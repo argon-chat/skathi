@@ -63,6 +63,8 @@ sk-elements = { path = "../sk-elements" }
 # `default-features = false` here and in every dependent of sk-runtime: features unify across the
 # graph, so one plain dependency would turn every sk-runtime default back on.
 sk-runtime = { path = "../sk-runtime", default-features = false, features = ["net-h2"] }
+# Direct, so build.rs gets the engine pin (DEP_REDJS_WEBKIT_VERSION).
+redjs = { path = "../../vendor/redjs/redjs", version = "0.2.0", default-features = false }
 sk-tree = { path = "../sk-tree", default-features = false }
 sk-webview = { path = "../sk-webview" }
 sk-sticker = { path = "../sk-sticker" }

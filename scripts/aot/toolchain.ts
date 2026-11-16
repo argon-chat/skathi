@@ -30,7 +30,7 @@ export const TABLE_FILES = [
   "AOTBuiltinTableTypes.cpp",
 ] as const;
 export function verifyEngine(sdk: string, pin: ToolchainPin): void {
-  const pins = readFileSync(join(sdk, "vendor/redjs/pins.txt"), "utf8");
+  const pins = readFileSync(join(sdk, "vendor/redjs/redjs/pins.txt"), "utf8");
   const value = (name: string) => new RegExp(`^${name.replace(/\./g, "\\.")}\\s*=\\s*([^\\s#]+)`, "m").exec(pins)?.[1];
   if (
     value("webkit.version") !== pin.engine.revision ||

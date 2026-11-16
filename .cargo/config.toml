@@ -30,8 +30,9 @@ rustflags = [
 
 [env]
 # The bun-webkit prebuilt is fetched by vendor/redjs/setup.ps1 (setup.sh on macOS) into
-# vendor/redjs/prebuilt/; redjs's build.rs finds it there (a set BUN_WEBKIT_DIR still wins) and
-# refuses any version other than the one in vendor/redjs/pins.txt.
+# vendor/redjs/prebuilt/; redjs's build.rs finds it there (a set BUN_WEBKIT_DIR still wins), or
+# fetches it into its own cache (REDJS_CACHE_DIR), and refuses any version other than the one in
+# vendor/redjs/redjs/pins.txt.
 #
 # Oldest macOS targeted (what the JSC prebuilt was built for); without it cc and rustc default
 # to 11.0 on arm64 and ld warns about every engine object.

@@ -44,12 +44,12 @@ fn main() {
         "{} is at {checked_out}, the toolchain pin names frontend {frontend}; run bun tools/sk-aot/setup.ts",
         bun.display()
     );
-    let pins = read(&sdk.join("vendor/redjs/pins.txt"));
+    let pins = read(&sdk.join("vendor/redjs/redjs/pins.txt"));
     assert!(
         pins.lines()
             .any(|line| line.split('#').next().unwrap().trim()
                 == format!("webkit.version = {engine}")),
-        "vendor/redjs/pins.txt does not pin engine {engine} of the toolchain pin"
+        "vendor/redjs/redjs/pins.txt does not pin engine {engine} of the toolchain pin"
     );
     println!("cargo:rustc-env=SK_AOT_PIN_FRONTEND={frontend}");
     println!("cargo:rustc-env=SK_AOT_PIN_ENGINE={engine}");
@@ -58,7 +58,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", bun.join(".git/HEAD").display());
     println!(
         "cargo:rerun-if-changed={}",
-        sdk.join("vendor/redjs/pins.txt").display()
+        sdk.join("vendor/redjs/redjs/pins.txt").display()
     );
 
     let redjs = sdk.join("vendor/redjs/redjs");

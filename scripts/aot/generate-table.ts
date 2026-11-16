@@ -24,7 +24,7 @@ const clean = Bun.spawnSync(["git", "-C", root, "diff", "--quiet", "HEAD", "--"]
 if (clean.exitCode !== 0) throw new Error("Bun tracked source checkout is modified; use a clean pinned checkout");
 const engine = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/Source/JavaScriptCore/aot");
 const generated = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/include/JavaScriptCore/aot");
-const pins = readFileSync(resolve(sdk, "vendor/redjs/pins.txt"), "utf8");
+const pins = readFileSync(resolve(sdk, "vendor/redjs/redjs/pins.txt"), "utf8");
 if (!pins.includes(`webkit.version = ${WEBKIT}`))
   throw new Error("Review the frontend/engine pin together before regenerating");
 // The upstream parsers require exact LF data, even on Windows. Do not silently

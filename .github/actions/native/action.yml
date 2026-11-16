@@ -102,7 +102,7 @@ runs:
         path: |
           vendor/redjs/prebuilt
           vendor/redjs/redjs/cpp/mimalloc
-        key: native-inputs-${{ inputs.target }}-${{ hashFiles('vendor/redjs/pins.txt') }}
+        key: native-inputs-${{ inputs.target }}-${{ hashFiles('vendor/redjs/redjs/pins.txt') }}
     - if: runner.os == 'Windows'
       name: Native dependencies
       shell: pwsh

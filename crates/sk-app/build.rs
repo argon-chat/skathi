@@ -206,16 +206,15 @@ fn macos_link() {
     }
 }
 
-/// `SK_PKG_VERSION` (packages/cli/package.json `"version"`) and `SK_JSC_PIN`
-/// (`vendor/redjs/pins.txt` `webkit.version`), reported by `--sk-host-info` and checked against a
-/// payload. Emitted before the `no-devtools` early return: both variants are hosts.
+/// `SK_PKG_VERSION` (packages/cli/package.json `"version"`) and `SK_JSC_PIN` (the engine redjs
+/// builds against), reported by `--sk-host-info` and checked against a payload. Emitted before the
+/// `no-devtools` early return: both variants are hosts.
 fn host_identity() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let repo = manifest.join("..").join("..");
     let pkg = repo.join("packages/cli/package.json");
-    let pins = repo.join("vendor/redjs/pins.txt");
     println!("cargo:rerun-if-changed={}", disp(&pkg));
-    println!("cargo:rerun-if-changed={}", disp(&pins));
+    println!("cargo:rerun-if-env-changed=DEP_REDJS_WEBKIT_VERSION");
     let version = std::fs::read_to_string(&pkg)
         .ok()
         .and_then(|text| {
@@ -226,15 +225,7 @@ fn host_identity() {
             Some(rest[..rest.find('"')?].to_string())
         })
         .unwrap_or_else(|| "0.0.0".into());
-    let pin = std::fs::read_to_string(&pins)
-        .ok()
-        .and_then(|text| {
-            text.lines().find_map(|l| {
-                let (k, v) = l.split_once('=')?;
-                (k.trim() == "webkit.version").then(|| v.trim().to_string())
-            })
-        })
-        .unwrap_or_else(|| "unknown".into());
+    let pin = std::env::var("DEP_REDJS_WEBKIT_VERSION").expect("redjs reports its engine pin");
     println!("cargo:rustc-env=SK_PKG_VERSION={version}");
     println!("cargo:rustc-env=SK_JSC_PIN={pin}");
 }

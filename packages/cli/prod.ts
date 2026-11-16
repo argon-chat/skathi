@@ -692,7 +692,7 @@ async function build() {
     .map(([key, path]) => ({ key, path }));
   writeAtomic(ASSETS_JSON, JSON.stringify(assets, null, 2) + "\n");
   if (AOT_INPUTS) {
-    const pinsPath = join(WS_ROOT, "vendor", "redjs", "pins.txt");
+    const pinsPath = join(WS_ROOT, "vendor", "redjs", "redjs", "pins.txt");
     const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);
     const manifest = AOT_INPUTS.write({
       script: out,

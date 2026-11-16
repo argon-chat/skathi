@@ -55,7 +55,7 @@ jobs:
             tools/sk-aot/.cache/bun
             tools/sk-aot/.cache/table
             tools/sk-aot/.cache/home
-          key: sk-aot-setup-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/pins.txt') }}
+          key: sk-aot-setup-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/redjs/pins.txt') }}
       # Takes a free drive letter with subst for Bun's codegen and removes it before it exits.
       - if: steps.setup-cache.outputs.cache-hit != 'true'
         name: Set up (Bun sources at the pin, C dependencies, table, codegen)

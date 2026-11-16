@@ -71,7 +71,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .tools/native-aot
-          key: windows-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/pins.txt') }}
+          key: windows-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/redjs/pins.txt') }}
       - if: runner.os == 'Windows'
         uses: actions/download-artifact@v4
         with:

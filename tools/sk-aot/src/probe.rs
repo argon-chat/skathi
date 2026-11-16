@@ -27,7 +27,7 @@ unsafe extern "C" {
 /// redjs's identity, over its compile options followed by the words.
 fn identity(program: &[u8], words: &[String]) -> [u8; 16] {
     let mut input = b"skathi-aot-image-v1\0".to_vec();
-    input.extend_from_slice(include_bytes!("../../../vendor/redjs/pins.txt"));
+    input.extend_from_slice(include_bytes!("../../../vendor/redjs/redjs/pins.txt"));
     input.extend_from_slice(redjs::aot::BUILD_TABLE_ID.as_bytes());
     input.extend_from_slice(redjs::aot::COMPILE_OPTIONS.as_bytes());
     for word in words {

@@ -80,8 +80,9 @@ describe("native inspector build provenance", () => {
       const redjs = join(root, "vendor/redjs");
       const headers = join(redjs, "prebuilt/bun-webkit/include");
       mkdirSync(headers, { recursive: true });
+      mkdirSync(join(redjs, "redjs"), { recursive: true });
       writeFileSync(
-        join(redjs, "pins.txt"),
+        join(redjs, "redjs", "pins.txt"),
         `webkit.version = ${pin.engine.revision}\nwebkit.sha256 = ${pin.engine.archiveSha256}\nwebkit.aot = 1\n`,
       );
       const configuration = join(headers, "cmakeconfig.h");
