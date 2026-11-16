@@ -471,7 +471,10 @@ describe("pointercancel", () => {
     let seen: Ev | undefined;
     (rt.global as unknown as El).addEventListener("pointercancel", (e) => (seen = e));
     rt.patchProp(stub(rt, 3), "onPointercancel", null, () => {});
-    expect(rt.flagsFor(rt.EV_CODES.pointercancel)).toEqual([{ id: 3, code: 44, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.pointercancel)).toEqual([
+      { id: 1, code: 44, on: true },
+      { id: 3, code: 44, on: true },
+    ]);
     fire(rt, inner, "pointercancel", 7, 8, -1);
     expect(seen?.type).toBe("pointercancel");
     expect([seen!.bubbles, seen!.cancelable]).toEqual([true, false]);

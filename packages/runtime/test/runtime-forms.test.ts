@@ -299,12 +299,12 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     focus(a);
     focus(a);
     expect(log).toEqual([]);
-    expect(rt.global.document.activeElement).toBe(null);
+    expect(rt.global.document.activeElement).toBe(rt.global.document.body);
     rt.host.dispatcher(a.__skId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
     expect(rt.global.document.activeElement).toBe(a);
     expect(log).toEqual(["focus@a(null)", "focusin@a(null)", "focusin^root:a"]);
     rt.host.dispatcher(a.__skId, rt.EV_CODES.blur, 0, 0, 0, 0, undefined);
-    expect(rt.global.document.activeElement).toBe(null);
+    expect(rt.global.document.activeElement).toBe(rt.global.document.body);
   });
 
   test("blur() on the focused element fires blur and focusout; on another one, nothing", () => {
@@ -316,7 +316,7 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     expect(log).toEqual([]);
     blur(a);
     expect(log).toEqual(["blur@a(null)", "focusout@a(null)"]);
-    expect(rt.global.document.activeElement).toBe(null);
+    expect(rt.global.document.activeElement).toBe(rt.global.document.body);
   });
 
   test("a disabled control and a detached node never reach the host", () => {

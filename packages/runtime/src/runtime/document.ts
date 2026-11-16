@@ -1,5 +1,5 @@
 import { mark, original, vacant } from "./realm";
-import { classTest, elementsUnder, hostQuery, queryOne, viewportRect } from "./dom-members";
+import { classTest, elementsUnder, hostQuery, queryOne } from "./dom-members";
 import type { TreeWalkerFilter } from "./dom-members";
 import {
   HTMLCollectionProto,
@@ -16,22 +16,19 @@ import {
   VALID_ELEMENT_NAME,
   cloneMirror,
   domError,
-  foreignNode,
   materializeOwnText,
   nodeArg,
-  preInsert,
   prepareStylesheetElement,
 } from "./tree-ops";
 import { wrapDetached } from "./labels";
 import type { Detached } from "./labels";
-import { detachNode, looseCreated, nodeById } from "./nodes";
+import { looseCreated, nodeById } from "./nodes";
 import { nodeOps } from "./node-ops";
 import { AttrImpl } from "./attr";
-import type { EventHandler, ListenerOptions, MirrorElement, MirrorNode } from "./types";
+import type { EventHandler, MirrorElement, MirrorNode } from "./types";
 import { activeElement } from "./focus";
 import { warnCompat } from "../compat";
 import { interceptGlobalTarget, isMirrorNode } from "./listeners";
-import { cssPropName, cssomName } from "./inline-style";
 import { installWaapi } from "../waapi";
 import { ElementProto } from "./protos";
 import { isMirrorEl } from "./controls";
@@ -40,7 +37,6 @@ import { defineGlobal } from "./globals";
 import { installSelection } from "../selection";
 import { asDomRect } from "./computed-style";
 import { appRoot, ensureDocumentRoot } from "../runtime";
-import { hooks } from "./state";
 
 const doc = globalThis.document;
 if (doc) {
@@ -173,158 +169,14 @@ if (doc) {
   }
   interceptGlobalTarget(doc);
   interceptGlobalTarget(globalThis);
-  // `documentElement` and `body` are both the app root (the one node `:root`, `html` and `body` match), so theme code such as `classList.add("dark")` or `style.setProperty("--radius", ...)` reaches the cascade root.
-  // Before `mount()` the root does not exist but module-scope theme code already writes to it; the pre-root object buffers those writes.
-  {
-    const pending: {
-      classes: string[];
-      style: Record<string, string>;
-      attrs: Record<string, string>;
-      listeners: { type: string; fn: EventHandler; opts: ListenerOptions }[];
-    } = { classes: [], style: Object.create(null), attrs: Object.create(null), listeners: [] };
-    const captureOf = (opts: ListenerOptions) => (typeof opts === "boolean" ? opts : !!opts?.capture);
-    const preRoot = {
-      nodeType: 1,
-      tagName: "HTML",
-      get className() {
-        return pending.classes.join(" ");
-      },
-      set className(v: unknown) {
-        pending.classes = String(v ?? "")
-          .split(/\s+/)
-          .filter(Boolean);
-      },
-      classList: {
-        add(...names: string[]) {
-          for (const n of names) if (n && !pending.classes.includes(n)) pending.classes.push(n);
-        },
-        remove(...names: string[]) {
-          pending.classes = pending.classes.filter((c) => !names.includes(c));
-        },
-        toggle(name: string, force?: boolean) {
-          const on = force === undefined ? !pending.classes.includes(name) : !!force;
-          if (on) preRoot.classList.add(name);
-          else preRoot.classList.remove(name);
-          return on;
-        },
-        contains: (name: string) => pending.classes.includes(name),
-        get length() {
-          return pending.classes.length;
-        },
-        item: (i: number) => pending.classes[i] ?? null,
-        toString: () => pending.classes.join(" "),
-      },
-      style: new Proxy(
-        {
-          setProperty(k: unknown, v: unknown) {
-            pending.style[cssomName(String(k))] = v == null ? "" : String(v);
-          },
-          removeProperty(k: unknown) {
-            const prev = pending.style[cssomName(String(k))] ?? "";
-            delete pending.style[cssomName(String(k))];
-            return prev;
-          },
-          getPropertyValue: (k: unknown) => pending.style[cssomName(String(k))] ?? "",
-          getPropertyPriority: () => "",
-        },
-        {
-          set(t, k, v) {
-            if (typeof k === "symbol" || k in t) return Reflect.set(t, k, v);
-            pending.style[cssPropName(k)] = v == null ? "" : String(v);
-            return true;
-          },
-          get: (t, k) =>
-            typeof k === "symbol" || k in t ? t[k as keyof typeof t] : (pending.style[cssPropName(k)] ?? ""),
-        },
-      ),
-      getAttribute: (k: unknown) => pending.attrs[String(k)] ?? null,
-      setAttribute(k: unknown, v: unknown) {
-        pending.attrs[String(k)] = String(v);
-      },
-      hasAttribute: (k: unknown) => String(k) in pending.attrs,
-      removeAttribute(k: unknown) {
-        delete pending.attrs[String(k)];
-      },
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      contains: () => false,
-      appendChild: (n: unknown) => preInsert(ensureDocumentRoot(), n, null, "appendChild"),
-      insertBefore: (n: unknown, anchor: unknown) => preInsert(ensureDocumentRoot(), n, anchor, "insertBefore"),
-      removeChild(n: unknown) {
-        const root = ensureDocumentRoot();
-        const child = nodeArg(n, "removeChild", "Node", 1);
-        if (!child) {
-          foreignNode(n as object, false, "removeChild");
-          return n;
-        }
-        if (child.parentNode !== root)
-          throw domError("removeChild", "Node", "NotFoundError", "The node to be removed is not a child of this node.");
-        detachNode(child);
-        return child;
-      },
-      insertAdjacentElement: (where: unknown, n: unknown) =>
-        ensureDocumentRoot().insertAdjacentElement(String(where), n as MirrorElement),
-      // A reference to `document.body` taken before mount is still this object once the root exists.
-      addEventListener(name: unknown, fn: unknown, opts?: ListenerOptions) {
-        if (appRoot) return appRoot.addEventListener(String(name), fn as EventHandler, opts);
-        if (typeof fn !== "function" && !(fn && typeof fn === "object")) return;
-        const type = String(name);
-        const capture = captureOf(opts);
-        if (pending.listeners.some((l) => l.type === type && l.fn === fn && captureOf(l.opts) === capture)) return;
-        pending.listeners.push({ type, fn: fn as EventHandler, opts });
-      },
-      removeEventListener(name: unknown, fn: unknown, opts?: ListenerOptions) {
-        if (appRoot) return appRoot.removeEventListener(String(name), fn as EventHandler, opts);
-        const type = String(name);
-        const capture = captureOf(opts);
-        pending.listeners = pending.listeners.filter(
-          (l) => !(l.type === type && l.fn === fn && captureOf(l.opts) === capture),
-        );
-      },
-      getBoundingClientRect: () => ({
-        ...viewportRect(),
-        toJSON() {
-          return this;
-        },
-      }),
-      children: [],
-      ownerDocument: doc,
-      parentNode: null,
-      scrollLeft: 0,
-      scrollTop: 0,
-      scrollX: 0,
-      scrollY: 0,
-      clientTop: 0,
-      clientLeft: 0,
-    };
-    for (const [name, axis] of [
-      ["clientWidth", "width"],
-      ["clientHeight", "height"],
-      ["offsetWidth", "width"],
-      ["offsetHeight", "height"],
-      ["scrollWidth", "width"],
-      ["scrollHeight", "height"],
-    ] as [string, "width" | "height"][]) {
-      Object.defineProperty(preRoot, name, { get: () => viewportRect()[axis], configurable: true });
-    }
-    hooks.flushDocumentElement = (root) => {
-      for (const c of pending.classes) root.classList.add(c);
-      for (const k of Object.keys(pending.style)) root.style.setProperty(k, pending.style[k]);
-      for (const k of Object.keys(pending.attrs)) root.setAttribute(k, pending.attrs[k]);
-      // Once: the root owns them now, and the next app's module code adds its own.
-      const listeners = pending.listeners;
-      pending.listeners = [];
-      for (const l of listeners) root.addEventListener(l.type, l.fn, l.opts);
-    };
-    for (const name of ["body", "documentElement"]) {
-      try {
-        Object.defineProperty(doc, name, {
-          get: () => appRoot ?? preRoot,
-          configurable: true,
-        });
-      } catch {
-        /* a non-configurable engine property — leave it alone */
-      }
+  // `documentElement` and `body` are both the app root (the one node `:root`, `html` and `body` match), so theme code
+  // such as `classList.add("dark")` or `style.setProperty("--radius", ...)` reaches the cascade root. After a teardown
+  // the next read makes the next app's root.
+  for (const name of ["body", "documentElement"]) {
+    try {
+      Object.defineProperty(doc, name, { get: ensureDocumentRoot, configurable: true });
+    } catch {
+      /* a non-configurable engine property — leave it alone */
     }
   }
 }

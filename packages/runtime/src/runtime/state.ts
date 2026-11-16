@@ -1,4 +1,3 @@
-import type { MirrorElement } from "./types";
 import type { GlobalEventMethods, GlobalEventSlot } from "./listeners";
 
 // Mutable state that more than one module writes. A leaf, so it is initialized before any module that installs a
@@ -7,8 +6,6 @@ import type { GlobalEventMethods, GlobalEventSlot } from "./listeners";
 export const hooks: {
   /** Claims `<style>`/`<link>` insertions and removals for the stylesheet registry. */
   foreignStyle: ((n: object, inserted: boolean) => boolean) | null;
-  /** Replays pre-mount `documentElement` writes onto the real root. */
-  flushDocumentElement: ((root: MirrorElement) => void) | null;
-} = { foreignStyle: null, flushDocumentElement: null };
+} = { foreignStyle: null };
 
 export const interceptedGlobals: { slot: GlobalEventSlot; delegate: GlobalEventMethods }[] = [];

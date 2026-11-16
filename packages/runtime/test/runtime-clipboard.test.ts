@@ -85,7 +85,6 @@ describe("ClipboardEvent", () => {
   test("a document listener added before mount() still rides the root's bit", () => {
     const rt = createRuntime();
     rt.global.document.addEventListener("copy", () => {});
-    rt.host.listeners.length = 0;
     rt.createApp({ render: () => null }).mount();
     const root = rt.global.document.documentElement;
     expect(rt.flagsFor(rt.EV_CODES.copy)).toEqual([{ id: root.__skId, code: rt.EV_CODES.copy, on: true }]);

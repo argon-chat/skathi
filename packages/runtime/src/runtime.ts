@@ -6,7 +6,6 @@ import type { App, ComponentPublicInstance } from "@vue/runtime-core";
 import "./apphost";
 import { warnCompat } from "./compat";
 import type { MirrorElement } from "./runtime/types";
-import { hooks } from "./runtime/state";
 import { looseById, looseRoots, nodesById } from "./runtime/nodes";
 import { mk, nodeOps, patchTeleport } from "./runtime/node-ops";
 import { patchProp } from "./runtime/patch-prop";
@@ -43,7 +42,7 @@ export { appDevtools } from "./devtools";
 export type { DevtoolsInfo } from "./devtools";
 export { Transition, TransitionGroup, resolveTransitionProps } from "./runtime/transitions";
 
-export let appRoot: MirrorElement | null = null; // created on mount or a pre-mount body insertion
+export let appRoot: MirrorElement | null = null; // made when the runtime evaluates, and again after a teardown
 
 const makeRenderer = () => createRenderer({ ...nodeOps, patchProp });
 let renderer: ReturnType<typeof makeRenderer> | null = null;
@@ -109,10 +108,10 @@ export function ensureDocumentRoot(): MirrorElement {
   // Listeners added to `document`/`window` at module scope had no root to carry their bit; sync them now.
   for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
   dndRearm();
-  // Module-scope writes to `document.documentElement` (the `dark` class, `--radius`) land before first render.
-  hooks.flushDocumentElement?.(root);
   return root;
 }
+// Before any app code, so module-scope theme code (`documentElement.classList.add("dark")`) writes to the real root.
+ensureDocumentRoot();
 
 /**
  * What `createApp` hands back: Vue's `App`, except `mount()` without a container keeps the native window-root shorthand;

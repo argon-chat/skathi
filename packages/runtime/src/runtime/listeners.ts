@@ -350,6 +350,7 @@ export function addExtraListener(
   }
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
+  if ((capture ? buckets.extraC : buckets.extraB).some((e) => e.fn === fn)) return;
   const entry = {
     fn,
     once: !!(opts && (opts as ListenerOptionsObject).once),

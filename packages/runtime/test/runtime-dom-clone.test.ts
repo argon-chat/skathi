@@ -115,7 +115,7 @@ describe("Node.prototype", () => {
 });
 
 describe("document.body before mount", () => {
-  test("a listener added before the root exists is installed on it", () => {
+  test("is already the root the app mounts on, with the listeners added at module scope", () => {
     const rt = createRuntime();
     const body = docOf(rt).body;
     const seen: string[] = [];
@@ -127,14 +127,8 @@ describe("document.body before mount", () => {
     body.removeEventListener("select.select", dropped);
 
     rt.createApp({ render: () => null }).mount();
-    const root = docOf(rt).body;
-    expect(root).not.toBe(body);
-    root.dispatchEvent(new CustomEvent("select.select"));
+    expect(docOf(rt).body).toBe(body);
+    body.dispatchEvent(new CustomEvent("select.select"));
     expect(seen).toEqual(["kept"]);
-
-    const late = () => seen.push("late");
-    body.addEventListener("select.select", late);
-    root.dispatchEvent(new CustomEvent("select.select"));
-    expect(seen).toEqual(["kept", "kept", "late"]);
   });
 });
