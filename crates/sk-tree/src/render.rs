@@ -5145,7 +5145,7 @@ fn build_iframe<V: 'static>(
                     m.control,
                 );
             })
-            .on_scroll_wheel(move |ev: &gpui::ScrollEvent, window, cx| {
+            .on_scroll(move |ev: &gpui::ScrollEvent, window, cx| {
                 // The wheel over a document is the document's; the app's scroll container under it
                 // does not move too.
                 if crate::iframe::has_document(id) {

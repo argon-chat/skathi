@@ -27,11 +27,10 @@ members = [
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
 exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
-# Replicated from vendor/zed: gpui needs async-task APIs that exist only on this fork rev,
-# and [patch] applies only from the workspace root. Carries the waker-identity fix
-# (smol-rs/async-task#108).
+# Replicated from vendor/zed, as [patch] applies only from the workspace root: the waker
+# identity fix (smol-rs/async-task#108) is merged upstream but not yet released.
 [patch.crates-io]
-async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
 # gpui pins taffy =0.15.0; vendor/taffy is the argon-chat/taffy fork (branch `vue-native`:
 # upstream v0.15.0 plus patches, each marked "vue-native patch" in the source).
 taffy = { path = "vendor/taffy" }

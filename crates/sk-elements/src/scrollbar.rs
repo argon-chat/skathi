@@ -827,7 +827,7 @@ impl Element for Scrollbar {
                 };
                 let radius = (ax.thumb_fill.size.width.min(ax.thumb_fill.size.height)) / 2.;
 
-                window.paint_layer(bounds, |window| {
+                window.paint_layer(|window| {
                     window.paint_quad(fill(ax.track, faded(track_bg, opacity)));
                     window.paint_quad(
                         fill(ax.thumb_fill, faded(thumb_bg, opacity)).corner_radii(radius),
