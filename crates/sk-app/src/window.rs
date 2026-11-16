@@ -1016,6 +1016,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     let dark = effective_dark(window);
     let s = SNAPSHOT.with(|c| c.borrow().clone());
     sk_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
+    publish_viewport(&s);
     // A hidden initial window may never get a platform frame; publish now so module-scope document.hidden is right.
     publish_visibility(&s);
     // Visibility and activation on the platform edge: a minimised or covered window paints no frames, so the per-frame diff would miss them.
@@ -1543,6 +1544,20 @@ fn snapshot_json(s: &Snapshot) -> String {
     .to_json()
 }
 
+fn publish_viewport(s: &Snapshot) {
+    let (_, _, outer_w, outer_h) = s.outer;
+    JsRuntime::with(|rt| unsafe {
+        sk_runtime::redjs::ffi::redjs_dom_set_viewport(
+            rt.raw(),
+            s.inner_width as i32,
+            s.inner_height as i32,
+            outer_w.round() as i32,
+            outer_h.round() as i32,
+            f64::from(s.scale),
+        )
+    });
+}
+
 thread_local! {
     static PREV: RefCell<Option<Snapshot>> = const { RefCell::new(None) };
     static BOOTED: Cell<bool> = const { Cell::new(false) };
@@ -1570,7 +1585,8 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         notify("sync", &json);
     }
 
-    // `innerWidth` etc. are whatever `redjs_dom_resize` last wrote, so the first pump pushes too (else JS keeps redjs's default viewport).
+    publish_viewport(&s);
+    // The first pump fires `resize` too.
     let viewport_moved = prev.as_ref().is_none_or(|p| {
         p.inner_width != s.inner_width || p.inner_height != s.inner_height || p.scale != s.scale
     });

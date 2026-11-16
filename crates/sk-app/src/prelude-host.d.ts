@@ -136,16 +136,13 @@ interface Document {
   dispatchEvent(ev: Event): boolean;
 }
 
+declare var innerWidth: number;
+declare var innerHeight: number;
+
 // Globals the prelude itself creates, so they cannot live in engine.d.ts. `var`, not `function`,
 // because the prelude assigns them.
 
-declare var innerWidth: number;
-declare var innerHeight: number;
-declare var devicePixelRatio: number;
-
-// Accessor-installed, read-only from JS; declared so `globalThis.outerWidth` type-checks.
-declare var outerWidth: number;
-declare var outerHeight: number;
+// Accessor-installed, read-only from JS; declared so `globalThis.screenX` type-checks.
 declare var screenX: number;
 declare var screenY: number;
 declare var screenLeft: number;

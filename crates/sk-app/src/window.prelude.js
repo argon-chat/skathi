@@ -55,17 +55,10 @@
     configurable: true,
     enumerable: true
   });
-  ro(globalThis, "outerWidth", () => S.outer.width);
-  ro(globalThis, "outerHeight", () => S.outer.height);
   ro(globalThis, "screenX", () => S.outer.x);
   ro(globalThis, "screenY", () => S.outer.y);
   ro(globalThis, "screenLeft", () => S.outer.x);
   ro(globalThis, "screenTop", () => S.outer.y);
-  if (!(globalThis.innerWidth > 0)) {
-    globalThis.innerWidth = S.innerWidth;
-    globalThis.innerHeight = S.innerHeight;
-    globalThis.devicePixelRatio = S.devicePixelRatio;
-  }
   const BOUNDS_X = 1, BOUNDS_Y = 2, BOUNDS_W = 4, BOUNDS_H = 8, BOUNDS_CONTENT = 16;
   const finite = (v) => typeof v === "number" && isFinite(v) ? v : undefined;
   const setBounds = (r, content) => {

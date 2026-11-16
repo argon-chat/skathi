@@ -177,35 +177,6 @@ if (doc) {
   }
   interceptGlobalTarget(doc);
   interceptGlobalTarget(globalThis);
-  // Viewport metrics: redjs reports 0; the window IS the app root, so use its painted box (floating positioning reads them).
-  // Except with the windowing host present: then inner* (client area) and outer* (GetWindowRect) are real and deliberately
-  // differ, so they are left alone.
-  if (!globalThis.__SK_WINDOW__) {
-    for (const [name, axis] of [
-      ["innerWidth", "width"],
-      ["innerHeight", "height"],
-      ["outerWidth", "width"],
-      ["outerHeight", "height"],
-    ] as [string, "width" | "height"][]) {
-      try {
-        Object.defineProperty(globalThis, name, {
-          get: () => viewportRect()[axis],
-          configurable: true,
-        });
-      } catch {
-        /* a non-configurable engine property — leave it alone */
-      }
-    }
-  }
-  for (const name of ["scrollX", "scrollY", "pageXOffset", "pageYOffset"]) {
-    try {
-      if (typeof (globalThis as Record<string, unknown>)[name] !== "number") {
-        Object.defineProperty(globalThis, name, { value: 0, configurable: true, writable: true });
-      }
-    } catch {
-      /* ditto */
-    }
-  }
   // `documentElement` and `body` are both the app root (the one node `:root`, `html` and `body` match), so theme code such as `classList.add("dark")` or `style.setProperty("--radius", ...)` reaches the cascade root.
   // Before `mount()` the root does not exist but module-scope theme code already writes to it; the pre-root object buffers those writes.
   {

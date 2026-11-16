@@ -6,8 +6,7 @@
 //
 // TODO(redjs): move this into native accessors in redjs's webapi/dom.rs.
 (() => {
-  // The generator re-emits this at the top of the artifact. Sloppy mode would turn the guarded
-  // `globalThis.innerWidth` seeding below from a throw into a silent no-op.
+  // The generator re-emits this at the top of the artifact.
   "use strict";
 
   const warn = (key: string, msg: string) => {
@@ -60,18 +59,10 @@
     enumerable: true,
   });
 
-  // `outerHeight - innerHeight` is not the titlebar height: use `getTitlebarAreaRect().height`.
-  ro(globalThis, "outerWidth", () => S.outer.width);
-  ro(globalThis, "outerHeight", () => S.outer.height);
   ro(globalThis, "screenX", () => S.outer.x);
   ro(globalThis, "screenY", () => S.outer.y);
   ro(globalThis, "screenLeft", () => S.outer.x);
   ro(globalThis, "screenTop", () => S.outer.y);
-  if (!(globalThis.innerWidth > 0)) {
-    globalThis.innerWidth = S.innerWidth;
-    globalThis.innerHeight = S.innerHeight;
-    globalThis.devicePixelRatio = S.devicePixelRatio;
-  }
 
   // Best-effort and clamped to the display's working area; a refused call is a silent no-op.
   const BOUNDS_X = 1,
