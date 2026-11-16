@@ -10,7 +10,7 @@ default = ["webgpu"]
 webgpu = ["sk-runtime/webgpu"]
 
 [dependencies]
-gpui = { path = "../../vendor/gpui/crates/gpui", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
 sk-css = { path = "../sk-css" }
 sk-effects = { path = "../sk-effects" }
 sk-elements = { path = "../sk-elements" }

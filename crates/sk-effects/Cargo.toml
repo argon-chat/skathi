@@ -11,6 +11,6 @@ publish = false
 # emitted as `effects.json` by `bun run shaders`; `cargo build` never compiles a shader.
 
 [dependencies]
-gpui = { path = "../../vendor/gpui/crates/gpui", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

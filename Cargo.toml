@@ -31,9 +31,9 @@ exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
 # identity fix (smol-rs/async-task#108) is merged upstream but not yet released.
 [patch.crates-io]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
-# gpui pins taffy =0.15.0; vendor/taffy is the argon-chat/taffy fork (branch `vue-native`:
+# gpui pins skathi-taffy =0.15.0, the argon-chat/taffy fork in vendor/taffy (branch `vue-native`:
 # upstream v0.15.0 plus patches, each marked "vue-native patch" in the source).
-taffy = { path = "vendor/taffy" }
+skathi-taffy = { path = "vendor/taffy" }
 
 [profile.release]
 opt-level = 3

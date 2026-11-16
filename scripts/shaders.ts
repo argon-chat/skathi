@@ -1,5 +1,6 @@
 // The built-in effects: crates/sk-effects/shaders/*.slang -> crates/sk-effects/generated/ (checked in, so
-// `cargo build` needs no shader compiler and a Slang upgrade that changes codegen shows up as a diff).
+// `cargo build` needs no shader compiler and a Slang upgrade that changes codegen shows up as a diff), plus
+// the copies each gpui renderer crate embeds from its own effects/, so it builds from its crates.io package.
 // The compiler itself is packages/cli/effects/compile.ts, which `sk build` and `sk dev` run over an
 // app's own shaders/.
 //
@@ -12,7 +13,7 @@
 //   --build-compiler     cargo build vendor/redslangc and run that
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import {
   BUILTIN_EFFECTS,
@@ -31,6 +32,12 @@ import { currentPlatform, hostsFor } from "../packages/cli/cli/platform";
 const REPO = resolve(import.meta.dir, "..");
 const BUILTIN_SHADERS = join(REPO, "crates/sk-effects/shaders");
 const GENERATED = join(REPO, "crates/sk-effects/generated");
+const GPUI_CRATES = join(REPO, "vendor/gpui/crates");
+const RENDERER_COPIES: { crate: string; wants: (name: string) => boolean }[] = [
+  { crate: "gpui_windows", wants: (name) => name.endsWith(".hlsl") || name === "effects.json" },
+  { crate: "gpui_wgpu", wants: (name) => name.endsWith(".wgsl") },
+  { crate: "gpui_apple", wants: (name) => name.endsWith(".metal") },
+];
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -87,24 +94,41 @@ async function builtins(compiler: string, check: boolean) {
     if (c.warnings.length) console.warn(formatProblems(c.warnings));
   }
   const files = effectFiles("builtin", compiled, (f) => `crates/sk-effects/shaders/${basename(f)}`);
+  if (!existsSync(GPUI_CRATES)) throw new Error("vendor/gpui is not checked out (git submodule update --init)");
+  const outputs = [
+    { dir: GENERATED, files },
+    ...RENDERER_COPIES.map((copy) => ({
+      dir: join(GPUI_CRATES, copy.crate, "effects"),
+      files: files.filter((f) => copy.wants(f.name)),
+    })),
+  ];
 
   if (check) {
-    const stale = files.filter((f) => {
-      const path = join(GENERATED, f.name);
-      return !existsSync(path) || readFileSync(path, "utf8") !== f.text;
-    });
+    const stale: string[] = [];
+    for (const { dir, files } of outputs) {
+      const names = new Set(files.map((f) => f.name));
+      for (const f of files) {
+        const path = join(dir, f.name);
+        if (!existsSync(path) || readFileSync(path, "utf8") !== f.text) stale.push(path);
+      }
+      if (existsSync(dir)) {
+        for (const name of readdirSync(dir)) {
+          if (!names.has(name) && /\.(hlsl|wgsl|metal)$/.test(name)) stale.push(join(dir, name));
+        }
+      }
+    }
     if (stale.length) {
       console.error("generated shader artifacts are stale — run `bun run shaders`:");
-      for (const f of stale) console.error(`  ${join(GENERATED, f.name)}`);
+      for (const path of stale) console.error(`  ${path}`);
       process.exit(1);
     }
     console.log(`shaders: ${compiled.length} built-in effect(s) up to date`);
     return;
   }
-  writeEffectFiles(GENERATED, files);
+  for (const { dir, files } of outputs) writeEffectFiles(dir, files);
   rmSync(join(GENERATED, "manifest.json"), { force: true });
   console.log(
-    `shaders: wrote ${compiled.length} built-in effect(s) -> ${GENERATED}\n  ` +
+    `shaders: wrote ${compiled.length} built-in effect(s) -> ${outputs.map((o) => o.dir).join(", ")}\n  ` +
       compiled.map((c) => c.effect.signature).join("\n  "),
   );
 }

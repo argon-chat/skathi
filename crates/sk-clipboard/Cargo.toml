@@ -10,7 +10,7 @@ publish = false
 sk-runtime = { path = "../sk-runtime", default-features = false, features = ["clipboard"] }
 # Not a second clipboard: gpui already owns the OS clipboard for the native <input>, and two
 # owners of one `OpenClipboard` race.
-gpui = { path = "../../vendor/gpui/crates/gpui", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
 
 # Item clipboard (src/win.rs); both crates are already in the graph.
 [target.'cfg(windows)'.dependencies]

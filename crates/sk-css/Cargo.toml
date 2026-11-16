@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-gpui = { path = "../../vendor/gpui/crates/gpui", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
 # MPL-2.0: link unmodified. parcel_selectors is pinned to the version lightningcss resolves so
 # both share one `Selector` type; `into_owned` lets a compiled rule own its selector.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["into_owned"] }
