@@ -297,11 +297,12 @@ function onMove(e: PointerEvent) {
 .titlebar .close:hover {
   background-color: #c42b1c;
 }`,
-        note: "The OS performs the action, so the buttons need no click handlers; on Windows 11, hovering the `maximize` button opens the snap layouts flyout.",
+        note: "The OS or the host performs the action, so the buttons need no click handlers; on Windows 11, hovering the `maximize` button opens the snap layouts flyout.",
       },
     ],
     edgeCases: [
-      "Do not also attach a click handler: the OS acts on the press and the handler runs on the forwarded click, so the window acts twice. `sk dev` warns about it.",
+      "Do not also attach a click handler that does the same: the window would act twice. `sk dev` warns about it.",
+      "`el.click()` on the element or on one of its descendants performs the action, as a real press does.",
       "`--window-control: none` removes an earlier role but leaves the element in an ancestor's drag region; add `app-region: no-drag` to take it out.",
       "Declared in a state rule such as `:hover`, it applies whatever the state, with an advisory.",
       'With `titleBarStyle: "default"` the OS owns the caption buttons, and the property does nothing, with an advisory.',

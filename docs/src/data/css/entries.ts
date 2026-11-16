@@ -688,7 +688,18 @@ const layout = section("Layout", [
       v("relative", OK, "A `relative` box with `z-index: auto` paints in tree order."),
       v("absolute", OK),
       v("fixed", PART, 'Placed against the parent: exact at the app root or in a `<Teleport to="body">`.'),
-      v("sticky", PART, "Laid out as `relative` inside a scroll container."),
+      v(
+        "sticky",
+        OK,
+        "Held at `top`, `right`, `bottom` and `left` from the nearest scroll container's edges, without leaving its parent.",
+      ),
+    ],
+    notes: [
+      "A `sticky` box's offset is applied when the frame is painted, from that frame's scroll position: no scroll listener or re-render is involved.",
+      "`getBoundingClientRect()`, `offsetTop`, `elementFromPoint()` and `IntersectionObserver` see a stuck box where it is painted.",
+    ],
+    limitations: [
+      "Under an ancestor with a `transform` that sits between a `sticky` box and its scroll container, the box is held against the untransformed edges.",
     ],
     related: ["top", "right", "bottom", "left", "inset", "z-index"],
     aliases: ["position: fixed", "position: sticky", "position: absolute"],
@@ -1891,29 +1902,22 @@ const interaction = section("Interaction", [
   }),
   prop("field-sizing", NO, "Lets form fields such as `<textarea>` size to their content."),
   prop("interactivity", NO, "Makes an element and its subtree inert."),
-  prop("app-region", PART, "Marks an element as a region that drags the window, as in an installed web app.", {
-    platforms: { windows: OK, macos: NO, linux: OK },
+  prop("app-region", OK, "Marks an element as a region that drags the window, as in an installed web app.", {
     values: [v("drag", OK), v("no-drag", OK), v("move", OK, "Same as `drag`."), v("none", OK, "Same as `no-drag`.")],
     notes: [
       "`app-region: drag` drags the window, as in an installed web app.",
       "`window-drag` is read as the same property.",
-    ],
-    limitations: [
-      "On macOS, it does nothing. The window drags only by the band where AppKit's own title bar sits, behind the app's content.",
-      "On Linux, a double-click on the region of a maximized window does not restore it.",
-      'On Linux, a popout with `chrome="hidden"` cannot be dragged by its regions.',
+      'On Windows, the OS moves the window. On macOS and Linux, the host does, in the main window and in a popout with `chrome="hidden"`.',
     ],
     aliases: ["-webkit-app-region", "window-drag", "drag region", "titlebar"],
     related: ["window-control"],
   }),
-  prop("--window-control", PART, "Turns an element into a window button: `minimize`, `maximize` or `close`.", {
-    platforms: { windows: OK, macos: NO, linux: PART },
+  prop("--window-control", OK, "Turns an element into a window button: `minimize`, `maximize` or `close`.", {
     skathiOnly: true,
     values: [v("minimize", OK), v("maximize", OK), v("close", OK)],
-    limitations: [
-      "On macOS, it does nothing. Use the native traffic lights.",
-      "On Linux, `maximize` does not restore a maximized window.",
-      "On Linux, `close` closes the app without dispatching `close-requested`, `beforeunload` or `pagehide`.",
+    notes: [
+      "On Windows, the OS performs the action. On macOS and Linux, the host performs it when the mouse button is released.",
+      "In the main window, `close` dispatches `close-requested`, `beforeunload` and `pagehide`, as the OS close button does.",
     ],
     aliases: ["window buttons", "titlebar buttons"],
     related: ["app-region"],

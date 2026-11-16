@@ -30,8 +30,15 @@ export interface SampleVariant {
   highlight: Set<number>;
 }
 
+const frameworkOf = (path: string): Framework | undefined => {
+  const ext = /\.(\w+)(?:\.ts)?$/.exec(path)?.[1];
+  return ext !== undefined && ext in frameworks ? (ext as Framework) : undefined;
+};
+
 export function sampleVariants({ src, region, focus, highlight, title }: SampleProps): SampleVariant[] {
-  const candidates = /\.\w+$/.test(src) ? [src] : Object.keys(frameworks).map((ext) => `${src}.${ext}`);
+  const candidates = /\.\w+$/.test(src)
+    ? [src]
+    : Object.keys(frameworks).flatMap((ext) => [`${src}.${ext}`, `${src}.${ext}.ts`]);
   const variants = candidates
     .filter((path) => files[`/samples/${path}`] !== undefined)
     .map((path) => {
@@ -54,8 +61,8 @@ export function sampleVariants({ src, region, focus, highlight, title }: SampleP
       }
       return {
         lang,
-        framework: lang in frameworks ? (lang as Framework) : undefined,
-        title: title ?? path.slice(path.lastIndexOf("/") + 1),
+        framework: frameworkOf(path),
+        title: title ?? path.slice(path.lastIndexOf("/") + 1).replace(/\.vue\.ts$/, ".ts"),
         code: shown.join("\n"),
         focus: parseLines(focus, local),
         highlight: parseLines(highlight, local),

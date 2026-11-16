@@ -1,19 +1,11 @@
 <script lang="ts">
-  import { appWindow } from "@skathi-native/runtime";
+  import { appWindow } from "@skathi-native/runtime/svelte";
 
   // #region state
-  const read = () => {
+  const state = $derived.by(() => {
     if (appWindow.isFullscreen()) return "fullscreen";
     if (appWindow.isMinimized()) return "minimized";
     return appWindow.isMaximized() ? "maximized" : "normal";
-  };
-  let state = $state(read());
-
-  $effect(() => {
-    const update = () => (state = read());
-    const events = ["maximize", "unmaximize", "minimize", "restore", "fullscreenchange"];
-    events.forEach((type) => appWindow.addEventListener(type, update));
-    return () => events.forEach((type) => appWindow.removeEventListener(type, update));
   });
   // #endregion state
 </script>

@@ -868,7 +868,7 @@ onMounted(() => {
     ],
     edgeCases: [
       'The `titlebar-area-*` variables exist only while the content owns the titlebar strip: not with `titleBarStyle: "default"`, in fullscreen or while minimized. Then the fallback applies, or the declaration is silently invalid without one.',
-      "`titlebar-area-x` and `titlebar-area-y` are `0px`. In a popout without OS chrome, the area spans the popout's full width.",
+      "`titlebar-area-y` is `0px`. `titlebar-area-x` is `0px`, except in the main window on macOS, where the area starts past the traffic lights at `78px`. In a popout without OS chrome, the area spans the popout's full width.",
       "`safe-area-inset-*` are always `0px`.",
       "Names are case-sensitive. An unknown name without a fallback makes the declaration invalid, with an advisory.",
     ],

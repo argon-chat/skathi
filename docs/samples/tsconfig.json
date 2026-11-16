@@ -7,9 +7,10 @@
     "baseUrl": ".",
     "paths": {
       "vue": ["../../packages/runtime/src/runtime.ts"],
-      "@skathi-native/runtime": ["../../packages/runtime/src/runtime.ts"]
+      "@skathi-native/runtime": ["../../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime/svelte": ["../../packages/runtime/src/svelte.ts"]
     },
-    "types": []
+    "types": ["svelte"]
   },
   "vueCompilerOptions": { "lib": "@skathi-native/runtime" },
   "include": [

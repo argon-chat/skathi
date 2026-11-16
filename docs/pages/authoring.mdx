@@ -107,7 +107,7 @@ import Sample from "../../src/components/Sample.astro";
 <Sample src="windows/WindowState" focus="state" />
 ```
 
-Without an extension, `src` picks up every framework variant beside it: `WindowState.vue` and `WindowState.svelte` become one block with a Vue and a Svelte tab. The reader's choice applies to every block on every page.
+Without an extension, `src` picks up every framework variant beside it: `WindowState.vue` and `WindowState.svelte` become one block with a Vue and a Svelte tab. A TypeScript module that differs per framework works the same way: `draft.vue.ts` and `draft.svelte.ts` become `draft.ts` in the Vue tab and `draft.svelte.ts`, the name Svelte needs for runes, in the Svelte tab. Svelte samples import from `@skathi-native/runtime/svelte`, as a Svelte app does. The reader's choice applies to every block on every page.
 
 <Sample src="windows/WindowState" focus="state" />
 

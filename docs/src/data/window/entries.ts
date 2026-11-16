@@ -16,15 +16,15 @@ export type Category = (typeof categories)[number];
 
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Main window":
-    "`appWindow` and the window globals (`innerWidth`, `screen`, `document.title`, the Fullscreen API) always address the primary window, also when the code runs from a pop-out's event handler. Every number is in CSS px. Verbs return at once: inside an input handler they apply in the same frame, otherwise at the top of the next one. Many verbs reach the OS only on Windows; each entry lists what macOS and Linux do instead. See [Windows](/guides/windows/).",
+    "`appWindow` and the window globals (`innerWidth`, `screen`, `document.title`, the Fullscreen API) always address the primary window, also when the code runs from a pop-out's event handler. Every number is in CSS px. Verbs return at once: inside an input handler they apply in the same frame, otherwise at the top of the next one. On Linux under Wayland, the compositor does not let an app place, hide or pin its window; each entry lists what it does there instead. See [Windows](/guides/windows/).",
   "Window events":
     "Host events are plain `Event`s with no payload: read the new state from `appWindow` in the handler, where the getters are already current. In one frame they fire in a fixed order: `resize`, `visibilitychange`, then `maximize` or `unmaximize`, `minimize` or `restore`, `fullscreenchange`, `backdropchange`, `focus` or `blur`, `move`, `geometrychange`, and last the media query `change` events. Verbs called inside a handler apply on the next frame. See [Closing and running in the background](/guides/closing-and-background/).",
   "Startup configuration":
-    "The `window` block of `sk.config.json` is read once, before the main window opens, and a change needs a restart. It is the only place to set the size, the minimum size, `titleBarStyle`, `resizable` and `minimizable`. A key the host does not know is ignored without a warning. `defineWindow()` applies the keys that can change at run time, after the window exists.",
+    "The `window` block of `sk.config.json` is read once, before the main window opens, and a change needs a restart. It is the only place to set the size, the minimum size, `titleBarStyle`, `resizable`, `minimizable` and `maximizable`. A key the host does not know is ignored without a warning. `defineWindow()` applies the keys that can change at run time, after the window exists.",
   "Title bar and chrome":
-    'With the default `titleBarStyle: "hidden"`, the app draws its own title bar under the Window Controls Overlay model: `app-region` marks where the window drags, `--window-control` turns elements into caption buttons, and `env(titlebar-area-*)` and `navigator.windowControlsOverlay` describe the strip. On macOS, the traffic lights stay and the CSS regions do nothing. See [Custom title bar](/guides/custom-title-bar/).',
+    'With the default `titleBarStyle: "hidden"`, the app draws its own title bar under the Window Controls Overlay model: `app-region` marks where the window drags, `--window-control` turns elements into caption buttons, and `env(titlebar-area-*)` and `navigator.windowControlsOverlay` describe the strip. On macOS, the traffic lights stay at the left of the strip, and the title bar area starts past them. See [Custom title bar](/guides/custom-title-bar/).',
   "Pop-out windows":
-    "`<SkWindow>` paints part of the same component tree in a second OS window: one JS realm, one Vue app, the same reactive state. Mounting the component opens the window and unmounting it closes it. CSS inside it is evaluated against the pop-out's own viewport, while `window.*` and `appWindow` still mean the main window. Most placement and visibility props reach the OS only on Windows. See [Pop-out windows](/guides/pop-out-windows/).",
+    "`<SkWindow>` paints part of the same component tree in a second OS window: one JS realm, one Vue or Svelte app, the same reactive state. Mounting the component opens the window and unmounting it closes it. CSS inside it is evaluated against the pop-out's own viewport, while `window.*` and `appWindow` still mean the main window. `taskbar`, `focusable`, `monitor` and `mapFromMain()` work only on Windows. A Svelte app imports it from `@skathi-native/runtime/svelte`, where the events are callback props such as `onclose` and the exposed values are `bind:` props. See [Pop-out windows](/guides/pop-out-windows/).",
   "Taskbar and dock":
     "The badge on the app icon is `navigator.setAppBadge()`. The `appWindow` taskbar verbs from Electron are accepted and do nothing yet. The window and taskbar icon comes from `sk.config.json` at build time and cannot change at run time.",
 };
@@ -83,7 +83,8 @@ function section(category: Category, drafts: readonly Draft[]): WindowEntry[] {
 }
 
 const IMPORT = 'import { appWindow } from "@skathi-native/runtime";';
-const MAC_LINUX_NOOP = "On macOS and Linux, it does nothing.";
+const WAYLAND_NO_POSITION =
+  "On Linux under Wayland, the compositor places the window: a position is ignored with an advisory, and a size still applies.";
 const MAC_LINUX_SAME_AS_CONTENT =
   "On macOS and Linux, it equals the content bounds. On macOS, `x` and `y` are relative to the screen the window is on, and the frame includes the title bar.";
 
@@ -93,13 +94,13 @@ const mainWindow = section("Main window", [
     name: "appWindow",
     kind: "property",
     summary: "The object that reads and controls the app's main window: its state, its size, its title and its events.",
-    platforms: os(OK, PART, PART),
+    platforms: os(OK, OK, PART),
     syntax: `${IMPORT}\n\nconst appWindow: SkAppWindow; // extends EventTarget`,
     notes: [
-      "Its getters and its `is*()` and `get*()` methods are reactive: read inside a template, `computed` or `watch`, they update when the window changes.",
+      "Its getters and its `is*()` and `get*()` methods are reactive: read inside a template, `computed` or `watch`, they update when the window changes. In Svelte they are reactive in markup, `$derived` and `$effect` once the app imports `@skathi-native/runtime/svelte`.",
       "Every verb is synchronous and returns `undefined`. Inside an input handler it applies in the same frame; elsewhere, at the top of the next frame.",
       "It always addresses the main window, also when the code runs from a pop-out's handler. A pop-out has no handle object; it is controlled through the props of `<SkWindow>`.",
-      "It is an `EventTarget` for the host events (`close-requested`, `maximize`, `minimize`, `move`, `fullscreenchange`, `backdropchange`). `resize`, `focus` and `blur` fire on the global `window`, not on `appWindow`.",
+      "It is an `EventTarget` for the host events: `close-requested`, `resize`, `focus`, `blur`, `maximize`, `unmaximize`, `minimize`, `restore`, `move`, `fullscreenchange` and `backdropchange`. `resize`, `focus` and `blur` also fire on the global `window`.",
       "Like Tauri's `getCurrentWindow()` or Electron's `BrowserWindow`, with the verbs named the same way.",
     ],
     examples: [
@@ -125,7 +126,7 @@ ${IMPORT}
       "`event.target === appWindow` holds inside a listener.",
     ],
     limitations: [
-      "On macOS and Linux, the verbs that move, restore, hide or pin the window do nothing or fall back; each entry lists the gap.",
+      "On Linux under Wayland, the verbs that place, hide or pin the window fall back or do nothing; each entry lists the gap.",
     ],
     related: ["get-current-window", "event-close-requested", "chrome", "define-window"],
     aliases: ["BrowserWindow", "window handle", "getCurrentWindow"],
@@ -151,7 +152,7 @@ export function wireTitlebar(min: HTMLElement, max: HTMLElement, close: HTMLElem
   max.addEventListener("click", () => win.toggleMaximize());
   close.addEventListener("click", () => win.close());
 }`,
-        note: "On Windows, `--window-control` on the buttons gives the native behavior, including the snap layouts flyout.",
+        note: "`--window-control` on the buttons gives the native behavior instead, including the snap layouts flyout on Windows.",
       },
     ],
     related: ["app-window", "sk-window"],
@@ -162,11 +163,11 @@ export function wireTitlebar(min: HTMLElement, max: HTMLElement, close: HTMLElem
     name: "appWindow.minimize()",
     kind: "method",
     summary: "Minimizes the main window to the taskbar or the Dock.",
-    platforms: all(OK),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.minimize(): void",
     returns: "`undefined`.",
     notes: [
-      "On Windows, `visibilitychange` (to hidden) and then `minimize` fire in the same frame. Restoring fires `visibilitychange` (to visible) and then `restore`.",
+      "`visibilitychange` (to hidden) and then `minimize` fire in the same frame. Restoring fires `visibilitychange` (to visible) and then `restore`.",
       "Calling it on a minimized window does nothing.",
       "It works when `window.minimizable` is `false` in `sk.config.json`.",
     ],
@@ -184,8 +185,7 @@ export async function exportAndMinimize(run: () => Promise<void>) {
       },
     ],
     limitations: [
-      "On macOS and Linux, the window minimizes, but `isMinimized()` stays `false` and no `minimize`, `restore` or `visibilitychange` event fires.",
-      "On Linux under Wayland, the compositor may refuse it.",
+      "On Linux under Wayland, the compositor may refuse it. When it minimizes, `isMinimized()` stays `false` and no `minimize`, `restore` or `visibilitychange` event fires.",
     ],
     related: ["is-minimized", "restore", "event-minimize", "event-restore"],
   },
@@ -194,11 +194,12 @@ export async function exportAndMinimize(run: () => Promise<void>) {
     name: "appWindow.maximize()",
     kind: "method",
     summary: "Maximizes the main window to fill the work area of its monitor.",
-    platforms: os(OK, PART, PART),
+    platforms: all(OK),
     syntax: "appWindow.maximize(): void",
     returns: "`undefined`.",
     notes: [
-      "On Windows, calling it on a maximized window does nothing. The `maximize` event and a `geometrychange` follow.",
+      "Calling it on a maximized window does nothing. The `maximize` event and a `geometrychange` follow.",
+      "On macOS, it zooms the window, and maximized means zoomed.",
       "On Windows, a call before the window is first shown, such as at the top of the app's entry module, makes the first show maximized.",
       "A maximized window that enters and leaves fullscreen comes back maximized.",
     ],
@@ -215,10 +216,6 @@ if (!localStorage.getItem("launched")) {
         note: "Run it at the top of the entry module, before the first frame, so the window appears maximized.",
       },
     ],
-    limitations: [
-      "On macOS, it toggles: on a zoomed window it un-zooms. `isMaximized()` is `true` only when the frame fills the screen's visible area.",
-      "On Linux, it toggles as well.",
-    ],
     related: ["unmaximize", "toggle-maximize", "is-maximized", "event-maximize"],
     aliases: ["zoom"],
   },
@@ -227,11 +224,11 @@ if (!localStorage.getItem("launched")) {
     name: "appWindow.unmaximize()",
     kind: "method",
     summary: "Restores a maximized main window to its previous size and position.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.unmaximize(): void",
     returns: "`undefined`.",
     notes: [
-      "On Windows, it calls `SW_RESTORE`. On a minimized window it restores from minimized to the earlier state, which may be maximized.",
+      "On a minimized window, it restores the window from minimized to its earlier state, which may be maximized.",
       "The `unmaximize` event follows.",
     ],
     examples: [
@@ -246,7 +243,7 @@ export function applyLayout(rect: { x: number; y: number; width: number; height:
 }`,
       },
     ],
-    limitations: [`${MAC_LINUX_NOOP} \`maximize()\` toggles there and un-maximizes a maximized window.`],
+    limitations: ["On Linux under Wayland, a minimized window is not known as minimized, so it is not restored."],
     related: ["maximize", "restore", "toggle-maximize", "event-unmaximize"],
   },
   {
@@ -254,7 +251,7 @@ export function applyLayout(rect: { x: number; y: number; width: number; height:
     name: "appWindow.toggleMaximize()",
     kind: "method",
     summary: "Maximizes the main window, or restores it if it is maximized.",
-    platforms: os(OK, PART, PART),
+    platforms: all(OK),
     syntax: "appWindow.toggleMaximize(): void",
     returns: "`undefined`.",
     examples: [
@@ -270,12 +267,8 @@ ${IMPORT}
     <slot />
   </nav>
 </template>`,
-        note: "An `app-region: drag` area already maximizes on double-click on Windows; use this for areas that do not drag.",
+        note: "An `app-region: drag` area already maximizes on a double-click; use this for areas that do not drag.",
       },
-    ],
-    limitations: [
-      "On macOS and Linux, it maximizes, but on a maximized window it does nothing. Call `maximize()` there, which toggles.",
-      "On Linux, the maximize button and the double-click of a custom title bar go through this method, so the user cannot un-maximize with them.",
     ],
     related: ["maximize", "unmaximize", "is-maximized"],
   },
@@ -284,11 +277,11 @@ ${IMPORT}
     name: "appWindow.restore()",
     kind: "method",
     summary: "Brings a minimized or maximized main window back to its normal size.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.restore(): void",
     returns: "`undefined`.",
     notes: [
-      "The same call as `unmaximize()`. On Windows it leaves either state.",
+      "The same call as `unmaximize()`: it leaves either state.",
       "It does not show a window hidden with `hide()`; call `show()`.",
       "The `restore` event means only that the window left the minimized state.",
     ],
@@ -304,7 +297,7 @@ export function onDownloadDone(file: string) {
 }`,
       },
     ],
-    limitations: [MAC_LINUX_NOOP],
+    limitations: ["On Linux under Wayland, a minimized window is not known as minimized, so it is not restored."],
     related: ["unmaximize", "minimize", "show", "event-restore"],
   },
   {
@@ -362,13 +355,11 @@ onMounted(() =>
     name: "appWindow.center()",
     kind: "method",
     summary: "Moves the main window to the center of the work area of its monitor.",
-    platforms: os(PART, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.center(): void",
     returns: "`undefined`.",
     notes: ["The outer rectangle, frame included, is centered within the work area of the monitor the window is on."],
-    limitations: ["On Windows, the window lands off-center when the display scale is not 100 %.", `${MAC_LINUX_NOOP}`],
-    workaround:
-      "On Windows, center with `setBounds()` from `screen`: `appWindow.setBounds({ x: screen.availLeft + (screen.availWidth - b.width) / 2, y: screen.availTop + (screen.availHeight - b.height) / 2 })`, where `b` is `appWindow.getBounds()`.",
+    limitations: ["On Linux under Wayland, it does nothing and prints an advisory: the compositor places the window."],
     related: ["set-bounds", "screen", "get-bounds"],
   },
   {
@@ -376,12 +367,12 @@ onMounted(() =>
     name: "appWindow.show()",
     kind: "method",
     summary: "Shows the main window and brings it to the front, also after `hide()`.",
-    platforms: os(OK, PART, PART),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.show(): void",
     returns: "`undefined`.",
     notes: [
       "On a hidden window it shows the window, then activates it. On a shown window it activates it.",
-      "It always raises the window, whatever `window.focus` says in `sk.config.json`.",
+      "It always raises the window, whatever `window.focus` says in `sk.config.json`. On macOS, it brings the app to the front as well.",
       "It cancels the 10 s fallback that shows a window started hidden with no tray icon.",
     ],
     examples: [
@@ -401,8 +392,7 @@ if (appTray.available) {
       },
     ],
     limitations: [
-      "On macOS and Linux, `hide()` minimizes the window instead of hiding it, and `show()` activates it. Whether that brings it back from the Dock on macOS is not verified.",
-      "On Linux under Wayland, the compositor may only flag the window for attention instead of raising it.",
+      "On Linux under Wayland, `hide()` minimizes the window, and the compositor may only flag the window for attention instead of raising it.",
     ],
     related: ["hide", "app-tray", "window-focus", "is-visible"],
   },
@@ -411,11 +401,11 @@ if (appTray.available) {
     name: "appWindow.hide()",
     kind: "method",
     summary: "Hides the main window and its taskbar button while the app keeps running.",
-    platforms: os(OK, PART, PART),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.hide(): void",
     returns: "`undefined`.",
     notes: [
-      "On Windows, `document.hidden` becomes `true`, `isVisible()` returns `false` and `visibilitychange` fires. No `minimize` event fires.",
+      "`document.hidden` becomes `true`, `isVisible()` returns `false` and `visibilitychange` fires. No `minimize` event fires.",
       "Call `show()` to bring the window back.",
       "Like Electron's `win.hide()`.",
     ],
@@ -434,7 +424,7 @@ appWindow.addEventListener("close-requested", (e) => {
       },
     ],
     limitations: [
-      "On macOS and Linux, it minimizes the window instead. The window stays in the Dock or the taskbar, `isVisible()` stays `true` and no event fires.",
+      "On Linux under Wayland, it minimizes the window instead. The window stays in the taskbar, `isVisible()` stays `true` and no event fires.",
     ],
     related: ["show", "event-close-requested", "app-tray", "is-visible", "document-visibility-state"],
     aliases: ["hide to tray", "minimize to tray"],
@@ -444,7 +434,7 @@ appWindow.addEventListener("close-requested", (e) => {
     name: "appWindow.isVisible()",
     kind: "method",
     summary: "Returns whether the main window is shown, as opposed to hidden with `hide()`.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.isVisible(): boolean",
     returns: "`true` when the window is shown. A minimized window counts as shown.",
     notes: ["It re-reads the window first, so it is exact right after a verb in the same handler.", "It is reactive."],
@@ -460,7 +450,7 @@ export function onMessage(chime: HTMLAudioElement) {
       },
     ],
     edgeCases: ["On Windows, it returns `true` while the window waits for its first frame before being shown."],
-    limitations: ["On macOS and Linux, it always returns `true`."],
+    limitations: ["On Linux under Wayland, it always returns `true`."],
     related: ["hide", "show", "document-visibility-state", "is-minimized"],
   },
   {
@@ -513,10 +503,13 @@ onUnmounted(() => removeEventListener("keydown", onKey));
     name: "appWindow.isMaximized()",
     kind: "method",
     summary: "Returns whether the main window is maximized.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     syntax: "appWindow.isMaximized(): boolean",
     returns: "`true` while the window is maximized.",
-    notes: ["It is reactive and re-reads the window first, so it is exact right after `maximize()`."],
+    notes: [
+      "It is reactive and re-reads the window first, so it is exact right after `maximize()`.",
+      "On macOS, it is `true` while the window is zoomed.",
+    ],
     examples: [
       {
         title: "Swap the maximize glyph in a custom title bar",
@@ -538,7 +531,6 @@ ${IMPORT}
 </style>`,
       },
     ],
-    limitations: ["On macOS, it is `true` only when the window frame is the size of the screen's visible area."],
     related: ["maximize", "toggle-maximize", "event-maximize", "event-unmaximize"],
   },
   {
@@ -546,7 +538,7 @@ ${IMPORT}
     name: "appWindow.isMinimized()",
     kind: "method",
     summary: "Returns whether the main window is minimized.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.isMinimized(): boolean",
     returns: "`true` while the window is minimized.",
     notes: ["It is reactive and re-reads the window first."],
@@ -570,7 +562,7 @@ appWindow.addEventListener("restore", () => {
 });`,
       },
     ],
-    limitations: ["On macOS and Linux, it always returns `false`."],
+    limitations: ["On Linux under Wayland, it always returns `false`."],
     related: ["minimize", "restore", "event-minimize", "document-visibility-state"],
   },
   {
@@ -658,7 +650,7 @@ addEventListener("pagehide", () => {
   if (appWindow.isMaximized() || appWindow.isMinimized()) return;
   localStorage.setItem("window-bounds", JSON.stringify(appWindow.getBounds()));
 });`,
-        note: "Writes to `localStorage` in `pagehide` reach disk. Restoring the position works on Windows only.",
+        note: "Writes to `localStorage` in `pagehide` reach disk. On Linux under Wayland, the position is not restored.",
       },
     ],
     edgeCases: [
@@ -707,7 +699,7 @@ export function windowInfo() {
     name: "appWindow.setBounds()",
     kind: "method",
     summary: "Moves or resizes the main window, frame included, in CSS px.",
-    platforms: os(PART, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.setBounds(rect: Partial<SkWindowRect>): void",
     params: [
       { name: "rect.x", type: "number", description: "Left edge of the outer window.", optional: true },
@@ -719,7 +711,9 @@ export function windowInfo() {
     notes: [
       "A field that is missing or not a finite number keeps its current value, so `{ x, y }` moves without resizing.",
       "The window is neither raised nor activated.",
-      "The size is kept at 1 px or more and within the work area. The position is clamped so the window stays inside the work area of its current monitor.",
+      "The size is kept at 1 px or more and within the work area.",
+      "On Windows, the position is clamped into the work area of the monitor the new rectangle lands on, so the window can move to another monitor but not behind the taskbar.",
+      "On macOS and Linux, the position is not clamped. On macOS, `x` and `y` are relative to the screen the window is on, as `getBounds()` reports them.",
       "Like Electron's `win.setBounds()`.",
     ],
     examples: [
@@ -740,10 +734,7 @@ export function dockRight() {
       },
     ],
     edgeCases: ["`getBounds()` can return the old geometry until the next frame."],
-    limitations: [
-      "On Windows, it cannot move the window to another monitor: the position is clamped into the current one.",
-      `${MAC_LINUX_NOOP} No advisory is printed.`,
-    ],
+    limitations: [WAYLAND_NO_POSITION],
     related: ["get-bounds", "set-content-bounds", "move-to", "center"],
   },
   {
@@ -751,7 +742,7 @@ export function dockRight() {
     name: "appWindow.setContentBounds()",
     kind: "method",
     summary: "Moves or resizes the main window so its client area has the given rectangle, in CSS px.",
-    platforms: all(PART),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.setContentBounds(rect: Partial<SkWindowRect>): void",
     params: [
       { name: "rect.x", type: "number", description: "Left edge of the client area.", optional: true },
@@ -776,10 +767,7 @@ export function fitTo(canvas: HTMLCanvasElement) {
         note: "The 32 px make room for a custom title bar above the canvas.",
       },
     ],
-    limitations: [
-      "On Windows, it cannot move the window to another monitor.",
-      "On macOS and Linux, the size changes, and the position does nothing.",
-    ],
+    limitations: [WAYLAND_NO_POSITION],
     related: ["set-bounds", "get-content-bounds", "resize-to"],
   },
   {
@@ -814,10 +802,7 @@ watchEffect(() => {
 </template>`,
       },
     ],
-    edgeCases: [
-      "There is no event when the title changes.",
-      "The host's temporary title bar strip (`titleBarFallback`) keeps showing the title from `sk.config.json`.",
-    ],
+    edgeCases: ["There is no event when the title changes."],
     related: ["document-title", "config-window-title", "sk-window-title"],
   },
   {
@@ -839,7 +824,7 @@ watchEffect(() => {
       "On Windows before build 22621, `mica` and `mica-alt` fall back to `acrylic` with an advisory, and read back as `acrylic`.",
       "An unknown name changes nothing and prints an advisory.",
       "It is kept while fullscreen suspends it. `backdropchange` fires when it changes.",
-      "It applies to the main window only. A pop-out keeps the backdrop it opened with.",
+      "It applies to the main window only. A pop-out draws its own `backdrop` prop.",
     ],
     examples: [
       {
@@ -958,10 +943,10 @@ function pick(theme: string) {
     name: "appWindow.alwaysOnTop",
     kind: "property",
     summary: "Reads or sets whether the main window stays above other windows.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: "appWindow.alwaysOnTop: boolean",
     notes: [
-      "On Windows, the window becomes topmost without being activated.",
+      "The window stays above other windows without being activated.",
       "The initial value is `window.alwaysOnTop` from `sk.config.json`. It is reactive.",
     ],
     examples: [
@@ -983,7 +968,7 @@ ${IMPORT}
 </template>`,
       },
     ],
-    limitations: ["On macOS and Linux, it does nothing, yet the getter returns the value that was set."],
+    limitations: ["On Linux under Wayland, setting `true` prints an advisory, and the getter stays `false`."],
     related: ["config-window-always-on-top", "sk-window-always-on-top"],
     aliases: ["topmost", "pin"],
   },
@@ -1158,36 +1143,38 @@ function openInspector() {
     slug: "resize-to",
     name: "window.resizeTo()",
     kind: "function",
-    summary: "Resizes the main window so its client area has the given size.",
-    platforms: all(PART),
+    summary: "Resizes the main window to the given outer size, frame included.",
+    platforms: all(OK),
     mdn: `${MDN}API/Window/resizeTo`,
     syntax: "window.resizeTo(width: number, height: number): void",
     params: [
-      { name: "width", type: "number", description: "Client width in CSS px." },
-      { name: "height", type: "number", description: "Client height in CSS px." },
+      { name: "width", type: "number", description: "Outer width in CSS px." },
+      { name: "height", type: "number", description: "Outer height in CSS px." },
     ],
     returns: "`undefined`.",
-    notes: ["It is `appWindow.setContentBounds({ width, height })`."],
+    notes: [
+      "It is `appWindow.setBounds({ width, height })`: the size is the one `getBounds()` reports, as in a browser.",
+      "The size is clamped to the work area.",
+      "To size the client area instead, call `appWindow.setContentBounds({ width, height })`.",
+    ],
     examples: [
       {
         title: "Grow the window when a details panel opens",
         lang: "ts",
         code: `export function openDetails(panel: HTMLElement) {
   panel.hidden = false;
-  if (innerWidth < 960) resizeTo(960, innerHeight);
+  if (outerWidth < 960) resizeTo(960, outerHeight);
 }`,
       },
     ],
-    edgeCases: ["In a browser it sets the outer size; here it sets the client size."],
-    limitations: ["On Windows, the size is clamped to the work area."],
-    related: ["set-content-bounds", "resize-by", "inner-width"],
+    related: ["set-bounds", "set-content-bounds", "resize-by", "outer-width"],
   },
   {
     slug: "resize-by",
     name: "window.resizeBy()",
     kind: "function",
     summary: "Grows or shrinks the main window by the given amounts.",
-    platforms: all(PART),
+    platforms: all(OK),
     mdn: `${MDN}API/Window/resizeBy`,
     syntax: "window.resizeBy(dx: number, dy: number): void",
     params: [
@@ -1195,7 +1182,7 @@ function openInspector() {
       { name: "dy", type: "number", description: "Change in height, in CSS px." },
     ],
     returns: "`undefined`.",
-    notes: ["It sets the client size to `innerWidth + dx` by `innerHeight + dy`."],
+    notes: ["It adds `dx` and `dy` to the outer size, as `resizeTo()` sets it. The size is clamped to the work area."],
     examples: [
       {
         title: "Widen the window by a sidebar's width",
@@ -1206,17 +1193,14 @@ function openInspector() {
 }`,
       },
     ],
-    edgeCases: [
-      "While the host's temporary title bar strip is shown, `innerHeight` excludes it but the new size includes it, so the window shrinks by the strip's height.",
-    ],
-    related: ["resize-to", "set-content-bounds"],
+    related: ["resize-to", "set-bounds"],
   },
   {
     slug: "move-to",
     name: "window.moveTo()",
     kind: "function",
     summary: "Moves the main window's top-left corner to a screen position.",
-    platforms: os(PART, NO, NO),
+    platforms: os(OK, OK, PART),
     mdn: `${MDN}API/Window/moveTo`,
     syntax: "window.moveTo(x: number, y: number): void",
     params: [
@@ -1224,7 +1208,10 @@ function openInspector() {
       { name: "y", type: "number", description: "Top edge of the outer window, in CSS px." },
     ],
     returns: "`undefined`.",
-    notes: ["It is `appWindow.setBounds({ x, y })`."],
+    notes: [
+      "It is `appWindow.setBounds({ x, y })`.",
+      "On Windows, the position is clamped into the work area of the monitor it lands on, so the window can move to another monitor.",
+    ],
     examples: [
       {
         title: "Snap the window to the top-left of the work area",
@@ -1234,7 +1221,7 @@ function openInspector() {
 }`,
       },
     ],
-    limitations: ["On Windows, the position is clamped into the work area of the current monitor.", MAC_LINUX_NOOP],
+    limitations: ["On Linux under Wayland, it does nothing and prints an advisory: the compositor places the window."],
     related: ["set-bounds", "move-by", "screen"],
   },
   {
@@ -1242,7 +1229,7 @@ function openInspector() {
     name: "window.moveBy()",
     kind: "function",
     summary: "Moves the main window by the given offsets.",
-    platforms: os(PART, NO, NO),
+    platforms: os(OK, OK, PART),
     mdn: `${MDN}API/Window/moveBy`,
     syntax: "window.moveBy(dx: number, dy: number): void",
     params: [
@@ -1268,7 +1255,7 @@ addEventListener("keydown", (e) => {
 });`,
       },
     ],
-    limitations: ["On Windows, the window cannot leave the work area of the current monitor.", MAC_LINUX_NOOP],
+    limitations: ["On Linux under Wayland, it does nothing and prints an advisory: the compositor places the window."],
     related: ["move-to", "set-bounds", "screen-x"],
   },
   {
@@ -1373,14 +1360,15 @@ const quit = () => window.close();
     name: "document.visibilityState / hidden",
     kind: "property",
     summary: "Reads whether the main window can be seen: shown, or hidden, minimized or covered.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, PART, PART),
     mdn: `${MDN}API/Document/visibilityState`,
     syntax: 'readonly document.visibilityState: "visible" | "hidden"\nreadonly document.hidden: boolean',
     notes: [
       "On Windows, the page is hidden while the window is hidden, minimized, on another virtual desktop, or fully covered by other windows. A shown window in the background stays visible.",
+      "On macOS and Linux, the page is hidden while the window is hidden or minimized.",
       "It is set before the app's code runs.",
       "While hidden, `requestAnimationFrame` callbacks do not run and animations pause.",
-      "Set `SK_OCCLUSION=0` to stop treating a covered window as hidden.",
+      "On Windows, set `SK_OCCLUSION=0` to stop treating a covered window as hidden.",
     ],
     examples: [
       {
@@ -1397,7 +1385,10 @@ const quit = () => window.close();
 }`,
       },
     ],
-    limitations: ["On macOS and Linux, the page is always `visible`."],
+    limitations: [
+      "On macOS and Linux, a window that is covered or on another desktop stays `visible`.",
+      "On Linux under Wayland, the page is always `visible`: the compositor reports neither minimized nor hidden.",
+    ],
     related: ["event-visibilitychange", "is-visible", "is-minimized", "hide"],
     aliases: ["hidden", "Page Visibility"],
   },
@@ -1488,6 +1479,7 @@ const portrait = screen.orientation.type.startsWith("portrait");
     returns: "A `MediaQueryList` with `matches`, `media`, `onchange`, `addListener` and `removeListener`.",
     notes: [
       "It uses the same evaluator as `@media`, against the main window, also from code in a pop-out.",
+      "Inside a `resize` handler, it already answers for the new size.",
       "A query the evaluator cannot run answers `false` and prints an advisory. See [matchMedia](/web-platform/match-media/).",
     ],
     examples: [
@@ -1509,10 +1501,7 @@ onUnmounted(() => narrow.removeEventListener("change", update));
 </template>`,
       },
     ],
-    edgeCases: [
-      "Inside a `resize` handler on `window`, `matchMedia()` may still answer for the size before the resize. The `change` events of an existing list are correct.",
-      "Every list ever created is kept and re-evaluated each frame. Create them once, not in a loop.",
-    ],
+    edgeCases: ["Every list ever created is kept and re-evaluated each frame. Create them once, not in a loop."],
     related: ["event-change", "event-resize", "theme", "display-mode"],
   },
   {
@@ -1663,7 +1652,7 @@ const windowEvents = section("Window events", [
     platforms: all(OK),
     syntax: 'appWindow.addEventListener("close-requested", (event: Event) => void)',
     notes: [
-      "It fires for the title bar's close button, Alt+F4, the taskbar's Close, macOS's red button and a `WM_CLOSE` from another process.",
+      "It fires for the title bar's close button, a `--window-control: close` element and the `titleBarOverlay` close button, Alt+F4, the taskbar's Close, macOS's red button and a `WM_CLOSE` from another process.",
       "`event.preventDefault()` keeps the window open. It works also when the user has not interacted with the app yet, so an app can hide to the tray.",
       "When no listener cancels it, `beforeunload` fires, then `pagehide`, then the app quits.",
       'It does not fire for `appWindow.close()`, `window.close()`, a tray `role: "quit"` item, the session ending, or a pop-out\'s close.',
@@ -1701,13 +1690,7 @@ export const discardAndClose = () => appWindow.close();`,
         note: "Show a dialog while `confirmClose` is `true`; its Discard button calls `discardAndClose`.",
       },
     ],
-    edgeCases: [
-      "A listener that throws counts as no veto, and the app closes.",
-      "Removing listeners is not counted, so the advisory about a `beforeunload` that blocks the close stays silent after the last listener is removed.",
-    ],
-    limitations: [
-      "On Linux, the close button of a custom title bar (`--window-control: close` or `titleBarOverlay`) closes the app without dispatching this event. Whether the window manager's own close goes through it is not verified.",
-    ],
+    edgeCases: ["A listener that throws counts as no veto, and the app closes."],
     related: ["close", "hide", "event-beforeunload", "event-pagehide", "app-tray"],
     aliases: ["onCloseRequested", "close event", "prevent close"],
   },
@@ -1751,7 +1734,8 @@ export const discardAndClose = () => appWindow.close();`,
     mdn: `${MDN}API/Window/pagehide_event`,
     syntax: 'addEventListener("pagehide", (event: Event) => void)',
     notes: [
-      "It fires for `appWindow.close()`, `window.close()` and a user close that nobody cancelled.",
+      'It fires on every way the app closes or quits: `appWindow.close()`, `window.close()`, a user close that nobody cancelled, a tray `role: "quit"` item, the embedder closing the app, the session ending, and any other quit of the app.',
+      "It fires once per run, also when several of these happen.",
       "Writes to `localStorage` made in the handler reach disk.",
     ],
     examples: [
@@ -1764,10 +1748,6 @@ export const discardAndClose = () => appWindow.close();`,
   });
 }`,
       },
-    ],
-    edgeCases: [
-      'It does not fire when a tray `role: "quit"` item, the embedder, the session ending or the OS closes the app.',
-      "On Linux, it does not fire when the user closes from a custom title bar's close button.",
     ],
     related: ["close", "event-close-requested", "event-beforeunload", "event-unload"],
   },
@@ -1809,14 +1789,16 @@ export const discardAndClose = () => appWindow.close();`,
     slug: "event-resize",
     name: "resize",
     kind: "event",
-    summary: "Fires on `window` when the main window's content size or display scale changes.",
+    summary: "Fires on `window` and on `appWindow` when the main window's content size or display scale changes.",
     platforms: all(OK),
     mdn: `${MDN}API/Window/resize_event`,
-    syntax: 'addEventListener("resize", (event: Event) => void)',
+    syntax:
+      'addEventListener("resize", (event: Event) => void)\nappWindow.addEventListener("resize", (event: Event) => void)',
     notes: [
-      "It fires when `innerWidth`, `innerHeight` or `devicePixelRatio` changes, at most once a frame, and always once at the first frame.",
-      "It fires before the other window events of the same frame.",
-      "It fires on the global `window`, not on `appWindow`. A pop-out's size is `<SkWindow @resize>`.",
+      "It fires when `innerWidth`, `innerHeight` or `devicePixelRatio` changes, at most once a frame. On `window` it also fires once at the first frame.",
+      "It fires on `window` before the other window events of the same frame, and on `appWindow` right after `visibilitychange`.",
+      "`matchMedia()` in the handler already answers for the new size.",
+      "A pop-out's size is `<SkWindow @resize>`.",
     ],
     examples: [
       {
@@ -1837,21 +1819,18 @@ onUnmounted(() => removeEventListener("resize", update));
 </template>`,
       },
     ],
-    edgeCases: [
-      '`appWindow.addEventListener("resize", …)` never fires.',
-      "Inside the handler, `matchMedia()` may answer for the previous size.",
-    ],
     related: ["inner-width", "match-media", "sk-window-event-resize", "event-geometrychange"],
   },
   {
     slug: "event-focus",
     name: "focus",
     kind: "event",
-    summary: "Fires on `window` when the main window becomes the active window.",
+    summary: "Fires on `window` and on `appWindow` when the main window becomes the active window.",
     platforms: all(OK),
     mdn: `${MDN}API/Window/focus_event`,
-    syntax: 'addEventListener("focus", (event: Event) => void)',
-    notes: ["It fires on the global `window`, not on `appWindow`.", "A pop-out's activation is `<SkWindow @focus>`."],
+    syntax:
+      'addEventListener("focus", (event: Event) => void)\nappWindow.addEventListener("focus", (event: Event) => void)',
+    notes: ["It fires on `window` first, then on `appWindow`.", "A pop-out's activation is `<SkWindow @focus>`."],
     examples: [
       {
         title: "Refresh the inbox when the user comes back",
@@ -1867,13 +1846,14 @@ onUnmounted(() => removeEventListener("resize", update));
     slug: "event-blur",
     name: "blur",
     kind: "event",
-    summary: "Fires on `window` when the main window stops being the active window.",
+    summary: "Fires on `window` and on `appWindow` when the main window stops being the active window.",
     platforms: all(OK),
     mdn: `${MDN}API/Window/blur_event`,
-    syntax: 'addEventListener("blur", (event: Event) => void)',
+    syntax:
+      'addEventListener("blur", (event: Event) => void)\nappWindow.addEventListener("blur", (event: Event) => void)',
     notes: [
       "It also fires when one of the app's own pop-outs becomes active.",
-      "It fires on the global `window`, not on `appWindow`.",
+      "It fires on `window` first, then on `appWindow`.",
     ],
     examples: [
       {
@@ -1902,9 +1882,13 @@ onUnmounted(() => removeEventListener("blur", close));
     name: "maximize",
     kind: "event",
     summary: "Fires on `appWindow` when the main window becomes maximized.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     syntax: 'appWindow.addEventListener("maximize", (event: Event) => void)',
-    notes: [HOST_EVENT, "A `geometrychange` follows in the same frame."],
+    notes: [
+      HOST_EVENT,
+      "A `geometrychange` follows in the same frame.",
+      "On macOS, it fires when the window is zoomed.",
+    ],
     examples: [
       {
         title: "Drop the window's rounded corners while maximized",
@@ -1917,7 +1901,6 @@ appWindow.addEventListener("unmaximize", sync);
 sync();`,
       },
     ],
-    limitations: ["On macOS, it fires only when the zoomed frame fills the screen's visible area."],
     related: ["event-unmaximize", "is-maximized", "maximize"],
   },
   {
@@ -1925,9 +1908,9 @@ sync();`,
     name: "unmaximize",
     kind: "event",
     summary: "Fires on `appWindow` when the main window leaves the maximized state.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     syntax: 'appWindow.addEventListener("unmaximize", (event: Event) => void)',
-    notes: [HOST_EVENT],
+    notes: [HOST_EVENT, "On macOS, it fires when the window leaves the zoomed state."],
     examples: [
       {
         title: "Save the restored size after un-maximizing",
@@ -1940,7 +1923,6 @@ appWindow.addEventListener("unmaximize", () => {
         note: "`getBounds()` can still read the maximized rectangle in this frame; save again on the next `move` or `resize` if exact values matter.",
       },
     ],
-    limitations: ["On macOS, it follows the same visible-area test as `isMaximized()`."],
     related: ["event-maximize", "unmaximize", "is-maximized"],
   },
   {
@@ -1948,7 +1930,7 @@ appWindow.addEventListener("unmaximize", () => {
     name: "minimize",
     kind: "event",
     summary: "Fires on `appWindow` when the main window is minimized.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: 'appWindow.addEventListener("minimize", (event: Event) => void)',
     notes: [HOST_EVENT, "It fires after `visibilitychange` in the same frame."],
     examples: [
@@ -1962,7 +1944,7 @@ export function pauseWhenMinimized(player: HTMLMediaElement) {
 }`,
       },
     ],
-    limitations: ["On macOS and Linux, it never fires. Listen to `blur` there."],
+    limitations: ["On Linux under Wayland, it never fires. Listen to `blur` there."],
     related: ["event-restore", "minimize", "is-minimized", "event-visibilitychange"],
   },
   {
@@ -1970,7 +1952,7 @@ export function pauseWhenMinimized(player: HTMLMediaElement) {
     name: "restore",
     kind: "event",
     summary: "Fires on `appWindow` when the main window comes back from minimized.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: 'appWindow.addEventListener("restore", (event: Event) => void)',
     notes: [HOST_EVENT, "It means only that the window left the minimized state; leaving maximized is `unmaximize`."],
     examples: [
@@ -1984,7 +1966,7 @@ appWindow.addEventListener("restore", () => {
 });`,
       },
     ],
-    limitations: ["On macOS and Linux, it never fires. Listen to `focus` there."],
+    limitations: ["On Linux under Wayland, it never fires. Listen to `focus` there."],
     related: ["event-minimize", "restore", "is-minimized"],
   },
   {
@@ -2105,11 +2087,11 @@ sync();`,
     name: "visibilitychange",
     kind: "event",
     summary: "Fires on `document` when the main window becomes hidden or visible.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, PART, PART),
     mdn: `${MDN}API/Document/visibilitychange_event`,
     syntax: 'document.addEventListener("visibilitychange", (event: Event) => void)',
     notes: [
-      "Hidden means hidden with `hide()`, minimized, on another virtual desktop, or fully covered.",
+      "Hidden means hidden with `hide()` or minimized, and on Windows also on another virtual desktop or fully covered.",
       "It fires before `minimize` and `restore` in the same frame.",
     ],
     examples: [
@@ -2128,7 +2110,10 @@ export function poll(fetchStatus: () => void) {
 }`,
       },
     ],
-    limitations: ["On macOS and Linux, it never fires."],
+    limitations: [
+      "On macOS and Linux, covering the window or moving it to another desktop does not fire it.",
+      "On Linux under Wayland, it never fires.",
+    ],
     related: ["document-visibility-state", "event-minimize", "hide"],
   },
   {
@@ -2163,8 +2148,7 @@ export function poll(fetchStatus: () => void) {
 
 const CREATION_ONLY = "It is read once when the window opens; a change needs a restart.";
 const OVERLAY_LIMITS = [
-  "On macOS, the buttons are drawn in the Windows style and do nothing when clicked. Leave the overlay off there; the traffic lights are the window's buttons.",
-  "On Linux, the maximize button cannot restore a maximized window, and the close button quits without dispatching `close-requested`.",
+  "On macOS, it is ignored with an advisory: the traffic lights are the window's buttons, and `appWindow.chrome.hostControls` stays `false`.",
 ];
 const HEX_ONLY =
   "Only hex colors are accepted: `#rgb`, `#rrggbb` or `#rrggbbaa`. Another form, such as a color name or `rgb()`, is refused with an advisory.";
@@ -2175,13 +2159,14 @@ const startup = section("Startup configuration", [
     name: "defineWindow()",
     kind: "function",
     summary:
-      "Sets the main window's run-time options from JS: title, backdrop, always on top and the title bar overlay.",
+      "Sets the main window's run-time options from JS: title, backdrop, theme, always on top and the title bar overlay.",
     platforms: os(OK, PART, PART),
     syntax:
-      'import { defineWindow } from "@skathi-native/runtime";\n\ndefineWindow(options: { title?: string; backdrop?: string; alwaysOnTop?: boolean; titleBarHeight?: number; titleBarOverlay?: boolean | object }): void',
+      'import { defineWindow } from "@skathi-native/runtime";\n\ndefineWindow(options: { title?: string; backdrop?: string; theme?: string; alwaysOnTop?: boolean; titleBarHeight?: number; titleBarOverlay?: boolean | object }): void',
     params: [
       { name: "options.title", type: "string", description: "Sets `document.title`.", optional: true },
       { name: "options.backdrop", type: "string", description: "Sets `appWindow.backdrop`.", optional: true },
+      { name: "options.theme", type: "string", description: "Sets `appWindow.theme`.", optional: true },
       { name: "options.alwaysOnTop", type: "boolean", description: "Sets `appWindow.alwaysOnTop`.", optional: true },
       {
         name: "options.titleBarHeight",
@@ -2199,7 +2184,7 @@ const startup = section("Startup configuration", [
     returns: "`undefined`.",
     notes: [
       "It runs when the app's code runs, after the window exists. Each key goes through the same setter as the matching `appWindow` property, so each has that property's platform support.",
-      "`frame` and `titleBarStyle` print an advisory that they need a different window style. `width`, `height`, `minWidth`, `minHeight`, `resizable`, `minimizable`, `maximizable`, `titleBarFallback` and `focus` print an advisory that they are creation-time only. Any other key prints an advisory as unknown.",
+      "`frame` and `titleBarStyle` print an advisory that they need a different window style. `width`, `height`, `minWidth`, `minHeight`, `resizable`, `minimizable`, `maximizable`, `titleBarFallback` and `focus` print an advisory that they are creation-time only. Any other key prints an advisory that lists the accepted keys.",
       "`null` or a value that is not an object does nothing.",
     ],
     examples: [
@@ -2219,12 +2204,9 @@ defineWindow({
 createApp(App).mount("#app");`,
       },
     ],
-    edgeCases: [
-      "`theme` is not a `defineWindow` key; set `appWindow.theme`.",
-      "The advisory for creation-time keys also lists `maxWidth`, `maxHeight`, `closable` and `movable`, which the `window` block does not support either.",
-    ],
     limitations: [
-      "On macOS and Linux, `alwaysOnTop` does nothing, and `backdrop` falls back as described under `appWindow.backdrop`.",
+      "On macOS and Linux, `backdrop` and `theme` fall back as described under `appWindow.backdrop` and `appWindow.theme`. On macOS, `titleBarOverlay` is ignored.",
+      "On Linux under Wayland, `alwaysOnTop` prints an advisory and does nothing.",
     ],
     related: ["config-window", "app-window", "set-title-bar-overlay", "backdrop"],
   },
@@ -2297,7 +2279,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: ["The host's temporary title bar strip shows this text even after the app changes the title."],
     related: ["title", "document-title", "config-window-title-bar-fallback"],
   },
   {
@@ -2355,11 +2336,12 @@ createApp(App).mount("#app");`,
     name: "window.minWidth",
     kind: "option",
     summary: "Sets the narrowest the user can make the main window, in CSS px.",
-    platforms: all(PART),
+    platforms: all(OK),
     syntax: '{ "window": { "minWidth": number } }',
     params: [{ name: "minWidth", type: "number >= 0", description: "Minimum width in CSS px.", optional: true }],
     notes: [
       CREATION_ONLY,
+      "It works alone; the height is then not limited.",
       "On Windows, a value above 500 prints an advisory: the Windows 11 snap layouts reject such a window.",
     ],
     examples: [
@@ -2371,10 +2353,7 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: [
-      "It applies only when `minHeight` is set too. Alone, it is ignored without a warning.",
-      "There is no maximum size option.",
-    ],
+    edgeCases: ["There is no maximum size option."],
     related: ["config-window-min-height", "sk-window-min-width"],
   },
   {
@@ -2382,10 +2361,10 @@ createApp(App).mount("#app");`,
     name: "window.minHeight",
     kind: "option",
     summary: "Sets the shortest the user can make the main window, in CSS px.",
-    platforms: all(PART),
+    platforms: all(OK),
     syntax: '{ "window": { "minHeight": number } }',
     params: [{ name: "minHeight", type: "number >= 0", description: "Minimum height in CSS px.", optional: true }],
-    notes: [CREATION_ONLY],
+    notes: [CREATION_ONLY, "It works alone; the width is then not limited."],
     examples: [
       {
         title: "Leave room for a toolbar and a status bar",
@@ -2395,7 +2374,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: ["It applies only when `minWidth` is set too."],
     related: ["config-window-min-width", "sk-window-min-height"],
   },
   {
@@ -2419,14 +2397,10 @@ createApp(App).mount("#app");`,
     name: "window.titleBarStyle",
     kind: "option",
     summary: "Chooses whether the app draws its own title bar or the OS draws one.",
-    platforms: os(OK, PART, PART),
+    platforms: all(OK),
     syntax: '{ "window": { "titleBarStyle": "hidden" | "default" | "hiddenInset" } }',
     values: [
-      v(
-        "hidden",
-        PART,
-        "The default. The app draws the title bar. On macOS the traffic lights stay and the CSS drag regions do nothing.",
-      ),
+      v("hidden", OK, "The default. The app draws the title bar. On macOS the traffic lights stay at its left."),
       v("default", OK, "The OS draws the title bar and its buttons."),
       v("hiddenInset", PART, 'Treated as `"hidden"` on every OS, macOS included, with an advisory.'),
     ],
@@ -2435,6 +2409,8 @@ createApp(App).mount("#app");`,
       '`"hidden"`: `display-mode` is `window-controls-overlay`, and `app-region` and `--window-control` are live.',
       '`"default"`: `display-mode` is `standalone`, `titleBarFallback` is off, and `app-region`, `--window-control` and `setTitleBarOverlay()` do nothing, with advisories.',
       'An unknown value prints an advisory and keeps `"hidden"`.',
+      'On macOS, with `"hidden"`, the traffic lights are centered in `titleBarHeight`, and the window drags by the app\'s `app-region` areas, not by the strip where the system title bar sits.',
+      'On Linux, with `"hidden"`, the host moves, resizes, maximizes and closes the window from the app\'s regions itself.',
     ],
     examples: [
       {
@@ -2444,10 +2420,6 @@ createApp(App).mount("#app");`,
   "window": { "title": "Settings", "titleBarStyle": "default" }
 }`,
       },
-    ],
-    limitations: [
-      'On macOS, with `"hidden"`, the traffic lights are centered in `titleBarHeight`, but `app-region` and `--window-control` do nothing. The window drags only by the strip where the system title bar sits.',
-      'On Linux, with `"hidden"`, the host moves, resizes, maximizes and closes the window from the app\'s regions itself.',
     ],
     related: ["config-window-title-bar-height", "app-region", "window-control", "display-mode", "chrome"],
     aliases: ["titlebar", "custom title bar", "frameless"],
@@ -2469,7 +2441,7 @@ createApp(App).mount("#app");`,
       },
     ],
     notes: [
-      "It is the height of `env(titlebar-area-height)`, of `getTitlebarAreaRect()` and of the caption buttons from `titleBarOverlay`.",
+      "It is the height of `env(titlebar-area-height)`, of `getTitlebarAreaRect()`, of the caption buttons from `titleBarOverlay` and of the host's temporary title bar strip.",
       "Change it at run time with `defineWindow({ titleBarHeight })` or `appWindow.setTitleBarOverlay({ height })`.",
     ],
     examples: [
@@ -2481,7 +2453,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: ["The host's temporary title bar strip is 36 px whatever this value is."],
     limitations: ["On macOS, it places the traffic lights when the window opens; a later change does not move them."],
     related: ["env-titlebar-area", "config-window-title-bar-overlay-height", "get-titlebar-area-rect"],
   },
@@ -2502,8 +2473,8 @@ createApp(App).mount("#app");`,
       },
     ],
     notes: [
-      "With `true`, the host draws a 36 px strip above the app with the configured title, which drags the window. It goes away for good at the first frame in which the app paints an `app-region: drag` area.",
-      "While the strip is shown, the Window Controls Overlay is not visible, `env(titlebar-area-*)` is undefined, `innerHeight` excludes the strip and `appWindow.chrome.contentInset.top` is `36`.",
+      "With `true`, the host draws a strip above the app that shows the current `document.title` and drags the window. It is `titleBarHeight` tall, 32 px by default. It goes away for good at the first frame in which the app paints an `app-region: drag` area.",
+      "While the strip is shown, the Window Controls Overlay is not visible, `env(titlebar-area-*)` is undefined, `innerHeight` excludes the strip and `appWindow.chrome.contentInset.top` is its height.",
       "Its removal fires `geometrychange`.",
       'It is ignored, with an advisory, under `titleBarStyle: "default"`.',
     ],
@@ -2517,7 +2488,6 @@ createApp(App).mount("#app");`,
         note: "Then `env(titlebar-area-height)` has its value from the first frame.",
       },
     ],
-    edgeCases: ["The strip always shows the title from `sk.config.json`, not the current `document.title`."],
     related: ["config-window-title-bar-style", "app-region", "chrome", "event-geometrychange"],
   },
   {
@@ -2525,7 +2495,7 @@ createApp(App).mount("#app");`,
     name: "window.titleBarOverlay",
     kind: "option",
     summary: "Draws minimize, maximize and close buttons over the top-right of the app's own title bar.",
-    platforms: os(OK, NO, PART),
+    platforms: os(OK, NO, OK),
     syntax:
       '{ "window": { "titleBarOverlay": boolean | { "height"?: number, "color"?: string, "symbolColor"?: string } } }',
     params: [
@@ -2541,15 +2511,15 @@ createApp(App).mount("#app");`,
         name: "symbolColor",
         type: "string",
         description: "Color of the glyphs, in hex.",
-        default: "`#ffffffe0`",
+        default: "`#000000e0` in the light theme, `#ffffffe0` in the dark one",
         optional: true,
       },
     ],
     notes: [
       "`true` or an object installs three 46 px buttons. `false` or no value installs none.",
-      "On Windows, the OS performs the actions, and hovering maximize opens the snap layouts flyout.",
+      "On Windows, the OS performs the actions, and hovering maximize opens the snap layouts flyout. On Linux, the host performs them.",
       "The buttons' width is taken out of `env(titlebar-area-width)` and of `getTitlebarAreaRect().width`.",
-      "They are hidden in fullscreen and while minimized. Hover colors are fixed, with red for close.",
+      "They are hidden in fullscreen and while minimized. The default glyph color and the hover colors of minimize and maximize follow the window's light or dark theme; close turns red.",
       'Under `titleBarStyle: "default"`, it is dropped.',
       "Like Electron's `titleBarOverlay`.",
     ],
@@ -2565,7 +2535,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: ["The default glyph color is white in both themes; set `symbolColor` for a light title bar."],
     limitations: OVERLAY_LIMITS,
     related: [
       "set-title-bar-overlay",
@@ -2580,7 +2549,7 @@ createApp(App).mount("#app");`,
     name: "window.titleBarOverlay.height",
     kind: "option",
     summary: "Sets the height of the overlay buttons and of the title bar area.",
-    platforms: os(OK, NO, PART),
+    platforms: os(OK, NO, OK),
     syntax: '{ "window": { "titleBarOverlay": { "height": number } } }',
     params: [
       {
@@ -2609,7 +2578,7 @@ createApp(App).mount("#app");`,
     name: "window.titleBarOverlay.color",
     kind: "option",
     summary: "Sets the background color of the overlay buttons.",
-    platforms: os(OK, NO, PART),
+    platforms: os(OK, NO, OK),
     syntax: '{ "window": { "titleBarOverlay": { "color": "#rgb" | "#rrggbb" | "#rrggbbaa" } } }',
     params: [{ name: "color", type: "string", description: "A hex color.", default: "transparent", optional: true }],
     notes: [HEX_ONLY],
@@ -2630,12 +2599,18 @@ createApp(App).mount("#app");`,
     name: "window.titleBarOverlay.symbolColor",
     kind: "option",
     summary: "Sets the color of the glyphs on the overlay buttons.",
-    platforms: os(OK, NO, PART),
+    platforms: os(OK, NO, OK),
     syntax: '{ "window": { "titleBarOverlay": { "symbolColor": "#rgb" | "#rrggbb" | "#rrggbbaa" } } }',
     params: [
-      { name: "symbolColor", type: "string", description: "A hex color.", default: "`#ffffffe0`", optional: true },
+      {
+        name: "symbolColor",
+        type: "string",
+        description: "A hex color.",
+        default: "`#000000e0` in the light theme, `#ffffffe0` in the dark one",
+        optional: true,
+      },
     ],
-    notes: [HEX_ONLY, "The default is white whatever the theme."],
+    notes: [HEX_ONLY, "The default follows the window's theme, `appWindow.theme` included."],
     examples: [
       {
         title: "Dark glyphs on a light title bar",
@@ -2689,7 +2664,7 @@ createApp(App).mount("#app");`,
     name: "window.resizable",
     kind: "option",
     summary: "Sets whether the user can resize the main window.",
-    platforms: os(OK, OK, NO),
+    platforms: all(OK),
     syntax: '{ "window": { "resizable": boolean } }',
     params: [
       {
@@ -2702,7 +2677,8 @@ createApp(App).mount("#app");`,
     ],
     notes: [
       CREATION_ONLY,
-      "On Windows, `false` also removes maximize: the maximize button area acts as caption, and no snap layouts flyout appears.",
+      "`false` also removes maximize. On Windows, the maximize button area then acts as caption, and no snap layouts flyout appears.",
+      "On Linux, `false` also fixes the size for code: `setBounds()` and `resizeTo()` cannot change it.",
     ],
     examples: [
       {
@@ -2713,7 +2689,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    limitations: ["On Linux, it is ignored: the host draws resize edges whenever the app draws its own title bar."],
     related: ["config-window-minimizable", "config-window-maximizable", "sk-window-resizable"],
   },
   {
@@ -2721,7 +2696,7 @@ createApp(App).mount("#app");`,
     name: "window.minimizable",
     kind: "option",
     summary: "Sets whether the main window has a minimize button.",
-    platforms: os(OK, OK, NO),
+    platforms: all(OK),
     syntax: '{ "window": { "minimizable": boolean } }',
     params: [
       {
@@ -2734,7 +2709,7 @@ createApp(App).mount("#app");`,
     ],
     notes: [
       CREATION_ONLY,
-      "On Windows, a `--window-control: minimize` area then does nothing. `appWindow.minimize()` still works.",
+      "A `--window-control: minimize` area then does nothing. `appWindow.minimize()` still works.",
     ],
     examples: [
       {
@@ -2745,26 +2720,47 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    limitations: ["On Linux, it is ignored."],
     related: ["config-window-resizable", "minimize"],
   },
   {
     slug: "config-window-maximizable",
     name: "window.maximizable",
     kind: "option",
-    summary: "Accepted in the `window` block but has no effect.",
-    platforms: all(NO),
+    summary: "Sets whether the user can maximize the main window.",
+    platforms: all(OK),
     syntax: '{ "window": { "maximizable": boolean } }',
-    notes: ["The value is read and never used."],
-    workaround: 'On Windows, `"resizable": false` removes maximize.',
-    related: ["config-window-resizable"],
+    params: [
+      {
+        name: "maximizable",
+        type: "boolean",
+        description: "`false` removes maximize.",
+        default: "`true`",
+        optional: true,
+      },
+    ],
+    notes: [
+      CREATION_ONLY,
+      "With `false`, the maximize button, a double-click on a drag area and a `--window-control: maximize` area no longer maximize the window.",
+      "On macOS, the zoom button is disabled.",
+      "`resizable: false` removes maximize as well.",
+    ],
+    examples: [
+      {
+        title: "A preferences window that cannot be maximized",
+        lang: "ts",
+        code: `{
+  "window": { "title": "Preferences", "maximizable": false }
+}`,
+      },
+    ],
+    related: ["config-window-resizable", "config-window-minimizable", "maximize"],
   },
   {
     slug: "config-window-always-on-top",
     name: "window.alwaysOnTop",
     kind: "option",
     summary: "Starts the main window above other windows.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: '{ "window": { "alwaysOnTop": boolean } }',
     params: [
       {
@@ -2785,7 +2781,7 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    limitations: [MAC_LINUX_NOOP],
+    limitations: ["On Linux under Wayland, it prints an advisory and does nothing."],
     related: ["always-on-top"],
   },
   {
@@ -2849,7 +2845,7 @@ createApp(App).mount("#app");`,
     name: "singleInstance",
     kind: "option",
     summary: "Keeps one running copy of the app: a second launch hands its arguments to the first and exits.",
-    platforms: os(OK, NO, OK),
+    platforms: all(OK),
     syntax: '{ "singleInstance": boolean }',
     params: [
       {
@@ -2877,7 +2873,6 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    limitations: ["On macOS, it is not implemented yet: every launch starts a new instance."],
     related: ["config-raise-on-second-instance", "config-id"],
   },
   {
@@ -2885,7 +2880,7 @@ createApp(App).mount("#app");`,
     name: "raiseOnSecondInstance",
     kind: "option",
     summary: "Brings the running app's window to the front when a second launch is forwarded to it.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: '{ "raiseOnSecondInstance": boolean }',
     params: [
       {
@@ -2908,14 +2903,13 @@ createApp(App).mount("#app");`,
       },
     ],
     limitations: [
-      "On macOS, `singleInstance` is not implemented, so there is nothing to raise.",
-      'On Linux, the window is not raised; the log reads "no window to raise yet".',
+      "On Linux under Wayland, the compositor may only flag the window for attention instead of raising it.",
     ],
     related: ["config-single-instance", "show"],
   },
 ]);
 
-const MAC_TITLEBAR_X = "On macOS, `x` is always `0`, although the traffic lights sit at the left.";
+const MAC_TITLEBAR_X = "On macOS, the area starts past the traffic lights: `x` is `78` and the width is 78 px less.";
 
 const titleBar = section("Title bar and chrome", [
   {
@@ -2978,7 +2972,7 @@ ${IMPORT}
     kind: "method",
     summary:
       "Installs, restyles or removes the minimize, maximize and close buttons the host draws over the title bar.",
-    platforms: os(OK, NO, PART),
+    platforms: os(OK, NO, OK),
     syntax:
       "appWindow.setTitleBarOverlay(overlay: boolean | null | { height?: number; color?: string; symbolColor?: string }): void",
     params: [
@@ -3025,11 +3019,12 @@ paint();`,
     name: "appWindow.startDragging()",
     kind: "method",
     summary: "Starts moving the main window with the mouse, from a `mousedown` handler.",
-    platforms: os(OK, NO, NO),
+    platforms: all(OK),
     syntax: "appWindow.startDragging(): void",
     returns: "`undefined`.",
     notes: [
-      "On Windows, it hands the press to the OS move loop, which returns when the user releases the button.",
+      "It hands the press to the platform's window move, which ends when the user releases the button.",
+      "An `app-region: drag` area does the same without code, and also maximizes on double-click.",
       "Like Tauri's `startDragging()`.",
     ],
     examples: [
@@ -3050,8 +3045,6 @@ function grab(e: MouseEvent) {
       },
     ],
     edgeCases: ["Whether the matching `mouseup` reaches the app is not verified."],
-    limitations: [MAC_LINUX_NOOP],
-    workaround: "Mark the area with `app-region: drag`, which also maximizes on double-click and snaps on Windows.",
     related: ["app-region", "start-resize-dragging"],
   },
   {
@@ -3073,13 +3066,14 @@ function grab(e: MouseEvent) {
     kind: "property",
     summary:
       "The web's Window Controls Overlay API for the main window: where the app's title bar area is, and when it changes.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     mdn: `${MDN}API/Navigator/windowControlsOverlay`,
     syntax:
       "readonly navigator.windowControlsOverlay: WindowControlsOverlay // visible, getTitlebarAreaRect(), ongeometrychange",
     notes: [
       "It describes the main window. A pop-out has no overlay object; use `env(titlebar-area-*)` in its CSS.",
       'Code written for an installed web app with `display_override: ["window-controls-overlay"]` runs unchanged.',
+      MAC_TITLEBAR_X,
     ],
     examples: [
       {
@@ -3097,7 +3091,6 @@ export function fitSearch(search: HTMLElement) {
 }`,
       },
     ],
-    limitations: [MAC_TITLEBAR_X],
     related: ["visible", "get-titlebar-area-rect", "event-geometrychange", "env-titlebar-area"],
     aliases: ["WCO", "WindowControlsOverlay"],
   },
@@ -3134,13 +3127,14 @@ export function syncTitlebar(bar: HTMLElement) {
     name: "navigator.windowControlsOverlay.getTitlebarAreaRect()",
     kind: "method",
     summary: "Returns the part of the title bar strip left to the app's content, in CSS px.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     mdn: `${MDN}API/WindowControlsOverlay/getTitlebarAreaRect`,
     syntax: "navigator.windowControlsOverlay.getTitlebarAreaRect(): DOMRect",
     returns:
       "A plain object with `x`, `y`, `width`, `height`, `top`, `left`, `right`, `bottom` and `toJSON()`. All values are `0` while the overlay is not visible.",
     notes: [
-      "`x` and `y` are `0`. `width` is `innerWidth`, minus 138 px when the `titleBarOverlay` buttons are installed. `height` is the title bar height.",
+      "`y` is `0`, and `x` is `0` on Windows and Linux. `width` is `innerWidth`, minus 138 px when the `titleBarOverlay` buttons are installed. `height` is the title bar height.",
+      MAC_TITLEBAR_X,
       "It reads the state of the last frame.",
     ],
     examples: [
@@ -3158,7 +3152,6 @@ export function syncTitlebar(bar: HTMLElement) {
       },
     ],
     edgeCases: ["It is not a `DOMRect` instance: `instanceof DOMRect` is `false`."],
-    limitations: [MAC_TITLEBAR_X],
     related: ["env-titlebar-area", "window-controls-overlay", "event-geometrychange"],
   },
   {
@@ -3261,7 +3254,7 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     name: "env(titlebar-area-*)",
     kind: "function",
     summary: "CSS variables that give the position and size of the title bar area the app draws in.",
-    platforms: os(OK, PART, OK),
+    platforms: all(OK),
     mdn: `${MDN}CSS/env`,
     syntax: "env(titlebar-area-x | titlebar-area-y | titlebar-area-width | titlebar-area-height, <fallback>)",
     notes: [
@@ -3284,8 +3277,9 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
         note: "The fallbacks apply in fullscreen and with the OS title bar.",
       },
     ],
-    edgeCases: ["`titlebar-area-x` and `titlebar-area-y` are always `0px`."],
-    limitations: ["On macOS, `titlebar-area-x` does not make room for the traffic lights; pad the left edge yourself."],
+    edgeCases: [
+      "`titlebar-area-y` is always `0px`. In the main window, `titlebar-area-x` is `0px` on Windows and Linux, and `78px` on macOS, past the traffic lights, with `titlebar-area-width` 78 px less.",
+    ],
     related: ["get-titlebar-area-rect", "config-window-title-bar-height", "sk-window-title-bar-height", "display-mode"],
     aliases: ["titlebar-area-height", "titlebar-area-width"],
   },
@@ -3294,7 +3288,7 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     name: "app-region",
     kind: "property",
     summary: "Marks the elements by which the user drags the window, as in an installed web app.",
-    platforms: os(OK, NO, OK),
+    platforms: all(OK),
     web: true,
     syntax: "app-region: drag | no-drag;\n-webkit-app-region: drag | no-drag;\nwindow-drag: move | none;",
     values: [
@@ -3304,9 +3298,10 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     notes: [
       "It inherits: every descendant drags until one sets `no-drag`.",
       "On Windows, the OS moves the window, with double-click to maximize and Aero Snap.",
+      "On macOS, the host moves the window, and a double-click does what the user chose in System Settings for a title bar double-click.",
       "On Linux, the host moves the window, and a double-click toggles maximize.",
       "Clicks inside a drag region still reach the element, unlike in a browser; `sk dev` advises `no-drag` on elements with click listeners there.",
-      'It works in a pop-out with `chrome="hidden"` on Windows.',
+      'It works in a pop-out with `chrome="hidden"`.',
       "The first drag region the app paints removes the host's temporary title bar strip.",
       "See [app-region](/css/app-region/) in the CSS reference.",
     ],
@@ -3335,11 +3330,6 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
       },
     ],
     edgeCases: ['Under `titleBarStyle: "default"`, it does nothing, with an advisory.'],
-    limitations: [
-      "On macOS, it does nothing. The window drags only by the strip where the system title bar sits.",
-      "On Linux, a double-click on the region of a maximized window does not restore it.",
-      'On Linux, a pop-out with `chrome="hidden"` cannot be dragged by its regions.',
-    ],
     related: ["window-control", "start-dragging", "config-window-title-bar-fallback", "env-titlebar-area"],
     aliases: ["-webkit-app-region", "window-drag", "drag region"],
   },
@@ -3348,22 +3338,20 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     name: "--window-control",
     kind: "property",
     summary: "Turns an element into the window's minimize, maximize or close button.",
-    platforms: os(OK, NO, PART),
+    platforms: all(OK),
     syntax: "--window-control: minimize | maximize | close | none;",
     values: [
       v("minimize", OK, "Minimizes the window."),
-      v(
-        "maximize",
-        PART,
-        "Maximizes or restores the window. On Windows 11, hovering it opens the snap layouts flyout.",
-      ),
-      v("close", PART, "Closes the window as the user's close does."),
+      v("maximize", OK, "Maximizes or restores the window. On Windows 11, hovering it opens the snap layouts flyout."),
+      v("close", OK, "Closes the window as the user's close does."),
       v("none", OK, "Removes an earlier role."),
     ],
     notes: [
-      "On Windows, the OS performs the action, so no click handler is needed. A `close` goes through `close-requested`.",
-      "On Windows, it follows `resizable` and `minimizable`: with `false`, the matching button no longer acts.",
-      "On Linux, the host performs the action when the mouse button is released.",
+      "The host performs the action, so no click handler is needed. On Windows the OS performs it; on macOS and Linux the host does when the mouse button is released.",
+      "In the main window, a `close` goes through `close-requested`, `beforeunload` and `pagehide`, as the OS close button does. In a pop-out, it closes the pop-out.",
+      "A click dispatched from code, such as `el.click()` on the element or on a descendant, performs the action too.",
+      "It follows `resizable`, `minimizable` and `maximizable`: with `false`, the matching button no longer acts.",
+      "On macOS, the traffic lights are already the window's buttons; most apps draw none of their own there.",
       "See [--window-control](/css/window-control/) in the CSS reference.",
     ],
     examples: [
@@ -3391,13 +3379,8 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
       },
     ],
     edgeCases: [
-      "Do not add a click handler as well: the window would act twice. `sk dev` warns about it.",
+      "Do not add a click handler that does the same: the window would act twice. `sk dev` warns about it.",
       'Under `titleBarStyle: "default"`, it does nothing, with an advisory.',
-    ],
-    limitations: [
-      "On macOS, it does nothing. Use the native traffic lights.",
-      "On Linux, `maximize` does not restore a maximized window.",
-      "On Linux, `close` closes the app without dispatching `close-requested`, `beforeunload` or `pagehide`.",
     ],
     related: ["app-region", "config-window-title-bar-overlay", "event-close-requested", "is-maximized"],
     aliases: ["window buttons", "caption buttons"],
@@ -3407,10 +3390,8 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
 const SK_IMPORT = 'import { SkWindow } from "@skathi-native/runtime";';
 const LIVE = "Live: a change on a mounted `<SkWindow>` applies to the open window, shortly after the change.";
 const CREATION =
-  "Creation-time: only the value at mount counts. To change it, close and reopen the window, for example with a `:key`.";
+  "Creation-time: only the value at mount counts. To change it, close and reopen the window, for example with a `:key`, or `{#key}` in Svelte.";
 const POPOUT_HWND_ONLY = "On macOS and Linux, it does nothing.";
-const POPOUT_NEVER_SHOWN =
-  "On macOS and Linux, a pop-out that starts hidden is never shown, so this prop leaves the window invisible there.";
 
 const popouts = section("Pop-out windows", [
   {
@@ -3421,13 +3402,14 @@ const popouts = section("Pop-out windows", [
     platforms: os(OK, PART, PART),
     syntax: `${SK_IMPORT}\n\n<SkWindow v-if="open" title="Palette" :bounds="{ width: 320, height: 400 }" @close="open = false">\n  …\n</SkWindow>`,
     notes: [
-      "Mounting it opens the window on the next tick, and unmounting it closes the window. Drive it with `v-if`.",
+      "Mounting it opens the window on the next tick, and unmounting it closes the window. Drive it with `v-if`, or `{#if}` in Svelte.",
       "The slot stays in the same component tree, with the same reactive state: a click in the pop-out runs the same handler as in the main window. Nothing is copied or messaged.",
       'The content stops painting in the main window at once. It is wrapped in a `<div class="sk-window-root">` that fills the pop-out and receives the component\'s attributes.',
       "CSS inside it, such as `@media`, `position: fixed` and `env(titlebar-area-*)`, answers for the pop-out. `window.innerWidth`, `matchMedia()` and `appWindow` still answer for the main window.",
       "Focus is per window: an `<input>` in the pop-out keeps its focus while the main window keeps its own.",
       "All pop-outs close when the main window closes. A pop-out cannot cancel its own close.",
       "It follows `appWindow.theme`.",
+      "In Svelte, import it from `@skathi-native/runtime/svelte`. The props keep their camelCase names, the events are the callback props `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`, and the exposed values are read with `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale`. `bind:this` gives `mapFromMain()`.",
     ],
     examples: [
       {
@@ -3456,10 +3438,10 @@ const colors = ["charcoal", "rust", "moss", "slate"];
       "If the app does not unmount the component in `@close`, the content paints in the main window again.",
       "A `<SkWindow>` inside another is opened as a sibling window, with an advisory.",
       "The same element cannot be painted by two windows; a second open is refused.",
-      "A `<Teleport :to>` into its `el` works, which moves existing content into the pop-out.",
+      "A `<Teleport :to>` into its `el` works, which moves existing content into the pop-out. Svelte has no `<Teleport>`: put the content in the children, or mount a component into `el` with Svelte's `mount(Comp, { target: el })`.",
     ],
     limitations: [
-      "On macOS and Linux, the props that place, show, hide or pin the window do nothing, and a pop-out that starts hidden never appears.",
+      "On macOS and Linux, `taskbar`, `focusable` and `monitor` do nothing, and `mapFromMain()` returns `null`. Each prop lists its other gaps, mostly under Wayland.",
     ],
     related: ["sk-window-event-close", "sk-window-bounds", "sk-window-el", "window-open"],
     aliases: ["SkWindow", "second window", "multi-window", "BrowserWindow"],
@@ -3500,7 +3482,7 @@ const title = computed(() => "Palette - " + tool.value);
     name: "<SkWindow bounds>",
     kind: "prop",
     summary: "Sets where the pop-out opens and how big its client area is, in CSS px.",
-    platforms: os(OK, PART, PART),
+    platforms: os(OK, OK, PART),
     syntax: '<SkWindow :bounds="{ x: 60, y: 80, width: 320, height: 400 }" />',
     params: [
       { name: "x", type: "number", description: "Left edge on the screen.", optional: true },
@@ -3509,8 +3491,9 @@ const title = computed(() => "Palette - " + tool.value);
       { name: "height", type: "number", description: "Client height.", default: "`320`", optional: true },
     ],
     notes: [
-      "Without both `x` and `y`, a pop-out shown at mount opens centered on the primary display. A pop-out that starts hidden opens centered on the main window's monitor.",
-      "On Windows, it is live: a change moves or resizes the open window, field by field. The values are not clamped.",
+      "Without both `x` and `y`, the pop-out opens centered on the main window's monitor.",
+      "`x` and `y` are CSS px at the main window's scale. On Windows, the pop-out opens on the monitor they fall on, also one other than the primary.",
+      "It is live: a change moves or resizes the open window, field by field. The values are not clamped.",
       "A change of another prop keeps the place where the user moved the window.",
       'It is ignored with `cover="monitor"`.',
     ],
@@ -3541,7 +3524,7 @@ function show() {
       "A `width` or `height` of `0` or less is ignored in a live change.",
       "There is no getter for the current position. The size comes from `@resize`.",
     ],
-    limitations: ["On macOS and Linux, only the value at mount counts."],
+    limitations: ["On Linux under Wayland, `x` and `y` are ignored: the compositor places the window."],
     related: ["sk-window-event-resize", "sk-window-min-width", "screen-x"],
   },
   {
@@ -3549,15 +3532,16 @@ function show() {
     name: "<SkWindow chrome>",
     kind: "prop",
     summary: "Chooses between the OS title bar and a title bar the app draws in the pop-out.",
-    platforms: os(OK, PART, PART),
+    platforms: all(OK),
     syntax: '<SkWindow chrome="default" | "hidden" />',
     values: [
       v("default", OK, "The OS draws the title bar. `display-mode` is `standalone`."),
-      v("hidden", PART, "The app draws the title bar. `display-mode` is `window-controls-overlay`."),
+      v("hidden", OK, "The app draws the title bar. `display-mode` is `window-controls-overlay`."),
     ],
     notes: [
       CREATION,
       'With `"hidden"`, the pop-out has no host buttons and no temporary strip: the app paints an `app-region: drag` area and its own `--window-control` buttons.',
+      'On macOS, with `"hidden"`, the traffic lights stay, centered in `titleBarHeight`.',
       "A change prints an advisory.",
     ],
     examples: [
@@ -3586,10 +3570,6 @@ const open = ref(true);
 </style>`,
       },
     ],
-    limitations: [
-      'On macOS, with `"hidden"`, the traffic lights work and sit within `titleBarHeight`, but `app-region` and `--window-control` do nothing.',
-      'On Linux, with `"hidden"`, the pop-out cannot be dragged or resized from the app\'s regions.',
-    ],
     related: ["sk-window-title-bar-height", "app-region", "window-control", "display-mode"],
   },
   {
@@ -3609,10 +3589,9 @@ const open = ref(true);
       },
     ],
     notes: [
-      CREATION,
-      "A change is ignored without a warning.",
+      LIVE,
       "An unknown name prints an advisory and keeps the default.",
-      "The default is the startup backdrop, even after the app changes `appWindow.backdrop`.",
+      "The default is the startup backdrop, even after the app changes `appWindow.backdrop`. Removing the prop goes back to it.",
     ],
     examples: [
       {
@@ -3640,7 +3619,7 @@ ${SK_IMPORT}
     name: "<SkWindow alwaysOnTop>",
     kind: "prop",
     summary: "Keeps the pop-out above other windows.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: '<SkWindow :always-on-top="true" />',
     params: [
       {
@@ -3671,7 +3650,7 @@ const pinned = ref(true);
 </template>`,
       },
     ],
-    limitations: [POPOUT_HWND_ONLY],
+    limitations: ["On Linux under Wayland, it does nothing."],
     related: ["always-on-top", "sk-window-taskbar"],
   },
   {
@@ -3679,7 +3658,7 @@ const pinned = ref(true);
     name: "<SkWindow resizable>",
     kind: "prop",
     summary: "Sets whether the user can resize the pop-out.",
-    platforms: os(OK, OK, NO),
+    platforms: all(OK),
     syntax: '<SkWindow :resizable="false" />',
     params: [
       {
@@ -3690,7 +3669,7 @@ const pinned = ref(true);
         optional: true,
       },
     ],
-    notes: [CREATION, "A change is ignored without a warning."],
+    notes: [CREATION, "A change prints an advisory."],
     examples: [
       {
         title: "A fixed-size color picker",
@@ -3706,7 +3685,6 @@ ${SK_IMPORT}
 </template>`,
       },
     ],
-    limitations: ["On Linux, it is ignored."],
     related: ["config-window-resizable", "sk-window-min-width"],
   },
   {
@@ -3717,7 +3695,7 @@ ${SK_IMPORT}
     platforms: all(OK),
     syntax: '<SkWindow :min-width="240" />',
     params: [{ name: "minWidth", type: "number", description: "Minimum client width.", optional: true }],
-    notes: [CREATION, "It works alone; the missing side is `0`. A change is ignored without a warning."],
+    notes: [CREATION, "It works alone; the missing side is `0`. A change prints an advisory."],
     examples: [
       {
         title: "Keep the palette's swatches readable",
@@ -3743,7 +3721,7 @@ ${SK_IMPORT}
     platforms: all(OK),
     syntax: '<SkWindow :min-height="200" />',
     params: [{ name: "minHeight", type: "number", description: "Minimum client height.", optional: true }],
-    notes: [CREATION, "It works alone. A change is ignored without a warning."],
+    notes: [CREATION, "It works alone. A change prints an advisory."],
     examples: [
       {
         title: "Leave room for a player's controls",
@@ -3772,10 +3750,9 @@ ${SK_IMPORT}
       { name: "titleBarHeight", type: "number", description: "Height in CSS px.", default: "`32`", optional: true },
     ],
     notes: [
-      CREATION,
+      LIVE,
       'It is `env(titlebar-area-height)` inside the pop-out when `chrome` is `"hidden"`.',
-      "On macOS, it also centers the traffic lights.",
-      "A change is ignored without a warning.",
+      "On macOS, it also centers the traffic lights when the window opens; a later change does not move them.",
     ],
     examples: [
       {
@@ -3804,7 +3781,7 @@ ${SK_IMPORT}
     name: "<SkWindow activate>",
     kind: "prop",
     summary: "Sets whether the pop-out takes the keyboard focus when it is shown.",
-    platforms: os(OK, PART, PART),
+    platforms: all(OK),
     syntax: '<SkWindow :activate="true" />',
     params: [
       {
@@ -3816,9 +3793,8 @@ ${SK_IMPORT}
       },
     ],
     notes: [
-      CREATION,
+      "Live: it is read at each show, the first one and each later one through `visible`.",
       "With the default `false`, the pop-out appears without taking focus, so a palette does not steal the caret from the main window.",
-      "It applies to the first show and to each later show through `visible`.",
       "It is ignored, with an advisory, when `focusable` is `false`.",
     ],
     examples: [
@@ -3840,7 +3816,6 @@ const open = ref(false);
 </template>`,
       },
     ],
-    limitations: ["On macOS and Linux, it applies only to a pop-out shown at mount."],
     related: ["sk-window-focusable", "sk-window-visible", "sk-window-event-focus"],
   },
   {
@@ -3848,7 +3823,7 @@ const open = ref(false);
     name: "<SkWindow visible>",
     kind: "prop",
     summary: "Hides or shows the pop-out while keeping it open and painted.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: '<SkWindow :visible="shown" />',
     params: [
       { name: "visible", type: "boolean", description: "`false` hides the window.", default: "`true`", optional: true },
@@ -3879,7 +3854,9 @@ const peeking = ref(false);
 </template>`,
       },
     ],
-    limitations: [POPOUT_HWND_ONLY, POPOUT_NEVER_SHOWN],
+    limitations: [
+      "On Linux under Wayland, a window cannot be hidden: `false` minimizes it, and a pop-out that starts hidden appears when it opens.",
+    ],
     related: ["sk-window-event-show", "sk-window-event-hide", "sk-window-activate"],
   },
   {
@@ -3887,7 +3864,7 @@ const peeking = ref(false);
     name: "<SkWindow cover>",
     kind: "prop",
     summary: "Makes the pop-out a borderless window that covers a whole monitor, taskbar included.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, PART, PART),
     syntax: '<SkWindow cover="monitor" />',
     params: [
       {
@@ -3925,7 +3902,10 @@ defineProps<{ countdown: number }>();
 </style>`,
       },
     ],
-    limitations: [POPOUT_NEVER_SHOWN],
+    limitations: [
+      "On macOS and Linux, each show sizes the window to the whole display it is on, but the window is not made borderless, and `monitor` is ignored.",
+      "On Linux under Wayland, the window cannot be placed or sized to the display.",
+    ],
     related: ["sk-window-monitor", "sk-window-ignore-mouse-events", "sk-window-focusable"],
     aliases: ["overlay", "kiosk"],
   },
@@ -4014,7 +3994,7 @@ defineProps<{ photo: string }>();
     name: "<SkWindow ignoreMouseEvents>",
     kind: "prop",
     summary: "Lets every mouse event pass through the pop-out to the windows under it.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, PART),
     syntax: '<SkWindow :ignore-mouse-events="true" />',
     params: [
       {
@@ -4050,7 +4030,7 @@ const locked = ref(true);
         note: "Keep the toggle in the main window: a click-through window cannot receive the click that unlocks it.",
       },
     ],
-    limitations: [POPOUT_HWND_ONLY],
+    limitations: ["On Linux under X11, it does nothing. Under Wayland it works."],
     related: ["sk-window-cover", "sk-window-focusable"],
     aliases: ["click-through", "setIgnoreMouseEvents"],
   },
@@ -4059,7 +4039,7 @@ const locked = ref(true);
     name: "<SkWindow focusable>",
     kind: "prop",
     summary: "Sets whether the pop-out can ever become the active window.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, PART, PART),
     syntax: '<SkWindow :focusable="false" />',
     params: [
       {
@@ -4093,7 +4073,9 @@ defineProps<{ fps: number }>();
 </template>`,
       },
     ],
-    limitations: [POPOUT_NEVER_SHOWN],
+    limitations: [
+      "On macOS and Linux, it only keeps the pop-out from being activated when it is shown; a click still activates it.",
+    ],
     related: ["sk-window-activate", "sk-window-taskbar", "sk-window-ignore-mouse-events"],
   },
   {
@@ -4101,7 +4083,7 @@ defineProps<{ fps: number }>();
     name: "<SkWindow contentProtection>",
     kind: "prop",
     summary: "Keeps the pop-out out of screenshots and screen sharing.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, NO),
     syntax: '<SkWindow :content-protection="true" />',
     params: [
       {
@@ -4115,6 +4097,7 @@ defineProps<{ fps: number }>();
     notes: [
       LIVE,
       "On Windows 10 version 2004 and later, the window is left out of captures. On earlier versions it is captured as black.",
+      "On macOS, it sets the window's sharing type to none.",
       "Like Electron's `setContentProtection(true)`.",
     ],
     examples: [
@@ -4134,7 +4117,7 @@ defineProps<{ secret: string }>();
 </template>`,
       },
     ],
-    limitations: [POPOUT_HWND_ONLY],
+    limitations: ["On Linux, it does nothing."],
     related: ["sk-window"],
   },
   {
@@ -4191,7 +4174,7 @@ const extended = screen.isExtended;
     params: [
       { name: "windowId", type: "number", description: "The window's id, the one `sk devtools --window` takes." },
     ],
-    notes: ["Live prop changes start reaching the window from here."],
+    notes: ["Live prop changes start reaching the window from here.", "In Svelte, it is the `onopen` callback prop."],
     examples: [
       {
         title: "Log the id to target the window in devtools",
@@ -4213,12 +4196,15 @@ ${SK_IMPORT}
     slug: "sk-window-event-close",
     name: "<SkWindow @close>",
     kind: "event",
-    summary: "Fires after the user or the OS has closed the pop-out.",
+    summary: "Fires when the pop-out closes: by the user, by the OS, or because the app unmounts the component.",
     platforms: all(OK),
     syntax: '<SkWindow @close="() => void" />',
     notes: [
-      "Unmount the component in the handler, usually by setting its `v-if` flag to `false`. Otherwise the content paints in the main window again.",
+      "After a close by the user or the OS, unmount the component in the handler, usually by setting its `v-if` flag to `false`. Otherwise the content paints in the main window again.",
+      "When the app unmounts the component, it fires synchronously as the unmount starts, before the OS window is gone.",
+      "It fires at most once per window, and only if the window had opened.",
       "After it, `windowId` is `0` and prop changes no longer reach a window.",
+      "In Svelte, it is the `onclose` callback prop.",
     ],
     examples: [
       {
@@ -4239,7 +4225,6 @@ const detached = ref(false);
 </template>`,
       },
     ],
-    edgeCases: ["It does not fire when the app unmounts the component itself."],
     related: ["sk-window", "sk-window-event-open"],
   },
   {
@@ -4249,7 +4234,7 @@ const detached = ref(false);
     summary: "Fires when the pop-out becomes the active window.",
     platforms: all(OK),
     syntax: '<SkWindow @focus="() => void" />',
-    notes: ["It arrives with the pop-out's next frame."],
+    notes: ["It arrives with the pop-out's next frame.", "In Svelte, it is the `onfocus` callback prop."],
     examples: [
       {
         title: "Highlight the palette while it is active",
@@ -4277,7 +4262,7 @@ const active = ref(false);
     summary: "Fires when the pop-out stops being the active window.",
     platforms: all(OK),
     syntax: '<SkWindow @blur="() => void" />',
-    notes: ["It arrives with the pop-out's next frame."],
+    notes: ["It arrives with the pop-out's next frame.", "In Svelte, it is the `onblur` callback prop."],
     examples: [
       {
         title: "Close a quick-search window when the user clicks away",
@@ -4313,6 +4298,7 @@ const open = ref(true);
     notes: [
       "It is the only way to read a pop-out's size from JS: `innerWidth` is the main window's.",
       "It also updates the exposed `width`, `height` and `scale`.",
+      "In Svelte, it is the `onresize` callback prop.",
     ],
     examples: [
       {
@@ -4341,22 +4327,23 @@ const onResize = (m: SkWindowMetrics) => (wide.value = m.width > 360);
     slug: "sk-window-event-show",
     name: "<SkWindow @show>",
     kind: "event",
-    summary: "Fires when a pop-out that was hidden appears, with the time it took to paint.",
-    platforms: os(PART, NO, NO),
+    summary: "Fires when the pop-out appears, with the time it took to paint.",
+    platforms: all(OK),
     syntax:
       '<SkWindow @show="(shown: { firstFrameMs: number; width: number; height: number; scale: number }) => void" />',
     params: [
       {
         name: "shown.firstFrameMs",
         type: "number",
-        description: "Milliseconds from the show request to the first frame.",
+        description: "Milliseconds from the open or the show request to the first frame.",
       },
       { name: "shown.width", type: "number", description: "Client width in CSS px." },
       { name: "shown.height", type: "number", description: "Client height in CSS px." },
       { name: "shown.scale", type: "number", description: "The pop-out's display scale." },
     ],
     notes: [
-      "It fires for a pop-out that started hidden (`visible` `false`, `cover`, or `focusable` `false`) and each time `visible` goes from `false` to `true`.",
+      "It fires once when the pop-out first appears, whether it opens visible or starts hidden, and again each time `visible` goes from `false` to `true`.",
+      "In Svelte, it is the `onshow` callback prop.",
     ],
     examples: [
       {
@@ -4375,8 +4362,6 @@ defineProps<{ shown: boolean }>();
 </template>`,
       },
     ],
-    edgeCases: ["On Windows, it does not fire for a pop-out shown at mount; use `@open` or the first `@resize`."],
-    limitations: ["On macOS and Linux, it never fires."],
     related: ["sk-window-visible", "sk-window-event-hide", "sk-window-event-open"],
   },
   {
@@ -4384,9 +4369,9 @@ defineProps<{ shown: boolean }>();
     name: "<SkWindow @hide>",
     kind: "event",
     summary: "Fires when the pop-out is hidden through `visible`.",
-    platforms: os(OK, NO, NO),
+    platforms: all(OK),
     syntax: '<SkWindow @hide="() => void" />',
-    notes: ["It fires when `visible` goes from `true` to `false`."],
+    notes: ["It fires when `visible` goes from `true` to `false`.", "In Svelte, it is the `onhide` callback prop."],
     examples: [
       {
         title: "Pause a preview when it is hidden",
@@ -4406,7 +4391,6 @@ const video = ref<HTMLVideoElement | null>(null);
 </template>`,
       },
     ],
-    limitations: ["On macOS and Linux, it never fires."],
     related: ["sk-window-visible", "sk-window-event-show"],
   },
   {
@@ -4416,7 +4400,7 @@ const video = ref<HTMLVideoElement | null>(null);
     summary: "The pop-out's root element, to use as a `<Teleport>` target.",
     platforms: all(OK),
     syntax: "el: Ref<SkWindowTarget | null>",
-    notes: ["It is set at mount, before `@open`."],
+    notes: ["It is set at mount, before `@open`.", "In Svelte, read it with `bind:el`."],
     examples: [
       {
         title: "Move an existing panel into a pop-out",
@@ -4450,6 +4434,7 @@ const target = computed(() => win.value?.el ?? null);
     summary: "The pop-out's window id, `0` before `@open` and after `@close`.",
     platforms: all(OK),
     syntax: "windowId: Ref<number>",
+    notes: ["In Svelte, read it with `bind:windowId`."],
     examples: [
       {
         title: "Show the window id in a debug overlay",
@@ -4476,7 +4461,7 @@ const win = ref<{ windowId: number } | null>(null);
     summary: "The pop-out's content width in CSS px, `0` until it first paints.",
     platforms: all(OK),
     syntax: "width: Ref<number>",
-    notes: ["It is updated with each `@resize`."],
+    notes: ["It is updated with each `@resize`.", "In Svelte, read it with `bind:width`."],
     examples: [
       {
         title: "Show the pop-out's size in the main window",
@@ -4503,7 +4488,7 @@ const win = ref<{ width: number; height: number } | null>(null);
     summary: "The pop-out's content height in CSS px, `0` until it first paints.",
     platforms: all(OK),
     syntax: "height: Ref<number>",
-    notes: ["It is updated with each `@resize`."],
+    notes: ["It is updated with each `@resize`.", "In Svelte, read it with `bind:height`."],
     examples: [
       {
         title: "Fit a list to the pop-out's height",
@@ -4532,7 +4517,10 @@ const rows = computed(() => Math.max(1, Math.floor((win.value?.height ?? 0) / 28
     summary: "The display scale of the pop-out's monitor, `1` until it first paints.",
     platforms: all(OK),
     syntax: "scale: Ref<number>",
-    notes: ["It can differ from `devicePixelRatio`, which is the main window's."],
+    notes: [
+      "It can differ from `devicePixelRatio`, which is the main window's.",
+      "In Svelte, read it with `bind:scale`.",
+    ],
     examples: [
       {
         title: "Size a canvas for the pop-out's own display",
@@ -4573,6 +4561,7 @@ watchEffect(() => {
     notes: [
       "It maps through screen coordinates, so it works across monitors with different scales.",
       "For a `cover` window, it measures where the next show will place the window.",
+      "In Svelte, `bind:this` on `<SkWindow>` gives an object with this method.",
     ],
     examples: [
       {
@@ -4606,10 +4595,10 @@ const spot = computed(() => overlay.value?.mapFromMain(props.target) ?? null);
     summary: "Lists the `<SkWindow>` props that only take effect when the window opens.",
     platforms: all(OK),
     syntax:
-      'import { SK_WINDOW_CREATION_TIME_PROPS } from "@skathi-native/runtime";\n\nconst SK_WINDOW_CREATION_TIME_PROPS: readonly string[]; // chrome, backdrop, resizable, minWidth, minHeight, cover, taskbar, focusable',
+      'import { SK_WINDOW_CREATION_TIME_PROPS } from "@skathi-native/runtime";\n\nconst SK_WINDOW_CREATION_TIME_PROPS: readonly string[]; // chrome, resizable, minWidth, minHeight, cover, taskbar, focusable',
     notes: [
-      "`titleBarHeight` and `activate` are creation-time too, but are not in the list.",
-      "Only `chrome`, `cover`, `taskbar` and `focusable` print an advisory when changed; the others change without effect.",
+      "A change of any of them on an open window prints an advisory and does nothing.",
+      "Every other prop is live.",
     ],
     examples: [
       {
@@ -4619,17 +4608,17 @@ const spot = computed(() => overlay.value?.mapFromMain(props.target) ?? null);
 import { computed } from "vue";
 ${SK_IMPORT}
 
-const props = defineProps<{ material: string; resizable: boolean }>();
-const key = computed(() => props.material + "|" + props.resizable);
+const props = defineProps<{ chrome: "default" | "hidden"; resizable: boolean }>();
+const key = computed(() => props.chrome + "|" + props.resizable);
 </script>
 
 <template>
-  <SkWindow :key="key" title="Preview" :backdrop="material" :resizable="resizable"><slot /></SkWindow>
+  <SkWindow :key="key" title="Preview" :chrome="chrome" :resizable="resizable"><slot /></SkWindow>
 </template>`,
         note: "A new `key` unmounts the old component and mounts a new one, which opens a new window.",
       },
     ],
-    related: ["sk-window", "sk-window-backdrop", "sk-window-chrome"],
+    related: ["sk-window", "sk-window-resizable", "sk-window-chrome"],
   },
   {
     slug: "window-open",
@@ -4688,7 +4677,9 @@ const taskbar = section("Taskbar and dock", [
     platforms: all(PLAN),
     syntax: "appWindow.setBadgeCount(...args: unknown[]): void",
     returns: "`undefined`.",
-    notes: [NOT_YET, "The advisory says there is no web equivalent, but `navigator.setAppBadge()` is one."],
+    notes: [
+      "It does nothing and prints an advisory once that points at `navigator.setAppBadge()` and `navigator.clearAppBadge()`.",
+    ],
     workaround: "Call `navigator.setAppBadge(count)`.",
     related: ["set-app-badge", "clear-app-badge"],
   },

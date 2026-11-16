@@ -718,11 +718,65 @@ defineProps<{ message: string }>();
 </style>`,
         note: "Teleported to the app root, the `fixed` box is placed against the window's edges.",
       },
+      {
+        title: "Keep each section's header on top while its section scrolls",
+        lang: "vue",
+        code: `<template>
+  <div class="list">
+    <section v-for="group in groups" :key="group.name">
+      <h3 class="header">{{ group.name }}</h3>
+      <div v-for="item in group.items" :key="item.id" class="row">{{ item.label }}</div>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.list {
+  height: 400px;
+  overflow: auto;
+}
+.header {
+  position: sticky;
+  top: 0;
+  background: white;
+}
+</style>`,
+        note: "The header stays inside its `<section>`, so the next section's header pushes it out.",
+      },
+      {
+        title: "Freeze the header row and the first column of a grid",
+        lang: "css",
+        code: `.sheet {
+  overflow: auto;
+}
+.sheet .row {
+  display: flex;
+}
+.sheet .head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.sheet .row > :first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+.sheet .head > :first-child {
+  z-index: 3;
+}`,
+        note: "The corner cell is sticky on both axes. The `z-index` values keep the header over the column and the corner over both.",
+      },
     ],
     edgeCases: [
       "A `fixed` box whose parent is not the size of the window prints an advisory in `sk dev`.",
       "In a pop-out window, a `fixed` box is placed against the pop-out's edges, not the main window's, with a one-time advisory.",
       "`fixed` and `sticky` always open a stacking context, even with `z-index: auto`.",
+      "A `sticky` box with `z-index: auto` paints over the in-flow content after it, as in a browser.",
+      "The nearest ancestor with `overflow` `hidden`, `scroll` or `auto` is the scroll container a `sticky` box holds to. Inside an `overflow: hidden` card it holds to the card, and so does not follow the page's scroll.",
+      "A percentage or `calc()` in `top` or `bottom` resolves against the scroll container's height, and in `left` or `right` against its width.",
+      "With no inset set, a `sticky` box stays where the flow put it.",
+      "When `top` and `bottom` both apply and conflict, `top` wins; likewise `left` over `right`.",
     ],
   },
   top: {
