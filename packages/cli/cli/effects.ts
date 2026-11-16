@@ -2,8 +2,8 @@
 // (HLSL, WGSL, MSL), so a build made on one OS runs on all three. `sk build` puts them into the payload
 // as `sk/effects/*` entries; `sk dev` writes them to dist/.sk-dev/effects and points the dev host there.
 
-import { watch, writeFileSync, type FSWatcher } from "node:fs";
-import { join } from "node:path";
+import { existsSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { basename, join } from "node:path";
 import {
   appShadersDir,
   compileAppEffects,
@@ -69,12 +69,13 @@ export interface EffectsWatch {
   close(): void;
 }
 
-/// Recompiles into `out` when a `.slang` under shaders/ changes, debounced. A failed compile keeps the
-/// last good files and reports through `onError`.
+/// Recompiles into `out` when a `.slang` under shaders/ changes, debounced; an app without shaders/
+/// is watched for one. A failed compile keeps the last good files and reports through `onError`.
+/// `compiler` may be resolved on the first rebuild, so an app without shaders never fetches one.
 export function watchAppEffects(options: {
   appRoot: string;
   out: string;
-  compiler: string;
+  compiler: string | (() => Promise<string>);
   onBuilt: (effects: AppEffects) => void;
   onError: (message: string) => void;
   debounceMs?: number;
@@ -90,7 +91,8 @@ export function watchAppEffects(options: {
     }
     running = true;
     try {
-      const effects = await compileAppEffects(options.appRoot, options.compiler);
+      const compiler = typeof options.compiler === "string" ? options.compiler : await options.compiler();
+      const effects = await compileAppEffects(options.appRoot, compiler);
       writeEffectFiles(options.out, effects.files);
       options.onBuilt(effects);
     } catch (e) {
@@ -105,18 +107,37 @@ export function watchAppEffects(options: {
       }
     }
   };
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void rebuild();
+    }, options.debounceMs ?? 120);
+  };
   let watcher: FSWatcher | null = null;
-  try {
-    watcher = watch(dir, { recursive: true }, (_event, file) => {
-      if (file && !String(file).endsWith(".slang")) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        void rebuild();
-      }, options.debounceMs ?? 120);
-    });
-  } catch (e) {
-    options.onError(`cannot watch ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+  const watchShaders = () => {
+    try {
+      watcher = watch(dir, { recursive: true }, (_event, file) => {
+        if (file && !String(file).endsWith(".slang")) return;
+        schedule();
+      });
+    } catch (e) {
+      options.onError(`cannot watch ${dir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  if (existsSync(dir)) {
+    watchShaders();
+  } else {
+    try {
+      watcher = watch(options.appRoot, (_event, file) => {
+        if (file !== basename(dir) || !existsSync(dir)) return;
+        watcher?.close();
+        watchShaders();
+        schedule();
+      });
+    } catch (e) {
+      options.onError(`cannot watch ${options.appRoot}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   return {
     close() {
@@ -135,7 +156,7 @@ export function devEffectsWatch(options: {
   appRoot: string;
   dist: string;
   out: string;
-  compiler: string;
+  compiler: string | (() => Promise<string>);
   inPlace: boolean;
   restart: () => void;
   log: (line: string) => void;

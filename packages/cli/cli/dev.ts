@@ -5,10 +5,10 @@
 // -p sk-app`); the cached dev host of this version; a download of it from the release (host-fetch.ts).
 //
 // An app with shaders/*.slang has them compiled into <dist>/effects, which the host reads through
-// SK_EFFECTS_DIR, and recompiled on every change. A good rebuild reaches the running app as a message
-// beside the HMR changes.json and replaces its effects in place; a host that predates that (its
-// --sk-host-info has no `devReload: ["effects"]`) is restarted. A failed rebuild prints the
-// diagnostics and keeps the last good build running.
+// SK_EFFECTS_DIR, and recompiled on every change, the first shader of an app that had none too. A
+// good rebuild reaches the running app as a message beside the HMR changes.json and replaces its
+// effects in place; a host that predates that (its --sk-host-info has no `devReload: ["effects"]`)
+// is restarted. A failed rebuild prints the diagnostics and keeps the last good build running.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -137,12 +137,17 @@ export async function dev(
   let host = start();
   let restarting = false;
   let effectsWatch: EffectsWatch | null = null;
-  if (compiler) {
+  if (!overridden) {
+    const shaderCompiler = async (): Promise<string> => {
+      compiler ??= (await resolveCompiler({ named: options.shaderCompiler, log: (line) => console.log(c.dim(line)) }))
+        .path;
+      return compiler;
+    };
     effectsWatch = devEffectsWatch({
       appRoot: config.appRoot,
       dist,
       out: effectsDir,
-      compiler,
+      compiler: shaderCompiler,
       inPlace: reloadsEffects(exe),
       restart: () => {
         restarting = true;

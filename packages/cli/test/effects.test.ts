@@ -276,6 +276,45 @@ test.skipIf(!compiler)(
 );
 
 test.skipIf(!compiler)(
+  "sk dev builds the first shader of an app that started without any",
+  async () => {
+    const root = mkdtempSync(join(scratch, "app-"));
+    const dist = join(root, "dist");
+    const out = join(dist, "effects");
+    mkdirSync(dist);
+    let errors = "";
+    let wake = () => {};
+    const rebuilt = new Promise<void>((resolve) => (wake = resolve));
+    const watch = devEffectsWatch({
+      appRoot: root,
+      dist,
+      out,
+      compiler: () => Promise.resolve(compiler!),
+      inPlace: true,
+      restart: () => {},
+      log: () => wake(),
+      onError: (text) => {
+        errors += text;
+        wake();
+      },
+      debounceMs: 30,
+    });
+    try {
+      mkdirSync(join(root, "shaders"));
+      writeFileSync(join(root, "shaders", "ripple.slang"), RIPPLE);
+      await rebuilt;
+      expect(errors).toBe("");
+      const message = JSON.parse(readFileSync(join(dist, EFFECTS_CHANGED), "utf8"));
+      const manifest = JSON.parse(readFileSync(join(message.dir, "effects.json"), "utf8"));
+      expect(manifest.effects.map((e: { name: string }) => e.name)).toEqual(["ripple"]);
+    } finally {
+      watch.close();
+    }
+  },
+  20_000,
+);
+
+test.skipIf(!compiler)(
   "sk dev sends a shader edit to a host that reloads effects instead of restarting it",
   async () => {
     const root = app({ "ripple.slang": RIPPLE });
