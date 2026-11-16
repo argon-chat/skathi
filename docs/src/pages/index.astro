@@ -275,9 +275,11 @@ const structuredData = {
                   width="1280"
                   height="820"
                   poster="/media/player-poster.webp"
-                  data-src="/media/player.mp4"
                   aria-label="The player template: a radial spectrum round the cover, recolouring with each track, and hearts when a song is liked"
-                ></video>
+                >
+                  <source data-src="/media/player.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                  <source data-src="/media/player.mp4" type="video/mp4" />
+                </video>
               </div>
               <figcaption>
                 <strong>Music player</strong><span>Svelte 5 · spectrum, aurora and glass in shaders</span>
@@ -294,9 +296,11 @@ const structuredData = {
                   width="1280"
                   height="820"
                   poster="/media/weather-poster.webp"
-                  data-src="/media/weather.mp4"
                   aria-label="The weather template: rain over a painted valley, a thunderstorm with lightning, then snow, with drops and frost on the glass panels"
-                ></video>
+                >
+                  <source data-src="/media/weather.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                  <source data-src="/media/weather.mp4" type="video/mp4" />
+                </video>
               </div>
               <figcaption>
                 <strong>Weather</strong><span>Vue 3 · sky, rain, lightning and frost in shaders</span>

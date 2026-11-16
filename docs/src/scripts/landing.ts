@@ -48,14 +48,23 @@ function startParallax(signal: AbortSignal): void {
 function startGallery(signal: AbortSignal): void {
   const gallery = document.querySelector<HTMLElement>("[data-fan]");
   if (!gallery) return;
-  const videos = [...gallery.querySelectorAll<HTMLVideoElement>("video[data-src]")];
+  const videos = [...gallery.querySelectorAll<HTMLVideoElement>("video")];
   const still =
     window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
     (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+  const attach = (video: HTMLVideoElement): void => {
+    const pending = video.querySelectorAll<HTMLSourceElement>("source[data-src]");
+    if (pending.length === 0) return;
+    for (const source of pending) {
+      source.src = source.dataset["src"] ?? "";
+      source.removeAttribute("data-src");
+    }
+    video.load();
+  };
 
   for (const video of videos) {
     if (still) {
-      video.src = video.dataset["src"] ?? "";
+      attach(video);
       video.controls = true;
     }
   }
@@ -65,7 +74,7 @@ function startGallery(signal: AbortSignal): void {
         for (const entry of entries) {
           const video = entry.target as HTMLVideoElement;
           if (entry.isIntersecting) {
-            if (!video.src) video.src = video.dataset["src"] ?? "";
+            attach(video);
             void video.play().catch(() => {});
           } else {
             video.pause();
