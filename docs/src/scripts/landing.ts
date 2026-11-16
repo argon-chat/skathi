@@ -45,6 +45,56 @@ function startParallax(signal: AbortSignal): void {
   update();
 }
 
+function startGallery(signal: AbortSignal): void {
+  const gallery = document.querySelector<HTMLElement>("[data-fan]");
+  if (!gallery) return;
+  const videos = [...gallery.querySelectorAll<HTMLVideoElement>("video[data-src]")];
+  const still =
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+
+  for (const video of videos) {
+    if (still) {
+      video.src = video.dataset["src"] ?? "";
+      video.controls = true;
+    }
+  }
+  if (!still) {
+    const watcher = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const video = entry.target as HTMLVideoElement;
+          if (entry.isIntersecting) {
+            if (!video.src) video.src = video.dataset["src"] ?? "";
+            void video.play().catch(() => {});
+          } else {
+            video.pause();
+          }
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+    for (const video of videos) watcher.observe(video);
+    signal.addEventListener("abort", () => watcher.disconnect());
+  }
+
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    const travel = gallery.offsetHeight - window.innerHeight;
+    const raw = travel > 0 ? -gallery.getBoundingClientRect().top / (travel * 0.75) : 1;
+    const t = Math.min(1, Math.max(0, raw));
+    gallery.style.setProperty("--fan", (t * t * (3 - 2 * t)).toFixed(4));
+  };
+  const schedule = () => {
+    if (!frame) frame = window.requestAnimationFrame(update);
+  };
+  window.addEventListener("scroll", schedule, { passive: true, signal });
+  window.addEventListener("resize", schedule, { passive: true, signal });
+  signal.addEventListener("abort", () => window.cancelAnimationFrame(frame));
+  update();
+}
+
 function initializeLanding(): void {
   const page = document.querySelector<HTMLElement>(".landing");
   if (!page || page.dataset["ready"]) return;
@@ -56,21 +106,7 @@ function initializeLanding(): void {
   void refreshStats(signal);
   startParallax(signal);
 
-  const tabs = [...document.querySelectorAll<HTMLButtonElement>("[data-shot]")];
-  for (const tab of tabs) {
-    tab.addEventListener(
-      "click",
-      () => {
-        for (const other of tabs) {
-          const selected = other === tab;
-          other.setAttribute("aria-selected", String(selected));
-          const panel = document.getElementById(other.getAttribute("aria-controls") ?? "");
-          if (panel) panel.hidden = !selected;
-        }
-      },
-      { signal },
-    );
-  }
+  startGallery(signal);
 
   const counter = document.querySelector<HTMLButtonElement>("[data-counter]");
   let count = 0;
