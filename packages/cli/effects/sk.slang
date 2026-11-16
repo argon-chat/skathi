@@ -213,6 +213,11 @@ public struct SkBackdropRadiusAttribute
 /// `input.time` (a speed), so `speed: 0` costs nothing. At most one per
 /// effect; an effect with no `[SkAnimated]` parameter never repaints on its
 /// own.
+///
+/// Use it only as a factor of `input.time` (`input.time * speed`): the host
+/// integrates the speed per element and hands the shader the value that makes
+/// that product the phase reached so far, so a change of speed (or a
+/// transition of it) carries on from where the motion is instead of jumping.
 [__AttributeUsage(_AttributeTargets.Var)]
 public struct SkAnimatedAttribute
 {

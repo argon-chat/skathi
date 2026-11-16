@@ -159,6 +159,7 @@ impl EffectSchema {
             backdrop_radius_param: self.backdrop_radius_param,
             bleed_param: self.bleed_param,
             animated: false,
+            animated_param: self.animated_param,
             pointer_param: self.pointer_param,
             pointer_times_param: self.pointer_times_param,
             clock_mask: self.clock_mask,
