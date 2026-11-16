@@ -36,7 +36,7 @@
     },
     "packages/cli": {
       "name": "@skathi-native/cli",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "bin": {
         "sk": "./cli/sk.ts",
       },
@@ -57,7 +57,7 @@
     },
     "packages/runtime": {
       "name": "@skathi-native/runtime",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "dependencies": {
         "@vue/runtime-core": "^3.5.0",
         "pinia": "^4.0.3",
@@ -75,7 +75,7 @@
     },
     "packages/test": {
       "name": "@skathi-native/test",
-      "version": "0.2.0",
+      "version": "0.3.0",
     },
   },
   "packages": {
