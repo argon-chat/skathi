@@ -1,0 +1,11 @@
+---
+import Icon from "./Icon.astro";
+---
+
+<div class="theme-switch" role="group" aria-label="Color theme">
+  <button data-theme-choice="light" aria-label="Light theme" title="Light theme"><Icon name="sun" size={15} /></button
+  ><button data-theme-choice="dark" aria-label="Dark theme" title="Dark theme"><Icon name="moon" size={15} /></button
+  ><button data-theme-choice="system" aria-label="System theme" title="System theme"
+    ><Icon name="monitor" size={15} /></button
+  >
+</div>

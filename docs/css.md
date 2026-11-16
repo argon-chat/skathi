@@ -1,3 +1,10 @@
+---
+title: CSS coverage
+description: Supported CSS properties, layout, styling, and platform limitations in the native renderer.
+section: Reference
+order: 1
+---
+
 # CSS coverage
 
 What a Skathi app can use from CSS, what is coming, and what is not. Stylesheets are compiled by

@@ -4,17 +4,22 @@
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "docs"
   ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "sk": "bun packages/cli/cli/sk.ts",
     "test": "bun run --cwd packages/runtime test && bun run --cwd packages/cli test",
-    "typecheck": "tsc -p packages/runtime/tsconfig.json && tsc -p packages/runtime/tsconfig.test.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/cli/tsconfig.test.json && tsc -p scripts/tsconfig.json && tsc -p packages/test/tsconfig.json && tsc -p crates/sk-app/src/tsconfig.json && vue-tsc -p apps/tsconfig.json && vue-tsc -p apps/devtools/test/tsconfig.inspector-ui.json",
+    "typecheck": "tsc -p packages/runtime/tsconfig.json && tsc -p packages/runtime/tsconfig.test.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/cli/tsconfig.test.json && tsc -p scripts/tsconfig.json && tsc -p packages/test/tsconfig.json && tsc -p crates/sk-app/src/tsconfig.json && vue-tsc -p apps/tsconfig.json && vue-tsc -p apps/devtools/test/tsconfig.inspector-ui.json && bun run docs:check",
     "preludes": "bun scripts/gen-preludes.ts",
     "preludes:check": "bun scripts/gen-preludes.ts --check",
     "shaders": "bun scripts/shaders.ts",
-    "shaders:check": "bun scripts/shaders.ts --check"
+    "shaders:check": "bun scripts/shaders.ts --check",
+    "docs:dev": "bun run --cwd docs dev",
+    "docs:build": "bun run --cwd docs build",
+    "docs:check": "bun run --cwd docs check",
+    "docs:deploy": "bun run --cwd docs deploy"
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",

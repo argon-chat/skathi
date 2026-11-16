@@ -1,0 +1,102 @@
+---
+title: Writing documentation
+label: Authoring guide
+description: Add Markdown pages, Vue examples, highlighted code, and documentation that agents can read.
+section: Contributing
+order: 0
+---
+
+import CounterDemo from "../src/components/CounterDemo.vue";
+
+Documentation is source code you can read. Add a Markdown file, describe it in frontmatter, and Astro turns it into a page with navigation, an outline, and a Markdown version for agents.
+
+## Add a page
+
+Create a `.md` or `.mdx` file inside `docs/pages/`. Nested directories become nested URLs. The existing `docs/css.md` and `docs/web-platform.md` are also part of the collection.
+
+```yaml
+---
+title: Your page title
+description: A concise explanation of what the reader will learn.
+section: Getting started
+order: 3
+---
+```
+
+Use `Getting started`, `Reference`, or `Contributing` for the section. The `order` field controls placement inside that section; an optional `label` sets a shorter sidebar title. Write level-two and level-three headings to populate the outline.
+
+Paths keep their name: `pages/guides/windows.md` becomes `/guides/windows/`. Its source is available at `/guides/windows.md`.
+
+## Write ordinary Markdown
+
+Use paragraphs, headings, lists, tables, blockquotes, and fenced code blocks. Link to documentation with its site path, for example `[CSS coverage](/css/)`. You do not need to write a layout or update a separate navigation file.
+
+Keep examples runnable and call out platform limitations. A code sample is more useful when a reader can tell which runtime it belongs to.
+
+## Highlight code
+
+Code is highlighted at build time with Shiki. JavaScript, TypeScript, Rust, Slang, Vue, shell commands, JSON, CSS, and TOML are configured. Standard Shiki aliases such as `js` and `ts` also work.
+
+### JavaScript
+
+```js
+const platform = "desktop";
+console.log(`Hello from ${platform}`);
+```
+
+### TypeScript
+
+```ts
+type Platform = "windows" | "macos" | "linux";
+const target: Platform = "windows";
+```
+
+### Rust
+
+```rust
+fn main() {
+    let greeting = "Hello from the native host";
+    println!("{greeting}");
+}
+```
+
+### Slang
+
+The following is an illustrative compute shader, independent of the SDK’s application API.
+
+```slang
+RWStructuredBuffer<float> values;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void computeMain(uint3 threadId : SV_DispatchThreadID)
+{
+    values[threadId.x] *= 2.0;
+}
+```
+
+## Add a Vue example
+
+Use an `.mdx` page to import a Vue component and hydrate it with an Astro client directive. Plain `.md` pages stay static.
+
+<CounterDemo client:visible />
+
+```mdx
+import CounterDemo from "../src/components/CounterDemo.vue";
+
+<CounterDemo client:visible />
+```
+
+This example runs in the documentation website’s browser. A native application uses the Skathi runtime and its supported platform APIs.
+
+## Make it readable by agents
+
+Each collection entry is exported as a Markdown source page and included in [/llms.txt](/llms.txt) and [/llms-full.txt](/llms-full.txt). Descriptive titles, self-contained examples, and explicit limitations help both readers and agents.
+
+The **Copy page** button copies the text source. The adjacent menu opens or downloads it. MDX sources also contain their component imports and markup, so explain an interactive example in prose as well.
+
+## Preview and publish
+
+From `crates/vue-native`, run `bun run docs:dev`. From this package, run `bun run check`, `bun fmt`, and `bun run build` before publishing.
+
+Set `SITE_URL` to the final public origin so canonical URLs, social previews, the sitemap, and agent links all point at the right host. Then use `bun run deploy` to build and upload static assets through Wrangler.

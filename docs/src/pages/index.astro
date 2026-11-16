@@ -1,0 +1,503 @@
+---
+import { Image } from "astro:assets";
+import { Code } from "astro:components";
+import "../styles/docs.css";
+import "../styles/landing.css";
+import wordmark from "../../../logos/full_side_text_logo.svg?url";
+import wolf from "../../../logos/logo_single.svg?url";
+import showcaseHome from "../assets/showcase-home.png";
+import showcaseShaders from "../assets/showcase-shaders.png";
+import shadingGlass from "../assets/shading-glass.png";
+import shadingNebula from "../assets/shading-nebula.png";
+import slang from "../lib/slang";
+import Head from "../components/Head.astro";
+import Icon from "../components/Icon.astro";
+import ThemeSwitch from "../components/ThemeSwitch.astro";
+import { docsHome, repository, version } from "../lib/docs";
+import { fetchStats } from "../lib/stats";
+
+const command = "bun create skathi my-blazing-fast-app";
+const title = "Skathi · Desktop apps from Vue, without a browser";
+const description =
+  "Write Vue 3 or Svelte 5 components in TypeScript. Skathi renders them on the GPU, runs the script in JavaScriptCore or compiles it ahead of time to machine code, and ships one app for Windows, macOS and Linux.";
+const canonical = new URL("/", Astro.site);
+const stats = await fetchStats();
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
+const shapes = {
+  sparkle: "M12 2c.7 5 2.9 7.3 8 8-5.1.7-7.3 3-8 8-.7-5-2.9-7.3-8-8 5.1-.7 7.3-3 8-8Z",
+  star: "m12 2.8 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 2.8Z",
+  heart: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z",
+} as const;
+const kinds = ["sparkle", "sparkle", "star", "heart", "bubble", "bubble", "dot"] as const;
+let seed = 11;
+const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+const parallax = [
+  { depth: 0.08, opacity: 0.35, scale: 0.55, count: 18 },
+  { depth: 0.22, opacity: 0.6, scale: 0.85, count: 12 },
+  { depth: 0.42, opacity: 0.85, scale: 1.2, count: 8 },
+].map((layer) => ({
+  ...layer,
+  items: Array.from({ length: layer.count }, () => {
+    const kind = kinds[Math.floor(random() * kinds.length)] ?? "dot";
+    const side = random() < 0.5;
+    return {
+      kind,
+      left: side ? random() * 16 : 84 + random() * 14,
+      top: random() * 100,
+      size: Math.round((12 + random() * 16) * layer.scale * (kind === "dot" ? 0.4 : 1)),
+      delay: -random() * 8,
+    };
+  }),
+}));
+
+const component = `<script setup lang="ts">
+import { ref } from "vue";
+
+const count = ref(0);
+</script>
+
+<template>
+  <main class="window">
+    <h1>Hello from a native window</h1>
+    <button @click="count++">
+      Clicked {{ count }} times
+    </button>
+  </main>
+</template>`;
+
+const sheenShader = `[SkEffect("sheen")]
+struct Sheen : IEffect
+{
+    [SkAnimated] [SkDefault("0.5")] [SkRange(0.0, 4.0)]
+    float speed;
+
+    [SkColor] [SkOptional] [SkDefault("#ffffff")]
+    float4 tint;
+
+    static override bool straightAlpha() { return true; }
+
+    float4 shade(EffectInput input)
+    {
+        float sweep = frac(input.time * speed) * 1.6 - 0.3;
+        float band = saturate(1.0 - abs((input.local.x + input.local.y) * 0.5 - sweep) * 8.0);
+        return float4(tint.rgb, tint.a * band * band * 0.6);
+    }
+};`;
+
+const sheenCss = `.card {
+  background: linear-gradient(135deg, #3b3f9e, #8b5cf6);
+  --shading: sheen(0.5, #ffffffcc);
+  transition: --shading 600ms ease;
+}
+.card:hover {
+  --shading: sheen(0.5, #ffd6f0);
+}`;
+
+const effects = [
+  "nebula",
+  "lens",
+  "glass",
+  "ripples",
+  "shatter",
+  "snow",
+  "fireflies",
+  "dissolve",
+  "orbit",
+  "halftone",
+  "pond",
+  "spotlight",
+  "grade",
+  "sheen",
+];
+
+const features = [
+  {
+    icon: "cpu",
+    tone: "pink",
+    title: "Rendered on the GPU",
+    text: "Layout by Taffy, painting by gpui on Direct3D, Metal or Vulkan. No WebView, and no Chromium in your bundle.",
+  },
+  {
+    icon: "layers",
+    tone: "lilac",
+    title: "Vue 3 and Svelte 5",
+    text: "Single-file components, the Composition API, Pinia, Vue Router and Tailwind. Or Svelte 5, from its own template.",
+  },
+  {
+    icon: "braces",
+    tone: "blue",
+    title: "Web APIs, written in Rust",
+    text: "Your script runs in JavaScriptCore. fetch, IndexedDB, Web Animations, Pointer Lock and View Transitions are native code.",
+  },
+  {
+    icon: "refresh",
+    tone: "yellow",
+    title: "Hot reload and devtools",
+    text: "Save a .vue, .ts or .css file and the window updates in place. F12 opens devtools with elements, performance and effects.",
+  },
+  {
+    icon: "sparkle",
+    tone: "pink",
+    title: "GPU effects",
+    text: "Write shaders in Slang and attach them to any element: liquid glass, ripples, snow, shatter, and cross-fades between them.",
+  },
+  {
+    icon: "package",
+    tone: "lilac",
+    title: "One app to ship",
+    text: "A single executable on Windows, an .app on macOS, an AppImage on Linux. Nothing else to install.",
+  },
+] as const;
+
+const steps = [
+  { label: "Create", command, text: "Pick a template: the showcase, a minimal app, or Svelte." },
+  { label: "Develop", command: "bun run dev", text: "A native window opens and follows your edits." },
+  { label: "Ship", command: "bun run publish", text: "A release build for this OS, ready to hand out." },
+] as const;
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Skathi",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Windows, macOS, Linux",
+  softwareVersion: version,
+  description,
+  url: canonical.href,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+};
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <Head
+      title={title}
+      description={description}
+      canonical={canonical}
+      type="website"
+      structuredData={structuredData}
+    />
+  </head>
+  <body class="landing" transition:animate="none">
+    <a href="#main-content" class="skip-link">Skip to content</a>
+    <div class="parallax" aria-hidden="true" data-parallax>
+      {
+        parallax.map((layer, index) => (
+          <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
+            {index === 0 && (
+              <>
+                <span class="parallax-glow" style="left: -8%; top: 18%; background: var(--candy-pink)" />
+                <span class="parallax-glow" style="right: -10%; top: 42%; background: var(--candy-blue)" />
+                <span class="parallax-glow" style="left: -6%; top: 70%; background: var(--candy-lilac)" />
+              </>
+            )}
+            {layer.items.map((item) => (
+              <span
+                class={`p-item p-${item.kind}`}
+                style={`left: ${item.left.toFixed(1)}%; top: ${item.top.toFixed(1)}%; width: ${item.size}px; height: ${item.size}px; animation-delay: ${item.delay.toFixed(1)}s`}
+              >
+                {item.kind !== "bubble" && item.kind !== "dot" && (
+                  <svg viewBox="0 0 24 24">
+                    <path d={shapes[item.kind]} />
+                  </svg>
+                )}
+              </span>
+            ))}
+          </div>
+        ))
+      }
+    </div>
+    <header class="landing-nav">
+      <a class="landing-mark" href="/" aria-label="Skathi home">
+        <img src={wolf} width="34" height="34" alt="" /><span>Skathi</span>
+      </a>
+      <nav class="landing-links" aria-label="Site">
+        <a href={docsHome}>Docs</a>
+        <a href="/quick-start/" class="wide-only">Quick start</a>
+        <a href="/css/" class="wide-only">CSS</a>
+        <a href={repository} target="_blank" rel="noreferrer" aria-label="Skathi on GitHub"
+          ><Icon name="github" size={19} /></a
+        >
+        <ThemeSwitch />
+      </nav>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section class="hero">
+        <div class="hero-art" aria-hidden="true">
+          <span class="glow glow-pink"></span>
+          <span class="glow glow-blue"></span>
+        </div>
+        <img class="hero-logo" src={wordmark} width="1902" height="827" alt="Skathi" />
+        <p class="hero-meta">
+          <span class="status-dot"></span>v{version}<span aria-hidden="true">·</span>Windows, macOS and Linux
+        </p>
+        <h1>Desktop apps from Vue, <span class="candy-text">without a browser.</span></h1>
+        <p class="hero-lead">{description}</p>
+        <div class="command">
+          <span class="command-prompt" aria-hidden="true">$</span>
+          <code>{command}</code>
+          <button type="button" class="command-copy" data-copy={command} aria-label="Copy the command">
+            <Icon name="copy" size={15} /><span data-copy-label>Copy</span>
+          </button>
+        </div>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/quick-start/">Get started<Icon name="arrow" size={15} /></a>
+          <a class="button" href={repository} target="_blank" rel="noreferrer"
+            ><Icon name="github" size={16} />Star on GitHub</a
+          >
+        </div>
+        <dl class="stats" data-stats hidden={!stats}>
+          <div>
+            <dt>installs from npm</dt>
+            <dd data-stat="npm">{stats ? compact.format(stats.npm) : ""}</dd>
+          </div>
+          <div>
+            <dt>stars on GitHub</dt>
+            <dd data-stat="stars">{stats ? compact.format(stats.stars) : ""}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="preview" aria-label="Screenshots">
+        <div class="preview-tabs" role="tablist" aria-label="Screenshots of the showcase app">
+          <button type="button" role="tab" id="tab-home" aria-controls="shot-home" aria-selected="true" data-shot
+            >The showcase app</button
+          ><button
+            type="button"
+            role="tab"
+            id="tab-shaders"
+            aria-controls="shot-shaders"
+            aria-selected="false"
+            data-shot>Shader effects</button
+          >
+        </div>
+        <div class="preview-frame">
+          <div id="shot-home" role="tabpanel" aria-labelledby="tab-home">
+            <Image
+              src={showcaseHome}
+              alt="The showcase app: a sidebar of features and a grid of cards, in a native window"
+              widths={[640, 1280]}
+              sizes="(max-width: 1100px) 100vw, 1060px"
+              format="webp"
+              loading="eager"
+            />
+          </div>
+          <div id="shot-shaders" role="tabpanel" aria-labelledby="tab-shaders" hidden>
+            <Image
+              src={showcaseShaders}
+              alt="The shaders page: a liquid glass lens refracting text, and an animated blue nebula"
+              widths={[640, 1280]}
+              sizes="(max-width: 1100px) 100vw, 1060px"
+              format="webp"
+            />
+          </div>
+        </div>
+        <p class="preview-caption">
+          Real screenshots of the <code>showcase</code> template. Every pixel is drawn by Skathi, not by a browser.
+        </p>
+      </section>
+
+      <section class="code-demo" aria-labelledby="code-title">
+        <div class="code-copy">
+          <h2 id="code-title">Write a component. <span class="candy-text">Get a window.</span></h2>
+          <p>
+            It is the Vue you already write: <code>ref</code>, templates, scoped styles, Pinia stores. Skathi takes the
+            tree Vue builds and draws it natively, so there is no DOM to ship and no browser to start.
+          </p>
+          <a class="text-link" href="/concepts/">How the runtime works<Icon name="arrow" size={14} /></a>
+        </div>
+        <div class="code-stage">
+          <div class="code-panel">
+            <span class="code-file">App.vue</span>
+            <Code
+              code={component}
+              lang="vue"
+              themes={{ light: "github-light", dark: "github-dark" }}
+              defaultColor={false}
+            />
+          </div>
+          <div class="mini-window" aria-label="What the component looks like">
+            <div class="mini-titlebar">
+              <img src={wolf} width="16" height="16" alt="" /><span>my-blazing-fast-app</span><span
+                class="mini-controls"
+                aria-hidden="true"><i></i><i></i><i></i></span
+              >
+            </div>
+            <div class="mini-body">
+              <strong>Hello from a native window</strong>
+              <button type="button" data-counter>Clicked 0 times</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="shading" aria-labelledby="shading-title">
+        <div class="shading-head">
+          <p class="eyebrow eyebrow-pink"><Icon name="sparkle" size={15} />Shading</p>
+          <h2 id="shading-title">Shaders, <span class="candy-text">straight from CSS.</span></h2>
+          <p>
+            An effect is one Slang file in <code>shaders/</code>. Skathi compiles it for Direct3D, Vulkan and Metal and
+            hands it to CSS as a custom property: parameters are arguments, and a transition on
+            <code>--shading</code> blends between them, or between two different effects.
+          </p>
+        </div>
+        <div class="shading-grid">
+          <div class="shading-code">
+            <div class="code-panel">
+              <span class="code-file">shaders/sheen.slang</span>
+              <Code
+                code={sheenShader}
+                lang={slang}
+                themes={{ light: "github-light", dark: "github-dark" }}
+                defaultColor={false}
+              />
+            </div>
+            <div class="code-panel">
+              <span class="code-file">src/styles.css</span>
+              <Code
+                code={sheenCss}
+                lang="css"
+                themes={{ light: "github-light", dark: "github-dark" }}
+                defaultColor={false}
+              />
+            </div>
+          </div>
+          <div class="shading-gallery">
+            <figure>
+              <Image
+                src={shadingGlass}
+                alt="A liquid glass lens refracting the word refraction and two coloured discs"
+                widths={[480, 968]}
+                sizes="(max-width: 900px) 100vw, 520px"
+                format="webp"
+              />
+              <figcaption><code>lens</code> reads the backdrop: liquid glass that bends what is behind it</figcaption>
+            </figure>
+            <figure>
+              <Image
+                src={shadingNebula}
+                alt="An animated blue and violet nebula with twinkling stars"
+                widths={[480, 968]}
+                sizes="(max-width: 900px) 100vw, 520px"
+                format="webp"
+              />
+              <figcaption><code>nebula</code> is animated: domain-warped noise, redrawn every frame</figcaption>
+            </figure>
+            <ul class="shading-list">
+              <li>On an element, behind it, or over the whole window</li>
+              <li>The pointer, a clock, colours, lengths and textures as parameters</li>
+              <li>Multi-pass and feedback effects</li>
+              <li>An Effects panel in the devtools, with controls for every parameter</li>
+            </ul>
+            <p class="effect-chips" aria-label="Effects in the showcase template">
+              {effects.map((name) => <code>{name}</code>)}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="aot" aria-labelledby="aot-title">
+        <div class="aot-copy">
+          <p class="eyebrow"><Icon name="cpu" size={15} />Ahead-of-time compilation</p>
+          <h2 id="aot-title">Your TypeScript, <span class="candy-text">compiled to machine code.</span></h2>
+          <p>
+            A release build can skip the JavaScript engine's warm-up. <code>sk publish --aot</code> takes the production bundle
+            through Bun's frontend into an intermediate representation, compiles that to native code, and stamps the image
+            into the app. The host runs it instead of parsing and interpreting the bundle.
+          </p>
+          <p>
+            The compiler does best with typed code. <code>sk check</code> lists what in your code and your dependencies would
+            break or slow down under AOT, and how much of it is typed.
+          </p>
+          <p class="aot-note">
+            Windows x64 for now, and experimental. Without <code>--aot</code>, the same app runs on JavaScriptCore.
+          </p>
+        </div>
+        <ol class="pipeline" aria-label="How an AOT build is made">
+          <li>
+            <span class="pipeline-icon"><Icon name="code" size={18} /></span>
+            <span><strong>Components and TypeScript</strong><small>.vue, .svelte, .ts</small></span>
+          </li>
+          <li>
+            <span class="pipeline-icon"><Icon name="package" size={18} /></span>
+            <span><strong>Production bundle</strong><small>tree-shaken, minified</small></span>
+          </li>
+          <li>
+            <span class="pipeline-icon"><Icon name="layers" size={18} /></span>
+            <span><strong>Intermediate representation</strong><small>Bun's AOT frontend</small></span>
+          </li>
+          <li>
+            <span class="pipeline-icon"><Icon name="cpu" size={18} /></span>
+            <span><strong>Machine code</strong><small>a native image inside the app</small></span>
+          </li>
+          <li class="pipeline-command"><code>$ bunx sk publish --aot</code></li>
+        </ol>
+      </section>
+
+      <section class="features" aria-labelledby="features-title">
+        <h2 id="features-title">Everything a desktop app needs, and nothing a browser brings.</h2>
+        <div class="feature-grid">
+          {
+            features.map((feature) => (
+              <article class="feature" data-tone={feature.tone}>
+                <span class="feature-icon">
+                  <Icon name={feature.icon} size={20} />
+                </span>
+                <h3>{feature.title}</h3>
+                <p>{feature.text}</p>
+              </article>
+            ))
+          }
+        </div>
+      </section>
+
+      <section class="steps" aria-labelledby="steps-title">
+        <h2 id="steps-title">Three commands from idea to app.</h2>
+        <ol class="step-list">
+          {
+            steps.map((step, index) => (
+              <li class="step">
+                <span class="step-number">{index + 1}</span>
+                <h3>{step.label}</h3>
+                <code class="step-command">{step.command}</code>
+                <p>{step.text}</p>
+              </li>
+            ))
+          }
+        </ol>
+        <p class="steps-more">
+          Bringing an existing app over? Check the <a href="/css/">CSS coverage</a> and the <a href="/web-platform/"
+            >web platform coverage</a
+          > first.
+        </p>
+      </section>
+
+      <section class="cta">
+        <img src={wolf} width="96" height="96" alt="" class="cta-wolf" />
+        <h2>Your next desktop app starts here.</h2>
+        <div class="command">
+          <span class="command-prompt" aria-hidden="true">$</span>
+          <code>{command}</code>
+          <button type="button" class="command-copy" data-copy={command} aria-label="Copy the command">
+            <Icon name="copy" size={15} /><span data-copy-label>Copy</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer landing-footer">
+      <a href="/">Skathi</a><span>Native by nature.</span><a href="/llms.txt">llms.txt</a><a
+        href={`${repository}/blob/master/LICENSE-MIT`}
+        target="_blank"
+        rel="noreferrer">MIT / Apache-2.0</a
+      >
+    </footer>
+    <script>
+      import "../scripts/docs";
+      import "../scripts/landing";
+    </script>
+  </body>
+</html>

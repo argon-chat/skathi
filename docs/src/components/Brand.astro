@@ -1,0 +1,14 @@
+---
+import logo from "../../../logos/full_side_text_logo.svg?url";
+
+interface Props {
+  docs?: boolean;
+}
+
+const { docs = false } = Astro.props;
+---
+
+<a class="brand" href="/" aria-label="Skathi home">
+  <img class="brand-logo" src={logo} width="1902" height="827" alt="" />
+  {docs && <span class="brand-docs">docs</span>}
+</a>

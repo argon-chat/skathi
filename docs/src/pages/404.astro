@@ -1,0 +1,9 @@
+---
+import DocsLayout from "../layouts/DocsLayout.astro";
+import { docsHome } from "../lib/docs";
+---
+
+<DocsLayout title="This trail ends here" description="This page does not exist. Return to the Skathi documentation.">
+  <p class="lead">The page you’re looking for has moved, or hasn’t been written yet.</p>
+  <p><a href={docsHome}>Back to the documentation</a> or <a href="/quick-start/">build your first app</a>.</p>
+</DocsLayout>

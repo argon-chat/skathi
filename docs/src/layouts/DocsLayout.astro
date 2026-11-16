@@ -1,0 +1,222 @@
+---
+import type { CollectionEntry } from "astro:content";
+import type { MarkdownHeading } from "astro";
+import "../styles/docs.css";
+import Brand from "../components/Brand.astro";
+import Head from "../components/Head.astro";
+import Icon from "../components/Icon.astro";
+import PageActions from "../components/PageActions.vue";
+import Search from "../components/Search.vue";
+import ThemeSwitch from "../components/ThemeSwitch.astro";
+import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, version } from "../lib/docs";
+
+interface Props {
+  page?: CollectionEntry<"docs">;
+  headings?: MarkdownHeading[];
+  title?: string;
+  description?: string;
+}
+
+const {
+  page,
+  headings = [],
+  title = page?.data.title ?? "Page not found",
+  description = page?.data.description ?? "Find your way back to the Skathi documentation.",
+} = Astro.props;
+const pages = await getDocs();
+const current = pages.findIndex((entry) => entry.id === page?.id);
+const previous = pages[current - 1];
+const next = current >= 0 ? pages[current + 1] : undefined;
+const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+const canonical = new URL(page ? pageUrl(page.id) : "/404/", Astro.site);
+const sectionIcons = { "Getting started": "book", Reference: "layers", Contributing: "code" } as const;
+const searchEntries = pages.map((entry) => ({
+  title: entry.data.title,
+  description: entry.data.description,
+  url: pageUrl(entry.id),
+  body: import.meta.env.DEV ? (entry.body ?? "") : "",
+}));
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  headline: title,
+  description,
+  url: canonical.href,
+  inLanguage: "en",
+  isPartOf: { "@type": "WebSite", name: "Skathi documentation", url: Astro.site?.href },
+};
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <Head
+      title={`${title} · Skathi`}
+      description={description}
+      canonical={canonical}
+      type="article"
+      structuredData={structuredData}
+      markdownUrl={page && markdownUrl(page.id)}
+      noindex={!page}
+    />
+  </head>
+  <body transition:animate="none">
+    <a href="#main-content" class="skip-link">Skip to content</a>
+    <header class="mobile-header">
+      <Brand />
+      <div class="mobile-controls">
+        <button id="mobile-search" class="icon-button" aria-label="Search documentation"><Icon name="search" /></button
+        ><button
+          id="menu-toggle"
+          class="icon-button"
+          aria-label="Open navigation"
+          aria-expanded="false"
+          aria-controls="sidebar"><Icon name="menu" /></button
+        >
+      </div>
+    </header>
+    <div id="nav-backdrop" class="nav-backdrop" hidden></div>
+    <aside id="sidebar" class="sidebar" aria-label="Documentation navigation">
+      <div class="sidebar-top">
+        <Brand docs />
+        <Search client:load entries={searchEntries} />
+        <div class="edition">
+          <span class="status-dot"></span><span>Desktop SDK</span><span class="edition-tag">v{version}</span>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        {
+          sections.map((section) => (
+            <details open class="nav-section">
+              <summary>
+                <>
+                  <Icon name={sectionIcons[section]} size={17} />
+                  <span>{section}</span>
+                  <Icon name="chevron" size={12} class="section-chevron" />
+                </>
+              </summary>
+              <ul>
+                {pages
+                  .filter((entry) => entry.data.section === section)
+                  .map((entry) => (
+                    <li>
+                      <a href={pageUrl(entry.id)} aria-current={page?.id === entry.id ? "page" : undefined}>
+                        {entry.data.label ?? entry.data.title}
+                      </a>
+                    </li>
+                  ))}
+              </ul>
+            </details>
+          ))
+        }
+      </nav>
+      <div class="sidebar-bottom">
+        <a class="agent-link" href="/llms.txt"
+          ><Icon name="terminal" size={17} /><span>Built for your agent, too</span><Icon name="arrow" size={14} /></a
+        >
+        <div class="sidebar-meta">
+          <a href={repository} aria-label="Skathi on GitHub" target="_blank" rel="noreferrer"
+            ><Icon name="github" size={19} /></a
+          ><span>Vue. Truly native.</span><ThemeSwitch />
+        </div>
+      </div>
+    </aside>
+    <div class="docs-shell">
+      <main id="main-content" class="main-content" tabindex="-1">
+        <div class="breadcrumbs" aria-label="Breadcrumb">
+          <a href={docsHome}>Docs</a><Icon name="chevron" size={12} /><span>{page?.data.section ?? "Navigation"}</span
+          ><Icon name="chevron" size={12} /><span class="breadcrumb-current">{page?.data.label ?? title}</span>
+        </div>
+        <div class="article-heading">
+          <h1 data-pagefind-meta="title">{title}</h1>{
+            page && <PageActions client:load markdownUrl={markdownUrl(page.id)} />
+          }
+        </div>
+        <article class="prose" data-pagefind-body={page ? true : undefined}>
+          <slot />
+        </article>
+        {
+          page && (
+            <footer class="article-footer">
+              <div class="page-meta">
+                <>
+                  <a
+                    href={`${repository}/edit/master/docs/${page.filePath?.replace(/^.*[\\/]docs[\\/]/, "").replaceAll("\\", "/") ?? ""}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Icon name="code" size={16} />
+                    Edit this page
+                    <Icon name="arrow" size={12} />
+                  </a>
+                  <span>Made with Vue. Rendered natively.</span>
+                </>
+              </div>
+              <nav class="pagination" aria-label="Previous and next pages">
+                {previous ? (
+                  <a href={pageUrl(previous.id)} class="previous-page">
+                    <small>Previous</small>
+                    <span>
+                      <Icon name="chevron" size={14} />
+                      {previous.data.label ?? previous.data.title}
+                    </span>
+                  </a>
+                ) : (
+                  <span />
+                )}
+                {next && (
+                  <a href={pageUrl(next.id)} class="next-page">
+                    <small>Next</small>
+                    <span>
+                      {next.data.label ?? next.data.title}
+                      <Icon name="chevron" size={14} />
+                    </span>
+                  </a>
+                )}
+              </nav>
+            </footer>
+          )
+        }
+        <div class="site-footer">
+          <a href="/">Skathi</a><span>Native by nature.</span><a
+            href={`${repository}/blob/master/LICENSE-MIT`}
+            target="_blank"
+            rel="noreferrer">MIT / Apache-2.0</a
+          >
+        </div>
+      </main>
+      <aside class="right-sidebar" aria-label="On this page">
+        <nav class="toc">
+          <p class="toc-title"><span class="toc-ring"></span>On this page</p><a
+            href="#main-content"
+            class="toc-link is-active"
+            data-toc-overview>Overview</a
+          >{
+            toc.map((heading) => (
+              <a
+                href={`#${heading.slug}`}
+                class:list={["toc-link", { "toc-nested": heading.depth === 3 }]}
+                data-toc-id={heading.slug}
+              >
+                {heading.text}
+              </a>
+            ))
+          }
+        </nav>
+        <div class="right-resources">
+          <p>Less friction. More native.</p><a href="/quick-start/"
+            >Build your first app<Icon name="arrow" size={15} /></a
+          ><a href={repository} target="_blank" rel="noreferrer">Explore the source<Icon name="arrow" size={15} /></a><a
+            href="/llms.txt">Read with your agent<Icon name="terminal" size={15} /></a
+          >
+        </div>
+        <a class="open-source" href={repository} target="_blank" rel="noreferrer"
+          ><Icon name="heart" size={14} />Open source, all the way down.</a
+        >
+      </aside>
+    </div>
+    <script>
+      import "../scripts/docs";
+    </script>
+  </body>
+</html>

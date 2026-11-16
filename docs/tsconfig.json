@@ -1,0 +1,13 @@
+{
+  "extends": ["astro/tsconfigs/strictest", "../tsconfig.base.json"],
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["astro/client", "bun"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "jsx": "preserve",
+    "jsxImportSource": "vue"
+  },
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist", "node_modules", ".wrangler"]
+}
