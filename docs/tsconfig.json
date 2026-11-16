@@ -3,8 +3,7 @@
   "compilerOptions": {
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "types": ["astro/client", "bun"],
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] },
+    "paths": { "@/*": ["./src/*"] },
     "jsx": "preserve",
     "jsxImportSource": "vue"
   },

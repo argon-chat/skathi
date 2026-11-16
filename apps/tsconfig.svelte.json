@@ -11,6 +11,7 @@
     "../packages/runtime/src/engine.d.ts",
     "../packages/runtime/src/protocol.d.ts",
     "../packages/runtime/src/indexeddb.d.ts",
+    "../packages/runtime/src/modules.d.ts",
     "../packages/runtime/env.d.ts",
     "../packages/runtime/src/svelte/*.svelte",
     "../packages/test/fixtures/*/src/**/*.svelte",

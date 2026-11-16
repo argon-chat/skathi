@@ -24,7 +24,7 @@
   "devDependencies": {
     "@types/bun": "^1.4.0",
     "svelte-check": "^4",
-    "typescript": "5",
+    "typescript": "6",
     "vue-tsc": "^3.3.11"
   }
 }

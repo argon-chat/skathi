@@ -193,7 +193,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
         "@skathi-native/runtime": sdk,
         ...Object.fromEntries(info.dependencies.map((dep) => [dep, runtimeDeps[dep]])),
       },
-      devDependencies: { "@skathi-native/cli": sdk, typescript: "^5", ...info.checker.devDependencies },
+      devDependencies: { "@skathi-native/cli": sdk, typescript: "^6", ...info.checker.devDependencies },
     }),
     "sk.config.json": json({
       $schema: CONFIG_SCHEMA,

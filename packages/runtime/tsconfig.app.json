@@ -16,5 +16,5 @@
     }
   },
   "vueCompilerOptions": { "lib": "@skathi-native/runtime" },
-  "files": ["./env.d.ts", "./src/engine.d.ts", "./src/protocol.d.ts", "./src/indexeddb.d.ts"]
+  "files": ["./env.d.ts", "./src/engine.d.ts", "./src/protocol.d.ts", "./src/indexeddb.d.ts", "./src/modules.d.ts"]
 }

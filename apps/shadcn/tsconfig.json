@@ -5,10 +5,6 @@
   "compilerOptions": {
     // DOM: reka-ui, vueuse and lucide are written against HTMLElement and friends.
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    // tailwindcss-animate and a few other deps are `export =` CJS.
-    "esModuleInterop": true,
-
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       // Not runtime.ts: it re-exports only @vue/runtime-core (no HTMLAttributes), and `paths` would retarget

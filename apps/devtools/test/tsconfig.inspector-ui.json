@@ -2,10 +2,9 @@
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ESNext"],
-    "baseUrl": "../../..",
     "paths": {
-      "vue": ["packages/runtime/src/runtime.ts"],
-      "@skathi-native/runtime": ["packages/runtime/src/runtime.ts"]
+      "vue": ["../../../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime": ["../../../packages/runtime/src/runtime.ts"]
     },
     "types": []
   },

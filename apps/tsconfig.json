@@ -8,7 +8,6 @@
 
     // The apps have no node_modules of their own: build.ts pre-seeds these bare specifiers into the loader's
     // registry, and these paths mirror that mapping.
-    "baseUrl": ".",
     "paths": {
       "vue": ["../packages/runtime/src/runtime.ts"],
       "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
@@ -24,6 +23,7 @@
     "../packages/runtime/src/engine.d.ts",
     "../packages/runtime/src/protocol.d.ts",
     "../packages/runtime/src/indexeddb.d.ts",
+    "../packages/runtime/src/modules.d.ts",
     "../packages/runtime/env.d.ts",
     "hello/src/**/*.ts",
     "hello/src/**/*.vue",
