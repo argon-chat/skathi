@@ -1,6 +1,6 @@
 //! `transition-*` parsing and the timing model. Names that cannot be interpolated become
 //! `TransitionProperty::Other` (the animator advises once); shorthands expand to their longhands; a
-//! negative `transition-delay` is clamped to zero with an advisory.
+//! negative `transition-delay` starts the transition part-way through.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -217,8 +217,15 @@ impl Easing {
 pub struct TransitionSpec {
     pub property: TransitionProperty,
     pub duration: Duration,
-    pub delay: Duration,
+    pub delay: Delay,
     pub easing: Easing,
+}
+
+impl TransitionSpec {
+    /// A combined duration (duration plus delay) of zero or less runs no transition.
+    pub fn is_instant(&self) -> bool {
+        self.delay.wait().is_zero() && self.delay.skip() >= self.duration
+    }
 }
 
 pub fn spec_for<'s>(
@@ -336,7 +343,7 @@ fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
 pub(crate) struct Collector {
     properties: Option<Vec<Vec<TransitionProperty>>>,
     durations: Option<Vec<Duration>>,
-    delays: Option<Vec<Duration>>,
+    delays: Option<Vec<Delay>>,
     easings: Option<Vec<Easing>>,
     seen: bool,
 }
@@ -395,7 +402,7 @@ impl Collector {
                         "transition-duration",
                         diagnostics,
                     ));
-                    delays.push(duration_of(&entry.delay, "transition-delay", diagnostics));
+                    delays.push(delay_of(&entry.delay, "transition-delay", diagnostics));
                     easings.push(easing_of(&entry.timing_function, diagnostics));
                 }
                 self.properties = Some(properties);
@@ -429,7 +436,7 @@ impl Collector {
                 self.seen = true;
                 self.delays = Some(
                     list.iter()
-                        .map(|t| duration_of(t, "transition-delay", diagnostics))
+                        .map(|t| delay_of(t, "transition-delay", diagnostics))
                         .collect(),
                 );
                 true
@@ -465,13 +472,13 @@ impl Collector {
         let delays = self.delays.unwrap_or_default();
         let easings = self.easings.unwrap_or_default();
 
-        let pick = |list: &[Duration], i: usize| -> Duration {
+        fn pick<T: Copy + Default>(list: &[T], i: usize) -> T {
             if list.is_empty() {
-                Duration::ZERO
+                T::default()
             } else {
                 list[i % list.len()]
             }
-        };
+        }
 
         let mut out = Vec::new();
         for (i, props) in entries.iter().enumerate() {
@@ -647,6 +654,67 @@ pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -
     Duration::from_secs_f64((ms as f64 / 1000.0).min(MAX_TIME_SECS))
 }
 
+pub(crate) fn delay_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Delay {
+    let ms = t.to_ms();
+    if !ms.is_finite() {
+        diagnostics.push(format!("non-finite {what} treated as 0s"));
+        return Delay::ZERO;
+    }
+    Delay::from_secs_f64(ms as f64 / 1000.0)
+}
+
+/// A signed `transition-delay` / `animation-delay`: a negative one starts the timeline that far in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Delay {
+    nanos: i64,
+}
+
+impl Delay {
+    pub const ZERO: Delay = Delay { nanos: 0 };
+
+    pub fn from_secs_f64(secs: f64) -> Self {
+        let secs = secs.clamp(-MAX_TIME_SECS, MAX_TIME_SECS);
+        Delay {
+            nanos: (secs * 1e9).round() as i64,
+        }
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.nanos == 0
+    }
+
+    pub fn as_secs_f64(self) -> f64 {
+        self.nanos as f64 / 1e9
+    }
+
+    /// The wait before the timeline starts; zero when negative.
+    pub fn wait(self) -> Duration {
+        Duration::from_nanos(self.nanos.max(0) as u64)
+    }
+
+    /// How far into the timeline it starts; zero when positive.
+    pub fn skip(self) -> Duration {
+        Duration::from_nanos(self.nanos.min(0).unsigned_abs())
+    }
+
+    /// The time into the timeline `elapsed` after the start, `None` while still waiting.
+    pub fn active(self, elapsed: Duration) -> Option<Duration> {
+        let wait = self.wait();
+        (elapsed >= wait).then(|| elapsed - wait + self.skip())
+    }
+
+    /// `run` measured from the start, so less the skipped part.
+    pub fn end_after(self, run: Duration) -> Option<Duration> {
+        Some(self.wait().checked_add(run)?.saturating_sub(self.skip()))
+    }
+}
+
+impl From<Duration> for Delay {
+    fn from(d: Duration) -> Self {
+        Delay::from_secs_f64(d.as_secs_f64())
+    }
+}
+
 pub(crate) const MAX_TIME_SECS: f64 = 1.0e9;
 
 pub(crate) fn easing_of(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
@@ -721,7 +789,7 @@ mod tests {
             vec![TransitionSpec {
                 property: TransitionProperty::Opacity,
                 duration: ms(200),
-                delay: ms(50),
+                delay: ms(50).into(),
                 easing: Easing::EaseIn,
             }]
         );
@@ -754,7 +822,7 @@ mod tests {
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].property, TransitionProperty::All);
         assert_eq!(s[0].duration, ms(300));
-        assert_eq!(s[0].delay, Duration::ZERO);
+        assert_eq!(s[0].delay, Delay::ZERO);
         assert_eq!(s[0].easing, Easing::Ease);
     }
 
@@ -767,7 +835,7 @@ mod tests {
         assert_eq!(s[0].easing, Easing::Linear);
         assert_eq!(s[1].property, TransitionProperty::Color);
         assert_eq!(s[1].duration, Duration::from_secs(2));
-        assert_eq!(s[1].delay, ms(100));
+        assert_eq!(s[1].delay, ms(100).into());
         assert_eq!(s[1].easing, Easing::EaseOut);
     }
 
@@ -783,7 +851,7 @@ mod tests {
         assert_eq!(s[0].duration, ms(100));
         assert_eq!(s[1].duration, ms(200));
         assert_eq!(s[2].duration, ms(100));
-        assert!(s.iter().all(|x| x.delay == ms(10)));
+        assert!(s.iter().all(|x| x.delay == ms(10).into()));
         assert_eq!(s[2].easing, Easing::Linear);
     }
 
@@ -844,14 +912,14 @@ mod tests {
     fn a_huge_time_is_capped_and_stays_addable() {
         let s = specs("transition: opacity 1e20s 1e20s");
         assert_eq!(s[0].duration, Duration::from_secs(1_000_000_000));
-        assert_eq!(s[0].delay, Duration::from_secs(1_000_000_000));
-        let _ = std::time::Instant::now() + s[0].delay + s[0].duration;
+        assert_eq!(s[0].delay, Duration::from_secs(1_000_000_000).into());
+        let _ = std::time::Instant::now() + s[0].delay.wait() + s[0].duration;
     }
 
     #[test]
-    fn negative_delay_is_clamped() {
+    fn a_negative_delay_is_kept() {
         let (s, _) = parse("transition: opacity 1s -200ms");
-        assert_eq!(s.unwrap()[0].delay, Duration::ZERO);
+        assert_eq!(s.unwrap()[0].delay.skip(), ms(200));
     }
 
     #[test]

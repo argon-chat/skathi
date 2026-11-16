@@ -310,7 +310,7 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             }
         }),
         "animation-duration" => animations(&|s| secs(s.duration)),
-        "animation-delay" => animations(&|s| secs(s.delay)),
+        "animation-delay" => animations(&|s| signed_secs(s.delay)),
         "animation-fill-mode" => animations(&|s| {
             match s.fill {
                 sk_css::FillMode::None => "none",
@@ -324,7 +324,7 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "transition-duration" | "transition-delay" if cs.transitions.is_empty() => "0s".into(),
         "transition-property" => transitions(&|s| s.property.name().to_string()),
         "transition-duration" => transitions(&|s| secs(s.duration)),
-        "transition-delay" => transitions(&|s| secs(s.delay)),
+        "transition-delay" => transitions(&|s| signed_secs(s.delay)),
         "width" | "height" => {
             let (w, h) = crate::render::bounds_of(id)
                 .map(|(_, _, w, h)| (w, h))
@@ -441,6 +441,10 @@ fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option
 
 fn secs(d: std::time::Duration) -> String {
     format!("{}s", d.as_secs_f32())
+}
+
+fn signed_secs(d: sk_css::Delay) -> String {
+    format!("{}s", d.as_secs_f64() as f32)
 }
 
 fn css_rgb(c: gpui::Hsla) -> String {

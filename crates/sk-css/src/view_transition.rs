@@ -296,7 +296,9 @@ mod tests {
         assert_eq!(duration(&root), Some(1.0));
         assert_eq!(duration(&hero), Some(2.0));
         assert_eq!(
-            hero.animations.first().map(|a| a.delay.as_secs_f32()),
+            hero.animations
+                .first()
+                .map(|a| a.delay.as_secs_f64() as f32),
             Some(3.0)
         );
         assert_eq!(hero.base.size.width, Some(gpui::px(40.0).into()));

@@ -68,8 +68,8 @@ pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;
 pub use transition::{
-    covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec,
-    ANIMATABLE_COUNT,
+    covered, parse_easing, spec_for, Delay, Easing, StepPosition, TransitionProperty,
+    TransitionSpec, ANIMATABLE_COUNT,
 };
 pub use vars::Vars;
 
@@ -3485,7 +3485,10 @@ mod tests {
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
         let states = engine.compute(box_node(), None, &Env::default());
         assert_eq!(states.base.opacity, Some(0.5));
-        assert_eq!(states.transitions[0].delay, Duration::from_millis(20));
+        assert_eq!(
+            states.transitions[0].delay,
+            Duration::from_millis(20).into()
+        );
     }
 
     #[test]
@@ -6910,7 +6913,10 @@ mod tests {
         };
         let computed = engine.compute(node, None, &Env::default());
         assert_eq!(computed.animations[0].duration, Duration::from_millis(500));
-        assert_eq!(computed.animations[0].delay, Duration::from_millis(20));
+        assert_eq!(
+            computed.animations[0].delay,
+            Duration::from_millis(20).into()
+        );
         assert_eq!(computed.animations[0].easing, Easing::Linear);
     }
 
@@ -6975,11 +6981,11 @@ mod tests {
             .animations
             .iter()
             .all(|animation| animation.fill == FillMode::Forwards
-                && animation.delay == Duration::from_millis(30)));
+                && animation.delay == Duration::from_millis(30).into()));
         let computed = fold_inline("animation: replacement 75ms ease-in");
         assert_eq!(computed.animations.len(), 1);
         assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
-        assert_eq!(computed.animations[0].delay, Duration::ZERO);
+        assert_eq!(computed.animations[0].delay, Delay::ZERO);
         assert_eq!(computed.animations[0].iterations, 1.0);
         assert_eq!(computed.animations[0].easing, Easing::EaseIn);
     }
@@ -7024,7 +7030,7 @@ mod tests {
         let legacy = Rc::new(vec![TransitionSpec {
             property: TransitionProperty::Width,
             duration: Duration::from_millis(900),
-            delay: Duration::ZERO,
+            delay: Delay::ZERO,
             easing: Easing::Linear,
         }]);
         let computed = engine.compute_with(box_node(), None, Some(&legacy), &Env::default());

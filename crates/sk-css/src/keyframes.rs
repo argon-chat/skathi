@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use gpui::StyleRefinement;
 
-use crate::transition::Easing;
+use crate::transition::{Delay, Easing};
 
 pub struct Keyframe {
     pub offset: f32,
@@ -55,7 +55,7 @@ pub enum PlayState {
 pub struct AnimationSpec {
     pub name: Rc<str>,
     pub duration: Duration,
-    pub delay: Duration,
+    pub delay: Delay,
     pub iterations: f32,
     pub direction: Direction,
     pub fill: FillMode,
@@ -76,14 +76,18 @@ impl AnimationSpec {
         // watching can tell; `mul_f32` would panic.
         let run = self.duration.as_secs_f64() * self.iterations.max(0.0) as f64;
         let run = Duration::try_from_secs_f64(run).ok()?;
-        self.delay.checked_add(run)
+        self.delay.end_after(run)
+    }
+
+    /// Time spent in the active interval, counting a negative delay as already run.
+    pub fn active_time(&self, elapsed: Duration) -> Duration {
+        (elapsed + self.delay.skip()).saturating_sub(self.delay.wait())
     }
 
     pub fn phase(&self, elapsed: Duration) -> Phase {
-        if elapsed < self.delay {
+        let Some(running) = self.delay.active(elapsed) else {
             return Phase::Delayed;
-        }
-        let running = elapsed - self.delay;
+        };
         if self.duration.is_zero() {
             return Phase::Finished {
                 progress: self.final_progress(),
@@ -211,7 +215,7 @@ impl Keyframes {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimationPatch {
     pub duration: Option<Duration>,
-    pub delay: Option<Duration>,
+    pub delay: Option<Delay>,
     pub easing: Option<Easing>,
     pub iterations: Option<f32>,
     pub direction: Option<Direction>,
@@ -322,7 +326,7 @@ pub struct Segment<'a> {
 pub struct AnimationDeclarations {
     names: Option<Vec<Rc<str>>>,
     durations: Option<Vec<Duration>>,
-    delays: Option<Vec<Duration>>,
+    delays: Option<Vec<Delay>>,
     easings: Option<Vec<Easing>>,
     iterations: Option<Vec<f32>>,
     directions: Option<Vec<Direction>>,
@@ -398,7 +402,7 @@ impl AnimationDeclarations {
                 self.delays = Some(
                     list.iter()
                         .map(|e| {
-                            crate::transition::duration_of(&e.delay, "animation-delay", diagnostics)
+                            crate::transition::delay_of(&e.delay, "animation-delay", diagnostics)
                         })
                         .collect(),
                 );
@@ -445,7 +449,7 @@ impl AnimationDeclarations {
                 self.seen = true;
                 self.delays = Some(
                     list.iter()
-                        .map(|t| crate::transition::duration_of(t, "animation-delay", diagnostics))
+                        .map(|t| crate::transition::delay_of(t, "animation-delay", diagnostics))
                         .collect(),
                 );
                 true
@@ -577,7 +581,7 @@ impl AnimationDeclarations {
             out.push(AnimationSpec {
                 name: name.clone(),
                 duration: cycle(&self.durations, i, Duration::ZERO),
-                delay: cycle(&self.delays, i, Duration::ZERO),
+                delay: cycle(&self.delays, i, Delay::ZERO),
                 iterations: cycle(&self.iterations, i, 1.0),
                 direction: cycle(&self.directions, i, Direction::Normal),
                 fill: cycle(&self.fills, i, FillMode::None),
@@ -604,7 +608,7 @@ mod tests {
         AnimationSpec {
             name: "spin".into(),
             duration: Duration::from_millis(1000),
-            delay: Duration::ZERO,
+            delay: Delay::ZERO,
             iterations,
             direction,
             fill: FillMode::None,
@@ -727,7 +731,7 @@ mod tests {
     #[test]
     fn the_delay_holds_the_animation_off() {
         let mut s = spec(1.0, Direction::Normal);
-        s.delay = Duration::from_millis(500);
+        s.delay = Duration::from_millis(500).into();
         assert_eq!(s.phase(Duration::from_millis(200)), Phase::Delayed);
         assert_eq!(
             s.phase(Duration::from_millis(750)),
@@ -737,6 +741,20 @@ mod tests {
             }
         );
         assert_eq!(s.total(), Some(Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn a_negative_delay_starts_part_way_through() {
+        let mut s = spec(1.0, Direction::Normal);
+        s.delay = Delay::from_secs_f64(-0.5);
+        assert_eq!(
+            s.phase(Duration::ZERO),
+            Phase::Running {
+                iteration: 0.0,
+                progress: 0.5
+            }
+        );
+        assert_eq!(s.total(), Some(Duration::from_millis(500)));
     }
 
     #[test]

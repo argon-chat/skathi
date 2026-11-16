@@ -224,7 +224,7 @@ accepted and ignored without one say so below.
 | ------------------------------------------------------------------ | ------ | -------------------------------------------------------------------------- |
 | `transition` and its longhands                                     | ✅     | Interrupted transitions retarget from the value on screen                  |
 | A `transition` composed with `var()`                               | ⛔     | Write it literally                                                         |
-| Negative `transition-delay`                                        | 🟡     | Clamped to `0s`                                                            |
+| Negative `transition-delay` and `animation-delay`                  | ✅     | Start part-way through                                                     |
 | `transition-behavior: allow-discrete`                              | ⛔     |                                                                            |
 | `@keyframes`, `animation` and its longhands                        | ✅     | Per-property keyframe timelines, every fill mode, direction and play state |
 | Easing: keywords, `cubic-bezier()`, `steps()`                      | ✅     |                                                                            |

@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::keyframes::{AnimationSpec, FillMode, Keyframes, Phase, PlayState};
-use crate::transition::{covered, spec_for, Easing, TransitionProperty, TransitionSpec};
+use crate::transition::{covered, spec_for, Delay, Easing, TransitionProperty, TransitionSpec};
 use crate::ComputedStates;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -705,7 +705,7 @@ struct Track {
     from: Animatable,
     to: Animatable,
     start: Instant,
-    delay: Duration,
+    delay: Delay,
     duration: Duration,
     easing: Easing,
 }
@@ -713,13 +713,12 @@ struct Track {
 impl Track {
     fn progress(&self, now: Instant) -> f32 {
         let elapsed = now.saturating_duration_since(self.start);
-        if elapsed < self.delay {
+        let Some(running) = self.delay.active(elapsed) else {
             return 0.0;
-        }
+        };
         if self.duration.is_zero() {
             return 1.0;
         }
-        let running = elapsed - self.delay;
         (running.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
     }
 
@@ -728,7 +727,7 @@ impl Track {
     }
 
     fn end(&self) -> Instant {
-        self.start + self.delay + self.duration
+        self.start + self.delay.end_after(self.duration).unwrap_or(self.duration)
     }
 
     fn finished(&self, now: Instant) -> bool {
@@ -837,7 +836,7 @@ impl Animator {
                             continue;
                         }
                     }
-                    if from == to || (spec.duration.is_zero() && spec.delay.is_zero()) {
+                    if from == to || spec.is_instant() {
                         if let Some(i) = index {
                             tracks.remove(i);
                         }
@@ -954,7 +953,7 @@ impl Animator {
                             continue;
                         }
                     }
-                    if from == to || (spec.duration.is_zero() && spec.delay.is_zero()) {
+                    if from == to || spec.is_instant() {
                         if let Some(i) = index {
                             tracks.remove(i);
                         }
@@ -1291,6 +1290,30 @@ mod tests {
         assert!((v - 0.5).abs() < 1e-3, "{v}");
         assert!(a.any_active(now + Duration::from_millis(1000)));
         assert!(!a.any_active(now + Duration::from_millis(1500)));
+    }
+
+    #[test]
+    fn a_negative_delay_starts_part_way_through() {
+        let mut a = Animator::new();
+        let now = t0();
+        let old = states(with_opacity(0.0), "transition: opacity 1s linear -250ms");
+        let new = states(with_opacity(1.0), "transition: opacity 1s linear -250ms");
+        a.on_computed(1, Some(&old), &new, now);
+
+        let v = opacity_of(&a.overlay_test(1, now).unwrap());
+        assert!((v - 0.25).abs() < 1e-3, "{v}");
+        assert!(a.any_active(now + Duration::from_millis(700)));
+        assert!(!a.any_active(now + Duration::from_millis(750)));
+
+        let mut b = Animator::new();
+        let skipped = "transition: opacity 1s linear -1s";
+        b.on_computed(
+            1,
+            Some(&states(with_opacity(0.0), skipped)),
+            &states(with_opacity(1.0), skipped),
+            now,
+        );
+        assert!(b.overlay(1, &StyleRefinement::default(), now).is_none());
     }
 
     #[test]
@@ -2125,7 +2148,7 @@ impl AnimRun {
         match self.phase(now) {
             Phase::Running { progress, .. } => Some(progress),
             Phase::Delayed if matches!(self.spec.fill, FillMode::Backwards | FillMode::Both) => {
-                Some(self.spec.phase(self.spec.delay).progress_or(0.0))
+                Some(self.spec.phase(self.spec.delay.wait()).progress_or(0.0))
             }
             Phase::Finished { progress }
                 if matches!(self.spec.fill, FillMode::Forwards | FillMode::Both) =>
@@ -2137,9 +2160,7 @@ impl AnimRun {
     }
 
     fn elapsed_seconds(&self, now: Instant) -> f32 {
-        self.elapsed(now)
-            .saturating_sub(self.spec.delay)
-            .as_secs_f32()
+        self.spec.active_time(self.elapsed(now)).as_secs_f32()
     }
 }
 
@@ -2300,7 +2321,7 @@ impl Animator {
                         node,
                         kind: AnimEventKind::AnimationStart,
                         name: run.spec.name.to_string(),
-                        elapsed: 0.0,
+                        elapsed: run.spec.active_time(Duration::ZERO).as_secs_f32(),
                     });
                 }
                 if !run.ended && matches!(phase, Phase::Finished { .. }) {
@@ -2312,7 +2333,7 @@ impl Animator {
                         elapsed: run
                             .spec
                             .total()
-                            .map(|t| t.saturating_sub(run.spec.delay).as_secs_f32())
+                            .map(|t| run.spec.active_time(t).as_secs_f32())
                             .unwrap_or(0.0),
                     });
                 }
@@ -2447,7 +2468,7 @@ impl Animator {
                     if !matches!(run.spec.fill, FillMode::Backwards | FillMode::Both) {
                         continue;
                     }
-                    run.spec.phase(run.spec.delay).progress_or(0.0)
+                    run.spec.phase(run.spec.delay.wait()).progress_or(0.0)
                 }
                 Phase::Finished { progress } => {
                     if !matches!(run.spec.fill, FillMode::Forwards | FillMode::Both) {
