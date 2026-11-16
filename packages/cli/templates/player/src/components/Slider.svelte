@@ -1,5 +1,4 @@
 <script lang="ts">
-  // A drag slider: the pointer is followed through the document, so a drag keeps going outside the rail.
   let {
     value,
     max = 1,

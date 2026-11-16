@@ -41,7 +41,6 @@ export function hearts(from: Element) {
 }
 
 export type Rgb = [number, number, number];
-/** A colour and a 0..1 weight, tweened together. */
 export type Tint = [number, number, number, number];
 
 export function rgb(hex: string): Rgb {
@@ -56,6 +55,5 @@ const byte = (v: number) =>
     .toString(16)
     .padStart(2, "0");
 
-/** `#rrggbb`, or `#rrggbbaa` with an alpha 0..1. */
 export const hex = ([r, g, b]: Rgb | Tint, alpha?: number) =>
   `#${byte(r)}${byte(g)}${byte(b)}${alpha === undefined ? "" : byte(alpha * 255)}`;

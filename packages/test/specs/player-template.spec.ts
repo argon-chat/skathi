@@ -1,6 +1,3 @@
-// `sk create --template player`, run as `sk dev` runs it: a Svelte 5 app that decodes and plays its demo tracks
-// through Web Audio, feeds the analyser's spectrum to its own `--shading` effects, and adds a file the user picks.
-
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
@@ -48,7 +45,6 @@ async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean, what:
 const shading = async (selector: string) =>
   String(await app.eval(`document.querySelector(${JSON.stringify(selector)}).style.getPropertyValue('--shading')`));
 
-/** A one-second 440 Hz mono WAV. */
 function tone(): Uint8Array {
   const rate = 22050;
   const samples = rate;

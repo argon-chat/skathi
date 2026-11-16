@@ -14,12 +14,10 @@ export interface Track {
   title: string;
   artist: string;
   album: string;
-  /** An app-relative URL, or a file the user picked. */
   source: string | File;
   /** Album art; null draws the `cover` effect from the palette instead. */
   cover: string | null;
   palette: Palette;
-  /** Seconds, known once the track has been decoded. */
   duration: number | null;
 }
 
@@ -94,7 +92,6 @@ const CANDY: Palette[] = [
 
 let added = 0;
 
-/** A track for a file the user opened, titled after its name. */
 export function fileTrack(file: File): Track {
   const title = file.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ");
   let hash = 0;
@@ -111,7 +108,6 @@ export function fileTrack(file: File): Track {
   };
 }
 
-/** A stable number from a track id, for the placeholder art's swirl. */
 export function seedOf(id: string): number {
   let hash = 7;
   for (const c of id) hash = (hash * 17 + c.charCodeAt(0)) % 9973;

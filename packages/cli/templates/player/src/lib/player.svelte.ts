@@ -34,7 +34,6 @@ class Player {
   playing = $state(false);
   loading = $state(false);
   error = $state("");
-  /** Seconds into the current track; advanced every frame while playing. */
   position = $state(0);
   volume = $state(0.8);
   muted = $state(false);
@@ -50,7 +49,6 @@ class Player {
   #tap: AnalyserNode | null = null;
   #bins = new Uint8Array(0);
   #source: AudioBufferSourceNode | null = null;
-  /** The context time at which the current track's 0:00 played. */
   #zero = 0;
   #decoded = new Map<string, Promise<AudioBuffer>>();
   #request = 0;
@@ -142,7 +140,6 @@ class Player {
     source.disconnect();
   }
 
-  /** Plays the current track from `at` seconds. */
   async play(at = this.position) {
     const track = this.current;
     if (!track) return;
@@ -193,7 +190,6 @@ class Player {
     this.#publish();
   }
 
-  /** Stops playback for good and releases the audio device. */
   close() {
     this.pause();
     void this.#ctx?.close();
@@ -275,7 +271,6 @@ class Player {
     return this.liked.has(id);
   }
 
-  /** Asks for audio files and appends them to the playlist; the first one added starts playing. */
   async addFiles() {
     let handles: FileSystemFileHandle[];
     try {

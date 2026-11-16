@@ -152,7 +152,6 @@ test("the player brings its music, covers, shaders and own icon, and packs the m
   const dir = fresh();
   create(dir, { template: "player" });
   expect(read(dir, "src/lib/product.ts")).toContain('export const productName = "My App";');
-  // Every asset the demo playlist names ships with the template.
   const ids = [...read(dir, "src/lib/tracks.ts").matchAll(/demo\(\s*"([a-z-]+)"/g)].map((m) => m[1]!);
   expect(ids.length).toBe(6);
   for (const id of ids) {
