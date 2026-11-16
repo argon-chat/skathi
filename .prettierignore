@@ -11,6 +11,7 @@ crates/sk-app/src/prelude.js
 crates/sk-app/src/window.prelude.js
 crates/sk-effects/generated/
 apps/shadcn/tailwind.config.ts
+packages/cli/check/css-catalog.json
 
 # Third-party sources and test data.
 crates/sk-vpx-sys/libvpx/

@@ -14,6 +14,10 @@ export interface ModuleGraph {
   declarations: string[];
   /** Absolute paths of the .js/.ts/.vue/.svelte files with code in the bundle. */
   modules: string[];
+  /** Absolute paths of the .css files (and index.html, for its `<style>`) whose CSS the build includes. */
+  styles?: string[];
+  /** The build runs Tailwind over the app's CSS. */
+  tailwind?: boolean;
   /** The production bundle and its sourcemap; a source is null when its positions are not the file's own. */
   bundle?: { code: string; sources: (string | null)[]; mappings: string };
   errors: GraphError[];

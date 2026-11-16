@@ -96,7 +96,7 @@ pub const CATALOG: &[Entry] = &[
     e("app-region", Supported, &["drag", "no-drag"], &[], "A window drag region, as in Electron"),
     e("appearance", Supported, &["none", "auto"], &[], ""),
     e("aspect-ratio", Partial, &["1 / 1", "1.5"], &["auto"], "`auto` cannot undo an earlier ratio"),
-    e("backdrop-filter", Partial, &["none", "blur(2px)"], &["grayscale(1)"], "Only `blur()`"),
+    e("backdrop-filter", Partial, &["none", "blur(2px)"], &["grayscale(1)", "saturate(180%)", "brightness(2)", "contrast(2)", "sepia(1)", "hue-rotate(10deg)", "invert(1)", "opacity(0.5)", "drop-shadow(0 0 1px red)"], "Only `blur()`"),
     e("backface-visibility", Unsupported, &[], &["hidden"], ""),
     e("background", Supported, &["red", "linear-gradient(red, blue)"], &[], ""),
     e("background-attachment", Ignored, &["scroll", "fixed"], &[], "A background scrolls with its element"),
@@ -208,7 +208,7 @@ pub const CATALOG: &[Entry] = &[
     e("container", Unsupported, &[], &["card / inline-size"], ""),
     e("container-name", Unsupported, &[], &["card"], ""),
     e("container-type", Unsupported, &[], &["inline-size"], ""),
-    e("content", Partial, &["none", "\"a\""], &["counter(n)"], "A literal string; counters and `attr()` generate nothing"),
+    e("content", Partial, &["none", "\"a\""], &["counter(n)", "attr(data-x)"], "A literal string; counters and `attr()` generate nothing"),
     e("content-visibility", Unsupported, &[], &["auto"], ""),
     e("corner-shape", Unsupported, &[], &["squircle"], ""),
     e("counter-increment", Unsupported, &[], &["n"], ""),
@@ -226,7 +226,7 @@ pub const CATALOG: &[Entry] = &[
     e("fill", Supported, &["none", "red"], &[], ""),
     e("fill-opacity", Supported, &["0.5"], &[], ""),
     e("fill-rule", Supported, &["nonzero", "evenodd"], &[], ""),
-    e("filter", Partial, &["blur(2px)", "url(#f)"], &["grayscale(1)", "url(a.svg#f)"], "One `blur()`, one `drop-shadow()` and one same-document SVG `url(#id)`; the colour functions are not applied"),
+    e("filter", Partial, &["blur(2px)", "url(#f)"], &["grayscale(1)", "url(a.svg#f)", "sepia(1)", "brightness(2)", "contrast(2)", "saturate(2)", "hue-rotate(10deg)", "invert(1)", "opacity(0.5)"], "One `blur()`, one `drop-shadow()` and one same-document SVG `url(#id)`; the colour functions are not applied"),
     e("flex", Supported, &["1", "none"], &[], ""),
     e("flex-align", Unsupported, &[], &["center"], ""),
     e("flex-basis", Supported, &["auto", "10px"], &[], ""),
@@ -481,7 +481,7 @@ pub const CATALOG: &[Entry] = &[
     e("text-wrap-style", Unsupported, &[], &["balance"], ""),
     e("top", Supported, &["auto", "10px"], &[], ""),
     e("touch-action", Ignored, &["none", "manipulation"], &[], ""),
-    e("transform", Supported, &["none", "translate(1px) rotate(10deg)"], &[], ""),
+    e("transform", Partial, &["none", "translate(1px) rotate(10deg)"], &["rotateX(10deg)", "rotateY(10deg)", "translateZ(1px)", "perspective(100px)", "rotate3d(1, 1, 0, 45deg)", "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)"], "2D only: rotation about the X or Y axis, depth and `perspective()` are not applied"),
     e("transform-box", Unsupported, &[], &["border-box"], ""),
     e("transform-origin", Supported, &["center", "0 0"], &[], ""),
     e("transition", Partial, &["opacity 1s ease", "none"], &[], "`linear()` easing is not parsed"),
@@ -750,6 +750,23 @@ mod tests {
         assert!(!cond("(-moz-appearance: none)"));
         assert!(!cond("display: flex; color: red"));
         assert!(!cond(""));
+    }
+
+    /// `sk check` reads this copy; regenerate it with
+    /// `cargo run -p sk-css --example css-catalog > packages/cli/check/css-catalog.json`.
+    #[test]
+    fn the_cli_copy_of_the_catalog_is_current() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/cli/check/css-catalog.json"
+        );
+        let Ok(copy) = std::fs::read_to_string(path) else {
+            return;
+        };
+        assert!(
+            copy.replace("\r\n", "\n").trim_end() == to_json(),
+            "packages/cli/check/css-catalog.json is stale: cargo run -p sk-css --example css-catalog > packages/cli/check/css-catalog.json"
+        );
     }
 
     #[test]

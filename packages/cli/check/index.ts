@@ -8,6 +8,7 @@ import { quietProgress, type Progress } from "../cli/term";
 import { Builtins } from "./builtins";
 import { codeInfo, REGISTRY } from "./codes";
 import { parseCheckConfig, Suppressions } from "./config";
+import { cssFindings } from "./css";
 import { rangeOf, ZERO_RANGE, type Finding } from "./finding";
 import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
@@ -58,6 +59,10 @@ export interface AnalyzeInput {
   progress?: Progress | undefined;
   /** The production bundle: a rule finding in code it cannot run is not reported. */
   bundle?: ModuleGraph["bundle"];
+  /** Stylesheets and pages whose CSS the build includes, besides the components in `modules`. */
+  styles?: string[];
+  /** The build runs Tailwind over the app's CSS. */
+  tailwind?: boolean;
 }
 
 export function loadTypeScript(appRoot: string): TypeScript {
@@ -142,6 +147,8 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     aliases: graph.aliases,
     declarations: graph.declarations,
     bundle: graph.bundle,
+    styles: graph.styles ?? [],
+    tailwind: graph.tailwind ?? false,
     allow: checkConfig.allow,
     deps: options.deps ?? true,
     findings,
@@ -205,6 +212,11 @@ export function analyze(input: AnalyzeInput): CheckReport {
     });
 
   const analysed = deps ? units : units.filter((u) => !u.owner);
+  const styled = [...input.modules.filter((m) => /\.(vue|svelte)$/i.test(m)), ...(input.styles ?? [])];
+  if (styled.length) {
+    progress.step("CSS");
+    findings.push(...cssFindings({ files: styled, packages, deps, tailwind: input.tailwind ?? false }));
+  }
   if (units.length) {
     progress.step("TypeScript program", units.length);
     const built = buildProgram({

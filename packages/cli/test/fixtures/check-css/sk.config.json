@@ -1,0 +1,10 @@
+{
+  "name": "check-css",
+  "version": "1.0.0",
+  "check": {
+    "allow": {
+      "SK4001": ["src/legacy/**"],
+      "SK4005": ["quiet-ui"]
+    }
+  }
+}

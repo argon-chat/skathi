@@ -55,13 +55,14 @@ The build summary has a `native` line with the image size and its size in the pa
 
 ## Before the first AOT build: sk check
 
-Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in three ranges:
+Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in four ranges:
 
-| Codes  | Severity | Meaning                                                       |
-| ------ | -------- | ------------------------------------------------------------- |
-| SK1xxx | error    | Breaks under AOT. The AOT build stops.                        |
-| SK2xxx | warning  | Works under AOT, but runs slower.                             |
-| SK3xxx | warning  | Typing quality: values the code passes around without a type. |
+| Codes  | Severity | Meaning                                                                                                                      |
+| ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| SK1xxx | error    | Breaks under AOT. The AOT build stops.                                                                                       |
+| SK2xxx | warning  | Works under AOT, but runs slower.                                                                                            |
+| SK3xxx | warning  | Typing quality: values the code passes around without a type.                                                                |
+| SK4xxx | warning  | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package. |
 
 `sk explain <code>` explains a code with an example and a fix, and `sk explain --list` lists them all. `sk check --deny-warnings` also fails on warnings, for CI.
 

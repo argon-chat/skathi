@@ -50,6 +50,30 @@ export function analyzeUnit(files: string[]): CheckReport {
   });
 }
 
+export const CSS_APP = join(FIXTURES, "check-css");
+
+export function analyzeCss(options: Partial<AnalyzeInput> = {}): CheckReport {
+  const config = JSON.parse(readFileSync(join(CSS_APP, "sk.config.json"), "utf8")) as { check: unknown };
+  return analyze({
+    typescript: ts,
+    root: CSS_APP,
+    entry: join(CSS_APP, "src/main.ts"),
+    modules: ["src/main.ts", "src/App.vue", "src/Widget.svelte"].map((m) => join(CSS_APP, m)),
+    styles: [
+      "index.html",
+      "src/main.css",
+      "src/more.css",
+      "src/fine.css",
+      "src/legacy/old.css",
+      "node_modules/fancy-ui/style.css",
+      "node_modules/quiet-ui/style.css",
+    ].map((m) => join(CSS_APP, m)),
+    allow: parseCheckConfig(config.check).allow,
+    toolVersion: "test",
+    ...options,
+  });
+}
+
 /** Diagnostics of one file as `line:code` (one-based lines). */
 export const lines = (report: CheckReport, file: string) =>
   report.diagnostics.filter((d) => d.file === file).map((d) => `${d.range.start.line + 1}:${d.code}`);

@@ -1,0 +1,18 @@
+@import "./more.css";
+.box {
+  float: left;
+  width: fit-content;
+}
+@container (min-width: 400px) {
+  .box {
+    float: right;
+  }
+}
+@layer base {
+  .x {
+    color: red;
+  }
+}
+input:placeholder-shown {
+  opacity: 0.5;
+}

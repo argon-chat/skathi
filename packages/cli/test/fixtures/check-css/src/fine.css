@@ -1,0 +1,59 @@
+:root {
+  --gap: 4px;
+}
+.a {
+  display: flex;
+  gap: var(--gap);
+  color: red;
+  transform: translate3d(0, 0, 0) rotate(10deg);
+  filter: blur(2px);
+  -webkit-backdrop-filter: blur(4px);
+  -webkit-font-smoothing: antialiased;
+}
+.b {
+  float: none;
+  direction: ltr;
+  font: inherit;
+  text-decoration-line: none;
+  width: var(--w);
+  filter: var(--filter);
+}
+.c:hover,
+.c:focus-visible,
+li:nth-child(2n),
+.d:has(.e),
+input::placeholder,
+::selection {
+  color: blue;
+}
+.e:not(.f) {
+  color: red;
+}
+.sm\:open\:block {
+  display: block;
+}
+@supports (float: left) {
+  .legacy {
+    float: left;
+    filter: sepia(1);
+  }
+}
+@media (min-width: 600px) {
+  .a {
+    padding: 8px;
+  }
+}
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@font-face {
+  font-family: X;
+  src: url(x.woff2);
+  font-display: swap;
+}
+@layer a, b;

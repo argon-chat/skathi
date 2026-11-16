@@ -237,9 +237,17 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 const PROD_TEMPLATE_COMMENTS = false;
 
 const cssById = new Map<string, string>();
+/** `--graph`: every .css file whose CSS the build includes, @imports too. */
+const GRAPH_STYLES = new Set<string>();
+
+function noteStyles(seen: Set<string>) {
+  if (graphOut) for (const file of seen) if (/\.css$/i.test(file)) GRAPH_STYLES.add(file);
+}
 
 async function viteCss(text: string, from: string, label: string): Promise<string> {
-  let css = inlineCssImports(text, from, SK_CONFIG_DIR, advise, undefined, ASSETS);
+  const seen = new Set([resolve(from)]);
+  let css = inlineCssImports(text, from, SK_CONFIG_DIR, advise, seen, ASSETS);
+  noteStyles(seen);
   if (TW_CONFIG && needsTailwindPass(css)) {
     try {
       css = await generateTailwind(TW_CONFIG, { text: css, from: from.replace(/\?.*$/, "") });
@@ -575,6 +583,16 @@ async function writeGraph(out: string) {
     });
     bundle = { code: await code.text(), sources, mappings: raw.mappings };
   }
+  const pages = new Set<string>();
+  for (const piece of LIFTED ? [...LIFTED.headCss, ...LIFTED.bodyCss] : []) {
+    if (piece.from.startsWith(`${INDEX_HTML}?`)) {
+      pages.add(INDEX_HTML);
+      continue;
+    }
+    const seen = new Set([resolve(piece.from)]);
+    inlineCssImports(piece.text, piece.from, SK_CONFIG_DIR, () => {}, seen);
+    noteStyles(seen);
+  }
   const graph: ModuleGraph = {
     schema: "skathi.module-graph",
     version: 1,
@@ -588,6 +606,8 @@ async function writeGraph(out: string) {
     },
     declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     modules: [...modules].sort(),
+    styles: [...pages, ...[...GRAPH_STYLES].sort()],
+    tailwind: TW_CONFIG !== null,
     ...(bundle ? { bundle } : {}),
     errors: result.logs
       .filter((log) => log.level === "error")
