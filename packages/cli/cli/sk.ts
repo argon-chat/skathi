@@ -168,7 +168,7 @@ export function cli(run: Run): Command {
     .command("dev")
     .summary("Run the app with hot reload")
     .description(
-      "Run the app with hot reload: edits to .vue, .ts and .css apply without a restart; an edit to a shaders/*.slang effect recompiles it and restarts the app.",
+      "Run the app with hot reload: edits to .vue, .ts and .css apply without a restart; an edit to a shaders/*.slang effect recompiles it and reloads it in the running app.",
     )
     .argument("[app]")
     .option("--exe <workload>", "Run this dev workload instead of the cached one")
