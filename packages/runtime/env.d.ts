@@ -1265,6 +1265,22 @@ declare global {
 }
 
 declare global {
+  /** Hot module replacement under `sk dev`, as Vite spells it. */
+  interface SkHotContext {
+    readonly data: Record<string, unknown>;
+    accept(cb?: (module: unknown) => void): void;
+    dispose(cb: (data: Record<string, unknown>) => void): void;
+    prune(cb: (data: Record<string, unknown>) => void): void;
+    invalidate(message?: string): void;
+    decline(): void;
+  }
+  interface ImportMeta {
+    /** Undefined in a build. */
+    readonly hot?: SkHotContext;
+  }
+}
+
+declare global {
   interface Storage {
     readonly length: number;
     key(index: number): string | null;

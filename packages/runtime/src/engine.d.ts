@@ -321,8 +321,64 @@ interface Navigator {
   /** Only with the `battery` feature; probe before calling. */
   getBattery?(): Promise<BatteryManager>;
   readonly permissions: Permissions;
+  /** The system media controls and media keys; Windows and macOS only, so probe before use. */
+  readonly mediaSession?: MediaSession;
 }
 declare var navigator: Navigator;
+
+interface MediaImage {
+  src: string;
+  sizes?: string;
+  type?: string;
+}
+interface MediaMetadataInit {
+  title?: string;
+  artist?: string;
+  album?: string;
+  artwork?: MediaImage[];
+}
+interface MediaMetadata {
+  title: string;
+  artist: string;
+  album: string;
+  artwork: readonly MediaImage[];
+}
+declare var MediaMetadata: { new (init?: MediaMetadataInit): MediaMetadata; prototype: MediaMetadata };
+type MediaSessionAction =
+  | "play"
+  | "pause"
+  | "seekbackward"
+  | "seekforward"
+  | "previoustrack"
+  | "nexttrack"
+  | "skipad"
+  | "stop"
+  | "seekto"
+  | "togglemicrophone"
+  | "togglecamera"
+  | "togglescreenshare"
+  | "hangup"
+  | "previousslide"
+  | "nextslide"
+  | "enterpictureinpicture"
+  | "voiceactivity";
+interface MediaSessionActionDetails {
+  action: MediaSessionAction;
+  seekTime?: number;
+  seekOffset?: number;
+  fastSeek?: boolean;
+}
+interface MediaPositionState {
+  duration?: number;
+  playbackRate?: number;
+  position?: number;
+}
+interface MediaSession {
+  metadata: MediaMetadata | null;
+  playbackState: "none" | "paused" | "playing";
+  setActionHandler(action: MediaSessionAction, handler: ((details: MediaSessionActionDetails) => void) | null): void;
+  setPositionState(state?: MediaPositionState): void;
+}
 
 type BlobPart = Blob | ArrayBuffer | ArrayBufferView | string;
 type BufferSource = ArrayBufferView | ArrayBuffer;
@@ -433,8 +489,12 @@ interface OscillatorNode extends AudioNode {
 interface AnalyserNode extends AudioNode {
   fftSize: number;
   smoothingTimeConstant: number;
+  minDecibels: number;
+  maxDecibels: number;
   readonly frequencyBinCount: number;
   getByteFrequencyData(array: Uint8Array): void;
+  getFloatFrequencyData(array: Float32Array): void;
+  getByteTimeDomainData(array: Uint8Array): void;
   getFloatTimeDomainData(array: Float32Array): void;
 }
 
@@ -449,8 +509,11 @@ interface AudioBuffer {
 
 interface AudioBufferSourceNode extends AudioNode {
   buffer: AudioBuffer | null;
+  loop: boolean;
+  loopStart: number;
+  loopEnd: number;
   onended: (() => void) | null;
-  start(when?: number): void;
+  start(when?: number, offset?: number, duration?: number): void;
   stop(when?: number): void;
 }
 
