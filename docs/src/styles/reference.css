@@ -70,7 +70,7 @@
     background: transparent;
     color: var(--text);
     font-family: var(--font-code);
-    font-size: 15px;
+    font-size: var(--fs-body);
     caret-color: var(--accent);
   }
   .part-search input::placeholder {
@@ -120,7 +120,7 @@
     gap: 7px;
     padding: 5px 10px;
     border-radius: 7px;
-    font-size: 12px;
+    font-size: var(--fs-ui);
     line-height: 1.5;
     color: var(--body);
     white-space: nowrap;
@@ -140,7 +140,7 @@
   }
   .count {
     font-family: var(--font-code);
-    font-size: 10px;
+    font-size: var(--fs-xs);
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
@@ -162,7 +162,7 @@
   }
   .catalog-status {
     margin: 12px 2px 0;
-    font-size: 12px;
+    font-size: var(--fs-ui);
     color: var(--muted);
     line-height: 1.5;
   }
@@ -175,7 +175,7 @@
   .link-button {
     margin-left: 10px;
     color: var(--accent);
-    font-size: 12px;
+    font-size: var(--fs-ui);
     text-decoration: underline;
     text-underline-offset: 3px;
     text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -195,11 +195,11 @@
     align-items: baseline;
     gap: 12px;
     margin: 46px 0 12px;
-    font-size: 24px;
+    font-size: var(--fs-2xl);
   }
   .group-count {
     font-family: var(--font-code);
-    font-size: 12px;
+    font-size: var(--fs-ui);
     font-weight: 400;
     letter-spacing: 0;
     color: var(--muted);
@@ -260,7 +260,7 @@
   .prose .row-name code {
     padding: 0;
     background: none;
-    font-size: 13.5px;
+    font-size: var(--fs-md);
     font-weight: 500;
     color: var(--text);
     white-space: nowrap;
@@ -273,7 +273,7 @@
   }
   .row-name-text {
     min-width: 0;
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 550;
     color: var(--text);
     white-space: nowrap;
@@ -303,7 +303,7 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    font-size: 12.5px;
+    font-size: var(--fs-ui);
     line-height: 1.55;
     color: var(--muted);
   }
@@ -319,7 +319,7 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    font-size: 12px;
+    font-size: var(--fs-ui);
     color: var(--body);
     white-space: nowrap;
   }
@@ -335,7 +335,7 @@
   }
   .group-note {
     margin: -4px 0 16px;
-    font-size: 13.5px;
+    font-size: var(--fs-md);
     line-height: 1.7;
     color: var(--muted);
     max-width: 68ch;
@@ -349,7 +349,7 @@
   .select select {
     appearance: none;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--fs-ui);
     line-height: 1.5;
     padding: 5px 30px 5px 11px;
     border-radius: 7px;
@@ -382,7 +382,7 @@
     position: relative;
     justify-self: end;
     font-family: var(--font-code);
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
@@ -423,7 +423,7 @@
   }
   .pin-since {
     font-family: var(--font-code);
-    font-size: 12px;
+    font-size: var(--fs-ui);
     color: var(--muted);
     white-space: nowrap;
   }
@@ -444,7 +444,7 @@
     flex-shrink: 0;
     padding: 0 6px;
     border-radius: 5px;
-    font-size: 10px;
+    font-size: var(--fs-xs);
     line-height: 1.7;
     font-weight: 550;
     letter-spacing: 0.02em;
@@ -472,7 +472,7 @@
     gap: 4px;
     height: 24px;
     border-radius: 5px;
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     line-height: 1;
     color: var(--muted);
     background: color-mix(in srgb, var(--surface) 70%, transparent);
@@ -514,7 +514,7 @@
   .catalog-empty p {
     max-width: 46ch;
     margin: 0;
-    font-size: 13.5px;
+    font-size: var(--fs-md);
   }
   .catalog-empty strong {
     display: block;
@@ -532,7 +532,7 @@
     font-family: var(--font-code) !important;
     font-weight: 500 !important;
     letter-spacing: -0.035em !important;
-    font-size: clamp(30px, 3.4vw, 46px) !important;
+    font-size: var(--fs-h1) !important;
     line-height: 1.15 !important;
     overflow-wrap: anywhere;
   }
@@ -557,7 +557,7 @@
   }
   .sheet-lead {
     margin: 14px 0 0;
-    font-size: 17px;
+    font-size: var(--fs-lead);
     line-height: 1.7;
     color: var(--body);
     max-width: 62ch;
@@ -584,7 +584,7 @@
     border-left: 1px solid var(--border);
   }
   .spec-cell dt {
-    font-size: 11px;
+    font-size: var(--fs-sm);
     letter-spacing: 0.02em;
     color: var(--muted);
   }
@@ -594,7 +594,7 @@
     gap: 8px;
     margin: 0;
     color: var(--text);
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 550;
     white-space: nowrap;
   }
@@ -633,7 +633,7 @@
     --tone: var(--gone);
   }
   .spec-status dd {
-    font-size: 16px;
+    font-size: var(--fs-xl);
   }
   .spec-since dd {
     font-family: var(--font-code);
@@ -660,7 +660,7 @@
     padding: 7px 12px;
     border-radius: 8px;
     border: 1px solid var(--border-strong);
-    font-size: 12.5px;
+    font-size: var(--fs-ui);
     line-height: 1.4;
     color: var(--text);
     transition:
@@ -684,7 +684,7 @@
     gap: 7px;
     padding: 7px 11px;
     border-radius: 8px;
-    font-size: 12.5px;
+    font-size: var(--fs-ui);
     line-height: 1.4;
     border: 1px dashed var(--border-strong);
     color: var(--body);
@@ -751,13 +751,13 @@
   }
   .param-optional {
     margin-left: 8px;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     color: var(--muted);
   }
   .param-default {
     display: block;
     margin-top: 4px;
-    font-size: 12px;
+    font-size: var(--fs-ui);
     color: var(--muted);
   }
   .prose .returns {
@@ -766,10 +766,10 @@
     align-items: baseline;
     gap: 10px;
     margin: 14px 0 0;
-    font-size: 14px;
+    font-size: var(--fs-lg);
   }
   .returns-label {
-    font-size: 11px;
+    font-size: var(--fs-sm);
     font-weight: 600;
     letter-spacing: 0.02em;
     color: var(--muted);
@@ -789,13 +789,13 @@
   .prose .example h3 {
     margin: 0 0 6px;
     font-family: var(--font-body);
-    font-size: 15.5px;
+    font-size: var(--fs-body);
     font-weight: 600;
     letter-spacing: 0;
   }
   .prose .example-note {
     margin: 0 0 12px;
-    font-size: 14px;
+    font-size: var(--fs-lg);
     color: var(--muted);
     max-width: 68ch;
   }
@@ -852,11 +852,11 @@
   .reference-card strong {
     display: block;
     color: var(--text);
-    font-size: 14.5px;
+    font-size: var(--fs-lg);
   }
   .reference-card small {
     display: block;
-    font-size: 12.5px;
+    font-size: var(--fs-ui);
     line-height: 1.6;
     color: var(--muted);
   }
@@ -870,7 +870,7 @@
     border: 1px solid var(--border);
     color: var(--accent);
     font-family: var(--font-code);
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: 600;
   }
   .related-list {
@@ -889,7 +889,7 @@
     color: var(--text);
     text-decoration: none;
     font-family: var(--font-code);
-    font-size: 12.5px;
+    font-size: var(--fs-ui);
     transition:
       border-color 140ms,
       color 140ms;

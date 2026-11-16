@@ -142,6 +142,9 @@
     padding: 40px 0 72px;
     text-align: center;
   }
+  #main-content {
+    overflow-x: clip;
+  }
   .hero-art {
     position: absolute;
     inset: 0 -120px auto;
