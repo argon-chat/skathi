@@ -244,9 +244,19 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
         }
         // `.group:hover .this` — the ancestor is named, because "which element am I watching" is
         // the half of a group rule that can be wrong.
+        let group_focus = cs.group_focus.as_deref();
         for (name, slot) in [
             ("group-hover", &cs.group_hover),
             ("group-active", &cs.group_active),
+            ("group-focus", &group_focus.and_then(|g| g.focus.clone())),
+            (
+                "group-focus-visible",
+                &group_focus.and_then(|g| g.focus_visible.clone()),
+            ),
+            (
+                "group-focus-within",
+                &group_focus.and_then(|g| g.focus_within.clone()),
+            ),
         ] {
             if let Some((anchor, r)) = slot {
                 out.push((

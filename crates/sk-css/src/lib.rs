@@ -108,6 +108,8 @@ pub struct ComputedStates {
     pub focus_within: Option<Rc<StyleRefinement>>,
     pub group_hover: Option<(u64, Rc<StyleRefinement>)>,
     pub group_active: Option<(u64, Rc<StyleRefinement>)>,
+    /// `:focus`, `:focus-visible` and `:focus-within` on an ancestor compound, folded at render.
+    pub group_focus: Option<Rc<GroupFocus>>,
     pub transitions: Rc<Vec<TransitionSpec>>,
     pub animations: Rc<Vec<AnimationSpec>>,
     pub extras: Extras,
@@ -130,6 +132,53 @@ pub struct ComputedStates {
     pub color: Option<gpui::Hsla>,
     pub font_size: f32,
     pub computed_font: gpui::Font,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupFocus {
+    pub focus: Option<(u64, Rc<StyleRefinement>)>,
+    pub focus_visible: Option<(u64, Rc<StyleRefinement>)>,
+    pub focus_within: Option<(u64, Rc<StyleRefinement>)>,
+}
+
+impl GroupFocus {
+    fn of(
+        focus: Option<(u64, StyleRefinement)>,
+        focus_visible: Option<(u64, StyleRefinement)>,
+        focus_within: Option<(u64, StyleRefinement)>,
+    ) -> Option<Rc<Self>> {
+        let wrap = |b: Option<(u64, StyleRefinement)>| b.map(|(key, r)| (key, Rc::new(r)));
+        (focus.is_some() || focus_visible.is_some() || focus_within.is_some()).then(|| {
+            Rc::new(GroupFocus {
+                focus: wrap(focus),
+                focus_visible: wrap(focus_visible),
+                focus_within: wrap(focus_within),
+            })
+        })
+    }
+
+    pub fn anchors(&self) -> impl Iterator<Item = u64> + '_ {
+        [&self.focus, &self.focus_visible, &self.focus_within]
+            .into_iter()
+            .flatten()
+            .map(|(key, _)| *key)
+    }
+
+    /// Folds the buckets whose anchor is in the state, weakest first as on the element's own ladder.
+    pub fn fold(&self, into: &mut StyleRefinement, holds: impl Fn(u64, Interaction) -> bool) {
+        use gpui::Refineable as _;
+        for (bucket, state) in [
+            (&self.focus_within, Interaction::FocusWithin),
+            (&self.focus, Interaction::Focus),
+            (&self.focus_visible, Interaction::FocusVisible),
+        ] {
+            if let Some((key, style)) = bucket {
+                if holds(*key, state) {
+                    into.refine(style);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1854,7 +1903,7 @@ impl Engine {
                         &mut quiet,
                     );
                 }
-                for (_, bucket) in group.hover.iter_mut().chain(group.active.iter_mut()) {
+                for (_, bucket) in group.buckets_mut() {
                     let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
                     $half.apply(
                         &vars,
@@ -2184,10 +2233,10 @@ impl Engine {
         }
         if group.conflict {
             diagnostics.push(
-                "this element is styled by `group-hover:` rules watching TWO different \
-                 ancestors — gpui gives an element one group to watch, so only the first \
-                 (most specific) one applies. Give the outer group its own named variant \
-                 (`group//name` + `group-hover/name:`) on a different element"
+                "this element is styled by rules on the same state of TWO different ancestors \
+                 (`group-hover:`, `.menu:focus .item`) — an element follows one ancestor per \
+                 state, so only the first (most specific) one applies. Give the outer group its \
+                 own named variant (`group//name` + `group-hover/name:`) on a different element"
                     .to_string(),
             );
         }
@@ -2263,7 +2312,7 @@ impl Engine {
                 mapper::apply_current_color(refinement, targets, value);
             }
         }
-        for (_, refinement) in group.hover.iter_mut().chain(group.active.iter_mut()) {
+        for (_, refinement) in group.buckets_mut() {
             if mapper::border_needs_current_color(refinement) {
                 let color = refinement
                     .text
@@ -2326,6 +2375,7 @@ impl Engine {
             focus_within: any_focus_within.then(|| Rc::new(focus_within)),
             group_hover: group.hover.map(|(key, r)| (key, Rc::new(r))),
             group_active: group.active.map(|(key, r)| (key, Rc::new(r))),
+            group_focus: GroupFocus::of(group.focus, group.focus_visible, group.focus_within),
             transitions: transitions.unwrap_or_default(),
             animations: {
                 if let Some(list) = animation_patch.computed_list() {
@@ -2623,16 +2673,33 @@ fn nearest_group_ancestor<D: MatchDom>(
 struct GroupFold {
     hover: Option<(u64, StyleRefinement)>,
     active: Option<(u64, StyleRefinement)>,
+    focus: Option<(u64, StyleRefinement)>,
+    focus_visible: Option<(u64, StyleRefinement)>,
+    focus_within: Option<(u64, StyleRefinement)>,
     conflict: bool,
 }
 
 impl GroupFold {
+    fn buckets_mut(&mut self) -> impl Iterator<Item = &mut (u64, StyleRefinement)> {
+        [
+            &mut self.hover,
+            &mut self.active,
+            &mut self.focus,
+            &mut self.focus_visible,
+            &mut self.focus_within,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
     fn bucket(&mut self, states: u8, key: u64) -> Option<&mut StyleRefinement> {
         let conflict = &mut self.conflict;
-        let slot = if states & STATE_ACTIVE != 0 {
-            &mut self.active
-        } else {
-            &mut self.hover
+        let slot = match rung_of(states) {
+            Some(0) => &mut self.active,
+            Some(1) => &mut self.hover,
+            Some(2) => &mut self.focus_visible,
+            Some(3) => &mut self.focus,
+            _ => &mut self.focus_within,
         };
         match slot.as_ref().map(|(owner, _)| *owner) {
             Some(owner) if owner != key => {
@@ -2711,18 +2778,6 @@ pub(crate) fn classify_states(
                  dropped: {}",
                 sel_text(sel)
             ));
-            return None;
-        }
-        if here & !(STATE_HOVER | STATE_ACTIVE) != 0 {
-            mapper::once(
-                diagnostics,
-                format!(
-                    "`:focus` / `:focus-visible` on an ANCESTOR compound (`group-focus:` and \
-                     friends) is not implemented — gpui has `group_hover` / `group_active` and no \
-                     group focus. The rule was dropped: {}",
-                    sel_text(sel)
-                ),
-            );
             return None;
         }
         if ancestor.is_some() {
@@ -3615,6 +3670,37 @@ mod tests {
         let states = cascade(&engine, &d, &Env::default());
         assert!(states[2].group_hover.is_none());
         assert_eq!(states[2].group_active.as_ref().map(|(k, _)| *k), Some(1));
+    }
+
+    #[test]
+    fn focus_states_on_an_ancestor_fold_into_their_own_buckets() {
+        let engine = Engine::compile(
+            ".group:focus .icon { opacity: 0.5 } .group:focus-visible .icon { opacity: 0.6 } \
+             .row:focus-within > .icon { opacity: 0.7 }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = group_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let icon = &states[2];
+        assert!(icon.focus.is_none() && icon.focus_within.is_none());
+        let group = icon.group_focus.as_ref().expect("ancestor focus buckets");
+        assert_eq!(
+            group.focus.as_ref().map(|(k, s)| (*k, s.opacity)),
+            Some((1, Some(0.5)))
+        );
+        assert_eq!(
+            group.focus_visible.as_ref().map(|(k, s)| (*k, s.opacity)),
+            Some((1, Some(0.6)))
+        );
+        assert_eq!(
+            group.focus_within.as_ref().map(|(k, s)| (*k, s.opacity)),
+            Some((2, Some(0.7)))
+        );
+        let mut folded = StyleRefinement::default();
+        group.fold(&mut folded, |key, state| {
+            key == 1 && matches!(state, Interaction::Focus)
+        });
+        assert_eq!(folded.opacity, Some(0.5));
     }
 
     #[test]

@@ -557,7 +557,7 @@ pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
         return;
     }
     window.blur(cx);
-    windows::set_focused_node(k, 0);
+    set_focus_slot(k, 0);
     js_dispatch_app(pending, tree::EV_BLUR, &EventPayload::default(), window, cx);
     // `:focus` rungs read the handle live, so repaint without waiting for a JS handler.
     window.refresh();
@@ -1171,7 +1171,7 @@ fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
         return;
     }
     if old != 0 {
-        windows::set_focused_node(k, 0);
+        set_focus_slot(k, 0);
         let payload = EventPayload {
             a: new_focus as f64,
             ..Default::default()
@@ -1183,7 +1183,7 @@ fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
             return;
         }
     }
-    windows::set_focused_node(k, new_focus);
+    set_focus_slot(k, new_focus);
     if new_focus != 0 {
         crate::selection::focus_moved(new_focus);
         let payload = EventPayload {
@@ -1191,6 +1191,15 @@ fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
             ..Default::default()
         };
         js_dispatch_app(new_focus, tree::EV_FOCUS, &payload, window, cx);
+    }
+}
+
+/// Moves the window's focus slot and re-renders the elements whose ancestor-focus rules watch it.
+fn set_focus_slot(k: windows::WinKey, id: u32) {
+    let old = windows::focused_node(k);
+    windows::set_focused_node(k, id);
+    if old != id {
+        tree::with_tree(|t| t.touch_focus_watchers(old, id));
     }
 }
 
@@ -1718,6 +1727,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     arm_pick_hitboxes(window);
     crate::cache::begin_frame(window, now);
     crate::cull::begin_frame(window, now);
+    crate::live_state::begin_draw(focused_node(window, cx), window);
     reset_stacking();
     let el = tree::read_tree(|t| {
         if t.root == 0 {
@@ -1847,6 +1857,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     });
     crate::cache::begin_frame(window, now);
     crate::cull::begin_frame(window, now);
+    crate::live_state::begin_draw(focused_node(window, cx), window);
     reset_stacking();
     tree::read_tree(|t| {
         if t.node(id).is_none() {
@@ -3552,6 +3563,13 @@ where
             e.style().refine(&split(h));
         }
     }
+    if let Some(group) = &cs.group_focus {
+        tree::read_tree(|t| {
+            group.fold(e.style(), |key, state| {
+                crate::live_state::drawn_focus_holds(t, key as u32, state)
+            })
+        });
+    }
     // `pointer-events: none` means not interactive at all, so no gpui active rungs, which would
     // make gpui insert a hitbox.
     if cs.extras.pointer_events_none != Some(true) {
@@ -4330,7 +4348,7 @@ pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswe
         return FocusAnswer::Already;
     }
     window.focus(&handle, cx);
-    windows::set_focused_node(k, id);
+    set_focus_slot(k, id);
     crate::log::record("dev", format!("[focus] el.focus() focused node {id}"));
     FocusAnswer::Moved {
         old: if old == id { 0 } else { old },
@@ -4348,7 +4366,7 @@ pub(crate) fn js_blur(id: u32, window: &mut Window, cx: &mut App) -> bool {
         return false;
     }
     window.blur(cx);
-    windows::set_focused_node(k, 0);
+    set_focus_slot(k, 0);
     true
 }
 

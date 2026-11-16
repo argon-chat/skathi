@@ -361,6 +361,8 @@ pub struct Tree {
     /// Anchor → elements whose `group-hover:` rung watches it. Rungs are folded at build time, so a
     /// flip on the anchor must re-render cached subtrees ([`Tree::touch_hover_styled`]).
     group_hover_deps: HashMap<u32, Vec<u32>>,
+    /// Anchor → elements whose `.a:focus .b`-style rules watch it ([`Tree::touch_focus_watchers`]).
+    group_focus_deps: HashMap<u32, Vec<u32>>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -448,6 +450,31 @@ impl Tree {
             self.touch(dep);
         }
         own || !deps.is_empty()
+    }
+
+    /// Focus moved from `old` to `new`: re-render the elements whose ancestor-focus rules watch
+    /// either one or, for `:focus-within`, an element above either.
+    pub(crate) fn touch_focus_watchers(&mut self, old: u32, new: u32) {
+        if self.group_focus_deps.is_empty() {
+            return;
+        }
+        let mut deps = Vec::new();
+        for start in [old, new] {
+            let mut at = start;
+            for _ in 0..4096 {
+                let Some(n) = self.node(at) else { break };
+                if let Some(watchers) = self.group_focus_deps.get(&at) {
+                    deps.extend_from_slice(watchers);
+                }
+                if n.parent == 0 || n.parent == at {
+                    break;
+                }
+                at = n.parent;
+            }
+        }
+        for dep in deps {
+            self.touch(dep);
+        }
     }
 
     fn alloc(&mut self, node: Node) -> u32 {
@@ -982,6 +1009,14 @@ impl Tree {
                 }
                 for (_, r) in [&cs.group_hover, &cs.group_active].into_iter().flatten() {
                     note_ref(r, &mut refinements);
+                }
+                if let Some(g) = &cs.group_focus {
+                    for (_, r) in [&g.focus, &g.focus_visible, &g.focus_within]
+                        .into_iter()
+                        .flatten()
+                    {
+                        note_ref(r, &mut refinements);
+                    }
                 }
                 if vars.insert(std::rc::Rc::as_ptr(&cs.vars)) {
                     m.var_entries += cs.vars.len();
@@ -1796,6 +1831,7 @@ impl Tree {
         }
         self.group_anchors.clear();
         self.group_hover_deps.clear();
+        self.group_focus_deps.clear();
         if engine.uses_group_states() {
             for (i, slot) in self.nodes.iter().enumerate() {
                 let Some(slot) = slot else { continue };
@@ -1809,6 +1845,12 @@ impl Tree {
                     }
                     if let Some((key, _)) = &cs.group_active {
                         self.group_anchors.insert(*key as u32);
+                    }
+                    for key in cs.group_focus.iter().flat_map(|g| g.anchors()) {
+                        self.group_focus_deps
+                            .entry(key as u32)
+                            .or_default()
+                            .push(i as u32);
                     }
                 }
             }
@@ -1923,6 +1965,13 @@ pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     let mut live = (*cs.base).clone();
     if let Some(overlay) = animation_overlay(id, &cs.base, std::time::Instant::now()) {
         live.refine(&overlay);
+    }
+    if let Some(group) = &cs.group_focus {
+        read_tree(|t| {
+            group.fold(&mut live, |key, state| {
+                crate::live_state::focus_holds(t, key as u32, state)
+            })
+        });
     }
     if let Some(rung) = fold_hover_target(id, &cs) {
         match sk_css::strip_transitioned(&rung, &cs.transitions) {

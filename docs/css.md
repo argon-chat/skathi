@@ -317,6 +317,7 @@ These apply to inline `<svg>`.
 | Type, class, id, `*`, attribute selectors (every operator, `i`)                                         | ✅     |                                                                |
 | Descendant, `>`, `+`, `~`                                                                               | ✅     |                                                                |
 | `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`                                        | ✅     | Not inside `:not()`, `:is()`, `:where()` or `:has()`           |
+| A state on an ancestor compound (`.menu:focus .item`)                                                   | ✅     | One ancestor per state; not left of `+` or `~`                 |
 | `:disabled`, `:enabled`, `:checked`, `:fullscreen`                                                      | ✅     |                                                                |
 | `:root`, `:empty`, `:first-child`, `:last-child`, `:only-child`, `:nth-*`, `*-of-type`                  | ✅     |                                                                |
 | `:nth-child(… of S)`                                                                                    | ⛔     |                                                                |

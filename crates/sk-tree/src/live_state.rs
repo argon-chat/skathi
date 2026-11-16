@@ -6,6 +6,7 @@
 //! reads. Every window answers for its own nodes; a `:focus-visible` text field always shows focus,
 //! as in Chromium.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 
 use gpui::Window;
@@ -51,6 +52,59 @@ impl LiveStates {
             }
             Interaction::FocusWithin => self.focus_within.contains(&id),
         }
+    }
+}
+
+thread_local! {
+    /// The focused node and modality gpui paints this frame, read when a window's build starts: the
+    /// window's slot catches up only in gpui's focus observers, which run after the draw.
+    static DRAWN_FOCUS: Cell<(u32, bool)> = const { Cell::new((0, false)) };
+}
+
+pub(crate) fn begin_draw(focused: Option<u32>, window: &Window) {
+    DRAWN_FOCUS.with(|c| c.set((focused.unwrap_or(0), window.last_input_was_keyboard())));
+}
+
+/// Whether `anchor` is in a focus state in the frame being drawn, for ancestor-focus rules.
+pub(crate) fn drawn_focus_holds(t: &Tree, anchor: u32, state: Interaction) -> bool {
+    let (focused, keyboard) = DRAWN_FOCUS.with(Cell::get);
+    focus_state(t, focused, keyboard, anchor, state)
+}
+
+/// [`drawn_focus_holds`] between frames, from the windows' slots.
+pub(crate) fn focus_holds(t: &Tree, anchor: u32, state: Interaction) -> bool {
+    let mut focused: Vec<(u32, bool)> = Vec::new();
+    windows::each(|_, w| {
+        if w.focused_node != 0 {
+            focused.push((w.focused_node, w.keyboard_input));
+        }
+    });
+    focused
+        .into_iter()
+        .any(|(f, keyboard)| focus_state(t, f, keyboard, anchor, state))
+}
+
+fn focus_state(t: &Tree, focused: u32, keyboard: bool, anchor: u32, state: Interaction) -> bool {
+    if focused == 0 {
+        return false;
+    }
+    match state {
+        Interaction::Focus => focused == anchor,
+        Interaction::FocusVisible => focused == anchor && (keyboard || is_text_field(t, focused)),
+        Interaction::FocusWithin => {
+            let mut at = focused;
+            for _ in 0..4096 {
+                if at == anchor {
+                    return true;
+                }
+                match t.node(at) {
+                    Some(n) if n.parent != 0 && n.parent != at => at = n.parent,
+                    _ => return false,
+                }
+            }
+            false
+        }
+        Interaction::Hover | Interaction::Active => false,
     }
 }
 

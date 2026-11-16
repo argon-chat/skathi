@@ -131,6 +131,7 @@ fn replayable_geometry(t: &Tree, id: u32, root: bool, metadata: bool) -> bool {
                 || cs.focus_within.is_some()
                 || cs.group_hover.is_some()
                 || cs.group_active.is_some()
+                || cs.group_focus.is_some()
                 || !cs.transitions.is_empty())
         {
             return false;
