@@ -35,13 +35,13 @@ describe("hover", () => {
 
       await tab.unhover();
       await expect(tab).not.toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.050980393");
 
       await tab.hover();
 
       // The assertion retries, which is exactly why it does not need to know that.
-      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
-      await expect(tab).toHaveComputedStyle("color", "a: 1.0");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveEngineStyle("color", "a: 1.0");
 
       // The RUNG was there all along — this is the control that shows `live` is reporting something
       // the static buckets cannot.
@@ -57,12 +57,12 @@ describe("hover", () => {
     async () => {
       const tab = app.locator(".tab").nth(1);
       await tab.hover();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.13333334");
 
       await tab.unhover();
 
       await expect(tab).not.toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.050980393");
     },
     T,
   );
@@ -82,8 +82,8 @@ describe("hover", () => {
       await motion.hover();
       await expect(motion).toBeHovered();
       await expect(list).not.toBeHovered();
-      await expect(motion).toHaveComputedStyle("background", "a: 0.13333334");
-      await expect(list).toHaveComputedStyle("background", "a: 0.050980393");
+      await expect(motion).toHaveEngineStyle("background", "a: 0.13333334");
+      await expect(list).toHaveEngineStyle("background", "a: 0.050980393");
     },
     T,
   );
@@ -93,14 +93,14 @@ describe("hover", () => {
     async () => {
       const btn = app.locator(".store-row .btn").first();
       await btn.unhover();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.34901962");
 
       await btn.hover();
       await expect(btn).toBeHovered();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.8");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.8");
 
       await btn.unhover();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.34901962");
     },
     T,
   );
@@ -117,7 +117,7 @@ describe("hover", () => {
       // The assertion still holds, because reading the hover state re-places the pointer this spec
       // asked for first.
       await expect(tab).toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.13333334");
 
       // And the same in the other direction: `unhover()` owns the pointer too, so a stray move ONTO
       // the element cannot make "not hovered" fail.

@@ -407,7 +407,7 @@ export const COMMANDS: CommandSpec[] = [
   {
     cmd: "screenshot",
     description:
-      "Capture the app window to a PNG. Default backend is gpui's render_to_image readback: the " +
+      "Capture the app window (or the one `window` names) to a PNG. Default backend is gpui's render_to_image readback: the " +
       "CLIENT area exactly (clientX/clientY come back 0), works unfocused, occluded, off-screen " +
       "and minimized, and never raises or activates the window — but it cannot see a mica/acrylic " +
       "backdrop, which DWM composites under the app. Pass backend=print_window for the composed " +

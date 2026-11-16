@@ -2733,6 +2733,13 @@ fn cmd_net_detail(seq: f64) -> String {
 }
 
 fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
+    if let Some(id) = TARGET_WINDOW.with(|c| c.get()) {
+        if !window_ids().contains(&id) {
+            return err(format!(
+                "no window {id} in this process — `windows` lists the ids"
+            ));
+        }
+    }
     let target = match path {
         Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
         _ => screenshot::next_default_path(),

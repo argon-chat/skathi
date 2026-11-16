@@ -83,7 +83,7 @@ describe("shadcn", () => {
 
       await toggle.click();
       await expect(toggle).toHaveText("theme: light");
-      await expect(app.locator(ROOT)).toHaveComputedStyle("background", "l: 1.0");
+      await expect(app.locator(ROOT)).toHaveEngineStyle("background", "l: 1.0");
       await expect(app.locator(".dark")).toHaveCount(0);
       const light = await rootBackground();
       expect(light!.l).toBe(1);
@@ -96,7 +96,7 @@ describe("shadcn", () => {
 
       // …and a token two levels down re-resolved with it, which is the part a root-only assertion
       // would miss.
-      await expect(app.locator(".text-card-foreground").first()).toHaveComputedStyle("color", /l: 0\.9[0-9]*/);
+      await expect(app.locator(".text-card-foreground").first()).toHaveEngineStyle("color", /l: 0\.9[0-9]*/);
 
       // Back to where the file found it, so the tests stay order-independent.
       await toggle.click();

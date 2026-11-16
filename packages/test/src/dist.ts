@@ -2,6 +2,7 @@
 // manifest it produced. 2.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { reapOrphans } from "./reap";
@@ -81,8 +82,11 @@ export function appNameOf(entry: string): string {
   return appDir.split(/[\\/]/).pop()!;
 }
 
-/** Where `ensureBuild` puts (and `noBuild` looks for) an app's cached dist. */
-export const cacheDistFor = (entry: string) => join(WORK_DIR, "dists", appNameOf(entry));
+/** Where `ensureBuild` puts (and `noBuild` looks for) an entry's cached dist. */
+export const cacheDistFor = (entry: string) => {
+  const key = createHash("sha256").update(resolve(entry).toLowerCase()).digest("hex").slice(0, 10);
+  return join(WORK_DIR, "dists", `${appNameOf(entry)}-${key}`);
+};
 
 /** In-process build de-dup: two launches of the same app must not race the builder. */
 const builds = new Map<string, Promise<string>>();

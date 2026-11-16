@@ -99,9 +99,11 @@ pub fn next_default_path() -> PathBuf {
     dir.join(format!("{next}.png"))
 }
 
-/// UFCS: the inherent `Window::window_handle()` shadows the `HasWindowHandle` method. Falls back to a pid lookup.
+/// UFCS: the inherent `Window::window_handle()` shadows the `HasWindowHandle` method. Falls back to
+/// a pid lookup only when no window was named, since that finds whichever window enumerates first.
 #[cfg(windows)]
 fn hwnd_of_window() -> Option<isize> {
+    let named = super::TARGET_WINDOW.with(|c| c.get()).is_some();
     super::with_target(|window, _| {
         let handle = <gpui::Window as HasWindowHandle>::window_handle(window).ok()?;
         match handle.as_raw() {
@@ -110,7 +112,7 @@ fn hwnd_of_window() -> Option<isize> {
         }
     })
     .flatten()
-    .or_else(hwnd_by_pid)
+    .or_else(|| if named { None } else { hwnd_by_pid() })
 }
 
 #[cfg(windows)]

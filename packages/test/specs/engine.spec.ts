@@ -23,17 +23,17 @@ describe("hover is pointer geometry", () => {
 
       await tab.hover();
       await expect(tab).toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.13333334");
 
       await app.press("a");
       await app.press("Shift+Tab");
 
       await expect(tab).toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.13333334");
 
       await tab.unhover();
       await expect(tab).not.toBeHovered();
-      await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
+      await expect(tab).toHaveEngineStyle("background", "a: 0.050980393");
     },
     T,
   );
@@ -45,12 +45,12 @@ describe("hover is pointer geometry", () => {
       // and gpui's paint-time ladder the other half.
       const btn = app.locator(".store-row .btn").first();
       await btn.hover();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.8");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.8");
       await app.press("b");
       await expect(btn).toBeHovered();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.8");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.8");
       await btn.unhover();
-      await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+      await expect(btn).toHaveEngineStyle("background", "a: 0.34901962");
     },
     T,
   );

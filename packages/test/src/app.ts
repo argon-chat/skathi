@@ -417,7 +417,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   hookExit();
 
   const log = options.verbose ? (l: string) => console.log(l) : () => {};
-  const label = options.label ?? options.app.replace(/[\\/]/g, "-");
+  const label = options.label ?? options.app.replace(/[\\/:]+/g, "-");
   const timeout = options.timeout ?? 10_000;
   const launchTimeout = options.launchTimeout ?? 60_000;
 

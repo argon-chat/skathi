@@ -121,8 +121,24 @@ export class LocatorAssertions {
     });
   }
 
-  /** A property of the element's computed style. */
-  async toHaveComputedStyle(
+  /** `getComputedStyle(el).getPropertyValue(property)` in the app, as CSS serializes it. */
+  async toHaveComputedStyle(property: string, expected: string | RegExp, options: AssertOptions = {}): Promise<void> {
+    await this.#poll(`computed ${property}`, show(expected), options, async () => {
+      const { index } = await this.locator.resolve(options.timeout ?? this.locator.timeout);
+      const value: unknown = await this.locator.app.eval(
+        `(() => { const el = document.querySelectorAll(${JSON.stringify(this.locator.selector)})[${index}];` +
+          ` return el ? getComputedStyle(el).getPropertyValue(${JSON.stringify(property)}) : null; })()`,
+      );
+      if (typeof value !== "string") return { pass: false, actual: "no such element in the document" };
+      return { pass: matches(value, expected), actual: JSON.stringify(value) };
+    });
+  }
+
+  /**
+   * A field of gpui's `StyleRefinement` debug dump (`Hsla { h: … }`, not CSS), substring-matched;
+   * `bucket` defaults to `live`, the rung painted last frame.
+   */
+  async toHaveEngineStyle(
     property: string,
     expected: string | RegExp,
     options: AssertOptions & { bucket?: string } = {},
