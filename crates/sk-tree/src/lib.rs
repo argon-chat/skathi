@@ -63,7 +63,7 @@ pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
     painted_drag_region_in, popped_out, root_bounds, root_bounds_in, set_os_chrome,
-    set_os_chrome_in, set_popped_out, set_repaint_all,
+    set_os_chrome_in, set_popped_out, set_repaint_all, window_control_at,
 };
 pub use tree::{
     effects_changed, with_tree, EVENT_NAMES, EV_AUXCLICK, EV_BEFOREINPUT, EV_BLUR, EV_CANPLAY,

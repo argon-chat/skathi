@@ -1591,6 +1591,35 @@ pub fn control_hitboxes() -> Vec<(u32, WindowControlArea)> {
     control_hitboxes_in(windows::primary())
 }
 
+/// The caption button a click on `node` lands on, as the hit test resolves it: the nearest
+/// ancestor-or-self declaring `--window-control`, with the window painting it. `None` where the OS
+/// draws the caption.
+pub fn window_control_at(node: u32) -> Option<(WinKey, WindowControlArea)> {
+    let win = windows::window_of_node(node);
+    if windows::peek(win, |w| w.os_chrome).unwrap_or(false) {
+        return None;
+    }
+    let area = tree::read_tree(|t| {
+        let mut cursor = node;
+        for _ in 0..1024 {
+            let n = t.node(cursor)?;
+            match n.computed.as_ref().and_then(|c| c.extras.window_control) {
+                Some(WindowControl::Minimize) => return Some(WindowControlArea::Min),
+                Some(WindowControl::Maximize) => return Some(WindowControlArea::Max),
+                Some(WindowControl::Close) => return Some(WindowControlArea::Close),
+                Some(WindowControl::None) => return None,
+                None => {}
+            }
+            if n.parent == 0 || windows::window_of_root(cursor).is_some() {
+                return None;
+            }
+            cursor = n.parent;
+        }
+        None
+    })?;
+    Some((win, area))
+}
+
 /// Folds the one inherited property sk-css carries (window control/drag) and decides whether this
 /// node needs a gpui window-control hitbox. One is emitted only where the effective value differs
 /// from the parent's: the hit test walks outward to the nearest hitbox, so a 30-node titlebar needs

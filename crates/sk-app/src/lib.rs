@@ -39,6 +39,8 @@ mod http_client;
 #[cfg(all(sk_devtools, test))]
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
+#[cfg(not(target_os = "windows"))]
+mod chrome_posix;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub mod consent_window;
@@ -53,8 +55,6 @@ pub mod hotkeys;
 mod inspector;
 pub mod js;
 mod json;
-#[cfg(target_os = "linux")]
-mod linux_chrome;
 mod mapped_file;
 #[cfg(feature = "audio")]
 mod microphone;
@@ -289,9 +289,7 @@ mod logger_tests {
     }
 }
 
-struct Shell {
-    title: String,
-}
+struct Shell;
 
 thread_local! {
     static SHELL: RefCell<Option<WeakEntity<Shell>>> = const { RefCell::new(None) };
@@ -438,6 +436,15 @@ fn reveal_startup_window(cx: &mut App, activate: bool) {
         }
     })
     .detach();
+}
+
+/// The display the primary window is on. Outside any update of the primary window.
+pub(crate) fn main_window_display(cx: &mut App) -> Option<gpui::DisplayId> {
+    let handle = MAIN_WINDOW.with(|w| w.get())?;
+    handle
+        .update(cx, |_, window, cx| window.display(cx).map(|d| d.id()))
+        .ok()
+        .flatten()
 }
 
 /// The primary window's gpui id (devtools `windows` calls it `main`).
@@ -659,8 +666,8 @@ impl Shell {
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont");
-        #[cfg(target_os = "linux")]
-        let shell = linux_chrome::wrap(shell, window);
+        #[cfg(not(target_os = "windows"))]
+        let shell = chrome_posix::wrap(shell, window, true);
         let shell = match window::opaque_fill(window::backdrop(), window::effective_dark(window)) {
             Some(fill) => shell.bg(fill),
             None => shell,
@@ -669,7 +676,7 @@ impl Shell {
             return shell
                 .child(sk_tree::build_root(window, cx))
                 .children(sk_tree::build_view_transition())
-                .children(window_controls_overlay())
+                .children(window_controls_overlay(window))
                 .children(inspector_overlay());
         }
         shell
@@ -677,12 +684,13 @@ impl Shell {
                 div()
                     .id("titlebar")
                     .window_control_area(WindowControlArea::Drag)
-                    .h(px(36.))
+                    .h(px(window::title_bar_height()))
+                    .overflow_hidden()
                     .px(px(14.))
                     .flex()
                     .items_center()
                     .text_size(px(13.))
-                    .child(self.title.clone()),
+                    .child(window::title()),
             )
             // `flex_1().min_h(0)` gives the app root a definite box; an auto-height slot would break
             // `h-full`, `overflow: auto` and `position: fixed` inside the app.
@@ -693,7 +701,7 @@ impl Shell {
                     .child(sk_tree::build_root(window, cx)),
             )
             .children(sk_tree::build_view_transition())
-            .children(window_controls_overlay())
+            .children(window_controls_overlay(window))
             .children(inspector_overlay())
     }
 }
@@ -714,8 +722,9 @@ fn inspector_overlay() -> Option<gpui::Div> {
 ///
 /// `window_control_area` makes `WM_NCHITTEST` answer HTMINBUTTON/HTMAXBUTTON/HTCLOSE, so the OS
 /// performs the action and HTMAXBUTTON arms the Windows 11 snap-layouts flyout.
-fn window_controls_overlay() -> Option<gpui::Div> {
+fn window_controls_overlay(window: &Window) -> Option<gpui::Div> {
     let (height, overlay) = window::overlay()?;
+    let dark = window::effective_dark(window);
     // Win10 has these code points in Segoe MDL2 Assets; `fallbacks` is DirectWrite's per-code-point chain.
     const MIN: &str = "\u{e921}";
     const MAX: &str = "\u{e922}";
@@ -733,7 +742,8 @@ fn window_controls_overlay() -> Option<gpui::Div> {
     let symbol = overlay
         .symbol_color
         .map(rgba)
-        .unwrap_or_else(|| rgba(0xffffffe0));
+        .unwrap_or_else(|| rgba(if dark { 0xffffffe0 } else { 0x000000e0 }));
+    let hover = if dark { 0xffffff1a } else { 0x0000000f };
     let button = |id: &'static str, glyph: &'static str, area: WindowControlArea, hover: u32| {
         div()
             .id(id)
@@ -761,8 +771,8 @@ fn window_controls_overlay() -> Option<gpui::Div> {
     }
     Some(
         strip
-            .child(button("wco-min", MIN, WindowControlArea::Min, 0xffffff1a))
-            .child(button("wco-max", MAX, WindowControlArea::Max, 0xffffff1a))
+            .child(button("wco-min", MIN, WindowControlArea::Min, hover))
+            .child(button("wco-max", MAX, WindowControlArea::Max, hover))
             .child(button(
                 "wco-close",
                 CLOSE,
@@ -986,10 +996,11 @@ fn run_app() {
         sk_elements::init(cx);
         publish_app_root();
         // First quit hook (they run in order): a quit no accepted close announced, such as the
-        // session ending, hides the windows and arms the deadline.
+        // session ending, hides the windows and arms the deadline; `pagehide` runs before storage flushes.
         std::mem::forget(cx.on_app_quit(|_| {
             window::cancel_startup_reveal();
             shutdown::begin("quit");
+            window::page_hide();
             std::future::ready(())
         }));
         std::mem::forget(cx.on_app_quit(|_| {
@@ -1192,10 +1203,12 @@ fn run_app() {
                 }),
                 is_resizable: cfg.resizable,
                 is_minimizable: cfg.minimizable,
-                window_min_size: cfg
-                    .min_width
-                    .zip(cfg.min_height)
-                    .map(|(w, h)| size(px(w), px(h))),
+                // macOS: the app's `window-drag` regions move the window, not AppKit's title-bar band.
+                app_owns_titlebar_drag: cfg.title_bar_style == window::TitleBarStyle::Hidden,
+                window_min_size: match (cfg.min_width, cfg.min_height) {
+                    (None, None) => None,
+                    (w, h) => Some(size(px(w.unwrap_or(0.0)), px(h.unwrap_or(0.0)))),
+                },
                 // The armed pump must not opt the window into the 33 ms unfocused throttle (JS timers would coarsen).
                 inactive_frame_interval: None,
                 // Maps to `SW_SHOWNOACTIVATE`: F12 shows the inspector without taking the caret from the app.
@@ -1214,7 +1227,7 @@ fn run_app() {
                 // Before the first frame is presented, so a test host is never seen in front.
                 quiet::send_to_back(window);
                 publish_video_device();
-                let shell = cx.new(|_| Shell { title: cfg.title.clone() });
+                let shell = cx.new(|_| Shell);
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);
                 // The pipe thread raises it directly: the foreground grant is short-lived.

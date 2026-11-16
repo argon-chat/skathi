@@ -37,7 +37,7 @@ export {
   withKeys,
   withModifiers,
 } from "./runtime/directives";
-export { appWindow, defineWindow, getCurrentWindow } from "./runtime/window";
+export { appWindow, defineWindow, getCurrentWindow, trackWindowReads } from "./runtime/window";
 export { appDevtools } from "./devtools";
 export type { DevtoolsInfo } from "./devtools";
 export { Transition, TransitionGroup, resolveTransitionProps } from "./runtime/transitions";
@@ -233,8 +233,18 @@ export const hydrate: typeof render = (vnode, container) => {
 export const initDirectivesForSSR = (): void => {};
 
 // `<SkWindow>`: a second OS window painting part of this tree, addressed by `mirrorNode.__skId`.
-export { SkWindow, SK_WINDOW_CREATION_TIME_PROPS } from "./skwindow";
-export type { SkWindowBounds, SkWindowMetrics, SkWindowTarget } from "./skwindow";
+export { SkWindow, SK_WINDOW_CREATION_TIME_PROPS, createSkWindowPopout, registerWindowRoot } from "./skwindow";
+export type {
+  SkWindowBounds,
+  SkWindowEvents,
+  SkWindowMetrics,
+  SkWindowOptions,
+  SkWindowPopout,
+  SkWindowRect,
+  SkWindowShown,
+  SkWindowState,
+  SkWindowTarget,
+} from "./skwindow";
 
 // `appHost`: functions and events of a program embedding Skathi as a library; inert in the exe.
 export { appHost } from "./apphost";

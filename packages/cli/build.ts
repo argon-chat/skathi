@@ -501,6 +501,18 @@ const vuePlugin = {
       const source = await Bun.file(args.path).text();
       return compileVue(args.path, source);
     });
+    // A package's Svelte components (the runtime's `<SkWindow>`, a component library), compiled as the app's are,
+    // without HMR: a package module is rebuilt whole.
+    build.onLoad({ filter: SVELTE_SOURCE }, async (args: Bun.OnLoadArgs) => {
+      const id = toId(args.path);
+      const out = await compileSvelte(APP_ROOT, args.path, await Bun.file(args.path).text(), {
+        dev: false,
+        filename: id,
+      });
+      for (const w of out.warnings) devAdvise(w);
+      if (out.css) devAdvise(`${id}: a package component's <style> is applied by sk build, not by sk dev`);
+      return { contents: out.js, loader: "js" as const };
+    });
   },
 };
 

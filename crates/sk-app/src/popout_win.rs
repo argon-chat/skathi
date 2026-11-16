@@ -10,8 +10,8 @@ mod imp {
         DWMWCP_DONOTROUND,
     };
     use windows::Win32::Graphics::Gdi::{
-        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR,
-        MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow,
+        HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -164,6 +164,21 @@ mod imp {
 
     pub fn is_visible(raw: isize) -> bool {
         unsafe { IsWindowVisible(h(raw)) }.as_bool()
+    }
+
+    /// The monitor nearest a physical point: its `HMONITOR` (gpui's display id) and rect.
+    pub fn monitor_at(x: i32, y: i32) -> Option<(u64, Rect)> {
+        let m = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+        if m.is_invalid() {
+            return None;
+        }
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(m, &mut info) }
+            .as_bool()
+            .then(|| (m.0 as u64, rect(info.rcMonitor)))
     }
 
     pub fn is_foreground(raw: isize) -> bool {
@@ -353,6 +368,9 @@ mod imp {
     pub fn hide(_raw: isize, _return_to: Option<isize>) {}
     pub fn is_visible(_raw: isize) -> bool {
         false
+    }
+    pub fn monitor_at(_x: i32, _y: i32) -> Option<(u64, Rect)> {
+        None
     }
     pub fn is_foreground(_raw: isize) -> bool {
         false

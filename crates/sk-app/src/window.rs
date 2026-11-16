@@ -710,6 +710,10 @@ mod win {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[path = "window_posix.rs"]
+mod posix;
+
+#[cfg(not(target_os = "windows"))]
 mod win {
     pub fn window_rect() -> Option<(f32, f32, f32, f32)> {
         None
@@ -1005,6 +1009,12 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     if cfg.always_on_top {
         win::set_always_on_top(true);
     }
+    #[cfg(target_os = "windows")]
+    if !cfg.maximizable {
+        window.vn_set_maximizable(false);
+    }
+    #[cfg(not(target_os = "windows"))]
+    posix::init(cfg, window);
     // Before the first snapshot, so nothing can be read through a stale cache.
     window
         .observe_window_display(|_, _| invalidate_display())
@@ -1146,6 +1156,15 @@ pub fn backdrop() -> Backdrop {
     LIVE.with(|l| l.borrow().backdrop)
 }
 
+/// `document.title` as last sent to the OS.
+pub fn title() -> String {
+    LIVE.with(|l| l.borrow().title.clone())
+}
+
+pub fn title_bar_height() -> f32 {
+    LIVE.with(|l| l.borrow().title_bar_height)
+}
+
 fn display_mode(fullscreen: bool) -> sk_css::DisplayMode {
     if fullscreen {
         return sk_css::DisplayMode::Fullscreen;
@@ -1276,7 +1295,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         }
         _ => (client, (0.0, 0.0, 0.0, 0.0)),
     };
-    Snapshot {
+    let snapshot = Snapshot {
         inner_width: inner.0,
         inner_height: inner.1,
         client,
@@ -1309,7 +1328,10 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         title_bar_height: live.title_bar_height,
         fallback_titlebar: live.fallback_titlebar,
         overlay: live.overlay,
-    }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let snapshot = posix::refine(snapshot, window);
+    snapshot
 }
 
 /// The Window Controls Overlay rect (`env(titlebar-area-*)`); zero with `visible: false` when the strip is not content's.
@@ -1338,8 +1360,19 @@ fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     )
 }
 
+/// [`titlebar_area`] past the macOS traffic lights, which sit at its left end.
+fn titlebar_rect(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
+    let (visible, (x, y, w, h)) = titlebar_area(s);
+    #[cfg(not(target_os = "windows"))]
+    if visible {
+        let left = posix::titlebar_inset();
+        return (true, (x + left, y, (w - left).max(0.0), h));
+    }
+    (visible, (x, y, w, h))
+}
+
 fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
-    let (visible, t) = titlebar_area(s);
+    let (visible, t) = titlebar_rect(s);
     sk_css::Env {
         viewport_width: s.inner_width,
         viewport_height: s.inner_height,
@@ -1461,7 +1494,7 @@ fn rect(t: (f32, f32, f32, f32)) -> Json {
 
 fn snapshot_json(s: &Snapshot) -> String {
     let mode = display_mode(s.fullscreen);
-    let (wco_visible, titlebar) = titlebar_area(s);
+    let (wco_visible, titlebar) = titlebar_rect(s);
     let cfg = config();
     Json::obj(vec![
         ("innerWidth", Json::n(s.inner_width)),
@@ -1585,6 +1618,11 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         notify("sync", &json);
     }
 
+    // Before `resize`, so `matchMedia` in its handlers sees the new environment.
+    keep_theme(window);
+    let dark = effective_dark(window);
+    let env_changed = sk_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
+
     publish_viewport(&s);
     // The first pump fires `resize` too.
     let viewport_moved = prev.as_ref().is_none_or(|p| {
@@ -1654,10 +1692,6 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         IN_DISPATCH.with(|f| f.set(false));
     }
 
-    // Before the pump, so `matchMedia` in a `resize` handler sees the new viewport.
-    keep_theme(window);
-    let dark = effective_dark(window);
-    let env_changed = sk_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
     if env_changed && BOOTED.with(|b| b.get()) {
         IN_DISPATCH.with(|f| f.set(true));
         notify("mediachange", &json);
@@ -1746,6 +1780,7 @@ enum Op {
     Unmaximize,
     ToggleMaximize,
     Close,
+    UserClose,
     Fullscreen(bool),
     Activate(bool),
     Bounds {
@@ -1787,10 +1822,17 @@ pub(crate) fn close_primary(why: &'static str, window: &mut Window, cx: &mut gpu
 }
 
 fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
+    #[cfg(not(target_os = "windows"))]
+    let Some(op) = posix::apply(op, window, cx) else {
+        return;
+    };
     match op {
         Op::Title(t) => {
             window.set_window_title(&t);
             LIVE.with(|l| l.borrow_mut().title = t);
+            if fallback_titlebar() {
+                cx.defer(crate::refresh_main);
+            }
         }
         Op::Minimize => window.minimize_window(),
         // `zoom_window` does not toggle, so the verbs stay distinct.
@@ -1804,6 +1846,12 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             }
         }
         Op::Close => close_primary("close()", window, cx),
+        Op::UserClose => {
+            if should_close() {
+                cancel_startup_reveal();
+                close_primary("a close request (caption button)", window, cx);
+            }
+        }
         // `toggle_fullscreen` toggles, so guard with the live state.
         Op::Fullscreen(on) => {
             if window.is_fullscreen() != on {
@@ -1841,7 +1889,10 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             let s = SNAPSHOT.with(|s| s.borrow().clone());
             let (_, _, ow, oh) = s.outer;
             let (_, _, aw, ah, al, at) = s.screen;
-            win::set_position(al + (aw - ow) / 2.0, at + (ah - oh) / 2.0);
+            win::set_position(
+                (al + (aw - ow) / 2.0) * s.scale,
+                (at + (ah - oh) / 2.0) * s.scale,
+            );
             resync_bounds(window, cx);
         }
         Op::AlwaysOnTop(on) => {
@@ -1868,7 +1919,45 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
     }
 }
 
-/// Best-effort, clamped to the display's `visible_bounds()` so an app cannot park behind the taskbar.
+/// `(x, y, width, height)` of the work area of the monitor nearest the physical rect, in physical px.
+#[cfg(target_os = "windows")]
+fn work_area_at(x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f32, f32, f32)> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    let r = RECT {
+        left: x.round() as i32,
+        top: y.round() as i32,
+        right: (x + w).round() as i32,
+        bottom: (y + h).round() as i32,
+    };
+    let m = unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) };
+    if m.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() {
+        return None;
+    }
+    let a = info.rcWork;
+    Some((
+        a.left as f32,
+        a.top as f32,
+        (a.right - a.left) as f32,
+        (a.bottom - a.top) as f32,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn work_area_at(_x: f32, _y: f32, _w: f32, _h: f32) -> Option<(f32, f32, f32, f32)> {
+    None
+}
+
+/// Best-effort, clamped to the target monitor's work area so an app cannot park behind the taskbar.
 fn apply_bounds(
     window: &mut Window,
     cx: &mut gpui::App,
@@ -1880,36 +1969,59 @@ fn apply_bounds(
 ) {
     let mut moved_synchronously = false;
     let s = SNAPSHOT.with(|s| s.borrow().clone());
-    let (_, _, aw, ah, al, at) = s.screen;
+    let scale = s.scale;
     let cur = if content { s.content } else { s.outer };
+    let (ox, oy, ow, oh) = s.outer;
+    let frame = if content {
+        (ow - s.content.2, oh - s.content.3)
+    } else {
+        (0.0, 0.0)
+    };
+    let mut nw = w.unwrap_or(cur.2).max(1.0);
+    let mut nh = h.unwrap_or(cur.3).max(1.0);
+    let mut nx = x.unwrap_or(ox);
+    let mut ny = y.unwrap_or(oy);
+    if content && x.is_some() {
+        nx -= s.content.0 - ox;
+    }
+    if content && y.is_some() {
+        ny -= s.content.1 - oy;
+    }
+    let sized = w.is_some() || h.is_some();
+    let (tw, th) = if sized {
+        (nw + frame.0, nh + frame.1)
+    } else {
+        (ow, oh)
+    };
+    // The work area of the monitor the target rect lands on, so a window can move to another one.
+    let (al, at, aw, ah) = work_area_at(nx * scale, ny * scale, tw * scale, th * scale)
+        .map(|(l, t, w, h)| (l / scale, t / scale, w / scale, h / scale))
+        .unwrap_or((s.screen.4, s.screen.5, s.screen.2, s.screen.3));
 
-    if w.is_some() || h.is_some() {
-        let mut nw = w.unwrap_or(cur.2).max(1.0);
-        let mut nh = h.unwrap_or(cur.3).max(1.0);
+    if sized {
         if aw > 0.0 {
-            nw = nw.min(aw);
-            nh = nh.min(ah);
+            nw = nw.min(aw - frame.0).max(1.0);
+            nh = nh.min(ah - frame.1).max(1.0);
         }
-        if content {
+        // Without an OS outer rect (`getBounds()` is the client rect there) the client is resized.
+        if content || win::window_rect().is_none() {
             window.resize(gpui::size(gpui::px(nw), gpui::px(nh)));
         } else {
-            win::set_outer_size(nw * s.scale, nh * s.scale);
+            win::set_outer_size(nw * scale, nh * scale);
             moved_synchronously = true;
         }
     }
     if x.is_some() || y.is_some() {
-        let (ox, oy, ow, oh) = s.outer;
-        let mut nx = x.unwrap_or(ox);
-        let mut ny = y.unwrap_or(oy);
-        if content {
-            nx -= s.content.0 - ox;
-            ny -= s.content.1 - oy;
-        }
+        let (tw, th) = if sized {
+            (nw + frame.0, nh + frame.1)
+        } else {
+            (ow, oh)
+        };
         if aw > 0.0 {
-            nx = nx.clamp(al, (al + aw - ow).max(al));
-            ny = ny.clamp(at, (at + ah - oh).max(at));
+            nx = nx.clamp(al, (al + aw - tw).max(al));
+            ny = ny.clamp(at, (at + ah - th).max(at));
         }
-        win::set_position(nx * s.scale, ny * s.scale);
+        win::set_position(nx * scale, ny * scale);
         moved_synchronously = true;
     }
     // `Window::resize` spawns its `SetWindowPos`; the Win32 calls send `WM_SIZE` re-entrantly and need [`resync_bounds`].
@@ -1939,18 +2051,31 @@ pub(crate) fn element_fullscreen(on: Option<bool>) -> bool {
     current
 }
 
-/// The embedder's `Handle::close`. Main thread.
+/// Closes without asking: the embedder's `Handle::close`, a tray `role: "quit"`. Main thread, outside any JS call.
 pub(crate) fn request_close() {
+    page_hide();
     submit(Op::Close);
 }
 
+/// A close the user asked for from app-drawn chrome: asked as a `WM_CLOSE` is (`close-requested`,
+/// `beforeunload`, then `pagehide`). Applied at the top of the next frame, outside any JS call.
+pub(crate) fn request_user_close() {
+    PENDING.with(|p| p.borrow_mut().push_back(Op::UserClose));
+}
+
+/// Dispatches `pagehide` once per session; the JS side ignores repeats. Outside any JS call.
+pub(crate) fn page_hide() {
+    let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
+    notify("pagehide", &json);
+}
+
 /// Main thread.
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn request_minimize() {
     submit(Op::Minimize);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "windows"))]
 pub(crate) fn request_toggle_maximize() {
     submit(Op::ToggleMaximize);
 }
@@ -1977,6 +2102,7 @@ fn op_take(op: &Op) -> Op {
         Op::Unmaximize => Op::Unmaximize,
         Op::ToggleMaximize => Op::ToggleMaximize,
         Op::Close => Op::Close,
+        Op::UserClose => Op::UserClose,
         Op::Fullscreen(b) => Op::Fullscreen(*b),
         Op::Activate(b) => Op::Activate(*b),
         Op::Bounds {
@@ -2123,6 +2249,9 @@ host_fn!(fn sk_window_set_overlay(g, args) {
     // `height` alone (arg 1 absent) keeps the live cluster, `false` retires it, an object installs or updates it.
     if let Some(h) = arg_f32(args.arg(0)) {
         LIVE.with(|l| l.borrow_mut().title_bar_height = h.max(0.0));
+        if fallback_titlebar() {
+            sk_runtime::with_app(|cx| cx.defer(crate::refresh_main));
+        }
     }
     let mode = args.arg(1).as_number().unwrap_or(-1.0);
     let read = |i: u32| unsafe { read_string(g, args.arg(i).0) }.unwrap_or_default();
@@ -2132,6 +2261,10 @@ host_fn!(fn sk_window_set_overlay(g, args) {
         m if m == 1.0 => {
             if config().title_bar_style == TitleBarStyle::Default {
                 advise(A27);
+                return UNDEF;
+            }
+            if cfg!(target_os = "macos") {
+                advise(NO_OVERLAY_MACOS);
                 return UNDEF;
             }
             let mut adv = Vec::new();
@@ -2164,6 +2297,10 @@ const A27: &str =
     "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
                    draws the caption buttons and owns their colours. The overlay is for \
                    custom-chrome windows.";
+const NO_OVERLAY_MACOS: &str =
+    "`titleBarOverlay` does nothing on macOS: the traffic lights are the window's caption \
+     buttons there, and `env(titlebar-area-x)` starts past them. Draw no caption buttons of \
+     your own on macOS.";
 
 /// `None` in fullscreen or while minimised.
 pub fn overlay() -> Option<(f32, Overlay)> {
@@ -2229,6 +2366,30 @@ host_fn!(fn sk_window_cursor(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
+// A caption button's activation behaviour: `el.click()` acts as a real press does. Queued, so the
+// action (a close asks `close-requested`) runs outside the click's JS.
+host_fn!(fn sk_window_control_click(_g, args) {
+    let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
+    let Some((key, area)) = sk_tree::window_control_at(node) else {
+        return Value::boolean(false).0;
+    };
+    if key != PRIMARY_WINDOW.with(|c| c.get()) {
+        return Value::boolean(crate::popout::window_control(key, area)).0;
+    }
+    let op = match area {
+        gpui::WindowControlArea::Min => Op::Minimize,
+        gpui::WindowControlArea::Max if !config().maximizable => return Value::boolean(true).0,
+        gpui::WindowControlArea::Max => Op::ToggleMaximize,
+        gpui::WindowControlArea::Close => {
+            request_user_close();
+            return Value::boolean(true).0;
+        }
+        _ => return Value::boolean(false).0,
+    };
+    PENDING.with(|p| p.borrow_mut().push_back(op));
+    Value::boolean(true).0
+});
+
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const std::ffi::c_void)] = &[
         ("__sk_window_state", 0, sk_window_state as *const _),
@@ -2270,6 +2431,11 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_window_hitboxes", 1, sk_window_hitboxes as *const _),
         ("__sk_window_cursor", 0, sk_window_cursor as *const _),
         ("__sk_window_advise", 1, sk_window_advise as *const _),
+        (
+            "__sk_window_control_click",
+            1,
+            sk_window_control_click as *const _,
+        ),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

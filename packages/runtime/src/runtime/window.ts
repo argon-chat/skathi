@@ -28,6 +28,15 @@ const inertWindow = new Proxy(
 );
 
 const STATE_METHOD = /^(is|get)[A-Z]/;
+const readHooks = new Map<string, () => void>();
+const readHook = () => {
+  for (const hook of readHooks.values()) hook();
+};
+
+/** Renderer glue: runs `hook` on every `appWindow` state read, as Vue tracks one; `key` names the renderer, and a reload's call replaces its predecessor's. */
+export function trackWindowReads(key: string, hook: () => void): void {
+  readHooks.set(key, hook);
+}
 // A reload re-evaluates this module but not the prelude: the previous evaluation's wrappers are undone first.
 const UNTRACK = Symbol.for("skathi.appWindow.untrack");
 
@@ -60,6 +69,7 @@ function trackReads(target: SkAppWindow, onChange: (fn: () => void) => () => voi
         get(this: unknown) {
           const value: unknown = get.call(this);
           void version.value;
+          readHook();
           return value;
         },
       });
@@ -72,6 +82,7 @@ function trackReads(target: SkAppWindow, onChange: (fn: () => void) => () => voi
       value(this: unknown, ...args: unknown[]): unknown {
         const value: unknown = Reflect.apply(fn, this, args);
         void version.value;
+        readHook();
         return value;
       },
     });

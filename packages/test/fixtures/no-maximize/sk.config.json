@@ -1,0 +1,12 @@
+{
+  "name": "sk-test-no-maximize",
+
+  "window": {
+    "title": "Skathi — no maximize (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "maximizable": false
+  }
+}

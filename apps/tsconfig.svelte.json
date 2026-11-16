@@ -1,0 +1,19 @@
+{
+  // `bun run typecheck` checks the Svelte apps and the runtime's Svelte components with svelte-check.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime/svelte": ["../packages/runtime/src/svelte.ts"]
+    }
+  },
+  "include": [
+    "../packages/runtime/src/engine.d.ts",
+    "../packages/runtime/src/protocol.d.ts",
+    "../packages/runtime/src/indexeddb.d.ts",
+    "../packages/runtime/env.d.ts",
+    "../packages/runtime/src/svelte/*.svelte",
+    "../packages/test/fixtures/*/src/**/*.svelte",
+    "../packages/cli/templates/*/src/**/*.svelte"
+  ]
+}

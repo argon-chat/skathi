@@ -83,14 +83,15 @@
     if (h !== undefined) mask |= BOUNDS_H;
     __sk_window_set_bounds(x ?? 0, y ?? 0, w ?? 0, h ?? 0, mask);
   };
-  globalThis.resizeTo = (w, h) => setBounds({ width: w, height: h }, true);
+  // The outer size, as on the web.
+  globalThis.resizeTo = (w, h) => setBounds({ width: w, height: h }, false);
   globalThis.resizeBy = (dw, dh) =>
-    setBounds({ width: S.innerWidth + (dw || 0), height: S.innerHeight + (dh || 0) }, true);
+    setBounds({ width: S.outer.width + (dw || 0), height: S.outer.height + (dh || 0) }, false);
   globalThis.moveTo = (x, y) => setBounds({ x, y }, false);
   globalThis.moveBy = (dx, dy) => setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
 
-  // `pagehide` fires once per close (a WM_CLOSE the app did not veto, or `close()`), as on any
-  // unload. `beforeunload` is not asked again.
+  // `pagehide` fires once per session, on any close or quit, as on any unload. `beforeunload` is not
+  // asked again.
   let pageHidden = false;
   const hidePage = () => {
     if (pageHidden) return;
@@ -487,13 +488,19 @@
       "startResizeDragging",
       "`startResizeDragging()` is not implemented — the window already has live resize borders on " + "all four edges.",
     );
-  for (const name of ["setProgressBar", "setOverlayIcon", "setBadgeCount", "setSkipTaskbar", "setIcon"] as const) {
+  for (const name of ["setProgressBar", "setOverlayIcon", "setSkipTaskbar", "setIcon"] as const) {
     appWindow[name] = () =>
       warn(
         `taskbar:${name}`,
         `\`${name}()\` is not implemented in v1 (Windows taskbar integration, no web equivalent).`,
       );
   }
+  appWindow.setBadgeCount = () =>
+    warn(
+      "taskbar:setBadgeCount",
+      "`setBadgeCount()` is not implemented. Use the web's `navigator.setAppBadge(count)` and " +
+        "`navigator.clearAppBadge()`, which badge the taskbar button on Windows and the Dock icon on macOS.",
+    );
   Object.defineProperty(appWindow, "title", {
     get: () => document!.title,
     set: (v: string) => (document!.title = v),
@@ -546,22 +553,19 @@
     contentInset: { ...S.contentInset },
   }));
 
-  // gpui fixes these at window creation.
+  // `sk.config.json` `window` keys read only when the window is created.
   const CREATION_ONLY = [
     "width",
     "height",
     "minWidth",
     "minHeight",
-    "maxWidth",
-    "maxHeight",
     "resizable",
     "minimizable",
     "maximizable",
-    "closable",
-    "movable",
     "titleBarFallback",
     "focus",
   ];
+  const RUNTIME_KEYS = ["title", "backdrop", "theme", "alwaysOnTop", "titleBarHeight", "titleBarOverlay"];
   // These need a different window style; changing it mid-session desyncs gpui's border_offset and
   // hit-test flags.
   const STYLE_ONLY = ["frame", "titleBarStyle"];
@@ -574,6 +578,10 @@
       }
       if (key === "backdrop") {
         appWindow.backdrop = opts.backdrop as string;
+        continue;
+      }
+      if (key === "theme") {
+        appWindow.theme = opts.theme as string;
         continue;
       }
       if (key === "alwaysOnTop") {
@@ -599,22 +607,44 @@
       if (CREATION_ONLY.includes(key)) {
         warn(
           `creation-only:${key}`,
-          `\`${key}\` can only be set when the window is created. Declare it in ` +
-            "`apps/<app>/sk.config.json` under `window`.",
+          `\`${key}\` can only be set when the window is created. Declare it in \`sk.config.json\` under \`window\`.`,
         );
         continue;
       }
-      warn(`defineWindow:${key}`, `unknown \`defineWindow\` key: ${JSON.stringify(key)}`);
+      warn(
+        `defineWindow:${key}`,
+        `unknown \`defineWindow\` key: ${JSON.stringify(key)}. It applies ${RUNTIME_KEYS.join(", ")}; ` +
+          `${[...CREATION_ONLY, ...STYLE_ONLY].join(", ")} belong in \`sk.config.json\` under \`window\`.`,
+      );
     }
   };
 
   // One callback, called with a comma-separated kind list and the new snapshot.
   // Its boolean return is the close veto.
-  let closeRequestedListeners = 0;
+  // `close-requested` listeners keyed as `addEventListener` dedupes them (listener, capture), each
+  // mapped to its `once` flag.
+  const closeRequestedListeners = new Map<string, boolean>();
+  const listenerIds = new WeakMap<object, number>();
+  let nextListenerId = 0;
+  const listenerKey = (fn: unknown, opts: unknown) => {
+    if (!fn || (typeof fn !== "function" && typeof fn !== "object")) return null;
+    let id = listenerIds.get(fn);
+    if (id === undefined) listenerIds.set(fn, (id = ++nextListenerId));
+    const capture = typeof opts === "boolean" ? opts : !!(opts && (opts as { capture?: unknown }).capture);
+    return `${id}:${capture}`;
+  };
   const origAdd = appWindow.addEventListener.bind(appWindow);
+  const origRemove = appWindow.removeEventListener.bind(appWindow);
   appWindow.addEventListener = (type, fn, opts) => {
-    if (type === "close-requested") closeRequestedListeners += 1;
+    const key = type === "close-requested" ? listenerKey(fn, opts) : null;
+    if (key && !closeRequestedListeners.has(key))
+      closeRequestedListeners.set(key, !!(opts && typeof opts === "object" && opts.once));
     return origAdd(type, fn, opts);
+  };
+  appWindow.removeEventListener = (type, fn, opts) => {
+    const key = type === "close-requested" ? listenerKey(fn, opts) : null;
+    if (key) closeRequestedListeners.delete(key);
+    return origRemove(type, fn, opts);
   };
 
   const emit = (target: SkDispatchTarget, name: string, init?: EventInit) =>
@@ -624,12 +654,18 @@
     publish(json);
     // "sync" publishes the snapshot before the trusted `resize`, so getters are current in handlers.
     if (kinds === "sync") return true;
+    // A close or quit that asks nothing: the tray's quit item, the embedder, the session ending.
+    if (kinds === "pagehide") {
+      hidePage();
+      return true;
+    }
     if (kinds === "close-requested") {
       // The user asked to close (title bar, Alt+F4, taskbar). `close()`, the tray's quit item and
       // the session ending close without asking. Not gated on sticky activation: an untouched
       // app may still keep its window, e.g. to hide it to a tray.
       const request = new Event("close-requested", { cancelable: true });
       appWindow.dispatchEvent(request);
+      for (const [key, once] of closeRequestedListeners) if (once) closeRequestedListeners.delete(key);
       if (request.defaultPrevented) return false;
       const ev = new Event("beforeunload", { cancelable: true });
       globalThis.dispatchEvent(ev);
@@ -637,7 +673,7 @@
         hidePage();
         return true;
       }
-      if (closeRequestedListeners === 0) {
+      if (closeRequestedListeners.size === 0) {
         warn(
           "beforeunload-trap",
           "`beforeunload` cancelled the close, but Skathi shows no confirmation dialog, so the " +
@@ -650,11 +686,15 @@
     for (const kind of kinds.split(",")) {
       switch (kind) {
         case "boot":
+          break;
+        // The window's own `resize` was dispatched by the host before this call.
         case "resize":
+          emit(appWindow, kind);
           break;
         case "focus":
         case "blur":
           emit(globalThis, kind);
+          emit(appWindow, kind);
           break;
         case "fullscreenchange":
           onFullscreenWindowChanged(S.fullscreen);

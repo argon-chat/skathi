@@ -1,10 +1,9 @@
-//! The window's chrome on Linux, where the app draws it.
+//! The window's chrome on Linux and macOS, where the app draws it.
 //!
-//! On Windows the `-webkit-app-region` areas ([`WindowControlArea`]) answer
-//! `WM_NCHITTEST` and the OS moves, maximizes and closes the window; on macOS
-//! the hidden titlebar keeps AppKit's. A Wayland window has no such caption
-//! (GNOME never draws one), and gpui's Linux backends do not consult the
-//! areas, so the shell does what the OS would.
+//! On Windows the `-webkit-app-region` areas ([`WindowControlArea`]) answer `WM_NCHITTEST` and
+//! the OS moves, maximizes and closes the window. gpui's Linux and macOS backends do not consult
+//! the areas (a Wayland window has no OS caption at all; a macOS window with a custom title bar
+//! leaves its dragging to the app), so the shell does what the OS would.
 
 use gpui::{
     div, px, CursorStyle, Decorations, Div, InteractiveElement, IntoElement, MouseButton,
@@ -15,7 +14,11 @@ use crate::window;
 
 const EDGE: f32 = 6.;
 
+/// Client-side resize edges: Linux with client decorations only (AppKit resizes its own windows).
 fn resizable(window: &Window) -> bool {
+    if cfg!(target_os = "macos") || !window.is_resizable() {
+        return false;
+    }
     match window.window_decorations() {
         Decorations::Client { tiling } => {
             !window.is_maximized() && !window.is_fullscreen() && !tiling.is_tiled()
@@ -33,32 +36,63 @@ fn on_edge(window: &Window, position: Point<Pixels>) -> bool {
         || position.y > size.height - edge
 }
 
-pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
+fn maximizable(window: &Window, primary: bool) -> bool {
+    window.is_resizable() && (!primary || window::config().maximizable)
+}
+
+/// `primary`: the main window, whose close asks `close-requested`; a pop-out's close is its own.
+pub(crate) fn wrap(shell: Div, window: &Window, primary: bool) -> Div {
     let shell = shell
-        .capture_any_mouse_down(|event, window, cx| {
+        .capture_any_mouse_down(move |event, window, cx| {
             if event.button != MouseButton::Left {
                 return;
             }
             if resizable(window) && on_edge(window, event.position) {
                 return;
             }
-            if window.window_control_area_at(event.position) == Some(WindowControlArea::Drag) {
-                if event.click_count == 2 {
-                    window::request_toggle_maximize();
-                } else {
-                    window.start_window_move();
-                }
-                cx.stop_propagation();
+            if window.window_control_area_at(event.position) != Some(WindowControlArea::Drag) {
+                return;
             }
+            if event.click_count == 2 {
+                if maximizable(window, primary) {
+                    if cfg!(target_os = "macos") {
+                        // Honours the user's "double-click a window's title bar to" setting.
+                        window.titlebar_double_click();
+                    } else {
+                        toggle_maximize(window, primary);
+                    }
+                }
+            } else {
+                window.start_window_move();
+            }
+            cx.stop_propagation();
         })
-        .capture_any_mouse_up(|event, window, cx| {
+        .capture_any_mouse_up(move |event, window, cx| {
             if event.button != MouseButton::Left {
                 return;
             }
             match window.window_control_area_at(event.position) {
-                Some(WindowControlArea::Min) => window::request_minimize(),
-                Some(WindowControlArea::Max) => window::request_toggle_maximize(),
-                Some(WindowControlArea::Close) => window::request_close(),
+                Some(WindowControlArea::Min) => {
+                    if window.is_minimizable() {
+                        if primary {
+                            window::request_minimize();
+                        } else {
+                            window.minimize_window();
+                        }
+                    }
+                }
+                Some(WindowControlArea::Max) => {
+                    if maximizable(window, primary) {
+                        toggle_maximize(window, primary);
+                    }
+                }
+                Some(WindowControlArea::Close) => {
+                    if primary {
+                        window::request_user_close();
+                    } else {
+                        window.vn_request_close();
+                    }
+                }
                 _ => return,
             }
             cx.stop_propagation();
@@ -76,6 +110,14 @@ pub(crate) fn wrap(shell: Div, window: &Window) -> Div {
         edge(ResizeEdge::TopRight, CursorStyle::ResizeUpRightDownLeft),
         edge(ResizeEdge::BottomLeft, CursorStyle::ResizeUpRightDownLeft),
     ])
+}
+
+fn toggle_maximize(window: &Window, primary: bool) {
+    if primary {
+        window::request_toggle_maximize();
+    } else {
+        window.vn_set_maximized(!window.vn_is_zoomed());
+    }
 }
 
 fn edge(edge: ResizeEdge, cursor: CursorStyle) -> impl IntoElement {

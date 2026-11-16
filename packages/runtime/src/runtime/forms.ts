@@ -1,7 +1,7 @@
 import type { MirrorElement, MirrorNode } from "./types";
 import { defineDom } from "./dom-members";
 import { isMirrorNode } from "./listeners";
-import { activate } from "./links";
+import { activate, activateWindowControl } from "./links";
 import { firstInTree } from "./labels";
 import { forEachDeep } from "./nodes";
 import { hasWarned, warnCompat } from "../compat";
@@ -30,7 +30,10 @@ defineDom("click", function (this: MirrorElement) {
     } catch {
       ev = new CustomEvent("click", init);
     }
-    if (propagate(this, "click", ev)) activate(this, true);
+    if (propagate(this, "click", ev)) {
+      activateWindowControl(this);
+      activate(this, true);
+    }
   } finally {
     clicking.delete(this);
   }

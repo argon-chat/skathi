@@ -1,0 +1,11 @@
+{
+  "$comment": "Svelte's <SkWindow> and reactive appWindow reads: a pop-out window, its props and events, and runes over window state.",
+
+  "name": "sk-test-svelte-window",
+
+  "window": {
+    "title": "Skathi — Svelte window (fixture)",
+    "width": 620,
+    "height": 460
+  }
+}

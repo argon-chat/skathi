@@ -11,7 +11,7 @@
     "prepare": "git config core.hooksPath .githooks || true",
     "sk": "bun packages/cli/cli/sk.ts",
     "test": "bun run --cwd packages/runtime test && bun run --cwd packages/cli test",
-    "typecheck": "tsc -p packages/runtime/tsconfig.json && tsc -p packages/runtime/tsconfig.test.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/cli/tsconfig.test.json && tsc -p scripts/tsconfig.json && tsc -p packages/test/tsconfig.json && tsc -p crates/sk-app/src/tsconfig.json && vue-tsc -p apps/tsconfig.json && vue-tsc -p apps/devtools/test/tsconfig.inspector-ui.json && bun run docs:check",
+    "typecheck": "tsc -p packages/runtime/tsconfig.json && tsc -p packages/runtime/tsconfig.test.json && tsc -p packages/cli/tsconfig.json && tsc -p packages/cli/tsconfig.test.json && tsc -p scripts/tsconfig.json && tsc -p packages/test/tsconfig.json && tsc -p crates/sk-app/src/tsconfig.json && vue-tsc -p apps/tsconfig.json && vue-tsc -p apps/devtools/test/tsconfig.inspector-ui.json && svelte-check --tsconfig apps/tsconfig.svelte.json --fail-on-warnings && bun run docs:check",
     "preludes": "bun scripts/gen-preludes.ts",
     "preludes:check": "bun scripts/gen-preludes.ts --check",
     "shaders": "bun scripts/shaders.ts",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.0",
+    "svelte-check": "^4",
     "typescript": "5",
     "vue-tsc": "^3.3.11"
   }

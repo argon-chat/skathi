@@ -75,8 +75,8 @@
       mask |= BOUNDS_H;
     __sk_window_set_bounds(x ?? 0, y ?? 0, w ?? 0, h ?? 0, mask);
   };
-  globalThis.resizeTo = (w, h) => setBounds({ width: w, height: h }, true);
-  globalThis.resizeBy = (dw, dh) => setBounds({ width: S.innerWidth + (dw || 0), height: S.innerHeight + (dh || 0) }, true);
+  globalThis.resizeTo = (w, h) => setBounds({ width: w, height: h }, false);
+  globalThis.resizeBy = (dw, dh) => setBounds({ width: S.outer.width + (dw || 0), height: S.outer.height + (dh || 0) }, false);
   globalThis.moveTo = (x, y) => setBounds({ x, y }, false);
   globalThis.moveBy = (dx, dy) => setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
   let pageHidden = false;
@@ -425,9 +425,10 @@
     setOverlay(o.height, 1, o.color, o.symbolColor);
   };
   appWindow.startResizeDragging = () => warn("startResizeDragging", "`startResizeDragging()` is not implemented — the window already has live resize borders on " + "all four edges.");
-  for (const name of ["setProgressBar", "setOverlayIcon", "setBadgeCount", "setSkipTaskbar", "setIcon"]) {
+  for (const name of ["setProgressBar", "setOverlayIcon", "setSkipTaskbar", "setIcon"]) {
     appWindow[name] = () => warn(`taskbar:${name}`, `\`${name}()\` is not implemented in v1 (Windows taskbar integration, no web equivalent).`);
   }
+  appWindow.setBadgeCount = () => warn("taskbar:setBadgeCount", "`setBadgeCount()` is not implemented. Use the web's `navigator.setAppBadge(count)` and " + "`navigator.clearAppBadge()`, which badge the taskbar button on Windows and the Dock icon on macOS.");
   Object.defineProperty(appWindow, "title", {
     get: () => document.title,
     set: (v) => document.title = v,
@@ -478,16 +479,13 @@
     "height",
     "minWidth",
     "minHeight",
-    "maxWidth",
-    "maxHeight",
     "resizable",
     "minimizable",
     "maximizable",
-    "closable",
-    "movable",
     "titleBarFallback",
     "focus"
   ];
+  const RUNTIME_KEYS = ["title", "backdrop", "theme", "alwaysOnTop", "titleBarHeight", "titleBarOverlay"];
   const STYLE_ONLY = ["frame", "titleBarStyle"];
   const defineWindow = (opts) => {
     if (!opts || typeof opts !== "object")
@@ -499,6 +497,10 @@
       }
       if (key === "backdrop") {
         appWindow.backdrop = opts.backdrop;
+        continue;
+      }
+      if (key === "theme") {
+        appWindow.theme = opts.theme;
         continue;
       }
       if (key === "alwaysOnTop") {
@@ -518,27 +520,53 @@
         continue;
       }
       if (CREATION_ONLY.includes(key)) {
-        warn(`creation-only:${key}`, `\`${key}\` can only be set when the window is created. Declare it in ` + "`apps/<app>/sk.config.json` under `window`.");
+        warn(`creation-only:${key}`, `\`${key}\` can only be set when the window is created. Declare it in \`sk.config.json\` under \`window\`.`);
         continue;
       }
-      warn(`defineWindow:${key}`, `unknown \`defineWindow\` key: ${JSON.stringify(key)}`);
+      warn(`defineWindow:${key}`, `unknown \`defineWindow\` key: ${JSON.stringify(key)}. It applies ${RUNTIME_KEYS.join(", ")}; ` + `${[...CREATION_ONLY, ...STYLE_ONLY].join(", ")} belong in \`sk.config.json\` under \`window\`.`);
     }
   };
-  let closeRequestedListeners = 0;
+  const closeRequestedListeners = new Map;
+  const listenerIds = new WeakMap;
+  let nextListenerId = 0;
+  const listenerKey = (fn, opts) => {
+    if (!fn || typeof fn !== "function" && typeof fn !== "object")
+      return null;
+    let id = listenerIds.get(fn);
+    if (id === undefined)
+      listenerIds.set(fn, id = ++nextListenerId);
+    const capture = typeof opts === "boolean" ? opts : !!(opts && opts.capture);
+    return `${id}:${capture}`;
+  };
   const origAdd = appWindow.addEventListener.bind(appWindow);
+  const origRemove = appWindow.removeEventListener.bind(appWindow);
   appWindow.addEventListener = (type, fn, opts) => {
-    if (type === "close-requested")
-      closeRequestedListeners += 1;
+    const key = type === "close-requested" ? listenerKey(fn, opts) : null;
+    if (key && !closeRequestedListeners.has(key))
+      closeRequestedListeners.set(key, !!(opts && typeof opts === "object" && opts.once));
     return origAdd(type, fn, opts);
+  };
+  appWindow.removeEventListener = (type, fn, opts) => {
+    const key = type === "close-requested" ? listenerKey(fn, opts) : null;
+    if (key)
+      closeRequestedListeners.delete(key);
+    return origRemove(type, fn, opts);
   };
   const emit = (target, name, init) => target.dispatchEvent(new Event(name, init));
   __sk_window_observe((kinds, json) => {
     publish(json);
     if (kinds === "sync")
       return true;
+    if (kinds === "pagehide") {
+      hidePage();
+      return true;
+    }
     if (kinds === "close-requested") {
       const request = new Event("close-requested", { cancelable: true });
       appWindow.dispatchEvent(request);
+      for (const [key, once] of closeRequestedListeners)
+        if (once)
+          closeRequestedListeners.delete(key);
       if (request.defaultPrevented)
         return false;
       const ev = new Event("beforeunload", { cancelable: true });
@@ -547,7 +575,7 @@
         hidePage();
         return true;
       }
-      if (closeRequestedListeners === 0) {
+      if (closeRequestedListeners.size === 0) {
         warn("beforeunload-trap", "`beforeunload` cancelled the close, but Skathi shows no confirmation dialog, so the " + "close button does nothing. Cancel `close-requested` on `appWindow` instead, ask the " + "user, and call `appWindow.close()` when they confirm.");
       }
       return false;
@@ -555,11 +583,14 @@
     for (const kind of kinds.split(",")) {
       switch (kind) {
         case "boot":
+          break;
         case "resize":
+          emit(appWindow, kind);
           break;
         case "focus":
         case "blur":
           emit(globalThis, kind);
+          emit(appWindow, kind);
           break;
         case "fullscreenchange":
           onFullscreenWindowChanged(S.fullscreen);

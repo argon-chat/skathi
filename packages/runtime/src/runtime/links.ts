@@ -26,6 +26,11 @@ export function isActivationEvent(ev: Event): boolean {
   return typeof MouseEvent !== "function" || ev instanceof MouseEvent;
 }
 
+/** A synthetic click on a `--window-control` caption button acts as a real press, whose action the OS performs itself. */
+export function activateWindowControl(target: MirrorNode): void {
+  if (isMirrorNode(target) && typeof __sk_window_control_click === "function") __sk_window_control_click(target.__skId);
+}
+
 export function activate(target: MirrorNode, bubbles: boolean): void {
   // Detached `document.createElement("a" | "input")` elements are not in the tree; FileSaver.js and `useFileDialog` click them.
   if (!isMirrorNode(target)) return activateDetached(target);

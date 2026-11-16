@@ -349,6 +349,7 @@ pub fn install(rt: &JsRuntime) {
 }
 
 pub fn pump() {
+    launch::pump();
     let installed = RT_G.load(Ordering::Acquire) != 0;
     let batch: Vec<Item> = {
         let Ok(mut q) = QUEUE.try_lock() else { return };

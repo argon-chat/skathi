@@ -19,6 +19,10 @@ use crate::json::{self, Json};
 use crate::popout_win;
 use crate::window::Backdrop;
 
+#[cfg(not(target_os = "windows"))]
+#[path = "popout_posix.rs"]
+mod posix;
+
 const UNDEF: u64 = 0xa;
 
 pub struct PopoutShell {
@@ -47,6 +51,8 @@ impl Render for PopoutShell {
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont");
+        #[cfg(not(target_os = "windows"))]
+        let shell = crate::chrome_posix::wrap(shell, window, false);
         let shell =
             match crate::window::opaque_fill(backdrop, crate::window::effective_dark(window)) {
                 Some(fill) => shell.bg(fill),
@@ -104,6 +110,9 @@ struct Popout {
     os_chrome: bool,
     title_bar_height: f32,
     backdrop: Backdrop,
+    /// Creation-time: changing one only advises.
+    resizable: bool,
+    min_size: (Option<f32>, Option<f32>),
     /// Last `(width, height)` reported to JS, so `resize` fires on change.
     last_metrics: (f32, f32),
     last_focused: bool,
@@ -378,7 +387,30 @@ host_fn!(fn sk_window_set_options(g, args) {
         let w = &p[i];
         (w.handle, w.title.clone(), w.os_chrome, w.visible, w.cover, w.taskbar, w.focusable)
     });
+    let (old_resizable, old_min_size, old_backdrop, old_title_bar_height) = POPOUTS.with(|p| {
+        let w = &p.borrow()[i];
+        (w.resizable, w.min_size, w.backdrop, w.title_bar_height)
+    });
     let opts = parse_options(&raw);
+    if opts.resizable != old_resizable {
+        crate::window::advise(
+            "<SkWindow resizable>: whether a window can be resized is decided when it is created \
+             (a window STYLE and its hit test), so changing it does nothing to a window that is \
+             already open — close and re-open it, for example with a `:key` that includes the value",
+        );
+    }
+    if (opts.min_width, opts.min_height) != old_min_size {
+        crate::window::advise(
+            "<SkWindow minWidth/minHeight>: the minimum size is decided when the window is created, \
+             so changing it does nothing to a window that is already open — close and re-open it, \
+             for example with a `:key` that includes the value",
+        );
+    }
+    let backdrop = opts
+        .backdrop
+        .unwrap_or_else(|| crate::window::config().backdrop);
+    let backdrop_moved = backdrop != old_backdrop;
+    let repaint = backdrop_moved || opts.title_bar_height != old_title_bar_height;
     if opts.focusable != old_focusable {
         crate::window::advise(
             "<SkWindow focusable>: whether a window can be activated is decided when it is created \
@@ -425,6 +457,9 @@ host_fn!(fn sk_window_set_options(g, args) {
         let mut p = p.borrow_mut();
         let w = &mut p[i];
         w.always_on_top = always_on_top;
+        w.backdrop = backdrop;
+        w.title_bar_height = opts.title_bar_height;
+        w.activate = opts.activate && w.focusable;
         let click_through = (w.ignore_mouse_events != opts.ignore_mouse_events).then_some(opts.ignore_mouse_events);
         w.ignore_mouse_events = opts.ignore_mouse_events;
         let protection = (w.content_protection != opts.content_protection).then_some(opts.content_protection);
@@ -452,6 +487,13 @@ host_fn!(fn sk_window_set_options(g, args) {
             let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
                 if title_moved {
                     window.set_window_title(&opts.title);
+                }
+                if backdrop_moved {
+                    window.set_background_appearance(backdrop.to_gpui());
+                }
+                // Its next frame re-publishes the env (`env(titlebar-area-height)`).
+                if repaint {
+                    window.refresh();
                 }
             });
             set_always_on_top(handle, always_on_top);
@@ -481,6 +523,12 @@ host_fn!(fn sk_window_set_options(g, args) {
                     }
                 }).detach();
             }
+            #[cfg(not(target_os = "windows"))]
+            posix::apply_live(
+                handle,
+                posix::Live { always_on_top, click_through, protection, bounds: bounds_request },
+                cx,
+            );
             if visible_moved {
                 if visible {
                     show_now(id, cx);
@@ -492,6 +540,42 @@ host_fn!(fn sk_window_set_options(g, args) {
     });
     UNDEF
 });
+
+/// A `--window-control` caption button's action on pop-out `key`, as its real press performs it.
+pub(crate) fn window_control(key: sk_tree::WinKey, area: gpui::WindowControlArea) -> bool {
+    let Some(handle) = POPOUTS.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|w| w.id.as_u64() == key)
+            .map(|w| w.handle)
+    }) else {
+        return false;
+    };
+    let acts = matches!(
+        area,
+        gpui::WindowControlArea::Min
+            | gpui::WindowControlArea::Max
+            | gpui::WindowControlArea::Close
+    );
+    if acts {
+        with_app(|cx| {
+            cx.defer(move |cx| {
+                if area == gpui::WindowControlArea::Close {
+                    crate::dialogs::remove_window(handle.into(), cx);
+                    return;
+                }
+                let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
+                    if area == gpui::WindowControlArea::Min {
+                        window.minimize_window();
+                    } else if window.is_resizable() {
+                        window.vn_set_maximized(!window.vn_is_zoomed());
+                    }
+                });
+            });
+        });
+    }
+    acts
+}
 
 /// gpui has no per-window API, so this goes through the cached HWND.
 fn set_always_on_top(handle: WindowHandle<PopoutShell>, on: bool) {
@@ -813,12 +897,17 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         sk_tree::set_popped_out(node, false);
         return;
     }
-    let bounds = match (opts.x, opts.y) {
-        (Some(x), Some(y)) => Bounds {
-            origin: point(px(x), px(y)),
-            size: size(px(opts.width), px(opts.height)),
-        },
-        _ => Bounds::centered(None, size(px(opts.width), px(opts.height)), cx),
+    let opened_at = Instant::now();
+    let (bounds, display_id) = match (opts.x, opts.y) {
+        (Some(x), Some(y)) => placed_bounds(x, y, opts.width, opts.height, cx),
+        // Centred on the main window's monitor, as a window created hidden is.
+        _ => {
+            let main = crate::main_window_display(cx);
+            (
+                Bounds::centered(main, size(px(opts.width), px(opts.height)), cx),
+                main,
+            )
+        }
     };
     if opts.activate && !opts.focusable {
         crate::window::advise(
@@ -855,6 +944,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             inactive_frame_interval: None,
             show: opts.visible && !hidden_first,
             is_minimizable: !opts.cover,
+            display_id,
+            app_owns_titlebar_drag: !opts.os_chrome,
             ..Default::default()
         },
         |window, cx| {
@@ -876,8 +967,14 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     sk_tree::set_os_chrome_in(key, opts.os_chrome);
     sk_tree::windows::set_full_res_images(key, opts.full_resolution);
     let mut hwnd = 0;
+    let mut first_frame = (1.0, (0.0, 0.0));
     let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
         hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
+        let client = window.viewport_size();
+        first_frame = (
+            window.scale_factor(),
+            (f32::from(client.width), f32::from(client.height)),
+        );
         // The OS keeps an owner disabled under its modal dialog, so the X closes the dialog first.
         window.on_window_should_close(cx, |window, cx| {
             crate::dialogs::may_close_now(window.window_handle(), cx)
@@ -905,6 +1002,17 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             popout_win::set_content_protection(hwnd, true);
         }
     }
+    #[cfg(not(target_os = "windows"))]
+    posix::apply_live(
+        handle,
+        posix::Live {
+            always_on_top: opts.always_on_top,
+            click_through: opts.ignore_mouse_events.then_some(true),
+            protection: opts.content_protection.then_some(true),
+            bounds: None,
+        },
+        cx,
+    );
     let title = opts.title.clone();
     POPOUTS.with(|p| {
         p.borrow_mut().push(Popout {
@@ -919,6 +1027,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             backdrop: opts
                 .backdrop
                 .unwrap_or_else(|| crate::window::config().backdrop),
+            resizable: opts.resizable,
+            min_size: (opts.min_width, opts.min_height),
             last_metrics: (0.0, 0.0),
             last_focused: false,
             fullscreen: false,
@@ -944,8 +1054,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             show_drawn: None,
             last_show_ms: 0.0,
             epoch: 0,
-            scale: 1.0,
-            viewport: (0.0, 0.0),
+            scale: first_frame.0,
+            viewport: first_frame.1,
         })
     });
     if opts.always_on_top {
@@ -972,7 +1082,57 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     // Created hidden (see `hidden_first`); this is its first show.
     if opts.visible && hidden_first {
         show_now(handle.window_id(), cx);
+    } else if opts.visible {
+        // gpui showed it and drew its first frame inside `open_window`; unless `@open` hid it.
+        let id = handle.window_id();
+        let still_shown = POPOUTS.with(|p| p.borrow().iter().any(|w| w.id == id && w.visible));
+        if still_shown {
+            report_show(cx, id, on_event, opened_at.elapsed());
+        }
     }
+}
+
+/// `x`/`y` are CSS px at the main window's scale, as live `bounds` and a hidden window's first show
+/// read them. gpui takes the origin in its target display's own logical px, so the display is the
+/// one under the window's centre, named explicitly.
+fn placed_bounds(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    cx: &App,
+) -> (Bounds<gpui::Pixels>, Option<gpui::DisplayId>) {
+    let size = size(px(width), px(height));
+    let as_given = (
+        Bounds {
+            origin: point(px(x), px(y)),
+            size,
+        },
+        None,
+    );
+    let scale = crate::window::primary_scale();
+    let centre = ((x + width / 2.0) * scale, (y + height / 2.0) * scale);
+    let Some((id, monitor)) =
+        popout_win::monitor_at(centre.0.round() as i32, centre.1.round() as i32)
+    else {
+        return as_given;
+    };
+    let id = gpui::DisplayId::new(id);
+    let Some(display) = cx.find_display(id) else {
+        return as_given;
+    };
+    let logical_width = f32::from(display.bounds().size.width);
+    if logical_width <= 0.0 {
+        return as_given;
+    }
+    let display_scale = (monitor[2] - monitor[0]) as f32 / logical_width;
+    (
+        Bounds {
+            origin: point(px(x * scale / display_scale), px(y * scale / display_scale)),
+            size,
+        },
+        Some(id),
+    )
 }
 
 /// Edge, physical px, of the hidden window a cover window waits as.
@@ -1005,6 +1165,15 @@ fn show_now(id: WindowId, cx: &mut App) {
         return;
     };
     if hwnd == 0 {
+        #[cfg(not(target_os = "windows"))]
+        posix::show(
+            id,
+            handle,
+            cover,
+            activate && !crate::quiet::never_focus(),
+            on_top,
+            cx,
+        );
         return;
     }
     let main = crate::window::primary_hwnd();
@@ -1102,7 +1271,11 @@ fn frame_drawn(id: u64, window: &Window, cx: &mut App) {
         let now = Instant::now();
         w.show_drawn = Some(now);
         // Drawn while hidden (usual): `shown` reports instead.
-        popout_win::is_visible(w.hwnd).then_some((w.id, w.on_event, now.duration_since(asked)))
+        #[cfg(target_os = "windows")]
+        let visible = popout_win::is_visible(w.hwnd);
+        #[cfg(not(target_os = "windows"))]
+        let visible = window.vn_is_shown();
+        visible.then_some((w.id, w.on_event, now.duration_since(asked)))
     });
     if let Some((wid, on_event, took)) = report {
         cx.defer(move |cx| report_show(cx, wid, on_event, took));
@@ -1123,6 +1296,10 @@ fn hide_now(id: WindowId, cx: &mut App) {
         return;
     };
     if hwnd == 0 {
+        #[cfg(not(target_os = "windows"))]
+        if posix::hide(id, cx) {
+            emit_in(cx, on_event, "hide", Json::obj(vec![]));
+        }
         return;
     }
     let return_to = crate::window::primary_hwnd().filter(|_| !crate::quiet::never_focus());

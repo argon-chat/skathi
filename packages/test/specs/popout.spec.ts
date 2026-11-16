@@ -125,6 +125,8 @@ describe("pop-out", () => {
       bunExpect(entries.some((e) => e.text.includes("popped out into window"))).toBe(true);
 
       await expect(app.locator(".hint")).toBeVisible();
+      // A window opened visible reports its first show too, not only one created hidden.
+      await expect(app.locator(".pal-shown")).toHaveText("1");
     },
     T,
   );
@@ -277,6 +279,8 @@ describe("pop-out", () => {
       // The `@close` emit ran — `palette` is false again, so the "bring it back" button is hidden
       // and the hint is gone.
       await expect(app.locator(".hint")).toBeHidden();
+      // `v-if` unmounted the component, and `@close` still reached the app.
+      await expect(app.locator(".pal-closed")).toHaveText("1");
 
       await expect(app.locator(".count")).toHaveText("4");
       await until("the panel to re-cascade against the main window", async () => (await backgroundHue(".panel")) > 0.5);
@@ -362,6 +366,21 @@ describe("pop-out", () => {
 
       await app.locator(".pop-notes").click();
       await until("the notes window to be gone", async () => (await popouts()).every((p) => p.title !== "Notes"));
+    },
+    T,
+  );
+
+  test(
+    "el.click() on a `--window-control: close` button closes its window, as a real press does",
+    async () => {
+      await app.locator(".pop-notes").click();
+      await until("the notes window to exist", async () => (await popouts()).find((p) => p.title === "Notes") ?? null);
+      await expect(app.locator(".note-mirror")).toBeVisible();
+
+      await app.eval(`document.querySelector(".bar-close").click(); "ok"`);
+
+      await until("the notes window to be gone", async () => (await popouts()).every((p) => p.title !== "Notes"));
+      await expect(app.locator(".note-mirror")).toBeHidden();
     },
     T,
   );

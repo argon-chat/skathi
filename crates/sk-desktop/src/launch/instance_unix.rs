@@ -1,9 +1,9 @@
-//! The one-instance rule on Linux: `instance_win`'s protocol over a Unix socket.
+//! The one-instance rule on Linux and macOS: `instance_win`'s protocol over a Unix socket.
 //!
 //! `$XDG_RUNTIME_DIR/vn-instance-<key>.lock` is flock'd by the instance for its lifetime and `.sock` is
 //! where it listens. The `flock` decides, not the socket: the kernel drops it however the holder ends, so a
-//! stale socket from a crash is replaced. The runtime dir is per user (else a 0700 `/tmp/vn-instance-<uid>`)
-//! and the server checks the peer's uid (`SO_PEERCRED`) before reading.
+//! stale socket from a crash is replaced. The runtime dir is per user (macOS: the private `$TMPDIR`; else a
+//! 0700 `/tmp/vn-instance-<uid>`) and the server checks the peer's uid before reading.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -55,13 +55,23 @@ fn runtime_dir() -> Result<PathBuf, String> {
     {
         return Ok(dir);
     }
+    // macOS: `$TMPDIR` is already per user and private, and a subdirectory would push the socket path
+    // past `sun_path`'s 104 bytes.
+    #[cfg(target_os = "macos")]
+    if let Ok(dir) = private_dir(std::env::temp_dir()) {
+        return Ok(dir);
+    }
     let dir = std::env::temp_dir().join(format!("vn-instance-{}", uid()));
     match fs::DirBuilder::new().mode(0o700).create(&dir) {
         Ok(()) => {}
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("creating {}: {e}", dir.display())),
     }
-    // Someone else's directory under a predictable name is not ours to use.
+    private_dir(dir)
+}
+
+/// Someone else's directory under a predictable name is not ours to use.
+fn private_dir(dir: PathBuf) -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
     let meta = fs::symlink_metadata(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     if !meta.is_dir() || meta.uid() != uid() || meta.mode() & 0o077 != 0 {
@@ -193,6 +203,15 @@ fn forward(sock: &PathBuf, fwd: &Forward, deadline: Instant) -> Sent {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: a connected socket and two out values.
+    let r = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    (r == 0).then_some(uid)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;

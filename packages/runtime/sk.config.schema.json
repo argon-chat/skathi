@@ -87,7 +87,7 @@
         "maximizable": { "description": "Whether the window can be maximized.", "type": "boolean" },
         "alwaysOnTop": { "description": "Keep the window above other windows.", "type": "boolean" },
         "focus": {
-          "description": "\"raise\": bring the window to the front when it opens.",
+          "description": "\"raise\": window.focus() brings the window to the front and takes the keyboard. Without it, focus() only requests attention (a taskbar flash or Dock bounce). It does not change how the window opens.",
           "type": "string",
           "enum": ["raise"]
         },

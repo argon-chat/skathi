@@ -18,6 +18,8 @@ const paletteRoot = computed(() => paletteWin.value?.el ?? null);
 
 const paletteSize = ref<SkWindowMetrics>({ width: 0, height: 0, scale: 1 });
 const paletteFocused = ref(false);
+const paletteShown = ref(0);
+const paletteClosed = ref(0);
 const paletteMetrics = computed(() =>
   paletteSize.value.width ? `${Math.round(paletteSize.value.width)}x${Math.round(paletteSize.value.height)}` : "none",
 );
@@ -42,7 +44,9 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
     <div class="card meta">
       brush = <span class="num brush-mirror">{{ brush }}</span> · palette viewport =
       <span class="num pal-size">{{ paletteMetrics }}</span> · focused =
-      <span class="num pal-focus">{{ paletteFocused }}</span>
+      <span class="num pal-focus">{{ paletteFocused }}</span> · shown =
+      <span class="num pal-shown">{{ paletteShown }}</span> · closed =
+      <span class="num pal-closed">{{ paletteClosed }}</span>
     </div>
 
     <!-- Distinct classes rather than positions: `v-show` keeps a hidden button in the tree
@@ -100,7 +104,11 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       always-on-top
       :min-width="240"
       :min-height="200"
-      @close="palette = false"
+      @close="
+        palette = false;
+        paletteClosed++;
+      "
+      @show="paletteShown++"
       @resize="(m: SkWindowMetrics) => (paletteSize = m)"
       @focus="paletteFocused = true"
       @blur="paletteFocused = false"
@@ -133,7 +141,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       <section class="notes">
         <div class="bar">
           <span class="bar-title">Notes</span>
-          <span class="bar-close" @click="notes = false">close</span>
+          <span class="bar-close">close</span>
         </div>
         <textarea class="note-input" v-model="note" />
         <div class="foot">this window's caption is CSS</div>

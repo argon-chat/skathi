@@ -112,9 +112,23 @@ declare global {
   var outerHeight: number;
   var screenX: number;
   var screenY: number;
+  var screenLeft: number;
+  var screenTop: number;
   var devicePixelRatio: number;
 
+  /** The outer size, CSS px, as on the web. */
+  function resizeTo(width: number, height: number): void;
   function resizeBy(x: number, y: number): void;
+  function moveTo(x: number, y: number): void;
+  function moveBy(x: number, y: number): void;
+  /** Closes the app: `pagehide`, then the window goes. Not asked through `close-requested`. */
+  function close(): void;
+  /** Raises only under `window.focus: "raise"`; otherwise requests attention. */
+  function focus(): void;
+  /** A no-op, as in every browser. */
+  function blur(): void;
+  /** Not implemented: rejects with `NotSupportedError`. */
+  function getScreenDetails(): Promise<never>;
 
   function open(url?: string, target?: string, features?: string): null;
 
@@ -196,6 +210,9 @@ declare global {
     readonly maxTouchPoints: number;
     readonly gpu: GPU;
     readonly mediaDevices: MediaDevices;
+    /** The taskbar button's badge on Windows, the Dock icon's on macOS. No argument shows a dot. */
+    setAppBadge(contents?: number): Promise<void>;
+    clearAppBadge(): Promise<void>;
   }
 
   interface WindowControlsOverlay extends EventTarget {
@@ -208,6 +225,8 @@ declare global {
   interface SkWindowChrome {
     titleBarStyle: string;
     displayMode: string;
+    /** The Window Controls Overlay area's height (`env(titlebar-area-height)`): 0 while the area is not visible (OS chrome, fullscreen, minimized, or the fallback title bar still up). */
+    titleBarHeight: number;
     fallbackTitleBar: boolean;
     overlayVisible: boolean;
     hostControls: boolean;
@@ -1158,6 +1177,9 @@ declare global {
     readonly pointerLockElement: Element | null;
     exitPointerLock(): void;
     hasFocus(): boolean;
+    /** `"hidden"` while the main window is minimized, hidden, on another virtual desktop or covered by other windows. */
+    readonly visibilityState: "visible" | "hidden";
+    readonly hidden: boolean;
     /** Inert, and returns `false`, as a browser does when a command cannot be executed; use `navigator.clipboard`. */
     execCommand(commandId: string): boolean;
     getElementById(elementId: string): HTMLElement | null;

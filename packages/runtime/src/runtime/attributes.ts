@@ -8,7 +8,7 @@ import { canonicalEvent } from "./event-names";
 import { isMirrorEl, ownExpando } from "./controls";
 import { propagate } from "./events";
 import { domError } from "./tree-ops";
-import { activate, isActivationEvent } from "./links";
+import { activate, activateWindowControl, isActivationEvent } from "./links";
 import { AttrImpl, attrParts } from "./attr";
 
 function attrNameNS(el: MirrorElement, ns: unknown, local: unknown): string | null {
@@ -294,7 +294,10 @@ defineDom(
     const name = canonicalEvent(ev.type);
     const proceed = propagate(this, name, ev);
     // DOM activation step: an uncancelled dispatched click acts like a real one (FileSaver.js; `el.click()` is built on it).
-    if (proceed && name === "click" && isActivationEvent(ev)) activate(this, !!ev.bubbles);
+    if (proceed && name === "click" && isActivationEvent(ev)) {
+      activateWindowControl(this);
+      activate(this, !!ev.bubbles);
+    }
     return proceed;
   },
   NODE_MEMBERS,

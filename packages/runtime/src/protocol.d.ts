@@ -289,8 +289,11 @@ declare function __sk_window_open(
   onEvent?: (kind: string, detailJson: SkJson) => void,
 ): void;
 
-/** The live half of `<SkWindow>`'s props (`title`, `alwaysOnTop`, `visible`, `fullResolution`, `ignoreMouseEvents`, `contentProtection`, `monitor`); other changes are fixed at creation: advised, ignored. */
+/** The live half of `<SkWindow>`'s props (`title`, `bounds`, `backdrop`, `alwaysOnTop`, `titleBarHeight`, `activate`, `visible`, `fullResolution`, `ignoreMouseEvents`, `contentProtection`, `monitor`); other changes are fixed at creation: advised, ignored. */
 declare function __sk_window_set_options(nodeId: SkNodeId, options: SkJson): void;
+
+/** A caption button's click activation: performs the `--window-control` action of the nearest ancestor-or-self declaring one, as a real press does. `false` when there is none. */
+declare function __sk_window_control_click(nodeId: SkNodeId): boolean;
 
 /** Where `nodeId`, as the PRIMARY window painted it, falls in the pop-out `popoutNodeId`: `[x, y, width, height]` JSON in the pop-out's CSS px; `undefined` when either was not painted. */
 declare function __sk_window_map_rect(popoutNodeId: SkNodeId, nodeId: SkNodeId): SkJson | undefined;
@@ -377,6 +380,7 @@ interface SkWindowRect {
 interface SkWindowChrome {
   titleBarStyle: string;
   displayMode: string;
+  /** The Window Controls Overlay area's height (`env(titlebar-area-height)`): 0 while the area is not visible (OS chrome, fullscreen, minimized, or the fallback title bar still up). */
   titleBarHeight: number;
   fallbackTitleBar: boolean;
   overlayVisible: boolean;
@@ -386,12 +390,13 @@ interface SkWindowChrome {
 }
 
 /**
- * The window facade: an `EventTarget` (`resize`/`move`/`focus`) with Tauri/Electron-shaped verbs. Every verb is SYNCHRONOUS (JS and the UI thread are the same thread) and returns `undefined`.
- * Its state reads (getters, `is*()`, `get*()`) are reactive in Vue templates, `computed` and `watch`.
+ * The window facade: an `EventTarget` (`resize`/`move`/`focus`/`blur`, `maximize`/`unmaximize`, `minimize`/`restore`, `fullscreenchange`, `backdropchange`, `close-requested`) with Tauri/Electron-shaped verbs. Every verb is SYNCHRONOUS (JS and the UI thread are the same thread) and returns `undefined`.
+ * Its state reads (getters, `is*()`, `get*()`) are reactive in Vue templates, `computed` and `watch`, and, once
+ * `@skathi-native/runtime/svelte` is imported, in Svelte templates, `$derived` and `$effect`.
  *
  * `close-requested` (cancelable) fires when the user asks to close the window (title bar, Alt+F4, taskbar);
  * `preventDefault()` keeps it open, e.g. to `hide()` it to a tray. `close()`, a tray `role: "quit"` item and the
- * session ending are not asked.
+ * session ending are not asked; `pagehide` fires for every close.
  */
 interface SkAppWindow extends EventTarget {
   minimize(): void;

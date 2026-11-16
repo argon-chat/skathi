@@ -16,9 +16,9 @@ use crate::args::Args;
 mod instance_win;
 #[cfg(target_os = "windows")]
 use instance_win as instance;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod instance_unix;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use instance_unix as instance;
 
 pub mod protocol;
@@ -380,13 +380,34 @@ fn raise_disabled() -> bool {
     std::env::var("SK_LAUNCH_RAISE").is_ok_and(|v| v.eq_ignore_ascii_case("off") || v == "0")
 }
 
+static RAISER: OnceLock<fn()> = OnceLock::new();
+static RAISE_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where no window handle can be raised from another thread: `raise` runs on the main thread, from [`crate::pump`].
+pub fn set_raiser(raise: fn()) {
+    let _ = RAISER.set(raise);
+}
+
+pub(crate) fn pump() {
+    if RAISE_ASKED.swap(false, Ordering::AcqRel) {
+        if let Some(raise) = RAISER.get() {
+            raise();
+        }
+    }
+}
+
 fn raise() -> bool {
     let hwnd = MAIN_HWND.load(Ordering::Relaxed);
-    if hwnd == 0 {
+    if hwnd != 0 {
+        #[cfg(target_os = "windows")]
+        instance::raise(hwnd);
+        return true;
+    }
+    if RAISER.get().is_none() {
         return false;
     }
-    #[cfg(target_os = "windows")]
-    instance::raise(hwnd);
+    RAISE_ASKED.store(true, Ordering::Release);
+    crate::wake();
     true
 }
 
@@ -458,7 +479,7 @@ pub fn start_with_activation(
     let mut outcome = Outcome::Run;
     let mut holds = false;
     if !skip {
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             let fwd = Forward {
                 argv: info.argv.clone(),
@@ -504,7 +525,7 @@ pub fn start_with_activation(
                 }
             }
         }
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
         {
             let _ = &dev_slot;
             eprintln!("[skathi compat] singleInstance is not implemented on this platform yet; running as a separate instance");

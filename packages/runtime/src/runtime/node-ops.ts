@@ -15,7 +15,7 @@ import { childList, touchDom } from "./collections";
 import { Teleport } from "@vue/runtime-core";
 import type { RendererOptions } from "@vue/runtime-core";
 import { I } from "./event-names";
-import { SkWindow, WINDOW_ROOT, windowRoots } from "../skwindow";
+import { WINDOW_ROOT, windowRoots } from "../skwindow";
 import { adoptCanvas } from "../canvas";
 import { appRoot } from "../runtime";
 import { defineOptionMembers, defineSelectMembers, optionsChangedIn } from "./select";
@@ -136,7 +136,6 @@ export function windowRootOf(node: MirrorNode | null | undefined): MirrorElement
 }
 
 interface MountingInstance {
-  type: unknown;
   parent: MountingInstance | null;
   subTree?: { el?: unknown } | null;
 }
@@ -144,7 +143,7 @@ interface MountingInstance {
 /**
  * The `<SkWindow>` root that `container`, not in the document yet, will paint under, or `null`. Vue mounts children
  * before inserting the element, so a `<Teleport>` gets a container whose parents stop short of the window root; the
- * nearest `<SkWindow>` above the Teleport says which window it is in.
+ * nearest `<SkWindow>` above the Teleport, the instance whose root element is a window root, says which window it is in.
  */
 function mountingWindowRoot(
   container: MirrorNode | null | undefined,
@@ -153,9 +152,8 @@ function mountingWindowRoot(
   if (windowRoots.size === 0 || !container) return null;
   for (let n: MirrorNode | null = container; n; n = n.parentNode) if (n === appRoot) return null;
   for (let i = parent; i; i = i.parent) {
-    if (i.type !== SkWindow) continue;
     const el = i.subTree?.el as MirrorElement | null | undefined;
-    return el && windowRoots.has(el) ? el : null;
+    if (el && windowRoots.has(el)) return el;
   }
   return null;
 }
