@@ -3,7 +3,7 @@
 //
 //   dist/vendor.js           IIFE: @vue/runtime-core + src/runtime.ts + src/loader.ts.
 //   dist/modules/<enc>.js    one classic script per app module; <enc> is the id with "/" -> "__".
-//   dist/manifest.json       { rev, vendorRev, entry, modules, deps }
+//   dist/manifest.json       { rev, vendorRev, entry, appRoot, modules, deps }
 //   dist/changes.json        { rev, vendorRev, changed: [{ id, kind }] }
 //
 // Module ids are workspace-relative POSIX paths. Change kind: script or <style> scoped/module/lang
@@ -1233,6 +1233,7 @@ function writeManifest(files: string[]) {
         rev,
         vendorRev,
         entry: toId(ENTRY_ABS),
+        appRoot: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
         name: readAppName(),
         modules: ids,
         assetFiles: Object.fromEntries(

@@ -1106,8 +1106,8 @@ fn relative_to_base(tag: &str, src: &str) -> PathBuf {
         None => {
             warn(
                 "<img src>: no app root is published, so relative image paths resolve against the \
-                 process working directory. Set SK_APP_ROOT, or run the dev host (which derives \
-                 it from the manifest entry)."
+                 process working directory. Set SK_APP_ROOT, or run the dev host on a dev build \
+                 (which records the app root)."
                     .into(),
             );
             std::env::current_dir().unwrap_or_default()

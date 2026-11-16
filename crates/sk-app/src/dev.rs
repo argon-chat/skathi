@@ -63,6 +63,7 @@ fn mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 struct Manifest {
     vendor_rev: f64,
     entry: String,
+    app_root: Option<std::path::PathBuf>,
     modules: Vec<String>,
     asset_files: std::collections::HashMap<String, std::path::PathBuf>,
 }
@@ -93,6 +94,11 @@ fn read_manifest() -> Option<Manifest> {
             .and_then(json::Json::as_f64)
             .unwrap_or(0.0),
         entry: v.get("entry").and_then(json::Json::as_str)?.to_string(),
+        app_root: v
+            .get("appRoot")
+            .and_then(json::Json::as_str)
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute()),
         modules: v
             .get("modules")
             .and_then(json::Json::as_arr)?
@@ -125,23 +131,19 @@ fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static 
     true
 }
 
-/// The base a relative `<img src>` resolves against, which the dev host can only derive from the
-/// manifest's entry module: `apps/imgperf/src/main.js` → `apps/imgperf/` (a trailing `src/` is
-/// stripped, where a Vite app would keep `index.html`). `SK_APP_ROOT` (read in `lib.rs`) wins.
-fn publish_asset_base(entry: &str) {
+/// The base a relative `<img src>` resolves against: the app root the builder recorded, since one
+/// dev host runs any app's dist. `SK_APP_ROOT` (read in `lib.rs`) wins.
+fn publish_asset_base(app_root: Option<std::path::PathBuf>) {
     if std::env::var_os("SK_APP_ROOT").is_some_and(|v| !v.is_empty()) {
         return;
     }
-    const WORKSPACE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    let entry_path = std::path::Path::new(WORKSPACE).join(entry);
-    let Some(dir) = entry_path.parent() else {
-        return;
-    };
-    let base = match dir.file_name() {
-        Some(name) if name == "src" => dir.parent().unwrap_or(dir),
-        _ => dir,
-    };
-    sk_tree::set_asset_base(base.to_path_buf());
+    match app_root {
+        Some(dir) => sk_tree::set_asset_base(dir),
+        None => eprintln!(
+            "[dev] the dev build names no app root, so the app's own files cannot be served: \
+             rebuild it with the current builder, or set SK_APP_ROOT to the app's directory"
+        ),
+    }
 }
 
 /// The `window` block of `apps/<app>/sk.config.json`, which `build.ts` copies verbatim into
@@ -234,7 +236,7 @@ pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else {
         return;
     };
-    publish_asset_base(&manifest.entry);
+    publish_asset_base(manifest.app_root.clone());
     sk_tree::set_dev_asset_files(manifest.asset_files);
     install_asset_provider(rt);
     if !eval_path(rt, &dist("vendor.js"), "sk://vendor.js", "vendor.js") {

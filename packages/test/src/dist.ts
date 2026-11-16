@@ -58,7 +58,7 @@ function newestMtime(dir: string, newest = 0): number {
 function newestInput(entry: string): number {
   const srcDir = dirname(entry);
   const appDir = srcDir.endsWith("src") ? dirname(srcDir) : srcDir;
-  let newest = Math.max(newestMtime(srcDir), newestMtime(RUNTIME_SRC));
+  let newest = Math.max(newestMtime(srcDir), newestMtime(RUNTIME_SRC), statSync(join(CLI_PKG, "build.ts")).mtimeMs);
   for (const name of readdirSync(appDir)) {
     if (!SOURCE_EXT.test(name)) continue;
     try {

@@ -772,8 +772,8 @@ fn window_controls_overlay() -> Option<gpui::Div> {
     )
 }
 
-/// The directory a relative `<img src>` resolves against: `SK_APP_ROOT`, else [`dev::boot`] derives
-/// it from the manifest entry. Prod leaves it unset (working directory, with an advisory).
+/// The directory a relative `<img src>` resolves against: `SK_APP_ROOT`, else [`dev::boot`] reads
+/// it from the dev build's manifest. Prod leaves it unset (working directory, with an advisory).
 fn publish_app_root() {
     #[cfg(feature = "prod")]
     if prod::publish_asset_store() {

@@ -21,8 +21,7 @@ const app = await launch({
   app: entry,
   window: [1100, 760],
   label: "player-template",
-  // The dev host derives the asset base from the entry against the checkout it was built in; name it.
-  env: { SK_APP_ROOT: dir, ...(compiler ? { SK_EFFECTS_DIR: effectsDir } : {}) },
+  ...(compiler ? { env: { SK_EFFECTS_DIR: effectsDir } } : {}),
 });
 afterAll(async () => {
   await app.close();
