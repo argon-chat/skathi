@@ -269,7 +269,7 @@ other property snaps to its end value.
 | `caret-color`, `caret-shape`              | ⛔     |                                                                                                           |
 | `resize`                                  | ⛔     | Build a drag handle with pointer events                                                                   |
 | `field-sizing`, `interactivity`           | ⛔     |                                                                                                           |
-| `window-drag` / `app-region` (`-webkit-`) | ✅     | Drags the window. In Svelte use `-webkit-app-region`: svelte-check flags the other two                    |
+| `app-region: drag` (`-webkit-app-region`) | ✅     | Drags the window, as in an installed web app                                                              |
 | `--window-control`                        | ✅     | Skathi: `minimize`, `maximize`, `close` make the element that window button                               |
 
 ## SVG properties in CSS

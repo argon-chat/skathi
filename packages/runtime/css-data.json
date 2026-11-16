@@ -21,7 +21,7 @@
     },
     {
       "name": "-webkit-app-region",
-      "description": "Skathi: the Electron spelling of `window-drag`. Prefer `window-drag: move | none`, except in Svelte, where svelte-check accepts only this spelling.",
+      "description": "Skathi: the Electron spelling of `window-drag`. Prefer `window-drag: move | none`.",
       "syntax": "drag | no-drag",
       "values": [
         { "name": "drag", "description": "As `window-drag: move`." },
