@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="icon.svg">
-    <img src="icon-black.svg" width="128" alt="Skathi">
-  </picture>
+  <img src="logos/full_side_text_logo.svg" width="480" alt="Skathi">
 </p>
 
 # Skathi
