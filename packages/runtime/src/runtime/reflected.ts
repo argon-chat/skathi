@@ -37,6 +37,7 @@ reflect("string", "alt", "area img input");
 reflect("string", "allow srcdoc", "iframe");
 reflect("string", "referrerPolicy loading", "iframe img");
 reflect("string", "accept min max step pattern", "input");
+reflect("string", "href download rel target", "a area");
 reflect("string", "htmlFor=for", "label output");
 reflect("long", "tabIndex", null);
 reflect("long", "maxLength minLength", "input textarea");

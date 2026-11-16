@@ -92,6 +92,26 @@ async function openDir() {
   }
 }
 
+// VueUse's `useFileDialog` and FileSaver.js: elements made by document.createElement and clicked, never inserted.
+function loosePick() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".txt";
+  input.addEventListener("change", () => {
+    results.loosePick = Array.from(input.files ?? [], (f) => f.name);
+  });
+  input.click();
+}
+
+function looseSave() {
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(new Blob(["loose"], { type: "text/plain" }));
+  a.setAttribute("href", url);
+  a.setAttribute("download", "loose.txt");
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function noGesture() {
   const out: string[] = [];
   for (const call of [() => g.showOpenFilePicker(), () => g.showSaveFilePicker(), () => g.showDirectoryPicker()]) {
@@ -149,6 +169,10 @@ createApp({
             button("open", "Open", () => void openOne()),
             button("dir", "Folder", () => void openDir()),
             h("a", { id: "dl", href: csv, download: "report.csv" }, "Download"),
+          ]),
+          h("div", { style: { display: "flex", gap: "8px" } }, [
+            button("loose-pick", "Loose pick", loosePick),
+            button("loose-save", "Loose save", looseSave),
           ]),
         ],
       );

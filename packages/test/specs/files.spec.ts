@@ -10,7 +10,7 @@ import { expect, launch, SkCommandError } from "../src/index";
 const T = 30_000;
 const app = await launch({
   app: "packages/test/fixtures/files/src/main.ts",
-  window: [480, 260],
+  window: [480, 300],
   label: "files",
 });
 
@@ -159,7 +159,41 @@ describe("file dialogs on the host (SK_DIALOGS=scripted)", () => {
       );
       bunExpect(readFileSync(saved, "utf8")).toBe("a,b\n1,2\n");
       const { entries } = await app.logs(0);
-      bunExpect(entries.filter((e) => e.text.includes("<a download> (D-F6)")).length).toBe(1);
+      bunExpect(
+        entries.filter((e) => e.text.includes("<a download>: the file is saved through a Save As")).length,
+      ).toBe(1);
+    },
+    T,
+  );
+
+  test(
+    "a created <input type=file> that is never inserted still picks when clicked",
+    async () => {
+      await app.locator("#loose-pick").click();
+      const d = await app.waitForDialog();
+      bunExpect(d.what).toBe("picker");
+      bunExpect(d.multiple).toBe(false);
+      await app.answerDialog(d.id, one);
+      bunExpect(await result("loosePick")).toEqual(["one.txt"]);
+    },
+    T,
+  );
+
+  test(
+    "a created <a download> that is never inserted still saves when clicked, after its URL is revoked",
+    async () => {
+      const target = join(scratch, "loose.txt");
+      await app.locator("#loose-save").click();
+      const d = await app.waitForDialog();
+      bunExpect(d.what).toBe("download");
+      bunExpect(d.suggestedName).toBe("loose.txt");
+      await app.answerDialog(d.id, target);
+      bunExpect(
+        await until(
+          async () => existsSync(target) && readFileSync(target, "utf8"),
+          (v) => v === "loose",
+        ),
+      ).toBe("loose");
     },
     T,
   );

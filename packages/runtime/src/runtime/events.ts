@@ -14,7 +14,7 @@ import { isMirrorEl, ownExpando } from "./controls";
 
 // `on<event>` IDL handlers: one listener per element and type, kept in its place in the listener order while
 // the handler changes; `null` removes it; a handler returning `false` cancels the event. On a non-mirror
-// object the property stays a plain expando (a detached `<input>`'s `onchange` is read by `fireDetached`).
+// object the property stays a plain expando.
 const HANDLER_ATTRS = [
   "abort",
   "animationcancel",

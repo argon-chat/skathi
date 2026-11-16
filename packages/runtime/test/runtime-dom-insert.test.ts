@@ -96,12 +96,15 @@ describe("document.createElement makes tree nodes", () => {
     expect(div.textContent).toBe("x");
   });
 
-  test("the name is checked, the engine keeps <a>, <input> and the head-only tags, and the SVG namespace keeps case", () => {
+  test("the name is checked, the engine keeps the head-only tags, and the SVG namespace keeps case", () => {
     const { doc } = world();
     expect(() => doc.createElement("")).toThrow();
     expect(() => doc.createElement("a b")).toThrow(expect.objectContaining({ name: "InvalidCharacterError" }));
-    for (const t of ["a", "input", "style", "link", "script"]) {
+    for (const t of ["style", "link", "script"]) {
       expect([t, "__skId" in doc.createElement(t)]).toEqual([t, false]);
+    }
+    for (const t of ["a", "input"]) {
+      expect([t, "__skId" in doc.createElement(t)]).toEqual([t, true]);
     }
     const grad = doc.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
     expect(grad.tag).toBe("linearGradient");
@@ -357,12 +360,16 @@ describe("what the renderer and script share", () => {
     expect(rt.host.tree.errors).toEqual([]);
   });
 
-  test("an engine <a> appended to the tree is kept, and an engine <style> anywhere joins the stylesheet", async () => {
+  test("a created <a> and <input> join the tree, and an engine <style> anywhere joins the stylesheet", async () => {
     const rt = createRuntime({ globals: { __SK_CSS__: [".bundle{}"] } });
     rt.createApp({ render: () => null }).mount();
     const doc = rt.global.document as unknown as DomDocument;
     const a = doc.createElement("a");
+    const input = doc.createElement("input");
     expect(doc.body.appendChild(a)).toBe(a);
+    expect(a.appendChild(input)).toBe(input);
+    expect([a.parentNode, input.parentNode]).toEqual([doc.body, a]);
+    expect(rt.host.tree.errors).toEqual([]);
     const s = doc.createElement("style");
     s.textContent = ".late{}";
     doc.body.appendChild(s);

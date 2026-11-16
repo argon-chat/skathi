@@ -20,8 +20,6 @@ import {
   nodeArg,
   prepareStylesheetElement,
 } from "./tree-ops";
-import { wrapDetached } from "./labels";
-import type { Detached } from "./labels";
 import { looseCreated, nodeById } from "./nodes";
 import { nodeOps } from "./node-ops";
 import { AttrImpl } from "./attr";
@@ -61,8 +59,7 @@ if (doc) {
     );
   });
   forceDoc("getElementById", (id: unknown) => queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()));
-  // A mirror element, loose until inserted. `ENGINE_TAGS` stay the engine's detached elements: `<a>`/`<input>` carry download and pick
-  // idioms (see `wrapDetached`), and head-only tags are not boxes.
+  // A mirror element, loose until inserted. Head-only `ENGINE_TAGS` stay the engine's: they are not boxes.
   // The engine's, not a previous runtime's wrapper (`original`): a reload would stack wrappers.
   const engineCreate = original(doc, "createElement", (doc as { createElement?: unknown }).createElement);
   const nativeCreate =
@@ -80,7 +77,6 @@ if (doc) {
     const t = name.toLowerCase();
     if (nativeCreate && ENGINE_TAGS.has(t)) {
       const el = nativeCreate(tag, opts);
-      if ((t === "a" || t === "input") && el && typeof el === "object") wrapDetached(el as Detached, t);
       if (t === "style" && el && typeof el === "object") prepareStylesheetElement(el as Record<string, unknown>);
       return el;
     }

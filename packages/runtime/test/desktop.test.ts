@@ -248,7 +248,7 @@ describe("<label> activation (HTML)", () => {
   });
 });
 
-describe("detached elements (redjs's document.createElement)", () => {
+describe("loose elements from document.createElement, never inserted", () => {
   test("VueUse's useFileDialog: an input never in the tree picks, and onchange sees event.target.files", async () => {
     const rt = createRuntime();
     const input = win(rt).document.createElement("input");
@@ -285,6 +285,7 @@ describe("detached elements (redjs's document.createElement)", () => {
     b.setAttribute("href", "data:text/plain,hi");
     b.setAttribute("download", "");
     expect(b.getAttribute("download")).toBe("");
+    expect([a.getAttribute("href"), b.href, b.download]).toEqual(["blob:sk/42", "data:text/plain,hi", ""]);
     b.click();
     expect(calls(rt, "download").map((c) => c.args)).toEqual([
       ["blob:sk/42", "notes.txt"],

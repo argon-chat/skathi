@@ -149,9 +149,9 @@ describe("a same-realm reload", () => {
       createRuntime({ realm: first.global });
     }
     expect(doc.createElement).not.toBe(wrapper);
-    const a = (doc.createElement as (t: string) => Record<string, unknown>)("a");
+    const style = (doc.createElement as (t: string) => Record<string, unknown>)("style");
     expect(engineCalls).toBe(1);
-    expect(typeof a.setAttribute).toBe("function");
+    expect(typeof style.appendChild).toBe("function");
   });
 
   test("navigator.userActivation reads the new runtime's activation", () => {

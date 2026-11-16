@@ -12,7 +12,7 @@ import { notifyMutation } from "./mutation-observer";
 // DETACHES (see `detachNode`). The engine's own detached `document.createElement(...)` objects (`ENGINE_TAGS`) may be
 // passed too: `<style>`/`<link>` join the stylesheet (`foreignNode`), others are left out, advised.
 
-export const ENGINE_TAGS = new Set(["a", "input", "style", "link", "script", "meta", "title", "base"]);
+export const ENGINE_TAGS = new Set(["style", "link", "script", "meta", "title", "base"]);
 export function stylesheetText(node: unknown): string {
   if (node == null) return "";
   if (typeof node === "string") return node;
@@ -78,8 +78,8 @@ export function foreignNode(x: object, inserted: boolean, method: string): void 
     const tag = String((x as { tagName?: unknown }).tagName).toLowerCase();
     warnCompat(
       `dom:engine-${tag}`,
-      `${method}() — a <${tag}> from document.createElement("${tag}") is the engine's detached element, ` +
-        "not a node of the retained tree, so it is not inserted and never painted (its click, href and files still work)",
+      `${method}() — a <${tag}> from document.createElement("${tag}") is a head-only element, ` +
+        "not a node of the retained tree, so it is not inserted",
     );
   }
 }

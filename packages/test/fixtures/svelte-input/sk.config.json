@@ -1,0 +1,11 @@
+{
+  "$comment": "Svelte 5 template elements the engine also creates on its own: <input bind:value> and <a>.",
+
+  "name": "sk-test-svelte-input",
+
+  "window": {
+    "title": "Skathi — Svelte input (fixture)",
+    "width": 420,
+    "height": 240
+  }
+}

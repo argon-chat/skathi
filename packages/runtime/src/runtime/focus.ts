@@ -1,6 +1,6 @@
 import type { MirrorElement, MirrorNode } from "./types";
 import { isMirrorNode } from "./listeners";
-import { nodeById } from "./nodes";
+import { isLoose, nodeById } from "./nodes";
 import { isDisabledControl } from "./forms";
 import { defineDom } from "./dom-members";
 import { warnCompat } from "../compat";
@@ -65,7 +65,7 @@ function focusMoved(next: MirrorElement, old: MirrorElement | null): void {
 }
 
 const focusable = (el: MirrorElement): boolean =>
-  isMirrorNode(el) && el.kind === 1 && nodeById(el.__skId) === el && !isDisabledControl(el);
+  isMirrorNode(el) && el.kind === 1 && nodeById(el.__skId) === el && !isLoose(el) && !isDisabledControl(el);
 
 defineDom("focus", function (this: MirrorElement) {
   if (!focusable(this)) return;

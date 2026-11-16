@@ -1,6 +1,6 @@
 import type { MirrorElement } from "./types";
 import { warnCompat } from "../compat";
-import { isMirrorNode, syncListenerFlag } from "./listeners";
+import { syncListenerFlag } from "./listeners";
 import { defineDom } from "./dom-members";
 import { I } from "./event-names";
 import { patchProp } from "./patch-prop";
@@ -9,12 +9,9 @@ import { isMirrorEl, isRangeInput, writeControlValue } from "./controls";
 import { propagate, synthesize } from "./events";
 import { activeElement } from "./focus";
 import { isDisabledControl } from "./forms";
-import { fireDetached } from "./labels";
-import type { Detached } from "./labels";
 
-// A file input's click opens the picker through sk-desktop; its `files`, `value`, `accept`, `multiple` and `webkitdirectory`
-// are own accessors installed when `type` becomes "file". Detached `document.createElement("input")` (VueUse's
-// `useFileDialog`) gets the same.
+// A file input's click opens the picker through sk-desktop, in the tree or loose (VueUse's `useFileDialog`); its `files`,
+// `value`, `accept`, `multiple` and `webkitdirectory` are own accessors installed when `type` becomes "file".
 
 function fileStatus(files: ArrayLike<{ name?: unknown }> | null): string {
   const n = files?.length ?? 0;
@@ -64,9 +61,8 @@ export function colorValue(value: unknown): string {
 // A picker is asynchronous. An already-open picker cannot be replaced by a
 // second click, and its result belongs to the original control.
 const colorPickers = new WeakSet<object>();
-export function showColorPicker(el: MirrorElement | Detached, via: "showPicker" | null): void {
-  const mirror = isMirrorNode(el);
-  if (mirror ? isDisabledControl(el as MirrorElement) : !!el.disabled) return;
+export function showColorPicker(el: MirrorElement, via: "showPicker" | null): void {
+  if (isDisabledControl(el)) return;
   if (colorPickers.has(el)) return;
   if (via === null && !activation.isActive()) {
     console.warn("Color chooser dialog can only be shown with a user activation.");
@@ -77,7 +73,7 @@ export function showColorPicker(el: MirrorElement | Detached, via: "showPicker" 
     return;
   }
   const before = colorValue(el.value);
-  const id = mirror ? (el as MirrorElement).__skId : 0;
+  const id = el.__skId;
   activation.consume();
   colorPickers.add(el);
   void fsHost
@@ -85,18 +81,10 @@ export function showColorPicker(el: MirrorElement | Detached, via: "showPicker" 
     .then((selected) => {
       if (selected == null) return;
       const next = colorValue(selected);
-      if (mirror) {
-        const control = el as MirrorElement;
-        if (control.__skId !== id || !isColorInput(control) || next === colorValue(control.value)) return;
-        writeControlValue(control, next);
-        propagate(control, "input", fileEvent("input"));
-        propagate(control, "change", fileEvent("change"));
-      } else {
-        if (String(el.type).trim().toLowerCase() !== "color" || next === colorValue(el.value)) return;
-        el.value = next;
-        fireDetached(el, "input");
-        fireDetached(el, "change");
-      }
+      if (el.__skId !== id || !isColorInput(el) || next === colorValue(el.value)) return;
+      writeControlValue(el, next);
+      propagate(el, "input", fileEvent("input"));
+      propagate(el, "change", fileEvent("change"));
     })
     .finally(() => colorPickers.delete(el));
 }

@@ -3,7 +3,7 @@ import { isMirrorNode } from "./listeners";
 import { warnCompat } from "../compat";
 import { fsHost, openContentUrl } from "./activation";
 import { activateFormButton, isResetButton, isSubmitButton } from "./forms";
-import { activateDetached, activateLabel } from "./labels";
+import { activateLabel } from "./labels";
 import { fileInputOps, isColorInput, isFileInput, isLabel, showColorPicker, showFilePicker } from "./file-input";
 
 // There is no document to navigate, so a link hands its URL to the system. Links are reachable by
@@ -32,8 +32,7 @@ export function activateWindowControl(target: MirrorNode): void {
 }
 
 export function activate(target: MirrorNode, bubbles: boolean): void {
-  // Detached `document.createElement("a" | "input")` elements are not in the tree; FileSaver.js and `useFileDialog` click them.
-  if (!isMirrorNode(target)) return activateDetached(target);
+  if (!isMirrorNode(target)) return;
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (hasActivationBehaviour(n)) {
       if (isFileInput(n)) showFilePicker(fileInputOps(n), null);
