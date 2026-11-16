@@ -78,7 +78,7 @@ const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const LOCAL_EXPORT = /^\s*export\s+\{[^}]*\};?[^\S\n]*$/gm;
 
-const SKWINDOW_STANDINS = (): unknown[] => [{ name: "SkWindow" }, Symbol("sk-window-root"), new Set<object>()];
+const SKWINDOW_STANDINS = (): unknown[] => [Symbol("sk-window-root"), new Set<object>()];
 
 export class FakeFileList {
   [i: number]: unknown;
@@ -286,6 +286,8 @@ interface RuntimeHost {
   listeners: { id: number; code: unknown; on: unknown }[];
   props: { id: number; key: string; value: unknown }[];
   styles: { id: number; key: string; value: unknown }[];
+  /** Calls into each `__sk_style_*` host function, by name. */
+  styleCalls: Record<string, number>;
   classes: { id: number; value: unknown }[];
   sheets: string[];
   sheetParts: string[][];
@@ -441,6 +443,7 @@ export function createRuntime(
     listeners: [],
     props: [],
     styles: [],
+    styleCalls: {},
     classes: [],
     sheets: [],
     sheetParts: [],
@@ -568,6 +571,10 @@ export function createRuntime(
     op: (id, name, value) => host.styles.push({ id, key: name, value }),
     computed: (id) => host.computedById.get(id) ?? "",
     root: () => rootId,
+    accepts: (name, value) => {
+      host.acceptCalls.push(`${name}: ${value}`);
+      return !host.styleRejects.has(`${name}: ${value}`);
+    },
     warnCompat,
   });
 
@@ -675,7 +682,6 @@ export function createRuntime(
     "installWaapi",
     "__sk_waapi_core",
     "Teleport",
-    "SkWindow",
     "WINDOW_ROOT",
     "windowRoots",
     "shellHost",
@@ -859,7 +865,10 @@ export function createRuntime(
     shellHost,
     hasWarned,
     warnCompat,
-    ...Object.values(style.fns),
+    ...Object.entries(style.fns).map(([name, fn]) => (...a: unknown[]) => {
+      host.styleCalls[name] = (host.styleCalls[name] ?? 0) + 1;
+      return Reflect.apply(fn, undefined, a);
+    }),
   ];
   if (options.selection === false) {
     const first = params.indexOf("__sk_selection_get");

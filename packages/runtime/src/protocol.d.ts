@@ -49,6 +49,8 @@ declare function __sk_style_object(node: object): import("./runtime/types").Mirr
 declare function __sk_computed_object(node: unknown): import("./runtime/types").MirrorStyle;
 /** runtime-dom's `setStyle` for one `:style` entry: the key as written (`backgroundColor`), `""` removes, a trailing `!important` is the priority. */
 declare function __sk_style_assign(id: SkNodeId, key: string, value: string): void;
+/** `__sk_style_assign` for a whole record `:style` as one change: `key\0value\0` per entry (`""` removes; `\x02` then `\x01value` per entry is an array, whose last accepted entry wins). Only declarations that differ from the inline ones are written. */
+declare function __sk_style_patch(id: SkNodeId, entries: string): void;
 /** One inline declaration's value by CSS name, `""` when there is none. */
 declare function __sk_style_get(id: SkNodeId, name: string): string;
 /** `style.cssText = text`, or `setAttribute("style", text)` (`asAttribute`, which keeps `text` verbatim). */

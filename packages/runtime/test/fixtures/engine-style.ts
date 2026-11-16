@@ -19,7 +19,16 @@ export interface StyleHostOptions {
   computed(id: number): string;
   /** The root's id, for a computed style of something that is not a node. */
   root(): number;
+  /** The engine's verdict on one declaration, for an array `:style` value (`sk_css::accepts_declaration`). */
+  accepts(name: string, value: string): boolean;
   warnCompat(key: string, msg: string): void;
+}
+
+/** One declaration to set; `value: ""` removes it. */
+interface Op {
+  name: string;
+  value: string;
+  important: boolean;
 }
 
 const hyphenate = (s: string): string => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
@@ -148,18 +157,45 @@ export function styleHost(o: StyleHostOptions) {
     if (!change(st)) return;
     if ((observing || st.present !== was) && hook) hook(id, before, st.present);
   };
+  const apply = (id: number, st: Inline, { name, value, important }: Op): boolean => {
+    if (value === "") return remove(id, st, name) !== null;
+    const prev = st.decls.get(name);
+    if (prev && prev.value === value && prev.important === important) return false;
+    const d = { value, important };
+    st.decls.set(name, d);
+    o.op(id, name, host(d));
+    st.present = true;
+    st.raw = null;
+    return true;
+  };
   const write = (id: number, name: string, value: string, important: boolean) =>
-    mutate(id, (st) => {
-      if (value === "") return remove(id, st, name) !== null;
-      const prev = st.decls.get(name);
-      if (prev && prev.value === value && prev.important === important) return false;
-      const d = { value, important };
-      st.decls.set(name, d);
-      o.op(id, name, host(d));
-      st.present = true;
-      st.raw = null;
-      return true;
-    });
+    mutate(id, (st) => apply(id, st, { name, value, important }));
+  const styleOp = (name: string, v: string): Op => {
+    if (v === "") return { name, value: "", important: false };
+    if (name.startsWith("--")) return { name, value: storedValue(v, true), important: false };
+    const m = /\s*!important$/.exec(v);
+    if (!m) return { name, value: storedValue(v, false), important: false };
+    const bare = v.slice(0, m.index);
+    return { name, value: bare.trim() === "" ? "" : storedValue(bare, false), important: true };
+  };
+  const fallbackOp = (name: string, flat: string[]): Op | null => {
+    for (let i = flat.length - 1; i >= 0; i--) {
+      const v = flat[i]!;
+      const bare = v.replace(/\s*!important$/, "").trim();
+      if (bare !== "" && !name.startsWith("--") && !o.accepts(name, bare)) continue;
+      if (i < flat.length - 1) {
+        const later = flat.length - 1 - i;
+        o.warnCompat(
+          `style-array:${name}`,
+          `:style ${name}: [${flat.map((x) => JSON.stringify(x)).join(", ")}] uses ${JSON.stringify(v)}: ` +
+            `the engine does not apply the later ${later === 1 ? "entry" : "entries"}. A browser keeps ` +
+            `the last entry IT accepts, so one that supports a later entry would use that one`,
+        );
+      }
+      return styleOp(name, v);
+    }
+    return null;
+  };
   const remove = (id: number, st: Inline, name: string): string | null => {
     const prev = st.decls.get(name);
     if (!prev) return null;
@@ -370,14 +406,19 @@ export function styleHost(o: StyleHostOptions) {
       __sk_style_object: (node: object) => create(node, false),
       __sk_computed_object: (node: unknown) => create(node, true),
       __sk_style_assign(id: number, key: string, v: string) {
-        const name = cssName(key);
-        if (v === "") return mutate(id, (st) => remove(id, st, name) !== null);
-        if (name.startsWith("--")) return write(id, name, storedValue(v, true), false);
-        const m = /\s*!important$/.exec(v);
-        if (!m) return write(id, name, storedValue(v, false), false);
-        const bare = v.slice(0, m.index);
-        if (bare.trim() === "") mutate(id, (st) => remove(id, st, name) !== null);
-        else write(id, name, storedValue(bare, false), true);
+        const op = styleOp(cssName(key), v);
+        mutate(id, (st) => apply(id, st, op));
+      },
+      __sk_style_patch(id: number, entries: string) {
+        const parts = entries.split("\0");
+        const ops: Op[] = [];
+        for (let i = 0; i + 1 < parts.length; i += 2) {
+          const name = cssName(parts[i]!);
+          const value = parts[i + 1]!;
+          const op = value.startsWith("\x02") ? fallbackOp(name, value.split("\x01").slice(1)) : styleOp(name, value);
+          if (op) ops.push(op);
+        }
+        if (ops.length) mutate(id, (st) => ops.reduce((changed, op) => apply(id, st, op) || changed, false));
       },
       __sk_style_get: (id: number, name: string) => inline.get(id)?.decls.get(name)?.value ?? "",
       __sk_style_replace: (id: number, t: string, asAttribute: boolean) => replace(id, t, asAttribute),

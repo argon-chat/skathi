@@ -376,10 +376,70 @@ describe(":style is runtime-dom's patchStyle", () => {
     expect(el.style.getPropertyPriority("width")).toBe("important");
   });
 
-  test("on a host without __sk_style_accepts an array keeps its last entry", () => {
-    const { rt, el, hostStyle } = setup({ styleAccepts: false });
-    rt.patchProp(el, "style", null, { display: ["-webkit-box", "flex"] });
-    expect(hostStyle()).toEqual([["display", "flex"]]);
+  test("a record patch is one host call, and writes only the declarations that differ", async () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { width: "10px", color: "red", gap: 2 });
+    const seen: RealmObserverEntry[] = [];
+    const ob = new rt.global.MutationObserver((r) => seen.push(...r));
+    ob.observe(el, { attributes: true, attributeOldValue: true });
+    rt.host.styleCalls = {};
+    const ops = rt.host.styles.length;
+    rt.patchProp(el, "style", { width: "10px", color: "red", gap: 2 }, { width: "10px", color: "red", gap: "2" });
+    expect(rt.host.styles.length).toBe(ops);
+    rt.patchProp(el, "style", { width: "10px", color: "red", gap: "2" }, { width: "12px", color: null });
+    expect(rt.host.styleCalls).toEqual({ __sk_style_patch: 2 });
+    expect(rt.host.styles.slice(ops).map((s) => [s.key, s.value])).toEqual([
+      ["color", ""],
+      ["gap", ""],
+      ["width", "12px"],
+    ]);
+    expect(hostStyle()).toEqual([["width", "12px"]]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen.map((r) => r.oldValue)).toEqual(["width: 10px; color: red; gap: 2;"]);
+    ob.disconnect();
+  });
+
+  test("an el.style edit is put back when the bound style changes", () => {
+    const { rt, el } = setup();
+    rt.patchProp(el, "style", null, { width: "10px", color: "red !important" });
+    el.style.width = "5px";
+    el.style.removeProperty("color");
+    rt.patchProp(el, "style", { width: "10px", color: "red !important" }, { width: "10px", color: "red !important" });
+    expect(el.style.width).toBe("5px");
+    rt.patchProp(
+      el,
+      "style",
+      { width: "10px", color: "red !important" },
+      { width: "10px", color: "red !important", top: "0" },
+    );
+    expect(el.style.width).toBe("10px");
+    expect(el.style.getPropertyPriority("color")).toBe("important");
+  });
+
+  test("a component re-render reaches the host only for the :style values that changed", async () => {
+    const rt = createRuntime();
+    const tick = ref(0);
+    const width = ref(80);
+    const Grid = defineComponent({
+      setup: () => () =>
+        h(
+          "div",
+          { "data-tick": tick.value },
+          Array.from({ length: 20 }, (_, i) => h("div", { key: i, style: { width: `${width.value}px` } })),
+        ),
+    });
+    rt.createApp(Grid).mount();
+    rt.host.styleCalls = {};
+    const ops = rt.host.styles.length;
+    tick.value++;
+    await nextTick();
+    expect(rt.host.styleCalls).toEqual({});
+    expect(rt.host.styles.length).toBe(ops);
+    width.value = 90;
+    await nextTick();
+    expect(rt.host.styleCalls).toEqual({ __sk_style_patch: 20 });
+    expect(rt.host.styles.length).toBe(ops + 20);
   });
 
   test("a string style keeps the variables useCssVars set", async () => {
@@ -426,6 +486,16 @@ describe("v-show keeps its display handling", () => {
     const n = rt.host.styles.length;
     rt.vShow.updated(el, { value: 1, oldValue: true });
     expect(rt.host.styles.length).toBe(n);
+  });
+
+  test("an unchanged display re-patched while hidden is still what shows", () => {
+    const { rt, el } = setup();
+    rt.patchProp(el, "style", null, { display: "flex", width: "1px" });
+    rt.vShow.beforeMount(el, { value: false });
+    rt.patchProp(el, "style", { display: "flex", width: "1px" }, { display: "flex", width: "2px" });
+    expect(el.style.display).toBe("none");
+    rt.vShow.updated(el, { value: true, oldValue: false });
+    expect(el.style.display).toBe("flex");
   });
 
   test("a :style change while hidden keeps it hidden, and the new display is what shows", () => {

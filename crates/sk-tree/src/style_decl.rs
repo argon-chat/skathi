@@ -440,30 +440,94 @@ host_fn!(fn computed_object(g, args) {
     unsafe { create(g, args.arg(0).0, true) }
 });
 
-// runtime-dom's `setStyle` for one `:style` entry: `null`/`""` removes, a trailing `!important` is the
-// priority, a custom property keeps an empty value.
+enum Op {
+    Remove,
+    Write(String, bool),
+}
+
+/// runtime-dom's `setStyle` for one `:style` entry: `""` removes, a trailing `!important` is the
+/// priority, a custom property keeps an empty value.
+fn style_op(name: &str, value: &str) -> Op {
+    if value.is_empty() {
+        return Op::Remove;
+    }
+    if name.starts_with("--") {
+        return Op::Write(stored_value(value, true), false);
+    }
+    match value.strip_suffix("!important").map(str::trim_end) {
+        Some(bare) if bare.trim().is_empty() => Op::Remove,
+        Some(bare) => Op::Write(stored_value(bare, false), true),
+        None => Op::Write(stored_value(value, false), false),
+    }
+}
+
+/// `false` when the declaration already was what `op` asks for.
+fn apply(t: &mut tree::Tree, id: u32, name: &str, op: &Op) -> bool {
+    match op {
+        Op::Remove => t.style_remove(id, name).is_some(),
+        Op::Write(value, important) => t.style_write(id, name, value, *important),
+    }
+}
+
 host_fn!(fn style_assign(g, args) {
     let id = arg_id(args.arg(0).0);
     let name = css_name(&unsafe { string_of(g, args.arg(1).0) });
     let v = args.arg(2).0;
     let value = if v == NULL || v == UNDEF { String::new() } else { unsafe { string_of(g, v) } };
-    unsafe {
-        if value.is_empty() {
-            mutate(g, id, |t| t.style_remove(id, &name).is_some());
-        } else if name.starts_with("--") {
-            let stored = stored_value(&value, true);
-            mutate(g, id, |t| t.style_write(id, &name, &stored, false));
-        } else if let Some(bare) = value.strip_suffix("!important").map(str::trim_end) {
-            if bare.trim().is_empty() {
-                mutate(g, id, |t| t.style_remove(id, &name).is_some());
-            } else {
-                let stored = stored_value(bare, false);
-                mutate(g, id, |t| t.style_write(id, &name, &stored, true));
-            }
-        } else {
-            let stored = stored_value(&value, false);
-            mutate(g, id, |t| t.style_write(id, &name, &stored, false));
+    let op = style_op(&name, &value);
+    unsafe { mutate(g, id, |t| apply(t, id, &name, &op)) };
+    UNDEF
+});
+
+/// The last entry the engine accepts; with none, the declaration is left as it was.
+unsafe fn fallback_op(g: *mut c_void, prop: &str, list: &[&str]) -> Option<Op> {
+    let custom = prop.starts_with("--");
+    let (i, v) = list.iter().copied().enumerate().rev().find(|&(_, v)| {
+        let bare = v.strip_suffix("!important").map_or(v, str::trim_end).trim();
+        bare.is_empty() || custom || sk_css::accepts_declaration(prop, bare)
+    })?;
+    if i + 1 < list.len() {
+        let later = list.len() - 1 - i;
+        let shown: Vec<String> = list.iter().map(|x| format!("{x:?}")).collect();
+        sk_runtime::host::warn_compat(
+            g,
+            &format!("style-array:{prop}"),
+            &format!(
+                ":style {prop}: [{}] uses {v:?}: the engine does not apply the later {}. A browser keeps the last \
+                 entry IT accepts, so one that supports a later entry would use that one",
+                shown.join(", "),
+                if later == 1 { "entry" } else { "entries" },
+            ),
+        );
+    }
+    Some(style_op(prop, v))
+}
+
+// runtime-dom's `setStyle` over a whole record `:style`, in one call and one attribute change. `entries` is
+// `key\0value\0` per entry: an empty value removes; `\x02` then `\x01value` per entry is an array, whose last
+// entry the engine accepts wins. Each write is diffed against the node's inline declaration, so an unchanged
+// value costs nothing and one changed through `el.style` is restored.
+host_fn!(fn style_patch(g, args) {
+    let id = arg_id(args.arg(0).0);
+    let entries = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    let mut ops: Vec<(String, Op)> = Vec::new();
+    let mut parts = entries.split('\0');
+    while let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+        let name = css_name(key);
+        let op = match value.strip_prefix('\x02') {
+            Some(list) => unsafe { fallback_op(g, &name, &list.split('\x01').skip(1).collect::<Vec<_>>()) },
+            None => Some(style_op(&name, value)),
+        };
+        if let Some(op) = op {
+            ops.push((name, op));
         }
+    }
+    if !ops.is_empty() {
+        unsafe {
+            mutate(g, id, |t| {
+                ops.iter().fold(false, |changed, (name, op)| apply(t, id, name, op) | changed)
+            })
+        };
     }
     UNDEF
 });
@@ -526,6 +590,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         ("__sk_style_object", 1, style_object as *const c_void),
         ("__sk_computed_object", 1, computed_object as *const c_void),
         ("__sk_style_assign", 3, style_assign as *const c_void),
+        ("__sk_style_patch", 2, style_patch as *const c_void),
         ("__sk_style_get", 2, style_get as *const c_void),
         ("__sk_style_replace", 3, style_replace as *const c_void),
         ("__sk_style_clear", 1, style_clear as *const c_void),
@@ -659,6 +724,62 @@ mod tests {
                 tree::read_tree(|t| t.style_text(el)),
                 "margin: 0 !important;",
                 "a freed node's object writes nothing"
+            );
+        });
+    }
+
+    /// What `patchStyle` in inline-style.ts sends for a record `:style`.
+    const PACK: &str = r#"globalThis.pack = (prev, next) => {
+        let s = "";
+        if (prev) for (const k in prev) if (next[k] == null) s += k + "\0\0";
+        for (const k in next) {
+            const v = next[k];
+            s += k + "\0" + (v == null ? "" : Array.isArray(v) ? "\x02" + v.flat(Infinity).map((x) => "\x01" + (x == null ? "" : String(x))).join("") : String(v)) + "\0";
+        }
+        return s;
+    }; ''"#;
+
+    #[test]
+    fn style_patch_writes_only_declarations_that_differ_from_the_inline_ones() {
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(install);
+            let el = element();
+            let text = || tree::read_tree(|t| t.style_text(el));
+            js(PACK);
+            js(&format!(
+                "globalThis.s = __sk_style_object({{ __skId: {el} }}); globalThis.seen = 0; \
+                 __sk_style_hook(() => seen++); __sk_style_observe(true); \
+                 globalThis.p = (a, b) => __sk_style_patch({el}, pack(a, b)); \
+                 globalThis.a = {{ width: '10px', backgroundColor: 'red', '--Gap': '4px', color: 'blue !important', zIndex: 2 }}; ''"
+            ));
+            assert_eq!(js("p(null, a); seen"), "1");
+            assert_eq!(
+                text(),
+                "width: 10px; background-color: red; --Gap: 4px; color: blue !important; z-index: 2;"
+            );
+
+            assert_eq!(
+                js("p(a, { ...a, zIndex: '2', color: 'blue!important' }); seen"),
+                "1",
+                "equal values write nothing"
+            );
+
+            js("s.width = '5px'; s.removeProperty('--Gap'); seen = 0; p(a, { ...a })");
+            assert_eq!(js("String(seen)"), "1", "one notification per patch");
+            assert_eq!(
+                text(),
+                "width: 10px; background-color: red; color: blue !important; z-index: 2; --Gap: 4px;",
+                "what el.style changed is restored"
+            );
+
+            js("p(a, { width: '12px', display: 'flex', color: 'blue', zIndex: null })");
+            assert_eq!(text(), "width: 12px; color: blue; display: flex;");
+
+            js("__sk_style_observe(false); p({ width: '12px' }, { width: ['14px', 'nope nope'], height: ['1px', null], color: [] })");
+            assert_eq!(
+                text(),
+                "width: 14px; color: blue; display: flex;",
+                "an array keeps the last accepted entry; an empty one changes nothing"
             );
         });
     }
