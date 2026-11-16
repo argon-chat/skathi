@@ -20,7 +20,7 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte", "player"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 interface Checker {
@@ -73,12 +73,19 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     packs: [{ name: "media", match: ["assets/music/**", "assets/covers/**"] }],
     checker: SVELTE_CHECK,
   },
+  weather: {
+    hint: "a weather app in Vue, its sky and rain drawn by shaders",
+    dependencies: [],
+    window: { width: 1180, height: 820, minWidth: 980, minHeight: 720, titleBarStyle: "hidden", titleBarHeight: 72 },
+    packs: [{ name: "textures", match: ["assets/textures/**"] }],
+    checker: VUE_TSC,
+  },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);

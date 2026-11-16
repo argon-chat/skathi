@@ -140,7 +140,10 @@ export function cli(run: Run): Command {
     .description("Start a new app. In a terminal it asks for whatever the options leave open.")
     .argument("[dir]")
     .option("--name <name>", "The app's name (default: the directory's)")
-    .option("--template <name>", "showcase (every feature), minimal, svelte, or player (a Svelte music player)")
+    .option(
+      "--template <name>",
+      "showcase (every feature), minimal, svelte, player (a Svelte music player) or weather (a Vue weather app)",
+    )
     .option("--os <list>", "What to package for: windows, macos, linux")
     .option("--devtools", "Keep devtools (F12) in published builds")
     .addOption(hidden("--no-devtools"))

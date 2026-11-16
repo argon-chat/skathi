@@ -160,6 +160,17 @@ test("the player comes from the templates checkout with its own icon, and packs 
   expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("hidden");
 });
 
+test("the weather template comes from the templates checkout with its own icon, and packs its textures", () => {
+  const dir = fresh();
+  create(dir, { template: "weather" });
+  expect(readFileSync(join(dir, "icon.png"))).toEqual(
+    readFileSync(join(import.meta.dir, "../../../templates/weather/icon.png")),
+  );
+  expect(loadAppConfig(dir).packs).toEqual([{ name: "textures", match: ["assets/textures/**"] }]);
+  expect(Object.keys(pkg(dir).dependencies)).toEqual(["@skathi-native/runtime"]);
+  expect(pkg(dir).scripts.typecheck).toBe("vue-tsc --noEmit");
+});
+
 test("a template without its own icon gets the Skathi one", () => {
   const dir = fresh();
   create(dir, { template: "minimal" });
