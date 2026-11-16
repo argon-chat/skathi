@@ -3,8 +3,8 @@
 // and the package manager. `--yes` (or no terminal) takes the defaults.
 //
 // It copies templates/<template>/ (src/, assets/) with the placeholders filled in, and writes
-// package.json (the app root the builders resolve npm dependencies from), sk.config.json, the Skathi
-// icon as icon.png and a tsconfig.json that type-checks against the runtime.
+// package.json (the app root the builders resolve npm dependencies from), sk.config.json, icon.png (the
+// template's own, else the Skathi icon) and a tsconfig.json that type-checks against the runtime.
 // Nothing is overwritten: an existing file is an error, not a merge.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -19,7 +19,7 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte", "player"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 interface Checker {
@@ -30,6 +30,11 @@ interface Checker {
 }
 
 const VUE_TSC: Checker = { script: "vue-tsc --noEmit", devDependencies: { "vue-tsc": "^3" }, sources: "src/**/*.vue" };
+const SVELTE_CHECK: Checker = {
+  script: "svelte-check",
+  devDependencies: { "svelte-check": "^4" },
+  sources: "src/**/*.svelte",
+};
 
 interface TemplateInfo {
   hint: string;
@@ -58,7 +63,14 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     hint: "the minimal app in Svelte 5",
     dependencies: ["svelte"],
     window: { width: 760, height: 520, titleBarStyle: "default" },
-    checker: { script: "svelte-check", devDependencies: { "svelte-check": "^4" }, sources: "src/**/*.svelte" },
+    checker: SVELTE_CHECK,
+  },
+  player: {
+    hint: "a music player in Svelte 5, dressed in shaders",
+    dependencies: ["svelte"],
+    window: { width: 1100, height: 760, minWidth: 480, minHeight: 640, titleBarStyle: "hidden", titleBarHeight: 44 },
+    packs: [{ name: "media", match: ["assets/music/**", "assets/covers/**"] }],
+    checker: SVELTE_CHECK,
   },
 };
 
@@ -140,6 +152,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const sdk = `^${CLI_VERSION}`;
 
   const files: Record<string, string | Uint8Array> = {
+    "icon.png": readFileSync(join(TEMPLATES_DIR, "icon.png")),
     ...templateFiles(template, { name, productName }),
     "package.json": json({
       name: slug,
@@ -172,7 +185,6 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       windows: { exeName, icon: "icon.png" },
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
     }),
-    "icon.png": readFileSync(join(TEMPLATES_DIR, "icon.png")),
     "tsconfig.json": json({
       extends: "@skathi-native/runtime/tsconfig.app.json",
       include: ["src/**/*.ts", info.checker.sources],

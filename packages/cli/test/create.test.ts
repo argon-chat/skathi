@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modeVariant } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
-import { create, createCommand, detectPackageManager, parseTemplate, runScript, TEMPLATES } from "../cli/create";
+import {
+  create,
+  createCommand,
+  detectPackageManager,
+  parseTemplate,
+  runScript,
+  TEMPLATES,
+  TEMPLATES_DIR,
+} from "../cli/create";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -94,7 +102,7 @@ test("the minimal template is one component, with OS chrome and no router", () =
   expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("default");
 });
 
-test("both templates point VS Code at the runtime's CSS custom data", () => {
+test("every template points VS Code at the runtime's CSS custom data", () => {
   for (const template of TEMPLATES) {
     const dir = fresh();
     create(dir, { template });
@@ -116,24 +124,54 @@ test("pinia and vue-router are dependencies only of the templates that use them"
   }
 });
 
-test("the svelte template depends on svelte at the version the runtime accepts and checks with svelte-check", () => {
+test("the svelte templates depend on svelte at the version the runtime accepts and check with svelte-check", () => {
+  const svelte = (
+    JSON.parse(read(join(import.meta.dir, "../../runtime"), "package.json")) as {
+      peerDependencies: Record<string, string>;
+    }
+  ).peerDependencies.svelte!;
+  for (const template of ["svelte", "player"] as const) {
+    const dir = fresh();
+    create(dir, { template });
+    expect(read(dir, "src/main.ts")).toContain('from "@skathi-native/runtime/svelte"');
+    expect(Object.keys(pkg(dir).dependencies).sort()).toEqual(["@skathi-native/runtime", "svelte"]);
+    expect(pkg(dir).dependencies.svelte).toBe(svelte);
+    expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "svelte-check", "typescript"]);
+    expect(pkg(dir).scripts.typecheck).toBe("svelte-check");
+    expect((JSON.parse(read(dir, "tsconfig.json")) as { include: string[] }).include).toEqual([
+      "src/**/*.ts",
+      "src/**/*.svelte",
+    ]);
+  }
   const dir = fresh();
   create(dir, { template: "svelte" });
   expect(read(dir, "src/App.svelte")).toContain('const productName = "My App";');
-  expect(read(dir, "src/main.ts")).toContain('from "@skathi-native/runtime/svelte"');
-  expect(pkg(dir).dependencies.svelte).toBe(
-    (
-      JSON.parse(read(join(import.meta.dir, "../../runtime"), "package.json")) as {
-        peerDependencies: Record<string, string>;
-      }
-    ).peerDependencies.svelte!,
-  );
-  expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "svelte-check", "typescript"]);
-  expect(pkg(dir).scripts.typecheck).toBe("svelte-check");
-  expect((JSON.parse(read(dir, "tsconfig.json")) as { include: string[] }).include).toEqual([
-    "src/**/*.ts",
-    "src/**/*.svelte",
-  ]);
+});
+
+test("the player brings its music, covers, shaders and own icon, and packs the media", () => {
+  const dir = fresh();
+  create(dir, { template: "player" });
+  expect(read(dir, "src/lib/product.ts")).toContain('export const productName = "My App";');
+  // Every asset the demo playlist names ships with the template.
+  const ids = [...read(dir, "src/lib/tracks.ts").matchAll(/demo\(\s*"([a-z-]+)"/g)].map((m) => m[1]!);
+  expect(ids.length).toBe(6);
+  for (const id of ids) {
+    expect(existsSync(join(dir, `assets/music/${id}.ogg`))).toBe(true);
+    expect(existsSync(join(dir, `assets/covers/${id}.jpg`))).toBe(true);
+  }
+  for (const shader of ["spectrum", "aurora", "bubbles", "stardust", "jelly", "glint", "cover", "glitter", "hearts"]) {
+    expect(existsSync(join(dir, "shaders", `${shader}.slang`))).toBe(true);
+  }
+  expect(readFileSync(join(dir, "icon.png"))).toEqual(readFileSync(join(TEMPLATES_DIR, "player", "icon.png")));
+  const config = loadAppConfig(dir);
+  expect(config.packs).toEqual([{ name: "media", match: ["assets/music/**", "assets/covers/**"] }]);
+  expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("hidden");
+});
+
+test("a template without its own icon gets the Skathi one", () => {
+  const dir = fresh();
+  create(dir, { template: "minimal" });
+  expect(readFileSync(join(dir, "icon.png"))).toEqual(readFileSync(join(TEMPLATES_DIR, "icon.png")));
 });
 
 test("an unknown template is refused before anything is written", async () => {

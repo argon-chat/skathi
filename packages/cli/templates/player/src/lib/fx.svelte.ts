@@ -1,0 +1,61 @@
+export const SCENES = [
+  { id: "aurora", label: "Aurora" },
+  { id: "bubbles", label: "Bubbles" },
+  { id: "stardust", label: "Stardust" },
+] as const;
+
+export type Scene = (typeof SCENES)[number]["id"];
+
+const SCENE_KEY = "player.scene";
+
+function savedScene(): Scene {
+  try {
+    const id = localStorage.getItem(SCENE_KEY);
+    return SCENES.find((s) => s.id === id)?.id ?? "aurora";
+  } catch {
+    return "aurora";
+  }
+}
+
+export const look = $state<{ scene: Scene }>({ scene: savedScene() });
+
+export function setScene(scene: Scene) {
+  look.scene = scene;
+  try {
+    localStorage.setItem(SCENE_KEY, scene);
+  } catch {
+    // Remembering the scene is a nicety.
+  }
+}
+
+/** The latest burst of hearts: where it starts (0..1 across the window) and when, on the effect clock. */
+export const burst = $state({ x: 0.5, y: 0.5, born: -1000 });
+
+export function hearts(from: Element) {
+  const box = from.getBoundingClientRect();
+  const app = document.querySelector(".app")?.getBoundingClientRect();
+  if (!app?.width || !app.height) return;
+  burst.x = (box.left + box.width / 2 - app.left) / app.width;
+  burst.y = (box.top + box.height / 2 - app.top) / app.height;
+  burst.born = performance.now() / 1000;
+}
+
+export type Rgb = [number, number, number];
+/** A colour and a 0..1 weight, tweened together. */
+export type Tint = [number, number, number, number];
+
+export function rgb(hex: string): Rgb {
+  const n = Number.parseInt(hex.replace("#", ""), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+export const css = ([r, g, b]: Rgb | Tint) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+
+const byte = (v: number) =>
+  Math.round(Math.min(255, Math.max(0, v)))
+    .toString(16)
+    .padStart(2, "0");
+
+/** `#rrggbb`, or `#rrggbbaa` with an alpha 0..1. */
+export const hex = ([r, g, b]: Rgb | Tint, alpha?: number) =>
+  `#${byte(r)}${byte(g)}${byte(b)}${alpha === undefined ? "" : byte(alpha * 255)}`;
