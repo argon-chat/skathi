@@ -16,12 +16,14 @@ macro_rules! unlinked {
 unlinked! {
     ASN1_STRING_to_UTF8
     BIO_clear_retry_flags
+    BIO_free
     BIO_get_data
     BIO_get_new_index
     BIO_meth_new
     BIO_meth_set_ctrl
     BIO_meth_set_read
     BIO_meth_set_write
+    BIO_new_mem_buf
     BIO_set_retry_read
     BunString__createAtom
     BunString__createExternalGloballyAllocatedLatin1
@@ -44,7 +46,10 @@ unlinked! {
     Bun__visibleWidthExcludeANSI_utf16
     Bun__writeHTTPDate
     CRYPTO_BUFFER_POOL_new
+    CRYPTO_BUFFER_free
+    CRYPTO_BUFFER_new
     ERR_clear_error
+    EVP_PKEY_free
     EVP_blake2b256
     EVP_blake2b512
     EVP_get_digestbynid
@@ -72,6 +77,10 @@ unlinked! {
     OBJ_find_sigid_algs
     OBJ_obj2nid
     OPENSSL_free
+    PEM_read_bio_PrivateKey
+    PEM_read_bio_X509
+    PEM_read_bio_X509_AUX
+    PEM_read_bio_X509_CRL
     RSA_PSS_PARAMS_free
     SSL_CTX_free
     SSL_CTX_set0_buffer_pool
@@ -79,6 +88,7 @@ unlinked! {
     SSL_SESSION_free
     SSL_SESSION_up_ref
     SSL_get_peer_cert_chain
+    SSL_get_peer_certificate
     SSL_get_servername
     SSL_get_verify_result
     SSL_set_tlsext_host_name
@@ -103,15 +113,23 @@ unlinked! {
     X509V3_EXT_get
     X509V3_EXT_get_nid
     X509_ALGOR_get0
+    X509_CRL_free
     X509_NAME_ENTRY_get_data
     X509_NAME_get_entry
     X509_NAME_get_index_by_NID
+    X509_STORE_CTX_free
+    X509_STORE_CTX_get1_issuer
+    X509_STORE_CTX_init
+    X509_STORE_CTX_new
+    X509_STORE_free
     X509_digest
+    X509_free
     X509_get0_signature
     X509_get_ext
     X509_get_ext_by_NID
     X509_get_signature_nid
     X509_get_subject_name
+    X509_up_ref
     ZigSourceProvider__getSourceSlice
     __bun_dispatch__DevServerHandle__Bake__asset_hash
     __bun_dispatch__DevServerHandle__Bake__barrel_needed_exports
@@ -124,10 +142,11 @@ unlinked! {
     __bun_dispatch__DevServerHandle__Bake__register_barrel_export
     __bun_dispatch__DevServerHandle__Bake__register_barrel_with_deferrals
     __bun_dispatch__DevServerHandle__Bake__track_resolution_failure
+    __bun_dispatch__EventLoopCtx__Js__loop_
+    __bun_dispatch__EventLoopCtx__SpawnSync__loop_
     __bun_dispatch__JsEventLoop__Jsc__auto_tick
     __bun_dispatch__JsEventLoop__Jsc__auto_tick_active
     __bun_dispatch__JsEventLoop__Jsc__bun_vm
-    __bun_dispatch__JsEventLoop__Jsc__create_null_delimited_env_map
     __bun_dispatch__JsEventLoop__Jsc__enter
     __bun_dispatch__JsEventLoop__Jsc__env
     __bun_dispatch__JsEventLoop__Jsc__exit
@@ -135,7 +154,6 @@ unlinked! {
     __bun_dispatch__JsEventLoop__Jsc__iteration_number
     __bun_dispatch__JsEventLoop__Jsc__js_poster
     __bun_dispatch__JsEventLoop__Jsc__tick
-    __bun_dispatch__JsEventLoop__Jsc__top_level_dir
     __bun_dispatch__JsEventLoop__Jsc__uws_loop
     __bun_dispatch__TranspilerCacheImpl__Jsc__put
     __bun_dispatch__VmLoaderCtx__Runtime__blob_loader
@@ -150,16 +168,14 @@ unlinked! {
     __bun_dispatch__VmLoaderCtx__Runtime__origin_path
     __bun_dispatch__VmLoaderCtx__Runtime__read_dir_info_package_json
     __bun_dispatch__VmLoaderCtx__Runtime__resolve_blob
-    __bun_fire_timer
+    __bun_get_vm_ctx
     __bun_js_event_loop_current
-    __bun_js_timer_epoch
     __bun_jsc_bytecode_link_encoder_add_internal_module
     __bun_jsc_bytecode_link_encoder_add_internal_module_from_source
     __bun_jsc_bytecode_link_encoder_add_module
     __bun_jsc_bytecode_link_encoder_destroy
     __bun_jsc_bytecode_link_encoder_finish
     __bun_jsc_bytecode_link_encoder_new
-    __bun_jsc_enable_hot_module_reloading_for_bundler
     __bun_jsc_encoder_string_table_new
     __bun_jsc_encoder_string_table_slot
     __bun_jsc_encoder_string_table_take
@@ -169,27 +185,54 @@ unlinked! {
     __bun_jsc_host_builtins
     __bun_jsc_wtf_string_hash
     __bun_macro_collect_vm_garbage
-    __bun_macro_context_deinit
-    __bun_macro_context_init
+    __bun_macro_drop_source_code_printer
     __bun_resolver_init_package_manager
     __bun_resolver_parse_dependency
     ares_inet_ntop
     bun_free_loop_at_thread_exit
     clock_gettime_monotonic
+    crc32
     d2i_RSA_PSS_PARAMS
+    d2i_SSL_SESSION
+    d2i_X509
+    deflate
+    deflateBound
+    deflateEnd
+    deflateInit2_
+    deflateParams
+    deflateReset
+    deflateSetDictionary
     highway_copy_ascii_prefix
     highway_count_mapping_delims
     highway_encode_hex_lower
     highway_parse_mappings
     highway_xml_index16_chunk
     i2d_SSL_SESSION
+    i2d_X509
+    inflate
+    inflateEnd
+    inflateInit2_
+    inflateReset
+    inflateSetDictionary
+    inflateValidate
     rescle__setWindowsMetadata
     simdutf__base64_decode_from_binary_lenient
-    simdutf__convert_valid_utf16le_to_utf8
     simdutf__validate_utf16le
     sk_num
     sk_pop_free_ex
     sk_value
+    us_connecting_socket_close
+    us_connecting_socket_get_dns_error
+    us_connecting_socket_get_error
+    us_connecting_socket_get_native_handle
+    us_connecting_socket_group
+    us_connecting_socket_is_closed
+    us_connecting_socket_is_shut_down
+    us_connecting_socket_kind
+    us_connecting_socket_long_timeout
+    us_connecting_socket_shutdown
+    us_connecting_socket_shutdown_read
+    us_connecting_socket_timeout
     us_get_default_ciphers
     us_internal_free_closed_sockets
     us_loop_close_all_groups
@@ -201,6 +244,7 @@ unlinked! {
     us_quic_pending_connect_addrinfo
     us_quic_pending_connect_cancel
     us_quic_pending_connect_resolved
+    us_quic_socket_context_connect
     us_quic_stream_close
     us_quic_stream_header
     us_quic_stream_header_count
@@ -273,51 +317,61 @@ unlinked! {
     us_ssl_wrapper_from_verify
     us_wakeup_loop
     uws_get_loop_with_native
-    uws_h2_app_any
-    uws_h2_app_clear_routes
-    uws_h2_app_connect
-    uws_h2_app_delete
-    uws_h2_app_destroy
-    uws_h2_app_drain
-    uws_h2_app_get
-    uws_h2_app_head
-    uws_h2_app_on_schedule_drain
-    uws_h2_app_options
-    uws_h2_app_patch
-    uws_h2_app_post
-    uws_h2_app_put
-    uws_h2_app_trace
-    uws_h2_res_clear_on_writable
-    uws_h2_res_end
-    uws_h2_res_end_sendfile
-    uws_h2_res_end_stream
-    uws_h2_res_end_without_body
-    uws_h2_res_flush_headers
-    uws_h2_res_force_close
-    uws_h2_res_get_buffered_amount
-    uws_h2_res_get_remote_address_info
-    uws_h2_res_grow_request_window
-    uws_h2_res_has_responded
-    uws_h2_res_is_closed
-    uws_h2_res_mark_wrote_content_length_header
-    uws_h2_res_mark_wrote_date_header
-    uws_h2_res_on_aborted
-    uws_h2_res_on_data
-    uws_h2_res_on_timeout
-    uws_h2_res_pause
-    uws_h2_res_request_body_ended
-    uws_h2_res_reset_timeout
-    uws_h2_res_resume
-    uws_h2_res_state
-    uws_h2_res_timeout
-    uws_h2_res_try_end
-    uws_h2_res_write
-    uws_h2_res_write_continue
-    uws_h2_res_write_header
-    uws_h2_res_write_header_int
-    uws_h2_res_write_mark
-    uws_h2_res_write_status
+    uws_h3_app_add_server_name
+    uws_h3_app_any
+    uws_h3_app_clear_routes
+    uws_h3_app_close
+    uws_h3_app_connect
+    uws_h3_app_delete
+    uws_h3_app_get
+    uws_h3_app_head
+    uws_h3_app_options
+    uws_h3_app_patch
+    uws_h3_app_post
+    uws_h3_app_put
+    uws_h3_app_trace
+    uws_h3_listen_socket_close
+    uws_h3_listen_socket_local_address
+    uws_h3_listen_socket_port
+    uws_h3_req_get_header
+    uws_h3_req_get_method
+    uws_h3_req_get_url
+    uws_h3_req_set_yield
+    uws_h3_res_clear_on_writable
+    uws_h3_res_end
+    uws_h3_res_end_sendfile
+    uws_h3_res_end_stream
+    uws_h3_res_end_without_body
+    uws_h3_res_flush_headers
+    uws_h3_res_force_close
+    uws_h3_res_get_buffered_amount
+    uws_h3_res_get_remote_address_info
+    uws_h3_res_has_responded
+    uws_h3_res_mark_wrote_content_length_header
+    uws_h3_res_mark_wrote_date_header
+    uws_h3_res_on_aborted
+    uws_h3_res_on_data
+    uws_h3_res_on_timeout
+    uws_h3_res_pause
+    uws_h3_res_reset_timeout
+    uws_h3_res_resume
+    uws_h3_res_state
+    uws_h3_res_timeout
+    uws_h3_res_try_end
+    uws_h3_res_write
+    uws_h3_res_write_continue
+    uws_h3_res_write_header
+    uws_h3_res_write_header_int
+    uws_h3_res_write_mark
+    uws_h3_res_write_status
     uws_loop_date_header_timer_update
     uws_loop_flush_pending_writes
+    uws_req_get_header
+    uws_req_get_method
+    uws_req_get_parameter
+    uws_req_get_url
+    uws_req_has_transfer_encoding
+    uws_req_set_yield
     windows_enable_stdio_inheritance
+    zlibVersion
 }

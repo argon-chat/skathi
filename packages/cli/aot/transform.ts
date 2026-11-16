@@ -64,6 +64,14 @@ export function opaqueGlobals(tableGlobals: readonly string[] = HOST_TABLE.names
   return [...new Set([...tableGlobals, ...BROWSER_GLOBALS])].sort();
 }
 
+/** A builtin global stays read-only unless the image spells out an assignment to it; writes through
+ * `__sk_host` (the runtime wraps setTimeout and WebSocket) are not spelled out, so this dead branch is. */
+function openHostGlobals(names: readonly string[]): string {
+  const host = new Set(HOST_TABLE.names);
+  const opened = names.filter((name) => host.has(name));
+  return `if (__SK_AOT_HOST__ === undefined) {\n${opened.map((name) => `globalThis.${name} = undefined;`).join("\n")}\n}\n`;
+}
+
 export function opaqueHost(source: string, names: readonly string[] = opaqueGlobals()): string {
-  return `// ${TRANSFORM}: stable host API references are opaque inputs.\n(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n${source}\n})(__SK_AOT_HOST__);\n`;
+  return `// ${TRANSFORM}: stable host API references are opaque inputs.\n${openHostGlobals(names)}(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n${source}\n})(__SK_AOT_HOST__);\n`;
 }

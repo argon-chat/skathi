@@ -5,8 +5,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve, basename } from "node:path";
 import { canonicalTableReceipt } from "./toolchain";
-const FRONTEND = "7ca0042d3ba23ed60fd9cd8af1a1ce6ec3f8d074";
-const WEBKIT = "4d45755fed4aeef19e95beb90d3d0c884a2812bd";
+const FRONTEND = "237bba51e98a8b3d5b62d2d6c33853c2e83820a7";
+const WEBKIT = "3bc94211496460feda299ef85eef710eb67fafb3";
 function argument(name: string): string {
   const index = process.argv.indexOf(name);
   const value = process.argv[index + 1];

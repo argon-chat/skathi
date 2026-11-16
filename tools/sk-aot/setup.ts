@@ -13,7 +13,16 @@ const table = join(cache, "table");
 const engine = join(sdk, "vendor/redjs/prebuilt/bun-webkit/Source/JavaScriptCore/aot");
 const pin = JSON.parse(readFileSync(join(sdk, "packages/cli/aot/toolchain.lock.json"), "utf8"));
 const revision: string = pin.frontend.revision;
-const SPARSE = ["src", "scripts", "packages", "docs/compiler", "docs/lint/rules", "completions", "patches"];
+const SPARSE = [
+  "src",
+  "scripts",
+  "packages",
+  "docs/compiler",
+  "docs/lint/rules",
+  "completions",
+  "patches",
+  "test/aot/native",
+];
 
 function run(command: string[], options: { cwd?: string; env?: Record<string, string>; allowFailure?: boolean } = {}) {
   console.log(`$ ${command.join(" ")}`);

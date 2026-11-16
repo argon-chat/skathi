@@ -3,15 +3,15 @@
   "version": 1,
   "target": "x86_64-windows",
   "frontend": {
-    "revision": "7ca0042d3ba23ed60fd9cd8af1a1ce6ec3f8d074",
+    "revision": "237bba51e98a8b3d5b62d2d6c33853c2e83820a7",
     "sourceRepository": "https://github.com/oven-sh/bun.git"
   },
   "engine": {
-    "revision": "4d45755fed4aeef19e95beb90d3d0c884a2812bd",
-    "archiveSha256": "fd79937b7f8becd5c0961646cd7f8af4409122e9cf710ffd766dc0c89df1f619"
+    "revision": "3bc94211496460feda299ef85eef710eb67fafb3",
+    "archiveSha256": "837f06ecd569791d4497ea7e8703f636fac5a1869ca5ee7c5f49b4c4eaa40e3d"
   },
   "table": {
-    "id": "4750b3540882158b35c1f7cc946edc1acb18561345bc70f9151fb913e59268b8",
-    "dumpSha256": "afac4f15bc41518c037d80965fed1c53edd36b96837602cab40660b3a0f5beb2"
+    "id": "a9db25bde548594d86b2439e8dfd11335a87004ee374a31e2d1a557c40543886",
+    "dumpSha256": "b379cd1e35c090880b6b4ae4fdbdab9b1566a06c829e3e9d6824ac7aaa11cdc7"
   }
 }

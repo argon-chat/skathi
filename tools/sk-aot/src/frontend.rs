@@ -138,6 +138,8 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
         executable_identity: ExecutableIdentity([0; 16]),
         image_form: None,
         module_prefix: MODULE_PREFIX,
+        outfile: None,
+        replaced_file: None,
         log,
         arena,
         event_loop: None,

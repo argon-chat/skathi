@@ -171,5 +171,8 @@ fn main() {
     // Bun__removableFeatureState and Bun__removableFeatureName: Bun's trim crate and redjs both
     // define the untrimmed engine's, with the same contents.
     println!("cargo:rustc-link-arg-bins=/FORCE:MULTIPLE");
+    // Folded natives (DataView's setInt8 and setUint8) give one boxed call two stubs, which
+    // the engine refuses when it creates a realm.
+    println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
     println!("cargo:rerun-if-changed=engine");
 }
