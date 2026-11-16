@@ -1,7 +1,7 @@
 // So the kill happens from three places — `close()`, a `process.exit` hook, and the signal
 // handlers — and all three are idempotent.
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,6 +19,7 @@ import {
   WORK_DIR,
 } from "./dist";
 import { artifactPath } from "./artifacts";
+import { killTree } from "./reap";
 
 export interface LaunchOptions {
   /**
@@ -338,7 +339,7 @@ export class SkApp {
     } catch {}
     if (!this.keepAlive) {
       try {
-        spawnSync("taskkill", ["/PID", String(this.pid), "/T", "/F"], { stdio: "ignore" });
+        killTree(this.pid);
       } catch {}
     }
     try {
@@ -487,7 +488,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   const deadline = Date.now() + launchTimeout;
   const fail = (why: string) => {
     try {
-      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+      killTree(pid);
       closeSync(logFd);
     } catch {}
     return new Error(`${label}: ${why}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`);

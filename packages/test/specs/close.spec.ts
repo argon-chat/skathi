@@ -2,12 +2,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stagedExe } from "../src/dist";
-import { launch, REPO, type SkApp } from "../src/index";
+import { killTree, launch, REPO, type SkApp } from "../src/index";
 
 const T = 60_000;
 const FIXTURE = "packages/test/fixtures/launch/src/main.ts";
@@ -17,7 +17,7 @@ const user32 = dlopen("user32.dll", {
 const extra: number[] = [];
 const apps: SkApp[] = [];
 afterAll(async () => {
-  for (const pid of extra) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  for (const pid of extra) killTree(pid);
   for (const a of apps) await a.close();
   user32.close();
 });

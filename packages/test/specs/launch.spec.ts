@@ -7,7 +7,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stagedExe } from "../src/dist";
-import { expect, launch, REPO } from "../src/index";
+import { expect, killTree, launch, REPO } from "../src/index";
 
 const T = 30_000;
 const appName = `sk-test-launch-${process.pid}`;
@@ -25,7 +25,7 @@ const doc = join(scratch, "x.txt");
 writeFileSync(doc, "a document the second launch names\n");
 const extra: number[] = [];
 afterAll(() => {
-  for (const pid of extra) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+  for (const pid of extra) killTree(pid);
   app.close();
   rmSync(scratch, { recursive: true, force: true });
 });

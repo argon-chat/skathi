@@ -40,6 +40,21 @@ export function findOrphans(): Orphan[] {
   return orphans;
 }
 
+/** Kills `pid` and its children: a host is spawned detached, so on unix it leads its own group. */
+export function killTree(pid: number) {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+}
+
 /**
  * Kills every orphan `findOrphans()` reports — the tree, so an inspector child goes with its host
  * — and returns what it found.
@@ -47,7 +62,7 @@ export function findOrphans(): Orphan[] {
 export function reapOrphans(): Orphan[] {
   const orphans = findOrphans();
   for (const o of orphans) {
-    spawnSync("taskkill", ["/PID", String(o.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    killTree(o.pid);
   }
   if (orphans.length) {
     const list = orphans.map((o) => `${o.pid} (runner ${o.runner})`).join(", ");

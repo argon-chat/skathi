@@ -10,7 +10,13 @@ import { reapOrphans } from "./reap";
 export const REPO = resolve(import.meta.dir, "../../..");
 export const CLI_PKG = join(REPO, "packages/cli");
 const RUNTIME_SRC = join(REPO, "packages/runtime/src");
-export const DEFAULT_EXE = join(REPO, "target/x86_64-pc-windows-msvc/debug/sk-app.exe");
+export const DEFAULT_EXE = join(
+  REPO,
+  {
+    win32: "target/x86_64-pc-windows-msvc/debug/sk-app.exe",
+    darwin: `target/${process.arch === "arm64" ? "aarch64" : "x86_64"}-apple-darwin/debug/sk-app`,
+  }[process.platform as string] ?? "target/x86_64-unknown-linux-gnu/debug/sk-app",
+);
 
 /** Everything this harness writes that is not a user-facing artifact. */
 export const WORK_DIR = join(REPO, "packages/test/.sk-test");

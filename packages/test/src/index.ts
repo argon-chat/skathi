@@ -10,7 +10,7 @@ export { readPng, changedRegion, inset, Png } from "./pixels";
 export type { Rect } from "./pixels";
 export { ARTIFACTS_DIR, artifactPath } from "./artifacts";
 export { REPO, DEFAULT_EXE, WORK_DIR } from "./dist";
-export { findOrphans, reapOrphans } from "./reap";
+export { findOrphans, killTree, reapOrphans } from "./reap";
 export type { Orphan } from "./reap";
 export { featureExe, featureExeDir, fileContains, packagedExe, bareHost } from "./features";
 export type { FeatureExeOptions, PackagedExeOptions } from "./features";

@@ -1,23 +1,28 @@
 import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
 
-const user32 = dlopen("user32.dll", {
-  OpenClipboard: { args: [FFIType.ptr], returns: FFIType.i32 },
-  CloseClipboard: { args: [], returns: FFIType.i32 },
-  EmptyClipboard: { args: [], returns: FFIType.i32 },
-  EnumClipboardFormats: { args: [FFIType.u32], returns: FFIType.u32 },
-  GetClipboardData: { args: [FFIType.u32], returns: FFIType.ptr },
-  SetClipboardData: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.ptr },
-  IsClipboardFormatAvailable: { args: [FFIType.u32], returns: FFIType.i32 },
-  RegisterClipboardFormatW: { args: [FFIType.ptr], returns: FFIType.u32 },
+const open = () => ({
+  user32: dlopen("user32.dll", {
+    OpenClipboard: { args: [FFIType.ptr], returns: FFIType.i32 },
+    CloseClipboard: { args: [], returns: FFIType.i32 },
+    EmptyClipboard: { args: [], returns: FFIType.i32 },
+    EnumClipboardFormats: { args: [FFIType.u32], returns: FFIType.u32 },
+    GetClipboardData: { args: [FFIType.u32], returns: FFIType.ptr },
+    SetClipboardData: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.ptr },
+    IsClipboardFormatAvailable: { args: [FFIType.u32], returns: FFIType.i32 },
+    RegisterClipboardFormatW: { args: [FFIType.ptr], returns: FFIType.u32 },
+  }),
+  kernel32: dlopen("kernel32.dll", {
+    GlobalAlloc: { args: [FFIType.u32, FFIType.u64], returns: FFIType.ptr },
+    GlobalLock: { args: [FFIType.ptr], returns: FFIType.ptr },
+    GlobalUnlock: { args: [FFIType.ptr], returns: FFIType.i32 },
+    GlobalSize: { args: [FFIType.ptr], returns: FFIType.u64 },
+    GlobalFree: { args: [FFIType.ptr], returns: FFIType.ptr },
+    RtlMoveMemory: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.void },
+  }),
 });
-const kernel32 = dlopen("kernel32.dll", {
-  GlobalAlloc: { args: [FFIType.u32, FFIType.u64], returns: FFIType.ptr },
-  GlobalLock: { args: [FFIType.ptr], returns: FFIType.ptr },
-  GlobalUnlock: { args: [FFIType.ptr], returns: FFIType.i32 },
-  GlobalSize: { args: [FFIType.ptr], returns: FFIType.u64 },
-  GlobalFree: { args: [FFIType.ptr], returns: FFIType.ptr },
-  RtlMoveMemory: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.void },
-});
+// Opened on first use: importing the harness must work where there is no Win32 clipboard.
+let libs: ReturnType<typeof open> | null = null;
+const lib = () => (libs ??= open());
 
 const GMEM_MOVEABLE = 0x0002;
 /** Formats whose data is a GDI handle, not a memory block. */
@@ -40,17 +45,17 @@ function wide(s: string): Uint16Array {
 
 /** A registered format's id by name ("PNG", "HTML Format"). */
 export function clipboardFormatId(name: string): number {
-  return user32.symbols.RegisterClipboardFormatW(ptr(wide(name)));
+  return lib().user32.symbols.RegisterClipboardFormatW(ptr(wide(name)));
 }
 
 /** Runs `f` with the clipboard open; another process may hold it for a moment. */
 function withOpen<T>(f: () => T): T {
   for (let i = 0; i < 50; i++) {
-    if (user32.symbols.OpenClipboard(null)) {
+    if (lib().user32.symbols.OpenClipboard(null)) {
       try {
         return f();
       } finally {
-        user32.symbols.CloseClipboard();
+        lib().user32.symbols.CloseClipboard();
       }
     }
     Bun.sleepSync(10);
@@ -59,16 +64,16 @@ function withOpen<T>(f: () => T): T {
 }
 
 function readOpen(format: number): Uint8Array | null {
-  if (!user32.symbols.IsClipboardFormatAvailable(format)) return null;
-  const h = user32.symbols.GetClipboardData(format);
+  if (!lib().user32.symbols.IsClipboardFormatAvailable(format)) return null;
+  const h = lib().user32.symbols.GetClipboardData(format);
   if (!h) return null;
-  const size = Number(kernel32.symbols.GlobalSize(h));
-  const p = kernel32.symbols.GlobalLock(h);
+  const size = Number(lib().kernel32.symbols.GlobalSize(h));
+  const p = lib().kernel32.symbols.GlobalLock(h);
   if (!p) return null;
   try {
     return size > 0 ? new Uint8Array(toArrayBuffer(p, 0, size)).slice() : new Uint8Array(0);
   } finally {
-    kernel32.symbols.GlobalUnlock(h);
+    lib().kernel32.symbols.GlobalUnlock(h);
   }
 }
 
@@ -82,7 +87,11 @@ export function clipboardFormat(format: number | string): Uint8Array | null {
 export function clipboardSnapshot(): ClipboardSnapshot {
   return withOpen(() => {
     const out: ClipboardSnapshot = [];
-    for (let f = user32.symbols.EnumClipboardFormats(0); f !== 0; f = user32.symbols.EnumClipboardFormats(f)) {
+    for (
+      let f = lib().user32.symbols.EnumClipboardFormats(0);
+      f !== 0;
+      f = lib().user32.symbols.EnumClipboardFormats(f)
+    ) {
       if (isHandleFormat(f)) continue;
       const bytes = readOpen(f);
       if (bytes) out.push({ format: f, bytes });
@@ -94,14 +103,14 @@ export function clipboardSnapshot(): ClipboardSnapshot {
 /** Replaces the clipboard with a snapshot (an empty one empties it). */
 export function clipboardRestore(snapshot: ClipboardSnapshot): void {
   withOpen(() => {
-    user32.symbols.EmptyClipboard();
+    lib().user32.symbols.EmptyClipboard();
     for (const { format, bytes } of snapshot) {
-      const h = kernel32.symbols.GlobalAlloc(GMEM_MOVEABLE, Math.max(1, bytes.length));
+      const h = lib().kernel32.symbols.GlobalAlloc(GMEM_MOVEABLE, Math.max(1, bytes.length));
       if (!h) continue;
-      const p = kernel32.symbols.GlobalLock(h);
-      if (p && bytes.length) kernel32.symbols.RtlMoveMemory(p, ptr(bytes), bytes.length);
-      kernel32.symbols.GlobalUnlock(h);
-      if (!user32.symbols.SetClipboardData(format, h)) kernel32.symbols.GlobalFree(h);
+      const p = lib().kernel32.symbols.GlobalLock(h);
+      if (p && bytes.length) lib().kernel32.symbols.RtlMoveMemory(p, ptr(bytes), bytes.length);
+      lib().kernel32.symbols.GlobalUnlock(h);
+      if (!lib().user32.symbols.SetClipboardData(format, h)) lib().kernel32.symbols.GlobalFree(h);
     }
   });
 }
