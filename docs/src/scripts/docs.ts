@@ -134,10 +134,49 @@ function initializePage(): void {
 
   const prose = document.querySelector<HTMLElement>(".prose");
   const rail = prose ? document.createElement("div") : undefined;
-  const railFill = document.createElement("div");
+  const svgNS = "http://www.w3.org/2000/svg";
+  const railSvg = document.createElementNS(svgNS, "svg");
+  const railTrack = document.createElementNS(svgNS, "path");
+  const railFill = document.createElementNS(svgNS, "path");
+  const railGradient = document.createElementNS(svgNS, "linearGradient");
   let railNodes: { node: HTMLElement; heading: HTMLElement; top: number }[] = [];
   let railTop = 0;
   let railHeight = 0;
+  let railLength = 0;
+  const lineX = 4.5;
+  function railPath(): string {
+    if (!rail) return "";
+    const box = rail.getBoundingClientRect();
+    const bend = 32;
+    const clearance = 16;
+    let y = 0;
+    let d = `M${lineX} 0`;
+    const frames = [...document.querySelectorAll<HTMLElement>(".prose .demo-frame")]
+      .map((frame) => frame.getBoundingClientRect())
+      .filter((r) => r.height > 0 && r.left < box.left + lineX + clearance)
+      .map((r) => ({ top: r.top - box.top, bottom: r.bottom - box.top, x: r.left - box.left - clearance }))
+      .sort((a, b) => a.top - b.top);
+    for (const frame of frames) {
+      const start = frame.top - clearance - bend;
+      const end = frame.bottom + clearance + bend;
+      if (start < y || end > railHeight) continue;
+      const mid = bend / 2;
+      d += ` V${start} C${lineX} ${start + mid} ${frame.x} ${start + mid} ${frame.x} ${start + bend}`;
+      d += ` V${end - bend} C${frame.x} ${end - mid} ${lineX} ${end - mid} ${lineX} ${end}`;
+      y = end;
+    }
+    return `${d} V${railHeight}`;
+  }
+  function lengthAtDepth(depth: number): number {
+    let low = 0;
+    let high = railLength;
+    for (let i = 0; i < 18; i++) {
+      const mid = (low + high) / 2;
+      if (railTrack.getPointAtLength(mid).y < depth) low = mid;
+      else high = mid;
+    }
+    return high;
+  }
   function layoutRail(): void {
     if (!prose || !rail) return;
     const sections = [...prose.querySelectorAll<HTMLElement>(":scope h2")].filter(
@@ -151,6 +190,12 @@ function initializePage(): void {
     railHeight = Math.max(0, prose.getBoundingClientRect().height - railTop - 8);
     rail.style.setProperty("--rail-top", `${railTop}px`);
     rail.style.setProperty("--rail-height", `${railHeight}px`);
+    const d = railPath();
+    railTrack.setAttribute("d", d);
+    railFill.setAttribute("d", d);
+    railLength = railTrack.getTotalLength();
+    rail.style.setProperty("--rail-length", `${railLength}`);
+    railFill.style.strokeDasharray = `${railLength} ${railLength}`;
     railNodes.forEach(({ node }) => node.remove());
     railNodes = sections.map((heading) => {
       const node = document.createElement("span");
@@ -165,8 +210,22 @@ function initializePage(): void {
   if (prose && rail) {
     rail.className = "rail";
     rail.setAttribute("aria-hidden", "true");
-    railFill.className = "rail-fill";
-    rail.append(railFill);
+    railGradient.id = "rail-gradient";
+    railGradient.setAttribute("gradientUnits", "userSpaceOnUse");
+    railGradient.setAttribute("x1", "0");
+    railGradient.setAttribute("x2", "0");
+    for (const name of ["from", "to"]) {
+      const stop = document.createElementNS(svgNS, "stop");
+      stop.setAttribute("class", `rail-stop-${name}`);
+      stop.setAttribute("offset", name === "from" ? "0" : "1");
+      railGradient.append(stop);
+    }
+    const defs = document.createElementNS(svgNS, "defs");
+    defs.append(railGradient);
+    railTrack.setAttribute("class", "rail-track");
+    railFill.setAttribute("class", "rail-fill");
+    railSvg.append(defs, railTrack, railFill);
+    rail.append(railSvg);
     prose.prepend(rail);
     prose.classList.add("has-rail");
     new ResizeObserver(() => layoutRail()).observe(prose);
@@ -178,7 +237,10 @@ function initializePage(): void {
     if (prose && rail && !rail.hidden) {
       const reading = line - prose.getBoundingClientRect().top;
       const filled = Math.min(Math.max(reading - railTop, 0), railHeight);
-      railFill.style.transform = `scaleY(${railHeight ? filled / railHeight : 0})`;
+      const length = filled <= 0 ? 0 : filled >= railHeight ? railLength : lengthAtDepth(filled);
+      railFill.style.strokeDashoffset = `${railLength - length}`;
+      railGradient.setAttribute("y1", "0");
+      railGradient.setAttribute("y2", `${Math.max(filled, 1)}`);
       railNodes.forEach(({ node, heading, top }) => {
         const passed = reading >= top;
         node.classList.toggle("is-passed", passed);

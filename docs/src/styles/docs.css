@@ -639,19 +639,31 @@
     height: var(--rail-height, 0);
     pointer-events: none;
   }
-  .rail::before,
-  .rail-fill {
-    content: "";
+  .rail svg {
     position: absolute;
-    inset: 0 auto 0 4px;
-    width: 1px;
-    background: var(--border);
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .rail path {
+    fill: none;
+    stroke-width: 1px;
+  }
+  .rail-track {
+    stroke: var(--border);
+    stroke-dasharray: var(--rail-length, 0) var(--rail-length, 0);
+    animation: rail-draw 1200ms var(--ease-out) 150ms both;
   }
   .rail-fill {
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 30%, transparent), var(--accent));
-    transform: scaleY(0);
-    transform-origin: top;
-    transition: transform 140ms linear;
+    stroke: url(#rail-gradient);
+    transition: stroke-dashoffset 140ms linear;
+  }
+  .rail-stop-from {
+    stop-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .rail-stop-to {
+    stop-color: var(--accent);
   }
   .rail-node {
     position: absolute;
@@ -672,10 +684,6 @@
     background: var(--accent);
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
   }
-  .rail::before {
-    transform-origin: top;
-    animation: rail-draw 1200ms var(--ease-out) 150ms both;
-  }
   .article-heading h1 {
     animation: rise-in 650ms var(--ease-out) both;
   }
@@ -692,7 +700,7 @@
   }
   @keyframes rail-draw {
     from {
-      transform: scaleY(0);
+      stroke-dashoffset: var(--rail-length, 0);
     }
   }
   .prose h2 {
