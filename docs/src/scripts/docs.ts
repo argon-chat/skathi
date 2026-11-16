@@ -113,19 +113,95 @@ function initializePage(): void {
     ?.addEventListener("click", () => window.dispatchEvent(new Event("skathi:search")), { signal });
 
   const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>("[data-toc-id]")];
-  const allTocLinks = document.querySelectorAll<HTMLAnchorElement>(".toc-link");
-  const headingElements = tocLinks
-    .map((link) => document.getElementById(link.dataset["tocId"] ?? ""))
-    .filter((heading): heading is HTMLElement => heading !== null);
+  const allTocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".toc-link")];
+  const toc = document.querySelector<HTMLElement>(".toc");
+  // Looked up on every update: the catalog island re-renders its group headings when filters change.
+  const headingElements = () =>
+    tocLinks
+      .map((link) => document.getElementById(link.dataset["tocId"] ?? ""))
+      .filter((heading): heading is HTMLElement => heading !== null && heading.getClientRects().length > 0);
+
+  document.querySelectorAll<HTMLHeadingElement>(".prose h2[id], .prose h3[id]").forEach((heading) => {
+    if (heading.querySelector(".heading-anchor")) return;
+    const anchor = document.createElement("a");
+    anchor.className = "heading-anchor";
+    anchor.href = `#${heading.id}`;
+    anchor.setAttribute("aria-label", `Link to ${heading.textContent ?? "this section"}`);
+    anchor.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L12 5.6M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></svg>';
+    heading.append(anchor);
+  });
+
+  const prose = document.querySelector<HTMLElement>(".prose");
+  const rail = prose ? document.createElement("div") : undefined;
+  const railFill = document.createElement("div");
+  let railNodes: { node: HTMLElement; heading: HTMLElement; top: number }[] = [];
+  let railTop = 0;
+  let railHeight = 0;
+  function layoutRail(): void {
+    if (!prose || !rail) return;
+    const sections = [...prose.querySelectorAll<HTMLElement>(":scope h2")].filter(
+      (heading) => heading.getClientRects().length > 0,
+    );
+    rail.hidden = sections.length < 2;
+    if (rail.hidden) return;
+    const origin = prose.getBoundingClientRect().top;
+    const first = sections[0];
+    railTop = first ? first.getBoundingClientRect().top - origin + 18 : 0;
+    railHeight = Math.max(0, prose.getBoundingClientRect().height - railTop - 8);
+    rail.style.setProperty("--rail-top", `${railTop}px`);
+    rail.style.setProperty("--rail-height", `${railHeight}px`);
+    railNodes.forEach(({ node }) => node.remove());
+    railNodes = sections.map((heading) => {
+      const node = document.createElement("span");
+      node.className = "rail-node";
+      const top = heading.getBoundingClientRect().top - origin + 18;
+      node.style.top = `${top - railTop}px`;
+      rail.append(node);
+      return { node, heading, top };
+    });
+    updateReading();
+  }
+  if (prose && rail) {
+    rail.className = "rail";
+    rail.setAttribute("aria-hidden", "true");
+    railFill.className = "rail-fill";
+    rail.append(railFill);
+    prose.prepend(rail);
+    prose.classList.add("has-rail");
+    new ResizeObserver(() => layoutRail()).observe(prose);
+  }
+
   let ticking = false;
-  function updateToc(): void {
-    const active = headingElements.filter((heading) => heading.getBoundingClientRect().top <= 130).at(-1);
+  function updateReading(): void {
+    const line = window.innerHeight * 0.32;
+    if (prose && rail && !rail.hidden) {
+      const reading = line - prose.getBoundingClientRect().top;
+      const filled = Math.min(Math.max(reading - railTop, 0), railHeight);
+      railFill.style.transform = `scaleY(${railHeight ? filled / railHeight : 0})`;
+      railNodes.forEach(({ node, heading, top }) => {
+        const passed = reading >= top;
+        node.classList.toggle("is-passed", passed);
+        heading.classList.toggle("is-reached", passed);
+      });
+    }
+    const active = headingElements()
+      .filter((heading) => heading.getBoundingClientRect().top <= line)
+      .at(-1);
+    let selectedLink: HTMLAnchorElement | undefined;
     allTocLinks.forEach((link) => {
       const selected = active ? link.dataset["tocId"] === active.id : link.hasAttribute("data-toc-overview");
       link.classList.toggle("is-active", selected);
-      if (selected) link.setAttribute("aria-current", "location");
-      else link.removeAttribute("aria-current");
+      if (selected) {
+        link.setAttribute("aria-current", "location");
+        selectedLink = link;
+      } else link.removeAttribute("aria-current");
     });
+    if (toc && selectedLink) {
+      toc.style.setProperty("--toc-y", `${selectedLink.offsetTop}px`);
+      toc.style.setProperty("--toc-h", `${selectedLink.offsetHeight}px`);
+      toc.classList.add("has-marker");
+    }
     ticking = false;
   }
   window.addEventListener(
@@ -133,12 +209,15 @@ function initializePage(): void {
     () => {
       if (!ticking) {
         ticking = true;
-        window.requestAnimationFrame(updateToc);
+        window.requestAnimationFrame(updateReading);
       }
     },
     { passive: true, signal },
   );
-  updateToc();
+  window.addEventListener("resize", layoutRail, { passive: true, signal });
+  document.fonts?.ready.then(layoutRail);
+  layoutRail();
+  updateReading();
 
   document.querySelectorAll<HTMLPreElement>(".prose pre").forEach((pre) => {
     const code = pre.querySelector("code");
@@ -152,20 +231,26 @@ function initializePage(): void {
     language.textContent = pre.dataset["language"] ?? code.dataset["language"] ?? "Code";
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "Copy";
+    button.className = "code-copy";
     button.setAttribute("aria-label", "Copy code");
+    button.innerHTML =
+      '<svg class="code-copy-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-copy" d="M9 9h11v11H9V9Zm-4 6H4V4h11v1"/><path class="icon-check" d="m5 12 5 5L20 7"/></svg><span class="code-copy-label">Copy</span>';
+    const label = button.querySelector<HTMLElement>(".code-copy-label");
     const status = document.createElement("span");
     status.className = "sr-only";
     status.setAttribute("role", "status");
+    let reset: number | undefined;
     button.addEventListener(
       "click",
       async () => {
+        window.clearTimeout(reset);
         try {
           await navigator.clipboard.writeText(code.textContent ?? "");
-          button.textContent = "Copied!";
+          button.dataset["state"] = "copied";
+          if (label) label.textContent = "Copied";
           status.textContent = "Code copied.";
         } catch {
-          button.textContent = "Select code";
+          if (label) label.textContent = "Select code";
           const range = document.createRange();
           range.selectNodeContents(code);
           const selection = window.getSelection();
@@ -173,10 +258,11 @@ function initializePage(): void {
           selection?.addRange(range);
           status.textContent = "Code selected. Press Control C or Command C to copy.";
         }
-        window.setTimeout(() => {
-          button.textContent = "Copy";
+        reset = window.setTimeout(() => {
+          delete button.dataset["state"];
+          if (label) label.textContent = "Copy";
           status.textContent = "";
-        }, 2500);
+        }, 2200);
       },
       { signal },
     );
@@ -203,7 +289,16 @@ function initializePage(): void {
     );
   });
 
-  document.querySelectorAll<HTMLTableElement>(".prose table").forEach((table) => {
+  document.querySelectorAll<HTMLQuoteElement>(".prose blockquote:not([data-kind])").forEach((quote) => {
+    const lead = quote.querySelector(":scope > p:first-child > strong:first-child")?.textContent?.replace(/:$/, "");
+    const kind = lead?.toLowerCase();
+    quote.classList.add("callout");
+    if (kind === "warning" || kind === "caution" || kind === "important") quote.dataset["kind"] = "warning";
+    else if (kind === "tip") quote.dataset["kind"] = "tip";
+    else quote.dataset["kind"] = "note";
+  });
+
+  document.querySelectorAll<HTMLTableElement>(".prose table:not([data-plain])").forEach((table) => {
     const wrapper = document.createElement("div");
     wrapper.className = "table-scroll";
     wrapper.tabIndex = 0;

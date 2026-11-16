@@ -10,25 +10,59 @@ import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, version } from "../lib/docs";
 
+interface Link {
+  label: string;
+  href: string;
+}
+
 interface Props {
   page?: CollectionEntry<"docs">;
   headings?: MarkdownHeading[];
   title?: string;
   description?: string;
+  /** A page outside the content collection: the sidebar entry it belongs under, and its own trail and links. */
+  sub?: {
+    parent: string;
+    path: string;
+    trail: Link[];
+    markdown: string;
+    edit: string;
+    previous?: Link | undefined;
+    next?: Link | undefined;
+  };
 }
 
 const {
   page,
   headings = [],
+  sub,
   title = page?.data.title ?? "Page not found",
   description = page?.data.description ?? "Find your way back to the Skathi documentation.",
 } = Astro.props;
 const pages = await getDocs();
+const parent = sub ? pages.find((entry) => entry.id === sub.parent) : undefined;
+const navId = page?.id ?? parent?.id;
 const current = pages.findIndex((entry) => entry.id === page?.id);
-const previous = pages[current - 1];
-const next = current >= 0 ? pages[current + 1] : undefined;
+const previousPage = pages[current - 1];
+const nextPage = current >= 0 ? pages[current + 1] : undefined;
+const toLink = (entry: CollectionEntry<"docs"> | undefined): Link | undefined =>
+  entry && { label: entry.data.label ?? entry.data.title, href: pageUrl(entry.id) };
+const previous = sub ? sub.previous : toLink(previousPage);
+const next = sub ? sub.next : toLink(nextPage);
+const markdownHref = sub?.markdown ?? (page && markdownUrl(page.id));
+const editHref =
+  sub?.edit ??
+  (page &&
+    `${repository}/edit/master/docs/${page.filePath?.replace(/^.*[\\/]docs[\\/]/, "").replaceAll("\\", "/") ?? ""}`);
+const trail: Link[] = sub
+  ? sub.trail
+  : page
+    ? [{ label: page.data.label ?? title, href: pageUrl(page.id) }]
+    : [{ label: title, href: "/404/" }];
+const section = page?.data.section ?? parent?.data.section ?? "Navigation";
+const indexable = Boolean(page || sub);
 const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
-const canonical = new URL(page ? pageUrl(page.id) : "/404/", Astro.site);
+const canonical = new URL(sub?.path ?? (page ? pageUrl(page.id) : "/404/"), Astro.site);
 const sectionIcons = { "Getting started": "book", Reference: "layers", Contributing: "code" } as const;
 const searchEntries = pages.map((entry) => ({
   title: entry.data.title,
@@ -56,8 +90,8 @@ const structuredData = {
       canonical={canonical}
       type="article"
       structuredData={structuredData}
-      markdownUrl={page && markdownUrl(page.id)}
-      noindex={!page}
+      markdownUrl={markdownHref}
+      noindex={!indexable}
     />
   </head>
   <body transition:animate="none">
@@ -100,7 +134,10 @@ const structuredData = {
                   .filter((entry) => entry.data.section === section)
                   .map((entry) => (
                     <li>
-                      <a href={pageUrl(entry.id)} aria-current={page?.id === entry.id ? "page" : undefined}>
+                      <a
+                        href={pageUrl(entry.id)}
+                        aria-current={page?.id === entry.id ? "page" : navId === entry.id ? "true" : undefined}
+                      >
                         {entry.data.label ?? entry.data.title}
                       </a>
                     </li>
@@ -123,28 +160,47 @@ const structuredData = {
     </aside>
     <div class="docs-shell">
       <main id="main-content" class="main-content" tabindex="-1">
-        <div class="breadcrumbs" aria-label="Breadcrumb">
-          <a href={docsHome}>Docs</a><Icon name="chevron" size={12} /><span>{page?.data.section ?? "Navigation"}</span
-          ><Icon name="chevron" size={12} /><span class="breadcrumb-current">{page?.data.label ?? title}</span>
-        </div>
-        <div class="article-heading">
-          <h1 data-pagefind-meta="title">{title}</h1>{
-            page && <PageActions client:load markdownUrl={markdownUrl(page.id)} />
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href={docsHome}>Docs</a><Icon name="chevron" size={12} /><span>{section}</span>{
+            trail.map((link, index) =>
+              index === trail.length - 1 ? (
+                <>
+                  <Icon name="chevron" size={12} />
+                  <span class="breadcrumb-current" aria-current="page">
+                    {link.label}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Icon name="chevron" size={12} />
+                  <a href={link.href}>{link.label}</a>
+                </>
+              ),
+            )
           }
-        </div>
-        <article class="prose" data-pagefind-body={page ? true : undefined}>
+        </nav>
+        {
+          Astro.slots.has("heading") ? (
+            <div class="article-heading article-heading-custom">
+              <slot name="heading" />
+              {markdownHref && <PageActions client:load markdownUrl={markdownHref} />}
+            </div>
+          ) : (
+            <div class="article-heading">
+              <h1 data-pagefind-meta="title">{title}</h1>
+              {markdownHref && <PageActions client:load markdownUrl={markdownHref} />}
+            </div>
+          )
+        }
+        <article class="prose" data-pagefind-body={indexable ? true : undefined}>
           <slot />
         </article>
         {
-          page && (
+          indexable && (
             <footer class="article-footer">
               <div class="page-meta">
                 <>
-                  <a
-                    href={`${repository}/edit/master/docs/${page.filePath?.replace(/^.*[\\/]docs[\\/]/, "").replaceAll("\\", "/") ?? ""}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a href={editHref} target="_blank" rel="noreferrer">
                     <Icon name="code" size={16} />
                     Edit this page
                     <Icon name="arrow" size={12} />
@@ -154,21 +210,21 @@ const structuredData = {
               </div>
               <nav class="pagination" aria-label="Previous and next pages">
                 {previous ? (
-                  <a href={pageUrl(previous.id)} class="previous-page">
+                  <a href={previous.href} class="previous-page">
                     <small>Previous</small>
                     <span>
                       <Icon name="chevron" size={14} />
-                      {previous.data.label ?? previous.data.title}
+                      {previous.label}
                     </span>
                   </a>
                 ) : (
                   <span />
                 )}
                 {next && (
-                  <a href={pageUrl(next.id)} class="next-page">
+                  <a href={next.href} class="next-page">
                     <small>Next</small>
                     <span>
-                      {next.data.label ?? next.data.title}
+                      {next.label}
                       <Icon name="chevron" size={14} />
                     </span>
                   </a>
@@ -187,7 +243,7 @@ const structuredData = {
       </main>
       <aside class="right-sidebar" aria-label="On this page">
         <nav class="toc">
-          <p class="toc-title"><span class="toc-ring"></span>On this page</p><a
+          <p class="toc-title">On this page</p><a
             href="#main-content"
             class="toc-link is-active"
             data-toc-overview>Overview</a

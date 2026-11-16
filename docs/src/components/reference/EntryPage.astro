@@ -1,0 +1,290 @@
+---
+import type { MarkdownHeading } from "astro";
+import { Code } from "astro:components";
+import "../../styles/reference.css";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import Icon from "../Icon.astro";
+import StatusMark from "./StatusMark.vue";
+import { repository } from "../../lib/docs";
+import {
+  categoryId,
+  currentVersion,
+  entryMarkdownUrl,
+  entryUrl,
+  find,
+  inline,
+  isProseName,
+  kindLabel,
+  plain,
+  platforms,
+  statuses,
+  type RefEntry,
+  type Reference,
+} from "../../lib/reference";
+
+interface Props {
+  reference: Reference;
+  entry: RefEntry;
+  previous?: RefEntry | undefined;
+  next?: RefEntry | undefined;
+}
+
+const { reference, entry, previous, next } = Astro.props;
+const status = statuses[entry.status];
+const related = (entry.related ?? []).map((slug) => find(reference, slug)).filter((r) => r !== undefined);
+const valueSince = entry.values?.some((value) => value.since && value.since !== entry.since) ?? false;
+const behavior = entry.notes ?? [];
+const examples = entry.examples ?? [];
+const edgeCases = entry.edgeCases ?? [];
+const headings: MarkdownHeading[] = [
+  behavior.length ? { depth: 2, slug: "behavior", text: "Behavior" } : undefined,
+  entry.values?.length ? { depth: 2, slug: "values", text: "Values" } : undefined,
+  examples.length ? { depth: 2, slug: "examples", text: "Examples" } : undefined,
+  edgeCases.length ? { depth: 2, slug: "edge-cases", text: "Edge cases" } : undefined,
+  entry.limitations?.length ? { depth: 2, slug: "limitations", text: "Limitations" } : undefined,
+  entry.workaround ? { depth: 2, slug: "instead", text: "Instead" } : undefined,
+  entry.mdn ? undefined : { depth: 2, slug: "reference", text: "Reference" },
+  related.length ? { depth: 2, slug: "related", text: "Related" } : undefined,
+].filter((h): h is MarkdownHeading => h !== undefined);
+const link = (e: RefEntry | undefined) => e && { label: plain(e.name), href: entryUrl(reference, e.slug) };
+const prose = isProseName(entry.name);
+const exampleId = (title: string, index: number) =>
+  `example-${index + 1}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
+---
+
+<DocsLayout
+  title={plain(entry.name)}
+  description={`${entry.summary} ${status.label} in Skathi${entry.since ? ` since ${entry.since}` : ""}.`}
+  headings={headings}
+  sub={{
+    parent: reference.id,
+    path: entryUrl(reference, entry.slug),
+    trail: [
+      { label: reference.title, href: `/${reference.id}/` },
+      { label: entry.category, href: groupHref },
+      { label: plain(entry.name), href: entryUrl(reference, entry.slug) },
+    ],
+    markdown: entryMarkdownUrl(reference, entry.slug),
+    edit: `${repository}/edit/master/${reference.source}`,
+    previous: link(previous),
+    next: link(next),
+  }}
+>
+  <header class="sheet-head" slot="heading">
+    <h1 class:list={["sheet-title", { "sheet-title-prose": prose }]} data-pagefind-meta="title" set:html={inline(entry.name)} />
+    <p class="sheet-lead" set:html={inline(entry.summary)} />
+  </header>
+
+  <dl class="spec-strip" aria-label="Support in Skathi">
+    <div class="spec-cell spec-status" data-tone={status.tone}>
+      <dt>In Skathi</dt>
+      <dd><StatusMark status={entry.status} size={18} />{status.label}</dd>
+    </div>
+    {
+      platforms.map((platform, index) => {
+        const value = entry.platforms[platform.id];
+        return (
+          <div class="spec-cell" data-tone={statuses[value].tone} style={`--delay: ${(index + 1) * 70}ms`}>
+            <dt>{platform.label}</dt>
+            <dd>
+              <StatusMark status={value} size={16} />
+              {statuses[value].label}
+            </dd>
+          </div>
+        );
+      })
+    }
+    <div class="spec-cell spec-since">
+      <dt>Since</dt>
+      <dd class:list={{ "is-new": entry.since === currentVersion }}>{entry.since ?? "Not yet"}</dd>
+    </div>
+  </dl>
+  <div class="sheet-actions">
+    <span class="sheet-badge sheet-badge-kind">{kindLabel(entry.kind)}</span>
+    {
+      entry.mdn && (
+        <a class="sheet-action" href={entry.mdn} target="_blank" rel="noreferrer">
+          <Icon name="book" size={15} />
+          MDN reference
+          <Icon name="arrow" size={13} />
+        </a>
+      )
+    }
+    {
+      entry.skathiOnly && (
+        <span class="sheet-badge sheet-badge-skathi">
+          <Icon name="sparkle" size={14} />
+          Skathi only
+        </span>
+      )
+    }
+    {
+      entry.animates && (
+        <span class="sheet-badge">
+          <Icon name="refresh" size={14} />
+          {entry.animates === "interpolated" ? "Animates" : "Animates discretely"}
+        </span>
+      )
+    }
+    {entry.experimental && <span class="sheet-badge sheet-badge-planned">Experimental on the web</span>}
+    {entry.webDeprecated && <span class="sheet-badge sheet-badge-no">Deprecated on the web</span>}
+  </div>
+
+  {
+    behavior.length ? (
+      <>
+        <h2 id="behavior">Behavior</h2>
+        <ul class="behavior">
+          {behavior.map((note) => (
+            <li set:html={inline(note)} />
+          ))}
+        </ul>
+      </>
+    ) : null
+  }
+
+  {
+    entry.values?.length ? (
+      <>
+        <h2 id="values">Values</h2>
+        <div class="table-scroll">
+          <table class="pinout" data-plain>
+            <thead>
+              <tr>
+                <th scope="col">Value</th>
+                <th scope="col">Status</th>
+                {valueSince && <th scope="col">Since</th>}
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entry.values.map((value) => (
+                <tr>
+                  <td>
+                    <code>{value.value}</code>
+                  </td>
+                  <td>
+                    <span class="pin-status" data-status={value.status}>
+                      <StatusMark status={value.status} size={15} />
+                      {statuses[value.status].label}
+                    </span>
+                  </td>
+                  {valueSince && (
+                    <td class:list={["pin-since", { "is-new": value.since === currentVersion }]}>
+                      {value.since ?? entry.since ?? ""}
+                    </td>
+                  )}
+                  <td set:html={inline(value.note ?? "")} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    ) : null
+  }
+
+  {
+    examples.length ? (
+      <>
+        <h2 id="examples">Examples</h2>
+        <div class="examples">
+          {examples.map((example, index) => (
+            <section class="example">
+              <h3 id={exampleId(example.title, index)} set:html={inline(example.title)} />
+              {example.note && <p class="example-note" set:html={inline(example.note)} />}
+              <Code
+                code={example.code.trim()}
+                lang={example.lang}
+                themes={{ light: "github-light", dark: "github-dark" }}
+                defaultColor={false}
+              />
+            </section>
+          ))}
+        </div>
+      </>
+    ) : null
+  }
+
+  {
+    edgeCases.length ? (
+      <>
+        <h2 id="edge-cases">Edge cases</h2>
+        <ul class="edges">
+          {edgeCases.map((edge) => (
+            <li>
+              <svg class="edge-glyph" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3 2v6.5A2.5 2.5 0 0 0 5.5 11H14" />
+                <path d="M11 8l3 3-3 3" />
+              </svg>
+              <span set:html={inline(edge)} />
+            </li>
+          ))}
+        </ul>
+      </>
+    ) : null
+  }
+
+  {
+    entry.limitations?.length ? (
+      <>
+        <h2 id="limitations">Limitations</h2>
+        <ul class="limits">
+          {entry.limitations.map((limitation) => (
+            <li>
+              <StatusMark status="partial" size={13} />
+              <span set:html={inline(limitation)} />
+            </li>
+          ))}
+        </ul>
+      </>
+    ) : null
+  }
+
+  {
+    entry.workaround ? (
+      <>
+        <h2 id="instead">Instead</h2>
+        <blockquote class="callout" data-kind="tip">
+          <p set:html={inline(entry.workaround)} />
+        </blockquote>
+      </>
+    ) : null
+  }
+
+  {
+    entry.mdn ? null : (
+      <>
+      <h2 id="reference">Reference</h2>
+      <div class="reference-card">
+        <span class="reference-glyph">sk</span>
+        <span>
+          <strong>{entry.skathiOnly ? "Not part of the web platform" : "Not in the browser reference"}</strong>
+          <small>
+            {entry.skathiOnly
+              ? "Browsers ignore it; Skathi reads it. This page is its reference."
+              : "MDN has no page for it: it is handled by Skathi's compiler and tooling, or outside the standard. This page is its reference."}
+          </small>
+        </span>
+      </div>
+      </>
+    )
+  }
+
+  {
+    related.length ? (
+      <>
+        <h2 id="related">Related</h2>
+        <div class="related-list">
+          {related.map((r) => (
+            <a class="related-chip" href={entryUrl(reference, r.slug)}>
+              <StatusMark status={r.status} size={13} />
+              {plain(r.name)}
+            </a>
+          ))}
+        </div>
+      </>
+    ) : null
+  }
+</DocsLayout>

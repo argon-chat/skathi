@@ -1,0 +1,24 @@
+---
+import type { GetStaticPaths } from "astro";
+import EntryPage from "../../components/reference/EntryPage.astro";
+import { cssReference } from "../../lib/css";
+import { ordered, type RefEntry } from "../../lib/reference";
+
+export const getStaticPaths = (() => {
+  const all = ordered(cssReference);
+  return all.map((entry, index) => ({
+    params: { slug: entry.slug },
+    props: { entry, previous: all[index - 1], next: all[index + 1] },
+  }));
+}) satisfies GetStaticPaths;
+
+interface Props {
+  entry: RefEntry;
+  previous?: RefEntry | undefined;
+  next?: RefEntry | undefined;
+}
+
+const { entry, previous, next } = Astro.props;
+---
+
+<EntryPage reference={cssReference} entry={entry} previous={previous} next={next} />
