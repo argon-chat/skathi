@@ -10,7 +10,7 @@
  */
 
 import { connect } from "node:net";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,7 +18,8 @@ import { buildRequest, usageBlock, UsageError, splitArgs } from "./commands";
 import { appSlot } from "./apps";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DIST = resolve(HERE, "..", "dist");
+const APP_DIST = resolve("dist", ".sk-dev");
+const DEFAULT_DIST = existsSync(join(APP_DIST, "devtools.json")) ? APP_DIST : resolve(HERE, "..", "dist");
 /** A wedged pump must never hang the caller. Overridable with --timeout <ms>. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -71,7 +72,7 @@ function readHandshake(dir: string): Handshake {
   } catch {
     die(
       `no devtools.json at ${path} — is a dev host running with this dist?\n` +
-        `  start one:  SK_DIST=${dir} target/x86_64-pc-windows-msvc/debug/sk-app.exe\n` +
+        `  start one:  run \`sk dev\` in the app's folder, then run this from the same folder\n` +
         `  or point at another slot:  --dist <dir>`,
     );
   }

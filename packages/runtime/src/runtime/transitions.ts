@@ -263,9 +263,8 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
       if (rawProps.moveClass || (children && children.length)) {
         warnCompat(
           "TransitionGroup:move",
-          "<TransitionGroup> animates enter and leave, but NOT the move of the items that stay " +
-            "(the FLIP technique needs a per-element transform, and gpui applies no matrix to a " +
-            "laid out box) — `moveClass` is ignored and reordered items jump to their new place",
+          "<TransitionGroup> animates enter and leave, but NOT the move of the items that stay — " +
+            "`moveClass` is ignored and reordered items jump to their new place",
         );
       }
       children = slots.default ? getTransitionRawChildren(slots.default()) : [];

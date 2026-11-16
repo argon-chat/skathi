@@ -107,10 +107,7 @@ function ruleText(rule: Rule): string {
     </header>
 
     <div v-if="state.selected === null" class="empty">
-      Select an element on the left, or press <b>Ctrl+Shift+C</b> and hover it in the app.<br />
-      <span class="t-faint"
-        >The picker latches when the pointer LEAVES the app's window — hover what you want, then come back here.</span
-      >
+      Select an element on the left, or press <b>Ctrl+Shift+C</b> and click it in the app.
     </div>
 
     <div v-else class="body">
