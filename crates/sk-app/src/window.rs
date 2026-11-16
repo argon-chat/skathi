@@ -2663,9 +2663,13 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(titlebar_area(&boot), (true, (0.0, 0.0, 980.0, 36.0)));
+        #[cfg(target_os = "macos")]
+        let inset = posix::titlebar_inset();
+        #[cfg(not(target_os = "macos"))]
+        let inset = 0.0;
         assert_eq!(
             css_env(&boot, false, false).titlebar_area,
-            Some([0.0, 0.0, 980.0, 36.0])
+            Some([inset, 0.0, 980.0 - inset, 36.0])
         );
 
         // The default (fallback ON) has no area until it retires.
