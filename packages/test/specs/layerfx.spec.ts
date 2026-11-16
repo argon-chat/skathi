@@ -71,6 +71,33 @@ test(
 );
 
 test(
+  "absolutely positioned, z-indexed and fixed descendants are part of the shaded content",
+  async () => {
+    const outside = await box("#outside");
+    expect(near(await pixel(outside, 8, 8), [255, 0, 0])).toBe(true);
+
+    const b = await box("#positioned");
+    await until(
+      () => pixel(b, 40, 50),
+      (rgb) => near(rgb, [0, 0, 255]),
+    );
+    const expected: [number, number, Rgb][] = [
+      [8, 8, [0, 255, 0]],
+      [20, 20, [255, 0, 0]],
+      [30, 30, [255, 0, 0]],
+      [72, 52, [0, 255, 0]],
+    ];
+    const seen = [];
+    for (const [dx, dy, rgb] of expected) {
+      const at = await pixel(b, dx, dy);
+      seen.push(near(at, rgb) ? "ok" : `(${dx}, ${dy}) is ${at}, not ${rgb}`);
+    }
+    expect(seen).toEqual(["ok", "ok", "ok", "ok"]);
+  },
+  T,
+);
+
+test(
   "opacity applies once, to the shaded result",
   async () => {
     const b = await box("#faded");

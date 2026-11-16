@@ -3741,8 +3741,18 @@ pub(crate) fn effect_context(extras: &sk_css::Extras, style: &gpui::StyleRefinem
         || extras.filter_url.is_some()
         || extras.drop_shadow.is_some()
         || extras.isolate == Some(true)
+        || reads_content(style)
         || extras.mask.images.as_ref().is_some_and(|l| !l.is_empty())
         || extras.mask.urls.as_ref().is_some_and(|u| !u.is_empty())
+}
+
+/// An effect that shades the element's own painting contains its positioned descendants, as a
+/// filter does.
+fn reads_content(style: &gpui::StyleRefinement) -> bool {
+    [style.vn_effect, style.vn_effect_fade.map(|fade| fade.from)]
+        .into_iter()
+        .flatten()
+        .any(|spec| spec.is_some() && spec.flags & gpui::EFFECT_FLAG_NEEDS_CONTENT != 0)
 }
 
 pub(crate) fn layer_of(
