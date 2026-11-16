@@ -4,31 +4,38 @@
 
 # Skathi
 
-Desktop apps from Vue 3 single-file components, without a browser. GPU-rendered UI, JavaScriptCore
-for the script. Windows, macOS (arm64) and Linux (x64).
+Desktop apps from Vue 3 and Svelte 5 components, without a browser. GPU-rendered UI with shader
+effects from CSS, JavaScriptCore for the script, or the script compiled ahead of time to machine code.
+Windows, macOS (arm64) and Linux (x64).
+
+Documentation: [skathi.land](https://skathi.land)
 
 ## Quick start
 
 Needs [bun](https://bun.sh).
 
 ```sh
-bun add -g --no-cache @skathi-native/cli@beta && 
-   sk create showcase -y --template showcase && 
-   cd showcase && 
-   bun install && 
-   bun run dev
+bun create skathi my-app
+cd my-app
+bun install
+bun run dev
 ```
+
+It asks for a template (`showcase`, `minimal` or `svelte`), the platforms to package for and the
+package manager. `bun create skathi my-app --template minimal --yes` takes the answers as options.
 
 ## Commands
 
-| Command      | What it does                 |
-| ------------ | ---------------------------- |
-| `sk create`  | a new app                    |
-| `sk dev`     | run the app with hot reload  |
-| `sk build`   | a debug build with devtools  |
-| `sk publish` | the release build            |
-| `sk check`   | what in the app will not run |
-| `sk prune`   | clear cached workloads       |
+The app's scripts run them (`bun run dev`, `bun run publish`); `bunx sk` runs any of them directly.
+
+| Command      | What it does                                        |
+| ------------ | --------------------------------------------------- |
+| `sk create`  | a new app                                           |
+| `sk dev`     | run the app with hot reload                         |
+| `sk build`   | a debug build with devtools                         |
+| `sk publish` | the release build (`--aot`: compiled ahead of time) |
+| `sk check`   | what will not run, or will be slow, under AOT       |
+| `sk prune`   | clear cached workloads                              |
 
 `sk <command> --help` lists its options.
 
