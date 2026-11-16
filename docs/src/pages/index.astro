@@ -5,8 +5,8 @@ import "../styles/docs.css";
 import "../styles/landing.css";
 import wordmark from "../../../logos/full_side_text_logo.svg?url";
 import wolf from "../../../logos/logo_single.svg?url";
-import showcaseHome from "../assets/showcase-home.png";
-import showcaseShaders from "../assets/showcase-shaders.png";
+import playerShot from "../assets/player.png";
+import weatherShot from "../assets/weather.png";
 import shadingGlass from "../assets/shading-glass.png";
 import shadingNebula from "../assets/shading-nebula.png";
 import slang from "../lib/slang";
@@ -262,33 +262,33 @@ const structuredData = {
       </section>
 
       <section class="preview" aria-label="Screenshots">
-        <div class="preview-tabs" role="tablist" aria-label="Screenshots of the showcase app">
-          <button type="button" role="tab" id="tab-home" aria-controls="shot-home" aria-selected="true" data-shot
-            >The showcase app</button
+        <div class="preview-tabs" role="tablist" aria-label="Screenshots of the template apps">
+          <button type="button" role="tab" id="tab-player" aria-controls="shot-player" aria-selected="true" data-shot
+            >Music player · Svelte</button
           ><button
             type="button"
             role="tab"
-            id="tab-shaders"
-            aria-controls="shot-shaders"
+            id="tab-weather"
+            aria-controls="shot-weather"
             aria-selected="false"
-            data-shot>Shader effects</button
+            data-shot>Weather · Vue</button
           >
         </div>
         <div class="preview-frame">
-          <div id="shot-home" role="tabpanel" aria-labelledby="tab-home">
+          <div id="shot-player" role="tabpanel" aria-labelledby="tab-player">
             <Image
-              src={showcaseHome}
-              alt="The showcase app: a sidebar of features and a grid of cards, in a native window"
+              src={playerShot}
+              alt="The player template: a library sidebar, a playlist, and a radial spectrum glowing round the album cover"
               widths={[640, 1280]}
               sizes="(max-width: 1100px) 100vw, 1060px"
               format="webp"
               loading="eager"
             />
           </div>
-          <div id="shot-shaders" role="tabpanel" aria-labelledby="tab-shaders" hidden>
+          <div id="shot-weather" role="tabpanel" aria-labelledby="tab-weather" hidden>
             <Image
-              src={showcaseShaders}
-              alt="The shaders page: a liquid glass lens refracting text, and an animated blue nebula"
+              src={weatherShot}
+              alt="The weather template: rain over a painted valley at dusk, and drops beading on the glass panels"
               widths={[640, 1280]}
               sizes="(max-width: 1100px) 100vw, 1060px"
               format="webp"
@@ -296,7 +296,7 @@ const structuredData = {
           </div>
         </div>
         <p class="preview-caption">
-          Real screenshots of the <code>showcase</code> template. Every pixel is drawn by Skathi, not by a browser.
+          Real screenshots of the <code>player</code> and <code>weather</code> templates: <code>bun create skathi</code> makes either. Every pixel, the spectrum, the rain and the glass included, is drawn by Skathi, not by a browser.
         </p>
       </section>
 
