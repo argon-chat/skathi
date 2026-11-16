@@ -1,10 +1,9 @@
 export interface Stats {
-  npm: number;
-  stars: number;
+  npm?: number;
+  stars?: number;
 }
 
 const repo = "argon-chat/skathi";
-const github = { headers: { "User-Agent": "skathi-docs", Accept: "application/vnd.github+json" } };
 
 async function json<T>(url: string, init?: RequestInit): Promise<T | undefined> {
   try {
@@ -27,12 +26,14 @@ async function npmDownloads(name: string): Promise<number | undefined> {
   return body?.downloads;
 }
 
-async function stars(): Promise<number | undefined> {
-  return (await json<{ stargazers_count?: number }>(`https://api.github.com/repos/${repo}`, github))?.stargazers_count;
+async function stars(token: string | undefined): Promise<number | undefined> {
+  const headers: Record<string, string> = { "User-Agent": "skathi-docs", Accept: "application/vnd.github+json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return (await json<{ stargazers_count?: number }>(`https://api.github.com/repos/${repo}`, { headers }))
+    ?.stargazers_count;
 }
 
-export async function fetchStats(): Promise<Stats | undefined> {
-  const [npm, starCount] = await Promise.all([npmDownloads("@skathi-native/cli"), stars()]);
-  if (npm === undefined || starCount === undefined) return undefined;
-  return { npm, stars: starCount };
+export async function fetchStats(githubToken?: string): Promise<Stats> {
+  const [npm, starCount] = await Promise.all([npmDownloads("@skathi-native/cli"), stars(githubToken)]);
+  return { ...(npm !== undefined && { npm }), ...(starCount !== undefined && { stars: starCount }) };
 }

@@ -6,7 +6,7 @@ import { defineConfig, fontProviders } from "astro/config";
 import docsContent from "./src/lib/docs-content";
 import slang from "./src/lib/slang";
 
-const site = process.env["SITE_URL"] ?? "http://localhost:4321";
+const site = process.env["SITE_URL"] ?? "https://skathi.land";
 
 export default defineConfig({
   site,

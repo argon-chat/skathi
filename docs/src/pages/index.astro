@@ -249,14 +249,14 @@ const structuredData = {
             ><Icon name="github" size={16} />Star on GitHub</a
           >
         </div>
-        <dl class="stats" data-stats hidden={!stats}>
-          <div>
+        <dl class="stats">
+          <div data-stat-cell="npm" hidden={stats.npm === undefined}>
             <dt>installs from npm</dt>
-            <dd data-stat="npm">{stats ? compact.format(stats.npm) : ""}</dd>
+            <dd data-stat="npm">{stats.npm !== undefined && compact.format(stats.npm)}</dd>
           </div>
-          <div>
+          <div data-stat-cell="stars" hidden={stats.stars === undefined}>
             <dt>stars on GitHub</dt>
-            <dd data-stat="stars">{stats ? compact.format(stats.stars) : ""}</dd>
+            <dd data-stat="stars">{stats.stars !== undefined && compact.format(stats.stars)}</dd>
           </div>
         </dl>
       </section>

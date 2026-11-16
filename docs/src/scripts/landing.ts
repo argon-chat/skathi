@@ -1,24 +1,17 @@
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
-const statKeys = ["npm", "stars"] as const;
-
-function isStats(value: unknown): value is Record<(typeof statKeys)[number], number> {
-  if (typeof value !== "object" || value === null) return false;
-  return statKeys.every((key) => typeof (value as Record<string, unknown>)[key] === "number");
-}
-
 async function refreshStats(signal: AbortSignal): Promise<void> {
-  const strip = document.querySelector<HTMLElement>("[data-stats]");
-  if (!strip) return;
   try {
     const response = await fetch("/api/stats", { signal });
     const body: unknown = response.ok ? await response.json() : undefined;
-    if (!isStats(body)) return;
-    for (const key of statKeys) {
-      const cell = strip.querySelector<HTMLElement>(`[data-stat="${key}"]`);
-      if (cell) cell.textContent = compact.format(body[key]);
+    if (typeof body !== "object" || body === null) return;
+    for (const [key, value] of Object.entries(body)) {
+      const cell = document.querySelector<HTMLElement>(`[data-stat-cell="${key}"]`);
+      const number = cell?.querySelector("dd");
+      if (!cell || !number || typeof value !== "number") continue;
+      number.textContent = compact.format(value);
+      cell.hidden = false;
     }
-    strip.hidden = false;
   } catch {}
 }
 
