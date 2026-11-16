@@ -76,7 +76,7 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   weather: {
     hint: "a weather app in Vue, its sky and rain drawn by shaders",
     dependencies: [],
-    window: { width: 1180, height: 820, minWidth: 980, minHeight: 720, titleBarStyle: "hidden", titleBarHeight: 72 },
+    window: { width: 1180, height: 880, minWidth: 980, minHeight: 780, titleBarStyle: "hidden", titleBarHeight: 72 },
     packs: [{ name: "textures", match: ["assets/textures/**"] }],
     checker: VUE_TSC,
   },
