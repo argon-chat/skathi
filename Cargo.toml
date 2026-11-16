@@ -23,11 +23,11 @@ members = [
     "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     "crates/sk-app",        # host binary shell
 ]
-# Vendor crates must resolve against their own workspace roots (zed's, redjs's).
+# Vendor crates must resolve against their own workspace roots (gpui's, redjs's).
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
 exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
-# Replicated from vendor/zed, as [patch] applies only from the workspace root: the waker
+# Replicated from vendor/gpui, as [patch] applies only from the workspace root: the waker
 # identity fix (smol-rs/async-task#108) is merged upstream but not yet released.
 [patch.crates-io]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }

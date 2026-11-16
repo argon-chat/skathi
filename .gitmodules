@@ -1,11 +1,6 @@
 [submodule "vendor/redjs"]
 	path = vendor/redjs
 	url = https://github.com/argon-chat/redjs.git
-[submodule "vendor/zed"]
-	path = vendor/zed
-	url = https://github.com/argon-chat/zed.git
-	branch = vue-native
-	shallow = true
 [submodule "vendor/taffy"]
 	path = vendor/taffy
 	url = https://github.com/argon-chat/taffy.git
@@ -22,3 +17,8 @@
 [submodule "templates"]
 	path = templates
 	url = https://github.com/argon-chat/skathi-templates.git
+[submodule "vendor/gpui"]
+	path = vendor/gpui
+	url = https://github.com/argon-chat/skathi-gpui.git
+	branch = main
+	shallow = true

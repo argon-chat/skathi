@@ -20,7 +20,7 @@ name = "gstreamer"
 harness = false
 
 [dependencies]
-gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+gpui = { path = "../../vendor/gpui/crates/gpui", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
 sk-resample = { path = "../sk-resample" }

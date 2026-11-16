@@ -311,7 +311,7 @@ fn standalone_manifest() {
         return;
     }
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let resources = root.join("../../vendor/zed/crates/gpui/resources/windows");
+    let resources = root.join("../../vendor/gpui/crates/gpui/resources/windows");
     println!(
         "cargo:rerun-if-changed={}",
         resources.join("gpui.manifest.xml").display()

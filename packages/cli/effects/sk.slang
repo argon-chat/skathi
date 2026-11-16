@@ -304,7 +304,7 @@ public struct SkCorners
     public float bottom_left;
 };
 
-/// Keep in sync with `gpui::EffectQuad` (vendor/zed/crates/gpui/src/scene.rs),
+/// Keep in sync with `gpui::EffectQuad` (vendor/gpui/crates/gpui/src/scene.rs),
 /// `struct EffectQuad` in gpui_windows/src/effects.hlsl and in
 /// gpui_wgpu/src/shaders_effects.wgsl. 56 words / 224 bytes.
 ///
