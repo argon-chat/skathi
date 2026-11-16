@@ -18,7 +18,7 @@ Install [Bun](https://bun.sh/) 1.4 or later and use a supported desktop platform
 bun create skathi my-app
 ```
 
-It asks for a template, the platforms to package for, and the package manager. `showcase` shows every feature, `minimal` is a single component, and `svelte` starts a Svelte 5 app. To skip the questions, pass them as options:
+It asks for a template, the platforms to package for, and the package manager. `showcase` shows every feature, `minimal` is a single component, `svelte` starts a Svelte 5 app, and `player` is a Svelte music player dressed in shaders, downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
 
 ```bash
 bun create skathi my-app --template minimal --yes

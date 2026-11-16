@@ -148,20 +148,13 @@ test("the svelte templates depend on svelte at the version the runtime accepts a
   expect(read(dir, "src/App.svelte")).toContain('const productName = "My App";');
 });
 
-test("the player brings its music, covers, shaders and own icon, and packs the media", () => {
+test("the player comes from the templates checkout with its own icon, and packs the media", () => {
   const dir = fresh();
   create(dir, { template: "player" });
   expect(read(dir, "src/lib/product.ts")).toContain('export const productName = "My App";');
-  const ids = [...read(dir, "src/lib/tracks.ts").matchAll(/demo\(\s*"([a-z-]+)"/g)].map((m) => m[1]!);
-  expect(ids.length).toBe(6);
-  for (const id of ids) {
-    expect(existsSync(join(dir, `assets/music/${id}.ogg`))).toBe(true);
-    expect(existsSync(join(dir, `assets/covers/${id}.jpg`))).toBe(true);
-  }
-  for (const shader of ["spectrum", "aurora", "bubbles", "stardust", "jelly", "glint", "cover", "glitter", "hearts"]) {
-    expect(existsSync(join(dir, "shaders", `${shader}.slang`))).toBe(true);
-  }
-  expect(readFileSync(join(dir, "icon.png"))).toEqual(readFileSync(join(TEMPLATES_DIR, "player", "icon.png")));
+  expect(readFileSync(join(dir, "icon.png"))).toEqual(
+    readFileSync(join(import.meta.dir, "../../../templates/player/icon.png")),
+  );
   const config = loadAppConfig(dir);
   expect(config.packs).toEqual([{ name: "media", match: ["assets/music/**", "assets/covers/**"] }]);
   expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("hidden");

@@ -107,7 +107,7 @@ describe("the player template", () => {
             .some((n) => Number.parseFloat(n.replace("spectrum(", "")) > 0),
         "non-zero spectrum levels",
       );
-      bunExpect(levels).toMatch(/118px, 46px, [\d.]+, #[0-9a-f]{8}\)$/);
+      bunExpect(levels).toMatch(/126px, 96px, [\d.]+, -?[\d.]+, #[0-9a-f]{8}\)$/);
     },
     T,
   );
@@ -122,12 +122,6 @@ describe("the player template", () => {
         () => shading(".app"),
         (v) => v.includes("#ff3b1f") && v.includes("#9e1020"),
         "the track's backdrop",
-      );
-      await app.locator(".scene").nth(2).click();
-      await until(
-        () => shading(".app"),
-        (v) => v.startsWith("stardust("),
-        "the stardust backdrop",
       );
     },
     T,

@@ -21,7 +21,7 @@ bun install
 bun run dev
 ```
 
-It asks for a template (`showcase`, `minimal` or `svelte`), the platforms to package for and the
+It asks for a template (`showcase`, `minimal`, `svelte`, or `player` from [skathi-templates](https://github.com/argon-chat/skathi-templates)), the platforms to package for and the
 package manager. `bun create skathi my-app --template minimal --yes` takes the answers as options.
 
 ## Commands

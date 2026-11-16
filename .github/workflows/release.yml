@@ -154,10 +154,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Check the tag
         run: bun scripts/release-hosts.ts --check-tag "$TAG"
-      # bun pm pack writes workspace:* as the real version; the licenses live at the repo root.
+      # bun pm pack writes workspace:* as the real version; the licenses live at the repo root. The CLI
+      # downloads the gallery templates at the commit the templates submodule is pinned to.
       - name: Pack
         run: |
           mkdir -p npm-tarballs
+          printf '{ "commit": "%s" }\n' "$(git rev-parse HEAD:templates)" > packages/cli/gallery.json
           for pkg in runtime cli; do
             cp LICENSE-MIT LICENSE-APACHE "packages/$pkg/"
             (cd "packages/$pkg" && bun pm pack --destination ../../npm-tarballs)

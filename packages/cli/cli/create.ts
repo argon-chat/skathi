@@ -2,8 +2,8 @@
 // name, the template, the OSes to package for, whether published builds keep devtools,
 // and the package manager. `--yes` (or no terminal) takes the defaults.
 //
-// It copies templates/<template>/ (src/, assets/) with the placeholders filled in, and writes
-// package.json (the app root the builders resolve npm dependencies from), sk.config.json, icon.png (the
+// It copies the template (templates/<template>/ here, or the gallery repo's) with the placeholders filled
+// in, and writes package.json (the app root the builders resolve npm dependencies from), sk.config.json, icon.png (the
 // template's own, else the Skathi icon) and a tsconfig.json that type-checks against the runtime.
 // Nothing is overwritten: an existing file is an error, not a merge.
 
@@ -12,6 +12,7 @@ import { basename, extname, join, relative, resolve } from "node:path";
 import * as p from "@clack/prompts";
 import { runtimeRequire } from "../runtime-path";
 import { ConfigError, sanitizeExeName } from "./config";
+import { fetchGallery, galleryDir } from "./gallery";
 import { CLI_VERSION } from "./host";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
 import { colorEnabled, paint } from "./term";
@@ -68,13 +69,28 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   player: {
     hint: "a music player in Svelte 5, dressed in shaders",
     dependencies: ["svelte"],
-    window: { width: 1100, height: 760, minWidth: 480, minHeight: 640, titleBarStyle: "hidden", titleBarHeight: 44 },
+    window: { width: 1240, height: 800, minWidth: 480, minHeight: 600, titleBarStyle: "hidden", titleBarHeight: 44 },
     packs: [{ name: "media", match: ["assets/music/**", "assets/covers/**"] }],
     checker: SVELTE_CHECK,
   },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
+
+/** Templates kept in the skathi-templates repo rather than in this package. */
+const GALLERY: ReadonlySet<Template> = new Set(["player"]);
+
+function templateDir(template: Template): string {
+  if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);
+  const dir = galleryDir(template);
+  if (!dir) throw new ConfigError(`sk create: the ${template} template has not been downloaded`);
+  return dir;
+}
+
+/** Downloads the template first when it lives in the gallery repo. */
+export async function prepareTemplate(template: Template): Promise<void> {
+  if (GALLERY.has(template)) await fetchGallery(template);
+}
 
 export const CONFIG_SCHEMA = "./node_modules/@skathi-native/runtime/sk.config.schema.json";
 
@@ -109,7 +125,7 @@ function listFiles(dir: string, prefix = ""): string[] {
 
 /** The template's files, keyed by app-relative path; `{{key}}` is replaced in text files, escaped for a string literal except in .txt. */
 export function templateFiles(template: Template, values: Record<string, string>): Record<string, string | Uint8Array> {
-  const dir = join(TEMPLATES_DIR, template);
+  const dir = templateDir(template);
   const out: Record<string, string | Uint8Array> = {};
   for (const rel of listFiles(dir)) {
     const bytes = readFileSync(join(dir, rel));
@@ -305,6 +321,7 @@ export async function createCommand(target: string | undefined, flags: CreateFla
 
   dir ??= "my-app";
   const pm = options.packageManager ?? detectPackageManager();
+  await prepareTemplate(options.template ?? "showcase");
   create(dir, options);
   const where = relative(process.cwd(), resolve(dir)) || ".";
   const next = [...(where === "." ? [] : [`cd ${where}`]), `${pm} install`, runScript(pm, "dev")].join("\n");

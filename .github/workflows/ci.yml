@@ -28,9 +28,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      # The AOT input tests read vendor/redjs/pins.txt.
-      - name: Check out pinned redjs metadata
-        run: git submodule update --init --depth 1 -- vendor/redjs
+      # The AOT input tests read vendor/redjs/pins.txt; the create tests copy the gallery templates.
+      - name: Check out pinned redjs metadata and the templates
+        run: git submodule update --init --depth 1 -- vendor/redjs templates
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4

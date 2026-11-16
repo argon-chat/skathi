@@ -21,3 +21,6 @@ packages/cli/test/fixtures/
 packages/runtime/test/fixtures/
 packages/test/fixtures/**/public/
 !bunfig.toml
+
+# Its own repository (argon-chat/skathi-templates).
+templates/

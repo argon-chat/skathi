@@ -19,3 +19,6 @@
 [submodule "vendor/redslangc"]
 	path = vendor/redslangc
 	url = https://github.com/argon-chat/redslangc.git
+[submodule "templates"]
+	path = templates
+	url = https://github.com/argon-chat/skathi-templates.git
