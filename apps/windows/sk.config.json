@@ -1,0 +1,27 @@
+{
+  "$comment": "The window gallery: one page per scenario in the window guides, and the source of their demo clips (`__demo`, see src/demo).",
+
+  "name": "windows",
+  "id": "land.skathi.samples.windows",
+  "productName": "Windows",
+  "version": "0.1.0",
+
+  "$comment-singleInstance": "A second launch reaches this copy as an appLaunch `launch` event, which shows a hidden window (closing/hide-and-return).",
+  "singleInstance": true,
+  "raiseOnSecondInstance": true,
+
+  "window": {
+    "title": "Windows",
+    "width": 1280,
+    "height": 800,
+
+    "$comment-min": "Both, or neither applies. Under 500 so Windows 11 snap layouts still take the window.",
+    "minWidth": 480,
+    "minHeight": 400,
+
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 40,
+    "titleBarFallback": false,
+    "backdrop": "acrylic"
+  }
+}

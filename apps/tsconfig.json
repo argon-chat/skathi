@@ -37,6 +37,8 @@
     "popout/src/**/*.vue",
     "listperf/src/**/*.ts",
     "listperf/src/**/*.vue",
+    "windows/src/**/*.ts",
+    "windows/src/**/*.vue",
     "../benches/*/app/src/**/*.ts",
     "../benches/*/app/src/**/*.vue",
     "devtools/src/**/*.ts",
