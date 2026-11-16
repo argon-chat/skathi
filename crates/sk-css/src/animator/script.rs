@@ -672,6 +672,25 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_animates_out_to_the_unset_value() {
+        let (mut a, t0) = animator();
+        a.script_set(
+            1,
+            7,
+            frames(&[(0.0, "--shading: glow(10px, 0.5)")]),
+            timing(1000.0),
+        );
+        a.script_clock(1, playing(0.0));
+        let r = a
+            .overlay(7, &StyleRefinement::default(), at(t0, 750))
+            .expect("in effect");
+        assert!(!r.vn_effect.expect("an effect slot").is_some());
+        let fade = r.vn_effect_fade.expect("the glow fades out");
+        assert_eq!(fade.from.id, gpui::effect_id::GLOW);
+        assert!((fade.progress - 0.75).abs() < 1e-3);
+    }
+
+    #[test]
     fn a_playing_animation_paints_from_its_clock_and_stops_at_the_end() {
         let (mut a, t0) = animator();
         a.script_set(

@@ -6524,6 +6524,31 @@ mod tests {
     }
 
     #[test]
+    fn keyframes_fade_an_effect_in_from_the_unset_value() {
+        let engine = Engine::compile(
+            "@keyframes appear { to { --shading: glow(10px, 0.5) } } \
+             .box { animation: appear 1000ms linear }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
+        let r = a
+            .overlay(
+                1,
+                &StyleRefinement::default(),
+                now + Duration::from_millis(250),
+            )
+            .unwrap();
+        assert_eq!(r.vn_effect.map(|e| e.id), Some(gpui::effect_id::GLOW));
+        let fade = r
+            .vn_effect_fade
+            .expect("the implicit from-keyframe is no effect");
+        assert!(!fade.from.is_some());
+        assert!((fade.progress - 0.25).abs() < 1e-3);
+    }
+
+    #[test]
     fn a_100_percent_keyframe_holds_under_fill_forwards() {
         let engine = Engine::compile(
             ".box { animation: pulse 80ms linear 1 forwards }              @keyframes pulse { to { opacity: 0.2 } }",

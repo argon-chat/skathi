@@ -88,6 +88,32 @@ test(
 );
 
 test(
+  "a content effect transitioned in from no effect blends with the unshaded painting",
+  async () => {
+    const b = await box("#appear");
+    expect(near(await pixel(b, 8, 8), [0, 255, 0])).toBe(true);
+    await app.eval(`document.querySelector("#appear").classList.add("swap")`);
+    const mid = await until(
+      () => pixel(b, 8, 8),
+      ([, g, bl]) => g > 40 && bl > 40,
+      3_000,
+    );
+    expect([mid[1] > 40, mid[2] > 40]).toEqual([true, true]);
+    expect(
+      near(
+        await until(
+          () => pixel(b, 8, 8),
+          (rgb) => near(rgb, [0, 0, 255]),
+          8_000,
+        ),
+        [0, 0, 255],
+      ),
+    ).toBe(true);
+  },
+  T,
+);
+
+test(
   "a history carries its state from frame to frame",
   async () => {
     const b = await box("#counter");

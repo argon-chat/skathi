@@ -7,6 +7,7 @@ const App = {
       h("div", { id: "swapped", class: "tile swap" }, [h("div", { id: "child", class: "child" })]),
       h("div", { id: "faded", class: "tile swap faded" }),
       h("div", { id: "counter", class: "tile count" }),
+      h("div", { id: "appear", class: "tile appear" }),
     ]),
 };
 

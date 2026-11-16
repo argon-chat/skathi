@@ -108,9 +108,11 @@ impl TransitionProperty {
 
     /// What keyframes animate: the [`animatable`](Self::animatable) set and the discrete properties.
     pub fn keyframed() -> impl Iterator<Item = TransitionProperty> {
-        Self::animatable()
-            .into_iter()
-            .chain([TransitionProperty::OverflowX, TransitionProperty::OverflowY])
+        Self::animatable().into_iter().chain([
+            TransitionProperty::OverflowX,
+            TransitionProperty::OverflowY,
+            TransitionProperty::Shading,
+        ])
     }
 
     pub fn is_discrete(&self) -> bool {
@@ -612,14 +614,9 @@ fn expand(id: &PropertyId) -> Expansion {
 pub(crate) fn animates(name: &str) -> bool {
     match expand(&PropertyId::from(name)) {
         Expansion::None => false,
-        Expansion::Props(list) => list.iter().any(|p| {
-            !matches!(
-                p,
-                TransitionProperty::All
-                    | TransitionProperty::Other(_)
-                    | TransitionProperty::Shading
-            )
-        }),
+        Expansion::Props(list) => list
+            .iter()
+            .any(|p| !matches!(p, TransitionProperty::All | TransitionProperty::Other(_))),
     }
 }
 

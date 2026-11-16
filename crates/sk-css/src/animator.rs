@@ -566,6 +566,7 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         ObjectPosition => Some(Animatable::ObjectPosition(gpui::ObjectPosition::default())),
+        Shading => Some(Animatable::Effect(EffectSpec::NONE)),
         TextShadow => TextShadows::new(&[], gpui::black()).map(Animatable::TextShadows),
         _ => None,
     }
@@ -1970,6 +1971,30 @@ mod tests {
             r.vn_effect_fade.map(|f| f.from.id),
             Some(gpui::effect_id::FROST)
         );
+    }
+
+    #[test]
+    fn an_effect_fades_in_from_and_out_to_an_unset_value() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let unset = states(StyleRefinement::default(), css);
+        let glow = states(with_shading("glow(10px, 0.5)"), css);
+
+        a.on_computed(1, Some(&unset), &glow, now);
+        let r = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
+        assert_eq!(shading_of(&r).id, gpui::effect_id::GLOW);
+        let fade = r.vn_effect_fade.expect("appearing fades in");
+        assert!(!fade.from.is_some());
+        assert!((fade.progress - 0.25).abs() < 1e-3);
+
+        let mut a = Animator::new();
+        a.on_computed(1, Some(&glow), &unset, now);
+        let r = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
+        assert!(!shading_of(&r).is_some());
+        let fade = r.vn_effect_fade.expect("disappearing fades out");
+        assert_eq!(fade.from.id, gpui::effect_id::GLOW);
+        assert!((fade.progress - 0.25).abs() < 1e-3);
     }
 
     #[test]

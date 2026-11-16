@@ -18,6 +18,9 @@
 .faded {
   opacity: 0.5;
 }
+.appear {
+  transition: --shading 4s linear;
+}
 .count {
   background: #000000;
   --shading: count(1);
