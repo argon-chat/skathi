@@ -9,7 +9,7 @@
 // (default target/crates) is also the target directory: <out>/package holds the .crate files and
 // their unpacked contents, and the final patch.toml points another project at all of them.
 
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -71,7 +71,14 @@ for (const step of STEPS) {
   const cmd = ["cargo", "package", ...these.flatMap((p) => ["-p", p.name])];
   cmd.push("--target-dir", out, "--config", patch, "--allow-dirty");
   if (values["no-verify"]) cmd.push("--no-verify");
-  run(cmd, cwd);
+  // The patch would otherwise land in the workspace's lockfile as `[[patch.unused]]`.
+  const lock = join(cwd, "Cargo.lock");
+  const locked = existsSync(lock) ? readFileSync(lock) : null;
+  try {
+    run(cmd, cwd);
+  } finally {
+    if (locked) writeFileSync(lock, locked);
+  }
   done.push(...these);
 }
 writePatch(done);
