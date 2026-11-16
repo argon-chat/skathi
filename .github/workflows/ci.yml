@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       # The AOT input tests read vendor/redjs/redjs/pins.txt; the create tests copy the gallery templates.
       - name: Check out pinned redjs metadata and the templates
-        run: git submodule update --init --depth 1 -- vendor/redjs templates
+        run: git submodule update --init --depth 1 -- vendor/redjs vendor/gpui templates
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
