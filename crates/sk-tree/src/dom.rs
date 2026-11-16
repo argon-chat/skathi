@@ -245,6 +245,7 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         // component reads back, and @floating-ui branches on exactly this string.
         "position" => match (cs.extras.fixed, cs.base.position) {
             (Some(true), _) => "fixed",
+            _ if cs.extras.sticky == Some(true) => "sticky",
             (_, Some(gpui::Position::Absolute)) => "absolute",
             (_, Some(gpui::Position::Relative)) => "relative",
             (_, None) => "static",

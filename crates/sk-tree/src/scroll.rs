@@ -133,6 +133,12 @@ pub(crate) fn unpainted_shift(id: u32) -> (f32, f32) {
     if AT_BUILD.with(|m| m.borrow().is_empty()) {
         return (0.0, 0.0);
     }
+    let (dx, dy) = scrolled_since_build(id);
+    let (sx, sy) = crate::sticky::unpainted(id, scrolled_since_build);
+    (dx + sx, dy + sy)
+}
+
+fn scrolled_since_build(id: u32) -> (f32, f32) {
     let (mut dx, mut dy) = (0.0f32, 0.0f32);
     let mut cur = tree::read_tree(|t| t.node(id).map(|n| n.parent).unwrap_or(0));
     for _ in 0..4096 {

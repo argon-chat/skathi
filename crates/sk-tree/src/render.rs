@@ -388,6 +388,17 @@ impl gpui::Element for BoundsProbe {
     }
 }
 
+/// The probe, shifted by `position: sticky` when the box has a [`crate::sticky::Spec`]: outside the
+/// probe, so rectangles and hit tests see where it is painted.
+fn placed(
+    id: u32,
+    sticky: Option<crate::sticky::Spec>,
+    root: bool,
+    inner: AnyElement,
+) -> AnyElement {
+    crate::sticky::wrap(id, sticky, probe_at(id, root, inner))
+}
+
 pub(crate) fn probe(id: u32, inner: AnyElement) -> AnyElement {
     probe_at(id, false, inner)
 }
@@ -408,6 +419,7 @@ pub(crate) fn gc_node_state() {
     crate::cache::gc(&live);
     crate::cull::gc(&live);
     crate::scroll::gc(&live);
+    crate::sticky::gc(&live);
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
@@ -1748,6 +1760,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         windows::set_primary(win);
     }
     reset_bounds(win);
+    crate::sticky::begin_frame(win);
     crate::iframe::drawing(win);
     windows::of(win, |w| {
         w.any_drag_region = false;
@@ -1877,6 +1890,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     // tests from it.
     windows::set_painted_root(win, id);
     reset_bounds(win);
+    crate::sticky::begin_frame(win);
     crate::iframe::drawing(win);
     crate::aria::reset_frame();
     sk_elements::scrollbar::reset_frame();
@@ -2082,6 +2096,9 @@ fn build_node<V: 'static>(
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
     advise_out_of_flow(t, id, node, &extras, windows::key(window));
+    let sticky = (extras.sticky == Some(true) && id != root)
+        .then(|| crate::sticky::spec(t, node, root))
+        .flatten();
     let split = Cell::new(false);
     match node.kind {
         // An empty text node takes no space in a browser but gpui lays it out as a full line box,
@@ -2121,36 +2138,60 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "img" => stack(
             own.clone(),
             &extras,
-            probe(id, build_img(t, id, node, window, cx, now, control_area)),
+            placed(
+                id,
+                sticky,
+                false,
+                build_img(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element if t.name(node.tag) == "lottie" => stack(
             own.clone(),
             &extras,
-            probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
+            placed(
+                id,
+                sticky,
+                false,
+                build_lottie(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element if t.name(node.tag) == "video" => stack(
             own.clone(),
             &extras,
-            probe(id, build_video(t, id, node, window, cx, now, control_area)),
+            placed(
+                id,
+                sticky,
+                false,
+                build_video(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element if t.name(node.tag) == "iframe" => stack(
             own.clone(),
             &extras,
-            probe(id, build_iframe(t, id, node, window, cx, now, control_area)),
+            placed(
+                id,
+                sticky,
+                false,
+                build_iframe(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element if t.name(node.tag) == "sk-sticker" => stack(
             own.clone(),
             &extras,
-            probe(
+            placed(
                 id,
+                sticky,
+                false,
                 sticker::build(t, id, node, window, cx, now, control_area),
             ),
         ),
         Kind::Element if t.name(node.tag) == "canvas" => stack(
             own.clone(),
             &extras,
-            probe(
+            placed(
                 id,
+                sticky,
+                false,
                 canvas::build(t, id, node, window, cx, now, control_area),
             ),
         ),
@@ -2159,7 +2200,12 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "svg" => stack(
             own.clone(),
             &extras,
-            probe(id, build_svg(t, id, node, window, cx, now, control_area)),
+            placed(
+                id,
+                sticky,
+                false,
+                build_svg(t, id, node, window, cx, now, control_area),
+            ),
         ),
         Kind::Element => stack_box(
             own,
@@ -2167,7 +2213,7 @@ fn build_node<V: 'static>(
             id == root,
             &stacking,
             &extras,
-            probe_at(id, id == root, {
+            placed(id, sticky, id == root, {
                 let mut d = with_control_area(div().id(id as usize), id, control_area, win);
                 if let Some(cs) = &node.computed {
                     d = apply_computed_style(d, cs, id, now);
@@ -3352,10 +3398,9 @@ fn advise_inline_level(
     );
 }
 
-/// `position: fixed` / `sticky`, the out-of-flow positions taffy cannot express, advised only where
-/// they come out different. `fixed`: taffy resolves against the parent, CSS against the viewport;
-/// they agree when the parent is the viewport (app root, `<Teleport to="body">`). `sticky` maps to
-/// `relative`, which matches unless a scroll container sits above it.
+/// `position: fixed`, which taffy cannot express, advised only where it comes out different: taffy
+/// resolves it against the parent, CSS against the viewport; they agree when the parent is the
+/// viewport (app root, `<Teleport to="body">`).
 fn advise_out_of_flow(
     t: &Tree,
     id: u32,
@@ -3376,13 +3421,6 @@ fn advise_out_of_flow(
             "position-fixed-not-portalled",
             || node_prefix(t, id),
             "`position: fixed` is laid out against a box that is NOT the viewport (v1)              — gpui/taffy have no viewport-relative position, so the element resolves              against its PARENT, and this element's parent is a different size from the              window. It is still painted in a deferred layer, so it stacks above its              siblings; portal it to the app root (Vue's `<Teleport to=\"body\">`, which              is what every overlay library already does) and the two agree exactly",
-        );
-    }
-    if extras.sticky == Some(true) && scrolling_ancestor(t, node) {
-        warn_compat_at(
-            "position-sticky-in-scroller",
-            || node_prefix(t, id),
-            "`position: sticky` inside a scroll container is laid out as `relative` (v1)              — it needs that container's scroll offset at LAYOUT time and taffy takes no              such input, so the box does not stay put as the content moves under it. A              header that must stay put belongs OUTSIDE the scroll container, as a flex              sibling of it. (Outside one this says nothing: with nothing scrolling above              it, `sticky` and `relative` paint the same box in a browser too.)",
         );
     }
 }
@@ -3473,24 +3511,6 @@ fn no_inner_inset(style: &gpui::StyleRefinement) -> bool {
         ]
         .into_iter()
         .all(zero_absolute)
-}
-
-fn scrolling_ancestor(t: &Tree, node: &crate::tree::Node) -> bool {
-    let mut id = node.parent;
-    for _ in 0..1024 {
-        let Some(n) = t.node(id) else { return false };
-        if let Some(cs) = n.computed.as_ref() {
-            let o = &cs.base.overflow;
-            if o.x == Some(Overflow::Scroll) || o.y == Some(Overflow::Scroll) {
-                return true;
-            }
-        }
-        if n.parent == 0 {
-            return false;
-        }
-        id = n.parent;
-    }
-    false
 }
 
 pub(crate) fn is_metadata(tag: &str) -> bool {
@@ -3612,6 +3632,10 @@ where
     if crate::fullscreen::is_active(id) {
         crate::fullscreen::apply_style(e.style());
     }
+    // Sticky insets are thresholds applied at prepaint (`crate::sticky`), not a relative offset.
+    if cs.extras.sticky == Some(true) {
+        e.style().inset = Default::default();
+    }
     e
 }
 
@@ -3728,8 +3752,9 @@ fn group_name(id: u32) -> gpui::SharedString {
 /// key is a path, one `(z, tree-order ordinal)` slot per enclosing context, outermost first; gpui
 /// compares lexicographically, which is CSS 2.1 Appendix E's paint order, and the hit test walks
 /// the same order. A negative z paints between its context's background and in-flow content, so the
-/// context's children are deferred into an in-flow slot ([`IN_FLOW`]). `relative` / `sticky`
-/// contexts keep tree-order paint (advised): lifting them would defer most of a page. Effect
+/// context's children are deferred into an in-flow slot ([`IN_FLOW`]). `relative` contexts
+/// keep tree-order paint (advised): lifting them would defer most of a page. `sticky` boxes are
+/// lifted, so a stuck header paints over the content scrolling under it. Effect
 /// contexts are read off the declared style, not the animated one.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stacking {
@@ -3796,14 +3821,16 @@ pub(crate) fn layer_of(
         None
     };
     let out_of_flow = position == Some(gpui::Position::Absolute);
+    let sticky = extras.sticky == Some(true);
     match z {
         Some(z) if z != 0 => Layer::Context(z),
-        Some(_) if out_of_flow => Layer::Context(0),
+        Some(_) if out_of_flow || sticky => Layer::Context(0),
         Some(_) => Layer::InFlowContext,
         None if extras.fixed == Some(true) => Layer::Context(0),
         None if out_of_flow && effect => Layer::Context(0),
         None if out_of_flow => Layer::Positioned,
-        None if effect || extras.sticky == Some(true) => Layer::InFlowContext,
+        None if sticky => Layer::Context(0),
+        None if effect => Layer::InFlowContext,
         None => Layer::InFlow,
     }
 }
@@ -3822,7 +3849,7 @@ fn advise_relative_tree_order(
     }
     warn_compat(
         "position-relative-tree-order",
-        "`position: relative` / `sticky` with `z-index: auto` or `0` paints in TREE ORDER (v1). CSS \
+        "`position: relative` with `z-index: auto` or `0` paints in TREE ORDER (v1). CSS \
          paints a positioned box after the in-flow content of its stacking context (CSS 2.1 \
          Appendix E, step 8), so a LATER in-flow sibling that overlaps it paints under it in a \
          browser and over it here. `position: absolute` boxes are painted in that layer; \
@@ -6174,7 +6201,7 @@ mod tests {
             sticky: Some(true),
             ..auto.clone()
         };
-        assert_eq!(layer(&sticky), Layer::InFlowContext);
+        assert_eq!(layer(&sticky), Layer::Context(0));
 
         let tree = b(
             "root",
@@ -7189,45 +7216,6 @@ mod tests {
         windows::forget(popout);
     }
 
-    #[test]
-    fn advise_sticky_needs_a_real_scroll_container_above_it() {
-        const KEY: &str = "position-sticky-in-scroller";
-        let sticky = || sk_css::Extras {
-            sticky: Some(true),
-            ..Default::default()
-        };
-        with_tree(|t| {
-            let div = t.intern("div");
-            let root = t.create_root();
-            let plain = t.create_element(div);
-            t.insert(plain, root, 0);
-            let header = t.create_element(div);
-            t.insert(header, plain, 0);
-            advise_out_of_flow(
-                t,
-                header,
-                t.node(header).unwrap(),
-                &sticky(),
-                windows::primary(),
-            );
-            assert!(!spoke(KEY), "nothing above it scrolls");
-
-            let mut scroller = gpui::StyleRefinement::default();
-            scroller.overflow.y = Some(gpui::Overflow::Scroll);
-            t.node_mut(plain).unwrap().computed = Some(computed(scroller, Default::default()));
-            advise_out_of_flow(
-                t,
-                header,
-                t.node(header).unwrap(),
-                &sticky(),
-                windows::primary(),
-            );
-            assert!(
-                spoke(KEY),
-                "inside a scroll container it really does not stay put"
-            );
-        });
-    }
     #[test]
     fn synthetic_inline_rows_allow_text_to_shrink_but_keep_authored_flex_minimums() {
         with_tree(|tree| {

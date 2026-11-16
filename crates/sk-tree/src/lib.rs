@@ -40,6 +40,7 @@ mod resample;
 mod scroll;
 mod select;
 mod selection;
+mod sticky;
 mod style_decl;
 mod svg;
 mod tree;

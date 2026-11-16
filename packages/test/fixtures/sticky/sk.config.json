@@ -1,0 +1,13 @@
+{
+  "$comment": "`position: sticky`: section headers pushed out by the next section, a 2D grid with a sticky header row, first column and corner, and a calc() threshold inside nested scroll containers.",
+
+  "name": "sk-test-sticky",
+
+  "window": {
+    "title": "Skathi — sticky (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

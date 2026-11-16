@@ -139,6 +139,11 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
+    // A sticky box never leaves its parent, so an ancestor wholly outside the clip hides it too;
+    // the box itself is refused in `placeholder`, where its shift can bring it into view.
+    if cs.extras.sticky == Some(true) {
+        return false;
+    }
     let base = &cs.base;
     if base.position == Some(gpui::Position::Absolute) || cs.extras.may_defer() {
         return true;
@@ -184,8 +189,11 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
             };
             let mut clip = outer.clip;
             let cs = node.computed.as_ref();
+            // A sticky box does not move with the scroll the shift below predicts.
             if MOVING.with(|m| m.borrow().contains(&parent))
-                || cs.is_some_and(|cs| cs.base.vn_transform.is_some())
+                || cs.is_some_and(|cs| {
+                    cs.base.vn_transform.is_some() || cs.extras.sticky == Some(true)
+                })
             {
                 clip = None;
             }
@@ -282,6 +290,7 @@ pub(crate) fn placeholder(
     if !independent
         || HOT.with(|h| h.borrow().contains(&id))
         || PINNED.with(|p| p.borrow().contains(&id))
+        || cs.extras.sticky == Some(true)
         || blocked(t, id)
     {
         return None;

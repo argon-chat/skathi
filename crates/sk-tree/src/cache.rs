@@ -205,7 +205,10 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     {
         return true;
     }
-    if cs.base.position == Some(gpui::Position::Absolute) || cs.extras.may_defer() {
+    if cs.base.position == Some(gpui::Position::Absolute)
+        || cs.extras.may_defer()
+        || cs.extras.sticky == Some(true)
+    {
         return true;
     }
     // `position: relative` with an inset SHIFTS the box: the wrapper would have to carry the shift
