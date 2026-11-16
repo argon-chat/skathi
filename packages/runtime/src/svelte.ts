@@ -114,29 +114,41 @@ export type MountOptions<Props extends object> = Omit<SvelteMountOptions<Props>,
   target?: SvelteMountOptions<Props>["target"];
 };
 
-const mounted = new Set<object>();
+const mounted: object[] = [];
+let appMounted = false;
 
-/** Mounts `component` (on the document root unless `target` says otherwise) and returns its exports. */
+function unmountAll(): void {
+  appMounted = false;
+  for (const app of mounted.splice(0).reverse()) void svelteUnmount(app);
+}
+
+/**
+ * Mounts `component` (on the document root unless `target` says otherwise) and returns its exports. The first mount is
+ * the app; later ones, such as content mounted into a pop-out, are unmounted with it on reload.
+ */
 export function mount<Props extends object, Exports extends object>(
   component: ComponentType<SvelteComponent<Props>> | Component<Props, Exports>,
   options?: MountOptions<Props>,
 ): Exports {
+  const run = (target: object): Exports => {
+    // svelte-dom-shim: Svelte's DOM mount() renders into the mirror root through the emulated DOM; the custom renderer's mount replaces it (sveltejs/svelte#18042)
+    const exports = svelteMount(component, { ...options, target } as SvelteMountOptions<Props>) as Exports;
+    mounted.push(exports);
+    return exports;
+  };
+  if (appMounted && options?.target) return run(options.target);
   let exports: Exports | undefined;
   mountDocument((root) => {
-    const target = options?.target ?? root;
-    // svelte-dom-shim: Svelte's DOM mount() renders into the mirror root through the emulated DOM; the custom renderer's mount replaces it (sveltejs/svelte#18042)
-    exports = svelteMount(component, { ...options, target } as SvelteMountOptions<Props>) as Exports;
-    const app = exports;
-    mounted.add(app);
-    return () => {
-      if (mounted.delete(app)) void svelteUnmount(app);
-    };
+    appMounted = true;
+    exports = run(options?.target ?? root);
+    return unmountAll;
   });
   return exports!;
 }
 
 /** Unmounts what `mount` returned, playing outros when `outro` is set. */
 export function unmount(exports: object, options?: { outro?: boolean }): Promise<void> {
-  mounted.delete(exports);
+  const i = mounted.indexOf(exports);
+  if (i >= 0) mounted.splice(i, 1);
   return svelteUnmount(exports as Record<string, unknown>, options);
 }

@@ -141,6 +141,17 @@ describe("svelte <SkWindow> under sk dev", () => {
     },
     T,
   );
+
+  test(
+    "a later mount() does not take the app's teardown: a reload unmounts both",
+    async () => {
+      await app.eval("__SK_TEST_MOUNT_EXTRA__()");
+      await expect(app.locator(".extra")).toHaveCount(1);
+      await app.eval('__SK_TEARDOWN__(); "ok"');
+      bunExpect(await app.eval("JSON.stringify(__SK_TEST_DESTROYED__ ?? [])")).toBe('["extra","app"]');
+    },
+    T,
+  );
 });
 
 describe("svelte <SkWindow> in a packaged build", () => {

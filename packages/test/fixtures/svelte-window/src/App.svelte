@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { appWindow, SkWindow, type SkWindowExports, type SkWindowMetrics } from "@skathi-native/runtime/svelte";
+  import { onDestroy } from "svelte";
+  import {
+    appWindow,
+    mount,
+    SkWindow,
+    type SkWindowExports,
+    type SkWindowMetrics,
+  } from "@skathi-native/runtime/svelte";
+  import Extra from "./Extra.svelte";
 
   let count = $state(0);
   let palette = $state(false);
@@ -19,7 +27,13 @@
     const r = pal?.mapFromMain(anchor);
     return r ? `${r.width}x${r.height}` : "null";
   };
-  (globalThis as { __SK_TEST_MAPPED__?: () => string }).__SK_TEST_MAPPED__ = mapped;
+  const g = globalThis as { __SK_TEST_MAPPED__?: () => string; __SK_TEST_MOUNT_EXTRA__?: () => string };
+  g.__SK_TEST_MAPPED__ = mapped;
+  g.__SK_TEST_MOUNT_EXTRA__ = () => {
+    mount(Extra, { target: anchor! });
+    return "ok";
+  };
+  onDestroy(() => ((globalThis as { __SK_TEST_DESTROYED__?: string[] }).__SK_TEST_DESTROYED__ ??= []).push("app"));
 </script>
 
 <main>
