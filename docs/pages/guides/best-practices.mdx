@@ -1,0 +1,232 @@
+---
+title: Best practices
+label: Best practices
+description: What to do and what to avoid so a Skathi app stays fast and behaves as you expect, from rendering cost and animation to layout reads, CSS support and platform APIs.
+section: Guides
+order: 6
+---
+
+import Sample from "../../src/components/Sample.astro";
+
+A Skathi app is written like a web app, but nothing runs in a browser. Your Vue or Svelte code runs in JavaScriptCore, every element is a node in a native element tree, and CSS is styled, laid out and painted by Skathi's own engine. Most web habits carry over. The ones in this guide do not, or cost more here than they would in a browser.
+
+Each section says what to do, what to avoid, and why. Under `sk dev` the runtime also catches several of these mistakes as they happen: see [Performance advisories](/guides/performance-advisories/).
+
+## How rendering cost adds up
+
+Every element you render is a JavaScript object on one side and a node in the native tree on the other. It is created, styled and kept in the tree whether or not it is in view; elements outside a scroll container's viewport are only skipped when painting. Each style, class, attribute or text change that reaches an element is a call into the native tree.
+
+In Vue, a component that updates re-runs its whole render function and diffs the result against the previous one. The cost grows with the number of elements the template produces, not with how many of them changed. Child components whose props did not change are skipped. Svelte 5 updates only the expressions that read the state that changed, so the template-wide re-render below is Vue's; the advice about element counts and per-frame writes applies to both.
+
+From this follow three rules:
+
+- **Do** render only what can be seen, and keep the elements in a list cheap.
+- **Do** keep state that only a few elements show (a selection, a hover, the scroll offset) out of templates that render many elements.
+- **Avoid** writing to many elements per frame. Change one shared parent instead.
+
+## Virtualize long lists
+
+**Avoid** a `v-for` or `{#each}` over thousands of rows inside a scroll container. All of them are created and kept in the tree, and in Vue every update of the component diffs all of them.
+
+**Do** render the slice in view: a spacer as tall as the whole list, holding the visible rows at their offsets.
+
+<Sample src="best-practices/VirtualList" focus="slice" />
+
+The scroll handler sets `first`, and the template reads `first`, not `scrollTop`. Setting a Vue `ref` or a Svelte `$state` to the value it already holds triggers nothing, so the list re-renders only when a new row comes into view, not on every scroll event. Rows that stay in view keep their key and the same `top`, so they cost no native call.
+
+A virtual-list component from npm does the same.
+
+## Draw per-item state once
+
+A selection, a hover or the item being edited usually changes one or two elements. If every row or cell reads it, every row or cell re-renders when it changes.
+
+```vue
+<!-- Every cell's class expression reads the selection, so the whole grid re-renders when it moves -->
+<div v-for="(text, c) in row" :key="c" :class="{ selected: r === sel.row && c === sel.col }">{{ text }}</div>
+```
+
+**Do** draw the state as one overlay element positioned over the list:
+
+<Sample src="best-practices/SelectionGrid" focus="overlay" />
+
+In Vue, the overlay is its own component, and the grid passes it the reactive `sel` object without reading its fields. The grid's render function never reads `sel.row` or `sel.col`, so a key press re-renders only the overlay:
+
+<Sample src="best-practices/SelectionBox.vue" />
+
+In Svelte, the overlay can stay inline: only its `style:transform` reads `sel`, so only it updates.
+
+When an overlay does not fit, for example when the selected row changes its own content, move the repeated element into a child component that receives only what it shows, such as `:selected="..."`. Vue then skips every child whose props did not change. [Performance advisories](/guides/performance-advisories/#wasted-re-render) shows that version.
+
+## Keep the scroll position out of templates
+
+A template that reads `scrollTop`, or a ref set from it, re-renders on every scroll event.
+
+**Do** keep a header in view with `position: sticky`. Its offset is applied when the frame is painted, from that frame's scroll position, with no scroll listener and no re-render:
+
+```css
+.table-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+```
+
+**Do** move an element that sits outside the scroll container, such as a header synced to a horizontally scrolling body, with a transform set through a template ref in the scroll handler:
+
+<Sample src="best-practices/SyncedHeader" focus="sync" />
+
+The handler writes one style on one element; the template is not involved. See [`position`](/css/position/) for how `sticky` resolves its scroll container.
+
+## Do not put v-memo in a nested v-for
+
+Vue gives each `v-memo` in a template one cache. When the `v-memo` is on an inner `v-for`, every iteration of the outer `v-for` shares it: the inner list reuses the cached vnodes of the previous row whenever their keys and memo values match. That happens all the time in a grid, where the inner keys are column ids that repeat in every row. The same vnodes end up mounted in two rows, elements disappear from the screen, and a later update throws `TypeError: null is not an object (evaluating 'el.__vnode = n2')`.
+
+```vue title="Grid.vue"
+<!-- Avoid: one cache for the inner list of every row -->
+<div v-for="row in rows" :key="row.id" class="row">
+  <div v-for="col in cols" :key="col.id" v-memo="[row.cells[col.id]]" class="cell">
+    {{ row.cells[col.id] }}
+  </div>
+</div>
+```
+
+**Do** put the inner list in its own component. Each component instance has its own cache:
+
+```vue title="Grid.vue"
+<div v-for="row in rows" :key="row.id" class="row">
+  <GridRow :row="row" :cols="cols" />
+</div>
+```
+
+```vue title="GridRow.vue"
+<script setup lang="ts">
+defineProps<{ row: { id: number; cells: Record<string, string> }; cols: { id: string }[] }>();
+</script>
+
+<template>
+  <div v-for="col in cols" :key="col.id" v-memo="[row.cells[col.id]]" class="cell">
+    {{ row.cells[col.id] }}
+  </div>
+</template>
+```
+
+`v-memo` on a single-level `v-for` is fine. Svelte has no `v-memo`.
+
+## :style, classes and direct style writes
+
+In Vue, an object `:style` is compared with the previous render's value before anything reaches the native tree:
+
+- A re-render that produces the same values makes no native call, even though the object is new.
+- When any value differs, the element gets one native call with every entry, and the native side writes only what changed.
+- A string `:style` replaces the element's whole inline style when the string changes.
+
+As in React, `:style` and direct `el.style` writes can disagree. If your code writes `el.style.opacity` and the template also binds `:style="{ opacity }"`, the direct write stays until the bound `opacity` value changes; a re-render with the same value does not put it back. Pick one owner per property: the template, or code holding a template ref.
+
+**Avoid** binding the same changing value on every element. Resizing a column here re-renders every cell with a new width:
+
+```vue
+<div v-for="c in cols" :key="c.id" class="cell" :style="{ width: `${c.width}px` }">{{ row[c.id] }}</div>
+```
+
+**Do** set it once on a shared parent, as a class or a CSS variable the children read. Each cell's `:style` is then the same on every render and never reaches the native tree again; only the parent changes:
+
+```vue
+<script setup lang="ts">
+import { computed } from "vue";
+
+const tableVars = computed(() => Object.fromEntries(cols.value.map((c) => [`--col-${c.id}`, `${c.width}px`])));
+</script>
+
+<template>
+  <div class="table" :style="tableVars">
+    <div v-for="c in cols" :key="c.id" class="cell" :style="{ width: `var(--col-${c.id})` }">{{ row[c.id] }}</div>
+  </div>
+</template>
+```
+
+The same goes for a theme, a density or a hover mode: toggle one class on the root instead of a value on each item.
+
+## Animate natively
+
+CSS transitions, `@keyframes` and `element.animate()` run in Skathi's native animator. Once an animation has started, nothing crosses between JavaScript and the native tree per frame: the animator samples it every frame from the keyframes and timing it was given.
+
+**Avoid** driving a fixed animation from `requestAnimationFrame` with style writes. Each write is a native call and a restyle, every frame:
+
+```ts
+function tick(t: number) {
+  panel.style.transform = `translateX(${offsetAt(t)}px)`; // [!code --]
+  requestAnimationFrame(tick); // [!code --]
+}
+```
+
+**Do** describe it once:
+
+```ts
+panel.animate([{ transform: "translateX(0)" }, { transform: "translateX(240px)" }], {
+  duration: 200,
+  easing: "ease-out",
+  fill: "forwards",
+});
+```
+
+- **Prefer** CSS transitions and `@keyframes` for motion that follows state: hover, open and closed, enter and leave. Toggling a class starts them with no JavaScript beyond the class write, and the keyframes are parsed once with the stylesheet. `element.animate()` creates an `Animation` object and converts its keyframes on every call; keep it for what needs imperative control: a computed path, scrubbing with `currentTime`, or waiting on `finished`. Once running, both cost the same per frame.
+- **Avoid** calling `element.animate()` every frame or on every pointer move. Creating an animation sends its keyframes and timing to the native side each time. Create it once and control it with `play()`, `pause()`, `reverse()`, `currentTime` or `updatePlaybackRate()`.
+- Motion that follows input, such as a drag, is fine as one `transform` write per event on the element being dragged.
+- Prefer `transform` and `opacity`. Only some properties interpolate (the list is under [Transitions and animations](/css/#transitions-and-animations) in the CSS reference); any other property snaps to its end value.
+- **Avoid** `getComputedStyle()` in a per-frame loop. Each property read applies pending style changes first, then asks the native tree. It also answers a fixed set of properties (`display`, `position`, `transform`, `opacity`, sizes, margins, paddings, border widths, `color`, `font-size`, the `transition-*` and `animation-*` properties and the like, plus every custom property); others read `""` with an advisory. Read once, or keep the value in your own state.
+- `<TransitionGroup>` animates entering and leaving items, but not the items that move: they jump to their new place and `moveClass` is ignored.
+- `v-show` inside `<Transition>` switches `display` without the enter and leave phases. Use `v-if` for an animated show and hide.
+
+## Measure layout at the right time
+
+Geometry reads behave differently from a browser's, and the difference affects correctness as well as speed.
+
+- `getBoundingClientRect()`, `offsetWidth`, `offsetHeight`, `clientWidth` and `clientHeight` answer from the last painted frame. For an element that has been painted before, they do not lay out again: change its size and read it in the same handler, and you get the old size.
+- For an element that has never been painted, such as one mounted in this update, Skathi draws the window once so it has a rectangle. Inside a mouse or keyboard event it cannot, so the element reads `0` and the console shows an advisory.
+- `scrollTop`, `scrollLeft`, `scrollWidth`, `scrollHeight`, `scrollTo()`, `scrollBy()`, `scrollIntoView()` and writes to `scrollTop` draw the window once when the tree holds changes that no frame has laid out yet. In `keydown`, `keyup`, `mousedown`, `wheel`, clipboard, `focus` and `blur` handlers they cannot, and answer from the last painted frame: `list.scrollTop = list.scrollHeight` right after appending a row there stops one row short.
+- `offsetTop` and `offsetLeft` are measured from the window, not from an offset parent. Use `getBoundingClientRect()`.
+
+**Do** measure where the layout is current: in a `ResizeObserver` callback, which runs when an element's size changes, or in `requestAnimationFrame()`.
+
+```ts
+list.append(row);
+list.scrollTop = list.scrollHeight; // [!code --]
+requestAnimationFrame(() => (list.scrollTop = list.scrollHeight)); // [!code ++]
+```
+
+**Avoid** alternating writes and scroll reads in a loop. Each read after a write draws the window again. Make all the writes, then read once. Every forced layout shows up in the devtools Performance tab as a **Forced layout** span in that frame, with the hint "Geometry reads forced synchronous layout"; writes between two of them add "DOM writes occurred after a forced layout".
+
+## Check CSS support instead of assuming it
+
+Stylesheets are compiled by lightningcss, laid out by taffy and painted natively. Many properties match a browser; some are partial, some are planned, and a few will not be supported. Look features up in the [CSS reference](/css/), which lists each one's status per platform and how it differs from a browser, rather than assuming browser parity. Some boundaries worth knowing before you design around them:
+
+| Feature                                                                                 | Status                                                                                                                              |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [`float`](/css/float/), `clear`                                                         | Not planned. Use flex or grid.                                                                                                      |
+| [`direction`](/css/direction/), `unicode-bidi`                                          | Not planned. Text is left-to-right and horizontal only.                                                                             |
+| [`filter`](/css/filter/)                                                                | Partial: `blur()`, `drop-shadow()` and `url(#id)` to an SVG `feColorMatrix`, each with limits. The color functions are not planned. |
+| `backdrop-filter`                                                                       | `blur()` only.                                                                                                                      |
+| [`mask`](/css/mask/) and the `mask-*` properties                                        | Partial.                                                                                                                            |
+| [`text-shadow`](/css/text-shadow/)                                                      | Supported.                                                                                                                          |
+| [`scroll-snap-type`](/css/scroll-snap-type/) and the other snap properties              | Planned.                                                                                                                            |
+| [`perspective`](/css/perspective/), `rotateX()`, `translateZ()` and other 3D transforms | Planned. `translate3d()` and `scale3d()` work with a zero Z.                                                                        |
+
+Most unsupported declarations print an advisory while the app runs, in the console and next to the rule in the devtools Styles panel. Two more are reported by `sk build`: `<style lang="scss">` and other preprocessor languages are compiled as plain CSS, and `<style module>` is not supported (`useCssModule()` answers `{}`).
+
+## Use the platform's APIs
+
+Some browser behaviors have nothing to act on in a desktop app. Skathi keeps the API and prints a one-time advisory that says what to use instead. The common ones:
+
+- **Links.** A relative `<a href>` has no document to navigate, so it does nothing; use the router's link component for in-app navigation. Links and `window.open()` hand only `http`, `https` and `mailto` URLs to the system. To open another scheme the app trusts, call `appShell.openExternal(url)`. `appShell` also has `openPath()`, `showItemInFolder()` and `trashItem()`.
+- **Forms.** A submission never navigates, and constraint validation (`required`, `pattern`, `type=email`) is not run: the `submit` event fires anyway. Cancel the submission (`@submit.prevent` in Vue) and validate in the handler.
+- **Context menu.** There is no built-in context menu, not even in a text field. Call `preventDefault()` in a `contextmenu` handler and show your own.
+- **Stylesheets.** A `<link rel="stylesheet">` added to `document.head` is not loaded. Import the CSS from your code.
+- **The window.** Use [`appWindow`](/window-api/app-window/) for the window's state. Its reads such as `isMaximized()` are reactive in templates, `computed`, `$derived` and effects, so never poll them. The [Windows guide](/guides/windows/) covers the rest.
+- **Storage.** [`localStorage`](/web-platform/local-storage/) and [IndexedDB](/web-platform/indexed-db/) are saved to disk. To move them to another folder or encrypt them at rest, call `appStorage.setStorageFolder(path, { encrypted: true })` before the first `indexedDB` call, which fixes the folder for the run. `localStorage` reaches the disk at most once per frame and when the app quits; `appStorage.flush()` writes the pending change at once.
+- **Events the host does not deliver.** Adding a listener for one, or an `@event` handler, prints an advisory that the handler will never fire. Treat that advisory as a bug in your code, not as noise.
+
+## Tools
+
+- **Performance advisories.** Under `sk dev`, the runtime warns about wasted re-renders, long lists without virtualization and too many native writes in one frame, naming the component and suggesting a fix. See [Performance advisories](/guides/performance-advisories/).
+- **The devtools Performance tab.** Open devtools with F12, select **Performance**, press **Record interaction**, use the app, stop, and select a frame. Its calls, forced layouts and hints are listed there: a JavaScript callback that held the main thread for more than 8 ms, forced synchronous layouts, and many nodes created and removed in the same frame, which usually points at unstable list keys or components that remount.
+- **The console and the Styles panel.** Compatibility advisories are printed once per cause. CSS advisories also appear next to the rule they came from.

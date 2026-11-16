@@ -1,0 +1,138 @@
+---
+title: Your first native app
+label: Quick start
+description: Create a Vue or Svelte application with Bun and run it in the native desktop host.
+section: Getting started
+order: 1
+---
+
+import Sample from "../src/components/Sample.astro";
+
+Go from a fresh directory to a native window using Bun and the Skathi CLI. Write the app in Vue 3 or Svelte 5: both run in the same host, with the same CSS, web APIs and window API. The code blocks on this page have a Vue and a Svelte tab, and the choice you make applies to every page.
+
+## Before you begin
+
+Install [Bun](https://bun.sh/) 1.4 or later and use a supported desktop platform: Windows x64, macOS on Apple silicon, or Linux x64.
+
+## Create an application
+
+```bash
+bun create skathi my-app
+```
+
+It asks for the app's name, a template, the platforms to package for, whether published builds keep devtools, and the package manager. The template decides the framework:
+
+| Template   | Framework | What it is                                                      |
+| ---------- | --------- | --------------------------------------------------------------- |
+| `showcase` | Vue       | every SDK feature, one page each, with `vue-router` and `pinia` |
+| `minimal`  | Vue       | one window, one component                                       |
+| `svelte`   | Svelte 5  | the minimal app in Svelte                                       |
+| `player`   | Svelte 5  | a music player dressed in shaders                               |
+| `weather`  | Vue       | a weather app whose sky and rain are drawn by shaders           |
+
+`player` and `weather` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
+
+```bash
+bun create skathi my-app --template minimal --yes
+bun create skathi my-app --template svelte --yes
+```
+
+Then install the dependencies:
+
+```bash
+cd my-app
+bun install
+```
+
+The app depends on `@skathi-native/cli`, so its `bun run` scripts and `bunx sk` use that version of `sk`. A Svelte app also depends on `svelte`, and its own `svelte/compiler` compiles the components, so keep it on version 5.
+
+## What is in the app
+
+| File                            | What it does                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `src/main.ts`                   | the entry: mounts the root component                                                 |
+| `src/App.vue`, `src/App.svelte` | the root component                                                                   |
+| `assets/`                       | files packaged with the app; a relative `fetch("assets/hello.txt")` reads them       |
+| `sk.config.json`                | name, platforms, the [`window` block](/window-api/config-window/), packaging options |
+| `tsconfig.json`                 | type-checks against the runtime                                                      |
+
+The entry mounts the root component. A Vue app calls `createApp(App).mount()` with no selector; a Svelte app calls `mount(App)` from `@skathi-native/runtime/svelte`. Both mount on the window's document root.
+
+```ts title="src/main.ts (Vue)"
+import { createApp } from "vue";
+import App from "./App.vue";
+
+createApp(App).mount();
+```
+
+```ts title="src/main.ts (Svelte)"
+import { mount } from "@skathi-native/runtime/svelte";
+import App from "./App.svelte";
+
+mount(App);
+```
+
+## Open a native window
+
+Start the development host:
+
+```bash
+bun run dev
+```
+
+Edit the root component and save to see it update; the window stays open. In Vue, a template edit re-renders in place and keeps the component's state. In Svelte, the edited component is hot-updated in place.
+
+A component reads the window through `appWindow`. Its reads are reactive: in a Vue template or `computed`, and in Svelte markup, `$derived` or `$effect`. The button label below follows the window when you maximize it by double-clicking the title bar.
+
+<Sample src="quick-start/App" focus="state" />
+
+Press **F12** in the running app to open the inspector. The [devtools guide](/guides/devtools/) covers it.
+
+## Coming from Vue: what differs in Svelte
+
+Skathi renders both frameworks into one element tree with the same renderer, so styling, layout, web APIs and the window API are the same. What differs is how the app plugs into Skathi:
+
+- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount`, `SkWindow`, `appWindow`, `defineWindow`, `getCurrentWindow`, and the other `app*` objects such as `appTray`, `appHotkeys` and `appStorage`. Importing it is what makes `appWindow` reads reactive in runes.
+- **Mount with `mount(App)`.** Pass `props` as in Svelte's own `mount`. The target defaults to the document root. A later `mount(Component, { target })`, for example into a pop-out window, is unmounted together with the app when the dev host reloads the app.
+- **`<SkWindow>` takes callback props and bindings.** Events are `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`. `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale` read its values, and `bind:this` gives `mapFromMain()`. The [pop-out guide](/guides/pop-out-windows/) has both versions of every example.
+- **There is no `<Teleport>`.** Put a pop-out's content in the `<SkWindow>` children, or `mount` a component into the element `bind:el` gives you.
+- **Transitions are Svelte's.** Svelte runs `transition:`, `in:` and `out:` through `element.animate()`, which the host supports. Vue's `<Transition>` and `<TransitionGroup>` are part of the Vue entry only.
+- **Type checking uses `svelte-check`** instead of `vue-tsc`, through `bun run typecheck`.
+
+Some parts are Vue-only:
+
+- `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime`, the Vue entry.
+- The `showcase` and `weather` templates are Vue apps; `vue-router` and `pinia` are Vue libraries.
+- Of the [performance advisories](/guides/performance-advisories/), the wasted re-render and long list advisories watch Vue component updates. In a Svelte app only the host-writes advisory is reported, with a total instead of component names.
+
+## Check compatibility
+
+Run the CLI checker when adding dependencies or porting browser-oriented code:
+
+```bash
+bun run check
+```
+
+It reports what in the app's code and its `node_modules` breaks or slows down under ahead-of-time compilation, and how well it is typed, for `.vue`, `.svelte` and `.ts` files alike. `bun run typecheck` runs `vue-tsc` or `svelte-check`.
+
+Use the [CSS reference](/css/) and [web platform reference](/web-platform/) to check individual features. A familiar API name does not imply that every browser behavior is available.
+
+## Build and package
+
+Create a debug build with devtools, in `dist/debug`:
+
+```bash
+bun run build
+```
+
+Produce the release build, one executable to ship, in `dist/release`:
+
+```bash
+bun run publish
+```
+
+The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
+
+## Keep exploring
+
+Read the [runtime model](/concepts/) before adapting an existing web application. It explains the renderer, host services, and why native CSS coverage differs from a browser. The [windows guide](/guides/windows/) follows the main window from launch to quit.

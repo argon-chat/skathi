@@ -1,0 +1,210 @@
+---
+import { Code } from "astro:components";
+import StatusMark from "./StatusMark.vue";
+import { constraintText, optionId, windowApiUrl, type ConfigOption } from "../../lib/config";
+import { inline, statuses } from "../../lib/reference";
+
+interface Props {
+  option: ConfigOption;
+  level: 3 | 4;
+}
+
+const { option, level } = Astro.props;
+const Heading = level === 3 ? "h3" : "h4";
+const notes = [...option.notes, ...option.limitations];
+---
+
+<section class:list={["cfg", { "cfg-nested": level === 4 }]}>
+  <Heading id={optionId(option.path)} class="cfg-name">
+    <code>{option.path}</code>
+    {option.required && <span class="cfg-flag">required</span>}
+  </Heading>
+  {option.description && <p class="cfg-desc">{option.description}</p>}
+  <dl class="cfg-meta">
+    <div>
+      <dt>Type</dt>
+      <dd><code>{option.type}</code></dd>
+    </div>
+    {
+      option.default && (
+        <div>
+          <dt>Default</dt>
+          <dd set:html={inline(option.default)} />
+        </div>
+      )
+    }
+    {
+      option.constraints.length > 0 && (
+        <div>
+          <dt>Constraints</dt>
+          <dd set:html={inline(constraintText(option.constraints))} />
+        </div>
+      )
+    }
+    {
+      option.support && (
+        <div>
+          <dt>Platforms</dt>
+          <dd class="cfg-support">
+            {option.support.map((s) => (
+              <span class="pin-status" data-status={s.status}>
+                <StatusMark status={s.status} size={14} />
+                {s.label}: {statuses[s.status].label.toLowerCase()}
+              </span>
+            ))}
+          </dd>
+        </div>
+      )
+    }
+    {
+      option.platforms && (
+        <div>
+          <dt>{option.support ? "Platform notes" : "Platforms"}</dt>
+          <dd set:html={inline(option.platforms)} />
+        </div>
+      )
+    }
+  </dl>
+  {
+    option.values.length > 0 && (
+      <div class="table-scroll">
+        <table class="cfg-values" data-plain>
+          <thead>
+            <tr>
+              <th scope="col">Value</th>
+              <th scope="col">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {option.values.map((v) => (
+              <tr>
+                <td>
+                  <code>{JSON.stringify(v.value)}</code>
+                </td>
+                <td set:html={inline(v.note ?? "")} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  {
+    notes.length > 0 && (
+      <ul class="cfg-notes">
+        {notes.map((note) => (
+          <li set:html={inline(note)} />
+        ))}
+      </ul>
+    )
+  }
+  {
+    option.example && (
+      <Code
+        code={option.example}
+        lang="json"
+        themes={{ light: "github-light", dark: "github-dark" }}
+        defaultColor={false}
+      />
+    )
+  }
+  {
+    option.more && (
+      <p class="cfg-more">
+        Details: <a href={windowApiUrl(option.more.slug)}>{option.more.name}</a> in the Window API.
+      </p>
+    )
+  }
+  {option.children.map((child) => <Astro.self option={child} level={4} />)}
+</section>
+
+<style>
+  .cfg {
+    margin: 0 0 36px;
+  }
+  .cfg-nested {
+    margin: 26px 0 0;
+    padding-left: 18px;
+    border-left: 1px solid var(--border);
+  }
+  :global(.prose) .cfg-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    scroll-margin-top: 24px;
+  }
+  :global(.prose) .cfg-name code {
+    font-size: 0.92em;
+    background: transparent;
+    padding: 0;
+    color: var(--text);
+  }
+  .cfg-flag {
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border-radius: 999px;
+    padding: 1px 9px;
+  }
+  :global(.prose) .cfg-desc {
+    margin: 0 0 14px;
+  }
+  .cfg-meta {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 16px;
+    font-size: var(--fs-md);
+  }
+  .cfg-meta > div {
+    display: grid;
+    grid-template-columns: 9.5em minmax(0, 1fr);
+    gap: 12px;
+  }
+  .cfg-meta dt {
+    color: var(--muted);
+  }
+  .cfg-meta dd {
+    margin: 0;
+    color: var(--body);
+  }
+  .cfg-support {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+  }
+  .cfg-support .pin-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  :global(.prose) .cfg-values {
+    margin: 0 0 16px;
+    font-size: var(--fs-md);
+  }
+  :global(.prose) .cfg-values td:first-child {
+    white-space: nowrap;
+  }
+  :global(.prose) .cfg-notes {
+    margin: 0 0 16px;
+    font-size: var(--fs-md);
+  }
+  :global(.prose) .cfg :global(pre) {
+    margin: 14px 0 16px;
+  }
+  :global(.prose) .cfg-more {
+    margin: 0 0 14px;
+    font-size: var(--fs-md);
+    color: var(--muted);
+  }
+  @media (max-width: 640px) {
+    .cfg-meta > div {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+    }
+    .cfg-nested {
+      padding-left: 12px;
+    }
+  }
+</style>

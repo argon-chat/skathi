@@ -14,7 +14,7 @@
     "preview": "astro preview",
     "preview:cloudflare": "wrangler dev",
     "check": "astro check && vue-tsc --noEmit -p tsconfig.json && bun run check:samples",
-    "check:samples": "vue-tsc --noEmit -p samples/tsconfig.json && svelte-check --tsconfig ./samples/tsconfig.json --diagnostic-sources js,svelte --fail-on-warnings",
+    "check:samples": "vue-tsc --noEmit -p samples/tsconfig.json && svelte-check --tsconfig ./samples/tsconfig.json --diagnostic-sources js,svelte --fail-on-warnings && vue-tsc --noEmit -p samples/tsconfig.specs.json",
     "test": "bun test tests/build.test.ts",
     "fmt": "bun fmt --no-script . && prettier --plugin prettier-plugin-astro --print-width 120 --write \"src/**/*.astro\"",
     "fmt:check": "bun fmt --no-script --check . && prettier --plugin prettier-plugin-astro --print-width 120 --check \"src/**/*.astro\"",

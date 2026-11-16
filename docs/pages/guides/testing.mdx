@@ -1,0 +1,238 @@
+---
+title: Testing your app
+label: Testing
+description: Drive a real Skathi window from bun test with @skathi-native/test. Launch an app, find elements, click and type, assert text, evaluate code in the app, check its logs, test a packaged build and pop-out windows, and run it all without taking over your desktop.
+section: Guides
+order: 7
+---
+
+import Sample from "../../src/components/Sample.astro";
+
+`@skathi-native/test` runs end-to-end tests against your app in a real Skathi host. It builds the app, starts it in its own window, connects to it over the local devtools port and gives `bun test` a Playwright-style API: locators that wait for an element, actions that click and type into it, and assertions that retry until they pass or time out.
+
+Every gesture goes through the devtools connection, not the operating system. The tests do not move your mouse, type into other windows or bring their window to the front, so they can run while you keep working.
+
+## What you need
+
+`@skathi-native/test` is not published to npm yet. It runs from a checkout of the Skathi repository, where it finds the build tool and the host executable it starts. You need:
+
+- **Bun 1.4.0 or later.** Older versions can crash the test runner while it stops the app, so the harness refuses to start on them.
+- **A Skathi checkout** with its dependencies installed (`bun install` at its root).
+- **A debug host** to test your app from source. Build it once with Cargo from the checkout, and again when you update the checkout.
+- **Or a packaged build** of your app from `sk build`. Then you don't need the debug host; see [Testing a packaged build](#testing-a-packaged-build).
+
+```sh
+bun install
+cargo build -p sk-app                                      # Windows
+cargo build -p sk-app --target aarch64-apple-darwin        # macOS on Apple silicon
+cargo build -p sk-app --target x86_64-unknown-linux-gnu    # Linux
+```
+
+The checkout's Cargo configuration builds for Windows by default, so macOS and Linux need the `--target`. The harness looks for the host in `target/<target>/debug/`.
+
+### What works where
+
+| Feature                                              | Windows             | macOS                    | Linux                    |
+| ---------------------------------------------------- | ------------------- | ------------------------ | ------------------------ |
+| Launch, locators, assertions, `eval`, logs           | Yes                 | Yes                      | Yes                      |
+| Screenshots on failure                               | Yes                 | Yes                      | Yes                      |
+| Test window stays out of your way                    | Opens behind others | Opens without activating | Opens without activating |
+| `uiaTree()`, what a screen reader sees               | Yes                 | No                       | No                       |
+| Clipboard helpers (`clipboardSnapshot()` and others) | Yes                 | No                       | No                       |
+
+## Where tests live
+
+A test file is an ordinary `bun test` file. Inside the checkout's Bun workspace, import from `@skathi-native/test`. A test file elsewhere imports the package by its path in the checkout, `<checkout>/packages/test/src/index.ts`.
+
+`launch({ app })` takes the app to test:
+
+- the name of a folder under the checkout's `apps/` directory, such as `"hello"`, which means `apps/hello/src/main.ts`;
+- or a path to the app's entry module, relative to the checkout root or absolute. The app can live outside the checkout. A Svelte app needs `svelte` in its own dependencies, as it does for `sk dev`.
+
+## A first test
+
+This guide tests a small to-do list. You type a task and press Enter or click **Add**, click a task to mark it done, and the window title shows how many are left.
+
+<Sample src="testing/todo/src/TodoApp" />
+
+The test file starts the app once, at the top level, and closes it after the last test:
+
+<Sample src="testing/todo.spec.ts" region="setup" title="todo.spec.ts" />
+
+`launch()` builds the app if any of its sources changed since the last build, copies the build into a private folder, starts a host on it and waits until the app has mounted. `window` sets the size of the window in CSS pixels. `label` names the files the harness writes for this app, such as screenshots and the host log.
+
+Locators wait up to 10 seconds for an element, but `bun test` gives a test only 5 seconds by default. `setDefaultTimeout(30_000)` gives a slow assertion time to fail with its own message, which says what it was waiting for, instead of a bare timeout.
+
+The first test types a task, presses Enter and checks the result:
+
+<Sample src="testing/todo.spec.ts" region="first" title="todo.spec.ts" />
+
+Run it from the checkout:
+
+```sh
+bun test ./path/to/todo.spec.ts
+```
+
+The tests in a file run in order and share one app, so the second test starts with the task the first one added.
+
+### Finding elements
+
+`app.locator(selector)` takes a CSS selector: classes, ids, attributes such as `[role=dialog]` and `[data-state=checked]`, and combinators. The selector is resolved again each time the locator is used, so a locator stays valid when the app re-renders.
+
+An action waits until the selector matches exactly one element that was painted in the last frame. If it matches several, the action fails and lists them; pick one with `.first()` or `.nth(i)`. An element that is not painted, such as a page inside a `<KeepAlive>` cache, counts as hidden.
+
+| Method                            | What it does                                                                                           |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `click()`                         | Dispatches a click to the element. `{ button: 2 }` for a right click.                                  |
+| `click({ real: true })`           | Sends a mouse press and release through the window's hit test, so whatever covers the element gets it. |
+| `hover()`, `unhover()`            | Moves the app's pointer onto the element, or away from everything.                                     |
+| `type(text)`                      | Focuses the element and sends one keystroke per character.                                             |
+| `press(key)`                      | Sends one key to the element: `"Enter"`, `"Escape"`, `"Shift+Tab"`, `"ArrowDown"`.                     |
+| `focus()`                         | Focuses the element.                                                                                   |
+| `scroll(dy, dx?)`                 | Scrolls the element and fires `scroll`. Returns the new `scrollTop` and `scrollLeft`.                  |
+| `textContent()`                   | The element's text. For an `<input>` or `<textarea>`, its current value.                               |
+| `boundingBox()`, `classes()`      | The element's box in window coordinates, and its class list.                                           |
+| `count()`, `all()`, `isVisible()` | Read the current state without waiting.                                                                |
+| `waitFor()`                       | Waits until the element is there and painted.                                                          |
+
+Keystrokes go through the same handlers as a person's, so a `keydown` listener that calls `preventDefault()` stops the character. `app.press(key)` sends a key to whatever has focus.
+
+### Clicking and asserting
+
+<Sample src="testing/todo.spec.ts" region="click" title="todo.spec.ts" />
+
+Pass a locator to `expect` and you get matchers that retry until they pass or the locator's timeout runs out. Anything else goes to `bun:test`'s own `expect`, so one import covers both.
+
+| Matcher                         | Passes when                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `toBeVisible()`, `toBeHidden()` | The element was painted with a non-empty box in the last frame, or was not.                     |
+| `toHaveCount(n)`                | The selector matches `n` elements.                                                              |
+| `toHaveText(text)`              | The text, with whitespace collapsed and trimmed, equals `text` or matches a regular expression. |
+| `toContainText(text)`           | The text contains `text` or matches a regular expression.                                       |
+| `toHaveClass(name)`             | The class list contains `name`, or every name of an array, or matches a regular expression.     |
+| `toBeHovered()`                 | The pointer is over the element.                                                                |
+
+`.not` inverts any of them, and each takes `{ timeout }` in milliseconds. `launch({ timeout })` changes the default for every locator of that app.
+
+To check how something looks, assert on the class or attribute that drives the style, as the test above does with `done`, rather than on the style itself.
+
+When an assertion fails, its message shows what it expected, what it last saw and the app's last log lines, with the path to a screenshot of the window and to the host's full log. Screenshots go to `.sk-test-artifacts/` at the checkout root, which is emptied at the start of each run. `app.screenshot(path?)` takes one yourself.
+
+## Evaluating code in the app
+
+`app.eval(js)` runs JavaScript in the app's global scope and returns the result:
+
+<Sample src="testing/todo.spec.ts" region="eval" title="todo.spec.ts" />
+
+The result crosses over as JSON, so it can be a string, number, boolean, array or plain object. A promise is not awaited and comes back as `{}`. If the code throws, `app.eval` rejects with the exception's message.
+
+Variables declared inside your modules are not globals, so `eval` cannot see them. To reach app state from a test, put a hook on `globalThis` in a development build, or read what the app already exposes: `document.title`, `localStorage`, `location`.
+
+## Logs and error checks
+
+The host keeps the app's last 500 log lines. `app.logs()` returns them as `{ entries, next }`; pass `next` to the following call to get only newer lines. Each entry has a `kind` and a `text`:
+
+| Kind       | Comes from                                                                       |
+| ---------- | -------------------------------------------------------------------------------- |
+| `log`      | `console.log`                                                                    |
+| `warn`     | `console.warn`, and the host's own warnings                                      |
+| `error`    | `console.error`, and uncaught exceptions, whose text starts with `[js uncaught]` |
+| `advisory` | [Performance advisories](/guides/performance-advisories/)                        |
+| `css`      | CSS the engine ignored or does not support                                       |
+| `dev`      | Messages from the development host                                               |
+
+`app.expectNoErrors()` fails if the log holds any `error` entry, and lists them with a screenshot. It makes a good last test in a file:
+
+<Sample src="testing/todo.spec.ts" region="errors" title="todo.spec.ts" />
+
+- `ignore: [/ResizeObserver/]` skips lines that match.
+- `advisories: true` also fails on performance advisories and CSS warnings.
+
+An exception thrown by code you run with `app.eval` is logged as uncaught too, so `expectNoErrors()` reports it.
+
+## Dialogs and permission prompts
+
+A test never opens a real file dialog. The app's file pickers wait for the test to answer instead:
+
+```ts
+await app.locator(".open").click();
+const dialog = await app.waitForDialog();
+await app.answerDialog(dialog.id, "C:/fixtures/notes.txt");
+```
+
+`dialog.kind` is `"open"`, `"folder"` or `"save"`, and `dialog.filters` and `dialog.suggestedName` show what the app asked for. `answerDialog` takes one path or an array, and `cancelDialog(id)` dismisses the dialog as Esc would.
+
+A permission prompt waits the same way. `app.waitForQuestion()` returns it with its `buttons`, `app.chooseDialog(id, "Allow")` answers it, `app.permissions()` lists the app's permission states and stored answers, and `app.resetPermissions(name?)` forgets the stored answers so the app asks again.
+
+Microphone capture is refused in tests unless you launch with `env: { SK_MEDIA_CAPTURE: "fake" }`, which provides a fake device. Pointer lock is refused unless you pass `SK_POINTER_LOCK: "fake"`, which simulates the lock without capturing your cursor.
+
+## Pop-out windows
+
+A [pop-out window](/guides/pop-out-windows/) paints part of the same element tree as the main window, so locators find elements in every window of the app, and you test a pop-out the way you test the main window:
+
+```ts
+test("the palette pops out", async () => {
+  await app.locator(".pop").click();
+  await expect(app.locator(".palette input")).toBeVisible();
+
+  await app.locator(".palette input").type("charcoal");
+  await expect(app.locator(".brush-name")).toHaveText("charcoal");
+
+  const { windows } = await app.send("windows");
+  expect(windows.map((w: { kind: string }) => w.kind)).toEqual(["main", "popout"]);
+});
+```
+
+`app.send("windows")` lists the app's windows with their `id`, `kind` (`"main"` or `"popout"`), `title`, `viewport` size and `focused` state. Screenshots, including the ones taken when an assertion fails, show the main window only.
+
+## Testing a packaged build
+
+To test the executable you ship, build it with `sk build`, then pass it to `launch()` with the `name` from its `sk.config.json`:
+
+```ts
+const app = await launch({
+  app: "notes-packaged",
+  exe: "C:/src/notes/dist/debug/Notes.exe",
+  packaged: "notes",
+});
+```
+
+With `packaged`, the harness builds nothing and does not need the debug host. `app` is only a label here. The packaged app finds its own bundle, and the harness connects to it through the file it writes in the system's temporary folder.
+
+The test needs the devtools port. `sk build` makes a debug build, which always has it. `sk publish` makes a release build without devtools unless `sk.config.json` has `"publishDevtools": true`, and such a build cannot be tested this way. An app that turns devtools off at startup with `appDevtools.disable()` cannot be tested either; see [Devtools](/guides/devtools/).
+
+Inside the checkout, `packagedExe({ app })` runs `sk build` for you and returns `{ exe, name }` to pass to `launch()`. It needs a prebuilt host, the one `sk build` would use, and may otherwise build one with Cargo, which takes minutes.
+
+A packaged app keeps its storage between runs, like any installed app: localStorage, IndexedDB and cookies written by one run are there in the next. Start each test file from a known state instead of assuming an empty store.
+
+## Running without taking over your desktop
+
+`launch()` starts every host with settings that keep it out of your way. You can override any of them with `env`:
+
+| Variable             | Set to     | Effect                                                                                                                              |
+| -------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `SK_WINDOW_FOCUS`    | `never`    | The window never takes the foreground, and `window.focus()` does not raise it. Focus and keyboard events inside the app still work. |
+| `SK_DIALOGS`         | `scripted` | File dialogs and permission prompts wait for the test instead of opening.                                                           |
+| `SK_LAUNCH_RAISE`    | `off`      | A second launch does not raise the running window.                                                                                  |
+| `SK_SINGLE_INSTANCE` | `0`        | Each launch is its own process, even with `"singleInstance": true`.                                                                 |
+| `SK_MEDIA_CAPTURE`   | `deny`     | Microphone capture is refused. Only `fake` overrides it.                                                                            |
+| `SK_POINTER_LOCK`    | `deny`     | Pointer lock is refused. Only `fake` overrides it.                                                                                  |
+
+On Windows the test window opens behind your other windows. On macOS and Linux it opens without activating, but the window manager decides where it is stacked, so it can appear on top of your work.
+
+There is no headless mode: the host opens a real window and draws every frame. The window can be behind others or on another desktop.
+
+Each `launch()` gets its own copy of the build and its own port, so several apps, or several `bun test` processes, can run at the same time.
+
+If the test runner is killed, its hosts notice and exit. Pass `keepAlive: true` to `launch()` to leave a host running after the test, to inspect it by hand.
+
+## Continuous integration
+
+- **A desktop session.** The machine needs a session that can open windows, with working graphics: Direct3D on Windows, Metal on macOS, Vulkan on Linux. A CI agent running as a background service with no desktop cannot open the window.
+- **Build once.** The debug host takes a while to build. Cache Cargo's `target/` folder, or test a packaged build from an earlier step of the pipeline.
+- **Keep the evidence.** On failure, upload `.sk-test-artifacts/` (screenshots) and `packages/test/.sk-test/logs/` (a full log per host) from the checkout.
+- **Leave time.** The first `launch()` of a run builds the app. A test that waits for animations or network needs more than the default timeouts.
+
+## Unit tests
+
+`@skathi-native/test` tests the whole app in a real window. There is no supported way yet to mount a single component outside the host. Test logic that does not use Skathi APIs, such as formatting, parsing and state transitions, with plain `bun test`, and test components through the app.

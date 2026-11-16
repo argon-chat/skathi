@@ -1,3 +1,4 @@
+import { appReference } from "./app";
 import { cssReference } from "./css";
 import type { Reference } from "./reference";
 import { webReference } from "./web";
@@ -8,4 +9,5 @@ export const references: Readonly<Record<string, Reference>> = {
   [cssReference.id]: cssReference,
   [webReference.id]: webReference,
   [windowReference.id]: windowReference,
+  [appReference.id]: appReference,
 };

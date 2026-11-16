@@ -37,6 +37,7 @@ function onClick(e: MouseEvent) {
     edgeCases: [
       "`querySelector`, `closest` and `matches` with a selector the engine cannot run, such as `:has()` or a pseudo-element, match nothing and log an advisory instead of throwing.",
       "`getBoundingClientRect()` is where the box was drawn, including `transform`s on it and its ancestors; `offsetWidth` and `clientWidth` are the layout box before transforms.",
+      "For an element that was already painted, these reads answer from the last drawn frame and do not force a layout: right after a change in the same handler they still give the old size. Read in `requestAnimationFrame` or a `ResizeObserver` callback to see the new one.",
       "An element mounted during a mouse or keyboard event has no size yet: its rect reads `0` and `sk dev` logs an advisory. Measure it in `requestAnimationFrame` or a `ResizeObserver` callback.",
     ],
   },

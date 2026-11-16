@@ -21,5 +21,7 @@
     "**/*.ts",
     "**/*.vue",
     "**/*.svelte"
-  ]
+  ],
+  // Specs run under bun (tsconfig.specs.json checks them). svelte-check cannot resolve the .vue import of an entry.
+  "exclude": ["**/*.spec.ts", "testing/todo/src/main.ts"]
 }

@@ -4172,7 +4172,11 @@ const extended = screen.isExtended;
     platforms: all(OK),
     syntax: '<SkWindow @open="(windowId: number) => void" />',
     params: [
-      { name: "windowId", type: "number", description: "The window's id, the one `sk devtools --window` takes." },
+      {
+        name: "windowId",
+        type: "number",
+        description: "The window's id, the one the devtools control script's `--window` takes.",
+      },
     ],
     notes: ["Live prop changes start reaching the window from here.", "In Svelte, it is the `onopen` callback prop."],
     examples: [
@@ -4803,8 +4807,9 @@ const taskbar = section("Taskbar and dock", [
     returns: "`set()` returns `undefined`. `null` removes the icon.",
     notes: [
       "`set()` replaces the whole tray model each time.",
-      'A `role: "quit"` item quits the app without dispatching `close-requested` or `pagehide`.',
+      'A `role: "quit"` item quits the app as `appWindow.close()` does: `pagehide` fires, `close-requested` does not.',
       "A window started hidden with no tray icon is shown after 10 s, so the app cannot become unreachable.",
+      "Every option, the icon formats and the menu items are in the [App APIs reference](/app-api/app-tray/).",
     ],
     examples: [
       {
@@ -4827,7 +4832,7 @@ if (appTray.available) {
       },
     ],
     edgeCases: [
-      'Save state in the `role: "quit"` path yourself, or quit through an item whose `onSelect` calls `appWindow.close()`, which fires `pagehide`.',
+      'An asset path such as `"assets/tray.png"` is read from the packaged app; under `sk dev` it throws a `TypeError`. Use a `data:` URL or pixels there.',
     ],
     limitations: ["On Linux, `available` is `false` and `set()` throws `NotSupportedError`."],
     related: ["show", "hide", "event-close-requested"],

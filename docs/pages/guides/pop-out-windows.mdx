@@ -48,7 +48,7 @@ Mount `<SkWindow>` to open the window, and unmount it to close it. Drive both wi
 
 A Svelte app imports `SkWindow` from `@skathi-native/runtime/svelte`, as the Svelte tab of each sample does. The props keep their camelCase names (`alwaysOnTop`, `taskbar={false}`), and the events are callback props: `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`. `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale` read the exposed values, and `bind:this` gives an object with `mapFromMain()`.
 
-Svelte has no `<Teleport>`. Put the pop-out's content in its children, or mount a component into the root with Svelte's own `mount(Panel, { target: el })` from `svelte` once `bind:el` has set `el`, and `unmount` it in `onclose`. A `class` you pass to `<SkWindow>` is not scoped to your component, so style it with `:global()` or wrap the content in an element of your own, as the samples do.
+Svelte has no `<Teleport>`. Put the pop-out's content in its children, or mount a component into the root with `mount(Panel, { target: el })` from `@skathi-native/runtime/svelte` once `bind:el` has set `el`, and `unmount` it in `onclose`. That `mount` also unmounts it when the app reloads. A `class` you pass to `<SkWindow>` is not scoped to your component, so style it with `:global()` or wrap the content in an element of your own, as the samples do.
 
 ### The @close contract
 

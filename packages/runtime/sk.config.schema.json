@@ -45,11 +45,11 @@
         },
         "minHeight": { "description": "Minimum height in logical pixels.", "type": "number", "minimum": 0 },
         "frame": {
-          "description": "false is treated as titleBarStyle \"hidden\": the window keeps its shadow, animations and edge resizing.",
+          "description": "false only prints an advisory: the window keeps its frame, shadow, animations and edge resizing. Hide the OS title bar with titleBarStyle \"hidden\".",
           "type": "boolean"
         },
         "titleBarStyle": {
-          "description": "\"default\": the OS draws the title bar. \"hidden\": the app draws it (default). \"hiddenInset\": macOS inset traffic lights; \"hidden\" elsewhere.",
+          "description": "\"default\": the OS draws the title bar. \"hidden\": the app draws it (default). \"hiddenInset\": treated as \"hidden\" on every OS, with an advisory.",
           "type": "string",
           "enum": ["default", "hidden", "hiddenInset"]
         },
@@ -59,7 +59,7 @@
           "minimum": 0
         },
         "titleBarFallback": {
-          "description": "Draw a host title bar strip under a hidden title bar. Ignored with titleBarStyle \"default\".",
+          "description": "Draw a host title bar strip until the app paints its first app-region: drag area. Default true; ignored with titleBarStyle \"default\".",
           "type": "boolean"
         },
         "titleBarOverlay": {

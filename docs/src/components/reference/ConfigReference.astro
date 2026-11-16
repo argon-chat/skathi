@@ -1,0 +1,17 @@
+---
+import ConfigOption from "./ConfigOption.astro";
+import { configSections } from "../../lib/config";
+import { inline } from "../../lib/reference";
+---
+
+{
+  configSections.map((section) => (
+    <>
+      <h2 id={section.id}>{section.title}</h2>
+      {section.intro && <p set:html={inline(section.intro)} />}
+      {section.options.map((option) => (
+        <ConfigOption option={option} level={3} />
+      ))}
+    </>
+  ))
+}
