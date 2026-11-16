@@ -47,9 +47,6 @@ if (doc) {
   const defDoc = (name: string, value: unknown) => {
     if (vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
   };
-  const defDocGet = (name: string, get: () => unknown) => {
-    if (vacant(doc, name)) Object.defineProperty(doc, name, { get: mark(get), configurable: true });
-  };
   // Force-installed: redjs's own `querySelector`/`getElementById` search a registry of elements it created, which is empty here,
   // so leaving them finds nothing, silently.
   const forceDoc = (name: string, value: unknown) =>
@@ -169,7 +166,6 @@ if (doc) {
       },
     });
   });
-  defDocGet("defaultView", () => globalThis);
   try {
     Object.defineProperty(doc, "activeElement", { get: activeElement, configurable: true });
   } catch (e) {
@@ -328,35 +324,6 @@ if (doc) {
         });
       } catch {
         /* a non-configurable engine property — leave it alone */
-      }
-    }
-    // `<head>` is not a box (a `<style>` appended must not become a child of the root): it stays redjs's property bag, common members filled in.
-    const head = (doc as unknown as { head?: Record<string, unknown> | null }).head;
-    if (head && typeof head === "object") {
-      if (!head.style || typeof head.style !== "object") head.style = {};
-      const hs = head.style as Record<string, unknown>;
-      if (typeof hs.setProperty !== "function") {
-        hs.setProperty = (k: unknown, v: unknown) => {
-          hs[String(k)] = v == null ? "" : String(v);
-        };
-      }
-      if (typeof hs.removeProperty !== "function") {
-        hs.removeProperty = (k: unknown) => {
-          const prev = hs[String(k)] ?? "";
-          delete hs[String(k)];
-          return prev;
-        };
-      }
-      if (typeof hs.getPropertyValue !== "function") hs.getPropertyValue = (k: unknown) => hs[String(k)] ?? "";
-      if (!head.querySelector) head.querySelector = () => null;
-      if (!head.querySelectorAll) head.querySelectorAll = () => [];
-      if (!head.contains) head.contains = () => false;
-      if (!head.getAttribute) head.getAttribute = () => null;
-      if (!head.setAttribute) head.setAttribute = () => {};
-      if (!head.appendChild) head.appendChild = (n: unknown) => n;
-      if (!head.removeChild) head.removeChild = (n: unknown) => n;
-      if (!("ownerDocument" in head)) {
-        Object.defineProperty(head, "ownerDocument", { get: () => doc, configurable: true });
       }
     }
   }
