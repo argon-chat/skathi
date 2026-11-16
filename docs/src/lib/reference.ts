@@ -1,8 +1,8 @@
 import cli from "../../../packages/cli/package.json";
 import type { Platform, Release, Status, ValueSupport } from "../data/css/entries";
-import type { Detail, Example } from "../data/details";
+import type { Detail, Example, Param } from "../data/details";
 
-export type { Example, Platform, Release, Status, ValueSupport };
+export type { Example, Param, Platform, Release, Status, ValueSupport };
 
 export interface RefEntry extends Detail {
   slug: string;
@@ -100,6 +100,10 @@ export const statuses: Record<Status, { label: string; tone: string; summary: st
 
 const kindLabels: Record<string, string> = {
   property: "Property",
+  prop: "Component prop",
+  option: "Config option",
+  component: "Component",
+  exposed: "Exposed member",
   shorthand: "Shorthand",
   selector: "Selector",
   "pseudo-class": "Pseudo-class",
@@ -186,13 +190,14 @@ export function plain(text: string): string {
   return text.replaceAll("`", "");
 }
 
-/** Inline Markdown code spans to HTML, for the short prose fields. */
+/** Inline Markdown code spans and links (site paths or https) to HTML, for the short prose fields. */
 export function inline(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\[([^\]]+)\]\((\/[^)\s"]*|https:\/\/[^)\s"]+)\)/g, '<a href="$2">$1</a>');
 }
 
 function platformLine(entry: RefEntry): string {
@@ -216,6 +221,20 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
   if (entry.webDeprecated) lines.push("- Deprecated on the web.");
   if (entry.animates) lines.push(`- Animates: ${entry.animates}.`);
   if (entry.mdn) lines.push(`- MDN: ${entry.mdn}`);
+  if (entry.syntax) {
+    lines.push("", "## Syntax", "", "```ts", entry.syntax.trim(), "```");
+    if (entry.params?.length)
+      lines.push(
+        "",
+        "| Parameter | Type | Description |",
+        "| --- | --- | --- |",
+        ...entry.params.map(
+          (p) =>
+            `| \`${p.name}\`${p.optional ? " (optional)" : ""} | \`${p.type.replaceAll("|", "\\|")}\` | ${p.description}${p.default ? ` Default: \`${p.default}\`.` : ""} |`,
+        ),
+      );
+    if (entry.returns) lines.push("", `Returns: ${entry.returns}`);
+  }
   if (entry.notes?.length) lines.push("", "## Behavior", "", ...entry.notes.map((note) => `- ${note}`));
   if (entry.values?.length) {
     lines.push("", "## Values", "", "| Value | Status | Since | Notes |", "| --- | --- | --- | --- |");

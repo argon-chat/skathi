@@ -1,0 +1,406 @@
+---
+title: Closing, hiding and quitting
+label: Closing and background
+description: Ask before closing, keep running in the background, bring the window back, and save data when the app quits.
+section: Guides
+order: 4
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+When the user clicks the close button, your app can let the window go, ask about unsaved work first, or hide and keep running in the background. This guide walks through the close flow event by event, then builds two complete scenarios: a "Save, Discard, Cancel" prompt and an app that hides on close and comes back on a second launch or a tray click. It ends with what happens at quit, how to make sure data reaches disk, and where macOS and Linux behave differently.
+
+## The close flow
+
+A close the user starts is any request that reaches the window through the OS: the title bar's close button, Alt+F4, Close in the taskbar menu, the red button on macOS, or a `WM_CLOSE` message from another program. Skathi runs it through three events, in order:
+
+1. **`close-requested` on `appWindow`.** It is cancelable. If a listener calls `preventDefault()`, the window stays open and nothing else happens.
+2. **`beforeunload` on `window`.** It runs only if `close-requested` was not cancelled. It can veto the close, but no dialog is ever shown.
+3. **`pagehide` on `window`.** It runs once, if nothing vetoed. It is the last place to save state.
+
+After `pagehide`, every window of the app hides at once, pop-outs close, and the app quits.
+
+### close-requested
+
+[`close-requested`](/window-api/event-close-requested/) is the event to build on. It fires before anything is torn down, and its `preventDefault()` works without the sticky-activation rule browsers apply to `beforeunload`, so an app the user has not touched yet can still hide instead of closing.
+
+```ts
+import { appWindow } from "@skathi-native/runtime";
+
+appWindow.addEventListener("close-requested", (e) => {
+  if (hasUnsavedWork()) e.preventDefault();
+});
+```
+
+The decision is synchronous. You cannot `await` a dialog inside the listener: call `preventDefault()` first, ask the user, and then close from code.
+
+### beforeunload
+
+[`beforeunload`](/window-api/event-beforeunload/) is there for code written for browsers. Its `preventDefault()` vetoes the close only after the user has pressed a key or a mouse button in the app, and even then Skathi shows no confirmation dialog: the close button simply does nothing. Use `close-requested` and your own UI instead. If a `beforeunload` listener vetoes a close and the app has no `close-requested` listener, Skathi prints a `beforeunload-trap` advisory.
+
+### pagehide
+
+[`pagehide`](/window-api/event-pagehide/) fires once per session, before the windows hide. Synchronous `localStorage` writes made in it reach disk. [`unload`](/window-api/event-unload/) never fires; Skathi accepts the listener and prints an advisory, as the web is removing that event.
+
+### Which routes run which events
+
+| How the close starts                                                                     | `close-requested` | `beforeunload`   | `pagehide`    |
+| ---------------------------------------------------------------------------------------- | ----------------- | ---------------- | ------------- |
+| Title bar close, Alt+F4, taskbar Close, macOS red button, `WM_CLOSE`                     | yes               | if not cancelled | if not vetoed |
+| `--window-control: close` or the host caption close button, Windows                      | yes               | if not cancelled | if not vetoed |
+| `--window-control: close` or the host caption close button, Linux                        | no                | no               | no            |
+| [`appWindow.close()`](/window-api/close/), [`window.close()`](/window-api/window-close/) | no                | no               | yes           |
+| A tray menu item with `role: "quit"`                                                     | no                | no               | no            |
+| A close from an embedding application                                                    | no                | no               | no            |
+| Closing a pop-out window                                                                 | no                | no               | no            |
+
+> **Note:** On Linux, Skathi's own close buttons skip the whole flow; see [Platform gaps](#platform-gaps). Test how the window manager's own close commands behave on the desktops you target.
+
+A pop-out cannot veto its own close; there is no `close-requested` for it. The [pop-out guide](/guides/pop-out-windows/) covers what happens to its content.
+
+## Ask before closing with unsaved changes
+
+<Demo
+  id="closing/unsaved-changes"
+  caption="The close button triggers close-requested, an in-app Save, Discard, Cancel sheet appears, and Cancel keeps the window open."
+/>
+
+```vue
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const text = ref(localStorage.getItem("draft") ?? "");
+const saved = ref(text.value);
+const asking = ref(false);
+
+function save() {
+  localStorage.setItem("draft", text.value);
+  saved.value = text.value;
+}
+
+function onCloseRequested(e: Event) {
+  if (text.value === saved.value) return;
+  e.preventDefault();
+  if (appWindow.isMinimized()) appWindow.restore();
+  asking.value = true;
+}
+
+function answer(choice: "save" | "discard" | "cancel") {
+  asking.value = false;
+  if (choice === "cancel") return;
+  if (choice === "save") save();
+  appWindow.close();
+}
+
+onMounted(() => appWindow.addEventListener("close-requested", onCloseRequested));
+onUnmounted(() => appWindow.removeEventListener("close-requested", onCloseRequested));
+</script>
+
+<template>
+  <div class="editor">
+    <textarea v-model="text" class="text" />
+    <div v-if="asking" class="scrim">
+      <div class="sheet">
+        <p>Save your changes before closing?</p>
+        <div class="actions">
+          <button class="btn primary" @click="answer('save')">Save</button>
+          <button class="btn" @click="answer('discard')">Discard</button>
+          <button class="btn" @click="answer('cancel')">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.editor {
+  position: relative;
+  height: 100%;
+  padding: 12px;
+}
+.text {
+  width: 100%;
+  height: 100%;
+}
+.scrim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #00000066;
+}
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 8px;
+  background: #2b2b2b;
+  color: #f3f3f3;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+}
+.btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #ffffff14;
+  color: #f3f3f3;
+}
+.btn.primary {
+  background: #4cc2ff;
+  color: #000000;
+}
+</style>
+```
+
+How it works:
+
+- **Only dirty state cancels.** With nothing to save, the listener returns without calling `preventDefault()` and the window closes normally.
+- **The sheet is your UI.** Skathi has no built-in confirmation dialog, so the prompt is an ordinary component. It can match your app and offer three choices instead of two.
+- **`appWindow.close()` finishes the job.** It skips `close-requested` and `beforeunload`, so it does not loop back into the prompt, and it still fires `pagehide`.
+- **Bring the window up first.** The taskbar's Close works on a minimized window. On Windows `restore()` brings it back so the user sees the question; on macOS and Linux `isMinimized()` is always `false` and the line does nothing.
+
+If the user clicks the close button again while the sheet is open, the listener cancels again and the sheet stays.
+
+> **Warning:** An exception thrown in a `close-requested` listener counts as permission to close. Keep the listener small and make sure it cannot throw before `preventDefault()`.
+
+## Hide instead of quitting
+
+<Demo
+  id="closing/hide-and-return"
+  caption="The close button hides the window instead of quitting, and a second launch of the app brings it back."
+/>
+
+A timer, a chat client or a sync tool usually keeps running when its window closes. Cancel `close-requested`, hide the window, and give the user ways back: a second launch of the app, and a tray icon where there is one.
+
+Turn on the single instance in `sk.config.json`, so a second launch reaches the running copy instead of starting another one:
+
+```json
+{
+  "name": "focus-timer",
+  "singleInstance": true,
+  "window": {
+    "title": "Focus timer",
+    "width": 420,
+    "height": 300
+  }
+}
+```
+
+Then handle the close, the second launch and the tray in the root component:
+
+```vue
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { appLaunch, appTray, appWindow } from "@skathi-native/runtime";
+
+const seconds = ref(0);
+const tick = setInterval(() => seconds.value++, 1000);
+
+function onCloseRequested(e: Event) {
+  e.preventDefault();
+  appWindow.hide();
+}
+const bringBack = () => appWindow.show();
+
+onMounted(() => {
+  appWindow.addEventListener("close-requested", onCloseRequested);
+  appLaunch.addEventListener("launch", bringBack);
+  if (appTray.available) {
+    appTray.set({
+      icon: { width: 16, height: 16, data: new Uint8Array(16 * 16 * 4).fill(255), template: true },
+      tooltip: "Focus timer",
+      onClick: bringBack,
+      menu: [
+        { label: "Open", default: true, onSelect: bringBack },
+        { type: "separator" },
+        { label: "Quit", onSelect: () => appWindow.close() },
+      ],
+    });
+  }
+});
+onUnmounted(() => {
+  clearInterval(tick);
+  appWindow.removeEventListener("close-requested", onCloseRequested);
+  appLaunch.removeEventListener("launch", bringBack);
+  if (appTray.available) appTray.set(null);
+});
+</script>
+
+<template>
+  <div class="timer">
+    <p class="time">{{ seconds }} s</p>
+    <p class="hint">Close the window: the timer keeps running. Start the app again to bring it back.</p>
+    <button class="btn" @click="appWindow.close()">Quit</button>
+  </div>
+</template>
+
+<style scoped>
+.timer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+}
+.time {
+  font-size: 40px;
+  font-variant-numeric: tabular-nums;
+}
+.hint {
+  font-size: 12px;
+  color: #ffffffa0;
+}
+.btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #ffffff14;
+  color: #f3f3f3;
+}
+</style>
+```
+
+### Hiding
+
+[`appWindow.hide()`](/window-api/hide/) removes the window and its taskbar button on Windows. The app keeps running: timers fire, network connections stay open and Vue keeps updating state. While hidden, `document.hidden` is `true`, so the app gets no `requestAnimationFrame` callbacks and CSS animations pause.
+
+### Coming back
+
+- **A second launch.** With `"singleInstance": true`, starting the app again forwards its arguments to the running copy and exits without opening a window. The running copy receives a `launch` event on `appLaunch`, and the sample calls [`appWindow.show()`](/window-api/show/) from it.
+- **The tray.** [`appTray`](/window-api/app-tray/) puts an icon in the Windows notification area or the macOS menu bar. Its `onClick` and a menu item call `show()`.
+- **The Dock on macOS.** On macOS `hide()` minimizes the window, so it waits in the Dock and the user restores it there like any minimized window.
+
+`show()` shows a hidden window and brings it to the front. On Windows, [`raiseOnSecondInstance`](/window-api/config-raise-on-second-instance/) (on by default) also raises the main window on a second launch, but call `show()` anyway: it is what makes a hidden window visible.
+
+> **Warning:** On Windows a hidden window has no taskbar button. Without a tray icon and without `singleInstance`, a user who closes the window has no way to bring it back or quit, short of Task Manager. Always offer at least one way back.
+
+### The Quit item
+
+The sample's tray menu uses its own item that calls `appWindow.close()` instead of the built-in `{ role: "quit" }`. A `role: "quit"` item closes the app without `close-requested` and without `pagehide`, so any saving you do in `pagehide` would be skipped. `appWindow.close()` fires `pagehide` first.
+
+### Platform behavior
+
+| Step                                       | Windows                    | macOS                                                     | Linux                                 |
+| ------------------------------------------ | -------------------------- | --------------------------------------------------------- | ------------------------------------- |
+| `hide()`                                   | hides; taskbar button goes | minimizes to the Dock instead                             | minimizes instead                     |
+| `singleInstance` and `launch`              | supported                  | not implemented: a second launch does not reach the first | supported                             |
+| Raise on a second launch                   | supported                  | not implemented                                           | not done; call `show()` from `launch` |
+| `appTray`                                  | notification area          | menu bar                                                  | not available: `available` is `false` |
+| Custom close button runs `close-requested` | yes                        | yes                                                       | no (see below)                        |
+
+## Close from code
+
+[`appWindow.close()`](/window-api/close/) and [`window.close()`](/window-api/window-close/) are the same function. They fire `pagehide` synchronously and then close the main window, which ends the app.
+
+- They do not fire `close-requested` or `beforeunload`. That is what lets an app that cancelled a close finish it after asking.
+- They close the whole app. There is no way to close only the main window and keep pop-outs open; to close a pop-out, unmount its `<SkWindow>`.
+- Calling them twice is harmless.
+- Unlike in a browser, `window.close()` is not limited to windows a script opened.
+
+## Quit and the data flush
+
+Closing the main window quits the app on every OS. On macOS this differs from the platform convention: the app does not stay in the Dock without a window. Keep it running with `close-requested` and `hide()` instead.
+
+When the app quits:
+
+1. Every window of the app hides at once, so the user sees the close happen immediately.
+2. Pop-outs close.
+3. Skathi flushes `localStorage`, cookies and IndexedDB to disk.
+4. A 4-second deadline ends the process, even if teardown is still running.
+
+A second launch while the app is still closing waits for the old process to exit and then starts a fresh one.
+
+To make data survive every way the app can end:
+
+- **Write as you go.** Debounced `localStorage` writes during normal use cover the paths that skip `pagehide`: a tray `role: "quit"`, an embedder close and the Linux custom close button.
+- **Keep `pagehide` synchronous.** Write to `localStorage` there. A `fetch()` or other asynchronous work started in `pagehide` is not guaranteed to finish before the process ends.
+- **Do not rely on `unload`.** It never fires.
+
+```ts
+import { ref, watch } from "vue";
+
+export const draft = ref(localStorage.getItem("draft") ?? "");
+
+let timer: ReturnType<typeof setTimeout> | undefined;
+const write = () => localStorage.setItem("draft", draft.value);
+
+watch(draft, () => {
+  clearTimeout(timer);
+  timer = setTimeout(write, 500);
+});
+addEventListener("pagehide", write);
+```
+
+The debounced `watch` covers the paths without `pagehide`; the `pagehide` listener catches the last half-second of typing on a normal close.
+
+## Platform gaps
+
+### Linux: the custom close button skips the close flow
+
+On Linux, a close button in a custom title bar closes the app without asking. This covers an element styled `--window-control: close` and the close button of the host's caption cluster (`titleBarOverlay`). Neither fires `close-requested`, `beforeunload` or `pagehide`, so an app that hides from `close-requested` quits instead, and an unsaved-changes prompt never appears.
+
+The workaround is a close button with an ordinary click handler that makes the same decision as your `close-requested` listener: prompt, hide or close. It behaves the same on every OS:
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "@skathi-native/runtime";
+
+const props = defineProps<{ dirty: boolean }>();
+const emit = defineEmits<{ ask: [] }>();
+
+function requestClose() {
+  if (props.dirty) emit("ask");
+  else appWindow.close();
+}
+</script>
+
+<template>
+  <button class="close" title="Close" @click="requestClose">✕</button>
+</template>
+
+<style scoped>
+.close {
+  width: 46px;
+  height: 100%;
+  app-region: no-drag;
+}
+.close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+</style>
+```
+
+Do not add `--window-control: close` to the same element: on Windows the OS would close the window as well as running your handler. A plain button gives up nothing on the close control, since the Windows 11 snap layouts belong to the maximize button. The [custom title bar guide](/guides/custom-title-bar/) builds the whole title bar.
+
+### macOS and Linux: hide() minimizes
+
+`hide()` minimizes the window on macOS and Linux. It stays in the Dock or the taskbar, `isVisible()` stays `true` and no event fires. The hide-and-show cycle in this guide is verified on Windows; on macOS, whether `show()` from a tray click restores a window that `hide()` minimized is not covered by tests yet, so try it on your target versions.
+
+### macOS: no single instance
+
+`singleInstance` is not implemented on macOS, so a second launch does not deliver a `launch` event to the running copy.
+
+## Pitfalls
+
+- **Awaiting inside `close-requested`.** The veto is read when the listener returns. Call `preventDefault()` synchronously and ask afterwards.
+- **Prompting from `beforeunload`.** It shows nothing, and without prior input it cannot veto. Use `close-requested`.
+- **Saving only in `pagehide`.** It does not run for a tray `role: "quit"`, an embedder close or the Linux custom close button.
+- **Hiding with no way back.** Pair `hide()` with a tray icon or `singleInstance`.
+- **Expecting the main window to close alone.** `appWindow.close()` ends the app, pop-outs included.
+
+## See also
+
+- [Windows](/guides/windows/): the main window's lifecycle and configuration
+- [Custom title bar](/guides/custom-title-bar/): caption buttons, drag regions and `--window-control`
+- [Pop-out windows](/guides/pop-out-windows/): `<SkWindow>` and its `@close` event
+- [`close-requested`](/window-api/event-close-requested/), [`beforeunload`](/window-api/event-beforeunload/), [`pagehide`](/window-api/event-pagehide/), [`unload`](/window-api/event-unload/)
+- [`appWindow.close()`](/window-api/close/), [`hide()`](/window-api/hide/), [`show()`](/window-api/show/), [`isVisible()`](/window-api/is-visible/)
+- [`singleInstance`](/window-api/config-single-instance/), [`raiseOnSecondInstance`](/window-api/config-raise-on-second-instance/), [`appTray`](/window-api/app-tray/)
+- [`document.visibilityState`](/window-api/document-visibility-state/), [`visibilitychange`](/window-api/event-visibilitychange/)
+- [`localStorage`](/web-platform/local-storage/), [`--window-control`](/css/window-control/), [`app-region`](/css/app-region/)

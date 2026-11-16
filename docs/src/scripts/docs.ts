@@ -307,6 +307,43 @@ function initializePage(): void {
     table.before(wrapper);
     wrapper.append(table);
   });
+
+  const demos = [...document.querySelectorAll<HTMLVideoElement>("video[data-demo]")];
+  if (demos.length) {
+    const attach = (video: HTMLVideoElement): void => {
+      const pending = video.querySelectorAll<HTMLSourceElement>("source[data-src]");
+      if (!pending.length) return;
+      for (const source of pending) {
+        source.src = source.dataset["src"] ?? "";
+        source.removeAttribute("data-src");
+      }
+      video.load();
+    };
+    const still =
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData === true;
+    if (still)
+      for (const video of demos) {
+        attach(video);
+        video.controls = true;
+      }
+    else {
+      const watcher = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const video = entry.target as HTMLVideoElement;
+            if (entry.isIntersecting) {
+              attach(video);
+              void video.play().catch(() => {});
+            } else video.pause();
+          }
+        },
+        { rootMargin: "200px 0px" },
+      );
+      for (const video of demos) watcher.observe(video);
+      signal.addEventListener("abort", () => watcher.disconnect());
+    }
+  }
 }
 
 document.addEventListener("astro:before-swap", (event: TransitionBeforeSwapEvent) => {

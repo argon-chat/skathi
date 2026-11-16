@@ -1891,18 +1891,30 @@ const interaction = section("Interaction", [
   }),
   prop("field-sizing", NO, "Lets form fields such as `<textarea>` size to their content."),
   prop("interactivity", NO, "Makes an element and its subtree inert."),
-  prop("app-region", OK, "Marks an element as a region that drags the window, as in an installed web app.", {
+  prop("app-region", PART, "Marks an element as a region that drags the window, as in an installed web app.", {
+    platforms: { windows: OK, macos: NO, linux: OK },
     values: [v("drag", OK), v("no-drag", OK), v("move", OK, "Same as `drag`."), v("none", OK, "Same as `no-drag`.")],
     notes: [
       "`app-region: drag` drags the window, as in an installed web app.",
       "`window-drag` is read as the same property.",
     ],
+    limitations: [
+      "On macOS, it does nothing. The window drags only by the band where AppKit's own title bar sits, behind the app's content.",
+      "On Linux, a double-click on the region of a maximized window does not restore it.",
+      'On Linux, a popout with `chrome="hidden"` cannot be dragged by its regions.',
+    ],
     aliases: ["-webkit-app-region", "window-drag", "drag region", "titlebar"],
     related: ["window-control"],
   }),
-  prop("--window-control", OK, "Turns an element into a window button: `minimize`, `maximize` or `close`.", {
+  prop("--window-control", PART, "Turns an element into a window button: `minimize`, `maximize` or `close`.", {
+    platforms: { windows: OK, macos: NO, linux: PART },
     skathiOnly: true,
     values: [v("minimize", OK), v("maximize", OK), v("close", OK)],
+    limitations: [
+      "On macOS, it does nothing. Use the native traffic lights.",
+      "On Linux, `maximize` does not restore a maximized window.",
+      "On Linux, `close` closes the app without dispatching `close-requested`, `beforeunload` or `pagehide`.",
+    ],
     aliases: ["window buttons", "titlebar buttons"],
     related: ["app-region"],
   }),

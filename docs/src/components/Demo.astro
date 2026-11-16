@@ -1,0 +1,49 @@
+---
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+interface Props {
+  /** `<group>/<name>`: the clip is public/media/<group>/<name>.{webm,mp4} with <name>-poster.webp beside it. */
+  id: string;
+  caption: string;
+  /** What the clip shows, for screen readers; defaults to the caption. */
+  label?: string;
+  width?: number;
+  height?: number;
+}
+
+const { id, caption, label = caption, width = 1280, height = 800 } = Astro.props;
+const base = `/media/${id}`;
+const ready = existsSync(join(process.cwd(), "public", `${base}.webm`));
+---
+
+{
+  ready ? (
+    <figure class="demo">
+      <div class="demo-frame">
+        <video
+          muted
+          loop
+          playsinline
+          preload="none"
+          width={width}
+          height={height}
+          poster={`${base}-poster.webp`}
+          aria-label={label}
+          data-demo
+        >
+          <source data-src={`${base}.webm`} type='video/webm; codecs="av01.0.05M.08"' />
+          <source data-src={`${base}.mp4`} type="video/mp4" />
+        </video>
+      </div>
+      <figcaption>{caption}</figcaption>
+    </figure>
+  ) : import.meta.env.DEV ? (
+    <figure class="demo demo-pending">
+      <div class="demo-frame">
+        <span>Recording pending: {id}</span>
+      </div>
+      <figcaption>{caption}</figcaption>
+    </figure>
+  ) : null
+}

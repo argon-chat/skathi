@@ -63,7 +63,7 @@ const section = page?.data.section ?? parent?.data.section ?? "Navigation";
 const indexable = Boolean(page || sub);
 const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 const canonical = new URL(sub?.path ?? (page ? pageUrl(page.id) : "/404/"), Astro.site);
-const sectionIcons = { "Getting started": "book", Reference: "layers", Contributing: "code" } as const;
+const sectionIcons = { "Getting started": "book", Guides: "monitor", Reference: "layers", Contributing: "code" } as const;
 const searchEntries = pages.map((entry) => ({
   title: entry.data.title,
   description: entry.data.description,

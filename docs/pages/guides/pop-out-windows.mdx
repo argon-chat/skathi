@@ -1,0 +1,620 @@
+---
+title: Pop-out windows
+label: Pop-out windows
+description: Open part of your component tree in its own OS window with SkWindow, for palettes, inspectors, tooltips and click-through overlays.
+section: Guides
+order: 3
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+`<SkWindow>` opens a second OS window that paints part of your component tree. There is no second app, no message passing and no serialization: the pop-out runs the same components on the same reactive state, so a click in it updates the main window in the same frame. This guide covers the model first, then opening and closing, which props apply live, and the common scenarios: palettes, tooltips that follow the main window, click-through overlays, owned windows, focus, screen-capture protection and multiple monitors. Many of the advanced props work on Windows only, and each section says so. The [platform table](#platform-support) collects them.
+
+## One app, many windows
+
+Skathi runs one JavaScript realm, one Vue app and one element tree. `<SkWindow>` marks a node of that tree as popped out. The node stops painting in the main window, and a second window paints it and its subtree. Nothing is remounted: the components inside keep their instances, their local state and their watchers. A handler that runs from a click in the pop-out is the same function, reading the same refs.
+
+That has one consequence to keep in mind. Global JavaScript APIs describe the **main** window, even when the code runs from a click in a pop-out. CSS is evaluated against the window that **paints** the element.
+
+| You use                                                          | Inside a pop-out it describes                           |
+| ---------------------------------------------------------------- | ------------------------------------------------------- |
+| `window.innerWidth`, `innerHeight`, `devicePixelRatio`, `screen` | The main window and its display                         |
+| `matchMedia()`                                                   | The main window                                         |
+| `appWindow`, `document.title`, `document.hasFocus()`             | The main window                                         |
+| `resize`, `focus` and `blur` on `window`                         | The main window                                         |
+| `@media` (width, height, `prefers-color-scheme`, `display-mode`) | The pop-out                                             |
+| `env(titlebar-area-*)`                                           | The pop-out                                             |
+| `position: fixed`                                                | The pop-out's edges                                     |
+| `@keyframes` declared inside an `@media` block                   | Chosen against the pop-out                              |
+| The pop-out's own size                                           | `@resize`, or the exposed `width`, `height` and `scale` |
+
+Pop-outs follow [`appWindow.theme`](/window-api/theme/). They do not follow later changes to `appWindow.backdrop`: each pop-out's material defaults to the `backdrop` in `sk.config.json`, or to its own [`backdrop`](/window-api/sk-window-backdrop/) prop.
+
+`window.open()` is not a way to get a second window. It always returns `null`: an `http:`, `https:` or `mailto:` URL opens in the system browser or mail client, and any other call prints an advisory that points you at `<SkWindow>`.
+
+## Open and close a pop-out
+
+Mount `<SkWindow>` to open the window, and unmount it to close it. Drive both with `v-if`:
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { SkWindow, type SkWindowMetrics } from "@skathi-native/runtime";
+
+const notesOpen = ref(false);
+const note = ref("");
+const size = ref("");
+
+function onResize(m: SkWindowMetrics) {
+  size.value = `${Math.round(m.width)} × ${Math.round(m.height)}`;
+}
+</script>
+
+<template>
+  <main class="page">
+    <button @click="notesOpen = !notesOpen">{{ notesOpen ? "Close notes" : "Open notes" }}</button>
+    <p>{{ note.length }} characters</p>
+    <SkWindow
+      v-if="notesOpen"
+      title="Notes"
+      :bounds="{ width: 360, height: 280 }"
+      activate
+      @close="notesOpen = false"
+      @resize="onResize"
+    >
+      <textarea v-model="note" class="notes" />
+      <footer class="size">{{ size }}</footer>
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.page {
+  padding: 24px;
+}
+.notes {
+  width: 100%;
+  height: 200px;
+  padding: 12px;
+}
+@media (max-width: 300px) {
+  .size {
+    display: none;
+  }
+}
+</style>
+```
+
+- The character count in the main window updates as you type in the pop-out, because `note` is one ref.
+- `@media (max-width: 300px)` is evaluated against the pop-out, so the size footer hides when the pop-out is narrow, whatever the main window's width.
+- The window opens on the next effect cycle, not inside the mount. [`@open`](/window-api/sk-window-event-open/) fires when it exists, with the window id that devtools' `--window` flag takes.
+- `<SkWindow>` renders a `div.sk-window-root` that fills the window. Attributes and classes you put on `<SkWindow>` land on that root, and the exposed `el` ref can be a `<Teleport>` target.
+
+### The @close contract
+
+[`@close`](/window-api/sk-window-event-close/) fires when the window was closed from outside your code: the user clicked its close button, or the app is shutting down. Handle it by unmounting, which is what `notesOpen = false` does.
+
+If you do not unmount, the subtree comes back: it is painted inline in the main window again, at its place in the tree, with its state intact. The component stays closed. It does not open a new window until it is mounted again.
+
+<Demo
+  id="pop-out/reattach"
+  caption="Closing a pop-out that is not driven by v-if puts its subtree back inline in the main window."
+/>
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { SkWindow } from "@skathi-native/runtime";
+
+const count = ref(0);
+</script>
+
+<template>
+  <main class="page">
+    <p>The counter opens in its own window. Close that window and the counter returns here.</p>
+    <SkWindow title="Counter" :bounds="{ width: 240, height: 160 }">
+      <div class="panel">
+        <button @click="count++">Clicked {{ count }} times</button>
+      </div>
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.page {
+  padding: 24px;
+}
+.panel {
+  padding: 16px;
+}
+</style>
+```
+
+> **Warning:** `@close` does not fire when your app closes the window by unmounting it. The emit arrives after Vue has unmounted the component, and Vue drops it. Put cleanup that must run on every close in the content's `onUnmounted`, or next to the code that flips the `v-if` flag.
+
+A pop-out cannot refuse to close: it has no `close-requested` event. When the main window closes, the app quits and every pop-out closes with it.
+
+## Live and creation-time props
+
+Some props are read once, when the window is created. Others are applied to the open window when they change. Live changes apply asynchronously, after `@open`.
+
+| Prop                                                                                             | Default           | Applies            | Effective on                                  |
+| ------------------------------------------------------------------------------------------------ | ----------------- | ------------------ | --------------------------------------------- |
+| [`title`](/window-api/sk-window-title/)                                                          | `"Skathi"`        | Live               | All                                           |
+| [`bounds`](/window-api/sk-window-bounds/)                                                        | 420 × 320         | Live on Windows    | All at creation; live changes on Windows only |
+| [`alwaysOnTop`](/window-api/sk-window-always-on-top/)                                            | `false`           | Live               | Windows                                       |
+| [`visible`](/window-api/sk-window-visible/)                                                      | `true`            | Live               | Windows                                       |
+| [`fullResolution`](/window-api/sk-window-full-resolution/)                                       | `false`           | Live               | All                                           |
+| [`ignoreMouseEvents`](/window-api/sk-window-ignore-mouse-events/)                                | `false`           | Live               | Windows                                       |
+| [`contentProtection`](/window-api/sk-window-content-protection/)                                 | `false`           | Live               | Windows                                       |
+| [`monitor`](/window-api/sk-window-monitor/)                                                      | Main's monitor    | Live, with `cover` | Windows                                       |
+| [`chrome`](/window-api/sk-window-chrome/)                                                        | `"default"`       | Creation; advises  | All, with gaps                                |
+| [`cover`](/window-api/sk-window-cover/)                                                          | none              | Creation; advises  | Windows                                       |
+| [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises  | Windows                                       |
+| [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises  | Windows                                       |
+| [`backdrop`](/window-api/sk-window-backdrop/)                                                    | Config `backdrop` | Creation; silent   | All, resolved per OS                          |
+| [`resizable`](/window-api/sk-window-resizable/)                                                  | `true`            | Creation; silent   | Windows, macOS                                |
+| [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Creation; silent   | All                                           |
+| [`titleBarHeight`](/window-api/sk-window-title-bar-height/)                                      | 32                | Creation; silent   | All                                           |
+| [`activate`](/window-api/sk-window-activate/)                                                    | `false`           | Creation; silent   | All; later shows on Windows only              |
+
+"Advises" means a change prints an advisory and does nothing. "Silent" means a change is ignored with no message. To change a creation-time prop, remount the window, for example with a `:key` that includes the value. [`SK_WINDOW_CREATION_TIME_PROPS`](/window-api/sk-window-creation-time-props/) lists eight of these props, but `titleBarHeight` and `activate` are missing from it, so use the table above.
+
+`minWidth` and `minHeight` work on their own in a pop-out. The main window's config needs both.
+
+## Palettes and inspectors
+
+A palette is a small window that edits the document in the main window. It should not take the keyboard when it appears, and it should stay with the main window rather than float over every other app.
+
+<Demo
+  id="pop-out/palette"
+  caption="A floating color palette: clicking a swatch in it recolors the canvas in the main window, because both windows share the same reactive state."
+/>
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { appWindow, SkWindow, type SkWindowBounds } from "@skathi-native/runtime";
+
+const colors = ["#e5484d", "#f76b15", "#ffc53d", "#30a46c", "#0090ff", "#8e4ec6"];
+const ink = ref("#0090ff");
+const open = ref(false);
+const bounds = ref<SkWindowBounds>({ width: 200, height: 260 });
+
+function showPalette() {
+  if (navigator.platform === "Win32") {
+    const main = appWindow.getBounds();
+    bounds.value = { x: main.x + main.width + 8, y: main.y, width: 200, height: 260 };
+  }
+  open.value = true;
+}
+</script>
+
+<template>
+  <main class="editor">
+    <div class="canvas" :style="{ background: ink }" />
+    <button v-if="!open" @click="showPalette">Show palette</button>
+    <SkWindow v-if="open" title="Palette" :bounds="bounds" :taskbar="false" :min-width="160" @close="open = false">
+      <div class="swatches">
+        <button
+          v-for="c in colors"
+          :key="c"
+          class="swatch"
+          :class="{ on: c === ink }"
+          :style="{ background: c }"
+          @click="ink = c"
+        />
+      </div>
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+}
+.canvas {
+  height: 240px;
+  border-radius: 12px;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(3, 48px);
+  gap: 10px;
+  padding: 16px;
+}
+.swatch {
+  width: 48px;
+  height: 48px;
+  border-radius: 24px;
+}
+.swatch.on {
+  border: 3px solid #ffffff;
+}
+</style>
+```
+
+- `activate` is left at `false`, so the palette appears without taking focus, and the caret stays where it was in the main window.
+- `:taskbar="false"` makes the palette an owned window on Windows: no taskbar button, no Alt+Tab entry, always above the main window, and minimized with it. See [Owned windows](#owned-windows).
+- On Windows the palette opens to the right of the main window. `appWindow.getBounds()` gives the main window's outer rect in CSS px of screen space, the same space as `bounds` when all monitors share one scale. On macOS `getBounds()` is relative to the current screen, so the sample passes only a size outside Windows.
+- Use [`alwaysOnTop`](/window-api/sk-window-always-on-top/) instead when the palette must stay above other apps' windows too. It works on Windows only.
+
+An inspector is the same pattern with a bigger window and `resizable` left on. Either one can use `chrome="hidden"` and draw a compact caption with `app-region: drag` and `--window-control: close`, as in [Custom title bars](/guides/custom-title-bar/). A pop-out never gets the host's caption buttons or fallback strip. With `chrome="hidden"`, its `env(titlebar-area-*)` always reports x and y 0, the window's width, and the `titleBarHeight` prop.
+
+## Tooltips that follow the main window
+
+A pop-out can show something outside the main window's edges, such as a tooltip, a drag preview or a callout, positioned against an element of the main window. [`mapFromMain(el)`](/window-api/sk-window-map-from-main/), exposed on the `<SkWindow>` ref, returns where a main-window element is, in the pop-out's CSS px and relative to its root. It maps through screen coordinates, so it holds across monitors with different scales.
+
+The usual host for such content is a transparent, click-through window that covers the monitor. You then place the content absolutely at the mapped rect.
+
+<Demo
+  id="pop-out/follow"
+  caption="A pop-out tooltip tracks the selected row of the main window with mapFromMain while the list scrolls."
+/>
+
+```vue
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { appWindow, SkWindow, type SkWindowTarget } from "@skathi-native/runtime";
+
+type Rect = { x: number; y: number; width: number; height: number };
+type Overlay = { mapFromMain(target: SkWindowTarget | null): Rect | null };
+
+const isWindows = navigator.platform === "Win32";
+const tracks = Array.from({ length: 40 }, (_, i) => `Track ${i + 1}`);
+const selected = ref<number | null>(null);
+const list = ref<SkWindowTarget | null>(null);
+const overlay = ref<Overlay | null>(null);
+const tip = ref<Rect | null>(null);
+const rows = new Map<number, SkWindowTarget>();
+const label = computed(() => (selected.value === null ? "" : `${tracks[selected.value]}, 3:41`));
+
+const rowRef = (i: number) => (el: unknown) => {
+  if (el) rows.set(i, el as SkWindowTarget);
+  else rows.delete(i);
+};
+
+function place() {
+  const row = selected.value === null ? undefined : rows.get(selected.value);
+  const r = row && overlay.value ? overlay.value.mapFromMain(row) : null;
+  const box = overlay.value ? overlay.value.mapFromMain(list.value) : null;
+  if (r && box && r.y + r.height > box.y && r.y < box.y + box.height) tip.value = r;
+  else tip.value = null;
+}
+
+let frame = 0;
+function schedule() {
+  cancelAnimationFrame(frame);
+  frame = requestAnimationFrame(place);
+}
+
+function select(i: number) {
+  selected.value = selected.value === i ? null : i;
+  schedule();
+}
+
+onMounted(() => {
+  appWindow.addEventListener("move", schedule);
+  window.addEventListener("resize", schedule);
+});
+onBeforeUnmount(() => {
+  appWindow.removeEventListener("move", schedule);
+  window.removeEventListener("resize", schedule);
+  cancelAnimationFrame(frame);
+});
+</script>
+
+<template>
+  <div ref="list" class="list" @scroll="schedule">
+    <div
+      v-for="(t, i) in tracks"
+      :key="t"
+      :ref="rowRef(i)"
+      class="row"
+      :class="{ on: selected === i }"
+      @click="select(i)"
+    >
+      {{ t }}
+    </div>
+  </div>
+  <SkWindow
+    v-if="isWindows"
+    ref="overlay"
+    class="layer"
+    title="Track details"
+    cover="monitor"
+    chrome="hidden"
+    backdrop="transparent"
+    always-on-top
+    ignore-mouse-events
+    :focusable="false"
+    :visible="tip !== null"
+  >
+    <div v-if="tip" class="tip" :style="{ left: `${tip.x + tip.width + 12}px`, top: `${tip.y}px` }">{{ label }}</div>
+  </SkWindow>
+</template>
+
+<style>
+.list {
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px;
+}
+.row {
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+.row.on {
+  background: #0090ff40;
+}
+.layer {
+  position: relative;
+}
+.tip {
+  position: absolute;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #1b1b1bf0;
+  color: #ffffff;
+  font-size: 12px;
+}
+</style>
+```
+
+- The overlay is created once and kept warm. `:visible` shows it while there is a tip and hides it otherwise, so a new tip costs one frame, not a window creation. `mapFromMain()` works while the window is hidden: for a `cover` window it measures where the next show will put it.
+- `place()` runs in `requestAnimationFrame` after a scroll, a row click, a main-window `move` or a `resize`, so it reads the layout of the frame that moved. Do not call `mapFromMain()` on every frame when nothing has changed.
+- The tip hides when the selected row scrolls out of the list, by comparing the row with the list's own mapped rect.
+- `mapFromMain()` returns `null` before `@open`, after the window closes, and when either element is not painted.
+
+> **Note:** `mapFromMain()` and `cover` work on Windows only. On macOS and Linux `mapFromMain()` always returns `null`, and a `cover` window is never shown. That is why the sample mounts the overlay only on Windows. On other platforms, show the tooltip inside the main window.
+
+## Click-through overlays
+
+An overlay draws over the desktop, on top of other apps, without getting in the way of the mouse. Four props make one:
+
+- [`cover="monitor"`](/window-api/sk-window-cover/): a frameless window that covers a whole monitor, taskbar included. `bounds` is ignored. The main window's monitor is used unless [`monitor`](/window-api/sk-window-monitor/) names another.
+- [`ignoreMouseEvents`](/window-api/sk-window-ignore-mouse-events/): clicks pass through the window to whatever is under it, other apps included. It is live, so you can switch it off while the user interacts with the overlay.
+- [`:focusable="false"`](/window-api/sk-window-focusable/): the window is never activated, never takes the keyboard, and has no taskbar or Alt+Tab entry.
+- `backdrop="transparent"` with `chrome="hidden"`: no material and no caption, only what you paint.
+
+<Demo
+  id="pop-out/overlay"
+  caption="A click-through countdown ring over the desktop while the app and other windows keep working."
+/>
+
+```vue
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref } from "vue";
+import { SkWindow } from "@skathi-native/runtime";
+
+const isWindows = navigator.platform === "Win32";
+const total = 10;
+const left = ref(0);
+let timer = 0;
+
+function start() {
+  left.value = total;
+  clearInterval(timer);
+  timer = setInterval(() => {
+    left.value -= 1;
+    if (left.value <= 0) clearInterval(timer);
+  }, 1000);
+}
+onBeforeUnmount(() => clearInterval(timer));
+
+const ring = computed(() => `conic-gradient(#0090ff ${(left.value / total) * 360}deg, #ffffff26 0deg)`);
+</script>
+
+<template>
+  <main class="page">
+    <button v-if="left === 0" @click="start">Start a 10-second break</button>
+    <p v-else>Break ends in {{ left }} s</p>
+    <SkWindow
+      v-if="isWindows"
+      class="overlay"
+      title="Break timer"
+      cover="monitor"
+      chrome="hidden"
+      backdrop="transparent"
+      always-on-top
+      ignore-mouse-events
+      :focusable="false"
+      :visible="left > 0"
+    >
+      <div class="ring" :style="{ background: ring }">
+        <div class="hole">{{ left }}</div>
+      </div>
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.page {
+  padding: 24px;
+}
+.overlay {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 48px;
+}
+.ring {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 120px;
+  border-radius: 60px;
+}
+.hole {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border-radius: 48px;
+  background: #1b1b1bf0;
+  color: #ffffff;
+  font-size: 32px;
+}
+</style>
+```
+
+- The overlay is mounted once and toggled with `visible`. A hidden window stays created and keeps painting, so showing it again is one frame. A hidden `cover` window gives back its monitor-sized surface after 30 seconds.
+- [`@show`](/window-api/sk-window-event-show/) fires on each of those shows, with `firstFrameMs`, the time from the show request to the first frame. [`@hide`](/window-api/sk-window-event-hide/) fires when `visible` goes back to `false`. Neither fires for an ordinary pop-out that opens visible.
+- `alwaysOnTop` keeps the ring above other apps' windows when they are activated.
+
+> **Note:** This scenario is Windows-only. On macOS and Linux a window created hidden never appears: that covers `cover`, `:focusable="false"` and `:visible="false"` at creation. `ignoreMouseEvents`, `alwaysOnTop` and live `visible` do nothing there.
+
+## Owned windows
+
+[`:taskbar="false"`](/window-api/sk-window-taskbar/) makes the pop-out owned by the main window on Windows. An owned window:
+
+- has no taskbar button and no Alt+Tab entry;
+- always stays above the main window, without being topmost over other apps;
+- minimizes and restores with the main window.
+
+That suits palettes, inspectors and find bars. It is the only owner relationship Skathi has. Pop-outs are otherwise siblings: a `<SkWindow>` nested inside another is flattened to a sibling window, with an advisory. `taskbar` is creation-time, and on macOS and Linux it does nothing.
+
+## Focus
+
+Focus is per window. An `<input>` in a pop-out holds the focus in that window while the main window keeps its own focused element.
+
+- [`activate`](/window-api/sk-window-activate/) (default `false`) decides whether the window takes the keyboard when it is shown. Leave it off for palettes and turn it on for windows the user types into first.
+- [`@focus`](/window-api/sk-window-event-focus/) and [`@blur`](/window-api/sk-window-event-blur/) report the pop-out's own activation. They arrive with the pop-out's next frame.
+- When a pop-out takes focus, the main window loses it: `window` receives [`blur`](/window-api/event-blur/), and [`appWindow.isFocused()`](/window-api/is-focused/) turns `false`.
+- On Windows, hiding a pop-out with `visible` hands activation back to the main window.
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { appWindow, SkWindow } from "@skathi-native/runtime";
+
+const findOpen = ref(false);
+const findFocused = ref(false);
+const query = ref("");
+</script>
+
+<template>
+  <main class="page">
+    <button @click="findOpen = true">Find</button>
+    <p>Main window active: {{ appWindow.isFocused() }}. Find window active: {{ findFocused }}.</p>
+    <SkWindow
+      v-if="findOpen"
+      title="Find"
+      :bounds="{ width: 320, height: 120 }"
+      :taskbar="false"
+      activate
+      @focus="findFocused = true"
+      @blur="findFocused = false"
+      @close="findOpen = false"
+    >
+      <input v-model="query" class="query" placeholder="Search the document" />
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.page {
+  padding: 24px;
+}
+.query {
+  width: 100%;
+  padding: 8px;
+}
+</style>
+```
+
+`activate` is ignored, with an advisory, on a window with `:focusable="false"`. On macOS and Linux it applies only to the first show.
+
+## Keep a window out of screen captures
+
+[`contentProtection`](/window-api/sk-window-content-protection/) excludes a pop-out from screenshots, screen recording and screen sharing. On Windows 10 version 2004 and later the window is left out of the capture entirely. On older versions it is captured as black. It is live, so you can protect the window only while it shows something sensitive.
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { SkWindow } from "@skathi-native/runtime";
+
+const open = ref(false);
+const revealed = ref(false);
+</script>
+
+<template>
+  <main class="page">
+    <button @click="open = true">Show recovery codes</button>
+    <SkWindow
+      v-if="open"
+      title="Recovery codes"
+      :bounds="{ width: 320, height: 220 }"
+      :content-protection="revealed"
+      @close="open = false"
+    >
+      <div class="codes">
+        <p v-if="revealed">4F7K-29QX · 8LMD-0RTE · ZC3V-71HN</p>
+        <button @click="revealed = !revealed">{{ revealed ? "Hide" : "Reveal" }}</button>
+      </div>
+    </SkWindow>
+  </main>
+</template>
+
+<style>
+.page,
+.codes {
+  padding: 24px;
+}
+</style>
+```
+
+> **Note:** `contentProtection` works on Windows only. On macOS and Linux the window is captured as usual. It protects only that pop-out: the main window has no equivalent.
+
+## Multiple monitors
+
+All `<SkWindow>` numbers are CSS px. A few rules decide where a pop-out lands:
+
+- **With `x` and `y` in `bounds`**, the window opens there. `bounds` is the client area, and both `x` and `y` must be given.
+- **Without them**, a pop-out that opens visible is centered on the **primary display**, not on the main window's monitor. A pop-out created hidden is centered on the main window's monitor when it is first shown. To open next to the main window on any monitor, compute `x` and `y` from `appWindow.getBounds()`, as the palette sample does.
+- **Live `bounds` changes** (Windows) are converted with the main window's scale. With monitors at different scales, a position on the other monitor is off by the ratio of the two scales.
+- **`cover="monitor"`** covers the main window's monitor. `monitor` picks another by its index in the Windows display enumeration. That index is not the same as an index into `screen` or any other API. An index with no monitor behind it falls back to the main window's monitor with an advisory, and changing `monitor` moves a shown cover window live.
+- **`mapFromMain()`** maps through screen coordinates, so a tooltip overlay on one monitor can track an element of a main window on another.
+
+There is no list of displays: [`getScreenDetails()`](/window-api/get-screen-details/) rejects with `NotSupportedError`. [`screen`](/window-api/screen/) describes the main window's display, and `screen.isExtended` tells you whether there is more than one.
+
+## Platform support
+
+| Feature                                                            | Windows   | macOS                                   | Linux                                 |
+| ------------------------------------------------------------------ | --------- | --------------------------------------- | ------------------------------------- |
+| Open and close, `title`, shared state, per-window CSS              | Supported | Supported                               | Supported                             |
+| `@open`, `@close`, `@focus`, `@blur`, `@resize`                    | Supported | Supported                               | Supported                             |
+| `bounds`                                                           | Live      | At creation only                        | At creation only                      |
+| `chrome="hidden"`                                                  | Supported | Traffic lights work; drag regions inert | No host drag or resize handling       |
+| `resizable`                                                        | Supported | Supported                               | Ignored                               |
+| `activate`                                                         | Supported | First show only                         | First show only                       |
+| `alwaysOnTop`, `taskbar`, `contentProtection`, `ignoreMouseEvents` | Supported | No-op                                   | No-op                                 |
+| `visible`, `@show`, `@hide`                                        | Supported | No-op; hidden at creation never shows   | No-op; hidden at creation never shows |
+| `cover`, `monitor`, `:focusable="false"`                           | Supported | Window never shown                      | Window never shown                    |
+| `mapFromMain()`                                                    | Supported | Returns `null`                          | Returns `null`                        |
+
+For code that must run everywhere, open and close with `v-if` and keep the Windows-only props behind a platform check, as the samples above do with `navigator.platform`.
+
+## Pitfalls
+
+- **Forgetting `@close`.** Without it, a closed pop-out's content reappears inline in the main window.
+- **Expecting `@close` after `v-if` turns false.** It fires only for closes your code did not start.
+- **Expecting `@show` on a normal open.** `@show` fires only for a window that was created hidden or toggled with `visible`. Use `@open` or the first `@resize` to know a normal pop-out is up.
+- **Changing a creation-time prop.** `backdrop`, `resizable`, `minWidth`, `minHeight`, `titleBarHeight` and `activate` change silently with no effect. Remount with a new `:key`.
+- **Calling `matchMedia()` for the pop-out.** It answers for the main window. Use CSS `@media`, or the pop-out's `@resize` and exposed `width`.
+- **Popping out the same node twice.** A second `<SkWindow>` on a node that is already popped out is refused.
+- **No position getter.** You can set `bounds`, but nothing reports where the user moved the pop-out. Only its size comes back, through `@resize`.
+- **Unit tests.** In the unit-test harness the host functions are missing and mounting `<SkWindow>` throws. Stub the component in tests.
+
+## See also
+
+- [Windows](/guides/windows/): the main window, `appWindow`, theme and backdrop.
+- [Custom title bars](/guides/custom-title-bar/): drag regions and caption buttons for `chrome="hidden"`.
+- [Closing and running in the background](/guides/closing-and-background/): what happens to pop-outs when the app closes.
+- Reference: [`<SkWindow>`](/window-api/sk-window/), [`bounds`](/window-api/sk-window-bounds/), [`chrome`](/window-api/sk-window-chrome/), [`visible`](/window-api/sk-window-visible/), [`cover`](/window-api/sk-window-cover/), [`ignoreMouseEvents`](/window-api/sk-window-ignore-mouse-events/), [`focusable`](/window-api/sk-window-focusable/), [`taskbar`](/window-api/sk-window-taskbar/), [`contentProtection`](/window-api/sk-window-content-protection/), [`monitor`](/window-api/sk-window-monitor/), [`mapFromMain()`](/window-api/sk-window-map-from-main/), [`@close`](/window-api/sk-window-event-close/), [`@resize`](/window-api/sk-window-event-resize/), [`@show`](/window-api/sk-window-event-show/), [`window.open()`](/window-api/window-open/).
+- Web platform: [`window.open`](/web-platform/window-open/), [`matchMedia`](/web-platform/match-media/).

@@ -9,6 +9,9 @@
   html {
     scroll-behavior: smooth;
     scroll-padding-top: 40px;
+    cursor:
+      url("/cursor.svg") 6 5,
+      auto;
   }
   body {
     margin: 0;
@@ -982,6 +985,37 @@
   .table-scroll table {
     margin: 0;
     min-width: 540px;
+  }
+  .prose .demo {
+    margin: 28px 0;
+  }
+  .demo-frame {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--lift);
+  }
+  .demo-frame video {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .demo-pending .demo-frame {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 16 / 10;
+    border-style: dashed;
+    box-shadow: none;
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .prose .demo figcaption {
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
   }
   .prose img {
     max-width: 100%;

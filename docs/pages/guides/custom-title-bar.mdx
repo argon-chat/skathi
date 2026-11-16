@@ -1,0 +1,490 @@
+---
+title: Custom title bars
+label: Custom title bar
+description: Draw your own title bar with drag regions, caption buttons and edge resizing, and know what each OS does with it.
+section: Guides
+order: 2
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+By default a Skathi window has no OS caption: your app draws the title bar, the way an installed web app does with Window Controls Overlay. This guide builds that title bar from the ground up. It covers the drag region and the buttons and fields inside it, sizing the bar with `env(titlebar-area-*)`, the host's caption buttons versus your own, double-click to maximize, and resizing the frameless window by its edges. Windows has full support. On macOS the CSS drag regions and buttons do not work, and Linux has two gaps. The last sections give the details.
+
+## Choose who draws the title bar
+
+The `window` block of `sk.config.json` decides, once, before the window opens. [`titleBarStyle`](/window-api/config-window-title-bar-style/) has two working values:
+
+| Value                | Who draws the caption | `display-mode`            | Drag regions and `--window-control` |
+| -------------------- | --------------------- | ------------------------- | ----------------------------------- |
+| `"hidden"` (default) | Your app              | `window-controls-overlay` | Live                                |
+| `"default"`          | The OS                | `standalone`              | Inert, with an advisory             |
+
+```json
+{
+  "window": {
+    "title": "Notebook",
+    "width": 960,
+    "height": 640,
+    "minWidth": 480,
+    "minHeight": 320,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 36
+  }
+}
+```
+
+[`titleBarHeight`](/window-api/config-window-title-bar-height/) (default 32) is the height of the title bar area. It sets `env(titlebar-area-height)`, the height of the host's caption buttons and, on macOS, where the traffic lights sit.
+
+A few values that look useful do nothing:
+
+- `"titleBarStyle": "hiddenInset"` is treated as `"hidden"` on every OS, macOS included, with an advisory.
+- [`"frame": false`](/window-api/config-window-frame/) prints an advisory and changes nothing. A truly frameless window would lose its shadow, its animations and its resize edges, so Skathi does not offer one. `"hidden"` is the frameless style: the window keeps its OS frame and you draw everything inside it.
+- `defineWindow({ titleBarStyle })` and `defineWindow({ frame })` only advise. The style is fixed when the window is created, so change it in `sk.config.json` and restart.
+
+## Make the window draggable
+
+Mark the title bar with [`app-region: drag`](/css/app-region/). The property is inherited, so every descendant drags the window too. Carve interactive elements out with `app-region: no-drag`. Skathi also reads `-webkit-app-region` and its own `window-drag: move | none` as the same property.
+
+<Demo
+  id="title-bar/drag-region"
+  caption="Dragging the window by its custom title bar, then double-clicking the bar to maximize and restore it."
+/>
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const query = ref("");
+
+function toggleTheme() {
+  appWindow.theme = appWindow.theme === "dark" ? "light" : "dark";
+}
+</script>
+
+<template>
+  <div class="shell">
+    <header class="titlebar">
+      <span class="title">{{ appWindow.title }}</span>
+      <input v-model="query" class="search" placeholder="Search notes" />
+      <button class="theme" @click="toggleTheme">Theme</button>
+    </header>
+    <main class="content">
+      <p>Drag the bar above to move the window. Double-click it to maximize.</p>
+    </main>
+  </div>
+</template>
+
+<style>
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: env(titlebar-area-height, 36px);
+  width: env(titlebar-area-width, 100%);
+  padding: 0 12px;
+  app-region: drag;
+  user-select: none;
+}
+.title {
+  flex: 1;
+  font-size: 12px;
+}
+.search,
+.theme {
+  app-region: no-drag;
+}
+.search {
+  width: 220px;
+}
+.content {
+  flex: 1;
+  padding: 24px;
+}
+</style>
+```
+
+- `app-region: drag` on `.titlebar` makes the bar, the title text and any empty space between the controls move the window.
+- `.search` and `.theme` are no-drag islands. A press on them reaches the element and does not start a move.
+- `appWindow.title` is reactive, so the bar follows `document.title` without an event listener.
+
+### Keep every control out of the drag region
+
+Give each button, field, tab or menu inside the bar `app-region: no-drag`. Platforms disagree about a press on an interactive element that is still inside a drag region:
+
+- **Windows:** Skathi still delivers the click to the element and prints a `window-drag/interactive` advisory. A browser or Electron would swallow it.
+- **Linux:** the host takes the mouse-down to start the window move.
+
+Mark the islands and the bar behaves the same everywhere. An element with `--window-control` is already carved out and needs no extra rule.
+
+### Double-click and snap
+
+On Windows a drag region is the OS caption: Windows answers the hit test with `HTCAPTION`. Double-clicking it maximizes and restores, dragging it to the top of the screen maximizes, and Aero Snap works as it does in any native app. Do not add a `dblclick` handler that calls [`appWindow.toggleMaximize()`](/window-api/toggle-maximize/). The OS already does it.
+
+On Linux the host handles the double-click and calls `toggleMaximize()`. That maximizes the window, but a second double-click cannot restore it (see [Linux](#linux)).
+
+If a drag region is not enough, for example on a custom canvas, [`appWindow.startDragging()`](/window-api/start-dragging/) starts the OS move loop from a `mousedown` handler. It works on Windows only and does nothing on macOS and Linux.
+
+## Size the bar with env() and display-mode
+
+The host publishes the title bar area as [`env(titlebar-area-x | -y | -width | -height)`](/css/function-env/) and through [`navigator.windowControlsOverlay`](/web-platform/navigator-window-controls-overlay/):
+
+- `x` and `y` are 0.
+- `width` is the window width minus the host's caption buttons when they are installed (138 px; see [`titleBarOverlay`](#use-the-host-caption-buttons)).
+- `height` is `titleBarHeight`.
+
+The values are defined only while the overlay is visible: `titleBarStyle` is `"hidden"`, the window is neither fullscreen nor minimized, and the [fallback title bar](#the-fallback-title-bar) has retired. At other times `env()` takes its fallback. Always write one, as in `height: env(titlebar-area-height, 36px)`.
+
+[`@media (display-mode)`](/css/media-display-mode/) tells you which case you are in:
+
+| `display-mode`            | When                                   |
+| ------------------------- | -------------------------------------- |
+| `window-controls-overlay` | `titleBarStyle: "hidden"`, windowed    |
+| `standalone`              | `titleBarStyle: "default"` (OS chrome) |
+| `fullscreen`              | The window is fullscreen               |
+
+```css
+@media (display-mode: fullscreen) {
+  .titlebar {
+    display: none;
+  }
+}
+@media (display-mode: standalone) {
+  .titlebar {
+    display: none;
+  }
+}
+```
+
+The first rule hides your bar in fullscreen, where the host also hides its caption buttons. The second lets the same stylesheet run under OS chrome, where your drag regions would do nothing.
+
+From script, [`getTitlebarAreaRect()`](/window-api/get-titlebar-area-rect/) returns the same rect and [`geometrychange`](/window-api/event-geometrychange/) fires when it changes. The event fires for a change of width, scale, maximized or fullscreen state, `titleBarHeight`, the fallback strip or the host buttons. It does not fire for a height-only resize or for a minimize. [`appWindow.chrome`](/window-api/chrome/) adds Skathi's own fields, such as `hostControls` and `displayMode`.
+
+> **Note:** `env(titlebar-area-x)` and `getTitlebarAreaRect().x` are always 0, macOS included, where the traffic lights sit on the left. See [macOS](#macos) for the padding to add yourself.
+
+## The fallback title bar
+
+With [`titleBarFallback`](/window-api/config-window-title-bar-fallback/) at its default of `true`, the host draws a 36 px strip above your app: a drag area with the config title in it. The strip retires for good on the first frame in which your app paints a drag region. That keeps a window movable while your app is still loading, or if it never draws a title bar of its own.
+
+While the strip is up:
+
+- `env(titlebar-area-*)` is undefined, so the fallbacks apply. For an app that paints its bar on the first frame, that is one frame.
+- `navigator.windowControlsOverlay.visible` is `false`.
+- `innerHeight` excludes the strip, and `appWindow.chrome.contentInset.top` is 36.
+
+Set `"titleBarFallback": false` when your app always draws its own drag region. The rect is then real from the first frame. Under `titleBarStyle: "default"` the option is ignored with an advisory.
+
+> **Note:** The strip is always 36 px high, whatever `titleBarHeight` says. It shows the config `title` and does not follow later changes to `document.title` or `appWindow.title`.
+
+## Use the host caption buttons
+
+[`titleBarOverlay`](/window-api/config-window-title-bar-overlay/) installs minimize, maximize and close buttons drawn by the host, 3 × 46 px at the top-right, as tall as the title bar area. On Windows they are real caption buttons: the OS performs the action, and hovering maximize opens the Windows 11 snap layouts flyout. `env(titlebar-area-width)` already leaves room for them, so lay your content out to that width and nothing will sit under them.
+
+Set it in `sk.config.json` (`"titleBarOverlay": true` or an object), or at run time with [`appWindow.setTitleBarOverlay()`](/window-api/set-title-bar-overlay/). The sample installs the buttons from script so it can skip macOS, where they are drawn but do nothing, and so it can recolor the glyphs with the theme.
+
+<Demo
+  id="title-bar/overlay"
+  caption="Host-drawn caption buttons next to the app's tabs: hover, maximize and restore."
+/>
+
+```vue
+<script setup lang="ts">
+import { onBeforeUnmount, ref } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const tabs = ref(["Inbox", "Drafts", "Archive"]);
+const active = ref("Inbox");
+const dark = matchMedia("(prefers-color-scheme: dark)");
+
+function paintButtons() {
+  appWindow.setTitleBarOverlay({ symbolColor: dark.matches ? "#ffffffe0" : "#1b1b1be0" });
+}
+
+if (navigator.platform !== "MacIntel") {
+  paintButtons();
+  dark.addEventListener("change", paintButtons);
+}
+onBeforeUnmount(() => dark.removeEventListener("change", paintButtons));
+</script>
+
+<template>
+  <div class="shell">
+    <header class="titlebar">
+      <button v-for="tab in tabs" :key="tab" class="tab" :class="{ active: tab === active }" @click="active = tab">
+        {{ tab }}
+      </button>
+      <button class="tab" @click="tabs.push(`Tab ${tabs.length + 1}`)">+</button>
+    </header>
+    <main class="content">{{ active }}</main>
+  </div>
+</template>
+
+<style>
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.titlebar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: env(titlebar-area-height, 40px);
+  width: env(titlebar-area-width, 100%);
+  padding-left: 8px;
+  app-region: drag;
+}
+.tab {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  app-region: no-drag;
+}
+.tab.active {
+  background: #80808033;
+}
+.content {
+  flex: 1;
+  padding: 24px;
+}
+</style>
+```
+
+- Each tab is a no-drag island. The gaps between tabs and the space after the last one still drag the window.
+- `setTitleBarOverlay({ symbolColor })` installs the cluster or updates it. The default glyph color is a fixed `#ffffffe0`, which is white in a light theme too, so set `symbolColor` yourself and update it on the `prefers-color-scheme` change. `appWindow.theme` drives that media query, so the glyphs follow a forced theme as well.
+- Colors are hex only: `#rgb`, `#rrggbb` or `#rrggbbaa`. A named color or `rgb()` is refused with an advisory.
+- `setTitleBarOverlay(true)` installs the cluster with the default colors and resets custom ones. `false` or `null` removes it. Both fire `geometrychange`, and `appWindow.chrome.hostControls` reports the current state.
+
+> **Note:** The hover colors are fixed: white at 10 % for minimize and maximize, `#c42b1c` for close. On a light background the white hover is faint. If that matters, draw your own buttons.
+
+## Draw your own caption buttons
+
+To style the buttons yourself, give any element [`--window-control`](/css/window-control/) with the value `minimize`, `maximize` or `close`. On Windows the element then answers the OS hit test as that caption button. The OS performs the action, `maximize` shows the snap layouts flyout on hover, and `close` is a user close that dispatches [`close-requested`](/window-api/event-close-requested/). The element is implicitly no-drag.
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "@skathi-native/runtime";
+</script>
+
+<template>
+  <header class="titlebar">
+    <span class="title">{{ appWindow.title }}</span>
+    <div class="controls">
+      <div class="ctl min" title="Minimize">–</div>
+      <div class="ctl max" :title="appWindow.isMaximized() ? 'Restore' : 'Maximize'">
+        {{ appWindow.isMaximized() ? "❐" : "□" }}
+      </div>
+      <div class="ctl close" title="Close">✕</div>
+    </div>
+  </header>
+</template>
+
+<style>
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: env(titlebar-area-height, 36px);
+  app-region: drag;
+  user-select: none;
+}
+.title {
+  flex: 1;
+  padding-left: 12px;
+  font-size: 12px;
+}
+.controls {
+  display: flex;
+  height: 100%;
+}
+.ctl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  font-size: 12px;
+}
+.ctl:hover {
+  background: #80808026;
+}
+.min {
+  --window-control: minimize;
+}
+.max {
+  --window-control: maximize;
+}
+.close {
+  --window-control: close;
+}
+.close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+</style>
+```
+
+- No click handlers. The OS acts on the non-client click, and Skathi also forwards that click into the tree, so a handler on the same element makes the window act twice. Skathi prints a `window-control/double-action` advisory when it sees both.
+- `appWindow.isMaximized()` is reactive, so the maximize glyph and tooltip follow the window state with no listener.
+- The title bar uses no `env(titlebar-area-width)` here, because there is no host cluster to leave room for.
+- The buttons respect [`resizable`](/window-api/config-window-resizable/) and [`minimizable`](/window-api/config-window-minimizable/). With `"resizable": false` the maximize element becomes caption (it drags) instead of a button.
+
+## Resize a frameless window by its edges
+
+A `"hidden"` window keeps its resize edges, so there is nothing to build. [`appWindow.startResizeDragging()`](/window-api/start-resize-dragging/) exists only for code ported from other frameworks: it advises and does nothing. What you do write is a layout that reflows as the window changes size, and a minimum size in `sk.config.json`.
+
+<Demo
+  id="title-bar/edge-resize"
+  caption="Resizing a frameless window by its edge; the sidebar collapses at a breakpoint as the layout reflows."
+/>
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+
+const folders = ["Inbox", "Drafts", "Sent", "Archive"];
+const current = ref("Inbox");
+</script>
+
+<template>
+  <div class="shell">
+    <header class="titlebar">Mail</header>
+    <div class="body">
+      <nav class="sidebar">
+        <div v-for="f in folders" :key="f" class="folder" :class="{ on: f === current }" @click="current = f">
+          {{ f }}
+        </div>
+      </nav>
+      <main class="list">{{ current }}</main>
+    </div>
+  </div>
+</template>
+
+<style>
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: env(titlebar-area-height, 36px);
+  padding-left: 12px;
+  font-size: 12px;
+  app-region: drag;
+}
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.sidebar {
+  width: 200px;
+  padding: 8px;
+  border-right: 1px solid #80808040;
+}
+.folder {
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.folder.on {
+  background: #80808033;
+}
+.list {
+  flex: 1;
+  padding: 16px;
+}
+@media (max-width: 640px) {
+  .sidebar {
+    display: none;
+  }
+}
+</style>
+```
+
+Where the edges are depends on the OS:
+
+- **Windows:** the window keeps its OS resize frame on all four edges. Along the top edge the host answers the resize hit test before your drag region, so the top few pixels of the title bar resize the window rather than move it. There is no top band while the window is maximized.
+- **macOS:** AppKit resizes the window from its edges as usual.
+- **Linux:** with client-side decorations the host adds 6 px resize strips on each edge and corner, except while the window is maximized, fullscreen or tiled. When the compositor draws server-side decorations, the host leaves resizing to it.
+
+`"resizable": false` removes the edges on Windows and macOS. Linux ignores it, and the host strips stay.
+
+> **Warning:** [`minWidth`](/window-api/config-window-min-width/) and [`minHeight`](/window-api/config-window-min-height/) apply to the main window only when both are given. A lone `minWidth` is ignored. On Windows a `minWidth` above 500 also advises that snap layouts will refuse the window. Skathi has no maximum size option.
+
+## Platform behavior
+
+| Feature                                | Windows                                    | macOS                                 | Linux                                                |
+| -------------------------------------- | ------------------------------------------ | ------------------------------------- | ---------------------------------------------------- |
+| `titleBarStyle: "hidden"`              | Supported                                  | Partial: see [macOS](#macos)          | Supported: the host draws client-side chrome         |
+| `app-region` drag                      | OS caption: move, double-click, snap       | Inert                                 | Host move; double-click maximizes but cannot restore |
+| `--window-control`                     | OS caption buttons, snap layouts flyout    | Inert                                 | Acts on mouse-up; maximize cannot restore; see below |
+| `titleBarOverlay` buttons              | Supported                                  | Drawn in Windows style, do nothing    | Work; maximize cannot restore; see below             |
+| `env(titlebar-area-*)`, `display-mode` | Supported                                  | Supported, but `x` ignores the lights | Supported                                            |
+| Edge resizing                          | OS frame, plus a host band on the top edge | AppKit                                | Host strips (client-side decorations)                |
+| `resizable`, `minimizable`             | Supported                                  | Supported                             | Ignored                                              |
+| `startDragging()`                      | Supported                                  | No-op                                 | No-op                                                |
+
+### macOS
+
+With `"hidden"` the title bar is transparent and your content runs under it. AppKit's traffic lights stay. Skathi places them 12 px from the left edge and centers them vertically in `titleBarHeight`, once, when the window is created.
+
+On macOS, CSS drag regions and `--window-control` are inert. Only the band that AppKit itself keeps at the top of the window drags it. The host caption cluster from `titleBarOverlay` is drawn with Windows glyphs at the top-right and does nothing, so do not install it on macOS (the overlay sample above checks `navigator.platform`).
+
+`env(titlebar-area-x)` stays 0, so leave room for the traffic lights yourself:
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "@skathi-native/runtime";
+
+const mac = navigator.platform === "MacIntel";
+</script>
+
+<template>
+  <header class="titlebar" :class="{ mac }">{{ appWindow.title }}</header>
+</template>
+
+<style>
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: env(titlebar-area-height, 36px);
+  padding-left: 12px;
+  app-region: drag;
+}
+.titlebar.mac {
+  padding-left: 80px;
+}
+</style>
+```
+
+The `app-region` rule is harmless on macOS and keeps the bar draggable on Windows and Linux.
+
+### Linux
+
+On Linux the host draws the chrome itself. It moves the window from your drag regions, acts on `--window-control` and the `titleBarOverlay` buttons on mouse-up, and draws the resize strips. Two behaviors differ from Windows:
+
+- **Maximize cannot restore.** A double-click on a drag region, a `--window-control: maximize` element and the host maximize button all call `toggleMaximize()`. On Linux that maximizes the window but cannot restore it. Until this is fixed, draw the maximize button without `--window-control` and call [`appWindow.maximize()`](/window-api/maximize/) from its click handler. On Linux that call toggles.
+- **Close skips `close-requested`.** A `--window-control: close` element and the host close button close the app directly: no `close-requested`, no `beforeunload`, no `pagehide`. An app that hides to the tray from `close-requested` quits instead. See [Closing and running in the background](/guides/closing-and-background/).
+
+## Pitfalls
+
+- **Under OS chrome nothing works.** With `titleBarStyle: "default"`, `app-region`, `--window-control` and `setTitleBarOverlay()` are inert and print advisories. Hide the custom bar with `@media (display-mode: standalone)`.
+- **A click handler on a `--window-control` element acts twice** on Windows. Use one or the other.
+- **`appWindow.chrome.titleBarHeight` is not the configured height.** It is the height of the visible overlay area, and it reads 0 in fullscreen, while minimized and while the fallback strip is up.
+- **`getTitlebarAreaRect()` returns a plain object** with the `DOMRect` fields, not a `DOMRect` instance.
+- **Window state reads can lag a frame.** Verbs called inside a window event handler apply on the next frame. Read state reactively in the template rather than right after a verb.
+
+## See also
+
+- [Windows](/guides/windows/): window state, theme and backdrop, fullscreen.
+- [Pop-out windows](/guides/pop-out-windows/): a pop-out with `chrome="hidden"` draws its own caption the same way.
+- [Closing and running in the background](/guides/closing-and-background/): what the close button triggers.
+- Reference: [`titleBarStyle`](/window-api/config-window-title-bar-style/), [`titleBarHeight`](/window-api/config-window-title-bar-height/), [`titleBarFallback`](/window-api/config-window-title-bar-fallback/), [`titleBarOverlay`](/window-api/config-window-title-bar-overlay/), [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/), [`appWindow.chrome`](/window-api/chrome/), [`app-region`](/window-api/app-region/), [`--window-control`](/window-api/window-control/), [`env(titlebar-area-*)`](/window-api/env-titlebar-area/), [`display-mode`](/window-api/display-mode/), [`navigator.windowControlsOverlay`](/window-api/window-controls-overlay/), [`geometrychange`](/window-api/event-geometrychange/), [`toggleMaximize()`](/window-api/toggle-maximize/), [`startDragging()`](/window-api/start-dragging/).
+- CSS: [`app-region`](/css/app-region/), [`--window-control`](/css/window-control/), [`env()`](/css/function-env/), [`display-mode`](/css/media-display-mode/).

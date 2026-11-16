@@ -37,6 +37,7 @@ const behavior = entry.notes ?? [];
 const examples = entry.examples ?? [];
 const edgeCases = entry.edgeCases ?? [];
 const headings: MarkdownHeading[] = [
+  entry.syntax ? { depth: 2, slug: "syntax", text: "Syntax" } : undefined,
   behavior.length ? { depth: 2, slug: "behavior", text: "Behavior" } : undefined,
   entry.values?.length ? { depth: 2, slug: "values", text: "Values" } : undefined,
   examples.length ? { depth: 2, slug: "examples", text: "Examples" } : undefined,
@@ -130,6 +131,62 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
     {entry.experimental && <span class="sheet-badge sheet-badge-planned">Experimental on the web</span>}
     {entry.webDeprecated && <span class="sheet-badge sheet-badge-no">Deprecated on the web</span>}
   </div>
+
+  {
+    entry.syntax ? (
+      <>
+        <h2 id="syntax">Syntax</h2>
+        <div class="syntax">
+          <Code
+            code={entry.syntax.trim()}
+            lang="ts"
+            themes={{ light: "github-light", dark: "github-dark" }}
+            defaultColor={false}
+          />
+        </div>
+        {entry.params?.length ? (
+          <div class="table-scroll">
+            <table class="pinout params" data-plain>
+              <thead>
+                <tr>
+                  <th scope="col">Parameter</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entry.params.map((param) => (
+                  <tr>
+                    <td>
+                      <code>{param.name}</code>
+                      {param.optional && <span class="param-optional">optional</span>}
+                    </td>
+                    <td>
+                      <code class="param-type">{param.type}</code>
+                    </td>
+                    <td>
+                      <span set:html={inline(param.description)} />
+                      {param.default && (
+                        <span class="param-default">
+                          Default <code>{param.default}</code>
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {entry.returns && (
+          <p class="returns">
+            <span class="returns-label">Returns</span>
+            <span set:html={inline(entry.returns)} />
+          </p>
+        )}
+      </>
+    ) : null
+  }
 
   {
     behavior.length ? (

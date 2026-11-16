@@ -1,0 +1,684 @@
+---
+title: Windows
+label: Windows
+description: The main window from launch to quit, how to configure it, change its state, react to it and remember it, on Windows, macOS and Linux.
+section: Guides
+order: 1
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+Every Skathi app has one main window, and `appWindow` is how your code talks to it. This guide follows that window from launch to quit. It shows where each setting belongs, how to minimize, maximize, pin and fullscreen the window, how to keep the UI in step with its state, and how to bring it back at the same size next time. Many window verbs are fully implemented only on Windows today, and each section says which ones.
+
+## The main window
+
+A Skathi app has one JavaScript realm, one Vue app and one element tree. The main window paints that tree. Pop-out windows (`<SkWindow>`) paint parts of the same tree, so they share state with the main window without messaging.
+
+[`appWindow`](/window-api/app-window/) always addresses the main window, even when the code runs from an event handler inside a pop-out. The same is true of the web globals: `innerWidth`, `screenX`, `devicePixelRatio`, `screen`, `matchMedia()` and `document.title` all describe the main window.
+
+```ts
+import { appWindow, getCurrentWindow } from "@skathi-native/runtime";
+
+appWindow.title = "Notes";
+console.log(getCurrentWindow() === appWindow);
+```
+
+[`getCurrentWindow()`](/window-api/get-current-window/) returns `appWindow` so that code ported from Tauri runs unchanged. It never returns a pop-out; pop-outs have no handle object.
+
+Every `appWindow` verb is synchronous and returns `undefined`. There are no promises to await: the call is applied in the current frame, or queued to the top of the next one.
+
+## The lifecycle, from launch to quit
+
+1. **Launch.** With [`"singleInstance": true`](/window-api/config-single-instance/), a second launch hands its arguments to the running copy and exits without opening a window.
+2. **Create.** The host reads the `window` block of `sk.config.json` and creates the window at that size, centred on the primary display. On Windows the window is created hidden. On macOS and Linux it is shown at once.
+3. **Run your bundle.** `appWindow` already works at the top level of `main.ts`. Reads return the initial state; verbs are queued and applied at the top of the first frame. [`DOMContentLoaded` and `load`](/window-api/event-load/) fire once, after the bundle has run.
+4. **First frame.** The queued verbs are applied and window `resize` fires once. On Windows the host paints the first styled frame and only then shows the window, so there is no blank flash.
+5. **Running.** State changes arrive as events and as reactive reads, covered in [Reactive reads and events](#reactive-reads-and-events).
+6. **Close.** The user's close runs `close-requested`, then `beforeunload`, then `pagehide`. If nothing cancels it, every window of the app hides at once and pop-outs close.
+7. **Quit.** Closing the main window quits the app on every OS, macOS included. localStorage, cookies and IndexedDB are flushed, and a 4-second deadline ends the process.
+
+Steps 6 and 7 have their own guide: [Closing, hiding and quitting](/guides/closing-and-background/).
+
+> **Tip:** Because verbs called at the top level of `main.ts` run before the window is revealed on Windows, a call such as `appWindow.maximize()` there makes the window appear maximized, not jump to it.
+
+## Configure the window
+
+There are three places to shape the window. They are not interchangeable: some settings exist only at creation time.
+
+### sk.config.json
+
+The [`window` block](/window-api/config-window/) is read once, before the window exists. It is the only place to set the size, the minimum size, the title bar style and whether the window can be resized or minimized. Changing it takes a restart.
+
+```json
+{
+  "name": "notes",
+  "productName": "Notes",
+  "window": {
+    "title": "Notes",
+    "width": 960,
+    "height": 640,
+    "minWidth": 480,
+    "minHeight": 320,
+    "titleBarStyle": "default",
+    "backdrop": "mica",
+    "resizable": true
+  }
+}
+```
+
+The default `titleBarStyle` is `"hidden"`: your app draws its own title bar. This example asks for the OS caption instead. The [custom title bar guide](/guides/custom-title-bar/) covers the hidden style.
+
+> **Warning:** [`minWidth`](/window-api/config-window-min-width/) and [`minHeight`](/window-api/config-window-min-height/) apply to the main window only when you give both. One alone is ignored.
+
+### defineWindow
+
+[`defineWindow()`](/window-api/define-window/) is a convenience for the settings that can change at runtime. It runs when your bundle runs, after the window exists, and applies each key through the same setter a runtime call would use.
+
+```ts
+import { createApp, defineWindow } from "@skathi-native/runtime";
+import App from "./App.vue";
+
+defineWindow({ title: "Notes", backdrop: "acrylic", alwaysOnTop: false });
+
+createApp(App).mount();
+```
+
+It accepts `title`, `backdrop`, `alwaysOnTop`, `titleBarHeight` and `titleBarOverlay`. Any creation-time key, such as `width` or `resizable`, prints an advisory that tells you to move it to `sk.config.json` and is ignored. `theme` is not a `defineWindow` key; set `appWindow.theme` instead.
+
+### Runtime calls
+
+Everything else is a property or method of `appWindow`, plus the web globals. Changes made inside an input handler apply at once; changes made elsewhere apply at the next frame.
+
+### Which layer sets what
+
+| Setting                               | `sk.config.json`                    | `defineWindow` | At runtime                                                                           |
+| ------------------------------------- | ----------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| Title                                 | `title`                             | yes            | [`appWindow.title`](/window-api/title/), `document.title`                            |
+| Initial size                          | `width`, `height`                   | no             | [`setContentBounds()`](/window-api/set-content-bounds/)                              |
+| Minimum size                          | `minWidth` and `minHeight`          | no             | no                                                                                   |
+| Resizable, minimizable                | `resizable`, `minimizable`          | no             | no                                                                                   |
+| Title bar style and fallback strip    | `titleBarStyle`, `titleBarFallback` | no             | no                                                                                   |
+| Title bar height and host buttons     | `titleBarHeight`, `titleBarOverlay` | yes            | [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/)                         |
+| Backdrop                              | `backdrop`                          | yes            | [`appWindow.backdrop`](/window-api/backdrop/)                                        |
+| Always on top                         | `alwaysOnTop`                       | yes            | [`appWindow.alwaysOnTop`](/window-api/always-on-top/)                                |
+| `window.focus()` raises               | `focus: "raise"`                    | no             | no                                                                                   |
+| Theme                                 | none                                | no             | [`appWindow.theme`](/window-api/theme/)                                              |
+| Start position, maximized, fullscreen | none                                | no             | [`setBounds()`](/window-api/set-bounds/), `maximize()`, `setFullscreen()` at startup |
+
+Three keys do less than their names suggest:
+
+- [`maximizable`](/window-api/config-window-maximizable/) is accepted and ignored on every OS. On Windows, `"resizable": false` is what removes maximizing.
+- [`frame: false`](/window-api/config-window-frame/) prints an advisory and does nothing. Use `titleBarStyle` instead.
+- `resizable` and `minimizable` are ignored on Linux.
+
+For development, `SK_WINDOW=1280x800` overrides the configured size without editing the config.
+
+## Size, position and state
+
+### Minimize, maximize and restore
+
+<Demo
+  id="windows/state-verbs"
+  caption="An in-app toolbar minimizes, maximizes and restores the window while the state label follows it."
+/>
+
+```vue
+<script setup lang="ts">
+import { computed } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const state = computed(() => {
+  if (appWindow.isFullscreen()) return "fullscreen";
+  if (appWindow.isMinimized()) return "minimized";
+  return appWindow.isMaximized() ? "maximized" : "normal";
+});
+</script>
+
+<template>
+  <div class="toolbar">
+    <button class="btn" @click="appWindow.minimize()">Minimize</button>
+    <button class="btn" @click="appWindow.maximize()">Maximize</button>
+    <button class="btn" @click="appWindow.unmaximize()">Restore</button>
+    <button class="btn" @click="appWindow.toggleMaximize()">Toggle</button>
+    <span class="state">State: {{ state }}</span>
+  </div>
+</template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+}
+.btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #ffffff14;
+  color: #f3f3f3;
+}
+.state {
+  margin-left: auto;
+  font-size: 12px;
+  color: #ffffffb0;
+}
+</style>
+```
+
+The `computed` re-runs on its own: `appWindow` reads such as `isMaximized()` are reactive in templates, `computed` and `watch`. You never poll them.
+
+- [`minimize()`](/window-api/minimize/) and [`maximize()`](/window-api/maximize/) ask the OS to change the state. On Windows, calling `maximize()` twice is harmless.
+- [`unmaximize()`](/window-api/unmaximize/) and its alias [`restore()`](/window-api/restore/) restore from maximized, and on Windows also from minimized.
+- [`toggleMaximize()`](/window-api/toggle-maximize/) maximizes a normal window and restores a maximized one.
+
+The state verbs behave differently across platforms:
+
+| Call                        | Windows   | macOS                                                    | Linux                           |
+| --------------------------- | --------- | -------------------------------------------------------- | ------------------------------- |
+| `minimize()`                | supported | supported                                                | supported                       |
+| `maximize()`                | supported | toggles: a second call un-zooms                          | toggles: a second call restores |
+| `unmaximize()`, `restore()` | supported | does nothing                                             | does nothing                    |
+| `toggleMaximize()`          | supported | maximizes, but cannot restore                            | maximizes, but cannot restore   |
+| `isMinimized()`             | supported | always `false`                                           | always `false`                  |
+| `isMaximized()`             | supported | true only when the frame fills the screen's visible area | supported                       |
+
+> **Note:** On macOS and Linux, call `maximize()` again to restore a maximized window. It toggles there, while `unmaximize()`, `restore()` and `toggleMaximize()` cannot leave the maximized state. The `minimize` and `restore` events never fire on those platforms.
+
+### Fullscreen
+
+<Demo id="windows/fullscreen" caption="A button enters fullscreen, and both the button and the Escape key leave it." />
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "@skathi-native/runtime";
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen();
+  else void document.documentElement.requestFullscreen();
+}
+</script>
+
+<template>
+  <div class="player">
+    <button class="btn" @click="toggleFullscreen">
+      {{ appWindow.isFullscreen() ? "Leave fullscreen" : "Fullscreen" }}
+    </button>
+    <p class="hint">Press Escape to leave.</p>
+  </div>
+</template>
+
+<style scoped>
+.player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+}
+.btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: #ffffff14;
+  color: #f3f3f3;
+}
+.hint {
+  font-size: 12px;
+  color: #ffffff90;
+}
+</style>
+```
+
+There are two ways into fullscreen, and they differ in how the user gets out:
+
+| Route                                                            | Escape leaves it | `document.fullscreenElement` | Typical use                      |
+| ---------------------------------------------------------------- | ---------------- | ---------------------------- | -------------------------------- |
+| [`element.requestFullscreen()`](/window-api/request-fullscreen/) | yes              | the element                  | a video, a slide, the whole page |
+| [`appWindow.setFullscreen(true)`](/window-api/set-fullscreen/)   | no               | `null`                       | a kiosk mode the app controls    |
+
+- Escape and [`document.exitFullscreen()`](/window-api/exit-fullscreen/) only undo element fullscreen. Leave window fullscreen with `appWindow.setFullscreen(false)`.
+- Unlike in a browser, `requestFullscreen()` needs no click first. It rejects with a `TypeError` instead of firing `fullscreenerror`.
+- On Windows, leaving fullscreen restores the exact earlier rect, maximized or not, on any monitor. On macOS fullscreen is native: an animated, separate Space. On Linux the window manager decides.
+- [`isFullscreen()`](/window-api/is-fullscreen/) covers both routes, and the main window's [`fullscreenchange`](/window-api/event-fullscreenchange/) event fires for both.
+
+While fullscreen, `@media (display-mode: fullscreen)` matches and `env(titlebar-area-*)` is undefined, so a custom title bar can hide itself with CSS alone.
+
+### Always on top
+
+<Demo
+  id="windows/always-on-top"
+  caption="A Pin toggle keeps a small notes window above another window brought to the front."
+/>
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const note = ref(localStorage.getItem("note") ?? "");
+const save = () => localStorage.setItem("note", note.value);
+const togglePin = () => (appWindow.alwaysOnTop = !appWindow.alwaysOnTop);
+</script>
+
+<template>
+  <div class="notes">
+    <div class="bar">
+      <span class="title">Notes</span>
+      <button class="pin" :class="{ on: appWindow.alwaysOnTop }" @click="togglePin">
+        {{ appWindow.alwaysOnTop ? "Pinned" : "Pin" }}
+      </button>
+    </div>
+    <textarea v-model="note" class="text" @input="save" />
+  </div>
+</template>
+
+<style scoped>
+.notes {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+}
+.title {
+  flex: 1;
+  font-size: 13px;
+}
+.pin {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #ffffff14;
+}
+.pin.on {
+  background: #4cc2ff;
+  color: #000000;
+}
+.text {
+  flex: 1;
+  margin: 0 12px 12px;
+}
+</style>
+```
+
+[`appWindow.alwaysOnTop`](/window-api/always-on-top/) keeps the window above other apps' windows without taking focus. Set `"alwaysOnTop": true` in the `window` block to start pinned.
+
+> **Note:** Always on top works only on Windows. On macOS and Linux the setter has no effect on the window, yet the getter returns what you set, so the button above reads "Pinned" while the window is not. Hide the control on those platforms.
+
+### Move and resize
+
+| Call                                                        | Rect                  | Windows                                             | macOS and Linux      |
+| ----------------------------------------------------------- | --------------------- | --------------------------------------------------- | -------------------- |
+| [`setBounds(rect)`](/window-api/set-bounds/)                | outer, frame included | moves and resizes                                   | does nothing         |
+| [`setContentBounds(rect)`](/window-api/set-content-bounds/) | client area           | moves and resizes                                   | resizes; cannot move |
+| [`window.resizeTo(w, h)`](/window-api/resize-to/)           | client area           | resizes                                             | resizes              |
+| [`window.moveTo(x, y)`](/window-api/move-to/)               | outer                 | moves                                               | does nothing         |
+| [`center()`](/window-api/center/)                           | outer                 | centres, but off-centre when the scale is not 100 % | does nothing         |
+
+Both `setBounds()` and `setContentBounds()` take a partial rect in CSS pixels: `setBounds({ x: 100 })` moves without resizing. The size is clamped to the work area, and the position is clamped so the window stays on its current monitor.
+
+> **Warning:** `window.resizeTo()` sets the client size, not the outer size as in a browser. `window.resizeBy()` measures from `innerWidth` and `innerHeight`, which exclude the fallback title bar strip, so while that strip is shown `resizeBy(0, 0)` shrinks the window by its height.
+
+Until `center()` handles display scaling, centre the window yourself. On the window's own monitor, `screen` and `setBounds()` use the same CSS pixels:
+
+```ts
+import { appWindow } from "@skathi-native/runtime";
+
+const { width, height } = appWindow.getBounds();
+appWindow.setBounds({
+  x: screen.availLeft + (screen.availWidth - width) / 2,
+  y: screen.availTop + (screen.availHeight - height) / 2,
+});
+```
+
+## Reactive reads and events
+
+### Reads
+
+Every `appWindow` getter and every `is*()` and `get*()` method is reactive: [`isMaximized()`](/window-api/is-maximized/), [`isFocused()`](/window-api/is-focused/), [`getBounds()`](/window-api/get-bounds/), [`scaleFactor`](/window-api/scale-factor/), `title`, `theme`, `backdrop`, `chrome` and the rest. Read them in a template or a `computed` and Vue updates the UI when the window changes.
+
+The web globals are not reactive. `innerWidth`, `innerHeight`, `screenX` and `devicePixelRatio` are plain numbers; copy them into a `ref` from a `resize` handler.
+
+> **Note:** [`getBounds()`](/window-api/get-bounds/) and [`getContentBounds()`](/window-api/get-content-bounds/) return the last published state. Right after a `setBounds()` or `maximize()` outside an event handler, they can still return the old rect until the next frame. The `is*()` methods re-read the window and are exact.
+
+### Events
+
+The events are spread over three targets. Listen on the right one: `appWindow.addEventListener("resize", ...)` is accepted but never fires.
+
+| Event                                                                                    | Target                            | Fires when                                       | Windows | macOS   | Linux   |
+| ---------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------ | ------- | ------- | ------- |
+| [`resize`](/window-api/event-resize/)                                                    | `window`                          | the viewport or the scale changes; once at start | yes     | yes     | yes     |
+| [`focus`](/window-api/event-focus/), [`blur`](/window-api/event-blur/)                   | `window`                          | the main window gains or loses activation        | yes     | yes     | yes     |
+| [`maximize`](/window-api/event-maximize/), [`unmaximize`](/window-api/event-unmaximize/) | `appWindow`                       | the maximized state flips                        | yes     | partial | yes     |
+| [`minimize`](/window-api/event-minimize/), [`restore`](/window-api/event-restore/)       | `appWindow`                       | the window enters or leaves minimized            | yes     | never   | never   |
+| [`move`](/window-api/event-move/)                                                        | `appWindow`                       | the outer position changed, once per frame       | yes     | partial | partial |
+| [`fullscreenchange`](/window-api/event-fullscreenchange/)                                | `appWindow`                       | fullscreen by any route                          | yes     | yes     | yes     |
+| [`backdropchange`](/window-api/event-backdropchange/)                                    | `appWindow`                       | `backdrop` or `effectiveBackdrop` changed        | yes     | yes     | yes     |
+| [`visibilitychange`](/window-api/event-visibilitychange/)                                | `document`                        | minimized, hidden, covered or on another desktop | yes     | never   | never   |
+| [`geometrychange`](/window-api/event-geometrychange/)                                    | `navigator.windowControlsOverlay` | the title bar area moved or resized              | yes     | yes     | yes     |
+| [`close-requested`](/window-api/event-close-requested/)                                  | `appWindow`                       | the user asks to close                           | yes     | yes     | partial |
+
+Every host event is a plain `Event` with no payload. Read the new state from `appWindow` inside the handler; it is already current there.
+
+```vue
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+import { appWindow } from "@skathi-native/runtime";
+
+const STATE_EVENTS = ["maximize", "unmaximize", "minimize", "restore", "fullscreenchange", "move"];
+const log = ref<string[]>([]);
+const viewport = ref("");
+
+const push = (e: Event) => (log.value = [e.type, ...log.value].slice(0, 8));
+const onResize = (e: Event) => {
+  viewport.value = `${Math.round(innerWidth)} x ${Math.round(innerHeight)} @ ${devicePixelRatio}x`;
+  push(e);
+};
+
+onMounted(() => {
+  STATE_EVENTS.forEach((type) => appWindow.addEventListener(type, push));
+  addEventListener("resize", onResize);
+  addEventListener("focus", push);
+  addEventListener("blur", push);
+});
+onUnmounted(() => {
+  STATE_EVENTS.forEach((type) => appWindow.removeEventListener(type, push));
+  removeEventListener("resize", onResize);
+  removeEventListener("focus", push);
+  removeEventListener("blur", push);
+});
+</script>
+
+<template>
+  <div class="panel">
+    <p>{{ appWindow.isFocused() ? "Active" : "In the background" }}, {{ viewport }}</p>
+    <ol class="log">
+      <li v-for="(type, i) in log" :key="i">{{ type }}</li>
+    </ol>
+  </div>
+</template>
+
+<style scoped>
+.panel {
+  padding: 12px;
+  font-size: 13px;
+}
+.log {
+  margin-top: 8px;
+  color: #ffffffb0;
+}
+</style>
+```
+
+### Order within a frame
+
+The host collects changes once per frame and dispatches them in a fixed order: window `resize`, then `visibilitychange`, then `maximize` or `unmaximize`, `minimize` or `restore`, `fullscreenchange`, `backdropchange`, `focus` or `blur`, `move`, `geometrychange`, and finally media query `change` events. Nothing fires twice for one change.
+
+A verb called inside one of these handlers is applied at the next frame, not inside the dispatch.
+
+## Remember the window's bounds
+
+Skathi does not save the window's size, position or maximized state between launches. Store them yourself and apply them at startup.
+
+```ts
+import { appWindow } from "@skathi-native/runtime";
+
+interface Saved {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized: boolean;
+}
+
+const KEY = "window-bounds";
+const isNum = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
+function load(): Saved | null {
+  try {
+    const s: Partial<Record<keyof Saved, unknown>> = JSON.parse(localStorage.getItem(KEY) ?? "null") ?? {};
+    const { x, y, width, height } = s;
+    if (!isNum(x) || !isNum(y) || !isNum(width) || !isNum(height)) return null;
+    return { x, y, width, height, maximized: s.maximized === true };
+  } catch {
+    return null;
+  }
+}
+
+export function rememberBounds(): void {
+  const saved = load();
+  if (saved) {
+    appWindow.setBounds({ x: saved.x, y: saved.y, width: saved.width, height: saved.height });
+    if (saved.maximized) appWindow.maximize();
+  }
+
+  let normal = saved ?? appWindow.getBounds();
+  let maximized = saved?.maximized ?? false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const write = () => localStorage.setItem(KEY, JSON.stringify({ ...normal, maximized }));
+  const record = () => {
+    if (appWindow.isMinimized() || appWindow.isFullscreen()) return;
+    maximized = appWindow.isMaximized();
+    if (!maximized) normal = appWindow.getBounds();
+    clearTimeout(timer);
+    timer = setTimeout(write, 300);
+  };
+
+  appWindow.addEventListener("move", record);
+  appWindow.addEventListener("maximize", record);
+  appWindow.addEventListener("unmaximize", record);
+  addEventListener("resize", record);
+  addEventListener("pagehide", write);
+}
+```
+
+Call it before mounting:
+
+```ts
+import { createApp } from "@skathi-native/runtime";
+import App from "./App.vue";
+import { rememberBounds } from "./rememberBounds";
+
+rememberBounds();
+createApp(App).mount();
+```
+
+The parts that matter:
+
+- **Normal bounds, not current bounds.** A maximized window's rect is the work area, so the code keeps the last normal rect and a separate `maximized` flag. Restoring it puts the window back at its normal size, then maximizes it, so un-maximizing later lands where the user expects.
+- **Skip minimized and fullscreen.** On Windows a minimized window reports a position around -32000. Saving that would park the window off screen next time.
+- **Write on change, not only at exit.** The writes are debounced, and `pagehide` saves the last state on a normal close. A tray `role: "quit"` item does not fire `pagehide`, so the debounced writes are what make the state survive it. `localStorage` is flushed to disk when the app quits.
+- **Startup timing.** The verbs are queued and applied at the first frame. On Windows that is before the window appears, so it shows at the saved place without jumping.
+
+| Behavior                      | Windows                                 | macOS                          | Linux                          |
+| ----------------------------- | --------------------------------------- | ------------------------------ | ------------------------------ |
+| Restore the size and position | yes, on the primary monitor (see below) | no: `setBounds()` does nothing | no: `setBounds()` does nothing |
+| Restore the maximized state   | yes                                     | yes                            | yes                            |
+
+> **Warning:** The position is restored reliably only for a window on the primary monitor. The window always opens on the primary display, and `setBounds()` keeps it inside its current monitor's work area, so a saved position on another monitor lands at the nearest edge of the primary one. If the monitors use different scale factors, saved coordinates from the other monitor are also scaled differently. On macOS and Linux this code restores only the maximized state; to restore the size there, call `setContentBounds({ width, height })` with the saved client size instead.
+
+## DPI, coordinates and multiple monitors
+
+Every number in the window API is in CSS pixels: device pixels divided by the window's scale factor. [`appWindow.scaleFactor`](/window-api/scale-factor/) and [`devicePixelRatio`](/window-api/device-pixel-ratio/) are the same value. When the window moves to a monitor with another scale, window `resize` fires and media queries on `resolution` are evaluated again.
+
+Several reads describe different rectangles:
+
+| Read                                                                                                                              | What it measures                             | Windows     | macOS and Linux                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------- | -------------------------------------------------------------------- |
+| [`innerWidth`, `innerHeight`](/window-api/inner-width/)                                                                           | the box your app paints, without host chrome | yes         | yes                                                                  |
+| [`appWindow.chrome`](/window-api/chrome/)`.client`                                                                                | the client area                              | yes         | yes                                                                  |
+| [`getContentBounds()`](/window-api/get-content-bounds/)                                                                           | the client rect with its screen position     | client rect | macOS: the frame, title bar included, relative to the current screen |
+| [`getBounds()`](/window-api/get-bounds/), [`screenX`, `screenY`](/window-api/screen-x/), [`outerWidth`](/window-api/outer-width/) | the outer rect, frame included               | yes         | same as `getContentBounds()`                                         |
+| [`screen`](/window-api/screen/)                                                                                                   | the display the main window is on            | yes         | yes                                                                  |
+
+- `innerWidth` is smaller than the client area only while the host draws its fallback title bar strip. Once your app draws its own title bar, the two are equal.
+- On Windows, `outerWidth` minus `innerWidth` is the invisible resize border, not a title bar. Read the title bar height from `navigator.windowControlsOverlay.getTitlebarAreaRect()`.
+- `screen.availLeft`, `availTop`, `availWidth` and `availHeight` give the work area of the current display, without the taskbar or Dock.
+
+Multi-monitor support is limited today:
+
+- `screen` describes only the display the main window is on. [`screen.isExtended`](/window-api/screen/) tells you whether there are others, and [`window.getScreenDetails()`](/window-api/get-screen-details/) rejects with `NotSupportedError`.
+- `setBounds()` cannot move the window to another monitor. The user can drag it there.
+- On Windows with monitors at different scales, `getBounds()` divides every coordinate by the window's current scale, so a position on another monitor is not in that monitor's CSS pixels.
+- A pop-out can cover a chosen monitor with `<SkWindow cover="monitor" :monitor="1">`, on Windows only. The [pop-out guide](/guides/pop-out-windows/) shows it.
+
+## Theme and backdrop
+
+<Demo
+  id="windows/theme-backdrop"
+  caption="Theme light, dark and system, and backdrop mica, acrylic and none, switched live."
+/>
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "@skathi-native/runtime";
+
+const THEMES = ["system", "light", "dark"];
+const BACKDROPS = ["mica", "acrylic", "none"];
+
+appWindow.theme = localStorage.getItem("theme") ?? "system";
+
+function setTheme(theme: string) {
+  appWindow.theme = theme;
+  localStorage.setItem("theme", theme);
+}
+</script>
+
+<template>
+  <div class="panel">
+    <div class="row">
+      <button v-for="t in THEMES" :key="t" class="chip" :class="{ on: appWindow.theme === t }" @click="setTheme(t)">
+        {{ t }}
+      </button>
+    </div>
+    <div class="row">
+      <button
+        v-for="b in BACKDROPS"
+        :key="b"
+        class="chip"
+        :class="{ on: appWindow.backdrop === b }"
+        @click="appWindow.backdrop = b"
+      >
+        {{ b }}
+      </button>
+    </div>
+    <p>Drawn: {{ appWindow.effectiveBackdrop }}</p>
+  </div>
+</template>
+
+<style scoped>
+.panel {
+  --fg: #1b1b1b;
+  --chip: #0000000f;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  color: var(--fg);
+}
+@media (prefers-color-scheme: dark) {
+  .panel {
+    --fg: #f3f3f3;
+    --chip: #ffffff14;
+  }
+}
+.row {
+  display: flex;
+  gap: 6px;
+}
+.chip {
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+}
+.chip.on {
+  background: #0067c0;
+  color: #ffffff;
+}
+</style>
+```
+
+### Theme
+
+[`appWindow.theme`](/window-api/theme/) is `"system"`, `"light"` or `"dark"`, like Electron's `nativeTheme.themeSource`. It drives `@media (prefers-color-scheme)` for the whole app, so the stylesheet above follows it with no extra code.
+
+- It starts at `"system"` on every launch. No config key sets it and it is not saved, which is why the sample stores the choice itself.
+- Names are case-sensitive: `"Dark"` prints an advisory and is ignored.
+- There is no theme event. To react in script, listen for `change` on `matchMedia("(prefers-color-scheme: dark)")`.
+
+| Effect of `appWindow.theme`                    | Windows                                  | macOS                  | Linux                  |
+| ---------------------------------------------- | ---------------------------------------- | ---------------------- | ---------------------- |
+| `prefers-color-scheme` in CSS and `matchMedia` | yes                                      | yes                    | yes                    |
+| Native caption colours and backdrop tint       | yes, for every window, pop-outs included | no: they follow the OS | no: they follow the OS |
+
+### Backdrop
+
+[`appWindow.backdrop`](/window-api/backdrop/) picks the material behind your app: `"mica"` (the default), `"mica-alt"`, `"acrylic"`, `"transparent"` or `"none"`. The setter also accepts `"tabbed"`, `"blur"` and `"opaque"` as aliases. The material shows only where your app does not paint an opaque background, so keep the root and large panels translucent.
+
+The getter returns the material actually applied. Set `"blur"` and it reads `"acrylic"`; on Windows builds before 22621, `"mica"` and `"mica-alt"` read back `"acrylic"`. [`effectiveBackdrop`](/window-api/effective-backdrop/) tells you what is drawn right now, and [`backdropchange`](/window-api/event-backdropchange/) fires when either value changes.
+
+| Material                      | Windows 11 | macOS                                       | Linux                                         |
+| ----------------------------- | ---------- | ------------------------------------------- | --------------------------------------------- |
+| `mica`, `mica-alt`, `acrylic` | as named   | one behind-window blur for all three        | drawn opaque; `effectiveBackdrop` is `"none"` |
+| `transparent`                 | yes        | yes                                         | depends on the compositor                     |
+| `none`                        | yes        | yes                                         | yes                                           |
+| In fullscreen                 | kept       | drawn flat; `effectiveBackdrop` is `"none"` | as above                                      |
+
+> **Note:** Pop-out windows do not follow `appWindow.backdrop`. Each one takes the backdrop from its own `backdrop` prop, or else from the `backdrop` in `sk.config.json`.
+
+## Taskbar and dock
+
+| Feature                         | API                                                                                                              | Windows                    | macOS                 | Linux                                                               |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------- | --------------------- | ------------------------------------------------------------------- |
+| Name in the taskbar and Alt-Tab | [`appWindow.title`](/window-api/title/)                                                                          | yes                        | yes                   | yes                                                                 |
+| Icon                            | [`windows.icon`](/window-api/config-windows-icon/), [`macos.icon`](/window-api/config-macos-icon/) at build time | yes                        | yes                   | from the `.desktop` entry matched by [`id`](/window-api/config-id/) |
+| Badge                           | [`navigator.setAppBadge()`](/window-api/set-app-badge/)                                                          | a red overlay icon         | the Dock badge        | not available                                                       |
+| Ask for attention               | [`window.focus()`](/window-api/window-focus/)                                                                    | flashes the taskbar button | bounces the Dock icon | X11 urgency hint; nothing on Wayland                                |
+| Tray icon                       | [`appTray`](/window-api/app-tray/)                                                                               | yes                        | menu bar              | not available                                                       |
+| Remove the taskbar button       | [`hide()`](/window-api/hide/)                                                                                    | yes                        | minimizes instead     | minimizes instead                                                   |
+
+`navigator.setAppBadge(n)` shows a number, `99+` above 99, or a dot with no argument; `0` or [`navigator.clearAppBadge()`](/window-api/clear-app-badge/) clears it. Its typings are not in the runtime yet, and it does not exist on Linux, so declare it as optional:
+
+```ts
+declare global {
+  interface Navigator {
+    setAppBadge?(contents?: number): Promise<void>;
+    clearAppBadge?(): Promise<void>;
+  }
+}
+
+export async function showUnread(count: number): Promise<void> {
+  await navigator.setAppBadge?.(count);
+}
+```
+
+By default `window.focus()` does not steal focus: it asks for attention instead. Set `"focus": "raise"` in the `window` block to make it bring the window to the front. `appWindow.show()` always raises.
+
+> **Note:** [`setProgressBar()`](/window-api/set-progress-bar/), [`setOverlayIcon()`](/window-api/set-overlay-icon/), [`setBadgeCount()`](/window-api/set-badge-count/), [`setSkipTaskbar()`](/window-api/set-skip-taskbar/) and [`setIcon()`](/window-api/set-icon/) exist on `appWindow` but are not implemented yet. Each prints an advisory once and does nothing. Use `navigator.setAppBadge()` for badges; there is no way to show taskbar progress or change the icon at runtime yet.
+
+## Pitfalls
+
+- **Listening on the wrong target.** `resize`, `focus` and `blur` go to the global `window`, not to `appWindow`. A listener on `appWindow` for them never fires.
+- **Trusting a getter off Windows.** `alwaysOnTop` reports what you set even where it has no effect. `isMinimized()` is always `false` and `isVisible()` always `true` on macOS and Linux.
+- **Reading geometry right after a verb.** `getBounds()` can lag one frame behind `setBounds()`. Read the new rect in the `move` or `resize` handler instead.
+- **Expecting a fixed window size from `innerWidth`.** It changes with host chrome and DPI; react to `resize` or use CSS media queries.
+- **Unit tests.** Outside the host, `appWindow` is an inert stand-in: `is*()` methods return `false`, every other member is a no-op, and each access warns once.
+
+## More window guides
+
+- [Custom title bar](/guides/custom-title-bar/): draw your own title bar, drag regions and caption buttons, and the Windows 11 snap layouts.
+- [Pop-out windows](/guides/pop-out-windows/): open more OS windows with `<SkWindow>` that share your app's state.
+- [Closing, hiding and quitting](/guides/closing-and-background/): ask before closing, keep running in the background, and save data on quit.
+
+## See also
+
+- [Window API reference](/window-api/)
+- [`appWindow`](/window-api/app-window/), [`defineWindow()`](/window-api/define-window/), [`window` in sk.config.json](/window-api/config-window/)
+- [`setBounds()`](/window-api/set-bounds/), [`getBounds()`](/window-api/get-bounds/), [`setFullscreen()`](/window-api/set-fullscreen/), [`alwaysOnTop`](/window-api/always-on-top/)
+- [`theme`](/window-api/theme/), [`backdrop`](/window-api/backdrop/), [`effectiveBackdrop`](/window-api/effective-backdrop/)
+- [`prefers-color-scheme`](/css/media-prefers-color-scheme/), [`display-mode`](/css/media-display-mode/)
+- [`matchMedia()`](/web-platform/match-media/), [Fullscreen API](/web-platform/fullscreen-api/), [`localStorage`](/web-platform/local-storage/), [`navigator.setAppBadge()`](/web-platform/navigator-set-app-badge/)

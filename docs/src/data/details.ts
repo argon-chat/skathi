@@ -5,7 +5,19 @@ export interface Example {
   note?: string;
 }
 
+export interface Param {
+  name: string;
+  type: string;
+  description: string;
+  optional?: boolean;
+  default?: string;
+}
+
 export interface Detail {
+  /** TypeScript signature or usage line, rendered as a code block. */
+  syntax?: string;
+  params?: Param[];
+  returns?: string;
   examples?: Example[];
   edgeCases?: string[];
 }

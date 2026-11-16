@@ -3,7 +3,7 @@ import cli from "../../../packages/cli/package.json";
 import { catalogMarkdown } from "./reference";
 import { references } from "./references";
 
-export const sections = ["Getting started", "Reference", "Contributing"] as const;
+export const sections = ["Getting started", "Guides", "Reference", "Contributing"] as const;
 export const repository = "https://github.com/argon-chat/skathi";
 export const version = cli.version;
 export const docsHome = "/introduction/";
