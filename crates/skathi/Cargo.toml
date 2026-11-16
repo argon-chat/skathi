@@ -1,0 +1,37 @@
+[package]
+name = "skathi"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Vue and Svelte apps as native desktop programs: embed the Skathi engine (gpui and JavaScriptCore) in your own executable"
+readme = "README.md"
+keywords = ["vue", "desktop", "gui", "javascriptcore", "gpui"]
+categories = ["gui"]
+include = ["src/**/*", "build.rs", "README.md"]
+# Not a native library: tells an embedder's build script what its executable must carry
+# (DEP_SKATHI_LINK_ARGS, DEP_SKATHI_WINDOWS_RESOURCES).
+links = "skathi"
+
+[features]
+default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"]
+# Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
+prod = ["sk-app/prod"]
+audio = ["sk-app/audio"]
+storages = ["sk-app/storages"]
+clipboard = ["sk-app/clipboard"]
+indexeddb = ["sk-app/indexeddb"]
+webgpu = ["sk-app/webgpu"]
+native-dx12 = ["sk-app/native-dx12"]
+battery = ["sk-app/battery"]
+no-devtools = ["sk-app/no-devtools"]
+runtime-shaders = ["sk-app/runtime-shaders"]
+
+[dependencies]
+sk-app = { path = "../sk-app", version = "0.3.0", default-features = false }
+# For its links metadata only (the Windows manifest).
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
+
+[dev-dependencies]
+serde_json = "1"

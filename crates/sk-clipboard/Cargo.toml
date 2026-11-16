@@ -1,16 +1,18 @@
 [package]
 name = "sk-clipboard"
-version = "0.1.0"
+description = "navigator.clipboard for Skathi, over gpui's clipboard"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 # The `ClipboardHost` trait is declared in redjs and implemented here.
-sk-runtime = { path = "../sk-runtime", default-features = false, features = ["clipboard"] }
+sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false, features = ["clipboard"] }
 # Not a second clipboard: gpui already owns the OS clipboard for the native <input>, and two
 # owners of one `OpenClipboard` race.
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
 
 # Item clipboard (src/win.rs); both crates are already in the graph.
 [target.'cfg(windows)'.dependencies]

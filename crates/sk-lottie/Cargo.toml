@@ -1,9 +1,12 @@
 [package]
 name = "sk-lottie"
-version = "0.1.0"
+description = "Lottie and .tgs playback behind Skathi's <lottie> element"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+include = ["src/**/*"]
 
 [features]
 # ThorVG is the default renderer (wider coverage than `rasterlottie`). `default = []` puts
@@ -27,17 +30,17 @@ rasterlottie = { version = "=0.2.2", default-features = false, features = [
     "text",
 ] }
 # ThorVG (C++ submodule) + checked-in FFI; `optional` so `--no-default-features` has no C++.
-sk-thorvg-sys = { path = "../sk-thorvg-sys", optional = true }
+sk-thorvg-sys = { path = "../sk-thorvg-sys", version = "0.3.0", optional = true }
 # `.tgs` is gzipped Lottie JSON; `rust_backend` keeps it pure Rust.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # The document is parsed here, before any backend (see `src/normalize.rs`).
 serde_json = "1"
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
 
 [dev-dependencies]
-gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/crates/gpui_platform", version = "0.2.0", default-features = false }
+gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/crates/gpui_platform", version = "0.3.0", default-features = false }
 # `tests/playback.rs` reads the fixture documents to cross-check the ANIMATED list.
 serde_json = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

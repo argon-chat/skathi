@@ -1,9 +1,11 @@
 [package]
 name = "sk-runtime"
-version = "0.1.0"
+description = "Skathi's JavaScriptCore runtime: context boot, the pump, the bridge and host functions over redjs"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 # Optional Battery Status API; applications choose whether to expose it.
@@ -29,7 +31,7 @@ net-h2 = ["redjs/net-h2"]
 
 [dependencies]
 # `svg-images` and `canvas` are always on.
-redjs = { path = "../../vendor/redjs/redjs", version = "0.2.0", default-features = false, features = ["svg-images", "canvas"] }
-redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.2.0", optional = true }
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
+redjs = { path = "../../vendor/redjs/redjs", version = "0.3.0", default-features = false, features = ["svg-images", "canvas"] }
+redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.3.0", optional = true }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
 serde_json = "1"

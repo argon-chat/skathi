@@ -4,7 +4,8 @@
 //! `window.json`), deflated, and embedded by `src/inspector.rs`. It is generated rather than checked
 //! in so the embedded bundle can never be older than its sources; without bun the build fails with
 //! the command to run. `SK_DEVTOOLS_BUNDLE=<app.prod.js>` supplies a prebuilt bundle instead, for
-//! packaging jobs that build JS and Rust in separate stages.
+//! packaging jobs that build JS and Rust in separate stages. The published crate carries one in
+//! `devtools/`, written by `scripts/package-crates.ts`.
 
 #[path = "build_native_inspector.rs"]
 mod native_inspector;
@@ -50,27 +51,30 @@ fn main() {
     std::fs::create_dir_all(&out).expect("cannot create OUT_DIR/devtools");
     let bundle = out.join("app.prod.js");
     let window_json = out.join("window.json");
+    let pkg = repo.join("packages/cli");
+    let entry = repo.join("apps/devtools/src/main.ts");
+    // A packaged sk-app has no repo around it and carries the bundle built when it was packaged.
+    let carried = manifest.join("devtools/app.prod.js");
+    let in_repo = entry.is_file();
 
-    watch_tree(&repo.join("apps/devtools"));
-    watch_tree(&repo.join("packages/runtime/src"));
-    println!(
-        "cargo:rerun-if-changed={}",
-        disp(&repo.join("packages/cli/prod.ts"))
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        disp(&repo.join("packages/cli/tailwind.ts"))
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        disp(&repo.join("packages/cli/package.json"))
-    );
+    if in_repo {
+        watch_tree(&repo.join("apps/devtools"));
+        watch_tree(&repo.join("packages/runtime/src"));
+        for file in ["prod.ts", "tailwind.ts", "package.json"] {
+            println!("cargo:rerun-if-changed={}", disp(&pkg.join(file)));
+        }
+    }
 
-    if let Some(prebuilt) = std::env::var_os("SK_DEVTOOLS_BUNDLE") {
-        let prebuilt = PathBuf::from(prebuilt);
+    let prebuilt = std::env::var_os("SK_DEVTOOLS_BUNDLE")
+        .map(PathBuf::from)
+        .or_else(|| (!in_repo && carried.is_file()).then_some(carried));
+    if let Some(prebuilt) = prebuilt {
         println!("cargo:rerun-if-changed={}", disp(&prebuilt));
         let js = std::fs::read(&prebuilt).unwrap_or_else(|e| {
-            panic!("SK_DEVTOOLS_BUNDLE={} cannot be read: {e}", disp(&prebuilt))
+            panic!(
+                "the inspector bundle {} cannot be read: {e}",
+                disp(&prebuilt)
+            )
         });
         std::fs::write(&bundle, js).expect("cannot write the inspector bundle into OUT_DIR");
         let beside = prebuilt.with_file_name("window.json");
@@ -80,9 +84,14 @@ fn main() {
         native_inspector::prepare(&repo, &out);
         return;
     }
+    if !in_repo {
+        panic!(
+            "\nthis sk-app has no devtools inspector bundle to embed. Set SK_DEVTOOLS_BUNDLE to an \
+             app.prod.js built from Skathi's apps/devtools, or build without the inspector \
+             (the `no-devtools` feature).\n"
+        );
+    }
 
-    let pkg = repo.join("packages/cli");
-    let entry = repo.join("apps/devtools/src/main.ts");
     let status = Command::new("bun")
         .current_dir(&pkg)
         .arg("prod.ts")
@@ -213,18 +222,20 @@ fn host_identity() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let repo = manifest.join("..").join("..");
     let pkg = repo.join("packages/cli/package.json");
-    println!("cargo:rerun-if-changed={}", disp(&pkg));
     println!("cargo:rerun-if-env-changed=DEP_REDJS_WEBKIT_VERSION");
+    // Packaged, there is no package.json beside the crate: the crates and the CLI are released
+    // with one version.
     let version = std::fs::read_to_string(&pkg)
         .ok()
         .and_then(|text| {
+            println!("cargo:rerun-if-changed={}", disp(&pkg));
             let at = text.find("\"version\"")?;
             let rest = &text[at + "\"version\"".len()..];
             let open = rest.find('"')?;
             let rest = &rest[open + 1..];
             Some(rest[..rest.find('"')?].to_string())
         })
-        .unwrap_or_else(|| "0.0.0".into());
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap());
     let pin = std::env::var("DEP_REDJS_WEBKIT_VERSION").expect("redjs reports its engine pin");
     println!("cargo:rustc-env=SK_PKG_VERSION={version}");
     println!("cargo:rustc-env=SK_JSC_PIN={pin}");
@@ -301,8 +312,10 @@ fn standalone_manifest() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let resources = root.join("../../vendor/gpui/crates/gpui/resources/windows");
+    let resources = PathBuf::from(
+        std::env::var_os("DEP_SKATHI_GPUI_WINDOWS_RESOURCES")
+            .expect("skathi-gpui reports its Windows resources"),
+    );
     println!(
         "cargo:rerun-if-changed={}",
         resources.join("gpui.manifest.xml").display()
@@ -316,7 +329,12 @@ fn standalone_manifest() {
     .unwrap();
     // The examples are this crate's own executables, and gpui's imports
     // need the Common Controls 6 the manifest names: without it Windows
-    // refuses to load them (STATUS_ENTRYPOINT_NOT_FOUND).
+    // refuses to load them (STATUS_ENTRYPOINT_NOT_FOUND). The package has none,
+    // and cargo rejects an examples link argument for a crate without examples.
+    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    if !manifest.join("examples").is_dir() {
+        return;
+    }
     embed_resource::compile_for_examples(
         resources.join("gpui.rc"),
         embed_resource::ParamsIncludeDirs([&resources]),

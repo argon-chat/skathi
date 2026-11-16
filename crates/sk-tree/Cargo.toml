@@ -1,25 +1,27 @@
 [package]
 name = "sk-tree"
-version = "0.1.0"
+description = "Skathi's retained node tree and the renderer's host functions"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 default = ["webgpu"]
 webgpu = ["sk-runtime/webgpu"]
 
 [dependencies]
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.2.0", default-features = false }
-sk-css = { path = "../sk-css" }
-sk-effects = { path = "../sk-effects" }
-sk-elements = { path = "../sk-elements" }
-sk-lottie = { path = "../sk-lottie" }
-sk-video = { path = "../sk-video" }
-sk-sticker = { path = "../sk-sticker" }
-sk-runtime = { path = "../sk-runtime", default-features = false }
-sk-payload = { path = "../sk-payload" }
-sk-resample = { path = "../sk-resample" }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
+sk-css = { path = "../sk-css", version = "0.3.0" }
+sk-effects = { path = "../sk-effects", version = "0.3.0" }
+sk-elements = { path = "../sk-elements", version = "0.3.0" }
+sk-lottie = { path = "../sk-lottie", version = "0.3.0" }
+sk-video = { path = "../sk-video", version = "0.3.0" }
+sk-sticker = { path = "../sk-sticker", version = "0.3.0" }
+sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false }
+sk-payload = { path = "../sk-payload", version = "0.3.0" }
+sk-resample = { path = "../sk-resample", version = "0.3.0" }
 # Same version and decoders gpui already builds.
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
 # Pinned to the version gpui resolves.

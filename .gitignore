@@ -1,5 +1,7 @@
 # Rust
 /target/
+# The inspector bundle a packaged sk-app carries (scripts/package-crates.ts).
+/crates/sk-app/devtools/
 crates/sk-thorvg-sys/tools/regen-bindings/target/
 crates/sk-thorvg-sys/tools/regen-bindings/Cargo.lock
 

@@ -1,9 +1,10 @@
 [package]
 name = "sk-resample"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "The pixel kernel behind sk-tree's downscaled image copies, in a crate of its own so the dev profile can optimise it"
 
 # Its own crate for the dev profile: `image::imageops::resize` is generic, so it is compiled in the

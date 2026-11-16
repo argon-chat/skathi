@@ -1,9 +1,11 @@
 [package]
 name = "sk-hotkeys"
-version = "0.1.0"
+description = "System-wide hotkeys for Skathi: Windows low-level hooks, the macOS event tap and a chord engine"
+version.workspace = true
 edition = "2024"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

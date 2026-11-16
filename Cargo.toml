@@ -22,10 +22,17 @@ members = [
     "crates/sk-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
     "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     "crates/sk-app",        # host binary shell
+    "crates/skathi",        # the facade an embedder depends on
 ]
 # Vendor crates must resolve against their own workspace roots (gpui's, redjs's).
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
 exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
+
+[workspace.package]
+version = "0.3.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/argon-chat/skathi"
+homepage = "https://skathi.land"
 
 # Replicated from vendor/gpui, as [patch] applies only from the workspace root: the waker
 # identity fix (smol-rs/async-task#108) is merged upstream but not yet released.

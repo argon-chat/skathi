@@ -1,9 +1,29 @@
 [package]
 name = "sk-thorvg-sys"
-version = "0.1.0"
+description = "ThorVG 1.1.2 for Skathi's Lottie playback: a pinned prebuilt or a cc build, and its C API"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license = "(MIT OR Apache-2.0) AND MIT AND Apache-2.0"
+repository.workspace = true
+homepage.workspace = true
+# Only the ThorVG sources the source build compiles (see `sources` in build.rs).
+include = [
+    "src/**/*",
+    "build.rs",
+    "prebuilt.txt",
+    "thorvg/LICENSE",
+    "thorvg/inc/**/*",
+    "thorvg/src/common/**/*",
+    "thorvg/src/renderer/*.cpp",
+    "thorvg/src/renderer/*.h",
+    "thorvg/src/renderer/cpu_engine/**/*",
+    "thorvg/src/bindings/capi/**/*",
+    "thorvg/src/loaders/raw/**/*",
+    "thorvg/src/loaders/lottie/**/*",
+    "thorvg/src/loaders/png/**/*",
+    "thorvg/src/loaders/jpg/**/*",
+    "thorvg/src/loaders/sfnt/**/*",
+]
 # Static archive from a C++ tree, so the usual `links` contract
 # applies: at most one crate in the graph may provide `thorvg`.
 links = "thorvg"

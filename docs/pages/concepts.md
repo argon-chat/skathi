@@ -32,7 +32,7 @@ A package that works with Vue is not automatically compatible if it assumes a co
 
 Windows, storage, clipboard access, permissions, and other platform services are implemented in Rust. The JavaScript surface exposes those native capabilities to application code.
 
-For embedding the SDK into another native application, the host provides `sk_app::embed` and `HostContext` hooks. Keep application-specific behavior in the embedder.
+To embed the SDK in another native application, depend on the [`skathi`](https://docs.rs/skathi) crate: its `Builder` runs an app payload and its `HostContext` hooks add native features. Keep application-specific behavior in the embedder.
 
 ## CSS has a native implementation
 

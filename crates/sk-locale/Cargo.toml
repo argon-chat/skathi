@@ -1,10 +1,13 @@
 [package]
 name = "sk-locale"
-version = "0.1.0"
+description = "Skathi's own UI text in the user's language, and appLocale for an app's"
+version.workspace = true
 edition = "2021"
-license = "MIT OR Apache-2.0"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+include = ["src/**/*", "build.rs", "locales/*.json"]
 
 [dependencies]
-sk-runtime = { path = "../sk-runtime", default-features = false }
+sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false }
 serde_json = "1"
