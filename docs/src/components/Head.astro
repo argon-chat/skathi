@@ -54,5 +54,6 @@ const image = new URL("/social.png", Astro.site);
         : matchMedia("(prefers-color-scheme: light)").matches
           ? "light"
           : "dark";
+    if (localStorage.getItem("skathi-framework") === "svelte") document.documentElement.dataset.framework = "svelte";
   } catch {}
 </script>

@@ -7,6 +7,7 @@ order: 0
 ---
 
 import CounterDemo from "../src/components/CounterDemo.vue";
+import Sample from "../src/components/Sample.astro";
 
 Documentation is source code you can read. Add a Markdown file, describe it in frontmatter, and Astro turns it into a page with navigation, an outline, and a Markdown version for agents.
 
@@ -74,6 +75,47 @@ void computeMain(uint3 threadId : SV_DispatchThreadID)
     values[threadId.x] *= 2.0;
 }
 ```
+
+### Titles, focus, highlights and diffs
+
+Add `title="…"` after the language to name the file in the toolbar. `focus=2-3` keeps those lines sharp and blurs the rest until the pointer is over the block; `{2}` highlights a line. Inside the code, a trailing `// [!code focus]`, `// [!code highlight]`, `// [!code ++]` or `// [!code --]` comment marks its line and is removed from the output.
+
+```ts title="window.ts" focus=4-5
+import { appWindow } from "@skathi-native/runtime";
+
+appWindow.addEventListener("resize", () => {
+  const { width, height } = appWindow.getBounds();
+  console.log(`${width}x${height}`);
+});
+```
+
+```ts title="close.ts"
+appWindow.addEventListener("close-requested", (event) => {
+  event.preventDefault();
+  appWindow.close(); // [!code --]
+  appWindow.hide(); // [!code ++]
+});
+```
+
+## Write samples as files
+
+A sample longer than a few lines belongs in `docs/samples/` as a real `.vue`, `.svelte` or `.ts` file. `bun run check` type-checks every sample against the runtime, so a renamed API breaks the docs build instead of the reader's copy of it. Show one with the `Sample` component:
+
+```mdx
+import Sample from "../../src/components/Sample.astro";
+
+<Sample src="windows/WindowState" focus="state" />
+```
+
+Without an extension, `src` picks up every framework variant beside it: `WindowState.vue` and `WindowState.svelte` become one block with a Vue and a Svelte tab. The reader's choice applies to every block on every page.
+
+<Sample src="windows/WindowState" focus="state" />
+
+Mark parts of a sample with region comments in the file's own comment syntax, `// #region name` … `// #endregion name` or `<!-- #region name -->` … `<!-- #endregion name -->`. The markers never reach the page. `region="name"` shows only that part; `focus` and `highlight` take line numbers or region names.
+
+<Sample src="windows/WindowState" region="buttons" title="WindowState (template)" />
+
+The Markdown copy of a page for agents replaces each `Sample` with its code as plain fenced blocks.
 
 ## Add a Vue example
 

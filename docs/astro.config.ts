@@ -3,6 +3,7 @@ import sitemap from "@astrojs/sitemap";
 import vue from "@astrojs/vue";
 import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig, fontProviders } from "astro/config";
+import { codeTransformers } from "./src/lib/code";
 import docsContent from "./src/lib/docs-content";
 import slang from "./src/lib/slang";
 
@@ -68,6 +69,7 @@ export default defineConfig({
       themes: { light: "github-light", dark: "github-dark" },
       defaultColor: false,
       langs: [slang],
+      transformers: codeTransformers,
     },
   },
   vite: { resolve: { dedupe: ["vue"] } },

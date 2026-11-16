@@ -854,14 +854,14 @@
     font-size: var(--fs-sm);
     color: var(--muted);
   }
-  .code-toolbar > span:first-child {
+  .code-title {
     display: flex;
     align-items: center;
     gap: 8px;
     font-family: var(--font-code);
     letter-spacing: 0.02em;
   }
-  .code-toolbar > span:first-child::before {
+  .code-title::before {
     content: "";
     width: 6px;
     height: 6px;
@@ -901,6 +901,83 @@
     opacity: 1;
     stroke-dashoffset: 0;
     transition: stroke-dashoffset 360ms var(--ease-out);
+  }
+  .code-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .code-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--code-bg);
+  }
+  .code-tabs button {
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-size: var(--fs-xs);
+    color: var(--muted);
+    transition:
+      color 120ms,
+      background 120ms;
+  }
+  .code-tabs button:hover {
+    color: var(--text);
+  }
+  .code-tabs button[aria-pressed="true"] {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  :root:not([data-framework="svelte"]) .code-block [data-framework="svelte"],
+  :root[data-framework="svelte"] .code-block [data-framework="vue"] {
+    display: none;
+  }
+  .code-block .line {
+    position: relative;
+  }
+  .code-block .line:is(.highlighted, .diff) {
+    display: inline-block;
+    width: calc(100% + 40px);
+    margin: 0 -20px;
+    padding: 0 20px;
+  }
+  .code-block .line.highlighted {
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    box-shadow: inset 2px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+  .code-block .line.diff.add {
+    background: color-mix(in srgb, var(--ok) 11%, transparent);
+  }
+  .code-block .line.diff.remove {
+    background: color-mix(in srgb, var(--no) 11%, transparent);
+    opacity: 0.75;
+  }
+  .code-block .line.diff::before {
+    position: absolute;
+    left: 7px;
+    font-weight: 600;
+  }
+  .code-block .line.diff.add::before {
+    content: "+";
+    color: var(--ok);
+  }
+  .code-block .line.diff.remove::before {
+    content: "−";
+    color: var(--no);
+  }
+  .code-block .has-focused .line:not(.focused) {
+    filter: blur(0.09em);
+    opacity: 0.5;
+    transition:
+      filter 350ms var(--ease-out),
+      opacity 350ms var(--ease-out);
+  }
+  .code-block:is(:hover, :focus-within) .has-focused .line:not(.focused) {
+    filter: none;
+    opacity: 1;
   }
   .prose ul,
   .prose ol {

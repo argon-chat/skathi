@@ -281,40 +281,28 @@ function initializePage(): void {
   layoutRail();
   updateReading();
 
-  document.querySelectorAll<HTMLPreElement>(".prose pre").forEach((pre) => {
-    const code = pre.querySelector("code");
-    if (!code) return;
-    const wrapper = document.createElement("div");
-    wrapper.className = "code-block";
-    pre.before(wrapper);
-    const toolbar = document.createElement("div");
-    toolbar.className = "code-toolbar";
-    const language = document.createElement("span");
-    language.textContent = pre.dataset["language"] ?? code.dataset["language"] ?? "Code";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "code-copy";
-    button.setAttribute("aria-label", "Copy code");
-    button.innerHTML =
-      '<svg class="code-copy-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-copy" d="M9 9h11v11H9V9Zm-4 6H4V4h11v1"/><path class="icon-check" d="m5 12 5 5L20 7"/></svg><span class="code-copy-label">Copy</span>';
+  function attachCopy(button: HTMLButtonElement, code: () => HTMLElement | null | undefined): void {
     const label = button.querySelector<HTMLElement>(".code-copy-label");
     const status = document.createElement("span");
     status.className = "sr-only";
     status.setAttribute("role", "status");
+    button.after(status);
     let reset: number | undefined;
     button.addEventListener(
       "click",
       async () => {
+        const target = code();
+        if (!target) return;
         window.clearTimeout(reset);
         try {
-          await navigator.clipboard.writeText(code.textContent ?? "");
+          await navigator.clipboard.writeText(target.textContent ?? "");
           button.dataset["state"] = "copied";
           if (label) label.textContent = "Copied";
           status.textContent = "Code copied.";
         } catch {
           if (label) label.textContent = "Select code";
           const range = document.createRange();
-          range.selectNodeContents(code);
+          range.selectNodeContents(target);
           const selection = window.getSelection();
           selection?.removeAllRanges();
           selection?.addRange(range);
@@ -328,9 +316,62 @@ function initializePage(): void {
       },
       { signal },
     );
-    toolbar.append(language, button, status);
+  }
+
+  document.querySelectorAll<HTMLPreElement>(".prose pre").forEach((pre) => {
+    const code = pre.querySelector("code");
+    if (!code || pre.closest("[data-code-block]")) return;
+    const wrapper = document.createElement("div");
+    wrapper.className = "code-block";
+    pre.before(wrapper);
+    const toolbar = document.createElement("div");
+    toolbar.className = "code-toolbar";
+    const title = document.createElement("span");
+    title.className = "code-title";
+    title.textContent = pre.dataset["title"] ?? pre.dataset["language"] ?? code.dataset["language"] ?? "Code";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-copy";
+    button.setAttribute("aria-label", "Copy code");
+    button.innerHTML =
+      '<svg class="code-copy-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-copy" d="M9 9h11v11H9V9Zm-4 6H4V4h11v1"/><path class="icon-check" d="m5 12 5 5L20 7"/></svg><span class="code-copy-label">Copy</span>';
+    toolbar.append(title, button);
     wrapper.append(toolbar, pre);
+    attachCopy(button, () => code);
   });
+
+  document.querySelectorAll<HTMLElement>("[data-code-block]").forEach((block) => {
+    const button = block.querySelector<HTMLButtonElement>(".code-copy");
+    if (button)
+      attachCopy(button, () =>
+        [...block.querySelectorAll<HTMLElement>(".code-variant code")].find((code) => code.offsetParent !== null),
+      );
+  });
+
+  const frameworkButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-framework-choice]")];
+  function setFramework(value: string): void {
+    root.dataset["framework"] = value;
+    frameworkButtons.forEach((button) =>
+      button.setAttribute("aria-pressed", String(button.dataset["frameworkChoice"] === value)),
+    );
+  }
+  setFramework(root.dataset["framework"] === "svelte" ? "svelte" : "vue");
+  frameworkButtons.forEach((button) =>
+    button.addEventListener(
+      "click",
+      () => {
+        const value = button.dataset["frameworkChoice"];
+        if (!value) return;
+        const before = button.getBoundingClientRect().top;
+        setFramework(value);
+        window.scrollBy({ top: button.getBoundingClientRect().top - before, behavior: "instant" });
+        try {
+          localStorage.setItem("skathi-framework", value);
+        } catch {}
+      },
+      { signal },
+    ),
+  );
 
   document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
     const label = button.querySelector<HTMLElement>("[data-copy-label]");

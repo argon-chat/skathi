@@ -13,7 +13,8 @@
     "build": "astro build && pagefind --site dist",
     "preview": "astro preview",
     "preview:cloudflare": "wrangler dev",
-    "check": "astro check && vue-tsc --noEmit -p tsconfig.json",
+    "check": "astro check && vue-tsc --noEmit -p tsconfig.json && bun run check:samples",
+    "check:samples": "vue-tsc --noEmit -p samples/tsconfig.json && svelte-check --tsconfig ./samples/tsconfig.json --fail-on-warnings",
     "test": "bun test tests/build.test.ts",
     "fmt": "bun fmt --no-script . && prettier --plugin prettier-plugin-astro --print-width 120 --write \"src/**/*.astro\"",
     "fmt:check": "bun fmt --no-script --check . && prettier --plugin prettier-plugin-astro --print-width 120 --check \"src/**/*.astro\"",
@@ -21,13 +22,14 @@
     "deploy:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
-    "@astrojs/mdx": "^8.1.6",
     "@astrojs/markdown-satteri": "^0.4.10",
+    "@astrojs/mdx": "^8.1.6",
     "@astrojs/sitemap": "^3.7.5",
     "@astrojs/vue": "^7.1.6",
     "@fontsource-variable/dm-sans": "^5",
     "@fontsource-variable/jetbrains-mono": "^5",
     "@fontsource-variable/lora": "^5",
+    "@shikijs/transformers": "^4.6.0",
     "astro": "^7.4.12",
     "satteri": "^0.11.7",
     "shiki": "^4.6.0",
@@ -38,6 +40,7 @@
     "pagefind": "^1.6.0",
     "prettier": "^3",
     "prettier-plugin-astro": "^0.14",
+    "svelte-check": "^4",
     "wrangler": "^4.162.0"
   }
 }

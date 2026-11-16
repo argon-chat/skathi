@@ -1,0 +1,68 @@
+---
+import { codeToHtml, type ShikiTransformer } from "shiki";
+import { lineTransformers } from "../lib/code";
+import { frameworks, sampleVariants, type SampleProps } from "../lib/samples";
+
+type Props = SampleProps;
+
+const astroCode: ShikiTransformer = {
+  name: "skathi:astro-code",
+  pre(node) {
+    this.addClassToHast(node, "astro-code");
+  },
+};
+const variants = await Promise.all(
+  sampleVariants(Astro.props).map(async (v) => ({
+    ...v,
+    html: await codeToHtml(v.code, {
+      lang: v.lang,
+      themes: { light: "github-light", dark: "github-dark" },
+      defaultColor: false,
+      transformers: [...lineTransformers(v.focus, v.highlight), astroCode],
+    }),
+  })),
+);
+const tabbed = variants.length > 1;
+---
+
+<div class="code-block" data-code-block>
+  <div class="code-toolbar">
+    <span class="code-title">
+      {variants.map((v) => <span data-framework={tabbed ? v.framework : undefined}>{v.title}</span>)}
+    </span>
+    <div class="code-actions">
+      {
+        tabbed && (
+          <div class="code-tabs" role="group" aria-label="Framework">
+            {variants.map((v) => (
+              <button type="button" data-framework-choice={v.framework} aria-pressed="false">
+                {v.framework ? frameworks[v.framework] : v.title}
+              </button>
+            ))}
+          </div>
+        )
+      }
+      <button type="button" class="code-copy" aria-label="Copy code">
+        <svg
+          class="code-copy-icon"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          ><path class="icon-copy" d="M9 9h11v11H9V9Zm-4 6H4V4h11v1"></path><path class="icon-check" d="m5 12 5 5L20 7"
+          ></path></svg
+        ><span class="code-copy-label">Copy</span>
+      </button>
+    </div>
+  </div>
+  {
+    variants.map((v) => (
+      <div class="code-variant" data-framework={tabbed ? v.framework : undefined} set:html={v.html} />
+    ))
+  }
+</div>
