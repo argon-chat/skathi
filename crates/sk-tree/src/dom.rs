@@ -128,6 +128,30 @@ fn root_origin() -> (f32, f32) {
         .unwrap_or((0.0, 0.0))
 }
 
+/// How many element descendants `id` has and how many of them the last frame painted inside its
+/// nearest scroll container (`id` itself counts). `None` outside a scroll container or before a paint.
+/// Never lays out: a dev advisory must not change the frame it measures.
+pub fn visible_share(id: u32) -> Option<(usize, usize)> {
+    let (chain, ids) = tree::read_tree(|t| (ancestors_from(t, id), descendants(t, id)));
+    let scroller = chain
+        .into_iter()
+        .find(|&a| crate::render::scroll_handle_of(a).is_some())?;
+    let window = crate::windows::window_of_node(scroller);
+    crate::windows::peek(window, |w| {
+        let &(vx, vy, vw, vh) = w.bounds.get(&scroller)?;
+        let seen = ids
+            .iter()
+            .filter(|&id| {
+                w.bounds.get(id).is_some_and(|&(x, y, width, height)| {
+                    x < vx + vw && x + width > vx && y < vy + vh && y + height > vy
+                })
+            })
+            .count();
+        Some((ids.len(), seen))
+    })
+    .flatten()
+}
+
 fn bounds_now(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::bounds_of(id)?;
     let (ox, oy) = root_origin();

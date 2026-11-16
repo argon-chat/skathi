@@ -459,7 +459,7 @@ onBeforeUnmount(() => {
         Select a call to inspect its callsite and captured counters. Render/submit spans measure host CPU work; GPU
         execution timestamps are not recorded.
       </div>
-      <div v-for="hint in detail.frame.hints" :key="hint.code" class="frame-hint">
+      <div v-for="(hint, i) in detail.frame.hints" :key="i" class="frame-hint">
         {{ hint.message }}<span v-if="hint.count > 1"> ({{ hint.count }})</span>
       </div>
     </template>

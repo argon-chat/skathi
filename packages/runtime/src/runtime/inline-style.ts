@@ -1,6 +1,7 @@
 import type { MirrorElement } from "./types";
 import { nodeById } from "./nodes";
 import { notifyMutation, observers } from "./mutation-observer";
+import { noteWrite } from "./perf-advice";
 
 // Inline style lives in the host: `el.style` is its CSSStyleDeclaration (`__sk_style_object`), and the
 // `style` attribute reads back its declarations (`__sk_style_attr`). Here: runtime-dom's `:style` diff, and
@@ -59,14 +60,17 @@ export function patchStyle(el: MirrorElement, prev: unknown, next: unknown): voi
       entries += `${key}\0${styleText(n[key])}\0`;
     }
     __sk_style_patch(el.__skId, entries);
+    if (__DEV__) noteWrite(el);
   } else if (isCssString) {
     if (prev !== next) {
       const vars = el._cssVarText;
       __sk_style_replace(el.__skId, vars ? `${next};${vars}` : next, false);
+      if (__DEV__) noteWrite(el);
       hasControlledDisplay = DISPLAY_RE.test(next);
     }
   } else if (prev) {
     __sk_style_clear(el.__skId);
+    if (__DEV__) noteWrite(el);
   }
   if (vShowOriginalDisplay in el) {
     el[vShowOriginalDisplay] = hasControlledDisplay ? inlineDisplay(el) : "";

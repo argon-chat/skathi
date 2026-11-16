@@ -1,0 +1,13 @@
+{
+  "$comment": "A sheet whose template reads the scroll offset to move its row headers, so every scroll re-renders every cell: the dev-build performance advisories must name it.",
+
+  "name": "sk-test-perf-advice",
+
+  "window": {
+    "title": "Skathi — perf advisories (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

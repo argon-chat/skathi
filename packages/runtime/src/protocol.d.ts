@@ -313,6 +313,15 @@ declare function __sk_log(message: string): void;
 declare function __sk_advise(key: string, message: string): boolean;
 declare function __sk_advised(key: string): boolean;
 
+/** The build's define: true under `sk dev`, false in a production bundle, where every `if (__DEV__)` branch is dropped. */
+declare const __DEV__: boolean;
+/** A dev-build performance advisory (`code`: `wasted-render`, `long-list`, `host-writes`): a hint on the frame being recorded, and `[skathi perf] message` in the console the first time `key` is seen. */
+declare function __sk_perf_advise(code: string, key: string, message: string): boolean;
+/** Counts the frames the host has built; JS work between two values belongs to one frame. */
+declare function __sk_perf_frame(): number;
+/** `"<elements>,<in view>"`: the element descendants of `id` and how many of them the last frame painted inside the nearest scroll container; `""` outside one or before a paint. */
+declare function __sk_perf_visible(id: SkNodeId): string;
+
 /** Optional recording controls, absent without devtools. A nonzero token must be ended in finally. */
 declare var __sk_trace_callback_begin: ((callback: unknown) => number) | undefined;
 declare var __sk_trace_callback_end: ((token: number) => void) | undefined;

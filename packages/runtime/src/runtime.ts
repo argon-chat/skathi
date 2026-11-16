@@ -20,6 +20,7 @@ import {
 import { pointer, pointerCaptures, releaseCapturedPointer } from "./runtime/pointer-capture";
 import { observers } from "./runtime/mutation-observer";
 import { installStylesheet } from "./runtime/stylesheet";
+import { watchDomWrites, watchVueRenders } from "./runtime/perf-advice";
 import "./runtime/reflect";
 import "./runtime/dnd";
 import "./runtime/document";
@@ -52,6 +53,7 @@ function vueRenderer(): ReturnType<typeof makeRenderer> {
   if (!renderer) {
     patchTeleport();
     renderer = makeRenderer();
+    if (__DEV__) watchVueRenders();
   }
   return renderer;
 }
@@ -173,6 +175,7 @@ export function createApp(rootComponent: unknown, rootProps: Record<string, unkn
  */
 export function mountDocument(render: (root: MirrorElement) => () => void): MirrorElement {
   if (globalThis.__SK_CSS__?.length) installStylesheet(globalThis.__SK_CSS__.join("\n"));
+  if (__DEV__) watchDomWrites();
   const root = ensureDocumentRoot();
   const stop = render(root);
   globalThis.__SK_TEARDOWN__ = () => teardownDocumentRoot(root, stop);

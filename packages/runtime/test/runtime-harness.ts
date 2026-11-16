@@ -24,6 +24,8 @@ import {
   shallowRef,
   Static,
   Teleport,
+  isRef,
+  setDevtoolsHook,
   toRaw,
   useTransitionState,
   version,
@@ -333,6 +335,13 @@ interface RuntimeHost {
     };
   };
   tree: TreeModel;
+  /** The dev-build performance advisories, when the world was made with `perf`. */
+  perf: {
+    advisories: { code: string; key: string; message: string }[];
+    frame: number;
+    visible: (id: number) => string;
+    calls: number;
+  };
 }
 
 /** `MouseEvent` hands the world an event class (bun has none). */
@@ -347,6 +356,10 @@ export function createRuntime(
     anim?: boolean;
     realm?: Record<string, unknown>;
     navigator?: Record<string, unknown>;
+    /** The `__DEV__` define; true unless a test plays a production bundle. */
+    dev?: boolean;
+    /** Registers the `__sk_perf_*` host functions. */
+    perf?: boolean;
   } = {},
 ) {
   const raw = RUNTIME_JS;
@@ -439,6 +452,7 @@ export function createRuntime(
   };
   const host: RuntimeHost = {
     tree,
+    perf: { advisories: [], frame: 1, visible: () => "", calls: 0 },
     names: [],
     listeners: [],
     props: [],
@@ -687,6 +701,12 @@ export function createRuntime(
     "shellHost",
     "hasWarned",
     "warnCompat",
+    "isRef",
+    "setDevtoolsHook",
+    "__DEV__",
+    "__sk_perf_advise",
+    "__sk_perf_frame",
+    "__sk_perf_visible",
     ...Object.keys(style.fns),
   ];
   const args = [
@@ -865,6 +885,28 @@ export function createRuntime(
     shellHost,
     hasWarned,
     warnCompat,
+    isRef,
+    setDevtoolsHook,
+    options.dev ?? true,
+    options.perf
+      ? (code: string, key: string, message: string) => {
+          host.perf.calls++;
+          host.perf.advisories.push({ code, key, message });
+          return true;
+        }
+      : undefined,
+    options.perf
+      ? () => {
+          host.perf.calls++;
+          return host.perf.frame;
+        }
+      : undefined,
+    options.perf
+      ? (id: number) => {
+          host.perf.calls++;
+          return host.perf.visible(id);
+        }
+      : undefined,
     ...Object.entries(style.fns).map(([name, fn]) => (...a: unknown[]) => {
       host.styleCalls[name] = (host.styleCalls[name] ?? 0) + 1;
       return Reflect.apply(fn, undefined, a);

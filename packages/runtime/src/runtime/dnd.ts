@@ -27,6 +27,7 @@ import { noteActivation } from "./activation";
 import { theGlobal } from "./interfaces";
 import { isSelectEl, pickOption } from "./select";
 import { isRangeInput, rangeValue } from "./controls";
+import { withCause } from "./perf-advice";
 
 // HTML drag and drop: gpui has none, so the runtime runs the gesture off the host's mouse events: a left press on a
 // `draggable="true"` element then a move past 4 px starts a drag; each move fires `drag`, `dragenter` / `dragleave`
@@ -255,7 +256,7 @@ function dndDispatch(
   return undefined;
 }
 
-__sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
+const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
   if (name === "pointerlockchange" || name === "pointerlockerror")
@@ -396,4 +397,5 @@ __sk_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(1);
   if (name === "mousedown" && dndState.seen && !dndState.gesture) dndPress(target, a, b, c, proceed);
   return proceed;
-});
+};
+__sk_set_dispatcher(__DEV__ ? withCause(dispatchHostEvent) : dispatchHostEvent);

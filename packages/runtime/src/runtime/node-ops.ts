@@ -23,6 +23,7 @@ import { notifyMutation } from "./mutation-observer";
 import { releaseCapturesIn } from "./pointer-capture";
 import { queryOne } from "./dom-members";
 import { addExtraListener, removeExtraListener, syncListenerFlag } from "./listeners";
+import { noteChildren, noteWrite } from "./perf-advice";
 
 export function mk(id: SkNodeId, kind: 1, tag: string): MirrorElement;
 export function mk(id: SkNodeId, kind: 2 | 3, tag: string): MirrorText;
@@ -81,6 +82,7 @@ export const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchPro
   setText: (node, text) => {
     node.text = String(text);
     __sk_set_text(node.__skId, node.text);
+    if (__DEV__) noteWrite(node);
   },
   setElementText: (node, text) => {
     // DETACH the children, do not free them, as `el.textContent = text` does: a leaving <Transition> child stays until
@@ -89,12 +91,17 @@ export const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchPro
     if (kids) for (const c of kids) detachNode(c, false);
     node.ownText = String(text);
     __sk_set_element_text(node.__skId, String(text));
+    if (__DEV__) noteWrite(node);
     if (kids) optionsChangedIn(node);
     notifyMutation(node, "childList", { addedNodes: [], removedNodes: kids ?? [] });
   },
-  insert: (child, parent, anchor) => insertNode(child, parent, anchor ?? null, true),
+  insert: (child, parent, anchor) => {
+    if (__DEV__) noteChildren(parent);
+    insertNode(child, parent, anchor ?? null, true);
+  },
   remove: (child) => {
     const p = child.parentNode;
+    if (__DEV__) noteChildren(p);
     if (p) {
       const i = p.childNodes.indexOf(child);
       if (i >= 0) p.childNodes.splice(i, 1);

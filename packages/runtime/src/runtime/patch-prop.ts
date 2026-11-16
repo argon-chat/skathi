@@ -20,6 +20,7 @@ import { isColorInput, syncFileInput } from "./file-input";
 import { JS_SOURCED_EVENTS, dndRearm, dndState, ensureBuckets, passiveOf, syncListenerFlag } from "./listeners";
 import { REFLECTED } from "./reflected";
 import type { Reflected } from "./reflected";
+import { noteWrite } from "./perf-advice";
 
 function reflectedOf(el: MirrorElement, key: string): Reflected | null {
   const r = REFLECTED[key];
@@ -154,6 +155,7 @@ const SPECIAL_BOOLEAN_ATTRS = new Set([
 ]);
 
 export function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
+  if (__DEV__) noteWrite(el);
   if (next == null) __sk_set_prop(el.__skId, I(key), undefined);
   else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
     __sk_set_prop(el.__skId, I(key), String(next));
@@ -221,7 +223,10 @@ export function writeClass(el: MirrorElement, remove = false): void {
   const extra = el._vtc;
   const value = extra && extra.size ? [base, ...extra].filter(Boolean).join(" ") : base;
   const before = el.attrs?.class;
-  if (before !== value) __sk_set_class(el.__skId, value);
+  if (before !== value) {
+    __sk_set_class(el.__skId, value);
+    if (__DEV__) noteWrite(el);
+  }
   if (!el.attrs) return;
   if (remove && !value) delete el.attrs.class;
   else el.attrs.class = value;

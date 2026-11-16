@@ -178,17 +178,16 @@ thread_local! {
 
 /// `console.warn` once per `key` for this thread; false when `key` was already said.
 pub unsafe fn warn_compat(g: *mut c_void, key: &str, msg: &str) -> bool {
-    if !WARNED.with(|w| w.borrow_mut().insert(key.to_string())) {
+    warn_once(g, key.to_string(), &format!("[skathi compat] {msg}"))
+}
+
+unsafe fn warn_once(g: *mut c_void, key: String, line: &str) -> bool {
+    if !WARNED.with(|w| w.borrow_mut().insert(key)) {
         return false;
     }
     let console = get(g, global(g), "console");
     if is_cell(console) {
-        let _ = call(
-            g,
-            get(g, console, "warn"),
-            console,
-            &[js_string(g, &format!("[skathi compat] {msg}"))],
-        );
+        let _ = call(g, get(g, console, "warn"), console, &[js_string(g, line)]);
     }
     true
 }
@@ -208,9 +207,30 @@ crate::host_fn!(fn js_advised(g, args) {
     enc_bool(has_warned(&key))
 });
 
+crate::host_fn!(fn js_perf_advise(g, args) {
+    let code = match unsafe { string_arg(g, args.arg(0).0) }.as_deref() {
+        Some("wasted-render") => "wasted-render",
+        Some("long-list") => "long-list",
+        Some("host-writes") => "host-writes",
+        _ => return UNDEF,
+    };
+    let key = unsafe { string_arg(g, args.arg(1).0) }.unwrap_or_default();
+    let msg = unsafe { string_arg(g, args.arg(2).0) }.unwrap_or_default();
+    redjs::profiling::hint(code, &msg);
+    enc_bool(unsafe { warn_once(g, format!("perf:{code}:{key}"), &format!("[skathi perf] {msg}")) })
+});
+
 /// `__sk_advise(key, message)` and `__sk_advised(key)`: the runtime's one-shot advisories share the
-/// host's set.
+/// host's set. `__sk_perf_advise(code, key, message)`: a dev-build performance advisory, a hint on the
+/// recorded frame each time and a console line once per key.
 pub(crate) unsafe fn install(g: *mut c_void) {
+    define(
+        g,
+        global(g),
+        "__sk_perf_advise",
+        make_fn(g, "__sk_perf_advise", 3, js_perf_advise),
+        2,
+    );
     define(
         g,
         global(g),

@@ -280,6 +280,18 @@ host_fn!(fn sk_query(g, args) {
     ret_string(&out)
 });
 
+// Dev-build performance advisories. `__sk_perf_frame()` counts built frames; `__sk_perf_visible(id)`
+// answers "<elements>,<in view>" for `id`'s subtree against its scroll container, or "".
+sk_runtime::raw_host_fn! { fn sk_perf_frame(_g, _cf) {
+    Value::number(render::build_count() as f64).0
+} }
+
+host_fn!(fn sk_perf_visible(_g, args) {
+    let out = dom::visible_share(arg_id(args.arg(0)))
+        .map_or_else(String::new, |(total, seen)| format!("{total},{seen}"));
+    ret_string(&out)
+});
+
 host_fn!(fn sk_bounds(_g, args) {
     let id = arg_id(args.arg(0));
     perf::note_read(perf::Read::Layout);
@@ -423,6 +435,8 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_set_dispatcher", 1, sk_set_dispatcher as *const _),
         ("__sk_query", 3, sk_query as *const _),
         ("__sk_bounds", 1, sk_bounds as *const _),
+        ("__sk_perf_frame", 0, sk_perf_frame as *const _),
+        ("__sk_perf_visible", 1, sk_perf_visible as *const _),
         ("__sk_focus", 2, sk_focus as *const _),
         ("__sk_input_select", 1, sk_input_select as *const _),
         ("__sk_media_state", 1, sk_media_state as *const _),
