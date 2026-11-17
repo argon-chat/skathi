@@ -120,7 +120,7 @@
     --sidebar-width: 288px;
     --content-width: 880px;
     --toc-width: 250px;
-    --wide-max: 1440px;
+    --wide-max: 1120px;
     --shell-pad: clamp(32px, 4.8vw, 96px);
     --shell-gap: clamp(40px, 5vw, 96px);
     font-family: var(--font-body);
@@ -382,7 +382,7 @@
     min-height: 100vh;
     display: grid;
     grid-template-columns: minmax(0, var(--content-width)) var(--toc-width);
-    justify-content: space-between;
+    justify-content: center;
     container-type: inline-size;
     gap: var(--shell-gap);
     padding: 48px var(--shell-pad) 0;
@@ -1129,7 +1129,7 @@
     min-width: 540px;
   }
   .prose .wide table {
-    min-width: 720px;
+    min-width: 600px;
     table-layout: fixed;
     overflow-wrap: break-word;
   }
@@ -1542,13 +1542,41 @@
       z-index: 1;
       margin-inline: -40px;
     }
-    /* Left as far as demo frames; right into the space before the TOC (100cqw is the shell's
-       inner width, 100% the column's), 48px short of it and no wider than --wide-max. */
+    /* The TOC sits at the right padding. The column, with the rail's 40px bleed and the right
+       reach of any wide block, is centred between the sidebar and the TOC; --lead is the
+       space before it. --shell-w is the shell's inner width: 100% in its own grid, 100cqw
+       inside it, so both declare --lead to substitute their own. */
+    .docs-shell {
+      --shell-w: 100%;
+      grid-template-columns: var(--lead) minmax(0, var(--content-width)) minmax(var(--shell-gap), 1fr) var(--toc-width);
+      column-gap: 0;
+    }
+    .docs-shell:has(.prose .wide) {
+      --reach: calc(var(--wide-max) - var(--content-width) - 40px);
+    }
+    .docs-shell,
     .prose .wide {
+      --free: max(0px, var(--shell-w) - var(--content-width) - var(--shell-gap) - var(--toc-width));
+      --lead: clamp(
+        0px,
+        (var(--free) + var(--shell-gap) + 40px - var(--shell-pad) - var(--reach, 0px)) / 2,
+        var(--free)
+      );
+    }
+    .main-content {
+      grid-column: 2;
+    }
+    .right-sidebar {
+      grid-column: 4;
+    }
+    /* Left as far as demo frames; right into the space before the TOC, 48px short of it and no
+       wider than --wide-max. */
+    .prose .wide {
+      --shell-w: 100cqw;
       position: relative;
       z-index: 1;
       margin-left: -40px;
-      margin-right: min(0px, max(100% + var(--toc-width) + 48px - 100cqw, 100% + 40px - var(--wide-max)));
+      margin-right: min(0px, max(100% + var(--lead) + var(--toc-width) + 48px - 100cqw, 100% + 40px - var(--wide-max)));
     }
   }
   @media (max-width: 1250px) {

@@ -69,7 +69,7 @@ There is no WebView in this rendering path. CSS and web-compatible APIs are impl
 
 ## Pick your next step
 
-Start with the [quick start](/quick-start/) to create and run an app. Read the [runtime model](/concepts/) to understand where Vue ends and the native host begins. Choosing between Skathi, Electron, Tauri and Qt? The [comparison](/comparison/) has measured size, memory and call cost side by side.
+Start with the [quick start](/quick-start/) to create and run an app. Read the [runtime model](/concepts/) to understand where Vue ends and the native host begins. Choosing between Skathi, Electron and Tauri? The [comparison](/comparison/) has measured size, memory and call cost side by side.
 
 Already migrating an application? Keep the [CSS reference](/css/) and [platform API reference](/web-platform/) nearby. They describe supported features and the limitations that matter in practice.
 
