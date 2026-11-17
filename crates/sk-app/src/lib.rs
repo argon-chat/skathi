@@ -856,6 +856,14 @@ fn publish_video_device() {
             if let Err(error) = unsafe { sk_tree::install_video_device_provider(provide) } {
                 log::error!("Could not install lazy video device provider: {error}");
             }
+            sk_tree::surface::install_d3d12_provider(|| {
+                gpui_windows::renderer_d3d12_device().map(|handle| sk_tree::surface::D3D12Lease {
+                    device: handle.device,
+                    queue: handle.queue,
+                    generation: handle.generation,
+                    keep_alive: handle.keep_alive,
+                })
+            });
         });
     }
     thread_local! {

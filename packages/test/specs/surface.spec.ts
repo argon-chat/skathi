@@ -147,6 +147,33 @@ test(
 );
 
 test(
+  "D3D12 producers on the renderer's device and on their own, and a D3D11 fence, hand frames over",
+  async () => {
+    const colors: Record<string, [number, number, number, number]> = {
+      d3d12: [255, 0, 255, 255],
+      "d3d12-shared": [0, 128, 255, 255],
+      "d3d11-fence": [64, 192, 0, 255],
+    };
+    // Each mode waits on the CPU until the surface released its texture (or fence value 2).
+    for (const [name, color] of Object.entries(colors)) await call("present", name, name, color, 48, 32);
+    for (const name of Object.keys(colors))
+      await until(
+        () => stats(name),
+        (s) => s.shown === 1,
+      );
+    const px = await shoot();
+    for (const [name, [b, g, r]] of Object.entries(colors)) {
+      const at = await box(`#${name}`);
+      expect(near(px(at.x + at.w / 2, at.y + at.h / 2), [r, g, b]), name).toBe(true);
+      expect(near(px(at.x + 4, at.y + 4), [r, g, b]), `${name} fills its box`).toBe(true);
+    }
+    const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
+    for (const name of Object.keys(colors)) expect(events).toContain(`${name}:ready:48x32`);
+  },
+  T,
+);
+
+test(
   "clearing withdraws the frame and tells the element",
   async () => {
     await call("clear", "fill");

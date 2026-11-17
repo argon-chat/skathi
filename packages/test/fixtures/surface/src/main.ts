@@ -36,5 +36,8 @@ createApp({
         style: at(200, 140, 80, 80, hiddenShown.value ? "" : "display: none"),
         ...log("hidden"),
       }),
+      ...["d3d12", "d3d12-shared", "d3d11-fence"].map((name, i) =>
+        h("sk-surface", { id: name, name, style: at(20 + i * 120, 260, 100, 80, "object-fit: fill"), ...log(name) }),
+      ),
     ]),
 }).mount();

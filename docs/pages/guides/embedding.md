@@ -278,7 +278,7 @@ std::thread::spawn(move || loop {
 });
 ```
 
-`present_bgra` works on every platform. On Windows a frame can stay on the GPU: a texture on the renderer's own device, or one shared from another device or process. A present never waits for the UI, the newest frame wins, and frames presented while the element is hidden or scrolled away cost no upload.
+`present_bgra` works on every platform. On Windows a frame can stay on the GPU: a Direct3D 11 or 12 texture on the renderer's own device, or one shared from another device, API (Vulkan included) or process. A present never waits for the UI, the newest frame wins, and frames presented while the element is hidden or scrolled away cost no upload.
 
 [Showing native GPU content](/guides/native-gpu-content/) covers the GPU paths, synchronisation, device loss and a libmpv recipe.
 
@@ -360,7 +360,7 @@ There is no `Handle` returned on macOS: take it from `HostContext::handle()` in 
 | `clipboard`       | on      | `navigator.clipboard`                                                            |
 | `indexeddb`       | on      | IndexedDB                                                                        |
 | `webgpu`          | on      | WebGPU                                                                           |
-| `native-dx12`     | on      | The Direct3D 12 renderer on Windows; off, Direct3D 11                            |
+| `native-dx12`     | on      | The Direct3D 12 renderer on Windows; off, Direct3D 11 (no `present_d3d12`)       |
 | `icu-root`        | off     | Links only ICU's root locale, about 12 MB less; see the note below               |
 | `battery`         | off     | The Battery Status API                                                           |
 | `no-devtools`     | off     | Compiles out the devtools protocol and the inspector                             |

@@ -3,7 +3,10 @@
 //!
 //! - `present(name, mode, [b, g, r, a], width, height)` presents one solid frame from a thread of
 //!   ours. `mode` is `"bgra"` (CPU), `"texture"` (a texture on the renderer's device) or `"shared"`
-//!   (a texture on a device of our own, handed over as a shared NT handle with a keyed mutex).
+//!   (a texture on a device of our own, handed over as a shared NT handle with a keyed mutex),
+//!   `"d3d11-fence"` (the same with a shared `ID3D11Fence`), `"d3d12"` (a resource on the
+//!   renderer's D3D12 device) or `"d3d12-shared"` (a D3D12 device of our own, shared resource and
+//!   fence).
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible }`.
 //!
@@ -53,6 +56,9 @@ fn main() {
                 let presented = match mode.as_str() {
                     "texture" => gpu::present_texture(&surface, color, width, height),
                     "shared" => gpu::present_shared(&surface, color, width, height),
+                    "d3d11-fence" => gpu::present_d3d11_fenced(&surface, color, width, height),
+                    "d3d12" => gpu::d3d12::present(&surface, color, width, height),
+                    "d3d12-shared" => gpu::d3d12::present_shared(&surface, color, width, height),
                     _ => {
                         let frame = color.repeat((width * height) as usize);
                         surface
@@ -104,12 +110,13 @@ mod gpu {
 
     use sk_app::embed::{SharedTexture, SurfaceError, SurfaceHandle};
     use windows::core::Interface;
-    use windows::Win32::Foundation::{CloseHandle, HMODULE};
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE, WAIT_OBJECT_0};
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-        ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
+        D3D11CreateDevice, ID3D11Device, ID3D11Device5, ID3D11DeviceContext, ID3D11DeviceContext4,
+        ID3D11Fence, ID3D11RenderTargetView, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_FENCE_FLAG_SHARED,
+        D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
         D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
         D3D11_USAGE_DEFAULT,
     };
@@ -117,6 +124,7 @@ mod gpu {
     use windows::Win32::Graphics::Dxgi::{
         IDXGIKeyedMutex, IDXGIResource1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
     };
+    use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
     type Result<T> = std::result::Result<T, String>;
 
@@ -181,24 +189,7 @@ mod gpu {
 
     /// What another process would do: its own device, a shared NT handle, a keyed mutex.
     pub fn present_shared(surface: &SurfaceHandle, color: [u8; 4], w: u32, h: u32) -> Result<()> {
-        let mut device = None;
-        let mut context = None;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                Some(&mut context),
-            )
-        }
-        .map_err(err)?;
-        let (device, context): (ID3D11Device, ID3D11DeviceContext) =
-            (device.ok_or("no device")?, context.ok_or("no context")?);
+        let (device, context) = own_device()?;
         let misc = (D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0)
             as u32;
         let (texture, view) = target(&device, w, h, misc)?;
@@ -228,6 +219,78 @@ mod gpu {
         unsafe { mutex.AcquireSync(0, 1000) }.map_err(err)?;
         unsafe { mutex.ReleaseSync(0) }.map_err(err)?;
         Ok(())
+    }
+
+    fn own_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+        let mut device = None;
+        let mut context = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+        }
+        .map_err(err)?;
+        Ok((device.ok_or("no device")?, context.ok_or("no context")?))
+    }
+
+    /// A D3D11 producer synchronised by a shared `ID3D11Fence` instead of a keyed mutex.
+    pub fn present_d3d11_fenced(
+        surface: &SurfaceHandle,
+        color: [u8; 4],
+        w: u32,
+        h: u32,
+    ) -> Result<()> {
+        let (device, context) = own_device()?;
+        let device5: ID3D11Device5 = device.cast().map_err(err)?;
+        let context4: ID3D11DeviceContext4 = context.cast().map_err(err)?;
+        let mut fence: Option<ID3D11Fence> = None;
+        unsafe { device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence) }.map_err(err)?;
+        let fence = fence.ok_or("no fence")?;
+        let misc = (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0) as u32;
+        let (texture, view) = target(&device, w, h, misc)?;
+        unsafe {
+            context.ClearRenderTargetView(&view, &rgba(color));
+            context4.Signal(&fence, 1).map_err(err)?;
+            context.Flush();
+        }
+        let resource: IDXGIResource1 = texture.cast().map_err(err)?;
+        let texture_handle = unsafe {
+            resource.CreateSharedHandle(
+                None,
+                (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0,
+                None,
+            )
+        }
+        .map_err(err)?;
+        let fence_handle =
+            unsafe { fence.CreateSharedHandle(None, GENERIC_ALL.0, None) }.map_err(err)?;
+        let presented = SharedTexture::open(texture_handle.0 as usize as u64)
+            .and_then(|t| t.with_fence(fence_handle.0 as usize as u64))
+            .and_then(|t| surface.present_shared_fenced(&t, 1, 2));
+        unsafe {
+            let _ = CloseHandle(texture_handle);
+            let _ = CloseHandle(fence_handle);
+        }
+        presented.map_err(err)?;
+        let event = unsafe { CreateEventW(None, false, false, None) }.map_err(err)?;
+        let reached = unsafe { fence.SetEventOnCompletion(2, event) }.is_ok()
+            && unsafe { WaitForSingleObject(event, 2000) } == WAIT_OBJECT_0;
+        unsafe {
+            let _ = CloseHandle(event);
+        }
+        if reached {
+            Ok(())
+        } else {
+            Err("the surface did not signal the release value".into())
+        }
     }
 
     /// Renders at the element's painted size, recreating its texture after a resize or a device loss.
@@ -273,6 +336,235 @@ mod gpu {
             }
         }
     }
+
+    pub mod d3d12 {
+        use std::mem::ManuallyDrop;
+
+        use sk_app::embed::{SharedTexture, SurfaceHandle};
+        use windows::core::Interface;
+        use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, WAIT_OBJECT_0};
+        use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
+        use windows::Win32::Graphics::Direct3D12::{
+            D3D12CreateDevice, ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue,
+            ID3D12DescriptorHeap, ID3D12Device, ID3D12DeviceChild, ID3D12Fence,
+            ID3D12GraphicsCommandList, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT,
+            D3D12_COMMAND_QUEUE_DESC, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+            D3D12_FENCE_FLAG_NONE, D3D12_FENCE_FLAG_SHARED, D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_NONE,
+            D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT,
+            D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+            D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATES,
+            D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_TRANSITION_BARRIER,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+        };
+        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+
+        use super::{err, rgba, Result};
+
+        struct Producer {
+            device: ID3D12Device,
+            queue: ID3D12CommandQueue,
+            fence: ID3D12Fence,
+        }
+
+        impl Producer {
+            fn new(device: ID3D12Device, fence_flags: bool) -> Result<Self> {
+                let queue = unsafe {
+                    device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                        ..Default::default()
+                    })
+                }
+                .map_err(err)?;
+                let flags = if fence_flags {
+                    D3D12_FENCE_FLAG_SHARED
+                } else {
+                    D3D12_FENCE_FLAG_NONE
+                };
+                let fence = unsafe { device.CreateFence(0, flags) }.map_err(err)?;
+                Ok(Producer {
+                    device,
+                    queue,
+                    fence,
+                })
+            }
+
+            fn texture(&self, w: u32, h: u32, heap: D3D12_HEAP_FLAGS) -> Result<ID3D12Resource> {
+                let desc = D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                    Width: u64::from(w),
+                    Height: h,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+                    ..Default::default()
+                };
+                let props = D3D12_HEAP_PROPERTIES {
+                    Type: D3D12_HEAP_TYPE_DEFAULT,
+                    ..Default::default()
+                };
+                let mut resource: Option<ID3D12Resource> = None;
+                unsafe {
+                    self.device.CreateCommittedResource(
+                        &props,
+                        heap,
+                        &desc,
+                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                        None,
+                        &mut resource,
+                    )
+                }
+                .map_err(err)?;
+                resource.ok_or_else(|| "no resource".into())
+            }
+
+            /// Clears `resource` (in RENDER_TARGET), leaves it in `after` and signals `value`.
+            fn clear(
+                &self,
+                resource: &ID3D12Resource,
+                color: [u8; 4],
+                after: D3D12_RESOURCE_STATES,
+                value: u64,
+            ) -> Result<()> {
+                let heap: ID3D12DescriptorHeap = unsafe {
+                    self.device
+                        .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                            Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                            NumDescriptors: 1,
+                            ..Default::default()
+                        })
+                }
+                .map_err(err)?;
+                let rtv = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+                unsafe { self.device.CreateRenderTargetView(resource, None, rtv) };
+                let allocator: ID3D12CommandAllocator = unsafe {
+                    self.device
+                        .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+                }
+                .map_err(err)?;
+                let list: ID3D12GraphicsCommandList = unsafe {
+                    self.device.CreateCommandList(
+                        0,
+                        D3D12_COMMAND_LIST_TYPE_DIRECT,
+                        &allocator,
+                        None,
+                    )
+                }
+                .map_err(err)?;
+                unsafe { list.ClearRenderTargetView(rtv, &rgba(color), None) };
+                if after != D3D12_RESOURCE_STATE_RENDER_TARGET {
+                    let mut barrier = D3D12_RESOURCE_BARRIER {
+                        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                                pResource: ManuallyDrop::new(Some(resource.clone())),
+                                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                StateBefore: D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                StateAfter: after,
+                            }),
+                        },
+                        ..Default::default()
+                    };
+                    unsafe {
+                        list.ResourceBarrier(std::slice::from_ref(&barrier));
+                        ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
+                    }
+                }
+                unsafe { list.Close() }.map_err(err)?;
+                let list: ID3D12CommandList = list.cast().map_err(err)?;
+                unsafe {
+                    self.queue.ExecuteCommandLists(&[Some(list)]);
+                    self.queue.Signal(&self.fence, value).map_err(err)?;
+                }
+                // The allocator and heap must outlive the GPU work.
+                wait(&self.fence, value)
+            }
+        }
+
+        fn wait(fence: &ID3D12Fence, value: u64) -> Result<()> {
+            if unsafe { fence.GetCompletedValue() } >= value {
+                return Ok(());
+            }
+            let event = unsafe { CreateEventW(None, false, false, None) }.map_err(err)?;
+            let reached = unsafe { fence.SetEventOnCompletion(value, event) }.is_ok()
+                && unsafe { WaitForSingleObject(event, 2000) } == WAIT_OBJECT_0;
+            unsafe {
+                let _ = CloseHandle(event);
+            }
+            if reached {
+                Ok(())
+            } else {
+                Err(format!("fence value {value} was not reached"))
+            }
+        }
+
+        /// A producer on the renderer's device: its own queue, a GPU-side handoff, the release fence.
+        pub fn present(surface: &SurfaceHandle, color: [u8; 4], w: u32, h: u32) -> Result<()> {
+            let renderer = surface.d3d12_device().map_err(err)?;
+            let raw = renderer.as_raw();
+            let device = unsafe { ID3D12Device::from_raw_borrowed(&raw) }
+                .ok_or("null device")?
+                .clone();
+            let producer = Producer::new(device, false)?;
+            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_NONE)?;
+            producer.clear(&resource, color, D3D12_RESOURCE_STATE_RENDER_TARGET, 1)?;
+            let released = unsafe {
+                surface.present_d3d12(
+                    resource.as_raw(),
+                    D3D12_RESOURCE_STATE_RENDER_TARGET.0,
+                    Some((producer.fence.as_raw(), 1)),
+                )
+            }
+            .map_err(err)?;
+            let release = surface.release_fence().map_err(err)?;
+            if release.wait(released, std::time::Duration::from_secs(2)) {
+                Ok(())
+            } else {
+                Err("the release fence did not reach the returned value".into())
+            }
+        }
+
+        /// What a producer with its own D3D12 device does (a Vulkan one imports these two objects):
+        /// share the resource and a fence.
+        pub fn present_shared(
+            surface: &SurfaceHandle,
+            color: [u8; 4],
+            w: u32,
+            h: u32,
+        ) -> Result<()> {
+            let mut device: Option<ID3D12Device> = None;
+            unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.map_err(err)?;
+            let producer = Producer::new(device.ok_or("no device")?, true)?;
+            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_SHARED)?;
+            producer.clear(&resource, color, D3D12_RESOURCE_STATE_COMMON, 1)?;
+            let share = |object: &ID3D12DeviceChild| unsafe {
+                producer
+                    .device
+                    .CreateSharedHandle(object, None, GENERIC_ALL.0, None)
+            };
+            let texture_handle = share(&resource.cast().map_err(err)?).map_err(err)?;
+            let fence_handle = share(&producer.fence.cast().map_err(err)?).map_err(err)?;
+            let pid = std::process::id();
+            let presented = SharedTexture::open_from_process(pid, texture_handle.0 as usize as u64)
+                .and_then(|t| t.with_fence_from_process(pid, fence_handle.0 as usize as u64))
+                .and_then(|t| surface.present_shared_fenced(&t, 1, 2));
+            unsafe {
+                let _ = CloseHandle(texture_handle);
+                let _ = CloseHandle(fence_handle);
+            }
+            presented.map_err(err)?;
+            wait(&producer.fence, 2)
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -285,6 +577,19 @@ mod gpu {
 
     pub fn present_shared(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
         present_texture(s, c, w, h)
+    }
+
+    pub fn present_d3d11_fenced(
+        s: &SurfaceHandle,
+        c: [u8; 4],
+        w: u32,
+        h: u32,
+    ) -> Result<(), String> {
+        present_texture(s, c, w, h)
+    }
+
+    pub mod d3d12 {
+        pub use super::{present_shared, present_texture as present};
     }
 
     pub fn animate(_: SurfaceHandle) {}

@@ -3,12 +3,29 @@
 //!
 //! A producer gets a [`SurfaceHandle`] by name ([`surface`]) and presents frames from any thread.
 //! The latest frame wins; an element picks it up on its next paint, and only while it is visible.
-//! On Windows a frame can be a D3D11 texture on the renderer's own device (GPU copy, no readback) or
-//! a DXGI shared texture from another device or process; everywhere it can be CPU BGRA.
+//! On Windows a frame can be a D3D11 or D3D12 texture on the renderer's own device (GPU copy, no
+//! readback) or a shared texture from another device, API or process, synchronised by a keyed
+//! mutex or a fence; everywhere it can be CPU BGRA.
 
 #[cfg(windows)]
 mod d3d11;
+#[cfg(windows)]
+mod d3d12;
 pub(crate) mod node;
+#[cfg(windows)]
+mod shared;
+
+#[cfg(windows)]
+pub use d3d12::{D3D12Lease, D3D12Provider};
+
+/// Under the D3D12 renderer, how surfaces reach its device and queue. Set once by the host.
+#[cfg(windows)]
+pub fn install_d3d12_provider(provider: D3D12Provider) {
+    d3d12::install(provider);
+}
+
+#[cfg(not(windows))]
+const NO_GPU: &str = "GPU surfaces are Windows-only for now; present CPU frames with present_bgra";
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -26,6 +43,8 @@ const _: () = {
     const fn send<T: Send>() {}
     send_sync::<SurfaceHandle>();
     send_sync::<D3D11Device>();
+    send_sync::<D3D12Device>();
+    send_sync::<D3D12Fence>();
     send::<SharedTexture>();
 };
 
@@ -50,12 +69,13 @@ pub fn surface(name: &str) -> SurfaceHandle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SurfaceError {
-    /// This platform has no GPU path for surfaces; [`SurfaceHandle::present_bgra`] works everywhere.
-    NotSupported,
+    /// This platform or renderer has no such path; the message says which one to use.
+    /// [`SurfaceHandle::present_bgra`] works everywhere.
+    NotSupported(&'static str),
     /// The renderer has no device yet (no window has drawn) or could not make one.
     NoDevice(String),
-    /// The renderer recreated its device: ask for [`SurfaceHandle::d3d11_device`] again and recreate
-    /// textures (or reopen shared ones) on it.
+    /// The renderer recreated its device: ask for the device again and recreate textures (or
+    /// reopen shared ones) on it.
     DeviceChanged,
     /// The texture was made on another device; open it as a [`SharedTexture`] instead.
     WrongDevice,
@@ -63,8 +83,11 @@ pub enum SurfaceError {
     Format(String),
     /// A zero or oversized frame, or a buffer too short for it.
     Size(String),
-    /// The keyed mutex was not released to the acquire key in time; nothing was presented.
+    /// The keyed mutex was not released to the acquire key, or the fence not signalled, in time;
+    /// nothing was presented.
     Timeout,
+    /// Every surface texture is still being copied or shown; nothing was presented.
+    Busy,
     /// The platform call failed; the message carries its error.
     Platform(String),
 }
@@ -72,20 +95,24 @@ pub enum SurfaceError {
 impl fmt::Display for SurfaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotSupported => f.write_str(
-                "GPU surfaces are Windows-only for now; present CPU frames with present_bgra",
-            ),
-            Self::NoDevice(why) => write!(f, "the renderer has no D3D11 device: {why}"),
+            Self::NotSupported(why) => f.write_str(why),
+            Self::NoDevice(why) => write!(f, "the renderer has no GPU device: {why}"),
             Self::DeviceChanged => f.write_str(
-                "the renderer recreated its D3D11 device; get it again and recreate the textures",
+                "the renderer recreated its device; get it again (d3d11_device, d3d12_device) and \
+                 recreate the textures",
             ),
             Self::WrongDevice => f.write_str(
-                "the texture is not on the device d3d11_device() returns; share it \
-                 (IDXGIResource1::CreateSharedHandle) and present it as a SharedTexture",
+                "the texture is not on the renderer's device (d3d11_device, d3d12_device); share \
+                 it (CreateSharedHandle) and present it as a SharedTexture",
             ),
             Self::Format(why) | Self::Size(why) => f.write_str(why),
             Self::Timeout => f.write_str(
-                "the producer did not release the keyed mutex to the acquire key in time",
+                "the producer did not release the keyed mutex to the acquire key, or signal the \
+                 fence, in time",
+            ),
+            Self::Busy => f.write_str(
+                "every surface texture is still in use: the producer presents faster than the \
+                 window draws, or a fence it waits on is never signalled; drop this frame",
             ),
             Self::Platform(why) => f.write_str(why),
         }
@@ -157,6 +184,8 @@ pub(crate) struct State {
     info: SurfaceInfo,
     #[cfg(windows)]
     gpu: d3d11::SurfaceGpu,
+    #[cfg(windows)]
+    gpu12: d3d12::SurfaceGpu,
 }
 
 #[derive(Clone)]
@@ -170,6 +199,9 @@ pub(crate) enum Frame {
     /// In the surface's own texture on the renderer's device.
     #[cfg(windows)]
     Gpu { width: u32, height: u32 },
+    /// In one of the surface's D3D12 textures, once the copy into it has run.
+    #[cfg(windows)]
+    D3D12 { width: u32, height: u32 },
 }
 
 impl Frame {
@@ -177,7 +209,7 @@ impl Frame {
         match self {
             Frame::Cpu { width, height, .. } => (*width, *height),
             #[cfg(windows)]
-            Frame::Gpu { width, height } => (*width, *height),
+            Frame::Gpu { width, height } | Frame::D3D12 { width, height } => (*width, *height),
         }
     }
 }
@@ -338,7 +370,7 @@ impl SurfaceHandle {
         }
         #[cfg(not(windows))]
         {
-            Err(SurfaceError::NotSupported)
+            Err(SurfaceError::NotSupported(NO_GPU))
         }
     }
 
@@ -359,20 +391,119 @@ impl SurfaceHandle {
         #[cfg(not(windows))]
         {
             let _ = texture;
-            Err(SurfaceError::NotSupported)
+            Err(SurfaceError::NotSupported(NO_GPU))
         }
     }
 
-    /// Presents a shared texture from another device or process (see [`SharedTexture`]).
+    /// The renderer's D3D12 device and direct queue, under the D3D12 renderer.
+    pub fn d3d12_device(&self) -> Result<D3D12Device, SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d12::device(&self.shared.state).map(|inner| D3D12Device { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            Err(SurfaceError::NotSupported(NO_GPU))
+        }
+    }
+
+    /// The fence [`Self::present_d3d12`] signals once it has copied a frame out of the producer's
+    /// resource.
+    pub fn release_fence(&self) -> Result<D3D12Fence, SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d12::release_fence().map(|inner| D3D12Fence { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            Err(SurfaceError::NotSupported(NO_GPU))
+        }
+    }
+
+    /// Presents an `ID3D12Resource` made on [`Self::d3d12_device`]: a 2D `B8G8R8A8_UNORM` (or
+    /// `_UNORM_SRGB`, `_TYPELESS`) texture, single-sampled, straight alpha, in `resource_state` (a
+    /// `D3D12_RESOURCE_STATES`, left as it is). The copy runs on a queue of the surface's own after
+    /// a GPU wait for `ready` (fence, value); without `ready` the resource must already be written.
+    /// Nothing blocks. Returns the value [`Self::release_fence`] reaches once the resource is free
+    /// to reuse.
+    ///
+    /// # Safety
+    /// `resource` is null or a live `ID3D12Resource`; `ready`'s fence is a live `ID3D12Fence`.
+    pub unsafe fn present_d3d12(
+        &self,
+        resource: *mut c_void,
+        resource_state: i32,
+        ready: Option<(*mut c_void, u64)>,
+    ) -> Result<u64, SurfaceError> {
+        #[cfg(windows)]
+        {
+            // SAFETY: the caller's.
+            let value =
+                unsafe { d3d12::present(&self.shared.state, resource, resource_state, ready) }?;
+            sk_runtime::frames::wake();
+            Ok(value)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (resource, resource_state, ready);
+            Err(SurfaceError::NotSupported(NO_GPU))
+        }
+    }
+
+    /// Presents a shared texture from another device or process (see [`SharedTexture`]); one
+    /// opened with a fence takes [`Self::present_shared_fenced`] instead.
     pub fn present_shared(&self, texture: &SharedTexture) -> Result<(), SurfaceError> {
         #[cfg(windows)]
         {
-            d3d11::present_shared(&self.shared.state, &texture.inner)?;
+            if texture.inner.fenced {
+                return Err(SurfaceError::Format(
+                    "the shared texture has a fence: present it with present_shared_fenced".into(),
+                ));
+            }
+            let sync = match texture.keys {
+                Some((acquire, release)) => d3d11::SharedSync::Keyed(acquire, release),
+                None => d3d11::SharedSync::None,
+            };
+            texture
+                .inner
+                .present(&self.shared.state, sync, texture.timeout_ms)?;
             sk_runtime::frames::wake();
             Ok(())
         }
         #[cfg(not(windows))]
         {
+            match texture.never {}
+        }
+    }
+
+    /// Presents a shared texture opened [`SharedTexture::with_fence`]: the copy waits until the
+    /// fence reaches `wait`, then the fence is signalled to `release` (the producer may write the
+    /// texture again once it gets there).
+    pub fn present_shared_fenced(
+        &self,
+        texture: &SharedTexture,
+        wait: u64,
+        release: u64,
+    ) -> Result<(), SurfaceError> {
+        #[cfg(windows)]
+        {
+            if !texture.inner.fenced {
+                return Err(SurfaceError::Format(
+                    "the shared texture has no fence: open it with SharedTexture::with_fence"
+                        .into(),
+                ));
+            }
+            texture.inner.present(
+                &self.shared.state,
+                d3d11::SharedSync::Fence(wait, release),
+                texture.timeout_ms,
+            )?;
+            sk_runtime::frames::wake();
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (wait, release);
             match texture.never {}
         }
     }
@@ -415,12 +546,13 @@ impl SurfaceHandle {
         #[cfg(windows)]
         {
             let mut st = self.state();
-            if matches!(st.frame, Some(Frame::Gpu { .. })) {
+            if matches!(st.frame, Some(Frame::Gpu { .. } | Frame::D3D12 { .. })) {
                 st.frame = None;
                 st.seq += 1;
                 st.lost = "device";
             }
             st.gpu.forget();
+            st.gpu12.forget();
         }
         self.notify(SurfaceEvent::DeviceLost);
     }
@@ -495,27 +627,166 @@ impl fmt::Debug for D3D11Device {
     }
 }
 
-/// A DXGI shared texture opened on the renderer's device: BGRA8, from a device of another API,
-/// adapter queue or process. Reopen it after [`SurfaceError::DeviceChanged`].
+/// The renderer's `ID3D12Device` and its direct `ID3D12CommandQueue`, referenced while this lives.
+/// Raw, so any `windows` crate version can wrap them.
+pub struct D3D12Device {
+    #[cfg(windows)]
+    inner: d3d12::Device,
+    #[cfg(not(windows))]
+    never: std::convert::Infallible,
+}
+
+impl D3D12Device {
+    /// The `ID3D12Device*`, borrowed from this value.
+    pub fn as_raw(&self) -> *mut c_void {
+        #[cfg(windows)]
+        {
+            self.inner.as_raw()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+
+    /// The renderer's `ID3D12CommandQueue*`. Work submitted there delays the next frame; a producer
+    /// with its own queue does not.
+    pub fn queue(&self) -> *mut c_void {
+        #[cfg(windows)]
+        {
+            self.inner.queue()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+
+    /// Changes when the renderer recreates its device.
+    pub fn generation(&self) -> u64 {
+        #[cfg(windows)]
+        {
+            self.inner.generation()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+}
+
+impl fmt::Debug for D3D12Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("D3D12Device")
+            .field("raw", &self.as_raw())
+            .field("generation", &self.generation())
+            .finish()
+    }
+}
+
+/// The `ID3D12Fence` a surface signals when [`SurfaceHandle::present_d3d12`] is done with a
+/// resource. Shared (`D3D12_FENCE_FLAG_SHARED`), so a queue on the same device can wait on it too.
+pub struct D3D12Fence {
+    #[cfg(windows)]
+    inner: d3d12::Fence,
+    #[cfg(not(windows))]
+    never: std::convert::Infallible,
+}
+
+impl D3D12Fence {
+    /// The `ID3D12Fence*`, borrowed from this value.
+    pub fn as_raw(&self) -> *mut c_void {
+        #[cfg(windows)]
+        {
+            self.inner.as_raw()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+
+    pub fn completed_value(&self) -> u64 {
+        #[cfg(windows)]
+        {
+            self.inner.completed()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+
+    /// Blocks until the fence reaches `value` or `timeout` passes; whether it got there.
+    pub fn wait(&self, value: u64, timeout: Duration) -> bool {
+        #[cfg(windows)]
+        {
+            self.inner.wait(value, timeout)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (value, timeout);
+            match self.never {}
+        }
+    }
+
+    /// Changes when the renderer recreates its device.
+    pub fn generation(&self) -> u64 {
+        #[cfg(windows)]
+        {
+            self.inner.generation()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+}
+
+impl fmt::Debug for D3D12Fence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("D3D12Fence")
+            .field("raw", &self.as_raw())
+            .field("completed", &self.completed_value())
+            .finish()
+    }
+}
+
+/// A shared BGRA8 texture opened on the renderer's device, from another device, API or process:
+/// D3D11, D3D12, or Vulkan rendering into D3D12 memory it imports. Reopen it after
+/// [`SurfaceError::DeviceChanged`].
 pub struct SharedTexture {
     #[cfg(windows)]
-    inner: d3d11::Opened,
+    inner: shared::Opened,
+    #[cfg(windows)]
+    keys: Option<(u64, u64)>,
+    #[cfg(windows)]
+    timeout_ms: u32,
     #[cfg(not(windows))]
     never: std::convert::Infallible,
 }
 
 impl SharedTexture {
-    /// Opens a handle this process holds: an NT handle (`IDXGIResource1::CreateSharedHandle`) or a
-    /// legacy one (`IDXGIResource::GetSharedHandle`). The handle stays the caller's to close.
+    #[cfg(windows)]
+    fn new(inner: shared::Opened) -> Self {
+        Self {
+            inner,
+            keys: None,
+            timeout_ms: 100,
+        }
+    }
+
+    /// Opens a handle this process holds: an NT handle (`CreateSharedHandle` in D3D11 or D3D12)
+    /// or a legacy one (`IDXGIResource::GetSharedHandle`). The handle stays the caller's to close.
     pub fn open(handle: u64) -> Result<Self, SurfaceError> {
         #[cfg(windows)]
         {
-            d3d11::open(handle).map(|inner| Self { inner })
+            shared::open(handle).map(Self::new)
         }
         #[cfg(not(windows))]
         {
             let _ = handle;
-            Err(SurfaceError::NotSupported)
+            Err(SurfaceError::NotSupported(NO_GPU))
         }
     }
 
@@ -524,12 +795,12 @@ impl SharedTexture {
     pub fn open_from_process(pid: u32, handle: u64) -> Result<Self, SurfaceError> {
         #[cfg(windows)]
         {
-            d3d11::open_from_process(pid, handle).map(|inner| Self { inner })
+            shared::open_from_process(pid, handle).map(Self::new)
         }
         #[cfg(not(windows))]
         {
             let _ = (pid, handle);
-            Err(SurfaceError::NotSupported)
+            Err(SurfaceError::NotSupported(NO_GPU))
         }
     }
 
@@ -539,7 +810,8 @@ impl SharedTexture {
         #[cfg(windows)]
         {
             let mut this = self;
-            this.inner.keys = Some((acquire, release));
+            this.inner.need_d3d11();
+            this.keys = Some((acquire, release));
             this
         }
         #[cfg(not(windows))]
@@ -549,12 +821,46 @@ impl SharedTexture {
         }
     }
 
-    /// How long a present waits for the acquire key (default 100 ms).
+    /// Synchronises through a shared fence, an NT handle this process holds: a D3D12 fence made
+    /// `D3D12_FENCE_FLAG_SHARED`, an `ID3D11Fence` made `D3D11_FENCE_FLAG_SHARED`, or a Vulkan
+    /// semaphore exported as `D3D12_FENCE`. Present it with
+    /// [`SurfaceHandle::present_shared_fenced`]. The handle stays the caller's to close.
+    pub fn with_fence(self, fence: u64) -> Result<Self, SurfaceError> {
+        #[cfg(windows)]
+        {
+            let mut this = self;
+            this.inner.open_fence(fence)?;
+            Ok(this)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = fence;
+            match self.never {}
+        }
+    }
+
+    /// [`Self::with_fence`] for a fence handle of process `pid`.
+    pub fn with_fence_from_process(self, pid: u32, fence: u64) -> Result<Self, SurfaceError> {
+        #[cfg(windows)]
+        {
+            let mut this = self;
+            this.inner.open_fence_from_process(pid, fence)?;
+            Ok(this)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (pid, fence);
+            match self.never {}
+        }
+    }
+
+    /// How long a present waits for the acquire key, or (under the D3D11 renderer) for the fence;
+    /// 100 ms by default. Under the D3D12 renderer a fence is waited on by the GPU.
     pub fn with_timeout(self, timeout: Duration) -> Self {
         #[cfg(windows)]
         {
             let mut this = self;
-            this.inner.timeout_ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+            this.timeout_ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
             this
         }
         #[cfg(not(windows))]
@@ -567,7 +873,7 @@ impl SharedTexture {
     pub fn size(&self) -> (u32, u32) {
         #[cfg(windows)]
         {
-            (self.inner.width, self.inner.height)
+            self.inner.size
         }
         #[cfg(not(windows))]
         {
@@ -587,7 +893,10 @@ impl fmt::Debug for SharedTexture {
 /// The renderer recreated its device: every surface drops its GPU frame and texture.
 pub(crate) fn device_changed() {
     #[cfg(windows)]
-    d3d11::forget_device();
+    {
+        d3d11::forget_device();
+        d3d12::forget_device();
+    }
     for surface in all() {
         surface.device_lost();
     }

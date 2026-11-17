@@ -32,6 +32,12 @@ thread_local! {
     static DEFERRED: RefCell<Vec<(u32, Event)>> = const { RefCell::new(Vec::new()) };
 }
 
+#[cfg(windows)]
+enum Gpu {
+    D3D11(super::d3d11::Texture),
+    D3D12(super::d3d12::Ready),
+}
+
 enum Event {
     Resize(u32, u32, f32),
     Ready(u32, u32),
@@ -217,13 +223,25 @@ fn write(
     let (seq, frame, lost, texture) = {
         let st = node.surface.lock_state();
         #[cfg(windows)]
-        let texture = st.gpu_texture();
+        let texture = match st.frame {
+            Some(Frame::D3D12 { .. }) => st.gpu12.ready().map(Gpu::D3D12),
+            _ => st.gpu_texture().map(Gpu::D3D11),
+        };
         #[cfg(not(windows))]
         let texture = ();
         (st.seq, st.frame.clone(), st.lost, texture)
     };
     if seq == node.seen {
         return (Shown::Nowhere, None);
+    }
+    // The copy into the surface's texture waits on the producer's fence on the GPU; handing it to
+    // the atlas before it ran would stall the renderer's queue on the producer.
+    #[cfg(windows)]
+    if let Some(Gpu::D3D12(ready)) = &texture {
+        if node.visible && !ready.done() {
+            sk_runtime::frames::wake();
+            return (Shown::Nowhere, None);
+        }
     }
     let Some(frame) = frame else {
         node.seen = seq;
@@ -254,11 +272,18 @@ fn write(
     let wrote = match frame {
         Frame::Cpu { bgra, .. } => tile.write_bgra(window, bgra.to_vec(), true),
         #[cfg(windows)]
-        Frame::Gpu { .. } => {
-            let Some(texture) = texture else {
-                return (Shown::Nowhere, None);
+        Frame::Gpu { .. } | Frame::D3D12 { .. } => {
+            let written = match texture {
+                Some(Gpu::D3D11(texture)) => {
+                    tile.write_gpu(window, gpui::GpuTextureHandle(texture.as_raw()), true)
+                }
+                Some(Gpu::D3D12(ready)) => {
+                    let handle = ready.handle();
+                    tile.write_d3d12(window, handle, Arc::new(ready), true)
+                }
+                None => return (Shown::Nowhere, None),
             };
-            match tile.write_gpu(window, gpui::GpuTextureHandle(texture.as_raw()), true) {
+            match written {
                 Some(shown) => shown,
                 None => {
                     node.seen = seq;

@@ -224,6 +224,26 @@ impl LiveTile {
         }
     }
 
+    /// [`LiveTile::write_gpu`] for a D3D12 resource on the renderer's device; `owner` is retained
+    /// until the atlas copy has run.
+    #[cfg(windows)]
+    pub(crate) fn write_d3d12(
+        &mut self,
+        window: &mut Window,
+        texture: gpui::D3D12TextureHandle,
+        owner: Arc<dyn std::any::Any + Send + Sync>,
+        visible: bool,
+    ) -> Option<Shown> {
+        match window.write_image_tile_d3d12(&self.image, 0, texture, owner) {
+            Ok(TileWrite::Refused) => None,
+            Err(error) => {
+                crate::log::record("window", format!("D3D12 atlas copy failed: {error:#}"));
+                None
+            }
+            Ok(write) => Some(shown(write, visible)),
+        }
+    }
+
     /// Hands the tile back to its window's atlas on that window's next frame, when no scene samples
     /// it any more. The frame that stops painting it must be a draw (see the module docs).
     pub(crate) fn retire(self) {

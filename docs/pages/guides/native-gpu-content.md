@@ -13,9 +13,9 @@ that `name` shows the newest one. The element is an ordinary box: `object-fit`, 
 `overflow` clipping, transforms, opacity and z-order apply, and the app's controls sit over it like
 over any other element.
 
-New in 0.4.0. **Windows first:** on Windows a frame can be a Direct3D 11 texture and never leaves the
-GPU. On macOS and Linux the element and the API exist, but frames are CPU BGRA; the GPU calls return
-`SurfaceError::NotSupported`.
+New in 0.4.0. **Windows first:** on Windows a frame can be a Direct3D 11 or 12 texture, or one shared
+from Vulkan, and never leaves the GPU. On macOS and Linux the element and the API exist, but frames
+are CPU BGRA; the GPU calls return `SurfaceError::NotSupported`.
 
 ## The element
 
@@ -54,24 +54,47 @@ window costs no upload. `surface.stats()` counts frames presented and frames sho
 renders continuously can skip frames while `info().visible` is false and render at `info().width` ×
 `info().height` to match the painted size.
 
-| Call                                 | Frame                                                           | Platforms |
-| ------------------------------------ | --------------------------------------------------------------- | --------- |
-| `present_d3d11_texture(texture)`     | an `ID3D11Texture2D` on the renderer's device, `d3d11_device()` | Windows   |
-| `present_shared(&SharedTexture)`     | a DXGI shared texture from another device or process            | Windows   |
-| `present_bgra(pixels, w, h, stride)` | CPU BGRA, straight alpha                                        | all       |
-| `present_bgrx(pixels, w, h, stride)` | CPU BGRX, opaque                                                | all       |
-| `clear()`                            | none: the element paints nothing, `surfacelost` fires           | all       |
+| Call                                          | Frame                                                           | Platforms |
+| --------------------------------------------- | --------------------------------------------------------------- | --------- |
+| `present_d3d11_texture(texture)`              | an `ID3D11Texture2D` on the renderer's device, `d3d11_device()` | Windows   |
+| `present_d3d12(resource, state, ready)`       | an `ID3D12Resource` on the renderer's device, `d3d12_device()`  | Windows   |
+| `present_shared(&SharedTexture)`              | a shared texture, with a keyed mutex or no synchronisation      | Windows   |
+| `present_shared_fenced(&SharedTexture, w, r)` | a shared texture synchronised by a shared fence                 | Windows   |
+| `present_bgra(pixels, w, h, stride)`          | CPU BGRA, straight alpha                                        | all       |
+| `present_bgrx(pixels, w, h, stride)`          | CPU BGRX, opaque                                                | all       |
+| `clear()`                                     | none: the element paints nothing, `surfacelost` fires           | all       |
 
-Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms), any sample count; mip 0
-is shown. Alpha is straight. A present copies the texture into the surface's own on the GPU before it
-returns, so the producer can start the next frame in the same texture at once.
+Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms); mip 0 is shown. Alpha is
+straight. Every GPU present copies the frame into a texture of the surface's own, so the producer
+gets its texture back as soon as that copy has run.
 
-### Rendering on the renderer's device
+### Which path
+
+Skathi renders with Direct3D 12 (the default build), or with Direct3D 11 in a host built without the
+`native-dx12` feature. Pick the path by what the producer renders with:
+
+| Producer                           | Path                                                                                           | Under the D3D11 renderer                    |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| D3D11, can use Skathi's device     | `present_d3d11_texture` on `d3d11_device()`                                                    | same                                        |
+| D3D11 on its own device or process | `SharedTexture` with a keyed mutex, or with an `ID3D11Fence`                                   | same                                        |
+| D3D12, can use Skathi's device     | `present_d3d12` on `d3d12_device()`, with the producer's fence                                 | `NotSupported`: share the texture instead   |
+| D3D12 on its own device or process | `SharedTexture::with_fence`, `present_shared_fenced`                                           | same (an `ID3D11Fence` opens the D3D12 one) |
+| Vulkan                             | external memory and a semaphore shared as a D3D12 fence: `with_fence`, `present_shared_fenced` | same                                        |
+| CPU, or a GPU API not listed       | `present_bgra` / `present_bgrx`                                                                | same                                        |
+
+Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of
+the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once
+that copy has finished, so a slow producer never stalls the UI. The D3D11 paths go through the
+renderer's D3D11On12 device, created on first use.
+
+### Direct3D 11 on the renderer's device
 
 `d3d11_device()` is the device Skathi composites with (the D3D11On12 device of its D3D12 renderer). It
 is multithread-protected: create textures on it and use its immediate context from your thread. The
-raw pointer works with any version of the `windows` crate. This producer clears a texture to a moving
-colour at the element's size:
+raw pointer works with any version of the `windows` crate. The copy is queued on that immediate
+context before `present_d3d11_texture` returns, so the next frame can go into the same texture at
+once; a multisampled texture is resolved. This producer clears a texture to a moving colour at the
+element's size:
 
 ```rust
 use std::time::{Duration, Instant};
@@ -148,15 +171,56 @@ fn render_target(device: &ID3D11Device, (w, h): (u32, u32)) -> ((u32, u32), ID3D
 }
 ```
 
-`crates/sk-app/examples/surface.rs` in the Skathi repository is a complete program with all three
-paths.
+`crates/sk-app/examples/surface.rs` in the Skathi repository is a complete program with every path.
 
-### Textures from another device or process
+### Direct3D 12 on the renderer's device
 
-A renderer on a device of its own (another adapter queue, another API through DXGI, another process)
-shares its texture instead: create it with `D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
-D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`, get an NT handle with `IDXGIResource1::CreateSharedHandle`,
-and hand the number and your process id to the embedder (an `appHost` call or your own IPC).
+`d3d12_device()` is the renderer's `ID3D12Device` and its direct queue. Render on a queue of your own
+on that device, signal a fence of yours, and present the resource with that fence and value. Nothing
+blocks: the surface's queue waits for your value on the GPU, copies, and signals its release fence,
+whose value `present_d3d12` returns. Write the resource again once `release_fence()` reaches it, or
+make your queue wait on it (`ID3D12CommandQueue::Wait`), or keep a few resources in rotation.
+
+```rust
+let gpu = surface.d3d12_device()?; // NotSupported under the D3D11 renderer
+let device = unsafe { ID3D12Device::from_raw_borrowed(&gpu.as_raw()) }.unwrap().clone();
+// … record into `resource` (BGRA8, single-sampled) on your queue, then:
+unsafe { queue.Signal(&fence, frame)? };
+let released = unsafe {
+    surface.present_d3d12(
+        resource.as_raw(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET.0, // its state now; it is left in it
+        Some((fence.as_raw(), frame)),
+    )?
+};
+let release = surface.release_fence()?;
+release.wait(released, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
+```
+
+`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame,
+so a producer keeps its own. A resource made on another D3D12 device returns
+`SurfaceError::WrongDevice`; share it as below. If the surface textures are all still in flight (the
+producer outruns the window, or its fence is never signalled), a present returns
+`SurfaceError::Busy` and the frame can be dropped.
+
+### Textures from another device, API or process
+
+A renderer on a device of its own (another adapter queue, another API, another process) shares its
+texture instead and hands the NT handle number and its process id to the embedder (an `appHost` call
+or your own IPC):
+
+- D3D11: create the texture with `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` and either
+  `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX` or `D3D11_RESOURCE_MISC_SHARED` with an `ID3D11Fence`
+  (`D3D11_FENCE_FLAG_SHARED`); `IDXGIResource1::CreateSharedHandle`.
+- D3D12: a committed resource with `D3D12_HEAP_FLAG_SHARED` and a fence with
+  `D3D12_FENCE_FLAG_SHARED`; `ID3D12Device::CreateSharedHandle` for both. Leave the resource in
+  `D3D12_RESOURCE_STATE_COMMON` when you signal.
+- Vulkan: Vulkan imports D3D12 objects more widely than it exports them, so create the texture and
+  fence on a D3D12 device as above and import them: the memory with `VkImportMemoryWin32HandleInfoKHR`
+  (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT`, `VK_KHR_external_memory_win32`), the fence as
+  a timeline semaphore with `VkImportSemaphoreWin32HandleInfoKHR`
+  (`VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT`, `VK_KHR_external_semaphore_win32`). Submit the
+  render with a signal of the frame value, and release the image to the external queue family.
 
 ```rust
 // Once per texture; again after SurfaceError::DeviceChanged.
@@ -166,43 +230,61 @@ let shared = skathi::SharedTexture::open_from_process(producer_pid, handle)?
 surface.present_shared(&shared)?;
 ```
 
+With a fence the producer picks the values per frame: the copy waits until the fence reaches `wait`,
+then signals it to `release`, the point after which the producer may write the texture again.
+
+```rust
+let shared = skathi::SharedTexture::open_from_process(producer_pid, texture_handle)?
+    .with_fence_from_process(producer_pid, fence_handle)?;
+// Per frame, after the producer signalled 2n + 1:
+surface.present_shared_fenced(&shared, 2 * n + 1, 2 * n + 2)?;
+// The producer waits for 2n + 2 (on its queue or the CPU) before rendering into it again.
+```
+
 `open_from_process` duplicates the handle into this process (it needs `PROCESS_DUP_HANDLE` on the
 producer, which a child process or one of the same user grants). A handle already in this process
-opens with `SharedTexture::open(handle)`, and so does a legacy handle from
-`IDXGIResource::GetSharedHandle`. Without a keyed mutex the producer must finish its writes (and flush)
-before the present.
+opens with `SharedTexture::open(handle)` and `with_fence(handle)`; a legacy handle from
+`IDXGIResource::GetSharedHandle` opens too, without a fence. Without a keyed mutex or a fence the
+producer must finish its writes before the present.
+
+Under the D3D12 renderer a fenced present returns at once and the wait happens on the GPU. Under the
+D3D11 renderer the present waits on the CPU for `wait`, up to `with_timeout` (100 ms by default, then
+`SurfaceError::Timeout`), so a fence that is never signalled cannot stall the window.
 
 ### Device loss
 
 When the GPU driver resets, Skathi recreates its device. Every surface drops its GPU frame, the
 elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and
-a present with an old texture returns `SurfaceError::DeviceChanged`. Get `d3d11_device()` again, then
-recreate your textures (or reopen shared ones) and present.
+a present with an old texture returns `SurfaceError::DeviceChanged`. Get `d3d11_device()` or
+`d3d12_device()` again, then recreate your textures (or reopen shared ones) and present.
 
 ## Recipe: libmpv
 
-A libmpv player renders each video frame into a texture of the surface and leaves the controls to the
-app:
+A libmpv player renders each video frame into a texture the surface takes and leaves the controls to
+the app. Upstream libmpv's render API has two backends, OpenGL and software; a libmpv build or fork
+whose render API renders through libplacebo on Vulkan (the `gpu-next` renderer) fits the Vulkan path.
 
-1. Create the mpv handle with `vo=libmpv`, and `hwdec=d3d11va` when the render API runs on the
-   surface's device, so decoding stays on the GPU.
-2. Create the render context on `surface.d3d11_device()`. Upstream libmpv's render API has OpenGL
-   and software backends; a libmpv build with a D3D11 render API (`MPV_RENDER_API_TYPE_D3D11` in some
-   builds) takes the device directly. With upstream libmpv, use OpenGL through ANGLE: its D3D11 backend
-   renders into a shared BGRA texture wrapped as an EGL pbuffer (`EGL_ANGLE_d3d_texture_client_buffer`)
-   and bound as mpv's FBO, presented with `present_shared`. The software API
-   (`MPV_RENDER_API_TYPE_SW`, format `bgr0`) with `present_bgrx` is the simplest, at a CPU copy per
-   frame.
-3. In the update callback (any thread), when `mpv_render_context_update` reports
+| How mpv renders                           | mpv options and render API                                                                                                                           | Skathi call                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Software                                  | `vo=libmpv`, `hwdec=auto-copy`; `MPV_RENDER_API_TYPE_SW` with `MPV_RENDER_PARAM_SW_FORMAT` `"bgr0"`                                                  | `present_bgrx`, one CPU copy per frame                                                            |
+| OpenGL through ANGLE on Skathi's device   | `vo=libmpv`, `hwdec=d3d11va`; `MPV_RENDER_API_TYPE_OPENGL` on an ANGLE display made from `d3d11_device()` (`EGL_ANGLE_device_d3d11`)                 | `present_d3d11_texture` with the texture behind mpv's FBO (`EGL_ANGLE_d3d_texture_client_buffer`) |
+| OpenGL through ANGLE on its own device    | the same on a device of its own; the FBO's texture made `SHARED_NTHANDLE \| SHARED_KEYEDMUTEX`                                                       | `SharedTexture::with_keyed_mutex`, `present_shared`                                               |
+| Vulkan through libplacebo (build or fork) | `vo=libmpv`, `gpu-api=vulkan`, `hwdec=d3d11va` or `vulkan`; the target image imported from a D3D12 shared resource, its semaphore from a D3D12 fence | `SharedTexture::with_fence`, `present_shared_fenced`                                              |
+
+Then, whatever the backend:
+
+1. In the update callback (any thread), when `mpv_render_context_update` reports
    `MPV_RENDER_UPDATE_FRAME`, render a frame of `surface.info()`'s size and present it. Skip the render
    while `info().visible` is false.
-4. Forward `surfaceresize` (or `on_change`) to resize that texture, and the app's controls to
+2. With a fence, signal the frame's value after the render and wait for the release value before the
+   next one renders into the same texture, or rotate two or three textures.
+3. Forward `surfaceresize` (or `on_change`) to resize the target, and the app's controls to
    `mpv_command` through `Builder::function`.
 
 ## Platform support
 
-| Platform | `<sk-surface>` | CPU frames | D3D11 textures | Shared textures |
-| -------- | -------------- | ---------- | -------------- | --------------- |
-| Windows  | yes            | yes        | yes            | yes             |
-| macOS    | yes            | yes        | no             | no              |
-| Linux    | yes            | yes        | no             | no              |
+| Platform | `<sk-surface>` | CPU frames | D3D11 textures | D3D12 textures      | Shared textures (keyed mutex, fence) |
+| -------- | -------------- | ---------- | -------------- | ------------------- | ------------------------------------ |
+| Windows  | yes            | yes        | yes            | D3D12 renderer only | yes                                  |
+| macOS    | yes            | yes        | no             | no                  | no                                   |
+| Linux    | yes            | yes        | no             | no                  | no                                   |

@@ -130,8 +130,9 @@
 //! redjs pins.
 
 pub use sk_app::embed::{
-    encrypt_local_storage_at, surface, Builder, Call, D3D11Device, EmitError, Error, Exit, Handle,
-    Handler, HostContext, HostCookie, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent,
-    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
+    encrypt_local_storage_at, surface, Builder, Call, D3D11Device, D3D12Device, D3D12Fence,
+    EmitError, Error, Exit, Handle, Handler, HostContext, HostCookie, Reply, SameSite,
+    SharedTexture, SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats,
+    SurfaceWatch,
 };
 pub use sk_app::{hotkeys, js, run_exe, tray, HostAllocator};

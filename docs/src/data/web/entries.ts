@@ -733,7 +733,7 @@ const graphics = section("Graphics and media", [
     platforms: { windows: OK, macos: PART, linux: PART },
     notes: [
       "The embedding program presents frames to the surface named by the `name` attribute: `skathi::surface(name)` in Rust, from any thread. The newest frame wins; the element picks it up on its next paint, and only while it is visible.",
-      "On Windows a frame can be a D3D11 texture on the renderer's own device (copied on the GPU), or a DXGI shared texture from another device or process, synchronised with its keyed mutex. CPU BGRA frames work on every platform.",
+      "On Windows a frame can be a D3D11 or D3D12 texture on the renderer's own device (copied on the GPU, after a GPU wait on the producer's fence for D3D12), or a shared texture from another device, API (D3D11, D3D12, Vulkan) or process, synchronised with a keyed mutex or a shared fence. CPU BGRA frames work on every platform.",
       "`object-fit` (default `contain`), `object-position`, `border-radius`, `overflow` clipping, transforms, opacity and z-order apply as on `<video>`. The box is 300 × 150 unless CSS sizes it.",
       "`surfaceresize` reports the painted content box in physical pixels (`width`, `height`, `devicePixelRatio`), so the producer can render at the size shown. `surfaceready` fires when the first frame shows, `surfacelost` when the frame goes (`reason`: `cleared` or `device`).",
     ],
@@ -742,7 +742,15 @@ const graphics = section("Graphics and media", [
       "Alpha is straight, not premultiplied. Frames are BGRA8.",
     ],
     related: ["video", "canvas-2d"],
-    aliases: ["native surface", "shared texture", "D3D11 texture", "mpv", "external renderer"],
+    aliases: [
+      "native surface",
+      "shared texture",
+      "D3D11 texture",
+      "D3D12 texture",
+      "Vulkan",
+      "mpv",
+      "external renderer",
+    ],
   }),
   prop("navigator.mediaSession", OK, "Shows what the app is playing in the system's media controls.", {
     platforms: NOT_ON_LINUX,

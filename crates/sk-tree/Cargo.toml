@@ -31,11 +31,12 @@ lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 futures = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-# WOFF/WOFF2 are unpacked by DirectWrite (`UnpackFontFile`); `<sk-surface>` copies D3D11 textures.
+# WOFF/WOFF2 are unpacked by DirectWrite (`UnpackFontFile`); `<sk-surface>` copies D3D11/D3D12 textures.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",

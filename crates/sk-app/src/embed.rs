@@ -27,8 +27,8 @@ use sk_runtime::{host_fn, JsRuntime};
 mod host_context;
 pub use host_context::{HostContext, HostCookie, SameSite};
 pub use sk_tree::surface::{
-    surface, D3D11Device, SharedTexture, SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo,
-    SurfaceStats, SurfaceWatch,
+    surface, D3D11Device, D3D12Device, D3D12Fence, SharedTexture, SurfaceError, SurfaceEvent,
+    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
 };
 
 type Setup = Box<dyn FnOnce(&HostContext) -> Result<(), String> + Send + 'static>;

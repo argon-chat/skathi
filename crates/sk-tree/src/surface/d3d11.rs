@@ -6,17 +6,18 @@ use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
 use windows::core::{IUnknown, Interface};
-use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    ID3D11Device, ID3D11Device1, ID3D11Device5, ID3D11DeviceContext, ID3D11DeviceContext4,
+    ID3D11Fence, ID3D11Multithread, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
     DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex;
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use super::{check_size, lock, Frame, State, SurfaceError};
 
@@ -120,7 +121,7 @@ pub(crate) struct SurfaceGpu {
     slot: Option<Slot>,
     /// The device generation last handed to the producer: a texture from an older one is
     /// [`SurfaceError::DeviceChanged`], not [`SurfaceError::WrongDevice`].
-    handed: u64,
+    pub(super) handed: u64,
 }
 
 struct Slot {
@@ -206,6 +207,28 @@ fn same(a: &ID3D11Device, b: &ID3D11Device) -> bool {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Guard<'a> {
+    None,
+    Keyed(&'a IDXGIKeyedMutex, u64, u64, u32),
+    Fence(&'a ID3D11Fence, u64, u64, u32),
+}
+
+fn reached(fence: &ID3D11Fence, value: u64, timeout_ms: u32) -> bool {
+    if unsafe { fence.GetCompletedValue() } >= value {
+        return true;
+    }
+    let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+        return false;
+    };
+    let waited = unsafe { fence.SetEventOnCompletion(value, event) }.is_ok()
+        && unsafe { WaitForSingleObject(event, timeout_ms) } == WAIT_OBJECT_0;
+    unsafe {
+        let _ = CloseHandle(event);
+    }
+    waited || unsafe { fence.GetCompletedValue() } >= value
+}
+
 /// Copies `source` into the surface's texture and makes it the frame. Runs with `state` locked so
 /// two producers cannot interleave; the context calls are serialised with the UI thread's.
 fn copy_in(
@@ -213,11 +236,27 @@ fn copy_in(
     state: &mut State,
     source: &ID3D11Texture2D,
     desc: &D3D11_TEXTURE2D_DESC,
-    sync: Option<(&IDXGIKeyedMutex, u64, u64, u32)>,
+    sync: Guard<'_>,
 ) -> Result<(), SurfaceError> {
     let size = (desc.Width, desc.Height);
     let target = state.gpu.ensure(gpu, size)?.clone();
-    if let Some((mutex, acquire, _, timeout)) = sync {
+    let fenced = match sync {
+        // The immediate context is the renderer's too: a GPU wait on a fence that is never
+        // signalled would stall every window, so the CPU waits first, with the timeout.
+        Guard::Fence(fence, wait, _, timeout) if !reached(fence, wait, timeout) => {
+            return Err(SurfaceError::Timeout)
+        }
+        Guard::Fence(fence, wait, release, _) => Some((
+            gpu.context
+                .cast::<ID3D11DeviceContext4>()
+                .map_err(|e| platform("ID3D11DeviceContext4", e))?,
+            fence,
+            wait,
+            release,
+        )),
+        _ => None,
+    };
+    if let Guard::Keyed(mutex, acquire, _, timeout) = sync {
         // Raw: `WAIT_TIMEOUT` is a success code the wrapper would turn into `Ok`.
         let hr =
             unsafe { (Interface::vtable(mutex).AcquireSync)(mutex.as_raw(), acquire, timeout) };
@@ -230,6 +269,11 @@ fn copy_in(
     {
         let _locked = Locked::enter(gpu);
         unsafe {
+            if let Some((context, fence, wait, _)) = &fenced {
+                context
+                    .Wait(*fence, *wait)
+                    .map_err(|e| platform("waiting on the producer's fence", e))?;
+            }
             if desc.SampleDesc.Count > 1 {
                 gpu.context
                     .ResolveSubresource(&target, 0, source, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
@@ -237,10 +281,15 @@ fn copy_in(
                 gpu.context
                     .CopySubresourceRegion(&target, 0, 0, 0, 0, source, 0, None);
             }
+            if let Some((context, fence, _, release)) = &fenced {
+                context
+                    .Signal(*fence, *release)
+                    .map_err(|e| platform("signalling the producer's fence", e))?;
+            }
             gpu.context.Flush();
         }
     }
-    if let Some((mutex, _, release, _)) = sync {
+    if let Guard::Keyed(mutex, _, release, _) = sync {
         unsafe { mutex.ReleaseSync(release) }
             .map_err(|e| platform("IDXGIKeyedMutex::ReleaseSync", e))?;
     }
@@ -272,26 +321,22 @@ pub(super) unsafe fn present_texture(
             SurfaceError::WrongDevice
         });
     }
-    copy_in(&gpu, &mut state, source, &desc, None)
+    copy_in(&gpu, &mut state, source, &desc, Guard::None)
 }
 
 pub(crate) struct Opened {
     texture: ID3D11Texture2D,
     desc: D3D11_TEXTURE2D_DESC,
     mutex: Option<IDXGIKeyedMutex>,
+    fence: Option<ID3D11Fence>,
     generation: u64,
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) keys: Option<(u64, u64)>,
-    pub(super) timeout_ms: u32,
 }
 
 // SAFETY: see `Gpu`.
 unsafe impl Send for Opened {}
 
-pub(super) fn open(handle: u64) -> Result<Opened, SurfaceError> {
+pub(super) fn open(handle: HANDLE) -> Result<Opened, SurfaceError> {
     let gpu = gpu()?;
-    let handle = HANDLE(handle as usize as *mut c_void);
     let legacy = || {
         let mut texture: Option<ID3D11Texture2D> = None;
         unsafe { gpu.device.OpenSharedResource(handle, &mut texture) }?;
@@ -310,57 +355,68 @@ pub(super) fn open(handle: u64) -> Result<Opened, SurfaceError> {
         mutex: texture.cast().ok(),
         texture,
         desc,
+        fence: None,
         generation: gpu.generation,
-        width: desc.Width,
-        height: desc.Height,
-        keys: None,
-        timeout_ms: 100,
     })
 }
 
-pub(super) fn open_from_process(pid: u32, handle: u64) -> Result<Opened, SurfaceError> {
-    let process = unsafe { OpenProcess(PROCESS_DUP_HANDLE, false, pid) }
-        .map_err(|e| platform(&format!("opening process {pid} to duplicate from"), e))?;
-    let mut ours = HANDLE::default();
-    let duplicated = unsafe {
-        DuplicateHandle(
-            process,
-            HANDLE(handle as usize as *mut c_void),
-            GetCurrentProcess(),
-            &mut ours,
-            0,
-            false,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    unsafe {
-        let _ = CloseHandle(process);
+impl Opened {
+    pub(super) fn size(&self) -> (u32, u32) {
+        (self.desc.Width, self.desc.Height)
     }
-    duplicated
-        .map_err(|e| platform(&format!("duplicating handle {handle} of process {pid}"), e))?;
-    let opened = open(ours.0 as usize as u64);
-    unsafe {
-        let _ = CloseHandle(ours);
+
+    pub(super) fn open_fence(&mut self, handle: HANDLE) -> Result<(), SurfaceError> {
+        let gpu = gpu()?;
+        let device: ID3D11Device5 = gpu.device.cast().map_err(|_| {
+            SurfaceError::NotSupported(
+                "the renderer's Direct3D 11 device has no shared fences (ID3D11Device5 needs \
+                 Windows 10 1703); synchronise with a keyed mutex",
+            )
+        })?;
+        let mut fence: Option<ID3D11Fence> = None;
+        unsafe { device.OpenSharedFence(handle, &mut fence) }
+            .map_err(|e| platform("opening the shared fence", e))?;
+        self.fence = fence;
+        Ok(())
     }
-    opened
 }
 
-pub(super) fn present_shared(state: &Mutex<State>, opened: &Opened) -> Result<(), SurfaceError> {
+/// How a shared present synchronises with its producer.
+#[derive(Clone, Copy)]
+pub(super) enum SharedSync {
+    None,
+    Keyed(u64, u64),
+    Fence(u64, u64),
+}
+
+pub(super) fn present_shared(
+    state: &Mutex<State>,
+    opened: &Opened,
+    sync: SharedSync,
+    timeout_ms: u32,
+) -> Result<(), SurfaceError> {
     let gpu = gpu()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);
     }
-    let sync = match (opened.keys, opened.mutex.as_ref()) {
-        (Some((acquire, release)), Some(mutex)) => {
-            Some((mutex, acquire, release, opened.timeout_ms))
+    let guard = match sync {
+        SharedSync::None => Guard::None,
+        SharedSync::Keyed(acquire, release) => {
+            let mutex = opened.mutex.as_ref().ok_or_else(|| {
+                SurfaceError::Format(
+                    "keyed-mutex keys were given for a texture made without SHARED_KEYEDMUTEX"
+                        .into(),
+                )
+            })?;
+            Guard::Keyed(mutex, acquire, release, timeout_ms)
         }
-        (Some(_), None) => {
-            return Err(SurfaceError::Format(
-                "keyed-mutex keys were given for a texture made without SHARED_KEYEDMUTEX".into(),
-            ))
+        SharedSync::Fence(wait, release) => {
+            let fence = opened.fence.as_ref().ok_or_else(|| {
+                SurfaceError::Format("the shared texture was opened without a fence".into())
+            })?;
+            Guard::Fence(fence, wait, release, timeout_ms)
         }
-        (None, _) => None,
     };
     let mut state = lock(state);
-    copy_in(&gpu, &mut state, &opened.texture, &opened.desc, sync)
+    copy_in(&gpu, &mut state, &opened.texture, &opened.desc, guard)
 }
