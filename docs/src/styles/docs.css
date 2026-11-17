@@ -120,6 +120,7 @@
     --sidebar-width: 288px;
     --content-width: 880px;
     --toc-width: 250px;
+    --wide-max: 1440px;
     --shell-pad: clamp(32px, 4.8vw, 96px);
     --shell-gap: clamp(40px, 5vw, 96px);
     font-family: var(--font-body);
@@ -381,7 +382,8 @@
     min-height: 100vh;
     display: grid;
     grid-template-columns: minmax(0, var(--content-width)) var(--toc-width);
-    justify-content: center;
+    justify-content: space-between;
+    container-type: inline-size;
     gap: var(--shell-gap);
     padding: 48px var(--shell-pad) 0;
   }
@@ -1126,6 +1128,58 @@
     margin: 0;
     min-width: 540px;
   }
+  .prose .wide table {
+    min-width: 720px;
+    table-layout: fixed;
+    overflow-wrap: break-word;
+  }
+  .prose td sup {
+    margin-left: 2px;
+    font-size: 0.72em;
+    font-weight: 650;
+    line-height: 0;
+    color: var(--accent);
+  }
+  .prose .table-notes {
+    margin: -10px 0 30px;
+    font-size: var(--fs-sm);
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .prose .table-notes p {
+    margin: 0 0 6px;
+  }
+  .prose .table-notes ol {
+    margin: 0;
+    padding-left: 20px;
+  }
+  .prose .table-notes li {
+    margin: 0 0 6px;
+    padding-left: 2px;
+  }
+  .prose .table-notes li::marker {
+    color: var(--accent);
+    font-weight: 650;
+  }
+  /* A bold value marks the best cell in its row; ties are all bold. */
+  .prose .leaders td:has(> strong) {
+    position: relative;
+    background: var(--accent-bg);
+    box-shadow: inset 2px 0 var(--accent);
+    color: var(--text);
+  }
+  .prose .leaders td > strong {
+    color: var(--accent);
+  }
+  .prose .leaders td > strong:first-of-type::after {
+    content: " (best)";
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   .prose .demo {
     margin: 28px 0;
   }
@@ -1488,18 +1542,13 @@
       z-index: 1;
       margin-inline: -40px;
     }
-    /* Up to 24px short of the sidebar and the TOC. The grid is centered, so the left edge is the
-       shell's padding or half the width the columns leave free, whichever is larger. */
+    /* Left as far as demo frames; right into the space before the TOC (100cqw is the shell's
+       inner width, 100% the column's), 48px short of it and no wider than --wide-max. */
     .prose .wide {
-      --free: calc((100vw - var(--sidebar-width) - var(--content-width) - var(--shell-gap) - var(--toc-width)) / 2);
       position: relative;
       z-index: 1;
-      margin-left: calc(24px - max(64px, var(--shell-pad), var(--free)));
-      margin-right: calc(-1 * max(40px, var(--shell-gap) - 24px));
-    }
-    .prose .wide table {
-      table-layout: fixed;
-      overflow-wrap: break-word;
+      margin-left: -40px;
+      margin-right: min(0px, max(100% + var(--toc-width) + 48px - 100cqw, 100% + 40px - var(--wide-max)));
     }
   }
   @media (max-width: 1250px) {
@@ -1509,10 +1558,6 @@
     }
     .right-sidebar {
       display: none;
-    }
-    .prose .wide table {
-      min-width: 760px;
-      overflow-wrap: break-word;
     }
   }
   @media (max-width: 900px) {

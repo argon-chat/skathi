@@ -1,22 +1,37 @@
 let parallaxBody: HTMLElement | undefined;
 
-function placeSides(sides: HTMLElement[]): void {
-  const sidebar = document.querySelector(".sidebar")?.getBoundingClientRect();
-  const main = document.querySelector(".main-content")?.getBoundingClientRect();
-  const toc = document.querySelector(".right-sidebar")?.getBoundingClientRect();
-  const width = document.documentElement.clientWidth;
-  const sidebarRight = sidebar && sidebar.right > 0 ? sidebar.right : 0;
+/** The columns of the viewport that no page element covers at any scroll position. */
+function freeColumns(): { x: number; end: number }[] {
+  const margin = 16;
+  const blocked: [number, number][] = [[document.documentElement.clientWidth - 8, Infinity]];
+  const block = (element: Element, before = margin) => {
+    const r = element.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) blocked.push([r.left - before, r.right + margin]);
+  };
+  document
+    .querySelectorAll(".sidebar, .right-sidebar, .prose .wide, .prose [data-rail-bend]")
+    .forEach((el) => block(el));
   // Clear of the reading rail, which hangs about 40px left of the article.
-  const left = { x: sidebarRight + 12, end: main ? main.left - 52 : 0 };
-  const right = { x: (toc && toc.width > 0 ? toc.right : (main?.right ?? width)) + 12, end: width - 8 };
-  const bounds = sides.map((side) => (side.dataset["side"] === "left" ? left : right));
-  sides.forEach((side, index) => {
-    const box = bounds[index];
-    const room = box ? box.end - box.x : 0;
-    side.classList.toggle("is-open", room >= 40);
-    if (box && room >= 40) {
-      side.style.setProperty("--side-x", `${Math.round(box.x)}px`);
-      side.style.setProperty("--side-width", `${Math.round(room)}px`);
+  const main = document.querySelector(".main-content");
+  if (main) block(main, 52);
+  blocked.sort((a, b) => a[0] - b[0]);
+  const free: { x: number; end: number }[] = [];
+  let x = 0;
+  for (const [start, end] of blocked) {
+    if (start - x >= 40) free.push({ x, end: start });
+    x = Math.max(x, end);
+  }
+  return free;
+}
+
+function placeZones(zones: HTMLElement[]): void {
+  const free = freeColumns();
+  zones.forEach((zone, index) => {
+    const column = free[index];
+    zone.classList.toggle("is-open", column !== undefined);
+    if (column) {
+      zone.style.setProperty("--zone-x", `${Math.round(column.x)}px`);
+      zone.style.setProperty("--zone-width", `${Math.round(column.end - column.x)}px`);
     }
   });
 }
@@ -29,7 +44,7 @@ function startParallax(): void {
   const events = new AbortController();
   document.addEventListener("astro:before-swap", () => events.abort(), { once: true });
   const { signal } = events;
-  const sides = [...layer.querySelectorAll<HTMLElement>("[data-side]")];
+  const zones = [...layer.querySelectorAll<HTMLElement>("[data-zone]")];
   const docs = layer.dataset["parallax"] === "docs";
   const reach = docs ? 40 : 60;
   const layers = [...layer.querySelectorAll<HTMLElement>(".parallax-layer")].map((element) => ({
@@ -37,7 +52,7 @@ function startParallax(): void {
     depth: Number(element.style.getPropertyValue("--depth")) || 0,
   }));
   const moving = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let measure = sides.length > 0;
+  let measure = zones.length > 0;
   let frame = 0;
   let px = 0;
   let py = 0;
@@ -45,7 +60,7 @@ function startParallax(): void {
     frame = 0;
     if (measure) {
       measure = false;
-      placeSides(sides);
+      placeZones(zones);
     }
     if (!moving) return;
     for (const { element, depth } of layers) {
@@ -71,7 +86,7 @@ function startParallax(): void {
       { passive: true, signal },
     );
   }
-  if (sides.length > 0)
+  if (zones.length > 0)
     window.addEventListener(
       "resize",
       () => {

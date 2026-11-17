@@ -67,21 +67,25 @@
     background: var(--candy-lilac);
   }
 
-  .parallax-side {
+  /* The mask also clips the glows' blur and the pointer drift to the zone. */
+  .parallax-zone {
+    --fade-x: linear-gradient(to right, transparent, #000 16px calc(100% - 16px), transparent);
     position: absolute;
-    inset: 0 auto 0 var(--side-x, 0);
-    width: var(--side-width, 0);
+    inset: 0 auto 0 var(--zone-x, 0);
+    width: var(--zone-width, 0);
     display: none;
+    mask-image: var(--fade-x);
   }
-  .parallax-side.is-open {
+  .parallax-zone.is-open {
     display: block;
   }
   .parallax-docs .parallax-layer {
     height: 200vh;
   }
   /* Clears the floor by the sidebar, where the pup stands. */
-  .parallax-docs [data-side="left"] {
-    mask-image: linear-gradient(to top, transparent 100px, #000 220px);
+  .parallax-docs [data-zone="0"] {
+    mask-image: var(--fade-x), linear-gradient(to top, transparent 100px, #000 220px);
+    mask-composite: intersect;
   }
   .parallax-docs .parallax-glow {
     left: 0;

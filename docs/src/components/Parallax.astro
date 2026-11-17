@@ -14,6 +14,7 @@ const shapes = {
   heart: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z",
 } as const;
 const kinds = ["sparkle", "sparkle", "star", "heart", "bubble", "bubble", "dot"] as const;
+const zoneGlows = ["pink", "blue", "lilac"] as const;
 let seed = docs ? 23 : 11;
 const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
 const config = docs
@@ -31,11 +32,12 @@ const layers = config.map((layer) => ({
   ...layer,
   items: Array.from({ length: layer.count }, () => {
     const kind = kinds[Math.floor(random() * kinds.length)] ?? "dot";
-    const side = random() < 0.5;
+    const pick = random();
+    const side = pick < 0.5;
     return {
       kind,
-      side: side ? "left" : "right",
-      left: docs ? 6 + random() * 70 : side ? random() * 16 : 84 + random() * 14,
+      zone: Math.min(zoneGlows.length - 1, Math.floor(pick * zoneGlows.length)),
+      left: docs ? random() * 100 : side ? random() * 16 : 84 + random() * 14,
       top: random() * 100,
       size: Math.round((12 + random() * 16) * layer.scale * (kind === "dot" ? 0.4 : 1)),
       delay: -random() * 8,
@@ -48,27 +50,28 @@ const glows = [
   { right: "-10%", top: "42%", color: "var(--candy-blue)" },
   { left: "-6%", top: "70%", color: "var(--candy-lilac)" },
 ];
+// Docs items stay inside their zone, whatever its width.
 const style = (item: Item, top = item.top) =>
-  `left: ${item.left.toFixed(1)}%; top: ${top.toFixed(1)}%; width: ${item.size}px; height: ${item.size}px; animation-delay: ${item.delay.toFixed(1)}s`;
+  `left: ${docs ? `calc(${item.left.toFixed(1)}% - ${((item.left / 100) * item.size).toFixed(1)}px)` : `${item.left.toFixed(1)}%`}; top: ${top.toFixed(1)}%; width: ${item.size}px; height: ${item.size}px; animation-delay: ${item.delay.toFixed(1)}s`;
 ---
 
 {
   docs ? (
     <div class="parallax parallax-docs" aria-hidden="true" data-parallax="docs">
-      {(["left", "right"] as const).map((side, sideIndex) => (
-        <div class="parallax-side" data-side={side}>
+      {zoneGlows.map((glow, zone) => (
+        <div class="parallax-zone" data-zone={zone}>
           {layers.map((layer, index) => (
             <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
               {index === 0 &&
                 [0, 50].map((offset) => (
                   <span
                     class="parallax-glow"
-                    style={`top: ${offset + (sideIndex ? 15 : 4)}%; background: var(--candy-${sideIndex ? "blue" : "pink"})`}
+                    style={`top: ${offset + 4 + zone * 11}%; background: var(--candy-${glow})`}
                   />
                 ))}
               {[0, 50].map((offset) =>
                 layer.items
-                  .filter((item) => item.side === side)
+                  .filter((item) => item.zone === zone)
                   .map((item) => (
                     <span class={`p-item p-${item.kind}`} style={style(item, offset + item.top / 2)}>
                       {item.kind !== "bubble" && item.kind !== "dot" && (
