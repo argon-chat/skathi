@@ -93,7 +93,49 @@ document.documentElement.classList.toggle("no-blur", !canBlur);`,
     ],
   },
 
-  "at-container": { edgeCases: [IGNORED] },
+  "at-container": {
+    examples: [
+      {
+        title: "Nested named containers",
+        lang: "css",
+        code: `.page {
+  container: page / inline-size;
+}
+.panel {
+  container: panel / inline-size;
+}
+@container page (width >= 60rem) {
+  .toolbar {
+    gap: 12px;
+  }
+}
+@container panel (width < 320px) {
+  .toolbar .label {
+    display: none;
+  }
+}`,
+        note: "Each rule asks its own container: the toolbar's spacing follows the page, its labels the panel it sits in.",
+      },
+      {
+        title: "Switch on a theme the container sets",
+        lang: "css",
+        code: `.sidebar {
+  --tone: muted;
+}
+@container style(--tone: muted) {
+  .item {
+    opacity: 0.7;
+  }
+}`,
+      },
+    ],
+    edgeCases: [
+      "With no container that can answer the query (no ancestor of that name, or only `inline-size` ones for a `height` query), the rules do not apply, and neither does their `not`.",
+      "Before the container's first layout its size is unknown; the frame lays it out, restyles and lays out again before painting, so the first paint already answers the query.",
+      "An element mounted in that frame starts no transition from the unknown-size style.",
+      "A container whose size depends on its own query results (a cycle) stops after 8 layouts in one frame, with an advisory.",
+    ],
+  },
 
   "at-layer": {
     edgeCases: [

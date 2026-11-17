@@ -3,7 +3,7 @@ import { appendFileSync, cpSync, mkdtempSync, rmSync, symlinkSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCheck } from "../check";
-import { declarationProblem, selectorProblems } from "../check/css";
+import { containerProblem, declarationProblem, selectorProblems } from "../check/css";
 import type { CheckReport } from "../check/schema";
 import { buildApp } from "../cli/build-app";
 import { packageDir } from "../runtime-path";
@@ -67,6 +67,14 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
   });
 
   test("selectors: only what the matcher cannot answer", () => {
+  test("@container: only queries the engine cannot evaluate", () => {
+    expect(containerProblem("card (width >= 24rem) and style(--mode: 50%)")).toBeNull();
+    expect(containerProblem("(orientation: portrait) or (min-height: 10em)")).toBeNull();
+    expect(containerProblem("scroll-state(stuck: top)")).not.toBeNull();
+    expect(containerProblem("style(color: red)")).not.toBeNull();
+    expect(containerProblem("(min-width: 50%)")).not.toBeNull();
+  });
+
     const count = (selector: string) => selectorProblems(selector).length;
     expect(count(".a:not(:hover)")).toBe(1);
     expect(count("li:nth-child(2 of .x)")).toBe(1);
@@ -158,13 +166,13 @@ describe("CSS warnings in sk build and sk dev", () => {
 
     appendFileSync(join(app, "src/fine.css"), ".added {\n  float: right;\n}\n");
     await until("rev 2");
-    await until("src/fine.css:61:3 SK4001");
+    await until("src/fine.css:69:3 SK4001");
     appendFileSync(join(app, "src/fine.css"), ".again {\n  color: red;\n}\n");
     await until("rev 3");
     appendFileSync(join(app, "src/main.css"), ".more {\n  color: blue;\n}\n");
     await until("rev 4");
     await Bun.sleep(200);
-    expect(count("src/fine.css:61:3 SK4001")).toBe(1);
+    expect(count("src/fine.css:69:3 SK4001")).toBe(1);
     expect(count("src/main.css:3:3 SK4001")).toBe(1);
   }, 90_000);
 });

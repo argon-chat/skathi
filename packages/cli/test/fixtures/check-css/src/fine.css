@@ -43,6 +43,14 @@ input::placeholder,
     padding: 8px;
   }
 }
+.card {
+  container: card / inline-size;
+}
+@container card (width >= 24rem) and style(--dense: 1) {
+  .a {
+    padding: 2cqi;
+  }
+}
 @keyframes spin {
   from {
     transform: rotate(0deg);

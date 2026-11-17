@@ -1,0 +1,13 @@
+{
+  "$comment": "Container queries: a card that switches layout at its container's width, nested named containers, cq units, containers resized by the window and by a CSS transition, and frames that move no container.",
+
+  "name": "sk-test-container-queries",
+
+  "window": {
+    "title": "Skathi — container queries (fixture)",
+    "width": 640,
+    "height": 480,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

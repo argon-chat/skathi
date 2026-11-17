@@ -218,9 +218,9 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "a CSS at-rule Skathi does not support",
     explanation:
-      "`@container`, `@layer` (outside Tailwind), `@scope`, `@starting-style`, `@counter-style`, `@font-feature-values` and `@namespace` are not implemented: the rules inside the block are dropped.",
-    example: "@container (min-width: 400px) {\n  .card { display: grid; }\n}",
-    fix: "Move the rules out of the block, or use `@media` on the window size.",
+      "`@layer` (outside Tailwind), `@scope`, `@starting-style`, `@counter-style`, `@font-feature-values` and `@namespace` are not implemented, nor are `@container` scroll-state queries, style queries on standard properties and sizes in `%`, viewport units or `calc()`: the rules inside the block are dropped.",
+    example: "@scope (.card) {\n  img { border-radius: 4px; }\n}",
+    fix: "Move the rules out of the block, or write the query with what the help line names.",
   },
   {
     code: "SK4005",

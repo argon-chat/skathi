@@ -534,7 +534,9 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     );
     perf::pump_done();
     // Observers run after layout and before paint, so this draws ahead of gpui's draw. After
-    // `pump_done` so that draw stays in gpui's bucket of the frame trace.
+    // `pump_done` so that draw stays in gpui's bucket of the frame trace. Container queries settle
+    // first: an observer must see the layout their restyle gives.
+    sk_tree::settle_container_queries(window, cx);
     sk_tree::update_layout_observers(window, cx);
     // The background tick measures the stall from here, so a slow frame is not mistaken for a parked one.
     background::note_frame();

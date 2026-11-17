@@ -12,6 +12,9 @@
 
 mod animator;
 pub mod catalog;
+pub mod container;
+#[cfg(test)]
+mod container_tests;
 mod element;
 #[cfg(test)]
 mod em_tests;
@@ -456,6 +459,10 @@ struct RuleEntry {
     /// Rewritten from a view transition pseudo-element: it matches the stand-ins only.
     vt: bool,
     condition: Option<u32>,
+    /// Index into [`Engine::container_queries`]: the `@container` rules around this one.
+    container: Option<u32>,
+    /// A declaration reads a container query unit, so the result depends on the container's size.
+    cq: bool,
     diagnostics: Option<Rc<Vec<String>>>,
     /// Author-written declarations; captured only under `set_capture_rule_text` since a Tailwind
     /// sheet is tens of thousands of strings.
@@ -737,6 +744,11 @@ pub struct Engine {
     generation: u64,
     share: bool,
     collecting_ua: bool,
+    container_queries: Vec<container::Query>,
+    /// The `@container` rules being collected into, innermost last.
+    collecting_container: Option<u32>,
+    /// The sheet has a `@container` rule or a container query unit.
+    uses_containers: bool,
     pub diagnostics: Vec<String>,
 }
 
@@ -1078,6 +1090,9 @@ impl Engine {
             generation: next_generation(),
             share: share::enabled(),
             collecting_ua: false,
+            container_queries: Vec::new(),
+            collecting_container: None,
+            uses_containers: false,
             diagnostics: Vec::new(),
         };
         // The flag describes THIS sheet: a resize only recompiles when the sheet currently
@@ -1135,6 +1150,12 @@ impl Engine {
 
     pub fn uses_group_states(&self) -> bool {
         self.group_states
+    }
+
+    /// Whether a style can depend on a query container: the sheet has `@container` or a `cq*`
+    /// unit. Inline styles with a `cq*` unit are the caller's to notice.
+    pub fn uses_containers(&self) -> bool {
+        self.uses_containers
     }
 
     /// The last block of that name whose condition holds in `env` (CSS duplicate-name rule). `Rc`
@@ -1299,13 +1320,40 @@ impl Engine {
                     }
                     continue;
                 }
+                CssRule::Container(c) => {
+                    let outer = self.collecting_container;
+                    let around = outer
+                        .map(|i| self.container_queries[i as usize].clone())
+                        .unwrap_or_default();
+                    match around.nest(c) {
+                        Ok(query) => {
+                            self.uses_containers = true;
+                            self.container_queries.push(query);
+                            self.collecting_container =
+                                Some((self.container_queries.len() - 1) as u32);
+                            self.collect(&c.rules.0, condition, order);
+                            self.collecting_container = outer;
+                        }
+                        Err(reason) => mapper::once(
+                            &mut self.diagnostics,
+                            format!(
+                                "@container {} uses {reason} — the whole block was dropped ({})",
+                                container::prelude_text(c),
+                                container::SUPPORTED
+                            ),
+                        ),
+                    }
+                    continue;
+                }
                 other => {
                     at_rule_ignored(other, &mut self.diagnostics);
                     continue;
                 }
             };
-            let (converted, viewport) =
-                mapper::noting_viewport_units(|| mapper::convert_block(&style.declarations));
+            let ((converted, viewport), cq) = container::noting_units(|| {
+                mapper::noting_viewport_units(|| mapper::convert_block(&style.declarations))
+            });
+            self.uses_containers |= cq;
             let first_rule = self.rules.len() as u32;
             let decls =
                 capture_rule_text().then(|| Rc::new(mapper::decl_pairs(&style.declarations)));
@@ -1455,6 +1503,8 @@ impl Engine {
                     pseudo,
                     vt,
                     condition,
+                    container: self.collecting_container,
+                    cq,
                     diagnostics: (!rule_diagnostics.is_empty())
                         .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
                     decls: decls.clone(),
@@ -1712,7 +1762,10 @@ impl Engine {
                 &el,
                 &mut ctx,
                 &mut |_, _| {},
-            ) {
+            ) && rule
+                .container
+                .is_none_or(|q| self.container_queries[q as usize].eval(parent_vars))
+            {
                 matched.push(rule);
             }
         });
@@ -1725,7 +1778,7 @@ impl Engine {
 
         let share_key = (self.share
             && inline.is_none()
-            && !matched.iter().any(|r| r.ancestor.is_some()))
+            && !matched.iter().any(|r| r.ancestor.is_some() || r.cq))
         .then(|| {
             let rules = matched.iter().map(|r| index_of(r)).collect();
             share::Key::new(
@@ -2382,7 +2435,7 @@ impl Engine {
             own.decoration.apply(&mut refinement.text);
         }
         mapper::compute_overflow(&mut base, &mut extras);
-        mapper::advise_contain_size(&base, &extras, diagnostics);
+        mapper::apply_size_containment(&mut base, &extras);
         mapper::compute_overflow(&mut before.0, &mut before.1);
         mapper::compute_overflow(&mut after.0, &mut after.1);
 
@@ -3214,7 +3267,10 @@ impl Engine {
                 &el,
                 &mut ctx,
                 &mut |_, _| {},
-            ) {
+            ) && rule
+                .container
+                .is_none_or(|q| self.container_queries[q as usize].eval(&Rc::new(Vars::default())))
+            {
                 matched.push(rule);
             }
         });
@@ -4642,10 +4698,10 @@ mod tests {
 
         let (overflow, d) = computed(".box { contain: strict; width: 10px; height: 10px }");
         assert_eq!((overflow, d.len()), (["clip", "clip"], 0));
-        let (_, d) = computed(".box { contain: inline-size; width: 10px }");
-        assert!(d.is_empty(), "{d:?}");
-        let (_, d) = computed(".box { contain: size; width: 10px }");
-        assert_eq!(d.len(), 1, "the auto height is still the content's: {d:?}");
+        for value in ["inline-size", "size"] {
+            let (_, d) = computed(&format!(".box {{ contain: {value}; width: 10px }}"));
+            assert!(d.is_empty(), "{d:?}");
+        }
     }
 
     fn hovered_opacity(css: &str, style: Option<&str>) -> Option<f32> {

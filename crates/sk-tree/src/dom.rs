@@ -195,6 +195,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "will-change",
     "contain",
     "container-type",
+    "container-name",
     "backdrop-filter",
     "animation-name",
     "animation-duration",
@@ -359,7 +360,16 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "translate" | "rotate" | "scale" | "perspective" | "filter" => "none".into(),
         "will-change" => "auto".into(),
         "contain" => "none".into(),
-        "container-type" => "normal".into(),
+        "container-type" => match cs.extras.container_type.unwrap_or(0) {
+            0 => "normal",
+            sk_css::container::INLINE => "inline-size",
+            _ => "size",
+        }
+        .into(),
+        "container-name" => match cs.extras.container_name.clone().flatten() {
+            Some(names) => names.join(" "),
+            None => "none".into(),
+        },
         "backdrop-filter" => match cs.base.backdrop_blur {
             Some(r) => format!("blur({}px)", f32::from(r)),
             None => "none".into(),

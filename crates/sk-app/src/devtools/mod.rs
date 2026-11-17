@@ -2542,6 +2542,14 @@ fn perf_data() -> Json {
             "presents",
             Json::n(sk_tree::devtools::frame_counts().1 as f64),
         ),
+        (
+            "containerRelayouts",
+            Json::n(sk_tree::devtools::container_query_counts().0 as f64),
+        ),
+        (
+            "containersMoved",
+            Json::n(sk_tree::devtools::container_query_counts().1 as f64),
+        ),
         // Scroll containers registered with the wheel router last frame. Filled by the paint walk,
         // so a retained-render replay cannot rebuild it.
         (

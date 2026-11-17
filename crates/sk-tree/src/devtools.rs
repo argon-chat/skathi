@@ -85,6 +85,11 @@ pub fn frame_counts() -> (u64, u64) {
     (crate::render::build_count(), crate::live::present_count())
 }
 
+/// Layouts re-run for container queries, and query containers whose size moved, since start.
+pub fn container_query_counts() -> (u64, u64) {
+    crate::containers::counts()
+}
+
 pub use crate::resample::ImageStats;
 pub use crate::tree::TreeMem;
 

@@ -58,7 +58,6 @@ const INERT_FOR: Record<string, string> = {
 const SUBSTITUTED = /(?<![\w-])(var|env|theme|screen)\(|#\{|\$[\w-]/i;
 
 const UNSUPPORTED_AT_RULES: Record<string, string> = {
-  container: "Use a `@media` query on the window size, or set a class from script.",
   layer: "Move the rules out of the `@layer` block; their order in the sheet decides the cascade.",
   scope: "Scope the rules with a class selector instead.",
   "starting-style": "Start the transition from script: set the start values, then change them on the next frame.",
@@ -66,7 +65,20 @@ const UNSUPPORTED_AT_RULES: Record<string, string> = {
   "font-feature-values": "Use `font-feature-settings` with the feature tags.",
   namespace: "Drop the namespace and select by element name or class.",
 };
-const RECURSE_AT_RULES = new Set(["media", "keyframes", "-webkit-keyframes", "-moz-keyframes"]);
+const RECURSE_AT_RULES = new Set(["media", "container", "keyframes", "-webkit-keyframes", "-moz-keyframes"]);
+
+/** Why the engine drops a `@container` block whose prelude it cannot evaluate, and what to write instead. */
+export function containerProblem(prelude: string): string | null {
+  const text = prelude.toLowerCase();
+  if (/(^|[\s(])scroll-state\s*\(/.test(text))
+    return "Scroll-state queries are not supported; set a class from a `scroll` listener instead.";
+  for (const m of text.matchAll(/(?<![\w-])style\s*\(\s*([^\s:)]+)/g))
+    if (!m[1]!.startsWith("--"))
+      return "Style queries test custom properties only: query a `--custom-property` the container sets.";
+  const sizes = text.replace(/style\s*\([^)]*\)/g, "");
+  if (/\d(%|vw|vh|vi|vb|vmin|vmax|cq\w*)(?![\w-])|calc\(/.test(sizes)) return "Write the size in `px`, `rem` or `em`.";
+  return null;
+}
 
 const STATE_FIX = "Set a class or data attribute from script and select on that.";
 const PSEUDO_CLASSES: Record<string, string> = Object.fromEntries([
@@ -358,6 +370,19 @@ function rule(ctx: Context, node: Rule, keyframes: boolean) {
 
 function atRule(ctx: Context, node: AtRule) {
   const name = node.name.toLowerCase();
+  const query = name === "container" ? containerProblem(node.params) : null;
+  if (query) {
+    const start = startOf(node);
+    push(
+      ctx,
+      "SK4004",
+      "this `@container` query is not supported: the rules inside it are dropped",
+      query,
+      start,
+      start + 10,
+    );
+    return;
+  }
   if (RECURSE_AT_RULES.has(name)) {
     visit(ctx, node, name !== "media");
     return;

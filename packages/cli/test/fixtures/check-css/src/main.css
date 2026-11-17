@@ -3,7 +3,7 @@
   float: left;
   width: fit-content;
 }
-@container (min-width: 400px) {
+@container scroll-state(stuck: top) {
   .box {
     float: right;
   }

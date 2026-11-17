@@ -197,6 +197,10 @@ pub struct Extras {
     pub contain_paint: Option<bool>,
     /// The axes `contain` size-contains ([`Extras::CONTAIN_WIDTH`], [`Extras::CONTAIN_HEIGHT`]).
     pub contain_size: Option<u8>,
+    /// `container-type` as the axes it queries ([`crate::container::INLINE`], [`crate::container::BLOCK`]); `Some(0)` is `normal`.
+    pub container_type: Option<u8>,
+    /// `container-name`; `Some(None)` is `none`.
+    pub container_name: Option<Option<Rc<[Rc<str>]>>>,
     /// `scroll-behavior: smooth`: a programmatic scroll of this box that does not say otherwise glides.
     pub scroll_smooth: Option<bool>,
     /// Only a qualifier of the refinement's axis, which stays the truth (see `compute_overflow`).
@@ -671,6 +675,12 @@ impl Extras {
         }
         if other.contain_size.is_some() {
             self.contain_size = other.contain_size;
+        }
+        if other.container_type.is_some() {
+            self.container_type = other.container_type;
+        }
+        if other.container_name.is_some() {
+            self.container_name = other.container_name.clone();
         }
         if other.scroll_smooth.is_some() {
             self.scroll_smooth = other.scroll_smooth;
@@ -1864,7 +1874,7 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
         LengthValue::Ch(v) => Some(v * character_basis(false)),
         LengthValue::Ex(v) => Some(v * character_basis(true)),
         LengthValue::Rch(v) | LengthValue::Rex(v) => Some(v * HALF_EM * rem_basis()),
-        other => viewport_value_px(other),
+        other => crate::container::unit_px(other).or_else(|| viewport_value_px(other)),
     }
 }
 
@@ -1952,6 +1962,12 @@ fn em_basis() -> f32 {
     } else {
         basis
     }
+}
+
+/// The value read something resolved per element, so it is kept for the cascade to re-apply, like
+/// an em.
+pub(crate) fn note_font_relative() {
+    FONT_UNITS_SEEN.with(|c| c.set(true));
 }
 
 pub(crate) fn with_font_basis<R>(px: f32, f: impl FnOnce() -> R) -> R {
@@ -4074,6 +4090,7 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
                     "px" => Some(*value),
                     other => match font_unit_px(other, *value)
                         .or_else(|| viewport_unit_px(other, *value))
+                        .or_else(|| crate::container::unit_name_px(other, *value))
                     {
                         Some(px) => Some(px),
                         None => return None,
@@ -4323,20 +4340,42 @@ fn contain(
     Some((paint, size))
 }
 
-/// Size containment sizes a box as if it were empty, which only shows on an axis the box does not
-/// size itself.
-pub(crate) fn advise_contain_size(r: &StyleRefinement, x: &Extras, diagnostics: &mut Vec<String>) {
-    let axes = x.contain_size.unwrap_or(0);
-    let auto = |l: Option<Length>| matches!(l, None | Some(Length::Auto));
-    if (axes & Extras::CONTAIN_WIDTH != 0 && auto(r.size.width))
-        || (axes & Extras::CONTAIN_HEIGHT != 0 && auto(r.size.height))
-    {
-        warn_once(
-            diagnostics,
-            "`contain: size` (or `strict`, `inline-size`) does not size the box as if it were \
-             empty (v1) — an axis without a width or height is still sized by the content; give \
-             the box an explicit size on that axis",
-        );
+fn container_axes(
+    t: &lightningcss::properties::contain::ContainerType,
+    diagnostics: &mut Vec<String>,
+) -> u8 {
+    use lightningcss::properties::contain::ContainerType as T;
+    match t {
+        T::Normal => 0,
+        T::ScrollState => {
+            once(
+                diagnostics,
+                "`container-type: scroll-state` is not supported: scroll-state container \
+                 queries are not implemented, so the element is not a query container"
+                    .to_string(),
+            );
+            0
+        }
+        T::InlineSize => crate::container::INLINE,
+        T::Size => crate::container::INLINE | crate::container::BLOCK,
+    }
+}
+
+fn container_names(
+    names: &lightningcss::properties::contain::ContainerNameList,
+) -> Option<Rc<[Rc<str>]>> {
+    use lightningcss::properties::contain::ContainerNameList as L;
+    match names {
+        L::None => None,
+        L::Names(list) => Some(list.iter().map(|n| Rc::from(n.0 .0.as_ref())).collect()),
+    }
+}
+
+/// The size containment `contain` and `container-type` ask for, which layout applies.
+pub(crate) fn apply_size_containment(r: &mut StyleRefinement, x: &Extras) {
+    let axes = x.contain_size.unwrap_or(0) | x.container_type.unwrap_or(0);
+    if axes != 0 {
+        r.vn_contain_size = Some(axes);
     }
 }
 
@@ -4439,6 +4478,12 @@ fn apply_property(
         FlexGrow(v, _) => r.flex_grow = Some(*v),
         FlexShrink(v, _) => r.flex_shrink = Some(*v),
         Order(v, _) => r.vn_order = Some(*v),
+        ContainerType(t) => x.container_type = Some(container_axes(t, diagnostics)),
+        ContainerName(names) => x.container_name = Some(container_names(names)),
+        Container(c) => {
+            x.container_type = Some(container_axes(&c.container_type, diagnostics));
+            x.container_name = Some(container_names(&c.name));
+        }
         FlexBasis(v, _) => r.flex_basis = lpa_length(v),
         Flex(v, _) => {
             r.flex_grow = Some(v.grow);

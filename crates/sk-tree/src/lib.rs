@@ -13,6 +13,7 @@ mod bgimage;
 mod cache;
 mod clipboard;
 mod color;
+mod containers;
 mod css_namespace;
 mod cull;
 mod dom;
@@ -68,6 +69,7 @@ pub mod windows;
 
 pub mod devtools;
 
+pub use containers::settle_frame as settle_container_queries;
 pub use img::{
     asset_base, asset_store, content_key, dev_asset_file, read_app_asset, set_asset_base,
     set_asset_store, set_dev_asset_files, AssetLookup,
@@ -602,7 +604,11 @@ fn sync_layout_inner() {
     if flush_changes() {
         FLUSHED_BY_SYNC.with(|c| c.set(true));
     }
+    let laid_out = render::layout_count();
     f();
+    if render::layout_count() != laid_out {
+        containers::settle(f);
+    }
     IN_SYNC_LAYOUT.with(|c| c.set(false));
 }
 
@@ -624,6 +630,7 @@ pub fn flush_changes_kind() -> Flush {
     if dirty {
         tree::restyle_all();
         render::gc_node_state();
+        containers::gc(&|id| tree::read_tree(|t| t.node(id).is_some()));
         render::canvas::gc(|id| tree::read_tree(|t| t.node(id).is_some()));
         tree::animator_gc();
         tree::with_tree(|t| t.release_freed());

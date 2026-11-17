@@ -212,6 +212,25 @@ watch(size, (px) => (document.documentElement.style.fontSize = px + "px"));
     edgeCases: [VIEWPORT_POPOUT, VIEWPORT_RESIZE],
   },
 
+  "unit-container": {
+    examples: [
+      {
+        title: "Scale a heading with the card it sits in",
+        lang: "css",
+        code: `.card {
+  container-type: inline-size;
+}
+.card h2 {
+  font-size: clamp(14px, 6cqi, 28px);
+}`,
+      },
+    ],
+    edgeCases: [
+      "A value with a container query unit is resolved per element, so elements that would otherwise share one computed style each compute their own.",
+      "Under a container that has not been laid out yet the unit uses the window; the same frame restyles it once the container has a size.",
+    ],
+  },
+
   "unit-vmin": {
     examples: [
       {

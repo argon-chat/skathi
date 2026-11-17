@@ -21,7 +21,7 @@ export const details: Details = {
   height: 32px;
   contain: strict;
 }`,
-        note: "Give the box an explicit width and height: `strict` sizes nothing for you.",
+        note: "Give the box an explicit width and height: under `strict` its content does not size it.",
       },
     ],
     edgeCases: [
@@ -47,15 +47,38 @@ export const details: Details = {
     ],
   },
   "container-type": {
+    examples: [
+      {
+        title: "A card that lays itself out by the width it is given",
+        lang: "css",
+        code: `.card-slot {
+  container-type: inline-size;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+}
+@container (min-width: 480px) {
+  .card {
+    flex-direction: row;
+  }
+}`,
+        note: "The same card stacks in a narrow sidebar and sits in a row in the main column, whatever the window's width.",
+      },
+    ],
     edgeCases: [
-      'A declaration prints an advisory and changes nothing; `CSS.supports("container-type", "inline-size")` returns `false`.',
+      "A `size` container with no `height` is as tall as its padding: its content does not size it.",
+      "An `inline-size` container that is a flex item and does not grow is as narrow as its padding; give it a `width` or `flex: 1`.",
+      '`getComputedStyle(el).containerType` reads `normal`, `inline-size` or `size`; `CSS.supports("container-type", "inline-size")` is `true`.',
     ],
   },
   "container-name": {
-    edgeCases: ["A declaration prints an advisory and changes nothing."],
+    edgeCases: [
+      "A name with no `container-type` makes a style container only: `@container sidebar style(--x: 1)` finds it, a size query does not.",
+    ],
   },
   container: {
-    edgeCases: ["A declaration prints an advisory and changes nothing."],
+    edgeCases: ["`container: card` alone sets the name and resets the type to `normal`."],
   },
   "content-visibility": {
     edgeCases: [

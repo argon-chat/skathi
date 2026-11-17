@@ -81,6 +81,9 @@ fn step(f: u64, window: &mut Window, cx: &mut App) {
     let _profile = sk_runtime::redjs::profiling::span("layout", "Resize / intersection observers");
     if window.vn_is_dirty() {
         window.draw(cx).clear(cx);
+        crate::containers::settle(|| {
+            window.draw(cx).clear(cx);
+        });
     }
     let pending = PENDING.with(|c| c.replace(false));
     if !pending && render::layout_count() == SEEN.with(Cell::get) {
@@ -99,6 +102,9 @@ fn step(f: u64, window: &mut Window, cx: &mut App) {
         if window.vn_is_dirty() || crate::layout_owed() {
             let t = perf::Span::start();
             window.draw(cx).clear(cx);
+            crate::containers::settle(|| {
+                window.draw(cx).clear(cx);
+            });
             relayouts += 1;
             relayout_ms += t.ms();
         }

@@ -363,6 +363,9 @@ pub struct Tree {
     dirty_all: bool,
     inline_dirty_nodes: Vec<u32>,
     style_flushed: bool,
+    /// An inline `style` has used a `cq*` unit (sticky): the cascade then tracks query containers
+    /// whatever the sheet says.
+    inline_container_units: bool,
     /// A set because `sync_runtime_sheets` runs on every dirtying flush and a slab scan is too
     /// costly.
     style_nodes: std::collections::BTreeSet<u32>,
@@ -1471,20 +1474,23 @@ impl Tree {
             sk_css::InheritedRadii,
         ),
         env: &sk_css::Env,
+        chain: &sk_css::container::Chain,
         diagnostics: &mut Vec<String>,
     ) -> (sk_css::ComputedStates, sk_css::InheritedRadii) {
         let n = self.node(id).expect("cascade_one on a live node");
         CASCADE_SUBJECT.with(|c| c.set(id));
-        let mut states = engine.compute_node_with_font(
-            NodeRef { tree: self, id },
-            n.inline.as_deref(),
-            parent_vars,
-            parent_text.color,
-            parent_text.font_size,
-            &parent_text.font,
-            env,
-            diagnostics,
-        );
+        let mut states = sk_css::container::with_chain(chain, || {
+            engine.compute_node_with_font(
+                NodeRef { tree: self, id },
+                n.inline.as_deref(),
+                parent_vars,
+                parent_text.color,
+                parent_text.font_size,
+                &parent_text.font,
+                env,
+                diagnostics,
+            )
+        });
         CASCADE_SUBJECT.with(|c| c.set(0));
         // `None` = nothing declared, so inherit; an explicit `pointer-events: auto` opts a
         // descendant back in (reka's `data-[state=open]:pointer-events-auto` overlay).
@@ -1492,6 +1498,40 @@ impl Tree {
         states.extras.pointer_events_none = Some(inert);
         let radii = sk_css::resolve_inherited_radii(&mut states, parent_radii);
         (states, radii)
+    }
+
+    /// The query containers above `id`, from the committed styles of its ancestors; `None` when
+    /// nothing in the sheet can ask.
+    fn container_chain(&self, id: u32, active: bool) -> sk_css::container::Chain {
+        if !active {
+            return None;
+        }
+        let mut above = Vec::new();
+        let mut cur = self.node(id).map_or(0, |n| n.parent);
+        for _ in 0..4096 {
+            let Some(n) = self.node(cur) else { break };
+            if n.computed.is_some() {
+                above.push(cur);
+            }
+            cur = n.parent;
+        }
+        let mut chain = None;
+        for &a in above.iter().rev() {
+            if let Some(cs) = self.node(a).and_then(|n| n.computed.as_ref()) {
+                chain = sk_css::container::Container::link(
+                    a,
+                    &cs.extras,
+                    &cs.vars,
+                    cs.font_size,
+                    &chain,
+                );
+            }
+        }
+        chain
+    }
+
+    fn containers_active(&self, engine: &sk_css::Engine) -> bool {
+        engine.uses_containers() || self.inline_container_units
     }
 
     /// The nodes whose own style alone may have moved ([`Tree::mark_self`]). A result that changes
@@ -1512,6 +1552,7 @@ impl Tree {
         let mut diagnostics = Vec::new();
         let mut stored = Vec::new();
         let mut whole = Vec::new();
+        let containers = self.containers_active(engine);
         for id in marks {
             let Some(n) = self.node(id) else { continue };
             if n.kind != Kind::Element || n.mark_gen == self.restyle_gen || n.computed.is_none() {
@@ -1523,6 +1564,7 @@ impl Tree {
                 id,
                 (&vars, inert, text, radii),
                 &here_env,
+                &self.container_chain(id, containers),
                 &mut diagnostics,
             );
             let Some(old) = n.computed.as_ref() else {
@@ -1536,6 +1578,8 @@ impl Tree {
                 && old.font_size == states.font_size
                 && old.computed_font == states.computed_font
                 && old.extras.pointer_events_none == states.extras.pointer_events_none
+                && old.extras.container_type == states.extras.container_type
+                && old.extras.container_name == states.extras.container_name
                 && sk_css::InheritedRadii::of(&old.base) == child_radii;
             if hands_down_the_same {
                 stored.push((id, states));
@@ -1588,6 +1632,7 @@ impl Tree {
             for d in diags {
                 warn_css(&format!("[css inline] {d}"));
             }
+            self.inline_container_units |= parsed.is_some() && body.contains("cq");
             let n = self.node_mut(id).unwrap();
             n.inline = parsed;
             n.inline_dirty = false;
@@ -1598,6 +1643,13 @@ impl Tree {
 
         let mut diagnostics: Vec<String> = Vec::new();
         let full = self.dirty_all;
+        let containers = self.containers_active(engine);
+        if containers {
+            crate::containers::install();
+        }
+        if full {
+            crate::containers::forget_all();
+        }
         let settled = self.settle_self_marks(engine, env);
         let roots = self.restyle_roots();
         let cascaded_anything = !roots.is_empty() || !settled.is_empty();
@@ -1615,6 +1667,7 @@ impl Tree {
                 Inherited,
                 sk_css::InheritedRadii,
                 sk_css::Env,
+                sk_css::container::Chain,
             )> = Vec::new();
             let multiwindow = crate::windows::any_secondary();
             for r in roots {
@@ -1629,6 +1682,7 @@ impl Tree {
                     inherited_text,
                     inherited_radii,
                     root_env,
+                    this.container_chain(r, containers),
                 ));
                 while let Some((
                     id,
@@ -1661,10 +1715,21 @@ impl Tree {
                                 font_size: states.font_size,
                                 font: states.computed_font.clone(),
                             };
+                            let child_chain = if containers {
+                                sk_css::container::Container::link(
+                                    id,
+                                    &states.extras,
+                                    &states.vars,
+                                    states.font_size,
+                                    &chain,
+                                )
+                            } else {
+                                None
+                            };
                             out.push((id, states));
-                            (vars, inert, text, radii)
+                            (vars, inert, text, radii, child_chain)
                         } else {
-                            (parent_vars, parent_inert, parent_text, parent_radii)
+                            (parent_vars, parent_inert, parent_text, parent_radii, chain)
                         };
                     for &c in n.children.iter().rev() {
                         // The window boundary: a popped-out node is painted by another window, so
@@ -1743,8 +1808,21 @@ impl Tree {
                     if hidden {
                         animator.cancel_animations(id, now);
                     }
+                    if containers {
+                        crate::containers::note_committed(
+                            id,
+                            n.parent,
+                            n.computed.is_none(),
+                            &states,
+                        );
+                    }
                     if n.computed.as_ref() != Some(&states) {
-                        animator.on_computed(id, n.computed.as_ref(), &states, now);
+                        let before = if containers && crate::containers::born_this_frame(id) {
+                            None
+                        } else {
+                            n.computed.as_ref()
+                        };
+                        animator.on_computed(id, before, &states, now);
                         // Against the painting window's environment: `@keyframes` inside `@media`
                         // exist only where the query holds. They are document-scoped, so a sheet
                         // without any skips the check.

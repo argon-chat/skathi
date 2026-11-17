@@ -2077,29 +2077,40 @@ const containment = section("Containment and hints", [
     values: [
       v("paint", OK, "Clips."),
       v("content", OK, "Clips."),
-      v("strict", PART, "Clips, but does not size the box as if it were empty."),
-      v("size", PART, "Does not size the box as if it were empty."),
-      v("inline-size", PART, "Does not size the box as if it were empty."),
+      v("strict", OK, "Clips, and sizes the box as if it were empty.", "0.4.0"),
+      v("size", OK, "Sizes the box as if it were empty on both axes.", "0.4.0"),
+      v("inline-size", OK, "Sizes the box's width as if it were empty.", "0.4.0"),
     ],
-    limitations: [
-      "`size`, `inline-size` and `strict` do not size the box as if it were empty: an axis without a `width` or `height` is still sized by its content, with an advisory. Give the box an explicit size on that axis.",
-      "`getComputedStyle()` reads `contain` as `none`.",
+    notes: [
+      "Size containment sizes the box from its own `width`, `height`, `min-*` and `max-*`, its padding and border, and what its parent gives it (a stretched block or a flex item that grows), never from its content.",
     ],
     related: ["content-visibility", "container-type"],
   }),
   prop("will-change", OK, "Hints which properties of an element are expected to change.", {
     notes: ["Treated as a hint."],
   }),
-  prop("container-type", PLAN, "Makes an element a query container that `@container` rules can test.", {
-    notes: ["Planned together with `@container`."],
-    related: ["container-name", "container", "at-container"],
+  prop("container-type", OK, "Makes an element a query container that `@container` rules can test.", {
+    since: "0.4.0",
+    values: [
+      v("normal", OK, "Not a size container; still a style container."),
+      v("inline-size", OK, "Queries on the width, with inline-size containment."),
+      v("size", OK, "Queries on both axes, with size containment."),
+      v("scroll-state", NO, "Prints an advisory; the element is not a query container."),
+    ],
+    notes: [
+      "The element gets size containment on the queried axes, so its size there does not depend on its content: give a `size` container a height, and an `inline-size` container in a shrink-to-fit place (a flex item that does not grow, an absolutely positioned box) a width.",
+      "A container whose size changes restyles the elements that queried it and lays them out again in the same frame, before `ResizeObserver` callbacks and paint.",
+    ],
+    limitations: ["Layout containment is not applied: a container still has a baseline and floats can cross it."],
+    related: ["container-name", "container", "at-container", "unit-container"],
   }),
-  prop("container-name", PLAN, "Names a query container for `@container` rules.", {
-    notes: ["Planned together with `@container`."],
+  prop("container-name", OK, "Names a query container for `@container` rules.", {
+    since: "0.4.0",
+    notes: ["A list of names; `@container <name>` picks the nearest ancestor that has the name."],
     related: ["container-type", "container", "at-container"],
   }),
-  sh("container", PLAN, "Sets `container-name` and `container-type` in one declaration.", {
-    notes: ["Planned together with `@container`."],
+  sh("container", OK, "Sets `container-name` and `container-type` in one declaration.", {
+    since: "0.4.0",
     related: ["container-type", "container-name", "at-container"],
   }),
   prop("content-visibility", NO, "Lets the browser skip rendering an element's content until it is needed.", {
@@ -2178,6 +2189,7 @@ const selectors = section("Selectors", [
     aliases: ["element selector", "tag selector"],
   }),
   sel("selector-class", "Class selector", OK, "Matches elements by class, such as `.card`."),
+    limitations: ["`getComputedStyle()` reads `contain` as `none`."],
   sel("selector-id", "ID selector", OK, "Matches the element with a given `id`, such as `#main`."),
   sel("selector-universal", "Universal selector (`*`)", OK, "Matches elements of any type.", { aliases: ["*"] }),
   sel(
@@ -2383,7 +2395,20 @@ const atRules = section("At-rules", [
     notes: ["It answers for Skathi: a declaration passes only if Skathi applies it.", "`selector()` is supported too."],
     aliases: ["CSS.supports()", "feature queries"],
   }),
-  at("@container", PLAN, "Applies styles based on the size of an ancestor query container.", {
+  at("@container", OK, "Applies styles based on the size of an ancestor query container.", {
+    since: "0.4.0",
+    notes: [
+      "Size features: `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`, with range syntax, combined with `and`, `or` and `not`. Lengths are `px`, `rem` or `em` (of the container's font size).",
+      "An optional name picks the nearest ancestor with that `container-name`; otherwise the nearest container that can answer every feature in the query.",
+      "Style queries on custom properties: `style(--theme: dark)` and `style(--dense)`.",
+      "Nests inside `@media`, `@supports` and another `@container`, and holds `@media` blocks.",
+      "The query sees the container's content box as the frame lays it out, including while a transition or animation resizes it; `getBoundingClientRect()` and `ResizeObserver` see the restyled layout.",
+    ],
+    limitations: [
+      "A query that uses an unsupported feature (scroll-state queries, style queries on standard properties, `%`, viewport units or `calc()` lengths) drops its whole block, with an advisory.",
+      "A query container in a pop-out window settles a frame late after that window's own layout moves it.",
+      "Rules are not ordered by `@layer`, which is not supported.",
+    ],
     aliases: ["container queries"],
     related: ["container-type", "container-name", "container", "unit-container"],
   }),
@@ -2617,9 +2642,14 @@ const valuesAndUnits = section("Values and units", [
     limitations: ["Ignored without an advisory."],
     related: ["unit-lh"],
   }),
-  unit("Container query units", NO, "Lengths relative to the size of a query container, such as `cqw` and `cqh`.", {
+  unit("Container query units", OK, "Lengths relative to the size of a query container, such as `cqw` and `cqh`.", {
     slug: "unit-container",
-    limitations: ["Ignored without an advisory."],
+    since: "0.4.0",
+    notes: [
+      "`cqw` and `cqi` are a percent of the nearest `inline-size` or `size` container's content width, `cqh` and `cqb` of the nearest `size` container's content height; `cqmin` and `cqmax` take the smaller or larger. With no such container they use the window.",
+      "Work in stylesheets, inline styles, `calc()` and `var()`.",
+    ],
+    limitations: ["Inside `@keyframes` they resolve against the window."],
     aliases: ["cqw", "cqh", "cqi", "cqb", "cqmin", "cqmax"],
     related: ["at-container"],
   }),
