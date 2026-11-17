@@ -133,6 +133,7 @@ function initializePage(): void {
   });
 
   const prose = document.querySelector<HTMLElement>(".prose");
+  prose?.querySelectorAll<HTMLElement>(".wide").forEach((block) => (block.dataset["railBend"] = ""));
   const rail = prose ? document.createElement("div") : undefined;
   const svgNS = "http://www.w3.org/2000/svg";
   const railSvg = document.createElementNS(svgNS, "svg");
@@ -151,7 +152,7 @@ function initializePage(): void {
     const clearance = 16;
     let y = 0;
     let d = `M${lineX} 0`;
-    const frames = [...document.querySelectorAll<HTMLElement>(".prose .demo-frame")]
+    const frames = [...document.querySelectorAll<HTMLElement>(".prose [data-rail-bend]")]
       .map((frame) => frame.getBoundingClientRect())
       .filter((r) => r.height > 0 && r.left < box.left + lineX + clearance)
       .map((r) => ({ top: r.top - box.top, bottom: r.bottom - box.top, x: r.left - box.left - clearance }))

@@ -20,7 +20,7 @@ const ready = existsSync(join(process.cwd(), "public", `${base}.webm`));
 {
   ready ? (
     <figure class="demo">
-      <div class="demo-frame">
+      <div class="demo-frame" data-rail-bend>
         <video
           muted
           loop
@@ -40,7 +40,7 @@ const ready = existsSync(join(process.cwd(), "public", `${base}.webm`));
     </figure>
   ) : import.meta.env.DEV ? (
     <figure class="demo demo-pending">
-      <div class="demo-frame">
+      <div class="demo-frame" data-rail-bend>
         <span>Recording pending: {id}</span>
       </div>
       <figcaption>{caption}</figcaption>

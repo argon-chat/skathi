@@ -120,6 +120,8 @@
     --sidebar-width: 288px;
     --content-width: 880px;
     --toc-width: 250px;
+    --shell-pad: clamp(32px, 4.8vw, 96px);
+    --shell-gap: clamp(40px, 5vw, 96px);
     font-family: var(--font-body);
     font-size: var(--fs-body);
     font-synthesis: none;
@@ -380,8 +382,8 @@
     display: grid;
     grid-template-columns: minmax(0, var(--content-width)) var(--toc-width);
     justify-content: center;
-    gap: clamp(40px, 5vw, 96px);
-    padding: 48px clamp(32px, 4.8vw, 96px) 0;
+    gap: var(--shell-gap);
+    padding: 48px var(--shell-pad) 0;
   }
   .docs-shell::before {
     content: "";
@@ -1474,10 +1476,10 @@
     :root {
       --content-width: 920px;
       --toc-width: 260px;
+      --shell-gap: 120px;
     }
     .docs-shell {
       padding-top: 60px;
-      gap: 120px;
     }
   }
   @media (min-width: 1251px) {
@@ -1485,6 +1487,19 @@
       position: relative;
       z-index: 1;
       margin-inline: -40px;
+    }
+    /* Up to 24px short of the sidebar and the TOC. The grid is centered, so the left edge is the
+       shell's padding or half the width the columns leave free, whichever is larger. */
+    .prose .wide {
+      --free: calc((100vw - var(--sidebar-width) - var(--content-width) - var(--shell-gap) - var(--toc-width)) / 2);
+      position: relative;
+      z-index: 1;
+      margin-left: calc(24px - max(64px, var(--shell-pad), var(--free)));
+      margin-right: calc(-1 * max(40px, var(--shell-gap) - 24px));
+    }
+    .prose .wide table {
+      table-layout: fixed;
+      overflow-wrap: break-word;
     }
   }
   @media (max-width: 1250px) {
@@ -1494,6 +1509,10 @@
     }
     .right-sidebar {
       display: none;
+    }
+    .prose .wide table {
+      min-width: 760px;
+      overflow-wrap: break-word;
     }
   }
   @media (max-width: 900px) {
