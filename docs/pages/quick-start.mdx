@@ -111,6 +111,8 @@ Skathi renders both frameworks into one element tree with the same renderer, so 
 - **Transitions are Svelte's.** Svelte runs `transition:`, `in:` and `out:` through `element.animate()`, which the host supports. Vue's `<Transition>` and `<TransitionGroup>` are part of the Vue entry only.
 - **Type checking uses `svelte-check`** instead of `vue-tsc`, through `bun run typecheck`.
 
+[Svelte support](/guides/svelte-support/) lists which Svelte features work in Skathi, and [Vue support](/guides/vue-support/) does the same for Vue.
+
 Some parts are Vue-only:
 
 - `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime` in an app that has `vue` installed. Without it, `@skathi-native/runtime` is the DOM layer and the `app*` objects only.

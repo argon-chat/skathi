@@ -61,7 +61,7 @@ There is no WebView in this rendering path. CSS and web-compatible APIs are impl
 
 ## Bring what you know
 
-- **Vue 3 single-file components.** Use the Composition API, reactive state, props, and events. Svelte 5 works too: pick the `svelte` template.
+- **Vue 3 single-file components.** Use the Composition API, reactive state, props, and events. Svelte 5 works too: pick the `svelte` template. [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/) list the few features that do not carry over.
 - **TypeScript.** Keep types alongside your application code.
 - **Native rendering.** Layout and drawing belong to the host, rather than a browser.
 - **Desktop platforms.** Windows is the primary development target; macOS and Linux hosts also exist. Individual capabilities vary by platform.

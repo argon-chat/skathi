@@ -28,7 +28,7 @@ createApp(App).use(createPinia()).mount();
 
 The application’s JavaScript executes in JavaScriptCore through the native runtime. Browser globals and APIs are available only where the SDK implements them.
 
-A package that works with Vue is not automatically compatible if it assumes a complete browser DOM. Check what it accesses and run `sk check` when evaluating it.
+A package that works with Vue is not automatically compatible if it assumes a complete browser DOM. Check what it accesses and run `sk check` when evaluating it. [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/) list which framework features work, which work with limits and which do not.
 
 ## Rust owns platform services
 

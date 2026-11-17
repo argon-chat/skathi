@@ -143,14 +143,15 @@ The build summary has a `native` line with the image size and its size in the pa
 
 ## Before the first AOT build: sk check
 
-Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in four ranges:
+Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in five ranges:
 
-| Codes    | Severity                   | Meaning                                                                                                                      |
-| -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `SK1xxx` | Error: the AOT build stops | Breaks under AOT. See [Built-ins are read-only](#built-ins-are-read-only).                                                   |
-| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time).                                       |
-| `SK3xxx` | Warning                    | Typing quality: values the code passes around without a type.                                                                |
-| `SK4xxx` | Warning                    | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package. |
+| Codes    | Severity                   | Meaning                                                                                                                                              |
+| -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SK1xxx` | Error: the AOT build stops | Breaks under AOT. See [Built-ins are read-only](#built-ins-are-read-only).                                                                           |
+| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time).                                                               |
+| `SK3xxx` | Warning                    | Typing quality: values the code passes around without a type.                                                                                        |
+| `SK4xxx` | Warning                    | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package.                         |
+| `SK5xxx` | Error or warning           | Vue and Svelte features that do not work or work differently. See [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/). |
 
 `sk explain <code>` explains a code with an example and a fix, and `sk explain --list` lists them all. `sk check --deny-warnings` also fails on warnings, for CI.
 
