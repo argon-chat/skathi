@@ -6,6 +6,7 @@ import Brand from "../components/Brand.astro";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import PageActions from "../components/PageActions.vue";
+import Parallax from "../components/Parallax.astro";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, statusLabels, version } from "../lib/docs";
@@ -97,6 +98,7 @@ const structuredData = {
   </head>
   <body transition:animate="none">
     <a href="#main-content" class="skip-link">Skip to content</a>
+    <Parallax docs />
     <header class="mobile-header">
       <Brand />
       <div class="mobile-controls">
@@ -288,6 +290,7 @@ const structuredData = {
     </div>
     <script>
       import "../scripts/docs";
+      import "../scripts/parallax";
     </script>
   </body>
 </html>

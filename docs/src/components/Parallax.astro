@@ -1,0 +1,111 @@
+---
+import "../styles/parallax.css";
+
+interface Props {
+  /** Fewer, fainter items, kept to the free space beside the docs columns. */
+  docs?: boolean;
+}
+
+const { docs = false } = Astro.props;
+
+const shapes = {
+  sparkle: "M12 2c.7 5 2.9 7.3 8 8-5.1.7-7.3 3-8 8-.7-5-2.9-7.3-8-8 5.1-.7 7.3-3 8-8Z",
+  star: "m12 2.8 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 2.8Z",
+  heart: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z",
+} as const;
+const kinds = ["sparkle", "sparkle", "star", "heart", "bubble", "bubble", "dot"] as const;
+let seed = docs ? 23 : 11;
+const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+const config = docs
+  ? [
+      { depth: 0.08, opacity: 0.22, scale: 0.5, count: 8 },
+      { depth: 0.22, opacity: 0.32, scale: 0.65, count: 6 },
+      { depth: 0.42, opacity: 0.42, scale: 0.8, count: 4 },
+    ]
+  : [
+      { depth: 0.08, opacity: 0.35, scale: 0.55, count: 18 },
+      { depth: 0.22, opacity: 0.6, scale: 0.85, count: 12 },
+      { depth: 0.42, opacity: 0.85, scale: 1.2, count: 8 },
+    ];
+const layers = config.map((layer) => ({
+  ...layer,
+  items: Array.from({ length: layer.count }, () => {
+    const kind = kinds[Math.floor(random() * kinds.length)] ?? "dot";
+    const side = random() < 0.5;
+    return {
+      kind,
+      side: side ? "left" : "right",
+      left: docs ? 6 + random() * 70 : side ? random() * 16 : 84 + random() * 14,
+      top: random() * 100,
+      size: Math.round((12 + random() * 16) * layer.scale * (kind === "dot" ? 0.4 : 1)),
+      delay: -random() * 8,
+    };
+  }),
+}));
+type Item = (typeof layers)[number]["items"][number];
+const glows = [
+  { left: "-8%", top: "18%", color: "var(--candy-pink)" },
+  { right: "-10%", top: "42%", color: "var(--candy-blue)" },
+  { left: "-6%", top: "70%", color: "var(--candy-lilac)" },
+];
+const style = (item: Item, top = item.top) =>
+  `left: ${item.left.toFixed(1)}%; top: ${top.toFixed(1)}%; width: ${item.size}px; height: ${item.size}px; animation-delay: ${item.delay.toFixed(1)}s`;
+---
+
+{
+  docs ? (
+    <div class="parallax parallax-docs" aria-hidden="true" data-parallax="docs">
+      {(["left", "right"] as const).map((side, sideIndex) => (
+        <div class="parallax-side" data-side={side}>
+          {layers.map((layer, index) => (
+            <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
+              {index === 0 &&
+                [0, 50].map((offset) => (
+                  <span
+                    class="parallax-glow"
+                    style={`top: ${offset + (sideIndex ? 15 : 4)}%; background: var(--candy-${sideIndex ? "blue" : "pink"})`}
+                  />
+                ))}
+              {[0, 50].map((offset) =>
+                layer.items
+                  .filter((item) => item.side === side)
+                  .map((item) => (
+                    <span class={`p-item p-${item.kind}`} style={style(item, offset + item.top / 2)}>
+                      {item.kind !== "bubble" && item.kind !== "dot" && (
+                        <svg viewBox="0 0 24 24">
+                          <path d={shapes[item.kind]} />
+                        </svg>
+                      )}
+                    </span>
+                  )),
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  ) : (
+    <div class="parallax" aria-hidden="true" data-parallax>
+      {layers.map((layer, index) => (
+        <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
+          {index === 0 &&
+            glows.map((glow) => (
+              <span
+                class="parallax-glow"
+                style={`${glow.left ? `left: ${glow.left}` : `right: ${glow.right}`}; top: ${glow.top}; background: ${glow.color}`}
+              />
+            ))}
+          {layer.items.map((item) => (
+            <span class={`p-item p-${item.kind}`} style={style(item)}>
+              {item.kind !== "bubble" && item.kind !== "dot" && (
+                <svg viewBox="0 0 24 24">
+                  <path d={shapes[item.kind]} />
+                </svg>
+              )}
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}

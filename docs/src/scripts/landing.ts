@@ -15,36 +15,6 @@ async function refreshStats(signal: AbortSignal): Promise<void> {
   } catch {}
 }
 
-function startParallax(signal: AbortSignal): void {
-  const layer = document.querySelector<HTMLElement>("[data-parallax]");
-  if (!layer || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  let frame = 0;
-  let px = 0;
-  let py = 0;
-  const update = () => {
-    frame = 0;
-    layer.style.setProperty("--scroll", String(window.scrollY));
-    layer.style.setProperty("--px", px.toFixed(3));
-    layer.style.setProperty("--py", py.toFixed(3));
-  };
-  const schedule = () => {
-    if (!frame) frame = window.requestAnimationFrame(update);
-  };
-  window.addEventListener("scroll", schedule, { passive: true, signal });
-  window.addEventListener(
-    "pointermove",
-    (event) => {
-      if (event.pointerType !== "mouse") return;
-      px = event.clientX / window.innerWidth - 0.5;
-      py = event.clientY / window.innerHeight - 0.5;
-      schedule();
-    },
-    { passive: true, signal },
-  );
-  signal.addEventListener("abort", () => window.cancelAnimationFrame(frame));
-  update();
-}
-
 function startGallery(signal: AbortSignal): void {
   const gallery = document.querySelector<HTMLElement>("[data-fan]");
   if (!gallery) return;
@@ -113,8 +83,6 @@ function initializeLanding(): void {
   const { signal } = events;
 
   void refreshStats(signal);
-  startParallax(signal);
-
   startGallery(signal);
 
   const counter = document.querySelector<HTMLButtonElement>("[data-counter]");

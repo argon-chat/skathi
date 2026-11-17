@@ -10,6 +10,7 @@ import shadingNebula from "../assets/shading-nebula.png";
 import slang from "../lib/slang";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
+import Parallax from "../components/Parallax.astro";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { docsHome, repository, version } from "../lib/docs";
 import { fetchStats } from "../lib/stats";
@@ -21,33 +22,6 @@ const description =
 const canonical = new URL("/", Astro.site);
 const stats = await fetchStats();
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-
-const shapes = {
-  sparkle: "M12 2c.7 5 2.9 7.3 8 8-5.1.7-7.3 3-8 8-.7-5-2.9-7.3-8-8 5.1-.7 7.3-3 8-8Z",
-  star: "m12 2.8 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 2.8Z",
-  heart: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z",
-} as const;
-const kinds = ["sparkle", "sparkle", "star", "heart", "bubble", "bubble", "dot"] as const;
-let seed = 11;
-const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-const parallax = [
-  { depth: 0.08, opacity: 0.35, scale: 0.55, count: 18 },
-  { depth: 0.22, opacity: 0.6, scale: 0.85, count: 12 },
-  { depth: 0.42, opacity: 0.85, scale: 1.2, count: 8 },
-].map((layer) => ({
-  ...layer,
-  items: Array.from({ length: layer.count }, () => {
-    const kind = kinds[Math.floor(random() * kinds.length)] ?? "dot";
-    const side = random() < 0.5;
-    return {
-      kind,
-      left: side ? random() * 16 : 84 + random() * 14,
-      top: random() * 100,
-      size: Math.round((12 + random() * 16) * layer.scale * (kind === "dot" ? 0.4 : 1)),
-      delay: -random() * 8,
-    };
-  }),
-}));
 
 const component = `<script setup lang="ts">
 import { ref } from "vue";
@@ -180,33 +154,7 @@ const structuredData = {
   </head>
   <body class="landing" transition:animate="none">
     <a href="#main-content" class="skip-link">Skip to content</a>
-    <div class="parallax" aria-hidden="true" data-parallax>
-      {
-        parallax.map((layer, index) => (
-          <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
-            {index === 0 && (
-              <>
-                <span class="parallax-glow" style="left: -8%; top: 18%; background: var(--candy-pink)" />
-                <span class="parallax-glow" style="right: -10%; top: 42%; background: var(--candy-blue)" />
-                <span class="parallax-glow" style="left: -6%; top: 70%; background: var(--candy-lilac)" />
-              </>
-            )}
-            {layer.items.map((item) => (
-              <span
-                class={`p-item p-${item.kind}`}
-                style={`left: ${item.left.toFixed(1)}%; top: ${item.top.toFixed(1)}%; width: ${item.size}px; height: ${item.size}px; animation-delay: ${item.delay.toFixed(1)}s`}
-              >
-                {item.kind !== "bubble" && item.kind !== "dot" && (
-                  <svg viewBox="0 0 24 24">
-                    <path d={shapes[item.kind]} />
-                  </svg>
-                )}
-              </span>
-            ))}
-          </div>
-        ))
-      }
-    </div>
+    <Parallax />
     <header class="landing-nav">
       <a class="landing-mark" href="/" aria-label="Skathi home">
         <img src={wolf} width="34" height="34" alt="" /><span>Skathi</span>
@@ -509,6 +457,7 @@ const structuredData = {
     <script>
       import "../scripts/docs";
       import "../scripts/landing";
+      import "../scripts/parallax";
     </script>
   </body>
 </html>
