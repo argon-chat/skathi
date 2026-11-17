@@ -12,11 +12,18 @@ declare module "native:demo" {
   export const available: boolean;
   export function point(x: number, y: number): Point;
   export function refuse(): number;
-  export function thread(): string;
+  export function uiThread(): string;
   export function double(n: number): Promise<number>;
   export function worker(): Promise<string>;
   export function crash(): Promise<number>;
   export function report(value: Value): null;
   export function on(event: "tick", handler: (data: Tick) => void): () => void;
   export function off(event: "tick", handler: (data: Tick) => void): void;
+}
+
+declare module "native:extra" {
+  export const available: boolean;
+  export function sum(a: number, b: number): number;
+  export function on(event: never, handler: (data: never) => void): () => void;
+  export function off(event: never, handler: (data: never) => void): void;
 }

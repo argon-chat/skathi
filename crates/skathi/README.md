@@ -9,16 +9,23 @@ skathi = "0.3"
 ```
 
 ```rust,ignore
+struct Hello;
+
+#[skathi::module]
+impl Hello {
+    pub fn greet(&self, who: String) -> String {
+        format!("hello, {who}")
+    }
+}
+
 let ui = skathi::Builder::new()
     .payload_file("app/dist/release/.sk/app.skpk")
-    .module("hello", |m| {
-        m.function("greet", |who: String| format!("hello, {who}"));
-    })
+    .module("hello", Hello)
     .spawn()?;
 ui.wait();
 ```
 
-The app imports it as `import { greet } from "native:hello"`.
+The app imports it as `import { greet } from "native:hello"`, typed by `sk types`.
 
 The app's payload is built with the `sk` CLI from `@skathi-native/cli` (`bunx sk publish
 --payload-only`). The [crate documentation](https://docs.rs/skathi) covers the payload, the build

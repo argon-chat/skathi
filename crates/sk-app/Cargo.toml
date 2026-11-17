@@ -90,14 +90,14 @@ sk-clipboard = { path = "../sk-clipboard", version = "0.3.0", optional = true }
 futures = "0.3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sha2 = "0.10"
-serde = "1"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta = { version = "=2.0.0-rc.28", features = ["derive", "serde_json"], optional = true }
 specta-serde = { version = "=0.0.15", optional = true }
 specta-typescript = { version = "=0.0.15", optional = true }
 
 [dev-dependencies]
-serde = { version = "1", features = ["derive"] }
+skathi-macros = { path = "../skathi-macros", features = ["types"] }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 # examples/surface.rs renders D3D11 and D3D12 frames for `<sk-surface>`.

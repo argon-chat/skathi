@@ -34,6 +34,12 @@ order: 10
 
   **Fix:** Use the [build script](/embedding/first-embedder/#4-the-build-script), or add Common Controls 6 to your manifest.
 
+- `type annotations needed` at `.module("…", |m| …)`
+
+  **Cause:** `Builder::module` takes a `#[skathi::module]` type or a closure, so Rust cannot infer the closure's parameter.
+
+  **Fix:** Write it `|m: &mut skathi::Module|`.
+
 - A stack overflow on deep recursion in JavaScript
 
   **Cause:** The link arguments from `DEP_SKATHI_LINK_ARGS`, which set the 8 MiB stack, did not reach the exe.
@@ -106,9 +112,9 @@ order: 10
 
 - The window freezes while a native function runs
 
-  **Cause:** `m.function` runs on the Skathi thread, so the frame waits for it.
+  **Cause:** A module method runs on the Skathi thread, so the frame waits for it.
 
-  **Fix:** Declare it with `m.task`: it runs on a worker and the app gets a promise. See [Tasks](/embedding/native-modules/#tasks-do-the-slow-work).
+  **Fix:** Mark it `#[task]` (`m.task` in the closure form): it runs on a worker and the app gets a promise. See [Tasks](/embedding/native-modules/#tasks-do-the-slow-work).
 
 - `native:notes.… is provided by the program that embeds this app, and this app is not embedded`
 
@@ -142,9 +148,9 @@ order: 10
 
 - `emit_to` returns `no native module declares that event`
 
-  **Cause:** No module of that name declares the event with `m.event`, or one of the two names has a typo.
+  **Cause:** No module of that name declares the event, or one of the two names has a typo.
 
-  **Fix:** Declare the event on the module you emit to.
+  **Fix:** Declare it on the module you emit to: `events(name = Type)` in `#[skathi::module]`, or `m.event`.
 
 - `dispatcher.post` returns `Full`
 

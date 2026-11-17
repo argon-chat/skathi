@@ -12,6 +12,21 @@
 //! #[global_allocator]
 //! static GLOBAL: skathi::HostAllocator = skathi::HostAllocator;
 //!
+//! #[skathi::data]
+//! struct Greeting {
+//!     text: String,
+//! }
+//!
+//! struct Hello;
+//!
+//! // `import { greet, on } from "native:hello"` in the app.
+//! #[skathi::module(events(ready = u32))]
+//! impl Hello {
+//!     pub fn greet(&self, who: String) -> Greeting {
+//!         Greeting { text: format!("hello, {who}") }
+//!     }
+//! }
+//!
 //! fn main() {
 //!     // F12 starts this executable again as the inspector (see `inspector_exe` below).
 //!     if std::env::args().nth(1).as_deref() == Some("--devtools") {
@@ -20,10 +35,7 @@
 //!     let builder = skathi::Builder::new()
 //!         .payload_file("app/dist/release/.sk/app.skpk")
 //!         .inspector_exe(std::env::current_exe().unwrap())
-//!         .module("hello", |m| {
-//!             m.function("greet", |who: String| format!("hello, {who}"));
-//!             m.event::<u32>("ready");
-//!         });
+//!         .module("hello", Hello);
 //!     #[cfg(target_os = "macos")]
 //!     if let Err(e) = builder.run_on_main_thread(|exit| i32::from(!exit.clean)) {
 //!         eprintln!("{e}");
@@ -41,10 +53,12 @@
 //! }
 //! ```
 //!
-//! A [`Module`] function runs inside the JS call and returns a value; a task runs on a worker and
-//! returns a promise. Arguments and results are `serde` types; with the `types` feature (on by
-//! default) they also derive [`Type`], and `sk types --exe <program>` writes the app's
-//! `native-modules.d.ts` from them.
+//! [`module`] exports every `pub fn` taking `&self` under its camelCase name: it runs inside the JS
+//! call and returns a value, or, marked `#[task]`, runs on a worker and returns a promise. For a few
+//! ad-hoc functions, a closure `|m: &mut skathi::Module| …` registers them instead. Arguments and
+//! results are [`data`] types (serde, plus [`Type`] with the `types` feature, on by default), and
+//! `sk types --exe <program>` writes the app's `native-modules.d.ts` from them. Deriving [`Type`]
+//! directly needs `#[specta(crate = skathi::specta)]` on the type.
 //!
 //! [`Builder::payload_static`] takes `include_bytes!` of the payload instead, for a single-file
 //! executable. [`Builder::setup`] runs before any app JS with a [`HostContext`]: direct
@@ -134,12 +148,15 @@
 //! parts of which are LGPL-2; its source is at <https://github.com/oven-sh/WebKit>, at the commit
 //! redjs pins.
 
+/// The serde `#[skathi::data]` derives with.
+pub use sk_app::embed::serde;
 pub use sk_app::embed::{
     encrypt_local_storage_at, surface, Builder, Call, D3D11Device, D3D12Device, D3D12Fence,
-    Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext, HostCookie, Job,
-    Module, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo,
-    SurfaceStats, SurfaceWatch, Typed,
+    Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext, HostCookie,
+    IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent,
+    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Typed,
 };
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};
 pub use sk_app::{hotkeys, js, run_exe, tray, HostAllocator};
+pub use skathi_macros::{data, module};

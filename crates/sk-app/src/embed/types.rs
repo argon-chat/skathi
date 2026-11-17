@@ -208,16 +208,18 @@ fn module(module: &Module) -> Result<String, String> {
             "  export function off(event: never, handler: (data: never) => void): void;\n",
         );
     }
+    let mut off = String::new();
     for (event, ty) in events {
         let ty = r.render(&ty)?;
         let name = serde_json::to_string(&event.name).unwrap_or_default();
         body.push_str(&format!(
             "  export function on(event: {name}, handler: (data: {ty}) => void): () => void;\n"
         ));
-        body.push_str(&format!(
+        off.push_str(&format!(
             "  export function off(event: {name}, handler: (data: {ty}) => void): void;\n"
         ));
     }
+    body.push_str(&off);
     let types = r.declarations()?;
     Ok(format!(
         "declare module \"native:{}\" {{\n{types}{body}}}\n",
@@ -315,5 +317,65 @@ declare module "native:empty" {
             format!("{HEADER}{expected}")
         );
         assert_eq!(declarations(&[]).unwrap(), "");
+    }
+
+    #[skathi_macros::data(crate = crate::embed)]
+    #[serde(rename_all = "camelCase")]
+    struct Entry {
+        entry_id: u32,
+    }
+
+    #[skathi_macros::data(crate = crate::embed)]
+    #[derive(serde::Serialize)]
+    enum Mood {
+        Calm,
+        Busy,
+    }
+
+    struct Store;
+
+    #[skathi_macros::module(crate = crate::embed, events(changed = Entry, "mood-swing" = Mood))]
+    impl Store {
+        pub fn new() -> Self {
+            Store
+        }
+
+        fn first_id(&self) -> u32 {
+            1
+        }
+
+        pub fn fetch_all(&self, max_count: u32, mood: Option<Mood>) -> Vec<Entry> {
+            let _ = (max_count, mood);
+            vec![Entry {
+                entry_id: self.first_id(),
+            }]
+        }
+
+        #[task]
+        pub fn sync_now(&self) -> Result<u32, String> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn a_module_type_declares_its_methods_by_their_signatures() {
+        let mut m = Module::new("store".into());
+        crate::embed::IntoModule::register(Store::new(), &mut m);
+        let expected = r#"
+declare module "native:store" {
+  export type Entry = {
+    entryId: number;
+  };
+  export type Mood = "Calm" | "Busy";
+  export const available: boolean;
+  export function fetchAll(maxCount: number, mood?: Mood | null): Entry[];
+  export function syncNow(): Promise<number>;
+  export function on(event: "changed", handler: (data: Entry) => void): () => void;
+  export function on(event: "mood-swing", handler: (data: Mood) => void): () => void;
+  export function off(event: "changed", handler: (data: Entry) => void): void;
+  export function off(event: "mood-swing", handler: (data: Mood) => void): void;
+}
+"#;
+        assert_eq!(declarations(&[m]).unwrap(), format!("{HEADER}{expected}"));
     }
 }

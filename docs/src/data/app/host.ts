@@ -6,7 +6,7 @@ const DEPRECATED = all("deprecated");
 const NOT_EMBEDDED =
   "In an app run by its own executable (`sk dev`, `sk build`), there is no embedder: `available` is `false`, `functions` is empty, `call()` rejects and `on()` never fires.";
 const INSTEAD =
-  'Import the program\'s [native modules](/embedding/native-modules/): `import { search, on } from "native:notes"`. Functions return their value, tasks a promise, events are typed, and `sk types` writes the declarations.';
+  'Import the program\'s [native modules](/embedding/native-modules/): `import { search, on } from "native:notes"`, from a `#[skathi::module]` in Rust. Functions return their value, tasks a promise, events are typed, and `sk types` writes the declarations.';
 
 export const host = section("Embedding", [
   {
@@ -23,8 +23,8 @@ export const available: boolean;
 export function on(event: string, handler: (data: unknown) => void): () => void;
 export function off(event: string, handler: (data: unknown) => void): void;`,
     notes: [
-      "A Rust program declares the module with `Builder::module(name, |m| …)`: `m.function` runs on the Skathi thread and returns its value, `m.task` runs on a worker and returns a promise, `m.event::<T>` declares what `Handle::emit_to` sends.",
-      "Arguments and results are serde values. An `Err` throws, or rejects for a task, with its message; a panic becomes an `Error`.",
+      "A Rust program declares the module as an `impl` block with `#[skathi::module]` and hands a value to `Builder::module(name, value)`: each `pub fn` taking `&self` runs on the Skathi thread and returns its value, under its camelCase name; one marked `#[task]` runs on a worker and returns a promise; `events(name = Type)` declares what `Handle::emit_to` sends.",
+      "Arguments and results are `#[skathi::data]` types, carried as serde values. An `Err` throws, or rejects for a task, with its message; a panic becomes an `Error`.",
       "An event arrives in the next frame after `emit_to`. A reload drops the handlers and rejects the tasks still waiting.",
       "`sk types --exe <program>` and `sk dev --exe` write `src/native-modules.d.ts` with the module's real signatures.",
       "Not embedded, the import still works: `available` is `false`, every function throws and `on` never fires.",

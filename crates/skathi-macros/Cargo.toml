@@ -1,0 +1,21 @@
+[package]
+name = "skathi-macros"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The #[skathi::module] and #[skathi::data] attributes of the skathi crate"
+include = ["src/**/*"]
+
+[lib]
+proc-macro = true
+
+[features]
+# `#[skathi::data]` also derives `specta::Type` (skathi's `types` feature).
+types = []
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

@@ -5341,6 +5341,7 @@ dependencies = [
  "skathi-gpui",
  "skathi-gpui-platform",
  "skathi-gpui-windows",
+ "skathi-macros",
  "specta",
  "specta-serde",
  "specta-typescript",
@@ -5583,6 +5584,7 @@ dependencies = [
  "serde_json",
  "sk-app",
  "skathi-gpui",
+ "skathi-macros",
 ]
 
 [[package]]
@@ -5983,6 +5985,15 @@ dependencies = [
 [[package]]
 name = "skathi-gpui-ztracing-macro"
 version = "0.3.0"
+
+[[package]]
+name = "skathi-macros"
+version = "0.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "skathi-taffy"

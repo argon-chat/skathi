@@ -23,6 +23,7 @@ members = [
     "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     "crates/sk-app",        # host binary shell
     "crates/skathi",        # the facade an embedder depends on
+    "crates/skathi-macros", # #[skathi::module] and #[skathi::data]
 ]
 # Vendor crates must resolve against their own workspace roots (gpui's, redjs's).
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.

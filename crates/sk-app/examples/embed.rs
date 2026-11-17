@@ -1,5 +1,6 @@
 //! A program that embeds Skathi: a console app that runs the engine on a thread of its own and
-//! gives the app a native module, `native:demo`, with functions, tasks and an event.
+//! gives the app native modules: `native:demo` with functions, tasks and an event, and
+//! `native:extra` registered by a closure.
 //!
 //! ```text
 //! cargo build -p sk-app --example embed --features prod
@@ -19,18 +20,20 @@ use std::io::BufRead;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-// `#[derive(Type)]` names `specta`; the re-export saves a dependency on it.
-use sk_app::embed::{specta, Builder, Type};
+use sk_app::embed::{Builder, Module};
+// An embedder writes `#[skathi::data]` and `#[skathi::module]`; inside Skathi the paths go
+// through sk_app.
+use skathi_macros::{data, module};
 
-#[derive(Serialize, Deserialize, Type)]
+#[data(crate = sk_app::embed)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(Serialize, Type)]
+#[data(crate = sk_app::embed)]
+#[derive(Clone, serde::Serialize)]
 struct Tick {
     n: u32,
 }
@@ -40,6 +43,55 @@ fn thread_name() -> String {
         .name()
         .unwrap_or("unnamed")
         .to_owned()
+}
+
+struct Demo {
+    reports: mpsc::Sender<Value>,
+    quiet: bool,
+}
+
+#[module(crate = sk_app::embed, events(tick = Tick))]
+impl Demo {
+    // Runs inside the JS call, on the Skathi thread: quick work only.
+    pub fn point(&self, x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    pub fn refuse(&self) -> Result<u8, String> {
+        Err("no such luck".into())
+    }
+
+    pub fn ui_thread(&self) -> String {
+        thread_name()
+    }
+
+    // Runs on a worker; the app gets a promise.
+    #[task]
+    pub fn double(&self, n: u32) -> Result<u32, String> {
+        std::thread::sleep(Duration::from_millis(30));
+        if n == 0 {
+            Err("zero has no double worth computing".into())
+        } else {
+            Ok(n * 2)
+        }
+    }
+
+    #[task]
+    pub fn worker(&self) -> String {
+        thread_name()
+    }
+
+    #[task]
+    pub fn crash(&self) -> u8 {
+        panic!("the task fell over")
+    }
+
+    pub fn report(&self, value: Value) {
+        if !self.quiet {
+            println!("app reports: {value}");
+        }
+        let _ = self.reports.send(value);
+    }
 }
 
 #[allow(deprecated)]
@@ -68,34 +120,16 @@ fn main() {
         .args(["--from-embed-example"])
         // A console program keeps the keyboard; the window opens beside it.
         .activate(!self_test)
-        .module("demo", move |m| {
-            // Runs inside the JS call, on the Skathi thread: quick work only.
-            m.function("point", |x: i32, y: i32| Point { x, y })
-                .params(["x", "y"]);
-            m.function("refuse", || -> Result<u8, String> {
-                Err("no such luck".into())
-            });
-            m.function("thread", thread_name);
-            // Runs on a worker; the app gets a promise.
-            m.task("double", |n: u32| -> Result<u32, String> {
-                std::thread::sleep(Duration::from_millis(30));
-                if n == 0 {
-                    Err("zero has no double worth computing".into())
-                } else {
-                    Ok(n * 2)
-                }
-            })
-            .params(["n"]);
-            m.task("worker", thread_name);
-            m.task("crash", || -> u8 { panic!("the task fell over") });
-            m.function("report", move |value: Value| {
-                if !self_test {
-                    println!("app reports: {value}");
-                }
-                let _ = reports_tx.send(value);
-            })
-            .params(["value"]);
-            m.event::<Tick>("tick");
+        .module(
+            "demo",
+            Demo {
+                reports: reports_tx,
+                quiet: self_test,
+            },
+        )
+        // The closure form, for a few ad-hoc functions.
+        .module("extra", |m: &mut Module| {
+            m.function("sum", |a: i32, b: i32| a + b).params(["a", "b"]);
         });
     builder = legacy(builder);
     if let Some(p) = &payload {

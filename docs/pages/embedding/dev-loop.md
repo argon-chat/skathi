@@ -28,7 +28,7 @@ Name the payload only when the feature is on. A dev build given a payload refuse
 
 ```rust
 let mut builder = skathi::Builder::new()
-    .module("notes", register_notes)
+    .module("notes", Notes::default())
     .setup(install_native_api);
 #[cfg(feature = "release")]
 {

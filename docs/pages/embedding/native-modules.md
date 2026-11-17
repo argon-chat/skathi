@@ -1,56 +1,58 @@
 ---
 title: Native modules
-description: The everyday way an embedded app and its Rust program talk. Builder::module gives the app typed functions, worker tasks and events; the app imports them from "native:<name>", with TypeScript types generated from your Rust types.
+description: The everyday way an embedded app and its Rust program talk. #[skathi::module] turns an impl block into typed functions, worker tasks and events; the app imports them from "native:<name>", with TypeScript types generated from your Rust types.
 section: Embedding
 order: 2
 ---
 
-New in 0.4.0. Your program gives the app a **native module**: Rust closures with ordinary typed parameters on one side, an `import` on the other. No names in strings, no JSON by hand, and the app's TypeScript knows every signature because it is generated from your Rust types.
+New in 0.4.0. Your program gives the app a **native module**: an `impl` block of ordinary Rust methods on one side, an `import` on the other. No names in strings, no JSON by hand, and the app's TypeScript knows every signature because it is generated from your Rust.
 
 ```rust title="src/main.rs"
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
-use skathi::specta; // the Type derive names it
-
-#[derive(Clone, Serialize, Deserialize, skathi::Type)]
+#[skathi::data]
+#[derive(Clone)]
 pub struct Note {
     pub id: u64,
     pub title: String,
     pub body: String,
 }
 
-#[derive(Deserialize, skathi::Type)]
+#[skathi::data]
 pub struct SearchOptions {
     pub limit: Option<u32>,
 }
 
-#[derive(Serialize, skathi::Type)]
+#[skathi::data]
 pub struct SyncProgress {
     pub done: u32,
     pub total: u32,
 }
 
+#[derive(Default)]
+struct Notes {
+    store: Mutex<HashMap<u64, Note>>,
+}
+
+#[skathi::module(events(progress = SyncProgress))]
+impl Notes {
+    pub fn get(&self, id: u64) -> Result<Note, String> {
+        self.store.lock().unwrap().get(&id).cloned().ok_or(format!("no note {id}"))
+    }
+
+    #[task]
+    pub fn search(&self, text: String, options: SearchOptions) -> Vec<Note> {
+        let limit = options.limit.unwrap_or(50) as usize;
+        let store = self.store.lock().unwrap();
+        store.values().filter(|n| n.body.contains(&text)).take(limit).cloned().collect()
+    }
+}
+
 fn main() {
-    let notes: Arc<Mutex<HashMap<u64, Note>>> = Arc::default();
-    let (by_id, by_text) = (notes.clone(), notes.clone());
     let ui = skathi::Builder::new()
         .payload_file("app/dist/release/.sk/app.skpk")
-        .module("notes", move |m| {
-            m.function("get", move |id: u64| -> Result<Note, String> {
-                by_id.lock().unwrap().get(&id).cloned().ok_or(format!("no note {id}"))
-            })
-            .params(["id"]);
-            m.task("search", move |text: String, options: SearchOptions| {
-                let limit = options.limit.unwrap_or(50) as usize;
-                let notes = by_text.lock().unwrap();
-                let found = notes.values().filter(|n| n.body.contains(&text));
-                found.take(limit).cloned().collect::<Vec<Note>>()
-            })
-            .params(["text", "options"]);
-            m.event::<SyncProgress>("progress");
-        })
+        .module("notes", Notes::default())
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("{e}");
@@ -74,46 +76,65 @@ export const stopWatching = on("progress", (p) => console.log(`${p.done} of ${p.
 
 Three kinds of export, one rule each:
 
-- **`m.function`** runs inside the call, on the UI thread, and returns a value.
-- **`m.task`** runs on a worker thread and returns a `Promise`.
-- **`m.event`** declares something your program tells the app; `Handle::emit_to` sends it from any thread, `on` receives it.
+- **A `pub fn` taking `&self`** runs inside the call, on the UI thread, and returns a value.
+- **The same with `#[task]`** runs on a worker thread and returns a `Promise`.
+- **`events(name = Type)`** declares something your program tells the app; `Handle::emit_to` sends it from any thread, `on` receives it.
 
-The module object exists before any app code runs, so a top-level `import` sees it at once. Add `serde` (with its `derive` feature) to your `Cargo.toml`; `skathi` re-exports what the `Type` derive needs.
+The module object exists before any app code runs, so a top-level `import` sees it at once. `skathi` is the only dependency this needs: `#[skathi::data]` brings serde and the type information along.
+
+## What #[skathi::module] exports
+
+- **Every `pub fn` that takes `&self`**, under its name in camelCase: `fetch_all` is `fetchAll` in the app. The parameters keep their names, camelCased the same way, in the generated types.
+- **Nothing else.** Private methods and associated functions without `self`, such as `new`, stay Rust-only helpers.
+- **`&self` only.** The value is moved into an `Arc` and shared by the UI thread and the task workers, so `&mut self` or `self` on a `pub fn` is a compile error: keep changing state behind a `Mutex` or an atomic. For the same reason the type must be `Send + Sync + 'static`.
+- **Plain signatures.** Owned parameter types (`String`, not `&str`), named with plain identifiers, at most eight; no generics, no `async fn` (a `#[task]` is the slow path). Each of these is a compile error that points at the parameter or method.
+- **JS names.** A method named like a JS keyword (`delete`) or like a module's own exports (`available`, `on`, `off`) does not compile: rename it.
+
+## #[skathi::data]
+
+The attribute goes on every struct and enum that crosses: parameters, results and events. It derives serde's `Serialize` and `Deserialize` and, with the `types` feature, `skathi::Type`, all through `skathi`'s own paths, so your `Cargo.toml` needs no serde or specta.
+
+- Your serde attributes stay in force: `#[serde(rename_all = "camelCase")]` renames the fields on the wire and in the generated types alike.
+- A derive the type already has is not added again: `#[derive(Serialize)]` of your own serde keeps working beside it. Put `#[skathi::data]` above the derives so it sees them.
+
+Deriving the type information yourself works too: `#[derive(serde::Serialize, skathi::Type)]` with `#[specta(crate = skathi::specta)]` on the type, since the derive otherwise looks for a `specta` crate of your own.
 
 ## Functions return a value now
 
 A function's parameters are its JavaScript arguments, each read with `serde` into the type you declared; its result is whatever `Serialize` makes of it, handed to the app as an ordinary object, array, string or number. The app never sees JSON text.
 
 ```rust
-m.function("slug", |title: String, max: Option<usize>| -> Result<String, String> {
-    let words: Vec<String> = title.split_whitespace().map(str::to_lowercase).collect();
-    if words.is_empty() {
-        return Err("a note needs a title".into());
+#[skathi::module]
+impl Tools {
+    pub fn slug(&self, title: String, max: Option<usize>) -> Result<String, String> {
+        let words: Vec<String> = title.split_whitespace().map(str::to_lowercase).collect();
+        if words.is_empty() {
+            return Err("a note needs a title".into());
+        }
+        Ok(words.join("-").chars().take(max.unwrap_or(40)).collect())
     }
-    Ok(words.join("-").chars().take(max.unwrap_or(40)).collect())
-})
-.params(["title", "max"]);
+}
 ```
 
-- **Arguments by position.** `slug("Groceries for Sunday")` returns `"groceries-for-sunday"`. A missing trailing argument is `null`, so an `Option<T>` parameter like `max` may be left out; extra arguments are ignored. Up to eight parameters; a struct parameter takes an options object.
-- **A wrong argument throws.** `slug(42)` throws a `TypeError` that names the function and the argument: ``native:notes.slug: argument 1: invalid type: integer `42`, expected a string``.
+- **Arguments by position.** `slug("Groceries for Sunday")` returns `"groceries-for-sunday"`. A missing trailing argument is `null`, so an `Option<T>` parameter like `max` may be left out; extra arguments are ignored. A struct parameter takes an options object.
+- **A wrong argument throws.** `slug(42)` throws a `TypeError` that names the function and the argument: ``native:tools.slug: argument 1: invalid type: integer `42`, expected a string``.
 - **`Err` throws.** Return `Result<T, E>` and an `Err` throws an `Error` in the app. A `String` error is its message. A struct error goes along as `error.data`, and its `message` field, if it has one, becomes the message. `E` must be `Serialize`: turn an `anyhow::Error` into text with `.map_err(|e| e.to_string())`.
 - **A panic throws too.** The app gets an `Error` that says the function panicked, and keeps running.
-- **Names are JS names.** An export is named like a JS function, `getNote` or `get_note`, and not a keyword such as `delete`; `spawn` refuses a module with a name it cannot export (`Error::Module`).
 
 A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task.
 
 ## Tasks do the slow work
 
-A task has the same shape as a function and runs on a worker thread. The app gets a promise; an `Err` or a panic rejects it.
+A task is a method marked `#[task]`. It runs on a worker thread, and the app gets a promise; an `Err` or a panic rejects it.
 
 ```rust
-m.task("saveAs", |note: Note, path: String| -> Result<u64, String> {
+// In `impl Notes`, beside `get` and `search`:
+#[task]
+pub fn save_as(&self, note: Note, path: String) -> Result<u64, String> {
     let text = format!("# {}\n\n{}\n", note.title, note.body);
     std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}"))?;
     Ok(text.len() as u64)
-})
-.params(["note", "path"]);
+}
 ```
 
 ```ts
@@ -142,7 +163,7 @@ A page reload drops the promises still waiting; their tasks finish and their res
 
 ## Events tell the app
 
-Declare each event with its payload type, then send it from any thread with the `Handle`:
+Declare each event with its payload type in the attribute, `events(progress = SyncProgress)`, then send it from any thread with the `Handle`:
 
 ```rust
 let events = ui.clone();
@@ -171,6 +192,7 @@ onScopeDispose(on("progress", (p) => (progress.value = p)));
 </template>
 ```
 
+- An event name that is not a Rust identifier is a string: `events("sync-done" = Summary)`.
 - Delivery happens in the app's next frame, in order. Nothing is queued for later: an event sent while nothing listens is dropped.
 - `on(event, handler)` returns a function that removes the handler; `off(event, handler)` does the same. A reload drops every handler.
 - `emit_to` refuses an event the module did not declare (`EmitError::NotDeclared`), data `serde_json` cannot write (`EmitError::NotJson`) and anything after the app closed (`EmitError::Closed`).
@@ -182,7 +204,7 @@ Events are for news. When the app needs an answer, it calls a function or a task
 
 ## Types for the app
 
-Every parameter, result and event type derives `skathi::Type` beside serde's derives. From those, your executable describes its modules in TypeScript, and the CLI writes them into the app:
+From the module's signatures and its `#[skathi::data]` types, your executable describes its modules in TypeScript, and the CLI writes them into the app:
 
 ```sh
 cargo build
@@ -217,13 +239,31 @@ declare module "native:notes" {
 
 - [`sk dev --exe`](/embedding/dev-loop/) does the same every time it starts, and writes the file only when it changed. Commit it: the app then type-checks and builds without your Rust toolchain.
 - Without it, TypeScript stops at the import with `Cannot find module 'native:notes'`. That is the reminder to run `sk types`.
-- Serde's attributes count: `#[serde(rename_all = "camelCase")]` renames the fields in the declarations as on the wire, and an enum of unit variants becomes a union of strings.
+- An enum of unit variants becomes a union of strings, and serde's renames apply.
 - Every Rust number is a TypeScript `number`. A `u64` above 2^53 loses precision on the way, as it would in any JSON: send such ids as strings.
-- `.params(["id"])` names the parameters; without it they are `arg1`, `arg2`, …
 - A `Result` return declares its `Ok` type: `get` returns `Note`, and an `Err` is a throw.
-- The `types` feature (on by default) is what pulls in [specta](https://docs.rs/specta). Off, the derive is gone, `sk types` says the exe was built without it, and the modules work the same.
+- The `types` feature (on by default) is what pulls in [specta](https://docs.rs/specta). Off, `#[skathi::data]` derives serde only, `sk types` says the exe was built without it, and the modules work the same.
 
-The `Type` derive names the `specta` crate. `use skathi::specta;` in the module that derives saves a dependency; adding `specta` to your `Cargo.toml` at skathi's version works too.
+## Closures, for a few functions
+
+A module without a type of its own, such as a couple of functions over values `main` already has, can be a closure that registers each export by hand:
+
+```rust
+let version = env!("CARGO_PKG_VERSION");
+let builder = skathi::Builder::new().module("about", move |m: &mut skathi::Module| {
+    m.function("version", move || version.to_owned());
+    m.task("checksum", |path: String| -> Result<u32, String> {
+        let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+        Ok(bytes.iter().fold(0u32, |sum, b| sum.wrapping_mul(31).wrapping_add(u32::from(*b))))
+    })
+    .params(["path"]);
+    m.event::<String>("updated");
+});
+```
+
+- The closure's parameter needs its type, `&mut skathi::Module`: Rust cannot infer it from `module`, which also takes a `#[skathi::module]` type.
+- `m.function`, `m.task` and `m.event` are what the attribute generates. The export name is the string, used as written.
+- `.params([...])` names the parameters in the generated types; without it they are `arg1`, `arg2`, …
 
 ## One app, with or without a program
 
@@ -241,12 +281,12 @@ A module the program did not register behaves the same, with an error that names
 
 ## Where things run
 
-|                   | Runs on             | May block?       | The app gets                      |
-| ----------------- | ------------------- | ---------------- | --------------------------------- |
-| `m.function`      | the Skathi thread   | no: it is the UI | a value, or a throw               |
-| `m.task`          | a worker thread     | yes              | a promise                         |
-| `Handle::emit_to` | any thread          | it never blocks  | delivered in the app's next frame |
-| an `on` handler   | the app's JS thread | no: it is the UI | —                                 |
+|                    | Runs on             | May block?       | The app gets                      |
+| ------------------ | ------------------- | ---------------- | --------------------------------- |
+| a `pub fn`         | the Skathi thread   | no: it is the UI | a value, or a throw               |
+| a `#[task]` method | a worker thread     | yes              | a promise                         |
+| `Handle::emit_to`  | any thread          | it never blocks  | delivered in the app's next frame |
+| an `on` handler    | the app's JS thread | no: it is the UI | —                                 |
 
 The low-level way in is still there: [Native APIs](/embedding/native-api/) build JS objects directly in the engine, for hot calls and streams.
 
@@ -254,14 +294,14 @@ The low-level way in is still there: [Native APIs](/embedding/native-api/) build
 
 Before 0.4.0 the two sides talked through `appHost`: `Builder::function(name, handler)` with JSON text in and out, called as `appHost.call(name, ...args)`, and `Handle::emit(event, json)` heard by `appHost.on(event, …)`. Both still work. The Rust compiler marks them deprecated, and the app prints a `[skathi compat]` advisory once for each. They will be removed in a later release.
 
-| Before                                        | Now                                                             |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| `.function("notes.get", \|call\| …)`          | `.module("notes", \|m\| { m.function("get", \|id: u64\| …); })` |
-| `serde_json::from_str(call.args())`           | typed parameters                                                |
-| `call.into_reply()` and a thread              | `m.task`                                                        |
-| `appHost.call<Note>("notes.get", 42)`         | `get(42)` from `"native:notes"`                                 |
-| `ui.emit("sync.progress", &json.to_string())` | `ui.emit_to("notes", "progress", &progress)`                    |
-| `appHost.on("sync.progress", …)`              | `on("progress", …)` from `"native:notes"`                       |
+| Before                                        | Now                                                   |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `.function("notes.get", \|call\| …)`          | `pub fn get(&self, id: u64)` in a `#[skathi::module]` |
+| `serde_json::from_str(call.args())`           | typed parameters                                      |
+| `call.into_reply()` and a thread              | `#[task]`                                             |
+| `appHost.call<Note>("notes.get", 42)`         | `get(42)` from `"native:notes"`                       |
+| `ui.emit("sync.progress", &json.to_string())` | `ui.emit_to("notes", "progress", &progress)`          |
+| `appHost.on("sync.progress", …)`              | `on("progress", …)` from `"native:notes"`             |
 
 `appHost.available` stays: it tells whether a program embeds the app at all.
 

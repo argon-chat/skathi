@@ -283,7 +283,19 @@ pub(crate) struct Event {
     pub(crate) ty: fn(&mut Types) -> DataType,
 }
 
-/// One `native:<name>` module, filled in by the closure given to `Builder::module`.
+/// What `Builder::module` takes: a type with `#[skathi::module]`, or a closure that fills the
+/// [`Module`] (`|m: &mut Module| …`).
+pub trait IntoModule {
+    fn register(self, module: &mut Module);
+}
+
+impl<F: FnOnce(&mut Module)> IntoModule for F {
+    fn register(self, module: &mut Module) {
+        self(module)
+    }
+}
+
+/// One `native:<name>` module, filled in by `Builder::module`.
 pub struct Module {
     pub(crate) name: String,
     pub(crate) functions: Vec<Entry>,

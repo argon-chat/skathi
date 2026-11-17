@@ -16,7 +16,7 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 **What you get**
 
 - **Your process, your `main`.** Your threads, your allocator, your logging, your crash handling. Skathi runs on a thread of its own and hands back a `Handle`.
-- **Calls without plumbing.** `import { query } from "native:db"` in the app is a Rust closure in yours, typed on both sides: `sk types` writes the TypeScript from your Rust types.
+- **Calls without plumbing.** `import { query } from "native:db"` in the app is a Rust method in yours, typed on both sides: `sk types` writes the TypeScript from your Rust types.
 - **Native APIs, not just messages.** In `setup` you build real JS objects backed by Rust functions, and post results from worker threads straight into the page.
 - **Native frames in the page.** A renderer you own (a video player, a game viewport, another process) draws into `<sk-surface>`, and the app's Vue or Svelte controls sit over it.
 - **One file if you want it.** `payload_static(include_bytes!(…))` compiles the app into the binary.

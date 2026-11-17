@@ -27,7 +27,8 @@ mod module;
 #[cfg(feature = "types")]
 mod types;
 pub use host_context::{HostContext, HostCookie, SameSite};
-pub use module::{Declared, Function, Job, Module, Typed};
+pub use module::{Declared, Function, IntoModule, Job, Module, Typed};
+pub use serde;
 pub use sk_tree::surface::{
     surface, D3D11Device, D3D12Device, D3D12Fence, SharedTexture, SurfaceError, SurfaceEvent,
     SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
@@ -276,7 +277,7 @@ impl std::error::Error for Error {}
 /// ```no_run
 /// let ui = sk_app::embed::Builder::new()
 ///     .payload_file("apps/hello/dist/release/.sk/app.skpk")
-///     .module("db", |m| {
+///     .module("db", |m: &mut sk_app::embed::Module| {
 ///         m.task("query", |sql: String| -> Result<Vec<String>, String> { Ok(vec![sql]) });
 ///         m.event::<bool>("online");
 ///     })
@@ -398,11 +399,11 @@ impl Builder {
         self
     }
 
-    /// A native module the app imports as `native:<name>`: `build` registers its functions,
-    /// tasks and events.
-    pub fn module(mut self, name: impl Into<String>, build: impl FnOnce(&mut Module)) -> Self {
+    /// A native module the app imports as `native:<name>`: a value of a `#[skathi::module]` type,
+    /// or a closure `|m: &mut Module| …` that registers its functions, tasks and events.
+    pub fn module(mut self, name: impl Into<String>, exports: impl IntoModule) -> Self {
         let mut module = Module::new(name.into());
-        build(&mut module);
+        exports.register(&mut module);
         self.modules.push(module);
         self
     }

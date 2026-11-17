@@ -41,6 +41,7 @@ test.skipIf(!WINDOWS)(
     // A function runs inside the call; a task on a worker, settling a promise.
     expect(first.uiThread).toBe("skathi");
     expect(first.worker.ok).toMatch(/^skathi-task-\d+$/);
+    expect(first.sum).toBe(5);
     expect(first.double).toEqual({ ok: 42 });
     expect(first.doubleZero).toMatchObject({ error: "Error", message: "zero has no double worth computing" });
     expect(first.crash.error).toBe("Error");
@@ -64,6 +65,8 @@ test.skipIf(!WINDOWS)("sk types writes the declarations the embedding program gi
   expect(declared).toContain("export function point(x: number, y: number): Point;");
   expect(declared).toContain("export function double(n: number): Promise<number>;");
   expect(declared).toContain('export function on(event: "tick", handler: (data: Tick) => void): () => void;');
+  expect(declared).toContain("export function uiThread(): string;");
+  expect(declared).toContain("export function sum(a: number, b: number): number;");
   run("bun", ["packages/cli/cli/sk.ts", "types", "packages/test/fixtures/embed", "--exe", EXE], 120_000);
   expect(readFileSync(join(REPO, "packages", "test", "fixtures", "embed", "src", "native-modules.d.ts"), "utf8")).toBe(
     declared,

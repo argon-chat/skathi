@@ -51,7 +51,6 @@ edition = "2021"
 
 [dependencies]
 skathi = "0.4"
-serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 embed-resource = "3"
@@ -98,22 +97,24 @@ What it adds:
 ## 5. main
 
 ```rust title="src/main.rs"
-use serde::Serialize;
-use skathi::specta; // the Type derive names it
-
-#[derive(Serialize, skathi::Type)]
+#[skathi::data]
 struct Build {
     version: String,
+}
+
+struct Notes;
+
+#[skathi::module(events(ready = Build))]
+impl Notes {
+    pub fn greet(&self, first: String, last: String) -> String {
+        format!("hello, {first} {last}")
+    }
 }
 
 fn main() {
     let ui = skathi::Builder::new()
         .payload_file("app/dist/release/.sk/app.skpk")
-        .module("notes", |m| {
-            m.function("greet", |first: String, last: String| format!("hello, {first} {last}"))
-                .params(["first", "last"]);
-            m.event::<Build>("ready");
-        })
+        .module("notes", Notes)
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("{e}");
@@ -125,7 +126,7 @@ fn main() {
 }
 ```
 
-`notes` is a [native module](/embedding/native-modules/): a function the app calls and an event it can listen for. In the app, anywhere:
+`notes` is a [native module](/embedding/native-modules/): every `pub fn` of the `impl` is a function the app calls, `ready` an event it can listen for, and `#[skathi::data]` makes `Build` something both sides understand. In the app, anywhere:
 
 ```ts
 import { greet, on } from "native:notes";
@@ -153,7 +154,7 @@ The window that opens belongs to your process. Close it and `wait` returns; your
 | Feature           | Default | What it adds                                                                     |
 | ----------------- | ------- | -------------------------------------------------------------------------------- |
 | `prod`            | on      | Runs a payload. Off, the exe boots the dev output named by `SK_DIST` (`sk dev`). |
-| `types`           | on      | `#[derive(skathi::Type)]` and the TypeScript for native modules (`sk types`)     |
+| `types`           | on      | The TypeScript for native modules (`sk types`)                                   |
 | `audio`           | on      | Web Audio                                                                        |
 | `storages`        | on      | localStorage, cookies and secrets on disk                                        |
 | `clipboard`       | on      | `navigator.clipboard`                                                            |

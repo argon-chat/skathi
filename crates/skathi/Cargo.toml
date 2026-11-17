@@ -16,8 +16,8 @@ links = "skathi"
 
 [features]
 default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types"]
-# Native module types: `#[derive(skathi::Type)]` and `--sk-host-types` (specta).
-types = ["sk-app/types"]
+# Native module types: `skathi::Type` (derived by `#[skathi::data]`) and `--sk-host-types` (specta).
+types = ["sk-app/types", "skathi-macros/types"]
 # Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
 prod = ["sk-app/prod"]
 audio = ["sk-app/audio"]
@@ -34,6 +34,7 @@ runtime-shaders = ["sk-app/runtime-shaders"]
 
 [dependencies]
 sk-app = { path = "../sk-app", version = "0.3.0", default-features = false }
+skathi-macros = { path = "../skathi-macros", version = "0.3.0" }
 # For its links metadata only (the Windows manifest).
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
 

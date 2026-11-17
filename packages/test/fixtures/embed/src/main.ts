@@ -1,5 +1,6 @@
 import { appHost, createApp, h, ref } from "@skathi-native/runtime";
-import { available, crash, double, on, point, refuse, report, thread, worker, type Value } from "native:demo";
+import { available, crash, double, on, point, refuse, report, uiThread, worker, type Value } from "native:demo";
+import { sum } from "native:extra";
 
 const status = ref("starting");
 
@@ -27,7 +28,8 @@ async function run(): Promise<void> {
     point: attempt(() => point(2, 3)),
     refuse: attempt(() => refuse()),
     badArgument: attempt(() => point("two" as unknown as number, 3)),
-    uiThread: thread(),
+    uiThread: uiThread(),
+    sum: sum(2, 3),
     double: await settle(double(21)),
     doubleZero: await settle(double(0)),
     crash: await settle(crash()),

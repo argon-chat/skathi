@@ -73,18 +73,21 @@ let exit = ui.wait();
 
 ```rust
 use std::sync::Arc;
-use serde::Serialize;
 use skathi::hotkeys::{Binding, Button, Chord, Hotkeys};
-use skathi::specta;
 
-#[derive(Serialize, skathi::Type)]
+#[skathi::data]
 struct Hotkey {
     id: String,
     /// "down" or "up": a binding can be held.
     phase: String,
 }
 
-// On the builder: .module("voice", |m| { m.event::<Hotkey>("hotkey"); })
+struct Voice;
+
+// On the builder: .module("voice", Voice)
+#[skathi::module(events(hotkey = Hotkey))]
+impl Voice {}
+
 let hotkeys = Hotkeys::new();
 let events = ui.clone();
 hotkeys.set_handler(Arc::new(move |fired| {
