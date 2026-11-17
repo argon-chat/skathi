@@ -107,6 +107,78 @@ jobs:
       - name: Release host builds
         run: cargo check --locked -p sk-app --features prod --target ${{ matrix.target }}
 
+  e2e:
+    name: E2E (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - name: Linux x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: ./.github/actions/native
+        with:
+          target: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-${{ matrix.target }}
+          cache-on-failure: true
+      # No GPU on a hosted runner: lavapipe (Vulkan) or llvmpipe (GL) under Xvfb, with a window manager
+      # for minimize, maximize and fullscreen.
+      - if: runner.os == 'Linux'
+        name: Display and runtime packages
+        run: |
+          sudo -n apt-get update -q
+          sudo -n apt-get install -y -q --no-install-recommends xvfb xauth openbox mesa-vulkan-drivers libvulkan1 \
+            libegl1 libgl1-mesa-dri libxkbcommon-x11-0 fonts-dejavu-core gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-libav
+      # Not a workspace member: the packaging spec builds it.
+      - name: shadcn app dependencies
+        run: bun install --frozen-lockfile --cwd apps/shadcn
+      # The hosted VM boots at 1024x768, smaller than several spec windows.
+      - if: runner.os == 'macOS'
+        name: Display
+        run: |
+          brew install --quiet displayplacer
+          id=$(displayplacer list | awk '/^Persistent screen id:/ { print $4; exit }')
+          displayplacer "id:$id res:1920x1080 hz:60 color_depth:7 scaling:off origin:(0,0) degree:0"
+          displayplacer list | grep -m1 '^Resolution:'
+      - name: Host
+        run: cargo build --locked -p sk-app --target ${{ matrix.target }}
+      # -noreset: the server must not reset between two hosts, or the next one cannot connect.
+      - if: runner.os == 'Linux'
+        name: Specs
+        working-directory: packages/test
+        run: xvfb-run -a -s "-screen 0 1920x1080x24 -noreset" sh -c 'openbox & bun test specs --timeout 30000'
+      # The macOS VM drops an occasional input or frame; a test gets two more tries there.
+      - if: runner.os == 'macOS'
+        name: Specs
+        working-directory: packages/test
+        run: bun test specs --timeout 30000 --retry 2
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-${{ matrix.target }}
+          path: |
+            .sk-test-artifacts/
+            packages/test/.sk-test/logs/
+          if-no-files-found: ignore
+          include-hidden-files: true
+
   rustfmt:
     name: Rust format
     runs-on: ubuntu-24.04
