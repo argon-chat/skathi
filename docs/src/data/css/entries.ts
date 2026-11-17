@@ -2497,6 +2497,21 @@ const atRules = section("At-rules", [
     ],
     related: ["custom-properties", "feature-tailwind-4"],
   }),
+  at("@function", OK, "Defines a custom function that returns a value computed from its arguments.", {
+    since: "0.4.0",
+    notes: [
+      "Parameters take an optional type (`<length>`, `<color>`, `type(<number> | auto)`, `*`) and an optional default, which may read an earlier parameter. `returns` sets the result's type.",
+      "The body holds `result` and local custom properties, which can read the parameters and the calling element's custom properties, and `@media`, `@supports` and `@container` blocks around them. Containers are the calling element's.",
+      "An argument or result that does not match its type, an unknown function, a missing argument and a function that calls itself make the declaration invalid at computed-value time, as with `var()`.",
+      "With several definitions of one name, the last one whose `@media` condition holds wins.",
+    ],
+    limitations: [
+      "Arguments and results are substituted as written once their type is checked, not as computed values: an `em` in an argument resolves where the result is used.",
+      "A definition inside a top-level `@container` block applies regardless of the container.",
+      "Definitions are not ordered by `@layer`, which is not supported.",
+    ],
+    related: ["dashed-function", "function-var", "custom-properties", "at-property"],
+  }),
   at("@scope", NO, "Scopes styles to a subtree of the document, with an optional lower boundary.", {
     workaround: "Use `<style scoped>`.",
     related: ["feature-scoped-styles"],
@@ -2765,6 +2780,21 @@ const valuesAndUnits = section("Values and units", [
     aliases: ["--*", "css variables"],
     related: ["function-var", "at-property"],
   }),
+  kw(
+    "dashed-function",
+    "<dashed-function>",
+    OK,
+    "A call of a custom function defined with `@function`, such as `--pad(8px)`.",
+    {
+      since: "0.4.0",
+      notes: [
+        "Works anywhere a value goes, including inside `var()` fallbacks, `calc()`, other functions, custom properties, `@keyframes` and `element.animate()`.",
+        "Arguments may hold `var()` and other calls. An argument with a comma in it is wrapped in braces: `--first({a, b})`.",
+      ],
+      aliases: ["custom functions", "css functions"],
+      related: ["at-function", "function-var"],
+    },
+  ),
   fn("env()", OK, "Inserts a value defined by the user agent, such as safe-area insets.", {
     values: [v("safe-area-inset-*", OK), v("titlebar-area-*", OK, "Window Controls Overlay.")],
     aliases: ["safe-area-inset", "titlebar-area", "window controls overlay"],

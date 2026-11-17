@@ -20,6 +20,7 @@ mod dynamic_range;
 mod element;
 #[cfg(test)]
 mod em_tests;
+mod functions;
 mod has;
 mod keyframes;
 mod mapper;
@@ -759,6 +760,7 @@ pub struct Engine {
     percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
     viewport_blocks: Vec<ViewportBlock>,
     viewport_unkept: bool,
+    functions: Rc<functions::Table>,
     /// Compile and viewport rebase counter: the matched-properties cache keys on it, since rule
     /// indices mean nothing across sheets and a rebase rewrites declarations in place.
     generation: u64,
@@ -1055,6 +1057,11 @@ fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
     };
     if sheet.is_some() {
         if let Ok(skipped) = warnings.read() {
+            // lightningcss keeps an `@function` as an unknown at-rule, which the engine reads.
+            let skipped: Vec<_> = skipped
+                .iter()
+                .filter(|e| !e.to_string().starts_with("Unknown at rule: @function"))
+                .collect();
             const SHOWN: usize = 20;
             for e in skipped.iter().take(SHOWN) {
                 diagnostics.push(format!("stylesheet: {e} — skipped, as a browser skips it"));
@@ -1090,6 +1097,7 @@ impl Engine {
             percentage_properties: Vec::new(),
             viewport_blocks: Vec::new(),
             viewport_unkept: false,
+            functions: Rc::default(),
             generation: next_generation(),
             share: share::enabled(),
             collecting_ua: false,
@@ -1185,6 +1193,7 @@ impl Engine {
         if !block.dynamic {
             return Some(block);
         }
+        let _functions = functions::Scope::enter(&self.functions, None);
         let steps = block
             .steps
             .iter()
@@ -1217,6 +1226,12 @@ impl Engine {
             steps,
             dynamic: false,
         }))
+    }
+
+    /// Runs `f` with this sheet's `@function`s callable, for values compiled outside the cascade.
+    pub fn with_functions<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _functions = functions::Scope::enter(&self.functions, None);
+        f()
     }
 
     pub fn has_keyframes(&self) -> bool {
@@ -1346,6 +1361,18 @@ impl Engine {
                             ),
                         ),
                     }
+                    continue;
+                }
+                CssRule::Unknown(u) if u.name.eq_ignore_ascii_case("function") => {
+                    use lightningcss::traits::ToCss as _;
+                    let text = rule
+                        .to_css_string(lightningcss::printer::PrinterOptions::default())
+                        .unwrap_or_default();
+                    let cond = condition.map(|c| self.conditions[c as usize].clone());
+                    let table = Rc::get_mut(&mut self.functions)
+                        .expect("functions are collected before the engine is shared");
+                    table.add(&text, cond, &mut self.diagnostics);
+                    self.uses_containers |= table.uses_containers();
                     continue;
                 }
                 other => {
@@ -1736,6 +1763,7 @@ impl Engine {
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
         let guessed = OWN_COLOR_GUESS.with(std::cell::Cell::take);
+        let _functions = functions::Scope::enter(&self.functions, Some(parent_vars));
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
         let el = element::El(node);
@@ -1781,6 +1809,7 @@ impl Engine {
 
         let share_key = (self.share
             && inline.is_none()
+            && !self.functions.uses_containers()
             && !matched.iter().any(|r| r.ancestor.is_some() || r.cq))
         .then(|| {
             let rules = matched.iter().map(|r| index_of(r)).collect();

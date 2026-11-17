@@ -131,6 +131,8 @@ pub(crate) enum VarError {
     UnknownEnv(String),
     Cycle(String),
     TooLarge,
+    UnknownFunction(String),
+    InvalidCall(String, String),
 }
 
 impl VarError {
@@ -151,6 +153,10 @@ impl VarError {
             VarError::TooLarge => {
                 format!("substitution expanded past {MAX_EXPANSION} characters")
             }
+            VarError::UnknownFunction(name) => {
+                format!("`{name}()` is called but no @function defines it here")
+            }
+            VarError::InvalidCall(name, why) => format!("the call to `{name}()` is invalid: {why}"),
         }
     }
 }
@@ -163,7 +169,7 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'\\' || b >= 0x80
 }
 
-fn skip_string(bytes: &[u8], i: usize) -> usize {
+pub(crate) fn skip_string(bytes: &[u8], i: usize) -> usize {
     let quote = bytes[i];
     let mut j = i + 1;
     while j < bytes.len() {
@@ -180,6 +186,20 @@ fn skip_string(bytes: &[u8], i: usize) -> usize {
 enum Subst {
     Var,
     Env,
+    /// A `--name(` call; the length of `--name`.
+    Function(usize),
+}
+
+/// `--name(` not preceded by an identifier byte.
+fn dashed_call_at(bytes: &[u8], i: usize) -> Option<usize> {
+    if bytes.get(i..i + 2) != Some(b"--") || (i > 0 && is_ident_byte(bytes[i - 1])) {
+        return None;
+    }
+    let mut j = i + 2;
+    while j < bytes.len() && is_ident_byte(bytes[j]) && bytes[j] != b'\\' {
+        j += 1;
+    }
+    (j > i + 2 && bytes.get(j) == Some(&b'(')).then_some(j - i)
 }
 
 fn is_fn_at(bytes: &[u8], i: usize, name: &[u8]) -> bool {
@@ -208,6 +228,9 @@ fn find_subst(bytes: &[u8], from: usize) -> Option<(usize, Subst)> {
         }
         if is_fn_at(bytes, i, b"env") {
             return Some((i, Subst::Env));
+        }
+        if let Some(len) = dashed_call_at(bytes, i) {
+            return Some((i, Subst::Function(len)));
         }
         i += 1;
     }
@@ -303,15 +326,32 @@ pub(crate) fn substitute(
     let mut cursor = 0usize;
     let bytes = text.as_bytes();
     while let Some((open, kind)) = find_subst(bytes, cursor) {
-        let paren = open + 3;
+        let paren = match kind {
+            Subst::Function(len) => open + len,
+            Subst::Var | Subst::Env => open + 3,
+        };
         let Some(close) = matching_paren(bytes, paren) else {
             break;
         };
         out.push_str(&text[cursor..open]);
+        if let Subst::Function(_) = kind {
+            out.push_str(&crate::functions::call(
+                &text[open..paren],
+                &text[paren + 1..close],
+                env,
+                lookup,
+            )?);
+            if out.len() > MAX_EXPANSION {
+                return Err(VarError::TooLarge);
+            }
+            cursor = close + 1;
+            continue;
+        }
         let (name, fallback) = split_var_args(&text[paren + 1..close]);
         let resolved = match kind {
             Subst::Var => lookup(name)?,
             Subst::Env => env_value(name, env),
+            Subst::Function(_) => unreachable!("handled above"),
         };
         match resolved {
             Some(value) => out.push_str(&value),
@@ -323,7 +363,9 @@ pub(crate) fn substitute(
                             VarError::UnknownEnv(name.to_string())
                         }
                         // A known variable the window does not define now: as routine as an unset var().
-                        Subst::Var | Subst::Env => VarError::Unresolved(name.to_string()),
+                        Subst::Var | Subst::Env | Subst::Function(_) => {
+                            VarError::Unresolved(name.to_string())
+                        }
                     });
                 }
             },
@@ -428,6 +470,10 @@ fn wide_keyword(raw: &str) -> Option<Wide> {
         return Some(Wide::Inherited);
     }
     None
+}
+
+pub(crate) fn is_wide_initial(raw: &str) -> bool {
+    matches!(wide_keyword(raw), Some(Wide::Initial))
 }
 
 pub(crate) fn resolve(

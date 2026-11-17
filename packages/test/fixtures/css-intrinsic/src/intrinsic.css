@@ -1,0 +1,142 @@
+:root {
+  interpolate-size: allow-keywords;
+}
+
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+#panel-slot,
+#sizes,
+#functions,
+#drl-parent,
+#drl-default {
+  position: absolute;
+  top: 10px;
+  width: 220px;
+}
+#panel-slot {
+  left: 10px;
+}
+#sizes {
+  left: 240px;
+}
+#functions {
+  left: 470px;
+}
+#drl-parent {
+  left: 10px;
+  top: 300px;
+  dynamic-range-limit: constrained;
+}
+#drl-default {
+  left: 240px;
+  top: 300px;
+}
+
+#panel {
+  height: 0;
+  overflow: hidden;
+  background: #48c;
+  transition: height 1s linear;
+}
+#panel.open {
+  height: auto;
+}
+#panel-content {
+  height: 100px;
+}
+
+#fit {
+  font-size: 10px;
+  width: calc-size(fit-content, size + 2em);
+  background: #c84;
+}
+#fit-content {
+  width: 60px;
+  height: 10px;
+}
+
+#half {
+  height: calc-size(auto, size * 0.5);
+  overflow: hidden;
+  background: #8c4;
+}
+#half-content {
+  height: 100px;
+}
+
+#basis-row {
+  display: flex;
+}
+#basis {
+  flex-basis: calc-size(content, size * 2);
+  flex-shrink: 0;
+  background: #4c8;
+}
+#basis-content {
+  width: 30px;
+  height: 10px;
+}
+
+#logical {
+  inline-size: 50px;
+  block-size: 30px;
+  background: #c48;
+}
+
+@function --space(--n <number>: 1) returns <length> {
+  result: calc(var(--n) * 8px);
+  @media (min-width: 10000px) {
+    result: 0px;
+  }
+}
+
+@function --tint(--c <color>, --amount <percentage>: 50%) returns <color> {
+  result: color-mix(in srgb, var(--c) var(--amount), white);
+}
+
+@function --loop(--n) {
+  result: --loop(var(--n));
+}
+
+@function --cq-gap() returns <length> {
+  result: 5px;
+  @container (width > 200px) {
+    result: 70px;
+  }
+}
+
+#fn-size {
+  width: --space(5);
+  height: --space();
+  background: #888;
+}
+#fn-color {
+  color: --tint(rgb(0 0 255));
+}
+#fn-cycle {
+  width: --loop(1);
+  height: 10px;
+}
+#fn-container {
+  container-type: inline-size;
+  width: 220px;
+}
+#fn-cq {
+  width: --cq-gap();
+  height: 10px;
+}
+#fn-var {
+  --base: 3px;
+  --k: 2;
+  width: calc(--space(var(--k)) + var(--base));
+  height: 10px;
+}
+
+#drl-mix {
+  dynamic-range-limit: dynamic-range-limit-mix(standard 40%, no-limit 60%);
+}

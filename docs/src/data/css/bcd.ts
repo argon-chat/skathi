@@ -1678,6 +1678,11 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.at-rules.property",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@property",
   },
+  "at-function": {
+    key: "css.at-rules.function",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@function",
+    experimental: true,
+  },
   "at-scope": {
     key: "css.at-rules.scope",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@scope",
@@ -1997,6 +2002,11 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "custom-properties": {
     key: "css.properties.custom-property",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/--*",
+  },
+  "dashed-function": {
+    key: "css.types.dashed-function",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/dashed-function",
+    experimental: true,
   },
   "function-env": {
     key: "css.types.env",

@@ -1,0 +1,13 @@
+{
+  "$comment": "`calc-size()` and `interpolate-size` by their boxes, `@function` results in layout and colour, and `dynamic-range-limit` computed values.",
+
+  "name": "sk-test-css-intrinsic",
+
+  "window": {
+    "title": "Skathi — intrinsic sizes and custom functions (fixture)",
+    "width": 720,
+    "height": 560,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

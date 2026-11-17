@@ -2203,7 +2203,13 @@ pub(crate) fn script_anim_set(
         )
     });
     let vars = vars.unwrap_or_default();
-    let (keyframes, notes) = sk_css::script_keyframes(frames, &vars, &env());
+    let (keyframes, notes) = with_engine(|engine| {
+        let compile = || sk_css::script_keyframes(frames, &vars, &env());
+        match engine {
+            Some(engine) => engine.with_functions(compile),
+            None => compile(),
+        }
+    });
     let previous = ANIMATOR.with(|a| {
         let mut a = a.borrow_mut();
         ensure_timeline_origin(&mut a);

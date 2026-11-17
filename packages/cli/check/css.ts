@@ -55,7 +55,7 @@ const INERT_FOR: Record<string, string> = {
   "border-collapse": "separate",
   "text-orientation": "mixed",
 };
-const SUBSTITUTED = /(?<![\w-])(var|env|theme|screen)\(|#\{|\$[\w-]/i;
+const SUBSTITUTED = /(?<![\w-])((var|env|theme|screen)|--[\w-]+)\(|#\{|\$[\w-]/i;
 
 const UNSUPPORTED_AT_RULES: Record<string, string> = {
   layer: "Move the rules out of the `@layer` block; their order in the sheet decides the cascade.",

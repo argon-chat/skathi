@@ -4133,7 +4133,9 @@ fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> 
     use lightningcss::properties::custom::{TokenOrValue, UnresolvedColor};
     value.0.iter().any(|token| match token {
         TokenOrValue::Var(_) | TokenOrValue::Env(_) => true,
-        TokenOrValue::Function(function) => has_substitution(&function.arguments),
+        TokenOrValue::Function(function) => {
+            function.name.0.starts_with("--") || has_substitution(&function.arguments)
+        }
         TokenOrValue::UnresolvedColor(
             UnresolvedColor::RGB { alpha, .. } | UnresolvedColor::HSL { alpha, .. },
         ) => has_substitution(alpha),

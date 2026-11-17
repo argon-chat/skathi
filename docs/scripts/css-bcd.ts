@@ -32,6 +32,7 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "keyword-revert": "css.types.global_keywords.revert",
   "easing-functions": "css.types.easing-function",
   "custom-properties": "css.properties.custom-property",
+  "dashed-function": "css.types.dashed-function",
   "webkit-font-smoothing": "css.properties.font-smooth",
   "app-region": "css.properties.-webkit-app-region",
   "webkit-mask": null,

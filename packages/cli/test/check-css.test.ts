@@ -61,6 +61,7 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("filter", "url(#shadow)")).toBeNull();
     expect(code("filter", "drop-shadow(0 1px 2px red)")).toBeNull();
     expect(code("width", "FIT-CONTENT")).toBe("SK4002");
+    expect(code("float", "--side(left)")).toBeNull();
     expect(code("float", "inherit")).toBeNull();
     expect(code("-webkit-text-size-adjust", "100%")).toBeNull();
     expect(code("-moz-appearance", "none")).toBeNull();
