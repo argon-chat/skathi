@@ -70,8 +70,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 for (const c of pending) {
   for (;;) {
     console.log(`\n== publishing ${c.name}@${c.version} (${c.dir})`);
-    // Verified above, against the packages of the crates before it.
-    const r = spawnSync("cargo", ["publish", "--no-verify", "-p", c.name], {
+    // Verified above, against the packages of the crates before it. --allow-dirty: sk-app carries the
+    // devtools bundle package-crates.ts just generated, which git ignores.
+    const r = spawnSync("cargo", ["publish", "--no-verify", "--allow-dirty", "-p", c.name], {
       cwd: join(ROOT, c.dir),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
