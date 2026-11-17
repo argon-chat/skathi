@@ -1,8 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { appendFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runCheck } from "../check";
 import { declarationProblem, selectorProblems } from "../check/css";
 import type { CheckReport } from "../check/schema";
+import { buildApp } from "../cli/build-app";
 import { analyzeCss, CSS_APP } from "./check-fixtures";
+
+const scratch: string[] = [];
+const watchers: Bun.Subprocess[] = [];
+afterAll(async () => {
+  for (const w of watchers) w.kill();
+  await Promise.all(watchers.map((w) => w.exited));
+  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+});
+const tempDir = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratch.push(dir);
+  return dir;
+};
 
 let cached: CheckReport | undefined;
 const report = () => (cached ??= analyzeCss());
@@ -84,4 +101,68 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
       "src/more.css",
     ]);
   }, 60_000);
+});
+
+describe("CSS warnings in sk build and sk dev", () => {
+  test("sk build warns about the CSS it bundles, keeps check.allow, and succeeds", async () => {
+    const lines: string[] = [];
+    const result = await buildApp({
+      target: CSS_APP,
+      out: tempDir("sk-css-build-"),
+      payloadOnly: true,
+      log: (l) => lines.push(l),
+    });
+    expect(result.skpk).toBeTruthy();
+    const warned = lines.filter((l) => /^warning: \S+:\d+:\d+ SK4/.test(l));
+    expect(warned).toContain(
+      "warning: src/main.css:3:3 SK4001 `float` is not supported: this declaration has no effect",
+    );
+    expect(warned.filter((l) => l.includes(" SK4005 ")).map((l) => l.split(":")[1]!.trim())).toEqual([
+      "node_modules/fancy-ui/style.css",
+    ]);
+    expect(warned.some((l) => l.includes("src/legacy/old.css"))).toBe(false);
+  }, 60_000);
+
+  test("sk dev reports a changed file's new warning once", async () => {
+    const app = tempDir("sk-css-dev-");
+    cpSync(CSS_APP, app, { recursive: true });
+    rmSync(join(app, "src/Widget.svelte"));
+    const proc = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "../build.ts"), join(app, "src/main.ts"), join(app, "dist"), "--watch"],
+      {
+        cwd: join(import.meta.dir, ".."),
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, NO_COLOR: "1", SK_OWNER_PID: String(process.pid) },
+      },
+    );
+    watchers.push(proc);
+    let out = "";
+    void (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of proc.stdout) out += decoder.decode(chunk);
+    })();
+    void (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of proc.stderr) out += decoder.decode(chunk);
+    })();
+    const until = async (what: string) => {
+      for (const deadline = Date.now() + 30_000; !out.includes(what); await Bun.sleep(50))
+        if (Date.now() > deadline) throw new Error(`no "${what}" in:\n${out}`);
+    };
+    const count = (what: string) => out.split(what).length - 1;
+    await until("watching");
+    expect(count("src/main.css:3:3 SK4001")).toBe(1);
+
+    appendFileSync(join(app, "src/fine.css"), ".added {\n  float: right;\n}\n");
+    await until("rev 2");
+    await until("src/fine.css:61:3 SK4001");
+    appendFileSync(join(app, "src/fine.css"), ".again {\n  color: red;\n}\n");
+    await until("rev 3");
+    appendFileSync(join(app, "src/main.css"), ".more {\n  color: blue;\n}\n");
+    await until("rev 4");
+    await Bun.sleep(200);
+    expect(count("src/fine.css:61:3 SK4001")).toBe(1);
+    expect(count("src/main.css:3:3 SK4001")).toBe(1);
+  }, 90_000);
 });

@@ -54,6 +54,9 @@ import {
   viteShapesPlugin,
 } from "./vitecompat";
 import { colorEnabled, paint } from "./cli/term";
+import { parseCheckConfig } from "./check/config";
+import { CssWarnings } from "./check/css";
+import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 
 const C = paint(colorEnabled(process.stdout));
@@ -391,8 +394,18 @@ function devAdvise(m: string) {
   warn(`${stamp()} advisory: ${m}`);
 }
 
+/** Every .css file the dev build has read, @imports too: what the CSS warnings watch. */
+const styleSheets = new Set<string>();
+
+function inlineImports(text: string, from: string): string {
+  const seen = new Set([resolve(from)]);
+  const css = inlineCssImports(text, from, SK_CONFIG_DIR, devAdvise, seen);
+  for (const file of seen) if (/\.css$/i.test(file)) styleSheets.add(file);
+  return css;
+}
+
 async function viteCss(text: string, from: string, label: string): Promise<string> {
-  const css = inlineCssImports(text, from, SK_CONFIG_DIR, devAdvise);
+  const css = inlineImports(text, from);
   if (!TW_CONFIG || !needsTailwindPass(css)) return css;
   try {
     return await generateTailwind(TW_CONFIG, { text: css, from });
@@ -696,7 +709,7 @@ const cssIds = () => Array.from(cssModules.keys());
  */
 async function buildCssModule(id: string): Promise<boolean> {
   const abs = cssModules.get(id)!;
-  let css = inlineCssImports(readFileSync(abs, "utf-8"), abs, SK_CONFIG_DIR, devAdvise);
+  let css = inlineImports(readFileSync(abs, "utf-8"), abs);
   if (TW_CONFIG && needsTailwindPass(css)) {
     const t0 = Date.now();
     try {
@@ -1375,7 +1388,19 @@ async function incrementalBuild() {
   );
 }
 
-await fullBuild("startup").catch((e) => {
+const cssWarnings = new CssWarnings({
+  root: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
+  allow: parseCheckConfig(readSkConfig()?.check).allow,
+  tailwind: TW_CONFIG !== null,
+});
+
+/** CSS the engine does not apply, in the styles that changed; each warning once per session. */
+function reportCss() {
+  const components = [...prevBlocks.keys()].filter((f) => /\.(vue|svelte)$/i.test(f));
+  for (const d of cssWarnings.update([...components, ...styleSheets])) warn(`${stamp()} ${diagnosticLine(d)}`);
+}
+
+await fullBuild("startup").then(reportCss, (e) => {
   console.error(e);
   if (!WATCH) process.exit(1);
 });
@@ -1395,6 +1420,7 @@ if (WATCH) {
       try {
         if (full) await fullBuild("runtime source changed");
         else await incrementalBuild();
+        reportCss();
       } catch (e) {
         fail(`${stamp()} ${String(e)}`);
       }

@@ -15,6 +15,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { parseCheckConfig } from "../check/config";
+import { cssDiagnostics, readStyleSources } from "../check/css";
+import { diagnosticLine } from "../check/finding";
+import type { BuildStyles } from "../check/graph";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
 import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
@@ -98,6 +102,18 @@ function readBuilderAssets(path: string): BuilderAsset[] {
     (a): a is BuilderAsset =>
       !!a && typeof (a as BuilderAsset).key === "string" && typeof (a as BuilderAsset).path === "string",
   );
+}
+
+/** SK4001–SK4005 over the CSS the bundle includes, one line each; `--aot` has them from its full check. */
+function cssWarnings(config: AppConfig, stylesJson: string): string[] {
+  if (!existsSync(stylesJson)) return [];
+  const styles = JSON.parse(readFileSync(stylesJson, "utf8")) as BuildStyles;
+  return cssDiagnostics({
+    root: config.appRoot,
+    sources: readStyleSources(styles.files),
+    allow: parseCheckConfig(config.raw.check).allow,
+    tailwind: styles.tailwind,
+  }).map(diagnosticLine);
 }
 
 export interface MacBundle extends AppBundleResult {
@@ -411,8 +427,10 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
 
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");
+  const stylesJson = join(work, "styles.json");
   // A stale list from an older build must not survive a builder that wrote none.
   rmSync(assetsJson, { force: true });
+  rmSync(stylesJson, { force: true });
   const tb = performance.now();
   const defineArgs = (options.defines ?? []).map((d) => `--define=${d}`);
   const pathArgs = [
@@ -447,6 +465,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const windowJson = readFileSync(join(work, "window.json"));
   const msBundle = performance.now() - tb;
   if (aot) await aotCheck(options.target, options.configPath, progress, options.color ?? false);
+  else for (const line of cssWarnings(config, stylesJson)) progress.warn(line);
 
   progress.step("assets");
   const ta = performance.now();

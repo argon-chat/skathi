@@ -1,10 +1,10 @@
 import { parse as parseSfc } from "@vue/compiler-sfc";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import postcss, { type AtRule, type ChildNode, type Container, type Declaration, type Root, type Rule } from "postcss";
-import type { Finding, FindingRelated } from "./finding";
-import type { Packages } from "./packages";
-import type { Range } from "./schema";
+import { diagnosticsOf, type Finding, type FindingRelated } from "./finding";
+import { Packages } from "./packages";
+import type { Diagnostic, Range } from "./schema";
 
 interface CatalogEntry {
   name: string;
@@ -401,30 +401,87 @@ export function fileFindings(file: string, source: string, tailwind: boolean): F
 
 const MAX_RELATED = 50;
 
+/** A stylesheet, component or page and its text; offsets inside it come from `styleBlocks`. */
+export interface StyleSource {
+  /** Absolute. */
+  file: string;
+  text: string;
+}
+
+/** Each readable file once; one that cannot be read is left out. */
+export function readStyleSources(files: Iterable<string>): StyleSource[] {
+  const out: StyleSource[] = [];
+  for (const file of new Set(files)) {
+    try {
+      out.push({ file, text: readFileSync(file, "utf8").replace(/^﻿/, "") });
+    } catch {}
+  }
+  return out;
+}
+
+export interface CssPassOptions {
+  root: string;
+  /** sk.config.json `check.allow`. */
+  allow: Map<string, string[]>;
+  tailwind: boolean;
+}
+
+/** The CSS pass of `sk check` on its own, dependencies included, as sk build and sk dev report it. */
+export function cssDiagnostics(
+  options: CssPassOptions & { sources: StyleSource[]; packages?: Packages | undefined },
+): Diagnostic[] {
+  const root = resolve(options.root);
+  const packages = options.packages ?? new Packages(root);
+  const findings = cssFindings({ sources: options.sources, packages, deps: true, tailwind: options.tailwind });
+  return diagnosticsOf(findings, root, packages, options.allow).diagnostics;
+}
+
+/** sk dev: the pass over the files whose text changed since the last call, each warning once per session. */
+export class CssWarnings {
+  private readonly texts = new Map<string, string>();
+  private readonly shown = new Set<string>();
+  private readonly packages: Packages;
+
+  constructor(private readonly options: CssPassOptions) {
+    this.packages = new Packages(resolve(options.root));
+  }
+
+  update(files: Iterable<string>): Diagnostic[] {
+    const sources = readStyleSources(files).filter((s) => this.texts.get(s.file) !== s.text);
+    if (!sources.length) return [];
+    for (const s of sources) this.texts.set(s.file, s.text);
+    // Keyed by place in order rather than line, so an edit above a warning does not repeat it.
+    const nth = new Map<string, number>();
+    return cssDiagnostics({ ...this.options, sources, packages: this.packages }).filter((d) => {
+      const what = `${d.file}\0${d.code}\0${d.message}`;
+      const n = (nth.get(what) ?? 0) + 1;
+      nth.set(what, n);
+      const key = `${what}\0${n}`;
+      if (this.shown.has(key)) return false;
+      this.shown.add(key);
+      return true;
+    });
+  }
+}
+
 /**
  * CSS the engine does not apply, in the app's components, pages and stylesheets. A dependency's
  * findings become one SK4005 per package, its places listed as related locations.
  */
 export function cssFindings(input: {
-  files: string[];
+  sources: StyleSource[];
   packages: Packages;
   deps: boolean;
   tailwind: boolean;
 }): Finding[] {
   const out: Finding[] = [];
   const byPackage = new Map<string, { name: string; found: Finding[] }>();
-  for (const file of new Set(input.files)) {
+  for (const { file, text } of input.sources) {
     const owner = input.packages.ownerOf(file);
     if (owner && !input.deps) continue;
-    let source: string;
-    try {
-      source = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-    } catch {
-      continue;
-    }
     let found: Finding[];
     try {
-      found = fileFindings(file, source, input.tailwind);
+      found = fileFindings(file, text, input.tailwind);
     } catch {
       continue;
     }

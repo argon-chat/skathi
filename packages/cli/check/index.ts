@@ -1,37 +1,27 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { loadAppConfig } from "../cli/config";
 import { appShadersDir, compileAppEffects, EffectsError, hasAppEffects } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
 import { quietProgress, type Progress } from "../cli/term";
 import { Builtins } from "./builtins";
-import { codeInfo, REGISTRY } from "./codes";
-import { parseCheckConfig, Suppressions } from "./config";
-import { cssFindings } from "./css";
-import { rangeOf, ZERO_RANGE, type Finding } from "./finding";
+import { REGISTRY } from "./codes";
+import { parseCheckConfig } from "./config";
+import { cssFindings, readStyleSources } from "./css";
+import { diagnosticsOf, PLATFORM, posix, rangeOf, ZERO_RANGE, type Finding } from "./finding";
 import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
 import { Packages } from "./packages";
 import { buildProgram, readUnits, type TypeScript } from "./program";
 import { Rules } from "./rules";
-import type { CheckReport, Diagnostic } from "./schema";
+import type { CheckReport } from "./schema";
 import { Typing } from "./typing";
 
 export type { CheckReport, Diagnostic } from "./schema";
 export { explain, formatPretty, listCodes } from "./report";
 
 const PROD_TS = join(import.meta.dir, "..", "prod.ts");
-
-/** Packages the SDK provides and answers for under AOT; an app cannot swap or retype them. */
-const PLATFORM = new Set([
-  "vue",
-  "@vue/runtime-core",
-  "@vue/runtime-dom",
-  "@vue/reactivity",
-  "@vue/shared",
-  "@skathi-native/runtime",
-]);
 
 export class CheckSetupError extends Error {}
 
@@ -73,8 +63,6 @@ export function loadTypeScript(appRoot: string): TypeScript {
   }
   throw new CheckSetupError("sk check needs the typescript package: add it to the app (bun add -d typescript)");
 }
-
-const posix = (path: string) => path.split(sep).join("/");
 
 export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const progress = options.progress ?? quietProgress;
@@ -215,7 +203,9 @@ export function analyze(input: AnalyzeInput): CheckReport {
   const styled = [...input.modules.filter((m) => /\.(vue|svelte)$/i.test(m)), ...(input.styles ?? [])];
   if (styled.length) {
     progress.step("CSS");
-    findings.push(...cssFindings({ files: styled, packages, deps, tailwind: input.tailwind ?? false }));
+    findings.push(
+      ...cssFindings({ sources: readStyleSources(styled), packages, deps, tailwind: input.tailwind ?? false }),
+    );
   }
   if (units.length) {
     progress.step("TypeScript program", units.length);
@@ -300,42 +290,12 @@ function report(
   files: number,
   scores: ReturnType<Typing["results"]>,
 ): CheckReport {
-  const rel = (file: string) => posix(relative(root, file));
-  const suppress = new Suppressions(input.allow ?? new Map());
-  const diagnostics: Diagnostic[] = [];
+  const { diagnostics, suppressed } = diagnosticsOf(findings, root, packages, input.allow ?? new Map());
   const owners = new Set<string>();
-  let suppressed = 0;
-  for (const f of findings) {
-    const info = codeInfo(f.code);
-    const owner = packages.ownerOf(f.file);
-    if (owner && PLATFORM.has(owner.name)) continue;
-    const file = rel(f.file);
-    if (!info.fatal && suppress.matches(f.code, file, owner?.name ?? null)) {
-      suppressed++;
-      continue;
-    }
-    diagnostics.push({
-      code: f.code,
-      severity: info.severity,
-      message: f.message,
-      file,
-      package: owner ? { name: owner.name, version: owner.version } : null,
-      range: f.range,
-      help: f.help ?? info.fix,
-      related: f.related.map((r) => ({ file: rel(r.file), range: r.range, message: r.message })),
-    });
-  }
   for (const u of input.modules) {
     const owner = packages.ownerOf(u);
     if (owner && !PLATFORM.has(owner.name) && (input.deps ?? true)) owners.add(`${owner.name}@${owner.version}`);
   }
-  diagnostics.sort(
-    (a, b) =>
-      (a.file < b.file ? -1 : a.file > b.file ? 1 : 0) ||
-      a.range.start.line - b.range.start.line ||
-      a.range.start.character - b.range.start.character ||
-      a.code.localeCompare(b.code),
-  );
   const typing = scores
     .filter((s) => !(s.owner && PLATFORM.has(s.owner.name)))
     .map((s) => ({

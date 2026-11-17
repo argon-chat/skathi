@@ -23,6 +23,13 @@ export interface ModuleGraph {
   errors: GraphError[];
 }
 
+/** What `bun prod.ts` writes to styles.json beside the bundle. */
+export interface BuildStyles {
+  /** Absolute paths of the components, stylesheets and pages whose CSS the bundle includes. */
+  files: string[];
+  tailwind: boolean;
+}
+
 export interface GraphError {
   message: string;
   file: string | null;

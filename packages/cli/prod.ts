@@ -6,6 +6,7 @@
 //                      `sk build` (cli/build-app.ts) packs it into the SKPK payload.
 //   dist/window.json   the `window` block of sk.config.json
 //   dist/assets.json   [{ key, path }]: every file imported by URL, packed into the payload under key
+//   dist/styles.json   { files, tailwind }: the files whose CSS the bundle includes, for sk build's CSS warnings
 //
 // Unlike build.ts: "vue" and "@skathi-native/runtime" alias to src/runtime.ts, inlineTemplate is true (no HMR),
 // styles go to (globalThis.__SK_CSS__ ??= []) ahead of the bundle, no HMR epilogue.
@@ -19,7 +20,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
-import type { ModuleGraph } from "./check/graph";
+import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 import {
@@ -83,6 +84,7 @@ const SK_CONFIG_DIR = appRootOverride ?? (APP_SRC_DIR.endsWith(`${sep}src`) ? di
 const SK_CONFIG_PATH = configOverride ?? join(SK_CONFIG_DIR, "sk.config.json");
 const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
 const ASSETS_JSON = join(dirname(OUT_FILE), "assets.json");
+const STYLES_JSON = join(dirname(OUT_FILE), "styles.json");
 
 function readSkConfig(): Record<string, unknown> {
   const path = SK_CONFIG_PATH;
@@ -237,11 +239,20 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 const PROD_TEMPLATE_COMMENTS = false;
 
 const cssById = new Map<string, string>();
-/** `--graph`: every .css file whose CSS the build includes, @imports too. */
-const GRAPH_STYLES = new Set<string>();
+/** Every .css file whose CSS the build includes, @imports too, and index.html when it has a `<style>`. */
+const STYLE_FILES = new Set<string>();
+/** The .vue and .svelte files whose `<style>` the build includes. */
+const STYLED_COMPONENTS = new Set<string>();
 
 function noteStyles(seen: Set<string>) {
-  if (graphOut) for (const file of seen) if (/\.css$/i.test(file)) GRAPH_STYLES.add(file);
+  for (const file of seen) if (/\.css$/i.test(file)) STYLE_FILES.add(file);
+}
+
+/** An index.html `<style>` piece: noted as the page itself. */
+function inlinePage(piece: CssPiece): boolean {
+  if (!piece.from.startsWith(`${INDEX_HTML}?`)) return false;
+  STYLE_FILES.add(INDEX_HTML);
+  return true;
 }
 
 async function viteCss(text: string, from: string, label: string): Promise<string> {
@@ -330,6 +341,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   }
   code = transformSource(code, absPath, SHAPES) ?? code;
 
+  STYLED_COMPONENTS.add(absPath);
   const cssChunks: string[] = [];
   for (const style of descriptor.styles) {
     let text = style.content;
@@ -484,6 +496,7 @@ const vuePlugin = {
       const out = await compileSvelte(APP_ROOT, args.path, source, { dev: false, filename: id });
       AOT_INPUTS?.svelte(args.path, source, out.js);
       for (const w of out.warnings) advise(w);
+      STYLED_COMPONENTS.add(args.path);
       if (out.css) cssById.set(id, await viteCss(out.css, args.path, `${id} <style>`));
       return { contents: transformSource(out.js, args.path, SHAPES) ?? out.js, loader: "js" as const };
     });
@@ -583,12 +596,8 @@ async function writeGraph(out: string) {
     });
     bundle = { code: await code.text(), sources, mappings: raw.mappings };
   }
-  const pages = new Set<string>();
   for (const piece of LIFTED ? [...LIFTED.headCss, ...LIFTED.bodyCss] : []) {
-    if (piece.from.startsWith(`${INDEX_HTML}?`)) {
-      pages.add(INDEX_HTML);
-      continue;
-    }
+    if (inlinePage(piece)) continue;
     const seen = new Set([resolve(piece.from)]);
     inlineCssImports(piece.text, piece.from, SK_CONFIG_DIR, () => {}, seen);
     noteStyles(seen);
@@ -606,7 +615,7 @@ async function writeGraph(out: string) {
     },
     declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     modules: [...modules].sort(),
-    styles: [...pages, ...[...GRAPH_STYLES].sort()],
+    styles: [...STYLE_FILES].sort(),
     tailwind: TW_CONFIG !== null,
     ...(bundle ? { bundle } : {}),
     errors: result.logs
@@ -672,6 +681,7 @@ async function build() {
   const htmlCss = async (pieces: CssPiece[]) => {
     const out: string[] = [];
     for (const p of pieces) {
+      inlinePage(p);
       if (declaresUtilities(p.text)) appOwnsUtilities = true;
       out.push(await viteCss(p.text, p.from, toId(p.from)));
     }
@@ -711,6 +721,11 @@ async function build() {
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, path]) => ({ key, path }));
   writeAtomic(ASSETS_JSON, JSON.stringify(assets, null, 2) + "\n");
+  const styles: BuildStyles = {
+    files: [...STYLED_COMPONENTS, ...STYLE_FILES].sort(),
+    tailwind: TW_CONFIG !== null,
+  };
+  writeAtomic(STYLES_JSON, JSON.stringify(styles, null, 2) + "\n");
   if (AOT_INPUTS) {
     const pinsPath = join(WS_ROOT, "vendor", "redjs", "redjs", "pins.txt");
     const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);

@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { AotError, compileNative, compilerInfo, compilerMismatch, nativeManifest, repoSkAot } from "../aot/native";
 import type { CompilerInfo } from "../aot/pin";
 import { TRANSFORM } from "../aot/transform";
+import { diagnosticLine } from "../check/finding";
 import { exitCode, formatPretty, runCheck, type CheckReport } from "../check/index";
 import { ConfigError } from "./config";
 import { CLI_VERSION, HostError, REPO_ROOT, type HostAot, type ResolvedHost } from "./host";
@@ -113,11 +114,6 @@ export async function resolveAotCompiler(
   return { path: fetched.path, info: await compilerInfo(fetched.path), source: "release" };
 }
 
-/** One line per diagnostic, for warnings that do not stop the build. */
-export function checkLine(d: CheckReport["diagnostics"][number]): string {
-  return `${d.file}:${d.range.start.line + 1}:${d.range.start.character + 1} ${d.code} ${d.message}`;
-}
-
 /** `sk check` over the app: errors (and fatal findings) refuse the build with the report; warnings are printed. */
 export async function aotCheck(
   target: string,
@@ -133,7 +129,7 @@ export async function aotCheck(
         "Fix the errors (sk explain <CODE> says how), or build with --no-aot.",
     );
   }
-  for (const d of report.diagnostics) progress.warn(checkLine(d));
+  for (const d of report.diagnostics) progress.warn(diagnosticLine(d));
   return report;
 }
 
