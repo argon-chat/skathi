@@ -1386,6 +1386,17 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
         titlebar_area: visible.then_some([t.0, t.1, t.2, t.3]),
         coarse_pointer: coarse_pointer(),
         safe_area_insets: [0.0; 4],
+        reduce_transparency: crate::transparency::reduce_transparency(),
+        device_size: device_size(s.screen.0, s.screen.1, (s.inner_width, s.inner_height)),
+    }
+}
+
+/// The monitor's size in CSS px, the viewport while no display is known.
+fn device_size(width: f32, height: f32, viewport: (f32, f32)) -> (f32, f32) {
+    if width > 0.0 && height > 0.0 {
+        (width, height)
+    } else {
+        viewport
     }
 }
 
@@ -1448,6 +1459,7 @@ pub fn popout_env(
         sk_css::DisplayMode::WindowControlsOverlay
     };
     let titlebar_area = (!os_chrome).then_some([0.0, 0.0, viewport.0, title_bar_height]);
+    let monitor = window.display(cx).map(|d| d.bounds().size);
     sk_css::Env {
         viewport_width: viewport.0,
         viewport_height: viewport.1,
@@ -1459,6 +1471,12 @@ pub fn popout_env(
         titlebar_area,
         coarse_pointer: coarse_pointer(),
         safe_area_insets: [0.0; 4],
+        reduce_transparency: crate::transparency::reduce_transparency(),
+        device_size: device_size(
+            monitor.map_or(0.0, |s| f32::from(s.width)),
+            monitor.map_or(0.0, |s| f32::from(s.height)),
+            viewport,
+        ),
     }
 }
 

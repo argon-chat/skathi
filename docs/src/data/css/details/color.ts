@@ -318,23 +318,33 @@ export const details: Details = {
   "function-light-dark": {
     examples: [
       {
-        title: "Instead: switch a panel's colors with the system theme",
+        title: "Theme tokens that follow the window theme",
         lang: "css",
-        code: `.panel {
-  background-color: #ffffff;
-  color: #1f2328;
+        code: `:root {
+  color-scheme: light dark;
+  --surface: light-dark(#ffffff, #161b22);
+  --text: light-dark(#1f2328, #e6edf3);
 }
 
-@media (prefers-color-scheme: dark) {
-  .panel {
-    background-color: #161b22;
-    color: #e6edf3;
-  }
+.panel {
+  background-color: var(--surface);
+  color: var(--text);
+}`,
+        note: "Switching `appWindow.theme` between `light`, `dark` and `system` recolors the panel on the next frame.",
+      },
+      {
+        title: "Keep one region light in a dark app",
+        lang: "css",
+        code: `.preview {
+  color-scheme: light;
+  background-color: light-dark(white, black);
 }`,
       },
     ],
     edgeCases: [
-      "`light-dark()` logs an advisory that the value does not resolve to a color, and the declaration is not applied.",
+      "A custom property holding `light-dark()` resolves where it is used: `--surface` above takes the scheme of each element that reads it.",
+      "Without a `color-scheme` that lists `dark`, it is always the light color.",
+      "`getComputedStyle(el).color` reports the color in use, such as `rgb(230, 237, 243)` under a dark theme.",
     ],
   },
   "system-colors": {
@@ -343,8 +353,20 @@ export const details: Details = {
     ],
   },
   "color-scheme": {
+    examples: [
+      {
+        title: "Dark form controls in a dark panel",
+        lang: "css",
+        code: `.settings-panel {
+  color-scheme: dark;
+  accent-color: #58a6ff;
+}`,
+        note: "Checkboxes, radio buttons, range and color inputs inside the panel draw their dark colors.",
+      },
+    ],
     edgeCases: [
-      '`color-scheme: light dark` logs an advisory and is not applied; `CSS.supports("color-scheme", "light dark")` returns `false`.',
+      "`light dark` and `dark light` behave the same: the window theme picks between them.",
+      "`only dark` reads back from `getComputedStyle()` as `dark only`.",
     ],
   },
   "forced-color-adjust": {

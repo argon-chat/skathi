@@ -44,9 +44,9 @@ const dragging = ref(false);
       },
     ],
     edgeCases: [
-      "Several keywords share a native shape: `move` and `all-scroll` show the open hand of `grab`, `cell` shows `crosshair`, and `no-drop` shows `not-allowed`.",
+      "`move` and `all-scroll` share the four-way arrow on Windows, and `no-drop` shows `not-allowed` there.",
       "The diagonal resize cursors come in two shapes: `nwse-resize`, `nw-resize` and `se-resize` show one, and `nesw-resize`, `ne-resize` and `sw-resize` the other.",
-      "A keyword that falls back to the arrow gives an advisory in `sk dev`.",
+      "`getComputedStyle(el).cursor` reads the keyword, inherited from the nearest ancestor that sets one.",
     ],
   },
   "pointer-events": {

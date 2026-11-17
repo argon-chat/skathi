@@ -214,16 +214,16 @@ const view = ref<"list" | "grid">("list");
   "flex-flow": {
     examples: [
       {
-        title: "Instead: wrap a row with the longhands",
+        title: "A wrapping row of tags",
         lang: "css",
         code: `.tags {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
+  flex-flow: row wrap;
+  gap: 6px;
 }`,
       },
     ],
-    edgeCases: [advisory],
+    edgeCases: ["The two values can come in either order: `wrap column` is `column wrap`."],
   },
   order: {
     examples: [

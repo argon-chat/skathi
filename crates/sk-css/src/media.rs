@@ -25,6 +25,11 @@ pub struct Env {
     /// Exists so `env(safe-area-inset-*)` from PWA sheets resolves: a fallback-less unknown `env()`
     /// invalidates its declaration.
     pub safe_area_insets: [f32; 4],
+    /// The OS asks for opaque surfaces (Windows "Transparency effects" off, macOS "Reduce
+    /// transparency").
+    pub reduce_transparency: bool,
+    /// `device-width` / `device-height`: the window's monitor, CSS px.
+    pub device_size: (f32, f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +61,8 @@ impl Default for Env {
             titlebar_area: Some([0.0, 0.0, 1024.0, 32.0]),
             coarse_pointer: false,
             safe_area_insets: [0.0; 4],
+            reduce_transparency: false,
+            device_size: (1920.0, 1080.0),
         }
     }
 }
@@ -113,6 +120,9 @@ pub(crate) enum Feature {
     Display(DisplayMode),
     Pointer { any: bool, want: PointerKind },
     Hover { any: bool, want: bool },
+    ReducedTransparency(bool),
+    DeviceWidth(Cmp, f32),
+    DeviceHeight(Cmp, f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +153,9 @@ impl Feature {
                 let _ = any;
                 want
             }
+            Feature::ReducedTransparency(reduce) => env.reduce_transparency == reduce,
+            Feature::DeviceWidth(cmp, px) => cmp.eval(env.device_size.0, px),
+            Feature::DeviceHeight(cmp, px) => cmp.eval(env.device_size.1, px),
         }
     }
 }
@@ -194,7 +207,8 @@ pub(crate) type Unsupported = &'static str;
 
 pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media types, \
      `width`/`min-width`/`max-width`, `height`/`min-height`/`max-height` (px lengths, \
-     range and interval syntax), `prefers-color-scheme`, `prefers-reduced-motion`, \
+     range and interval syntax), `device-width`/`device-height` (and their `min-`/`max-` forms), \
+     `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-reduced-transparency`, \
      `resolution`/`min-resolution`/`max-resolution` (dppx/dpi/dpcm), `display-mode`, \
      `pointer`/`any-pointer`, `hover`/`any-hover`, \
      combined with `and`/`or`/`not`/`,`";
@@ -307,6 +321,8 @@ fn display_mode(value: &MediaFeatureValue<'_>) -> Result<Cond, Unsupported> {
 fn sized(id: MediaFeatureId, cmp: Cmp, px: f32) -> Feature {
     match id {
         MediaFeatureId::Width => Feature::Width(cmp, px),
+        MediaFeatureId::DeviceWidth => Feature::DeviceWidth(cmp, px),
+        MediaFeatureId::DeviceHeight => Feature::DeviceHeight(cmp, px),
         _ => Feature::Height(cmp, px),
     }
 }
@@ -336,12 +352,15 @@ fn hover(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> 
 
 fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
     use MediaFeatureId::{
-        AnyHover, AnyPointer, DisplayMode as DisplayModeId, Height, Hover as HoverId,
-        Pointer as PointerId, PrefersColorScheme, PrefersReducedMotion, Resolution, Width,
+        AnyHover, AnyPointer, DeviceHeight, DeviceWidth, DisplayMode as DisplayModeId, Height,
+        Hover as HoverId, Pointer as PointerId, PrefersColorScheme, PrefersReducedMotion,
+        PrefersReducedTransparency, Resolution, Width,
     };
     Ok(match f {
         QueryFeature::Plain { name, value } => match standard(name)? {
-            id @ (Width | Height) => Cond::Feature(sized(id, Cmp::Eq, length_px(value)?)),
+            id @ (Width | Height | DeviceWidth | DeviceHeight) => {
+                Cond::Feature(sized(id, Cmp::Eq, length_px(value)?))
+            }
             Resolution => Cond::Feature(Feature::Resolution(Cmp::Eq, dppx(value)?)),
             DisplayModeId => display_mode(value)?,
             PointerId => pointer(value, false)?,
@@ -358,10 +377,16 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
                 "no-preference" => Cond::Feature(Feature::ReducedMotion(false)),
                 _ => return Err("an unknown `prefers-reduced-motion` value"),
             },
+            PrefersReducedTransparency => match ident(value)? {
+                "reduce" => Cond::Feature(Feature::ReducedTransparency(true)),
+                "no-preference" => Cond::Feature(Feature::ReducedTransparency(false)),
+                _ => return Err("an unknown `prefers-reduced-transparency` value"),
+            },
             _ => return Err("an unsupported media feature"),
         },
         QueryFeature::Boolean { name } => match standard(name)? {
-            Width | Height => Cond::Always,
+            Width | Height | DeviceWidth | DeviceHeight => Cond::Always,
+            PrefersReducedTransparency => Cond::Feature(Feature::ReducedTransparency(true)),
             PrefersColorScheme => Cond::Always,
             PrefersReducedMotion => Cond::Feature(Feature::ReducedMotion(true)),
             PointerId | AnyPointer | HoverId | AnyHover => Cond::Always,
@@ -373,7 +398,7 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             operator,
             value,
         } => match standard(name)? {
-            id @ (Width | Height) => {
+            id @ (Width | Height | DeviceWidth | DeviceHeight) => {
                 Cond::Feature(sized(id, Cmp::from(*operator), length_px(value)?))
             }
             Resolution => Cond::Feature(Feature::Resolution(Cmp::from(*operator), dppx(value)?)),
@@ -386,7 +411,7 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             end,
             end_operator,
         } => match standard(name)? {
-            id @ (Width | Height) => Cond::And(vec![
+            id @ (Width | Height | DeviceWidth | DeviceHeight) => Cond::And(vec![
                 Cond::Feature(sized(
                     id,
                     Cmp::from(*start_operator).flip(),
@@ -510,6 +535,36 @@ mod tests {
         assert!(cond("(prefers-reduced-motion: no-preference)")
             .unwrap()
             .eval(&env(800.0, false, false)));
+    }
+
+    #[test]
+    fn reduced_transparency_and_device_size() {
+        let reduced = Env {
+            reduce_transparency: true,
+            device_size: (2560.0, 1440.0),
+            ..Env::default()
+        };
+        let plain = Env {
+            device_size: (1280.0, 800.0),
+            ..Env::default()
+        };
+        let matches = |query: &str, env: &Env| cond(query).unwrap().eval(env);
+        assert!(matches("(prefers-reduced-transparency: reduce)", &reduced));
+        assert!(matches("(prefers-reduced-transparency)", &reduced));
+        assert!(!matches("(prefers-reduced-transparency)", &plain));
+        assert!(matches(
+            "(prefers-reduced-transparency: no-preference)",
+            &plain
+        ));
+        assert!(matches("(min-device-width: 1920px)", &reduced));
+        assert!(!matches("(min-device-width: 1920px)", &plain));
+        assert!(!matches("(max-device-height: 1080px)", &reduced));
+        assert!(matches("(device-width: 1280px)", &plain));
+        assert!(matches("(1000px < device-height <= 1440px)", &reduced));
+        assert!(
+            !matches("(min-width: 1500px)", &reduced),
+            "the viewport is not the device"
+        );
     }
 
     #[test]

@@ -260,6 +260,8 @@ const open = ref(false);
     edgeCases: [logicalSizeEdge],
   },
   "block-size": {
+      "With `max-width: 200px` and a ratio of `2`, a block that would stretch to 400px is 200 × 100: the limit carries through the ratio.",
+      "A transition between two ratios interpolates them on a log scale, as browsers do; to or from `auto` it snaps.",
     examples: [
       {
         title: "Instead: give a toolbar a fixed height",

@@ -45,6 +45,7 @@ mod render;
 mod resample;
 mod scroll;
 mod select;
+mod scheme;
 mod selection;
 mod snap;
 mod sticky;

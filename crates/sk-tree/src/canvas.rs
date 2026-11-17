@@ -574,22 +574,30 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
         Some(Length::Definite(DefiniteLength::Absolute(a))) => Some(f32::from(a.to_pixels(rem))),
         _ => None,
     };
-    if iw > 0.0 && ih > 0.0 && style.aspect_ratio.is_none() {
-        style.aspect_ratio = Some(iw / ih);
+    let ratio = style
+        .aspect_ratio
+        .filter(|r| *r > 0.0)
+        .or((iw > 0.0 && ih > 0.0).then(|| iw / ih));
+    if let Some(ratio) = ratio {
+        style.aspect_ratio = Some(ratio);
     }
     if auto(style.size.width) {
-        let w = match absolute(style.size.height) {
-            Some(h) if ih > 0.0 => iw * h / ih,
+        let w = match (absolute(style.size.height), ratio) {
+            (Some(h), Some(ratio)) => h * ratio,
             _ => iw,
         };
         style.size.width = Some(gpui::px(w).into());
     }
+    // A relative width leaves the height to the ratio.
     if auto(style.size.height) {
-        let h = match absolute(style.size.width) {
-            Some(w) if iw > 0.0 => ih * w / iw,
-            _ => ih,
+        let h = match (absolute(style.size.width), ratio) {
+            (Some(w), Some(ratio)) => Some(w / ratio),
+            (_, None) => Some(ih),
+            _ => None,
         };
-        style.size.height = Some(gpui::px(h).into());
+        if let Some(h) = h {
+            style.size.height = Some(gpui::px(h).into());
+        }
     }
 }
 
@@ -759,6 +767,34 @@ mod tests {
         assert_eq!(
             (s.size.width, s.size.height, s.aspect_ratio),
             (px(20.0), px(20.0), Some(1.0))
+        );
+
+        let mut s = gpui::StyleRefinement::default();
+        s.size.width = px(100.0);
+        s.aspect_ratio = Some(1.0);
+        size_as_replaced(&mut s, 300.0, 150.0, rem);
+        assert_eq!(
+            s.size.height,
+            px(100.0),
+            "an author ratio beats the natural one"
+        );
+
+        let mut s = gpui::StyleRefinement::default();
+        s.size.width = px(100.0);
+        s.aspect_ratio = Some(-1.0);
+        size_as_replaced(&mut s, 300.0, 150.0, rem);
+        assert_eq!(
+            s.size.height,
+            px(50.0),
+            "`auto 1 / 1` takes the natural ratio"
+        );
+
+        let mut s = gpui::StyleRefinement::default();
+        s.size.width = Some(gpui::relative(1.0).into());
+        size_as_replaced(&mut s, 300.0, 150.0, rem);
+        assert_eq!(
+            s.size.height, None,
+            "a relative width leaves the height to the ratio"
         );
     }
 

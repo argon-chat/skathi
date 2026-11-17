@@ -831,7 +831,7 @@ fn image(
 ) -> AnyElement {
     let mut d = styled(states, id, now);
     // A replaced box's natural ratio: it decides whichever side is `auto`.
-    if d.style().aspect_ratio.is_none() {
+    if !d.style().aspect_ratio.is_some_and(|r| r > 0.0) {
         d.style().aspect_ratio = aspect;
     }
     let plus_lighter = states.extras.plus_lighter == Some(true);

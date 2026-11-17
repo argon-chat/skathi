@@ -60,6 +60,7 @@ pub use mapper::{
     InlineStyle, ListMarker, MaskClips, MaskCompositing, MaskImages, MaskPatch, MaskStack,
     ObjectFit, OverscrollBehavior, PaintLayer, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill,
     TextTransform, TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
+pub use mapper::COLOR_SCHEME;
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
@@ -742,6 +743,23 @@ pub struct Engine {
 fn next_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// An element's used color scheme from its computed `color-scheme` (inherited in `vars`): `None`
+/// under `normal`, else whether it is dark, the environment's preference winning when both are
+/// listed.
+pub fn color_scheme(vars: &Vars, env: &Env) -> Option<bool> {
+    let (mut light, mut dark) = (false, false);
+    for word in vars.get(mapper::COLOR_SCHEME)?.split_ascii_whitespace() {
+        light |= word.eq_ignore_ascii_case("light");
+        dark |= word.eq_ignore_ascii_case("dark");
+    }
+    (light || dark).then_some(dark && (env.dark || !light))
+}
+
+/// Whether `light-dark()` takes its dark half: `normal` is light, as in a browser.
+pub fn used_dark(vars: &Vars, env: &Env) -> bool {
+    color_scheme(vars, env).unwrap_or(false)
 }
 
 /// Kept as printed text: an owned `DeclarationBlock` added 248 KB to the exe, and re-parsing a few
@@ -1881,6 +1899,7 @@ impl Engine {
             ($half:expr) => {{
                 let rungs = [
                     (any_active, &mut active),
+        let _color_scheme = mapper::ColorSchemeScope::enter(used_dark(&vars, env));
                     (any_hover, &mut hover),
                     (any_focus_visible, &mut focus_visible),
                     (any_focus, &mut focus),
@@ -5979,6 +5998,41 @@ mod tests {
         let shadows = s[2].base.box_shadow.as_ref().expect("box-shadow");
         assert_eq!(shadows.len(), 3, "{shadows:?}");
         assert_eq!(shadows[2].blur_radius, gpui::px(2.0));
+    #[test]
+    fn light_dark_follows_each_elements_used_color_scheme() {
+        let engine = Engine::compile(
+            ":root { color-scheme: light dark; --edge: light-dark(rgb(1 1 1), rgb(2 2 2)) } \
+             .page { color: light-dark(rgb(255 0 0), rgb(0 0 255)); \
+                     background-color: var(--edge) } \
+             .btn { color-scheme: only light; background-color: var(--edge); \
+                    border: 1px solid light-dark(rgb(255 0 0), rgb(0 0 255)) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let light = cascade(&engine, &d, &env_at(800.0, false, false));
+        let dark = cascade(&engine, &d, &env_at(800.0, true, false));
+        let red = Some(gpui::Hsla::from(gpui::rgb(0xff0000)));
+        let blue = Some(gpui::Hsla::from(gpui::rgb(0x0000ff)));
+        assert_eq!(light[1].base.text.color, red);
+        assert_eq!(dark[1].base.text.color, blue);
+        assert_ne!(light[1].base.background, dark[1].base.background);
+        assert_eq!(
+            dark[2].base.background, light[2].base.background,
+            "a var holding light-dark() resolves where it is used"
+        );
+        assert_eq!(dark[2].base.border_color, red);
+
+        let unscheme = Engine::compile(".btn { color: light-dark(rgb(255 0 0), rgb(0 0 255)) }");
+        assert_eq!(
+            cascade(&unscheme, &d, &env_at(800.0, true, false))[2]
+                .base
+                .text
+                .color,
+            red,
+            "`color-scheme: normal` is light"
+        );
+    }
+
     }
 
     #[test]

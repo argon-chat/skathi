@@ -44,7 +44,7 @@ export type Category = (typeof categories)[number];
 /** Section prose from the coverage page that applies to the whole category. Inline code is Markdown. */
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Transitions and animations":
-    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
+    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
   "SVG properties in CSS": "These apply to inline `<svg>`.",
   "Media features": "A query that uses an unsupported feature drops its whole `@media` block, with an advisory.",
   "Vendor prefixes":
@@ -441,7 +441,20 @@ const boxModel = section("Box model and sizing", [
     aliases: ["-webkit-box-sizing"],
   }),
   prop("aspect-ratio", OK, "Sets a preferred width-to-height ratio for an element's box.", {
-    limitations: ["`auto` cannot undo an earlier ratio."],
+    values: [
+      v("auto", OK, "Undoes an earlier ratio; a replaced element keeps its natural ratio.", "0.4.0"),
+      v(
+        "auto <ratio>",
+        OK,
+        "`<img>`, `<video>`, `<canvas>` and Lottie stickers keep their natural ratio; any other box takes the ratio.",
+        "0.4.0",
+      ),
+    ],
+    notes: [
+      "A `min-*` or `max-*` size on one axis is carried through the ratio to the other, as in browsers.",
+      "An `<img>` with a relative width, such as `width: 100%`, takes its height from the ratio (since 0.4.0).",
+    ],
+    animates: "interpolated",
   }),
   ...LOGICAL_SIZING.map((name) =>
     prop(
@@ -545,8 +558,9 @@ const layout = section("Layout", [
     related: ["flex-direction", "flex-flow"],
     aliases: ["-webkit-flex-wrap"],
   }),
-  sh("flex-flow", PLAN, "Sets `flex-direction` and `flex-wrap` in one declaration.", {
-    workaround: "Use `flex-direction` and `flex-wrap`.",
+  sh("flex-flow", OK, "Sets `flex-direction` and `flex-wrap` in one declaration.", {
+    since: "0.4.0",
+    notes: ["A half left out resets to its initial value: `flex-flow: wrap` is `row wrap`."],
     related: ["flex-direction", "flex-wrap"],
     aliases: ["-webkit-flex-flow"],
   }),
@@ -1192,8 +1206,14 @@ const color = section("Color", [
       related: ["function-color-mix", "function-rgb", "function-oklch"],
     },
   ),
-  fn("light-dark()", NO, "Returns one of two colors depending on whether a light or dark color scheme is in use.", {
-    workaround: "Use `@media (prefers-color-scheme: dark)`.",
+  fn("light-dark()", OK, "Returns one of two colors depending on whether a light or dark color scheme is in use.", {
+    since: "0.4.0",
+    notes: [
+      "Resolves per element from its used `color-scheme`: the dark color when the scheme lists `dark` and the window theme is dark (`appWindow.theme`, or the system setting under `system`), or when it lists only `dark`.",
+      "Under `color-scheme: normal`, the initial value, it is the light color, as in browsers: declare `color-scheme: light dark` on `:root` to follow the theme.",
+      "Updates live when the theme changes. Works in any color, inside `var()`, `color-mix()`, gradients and shadows.",
+    ],
+    limitations: ["In `@keyframes`, the light color is used."],
     related: ["media-prefers-color-scheme", "color-scheme"],
   }),
   kw(
@@ -1203,7 +1223,25 @@ const color = section("Color", [
     "Keywords such as `Canvas` or `AccentColor` that resolve to colors of the user's system.",
     { aliases: ["Canvas", "CanvasText", "AccentColor", "ButtonFace"] },
   ),
-  prop("color-scheme", NO, "Declares which color schemes, light or dark, an element can be rendered in.", {
+  prop("color-scheme", OK, "Declares which color schemes, light or dark, an element can be rendered in.", {
+    since: "0.4.0",
+    values: [
+      v("normal", OK, "Light."),
+      v("light", OK),
+      v("dark", OK),
+      v("light dark", OK, "Follows the window theme."),
+      v("only", OK, "Accepted; Skathi never forces colors, so it changes nothing."),
+    ],
+    notes: [
+      "Inherited: set it on `:root` for the whole app, or on any element for its subtree.",
+      "Drives `light-dark()` and the controls Skathi draws: checkboxes, radio buttons, range inputs, color inputs, the file input's button and the `<select>` popup take dark colors under a dark scheme.",
+      "Under `normal`, those controls keep their defaults: the `<select>` popup follows the window theme and the others are light.",
+      "`getComputedStyle(el).colorScheme` reads the computed value.",
+    ],
+    limitations: [
+      "Scrollbars and text inputs take their colors from the text color, not from the scheme.",
+      "The window's background and title bar follow `appWindow.theme`, not `color-scheme`.",
+    ],
     related: ["function-light-dark", "media-prefers-color-scheme"],
   }),
   prop("forced-color-adjust", NO, "Sets whether an element's colors may be overridden in forced-colors mode.", {
@@ -1893,12 +1931,22 @@ const interaction = section("Interaction", [
   prop("cursor", PART, "Sets the mouse cursor shown over an element.", {
     notes: ["Native cursors are used."],
     values: [
-      v("wait", PART, "Shows the arrow."),
-      v("progress", PART, "Shows the arrow."),
-      v("help", PART, "Shows the arrow."),
-      v("zoom-in, zoom-out", PART, "Shows the arrow."),
-      v("none", PART, "Shows the arrow."),
-      v("url()", PART, "Uses the fallback cursor."),
+      v(
+        "help, progress, wait, move, all-scroll",
+        PART,
+        "The system cursor on Windows and Linux; macOS has no public cursor for them and shows the arrow.",
+        "0.4.0",
+      ),
+      v("cell", OK, "The system `cell` cursor on Linux, the crosshair on Windows and macOS.", "0.4.0"),
+      v("no-drop", OK, "The system cursor on Linux, `not-allowed`'s on Windows and macOS.", "0.4.0"),
+      v("zoom-in, zoom-out", PART, "The system cursor on Linux; Windows and macOS show the arrow.", "0.4.0"),
+      v("none", PART, "Hides the cursor on Windows; macOS and Linux show the arrow.", "0.4.0"),
+      v(
+        "grab, grabbing, copy, context-menu",
+        PART,
+        "Windows has no system cursor for these and shows the arrow; macOS and Linux show theirs.",
+      ),
+      v("url()", PART, "The image is not loaded: the first fallback keyword shows."),
     ],
   }),
   prop("pointer-events", OK, "Sets whether an element can be the target of pointer events.", {
@@ -2417,7 +2465,7 @@ const mediaFeatures = section("Media features", [
       "Follows `appWindow.theme` when it is `light` or `dark`, and the system setting under `system`, the default.",
     ],
     aliases: ["dark mode"],
-    related: ["function-light-dark"],
+    related: ["function-light-dark", "color-scheme"],
   }),
   mf("prefers-reduced-motion", OK, "Tests whether the user asked for less motion.", {
     notes: ["Follows the system settings."],
@@ -2473,7 +2521,15 @@ const mediaFeatures = section("Media features", [
     related: ["media-width", "media-height"],
   }),
   mf("prefers-contrast", NO, "Tests whether the user asked for more or less contrast."),
-  mf("prefers-reduced-transparency", NO, "Tests whether the user asked for less transparency."),
+  mf("prefers-reduced-transparency", PART, "Tests whether the user asked for less transparency.", {
+    since: "0.4.0",
+    platforms: { windows: OK, macos: PART, linux: PART },
+    notes: [
+      "On Windows, `reduce` matches while Settings > Personalization > Colors > Transparency effects is off, and updates as soon as it changes.",
+    ],
+    limitations: ["macOS and Linux always answer `no-preference`."],
+    related: ["media-prefers-reduced-motion", "media-prefers-color-scheme"],
+  }),
   mf("forced-colors", NO, "Tests whether the system enforces a limited color palette, such as a high-contrast mode."),
   mf("inverted-colors", NO, "Tests whether the system inverts colors."),
   mf("color", NO, "Tests the number of bits per color component of the output device."),
@@ -2486,13 +2542,21 @@ const mediaFeatures = section("Media features", [
     aliases: ["-webkit-min-device-pixel-ratio", "-webkit-max-device-pixel-ratio"],
     related: ["media-resolution"],
   }),
-  mf("device-width", NO, "Tests the width of the output device's screen.", {
-    workaround: "Use `resolution` and `width`.",
-    related: ["media-width"],
+  mf("device-width", OK, "Tests the width of the output device's screen.", {
+    since: "0.4.0",
+    notes: [
+      "The width of the monitor the window is on, in CSS pixels: `screen.width`. It updates when the window moves to another monitor.",
+    ],
+    limitations: [MEDIA_SIZE_LIMIT],
+    aliases: ["min-device-width", "max-device-width"],
+    related: ["media-width", "media-device-height"],
   }),
-  mf("device-height", NO, "Tests the height of the output device's screen.", {
-    workaround: "Use `resolution` and `width`.",
-    related: ["media-height"],
+  mf("device-height", OK, "Tests the height of the output device's screen.", {
+    since: "0.4.0",
+    notes: ["The height of the monitor the window is on, in CSS pixels: `screen.height`."],
+    limitations: [MEDIA_SIZE_LIMIT],
+    aliases: ["min-device-height", "max-device-height"],
+    related: ["media-height", "media-device-width"],
   }),
   feat(
     "media-custom-media",

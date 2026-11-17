@@ -1,0 +1,217 @@
+:root {
+  color-scheme: light dark;
+  --tone: light-dark(rgb(10, 20, 30), rgb(200, 210, 220));
+}
+
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+.slot {
+  position: absolute;
+  width: 200px;
+}
+.slot > * {
+  background: #8888;
+}
+
+#ar-width-slot {
+  left: 10px;
+  top: 10px;
+}
+#ar-width {
+  width: 100px;
+  aspect-ratio: 2;
+}
+
+#ar-height-slot {
+  left: 220px;
+  top: 10px;
+}
+#ar-height {
+  height: 60px;
+  aspect-ratio: 3 / 2;
+}
+
+#ar-max-slot {
+  left: 10px;
+  top: 80px;
+  width: 400px;
+}
+#ar-max {
+  aspect-ratio: 2;
+  max-width: 200px;
+}
+
+#ar-min-slot {
+  left: 420px;
+  top: 10px;
+}
+#ar-min {
+  width: 100px;
+  aspect-ratio: 2;
+  min-height: 80px;
+}
+
+#ar-auto-slot {
+  left: 420px;
+  top: 100px;
+}
+.ratio-2 {
+  aspect-ratio: 2;
+}
+#ar-auto {
+  aspect-ratio: auto;
+  height: 30px;
+}
+
+#ar-auto-ratio-slot {
+  left: 420px;
+  top: 140px;
+}
+#ar-auto-ratio {
+  width: 100px;
+  aspect-ratio: auto 4 / 1;
+}
+
+#ar-content-slot {
+  left: 560px;
+  top: 10px;
+  width: 150px;
+}
+#ar-content {
+  width: 100px;
+  aspect-ratio: 2;
+}
+#ar-content-inner {
+  height: 80px;
+}
+
+#ar-anim-slot {
+  left: 10px;
+  top: 190px;
+}
+#ar-anim {
+  width: 100px;
+  aspect-ratio: 1;
+  transition: aspect-ratio 1.5s linear;
+}
+#ar-anim.wide {
+  aspect-ratio: 4;
+}
+
+#img-ratio-slot {
+  left: 220px;
+  top: 190px;
+}
+#img-ratio {
+  width: 100px;
+  aspect-ratio: 2;
+}
+
+#img-auto-ratio-slot {
+  left: 220px;
+  top: 250px;
+}
+#img-auto-ratio {
+  width: 100px;
+  aspect-ratio: auto 2 / 1;
+}
+
+#img-relative-slot {
+  left: 420px;
+  top: 190px;
+  width: 120px;
+}
+#img-relative {
+  width: 100%;
+}
+
+.flow {
+  position: absolute;
+  top: 370px;
+  width: 100px;
+  display: flex;
+}
+.cell {
+  width: 40px;
+  height: 20px;
+  background: #4a4;
+}
+#ff-wrap {
+  left: 10px;
+  flex-flow: row wrap;
+}
+#ff-column {
+  left: 130px;
+  flex-flow: column;
+}
+#ff-reverse {
+  left: 250px;
+  flex-flow: row-reverse wrap-reverse;
+}
+
+.tone {
+  position: absolute;
+  top: 430px;
+  width: 20px;
+  height: 20px;
+  color: light-dark(rgb(10, 20, 30), rgb(200, 210, 220));
+}
+#ld {
+  left: 10px;
+}
+#ld-light {
+  left: 40px;
+  color-scheme: light;
+}
+#ld-dark {
+  left: 70px;
+  color-scheme: only dark;
+}
+#ld-normal {
+  left: 100px;
+  color-scheme: normal;
+}
+#ld-var {
+  left: 130px;
+  color: var(--tone);
+}
+
+#cursor-wait {
+  cursor: wait;
+}
+#cursor-child {
+  left: 160px;
+}
+
+.panel {
+  position: absolute;
+  top: 480px;
+  width: 40px;
+  height: 40px;
+}
+#dark-panel {
+  left: 10px;
+  color-scheme: dark;
+}
+#light-panel {
+  left: 60px;
+  color-scheme: light;
+}
+
+#device {
+  position: absolute;
+  left: 200px;
+  top: 480px;
+  width: 10px;
+  height: 10px;
+}
+@media (min-device-width: 1px) and (min-device-height: 1px) {
+  #device {
+    width: 33px;
+  }
+}

@@ -354,8 +354,9 @@ fn step_to(id: u32, window: &mut Window, cx: &mut App) {
     window.refresh();
 }
 
-/// The nearest `accent-color` up the tree (it inherits); `auto` or none is Chromium's blue.
-fn accent(t: &Tree, id: u32) -> Hsla {
+/// The nearest `accent-color` up the tree (it inherits); `auto` or none is Chromium's blue, lighter
+/// under a dark `color-scheme`.
+fn accent(t: &Tree, id: u32, dark: bool) -> Hsla {
     let mut cur = id;
     for _ in 0..4096 {
         let Some(n) = t.node(cur) else { break };
@@ -367,7 +368,7 @@ fn accent(t: &Tree, id: u32) -> Hsla {
         }
         cur = n.parent;
     }
-    gpui::rgb(0x0075ff).into()
+    gpui::rgb(if dark { 0x99c8ff } else { 0x0075ff }).into()
 }
 
 /// The UA defaults Chromium gives the box: 13px square, its margins, only where the author set none.
@@ -392,20 +393,27 @@ pub(crate) fn skin(t: &Tree, id: u32, k: Toggle, window: &Window) -> AnyElement 
     let disabled = crate::render::actually_disabled(t, id);
     let pressed = windows::here(window, |w| w.active == Some(id));
     let hovered = tree::is_hovered(id) && !disabled;
-    let accent = accent(t, id);
+    let dark = crate::scheme::declared(t, id, window) == Some(true);
+    let accent = accent(t, id, dark);
     let grey = |v: u32| -> Hsla { gpui::rgb(v).into() };
+    // Chromium's palettes; the dark one is what `color-scheme: dark` gives a checkbox.
+    let (face, face_pressed, rim, rim_hovered) = if dark {
+        (0x3b3b3b, 0x545454, 0x858585, 0xacacac)
+    } else {
+        (0xffffff, 0xe5e5e5, 0x767676, 0x4f4f4f)
+    };
     let filled = (on || mixed) && k == Toggle::Checkbox;
     let (mut fill, mut edge) = if filled {
         (accent, accent)
     } else if on {
-        (grey(0xffffff), accent)
+        (grey(face), accent)
     } else {
         (
-            grey(if pressed { 0xe5e5e5 } else { 0xffffff }),
-            grey(if hovered { 0x4f4f4f } else { 0x767676 }),
+            grey(if pressed { face_pressed } else { face }),
+            grey(if hovered { rim_hovered } else { rim }),
         )
     };
-    let mut mark = grey(0xffffff);
+    let mut mark = grey(face);
     if disabled {
         fill = if filled {
             grey(0x767676).opacity(0.3)

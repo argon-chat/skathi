@@ -1,0 +1,13 @@
+{
+  "$comment": "`aspect-ratio`, `flex-flow` and `cursor` by their boxes and computed values; `color-scheme` and `light-dark()` across theme switches; `prefers-reduced-transparency` and `device-*` media features.",
+
+  "name": "sk-test-css-scheme-sizing",
+
+  "window": {
+    "title": "Skathi — color scheme and sizing (fixture)",
+    "width": 720,
+    "height": 560,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

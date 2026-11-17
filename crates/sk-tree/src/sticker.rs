@@ -398,16 +398,17 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
     if iw <= 0.0 || ih <= 0.0 {
         return;
     }
-    if style.aspect_ratio.is_none() {
-        style.aspect_ratio = Some(iw / ih);
-    }
+    let ratio = style.aspect_ratio.filter(|r| *r > 0.0).unwrap_or(iw / ih);
+    style.aspect_ratio = Some(ratio);
     if auto(style.size.width) {
-        let w = absolute(style.size.height).map_or(iw, |h| iw * h / ih);
+        let w = absolute(style.size.height).map_or(iw, |h| h * ratio);
         style.size.width = Some(gpui::px(w).into());
     }
+    // A relative width leaves the height to the ratio.
     if auto(style.size.height) {
-        let h = absolute(style.size.width).map_or(ih, |w| ih * w / iw);
-        style.size.height = Some(gpui::px(h).into());
+        if let Some(w) = absolute(style.size.width) {
+            style.size.height = Some(gpui::px(w / ratio).into());
+        }
     }
 }
 

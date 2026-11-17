@@ -816,8 +816,10 @@ fn apply_static<'i>(
     diagnostics: &mut Vec<String>,
 ) {
     use lightningcss::traits::IntoOwned as _;
-    let ((), relative) = noting_font_units(|| apply(p, r, x, diagnostics));
-    if relative || font.is_some() {
+    // A `light-dark()` resolves per element, so it is re-applied with the font-relative ones.
+    let (((), relative), schemed) =
+        noting_light_dark(|| noting_font_units(|| apply(p, r, x, diagnostics)));
+    if relative || schemed || font.is_some() {
         font.get_or_insert_with(Vec::new)
             .push(p.clone().into_owned());
     }
@@ -933,6 +935,18 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
     let mut convert = |props: &[Property]| -> Half {
         if props.is_empty() {
             return Half::default();
+        }
+        // Inherited and read per element (`light-dark()`, controls): it travels with the custom
+        // properties, under a name `var()` cannot reach.
+        Property::ColorScheme(_) => match value_text(p) {
+            Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
+            None => Channel::Static,
+        },
+        Property::Unparsed(u) if matches!(u.property_id, PropertyId::ColorScheme) => {
+            match value_text(p) {
+                Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
+                None => Channel::Static,
+            }
         }
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
@@ -1341,6 +1355,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut dynamic: Decls = Vec::new();
     let mut font: Option<Vec<Property<'static>>> = None;
     let mut styled = false;
+                || !style.custom.is_empty()
     let mut priority = None;
     // Without it one bad declaration cost the element its whole inline style.
     let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
@@ -1475,7 +1490,39 @@ pub(crate) fn srgb(c: &CssColor) -> Option<[f32; 4]> {
             let c = SRGB::try_from(c).ok()?.resolve_missing();
             Some([c.r, c.g, c.b, c.alpha].map(|v| v.clamp(0.0, 1.0)))
         }
-        CssColor::CurrentColor | CssColor::LightDark(..) | CssColor::System(_) => None,
+        CssColor::LightDark(light, dark) => {
+            LIGHT_DARK_SEEN.with(|seen| seen.set(true));
+            srgb(if COLOR_SCHEME_DARK.with(std::cell::Cell::get) {
+                dark
+            } else {
+                light
+            })
+        }
+        CssColor::CurrentColor | CssColor::System(_) => None,
+    }
+}
+
+/// The name `color-scheme` is carried under among the inherited custom properties.
+pub const COLOR_SCHEME: &str = "color-scheme";
+
+thread_local! {
+    /// The used color scheme of the element computing; light outside a cascade (a sheet compiling).
+    static COLOR_SCHEME_DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LIGHT_DARK_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Resolves `light-dark()` to its dark half while alive.
+pub(crate) struct ColorSchemeScope(bool);
+
+impl ColorSchemeScope {
+    pub(crate) fn enter(dark: bool) -> Self {
+        Self(COLOR_SCHEME_DARK.with(|c| c.replace(dark)))
+    }
+}
+
+impl Drop for ColorSchemeScope {
+    fn drop(&mut self) {
+        COLOR_SCHEME_DARK.with(|c| c.set(self.0));
     }
 }
 
@@ -1500,6 +1547,17 @@ thread_local! {
 pub fn set_web_font_families(families: impl IntoIterator<Item = String>) {
     let set = families.into_iter().map(|f| f.to_lowercase()).collect();
     WEB_FONTS.with(|w| *w.borrow_mut() = set);
+}
+
+fn noting_light_dark<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let outer = LIGHT_DARK_SEEN.with(|seen| seen.replace(false));
+    let out = f();
+    let seen = LIGHT_DARK_SEEN.with(|cell| {
+        let seen = cell.get();
+        cell.set(outer || seen);
+        seen
+    });
+    (out, seen)
 }
 
 fn waiting_web_font(families: &[CssFontFamily]) -> Option<Rc<[String]>> {
@@ -3397,9 +3455,9 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     once(
         diagnostics,
         format!(
-            "`{what}` value does not resolve to a concrete color (v1) — `light-dark()` and \
-             system colors (`Canvas`, `ButtonText`, …) are not computed; write the color, and \
-             switch it with `@media (prefers-color-scheme: dark)` where it must follow the theme"
+            "`{what}` value does not resolve to a concrete color (v1) — system colors \
+             (`Canvas`, `ButtonText`, …) are not computed; write the color, or use \
+             `light-dark()` with `color-scheme` where it must follow the theme"
         ),
     );
 }
@@ -4373,13 +4431,10 @@ fn apply_property(
                 _ => gpui::Display::Block,
             });
         }
-        FlexDirection(d, _) => {
-            r.flex_direction = Some(match d {
-                CssFlexDirection::Row => gpui::FlexDirection::Row,
-                CssFlexDirection::RowReverse => gpui::FlexDirection::RowReverse,
-                CssFlexDirection::Column => gpui::FlexDirection::Column,
-                CssFlexDirection::ColumnReverse => gpui::FlexDirection::ColumnReverse,
-            });
+        FlexDirection(d, _) => r.flex_direction = Some(flex_direction(d)),
+        FlexFlow(v, _) => {
+            r.flex_direction = Some(flex_direction(&v.direction));
+            r.flex_wrap = Some(flex_wrap(&v.wrap));
         }
         FlexGrow(v, _) => r.flex_grow = Some(*v),
         FlexShrink(v, _) => r.flex_shrink = Some(*v),
@@ -4390,14 +4445,7 @@ fn apply_property(
             r.flex_shrink = Some(v.shrink);
             r.flex_basis = lpa_length(&v.basis);
         }
-        FlexWrap(v, _) => {
-            use lightningcss::properties::flex::FlexWrap as W;
-            r.flex_wrap = Some(match v {
-                W::NoWrap => gpui::FlexWrap::NoWrap,
-                W::Wrap => gpui::FlexWrap::Wrap,
-                W::WrapReverse => gpui::FlexWrap::WrapReverse,
-            });
-        }
+        FlexWrap(v, _) => r.flex_wrap = Some(flex_wrap(v)),
         AlignItems(v, _) => {
             use gpui::AlignItems as G;
             let mapped = match v {
@@ -4408,6 +4456,41 @@ fn apply_property(
                 lightningcss::properties::align::AlignItems::BaselinePosition(_) => {
                     Some(G::Baseline)
                 }
+/// gpui's `aspect_ratio` encoding, since a refinement cannot clear a field: `0` is `auto` (no
+/// preferred ratio, or a degenerate one), a negative ratio is `auto && <ratio>` (a replaced
+/// element's natural ratio wins over it), a positive one is the ratio alone.
+fn aspect_ratio(auto: bool, ratio: Option<&lightningcss::values::ratio::Ratio>) -> f32 {
+    match ratio {
+        Some(r) if r.0 > 0.0 && r.1 > 0.0 && (r.0 / r.1).is_finite() => {
+            let value = r.0 / r.1;
+            if auto {
+                -value
+            } else {
+                value
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn flex_direction(d: &CssFlexDirection) -> gpui::FlexDirection {
+    match d {
+        CssFlexDirection::Row => gpui::FlexDirection::Row,
+        CssFlexDirection::RowReverse => gpui::FlexDirection::RowReverse,
+        CssFlexDirection::Column => gpui::FlexDirection::Column,
+        CssFlexDirection::ColumnReverse => gpui::FlexDirection::ColumnReverse,
+    }
+}
+
+fn flex_wrap(w: &lightningcss::properties::flex::FlexWrap) -> gpui::FlexWrap {
+    use lightningcss::properties::flex::FlexWrap as W;
+    match w {
+        W::NoWrap => gpui::FlexWrap::NoWrap,
+        W::Wrap => gpui::FlexWrap::Wrap,
+        W::WrapReverse => gpui::FlexWrap::WrapReverse,
+    }
+}
+
                 _ => None,
             };
             match mapped {
@@ -4775,15 +4858,7 @@ fn apply_property(
                 V::Collapse => gpui::Visibility::Hidden,
             });
         }
-        AspectRatio(v) => match &v.ratio {
-            Some(ratio) if !v.auto && ratio.1 != 0.0 => r.aspect_ratio = Some(ratio.0 / ratio.1),
-            // `aspect-auto` / `auto <ratio>`: a refinement cannot say "clear", so an earlier ratio
-            // survives.
-            _ => unsupported(
-                diagnostics,
-                "aspect-ratio: auto — cannot undo an earlier ratio",
-            ),
-        },
+        AspectRatio(v) => r.aspect_ratio = Some(aspect_ratio(v.auto, v.ratio.as_ref())),
         Opacity(v) => r.opacity = Some(v.0),
         // `color: currentColor` IS `color: inherit` — the property resolves against itself — and
         // inheriting is what not writing the field does.
@@ -5637,8 +5712,11 @@ fn apply_property(
                 K::Default | K::Auto => C::Arrow,
                 K::Text => C::IBeam,
                 K::VerticalText => C::IBeamCursorForVerticalLayout,
-                K::Crosshair | K::Cell => C::Crosshair,
-                K::Grab | K::Move | K::AllScroll => C::OpenHand,
+                K::Crosshair => C::Crosshair,
+                K::Cell => C::Cell,
+                K::Grab => C::OpenHand,
+                K::Move => C::Move,
+                K::AllScroll => C::AllScroll,
                 K::Grabbing => C::ClosedHand,
                 K::EResize => C::ResizeRight,
                 K::WResize => C::ResizeLeft,
@@ -5652,17 +5730,17 @@ fn apply_property(
                 K::NeResize | K::SwResize | K::NeswResize => C::ResizeUpRightDownLeft,
                 K::ColResize => C::ResizeColumn,
                 K::RowResize => C::ResizeRow,
-                K::NotAllowed | K::NoDrop => C::OperationNotAllowed,
+                K::NotAllowed => C::OperationNotAllowed,
+                K::NoDrop => C::NoDrop,
                 K::Alias => C::DragLink,
                 K::Copy => C::DragCopy,
                 K::ContextMenu => C::ContextualMenu,
-                K::None | K::Help | K::Progress | K::Wait | K::ZoomIn | K::ZoomOut => {
-                    diagnostics.push(format!(
-                        "`cursor: {:?}` has no native platform shape; using the arrow cursor",
-                        c.keyword
-                    ));
-                    C::Arrow
-                }
+                K::Help => C::Help,
+                K::Progress => C::Progress,
+                K::Wait => C::Wait,
+                K::ZoomIn => C::ZoomIn,
+                K::ZoomOut => C::ZoomOut,
+                K::None => C::Hidden,
             };
             r.mouse_cursor = Some(mapped);
         }
@@ -7856,6 +7934,35 @@ mod tests {
         };
         let one = |body: &str| {
             let list = layers(body);
+    #[test]
+    fn flex_flow_sets_both_longhands() {
+        let r = clean("flex-flow: column wrap-reverse");
+        assert_eq!(
+            (r.flex_direction, r.flex_wrap),
+            (
+                Some(gpui::FlexDirection::Column),
+                Some(gpui::FlexWrap::WrapReverse)
+            )
+        );
+        let r = clean("flex-direction: column; flex-flow: wrap");
+        assert_eq!(
+            (r.flex_direction, r.flex_wrap),
+            (Some(gpui::FlexDirection::Row), Some(gpui::FlexWrap::Wrap)),
+            "an omitted half resets to its initial value"
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_auto_overrides_an_earlier_ratio() {
+        assert_eq!(clean("aspect-ratio: 16 / 8").aspect_ratio, Some(2.0));
+        assert_eq!(
+            clean("aspect-ratio: 2; aspect-ratio: auto").aspect_ratio,
+            Some(0.0)
+        );
+        assert_eq!(clean("aspect-ratio: auto 2 / 1").aspect_ratio, Some(-2.0));
+        assert_eq!(clean("aspect-ratio: 0 / 1").aspect_ratio, Some(0.0));
+    }
+
             assert_eq!(list.len(), 1, "{body}");
             list[0]
         };

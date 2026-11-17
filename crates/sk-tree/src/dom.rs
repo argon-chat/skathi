@@ -224,6 +224,11 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
 ];
 
 /// One computed property of `id` (a [`COMPUTED_PROPERTIES`] name or a custom property); `None` for a node
+    "color-scheme",
+    "aspect-ratio",
+    "flex-direction",
+    "flex-wrap",
+    "cursor",
 /// not in the tree, or a name outside both.
 pub fn computed_value(id: u32, name: &str) -> Option<String> {
     tree::flush_pending_style();
@@ -240,7 +245,12 @@ pub fn computed_entries(id: u32) -> Option<Vec<(String, String)>> {
             .filter_map(|&k| computed_in(t, id, k).map(|v| (k.to_string(), v)))
             .collect();
         if let Some(cs) = n.computed.as_ref() {
-            out.extend(cs.vars.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+            out.extend(
+                cs.vars
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("--"))
+                    .map(|(k, v)| (k.to_string(), v.to_string())),
+            );
         }
         Some(out)
     })
@@ -444,6 +454,30 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
 #[derive(Clone, Copy)]
 enum EdgeBox {
     Padding,
+        "color-scheme" => cs
+            .vars
+            .get(sk_css::COLOR_SCHEME)
+            .unwrap_or("normal")
+            .to_string(),
+        "aspect-ratio" => match cs.base.aspect_ratio {
+            Some(r) if r > 0.0 => format!("{r} / 1"),
+            Some(r) if r < 0.0 => format!("auto {} / 1", -r),
+            _ => "auto".into(),
+        },
+        "flex-direction" => match cs.base.flex_direction.unwrap_or_default() {
+            gpui::FlexDirection::Row => "row",
+            gpui::FlexDirection::RowReverse => "row-reverse",
+            gpui::FlexDirection::Column => "column",
+            gpui::FlexDirection::ColumnReverse => "column-reverse",
+        }
+        .into(),
+        "flex-wrap" => match cs.base.flex_wrap.unwrap_or_default() {
+            gpui::FlexWrap::NoWrap => "nowrap",
+            gpui::FlexWrap::Wrap => "wrap",
+            gpui::FlexWrap::WrapReverse => "wrap-reverse",
+        }
+        .into(),
+        "cursor" => cursor_keyword(t, id).into(),
     Margin,
     Border,
 }
@@ -479,6 +513,54 @@ fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option
     let rem = gpui::px(sk_css::rem_basis());
     let parent_width = || {
         let parent = t.node(id).map(|n| n.parent).unwrap_or(0);
+/// `cursor` inherits; the keyword the nearest declaration mapped to.
+fn cursor_keyword(t: &Tree, id: u32) -> &'static str {
+    use gpui::CursorStyle as C;
+    let mut at = id;
+    let mut found = None;
+    while let Some(n) = t.node(at) {
+        found = n.computed.as_ref().and_then(|c| c.base.mouse_cursor);
+        if found.is_some() || n.parent == 0 || n.parent == at {
+            break;
+        }
+        at = n.parent;
+    }
+    match found {
+        None => "auto",
+        Some(C::Arrow) => "default",
+        Some(C::IBeam) => "text",
+        Some(C::Crosshair) => "crosshair",
+        Some(C::ClosedHand) => "grabbing",
+        Some(C::OpenHand) => "grab",
+        Some(C::PointingHand) => "pointer",
+        Some(C::ResizeLeft) => "w-resize",
+        Some(C::ResizeRight) => "e-resize",
+        Some(C::ResizeLeftRight) => "ew-resize",
+        Some(C::ResizeUp) => "n-resize",
+        Some(C::ResizeDown) => "s-resize",
+        Some(C::ResizeUpDown) => "ns-resize",
+        Some(C::ResizeUpLeftDownRight) => "nwse-resize",
+        Some(C::ResizeUpRightDownLeft) => "nesw-resize",
+        Some(C::ResizeColumn) => "col-resize",
+        Some(C::ResizeRow) => "row-resize",
+        Some(C::IBeamCursorForVerticalLayout) => "vertical-text",
+        Some(C::OperationNotAllowed) => "not-allowed",
+        Some(C::DragLink) => "alias",
+        Some(C::DragCopy) => "copy",
+        Some(C::ContextualMenu) => "context-menu",
+        Some(C::Help) => "help",
+        Some(C::Progress) => "progress",
+        Some(C::Wait) => "wait",
+        Some(C::Move) => "move",
+        Some(C::AllScroll) => "all-scroll",
+        Some(C::Cell) => "cell",
+        Some(C::ZoomIn) => "zoom-in",
+        Some(C::ZoomOut) => "zoom-out",
+        Some(C::NoDrop) => "no-drop",
+        Some(C::Hidden) => "none",
+    }
+}
+
         let w = crate::render::bounds_of(parent).map_or(0.0, |(_, _, w, _)| w);
         gpui::AbsoluteLength::Pixels(gpui::px(w))
     };

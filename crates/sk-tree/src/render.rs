@@ -2460,7 +2460,10 @@ fn build_node<V: 'static>(
                     d.child(crate::range::children(t, id, window))
                         .into_any_element()
                 } else if is_color {
-                    crate::color::defaults(d.style());
+                    crate::color::defaults(
+                        d.style(),
+                        crate::scheme::declared(t, id, window) == Some(true),
+                    );
                     d.child(crate::color::children(t, id, node, window))
                         .into_any_element()
                 } else if is_input {
@@ -2526,7 +2529,8 @@ fn build_node<V: 'static>(
                         kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
                     }
                     if is_file_input {
-                        kids.push(file_input_children(t, id, node, case));
+                        let dark = crate::scheme::declared(t, id, window) == Some(true);
+                        kids.push(file_input_children(t, id, node, case, dark));
                     } else if let Some(k) = toggle {
                         let skin = extras.appearance_none != Some(true);
                         crate::toggle::defaults(d.style(), k, skin);
@@ -5046,6 +5050,15 @@ fn is_sized(len: Option<gpui::Length>) -> bool {
     matches!(len, Some(gpui::Length::Definite(_)))
 }
 
+/// A replaced box's ratio: the author's, unless `auto` (zero) or `auto <ratio>` (negative) let the
+/// natural one win.
+#[cfg(any(feature = "lottie", feature = "video"))]
+fn preferred_ratio(declared: Option<f32>, iw: f32, ih: f32) -> f32 {
+    declared
+        .filter(|r| *r > 0.0 && r.is_finite())
+        .unwrap_or(iw / ih)
+}
+
 #[cfg(feature = "lottie")]
 fn build_lottie<V: 'static>(
     t: &Tree,
@@ -5077,13 +5090,14 @@ fn build_lottie<V: 'static>(
         let painted = prev_size_of(id);
         let known_w = definite_px(style_w, rem).or(painted.filter(|_| sized_w).map(|p| p.0));
         let known_h = definite_px(style_h, rem).or(painted.filter(|_| sized_h).map(|p| p.1));
+        let ratio = preferred_ratio(d.style().aspect_ratio, iw, ih);
 
         let (fill_w, fill_h) = match (sized_w, sized_h) {
             (true, true) => (None, None),
-            // One axis given: the other follows the intrinsic aspect ratio, as for `<img>`.
-            (true, false) => (None, known_w.map(|w| w * ih / iw).or(Some(ih))),
-            (false, true) => (known_h.map(|h| h * iw / ih).or(Some(iw)), None),
-            (false, false) => (Some(iw), Some(ih)),
+            // One axis given: the other follows the aspect ratio, as for `<img>`.
+            (true, false) => (None, known_w.map(|w| w / ratio).or(Some(ih))),
+            (false, true) => (known_h.map(|h| h * ratio).or(Some(iw)), None),
+            (false, false) => (Some(iw), Some(iw / ratio)),
         };
         if let Some(w) = fill_w {
             d.style().size.width = Some(gpui::Length::Definite(gpui::px(w).into()));
@@ -5507,12 +5521,13 @@ fn build_video<V: 'static>(
         let painted = prev_size_of(id);
         let known_w = definite_px(style_w, rem).or(painted.filter(|_| sized_w).map(|p| p.0));
         let known_h = definite_px(style_h, rem).or(painted.filter(|_| sized_h).map(|p| p.1));
+        let ratio = preferred_ratio(d.style().aspect_ratio, iw, ih);
 
         let (fill_w, fill_h) = match (sized_w, sized_h) {
             (true, true) => (None, None),
-            (true, false) => (None, known_w.map(|w| w * ih / iw).or(Some(ih))),
-            (false, true) => (known_h.map(|h| h * iw / ih).or(Some(iw)), None),
-            (false, false) => (Some(iw), Some(ih)),
+            (true, false) => (None, known_w.map(|w| w / ratio).or(Some(ih))),
+            (false, true) => (known_h.map(|h| h * ratio).or(Some(iw)), None),
+            (false, false) => (Some(iw), Some(iw / ratio)),
         };
         if let Some(w) = fill_w {
             d.style().size.width = Some(gpui::Length::Definite(gpui::px(w).into()));
@@ -5582,10 +5597,16 @@ fn file_input_children(
     id: u32,
     node: &crate::tree::Node,
     case: Option<sk_css::TextTransform>,
+    dark: bool,
 ) -> AnyElement {
     use gpui::Refineable as _;
     let (button_text, status) =
         crate::aria::file_input_labels(t, id).unwrap_or(("Choose File", String::new()));
+    let (border, face, text) = if dark {
+        (0x858585, 0x6b6b6b, gpui::white())
+    } else {
+        (0x767676, 0xefefef, gpui::black())
+    };
     let mut button = div()
         .flex_none()
         .mr(gpui::px(4.0))
@@ -5593,9 +5614,9 @@ fn file_input_children(
         .py(gpui::px(1.0))
         .rounded(gpui::px(3.0))
         .border_1()
-        .border_color(gpui::rgb(0x767676))
-        .bg(gpui::rgb(0xefefef))
-        .text_color(gpui::black());
+        .border_color(gpui::rgb(border))
+        .bg(gpui::rgb(face))
+        .text_color(text);
     if let Some(r) = node
         .computed
         .as_ref()

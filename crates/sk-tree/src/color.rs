@@ -6,8 +6,8 @@ use gpui::{div, px, AnyElement, Div, Length, Refineable, StyleRefinement, Window
 
 use crate::tree::{Node, Tree};
 
-/// UA defaults only fill properties the author has not specified.
-pub(crate) fn defaults(style: &mut StyleRefinement) {
+/// UA defaults only fill properties the author has not specified; `dark` is a dark `color-scheme`.
+pub(crate) fn defaults(style: &mut StyleRefinement, dark: bool) {
     style
         .size
         .width
@@ -24,8 +24,13 @@ pub(crate) fn defaults(style: &mut StyleRefinement) {
     style.border_widths.right.get_or_insert(px(1.0).into());
     style.border_widths.bottom.get_or_insert(px(1.0).into());
     style.border_widths.left.get_or_insert(px(1.0).into());
-    style.border_color.get_or_insert(gpui::rgb(0x767676).into());
-    style.background.get_or_insert(gpui::rgb(0xefefef).into());
+    let (border, face) = if dark {
+        (0x858585, 0x6b6b6b)
+    } else {
+        (0x767676, 0xefefef)
+    };
+    style.border_color.get_or_insert(gpui::rgb(border).into());
+    style.background.get_or_insert(gpui::rgb(face).into());
 }
 
 fn value_rgb(value: Option<&str>) -> u32 {

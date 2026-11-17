@@ -52,6 +52,8 @@ pub enum TransitionProperty {
     OverflowX,
     OverflowY,
     /// The whole function list travels as one value: matched lists interpolate componentwise, never
+    /// Interpolates the logarithm of the ratio, as browsers do; `auto` and `auto <ratio>` flip.
+    AspectRatio,
     /// through the matrix, which would shear.
     Transform,
     /// Excluded from `all`: a custom property is not an animatable property without an `@property`
@@ -61,7 +63,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 35;
+pub const ANIMATABLE_COUNT: usize = 36;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -111,6 +113,7 @@ impl TransitionProperty {
         Self::animatable().into_iter().chain([
             TransitionProperty::OverflowX,
             TransitionProperty::OverflowY,
+            AspectRatio,
             TransitionProperty::Shading,
         ])
     }
@@ -174,6 +177,7 @@ pub enum StepPosition {
     JumpStart,
     JumpEnd,
     JumpNone,
+            AspectRatio => "aspect-ratio",
     JumpBoth,
 }
 
@@ -638,6 +642,7 @@ pub fn parse_easing(text: &str) -> Option<Easing> {
 pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     let ms = t.to_ms();
     if !ms.is_finite() {
+        "aspect-ratio" => one(AspectRatio),
         diagnostics.push(format!("non-finite {what} treated as 0s"));
         return Duration::ZERO;
     }

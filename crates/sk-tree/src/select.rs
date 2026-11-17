@@ -647,7 +647,8 @@ pub(crate) fn popup_child(
         Some((o.highlight, o.scroll.clone(), std::mem::take(&mut o.reveal)))
     })?;
     let rows = rows(t, id);
-    let dark = windows::env_of(k).unwrap_or_else(crate::env).dark;
+    let dark = crate::scheme::declared(t, id, window)
+        .unwrap_or_else(|| windows::env_of(k).unwrap_or_else(crate::env).dark);
     let pal = palette(dark);
     let own_background = node
         .computed

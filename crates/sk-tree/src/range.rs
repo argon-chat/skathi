@@ -311,11 +311,12 @@ pub(crate) fn children(t: &Tree, id: u32, window: &Window) -> AnyElement {
     let fraction = spec.fraction(spec.value(t, id));
     let width = crate::render::painted_bounds(id).map_or(129., |r| r.2);
     let (thumb_width, thumb_height) = thumb_size(t, id, window, width);
+    let dark = crate::scheme::declared(t, id, window) == Some(true);
     let accent = t
         .node(id)
         .and_then(|n| n.computed.as_ref())
         .and_then(|cs| cs.extras.accent_color.flatten())
-        .unwrap_or_else(|| gpui::rgb(0x0075ff).into());
+        .unwrap_or_else(|| gpui::rgb(if dark { 0x99c8ff } else { 0x0075ff }).into());
     let skin = t
         .node(id)
         .and_then(|n| n.computed.as_ref())
@@ -327,7 +328,7 @@ pub(crate) fn children(t: &Tree, id: u32, window: &Window) -> AnyElement {
         .h(px(4.))
         .rounded(px(2.));
     if skin {
-        track = track.bg(gpui::rgb(0x777777));
+        track = track.bg(gpui::rgb(if dark { 0x545454 } else { 0x777777 }));
     }
     if let Some(style) = part_style(t, id, false, window) {
         track.style().refine(&style);

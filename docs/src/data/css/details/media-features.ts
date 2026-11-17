@@ -469,30 +469,54 @@ density.addEventListener("change", onDensityChange);`,
   "media-device-width": {
     examples: [
       {
-        title: "Instead: widen the layout when the window is large",
+        title: "A denser layout on small monitors",
         lang: "css",
-        code: `@media (min-width: 1440px) {
-  .content {
-    max-width: 1200px;
+        code: `@media (max-device-width: 1366px) {
+  .sidebar {
+    width: 200px;
   }
 }`,
-        note: "`screen.width` gives the display's width in script.",
+        note: "It tests the monitor, not the window: use `width` to follow the window's size.",
       },
+    ],
+    edgeCases: [
+      "Moving the window to a monitor of another size re-evaluates the query and fires `change` on a matching `matchMedia()` list.",
     ],
   },
 
   "media-device-height": {
     examples: [
       {
-        title: "Instead: show more rows when the window is tall",
+        title: "Taller previews on tall monitors",
         lang: "css",
-        code: `@media (min-height: 1000px) {
+        code: `@media (min-device-height: 1400px) {
   .preview {
     height: 480px;
   }
 }`,
       },
     ],
+  },
+
+  "media-prefers-reduced-transparency": {
+    examples: [
+      {
+        title: "Opaque panels when transparency is turned off",
+        lang: "css",
+        code: `.flyout {
+  background-color: rgb(32 32 32 / 0.7);
+  backdrop-filter: blur(20px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .flyout {
+    background-color: rgb(32 32 32);
+    backdrop-filter: none;
+  }
+}`,
+      },
+    ],
+    edgeCases: ["`(prefers-reduced-transparency)` alone matches what `reduce` matches."],
   },
 
   "media-custom-media": {

@@ -414,7 +414,7 @@ body {
     edgeCases: [
       "`color: currentColor` behaves as `inherit`.",
       "`getComputedStyle(el).color` returns `rgb(r, g, b)`, or `rgba(r, g, b, a)` with the alpha rounded to two decimals, whatever color syntax you wrote.",
-      "A value that does not resolve to a color, such as `light-dark()` or a system color, logs an advisory, and the element keeps its inherited color.",
+      "A value that does not resolve to a color, such as a system color, logs an advisory, and the element keeps its inherited color.",
     ],
   },
   "text-align": {

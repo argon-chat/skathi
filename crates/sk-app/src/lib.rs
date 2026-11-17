@@ -76,6 +76,7 @@ mod reload;
 mod shared_gpu;
 mod shutdown;
 mod slot;
+mod transparency;
 pub mod tray;
 mod window;
 

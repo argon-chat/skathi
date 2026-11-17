@@ -51,7 +51,7 @@ const folders = ["inbox", "drafts", "archive"];
     ],
     edgeCases: [
       "`background-color: currentColor` takes the element's computed `color`, including one it inherits. It reads the base `color`: a `:hover` rule that changes `color` does not recolor it.",
-      "A color that does not resolve to a concrete value (`light-dark()`, a system color such as `Canvas`) is dropped with an advisory; switch colors with `@media (prefers-color-scheme: dark)` instead.",
+      "A system color such as `Canvas` does not resolve to a concrete value and is dropped with an advisory; `light-dark()` resolves.",
     ],
   },
   background: {
@@ -150,7 +150,7 @@ defineProps<{ percent: number }>();
     ],
     edgeCases: [
       "A stop list longer than one GPU draw takes is split into bands, so there is no cap on the number of stops.",
-      "A stop whose color does not resolve, such as `light-dark()` or a system color, leaves the whole gradient layer unpainted.",
+      "A stop whose color does not resolve, such as a system color, leaves the whole gradient layer unpainted.",
     ],
   },
   "function-radial-gradient": {
