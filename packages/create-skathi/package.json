@@ -1,0 +1,27 @@
+{
+  "name": "create-skathi",
+  "version": "0.3.0",
+  "description": "Start a new Skathi app: bun create skathi <dir>",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/argon-chat/skathi.git",
+    "directory": "packages/create-skathi"
+  },
+  "type": "module",
+  "bin": {
+    "create-skathi": "./create-skathi.ts"
+  },
+  "files": [
+    "create-skathi.ts"
+  ],
+  "dependencies": {
+    "@skathi-native/cli": "workspace:*"
+  },
+  "engines": {
+    "bun": ">=1.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
