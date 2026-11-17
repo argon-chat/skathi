@@ -8,9 +8,23 @@ fn main() {
         let resources = std::env::var("DEP_SKATHI_GPUI_WINDOWS_RESOURCES")
             .expect("skathi-gpui reports its Windows resources");
         println!("cargo::metadata=windows_resources={resources}");
-        // JSC tells constructors apart by native function pointer, which identical-code folding
-        // merges; JS recursion needs an 8 MiB stack.
-        args.extend(["/OPT:NOICF".into(), "/STACK:8388608,4096".into()]);
+        // JSC tells constructors apart by native function pointer: link.exe's folding merges them,
+        // lld's SAFEICF leaves address-taken functions alone (as sk-app/build.rs). JS recursion
+        // needs an 8 MiB stack.
+        let lld = std::env::var("RUSTC_LINKER").is_ok_and(|linker| {
+            let stem = std::path::Path::new(&linker)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_ascii_lowercase());
+            matches!(stem.as_deref(), Some("rust-lld" | "lld-link"))
+        });
+        if lld && std::env::var("PROFILE").as_deref() == Ok("release") {
+            args.extend(["/OPT:SAFEICF".into(), "/OPT:lldtailmerge".into()]);
+        } else {
+            args.push("/OPT:NOICF".into());
+        }
+        args.push("/STACK:8388608,4096".into());
+        println!("cargo:rerun-if-env-changed=RUSTC_LINKER");
+        println!("cargo:rerun-if-changed=build.rs");
     }
     if os == "macos" {
         args.extend(

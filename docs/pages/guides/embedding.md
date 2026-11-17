@@ -336,6 +336,38 @@ Without `inspector_exe`, F12 says why nothing opened; the devtools protocol work
 - **Single instance and deep links.** `desktop_launch(true)` lets your exe apply the payload's `singleInstance` and protocol settings to the real command line. A second launch that was forwarded to the first returns `Error::LaunchExit(0)`: return that code from `main`.
 - **Hidden at start.** `visible(false)` boots the app without showing its window, for a tray app; `Handle::show()` shows it later. [`appTray`](/app-api/app-tray/) and [`appHotkeys`](/app-api/app-hotkeys/) work in an embedded app as they do in Skathi's own host, and `skathi::tray` and `skathi::hotkeys` give the same services to your Rust code.
 
+### Binary size
+
+Cargo profiles come from your workspace, not from Skathi's, so your exe is built the way your `Cargo.toml` says. Skathi's own release hosts use two settings that take about 12 MB off on Windows without a measurable slowdown, and your exe can use them too:
+
+```toml title="Cargo.toml"
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+
+# Layout, paint and the renderer stay at full speed: at "s" they take 15-30% longer per frame.
+[profile.release.package]
+your-crate.opt-level = 3 # under LTO the final crate's level applies to every crate's code
+sk-app.opt-level = 3
+sk-runtime.opt-level = 3
+sk-tree.opt-level = 3
+sk-css.opt-level = 3
+sk-elements.opt-level = 3
+sk-effects.opt-level = 3
+skathi-gpui.opt-level = 3
+skathi-gpui-windows.opt-level = 3
+skathi-taffy.opt-level = 3
+```
+
+```toml title=".cargo/config.toml"
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = ["-C", "target-feature=+crt-static"]
+```
+
+With `rust-lld`, which ships with rustc, Skathi's build script folds identical JavaScriptCore functions the safe way (`/OPT:SAFEICF`), about 5 MB more. With `link.exe` it turns folding off, because folding there breaks `BigInt` and `Symbol`. The full override list, image and audio decoders included, is in the `[profile.release.package]` section of Skathi's own `Cargo.toml`.
+
 ### macOS owns the main thread
 
 AppKit needs the process main thread, so on macOS `spawn` returns `Error::MainThreadRequired`. `run_on_main_thread` runs the app there instead and keeps the thread until the app closes; the callback runs after shutdown, stops your workers and returns the exit code:
