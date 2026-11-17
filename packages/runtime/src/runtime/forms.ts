@@ -6,7 +6,7 @@ import { firstInTree } from "./labels";
 import { forEachDeep } from "./nodes";
 import { hasWarned, warnCompat } from "../compat";
 import { isRangeInput, syncRangeValue } from "./controls";
-import { propagate, withProps } from "./events";
+import { propagate, propagateClick, withProps } from "./events";
 
 // el.click(): a MouseEvent through the host-click walk, then activation unless cancelled.
 // A disabled control, or a click() inside its own click handler (HTML's "click in progress"), does nothing.
@@ -30,7 +30,7 @@ defineDom("click", function (this: MirrorElement) {
     } catch {
       ev = new CustomEvent("click", init);
     }
-    if (propagate(this, "click", ev)) {
+    if (propagateClick(this, ev)) {
       activateWindowControl(this);
       activate(this, true);
     }

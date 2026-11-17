@@ -126,7 +126,11 @@ export interface MirrorElement extends MirrorNodeBase {
   tagName: string;
   value: string;
   _value: string;
-  _checked?: boolean;
+  /** Native accessors: the host holds a checkbox's and radio's state. */
+  checked: boolean;
+  indeterminate: boolean;
+  /** Option: whether the host's `:checked` property is set. */
+  _shownChecked?: boolean;
   /** Range: IDL/user edits stop value/defaultValue attributes replacing the live value. */
   _rangeDirty?: boolean;
   _trueValue?: unknown;

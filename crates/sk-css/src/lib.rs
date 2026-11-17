@@ -2965,6 +2965,7 @@ fn matches_from_props(pc: &PseudoClass<'_>) -> bool {
         PseudoClass::Disabled
         | PseudoClass::Enabled
         | PseudoClass::Checked
+        | PseudoClass::Indeterminate
         | PseudoClass::Fullscreen(_)
         | PseudoClass::ActiveViewTransition
         | PseudoClass::ActiveViewTransitionType { .. } => true,
@@ -4056,6 +4057,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn checked_and_indeterminate_follow_a_controls_state_not_its_attribute() {
+        let checked = Engine::compile(":checked { opacity: 0.5 }");
+        let indeterminate = Engine::compile(":indeterminate { opacity: 0.5 }");
+        let style = |tag: &'static str, attrs: &'static [(&'static str, &'static str)]| {
+            let node = Node {
+                tag,
+                class: "",
+                attrs,
+            };
+            let hit = |e: &Engine| {
+                e.compute(node, None, &Env::default())
+                    .base
+                    .opacity
+                    .is_some()
+            };
+            (hit(&checked), hit(&indeterminate))
+        };
+        assert_eq!(
+            style("input", &[("type", "checkbox"), ("checked", "")]),
+            (false, false)
+        );
+        assert_eq!(
+            style("input", &[("type", "Radio"), (":checked", "")]),
+            (true, false)
+        );
+        assert_eq!(
+            style("input", &[("type", "text"), (":checked", "")]),
+            (false, false)
+        );
+        assert_eq!(
+            style("input", &[("type", "checkbox"), (":indeterminate", "")]),
+            (false, true)
+        );
+        assert_eq!(
+            style("input", &[("type", "radio"), (":indeterminate", "")]),
+            (false, false)
+        );
+        assert_eq!(style("option", &[(":checked", "")]), (true, false));
+        assert_eq!(style("option", &[("selected", "")]), (false, false));
+    }
+
     fn attr_matches(selector: &str, attrs: &'static [(&'static str, &'static str)]) -> bool {
         let engine = Engine::compile(&format!("{selector} {{ opacity: 0.5 }}"));
         assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
@@ -4308,7 +4351,6 @@ mod tests {
             ".box:placeholder-shown",
             ".box:target",
             ".box:lang(en)",
-            ".box:indeterminate",
             ".box::first-line",
         ] {
             let engine = audited(selector);

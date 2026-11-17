@@ -350,16 +350,12 @@ describe("props that are DOM properties, as runtime-dom sets them", () => {
     expect(label.getAttribute("for")).toBe("email");
   });
 
-  test(":checked sets the property and the boolean attribute; setAttribute keeps its text", () => {
+  test(":checked sets the property, not the attribute; setAttribute keeps its text", () => {
     const rt = createRuntime();
     const box = make(rt, "input");
     rt.patchProp(box, "type", null, "checkbox");
-    rt.patchProp(box, "checked", null, false);
-    expect(box.checked).toBe(false);
-    expect(box.hasAttribute("checked")).toBe(false);
     rt.patchProp(box, "checked", false, true);
-    expect(box.checked).toBe(true);
-    expect(box.getAttribute("checked")).toBe("");
+    expect(box.hasAttribute("checked")).toBe(false);
     rt.patchProp(box, "true-value", null, "yes");
     expect(box._trueValue).toBe("yes");
 

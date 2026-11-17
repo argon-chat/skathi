@@ -6,6 +6,7 @@ import { isMirrorNode } from "./listeners";
 import { activation } from "./activation";
 import { isSelectEl } from "./select";
 import { isDisabledControl } from "./forms";
+import { isToggleInput } from "./controls";
 
 const LABELABLE = new Set(["button", "meter", "output", "progress", "select", "textarea"]);
 const isLabelable = (n: MirrorNode): n is MirrorElement =>
@@ -68,6 +69,7 @@ export function adviseJsSourced(el: MirrorElement, name: string, via: string): v
           isFileInput(n) ||
           (name === "change" &&
             (isSelectEl(n) ||
+              isToggleInput(n) ||
               isColorInput(n) ||
               (n.tag === "input" && String(n.attrs.type).toLowerCase() === "range"))),
       )
@@ -76,7 +78,7 @@ export function adviseJsSourced(el: MirrorElement, name: string, via: string): v
     warnCompat(
       key,
       `${via} — this event type is not delivered by the native host yet: only <input type=file> ` +
-        `(and <select>, <input type=range/color>, for \`change\`) fires it here, so on this element it will never fire`,
+        `(and <select>, checkboxes, radios, <input type=range/color>, for \`change\`) fires it here, so on this element it will never fire`,
     );
   });
 }

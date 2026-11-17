@@ -69,6 +69,32 @@ fn boolean_attr<D: MatchDom>(node: &D, name: &str) -> bool {
     node.attr(name).is_some_and(|v| v != "false")
 }
 
+fn is_toggle_input<D: MatchDom>(node: &D) -> bool {
+    node.has_tag("input")
+        && node.attr("type").is_some_and(|t| {
+            let t = t.trim();
+            t.eq_ignore_ascii_case("checkbox") || t.eq_ignore_ascii_case("radio")
+        })
+}
+
+/// A checkbox's, radio's or option's state lives in the host's `:checked` property; any other
+/// element keeps matching its `checked` attribute, so a `<button :checked>` switch still styles.
+fn checked<D: MatchDom>(node: &D) -> bool {
+    if is_toggle_input(node) || node.has_tag("option") {
+        node.attr(":checked").is_some()
+    } else {
+        !node.has_tag("input") && boolean_attr(node, "checked")
+    }
+}
+
+fn indeterminate<D: MatchDom>(node: &D) -> bool {
+    is_toggle_input(node)
+        && node
+            .attr("type")
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case("checkbox"))
+        && node.attr(":indeterminate").is_some()
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct El<D: MatchDom>(pub D);
 
@@ -173,7 +199,8 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             }
             PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
-            PseudoClass::Checked => boolean_attr(&self.0, "checked"),
+            PseudoClass::Checked => checked(&self.0),
+            PseudoClass::Indeterminate => indeterminate(&self.0),
             PseudoClass::Fullscreen(_) => self.0.attr(":fullscreen").is_some(),
             PseudoClass::ActiveViewTransition => active_view_transition(&self.0).is_some(),
             PseudoClass::ActiveViewTransitionType { kind } => active_view_transition(&self.0)

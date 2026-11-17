@@ -549,8 +549,9 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
         .or_else(|| t.prop(id, "aria-pressed").and_then(tristate))
         .or_else(|| {
             matches!(role, Role::CheckBox | Role::RadioButton | Role::Switch).then(|| {
-                match t.prop(id, "checked") {
-                    Some(v) if html_bool(v) => Toggled::True,
+                match (crate::toggle::kind(t, id), t.prop(id, "checked")) {
+                    (Some(k), _) => crate::toggle::aria_state(t, id, k),
+                    (None, Some(v)) if html_bool(v) => Toggled::True,
                     _ => Toggled::False,
                 }
             })

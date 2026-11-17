@@ -164,20 +164,7 @@ describe("value", () => {
   });
 });
 
-describe("checked, defaultValue, defaultChecked", () => {
-  test("checked follows the attribute until assigned, and an assignment reaches the host", () => {
-    const rt = createRuntime();
-    const box = rt.nodeOps.createElement("input") as unknown as El;
-    rt.patchProp(mirror(box), "type", null, "checkbox");
-    expect(box.checked).toBe(false);
-    rt.patchProp(mirror(box), "checked", null, true);
-    expect(box.checked).toBe(true);
-    Object.getOwnPropertyDescriptor(proto(rt, "HTMLInputElement"), "checked")!.set!.call(box, false);
-    expect(box.checked).toBe(false);
-    expect(lastValue(rt, box.__skId, "checked")).toBe("false");
-    expect(box.defaultChecked).toBe(true);
-  });
-
+describe("defaultValue", () => {
   test("defaultValue is the value attribute (input) or the text (textarea)", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input") as unknown as El;

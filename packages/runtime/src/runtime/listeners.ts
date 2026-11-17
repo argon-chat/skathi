@@ -18,6 +18,7 @@ import { RUNTIME_FIRED_EVENTS, blocksImplicitSubmission, isResetButton, isSubmit
 import { adviseJsSourced } from "./labels";
 import { isColorInput, isFileInput, isLabel } from "./file-input";
 import { isLink } from "./links";
+import { isToggleInput } from "./controls";
 import type { DndGesture } from "./dnd";
 
 export function ensureBuckets(m: HandlerMap, name: string): Buckets {
@@ -71,11 +72,21 @@ export function syncListenerFlag(self: MirrorNode, name: string): void {
     on = NAMES_BY_CODE[code]!.some((n) => [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)));
     if (!on && dndWants(code)) on = true;
   }
-  // Activation behaviour: a link, `<label>`, file/color input and submit/reset button listen for their own click;
+  // Activation behaviour: a link, `<label>`, file/color input, checkbox, radio and submit/reset button listen for
+  // their own click;
   // file/color inputs also hear Enter/Space, and a text-like `<input>` submits on Enter.
   if (!on && code === EV_CODES.click) {
     const n = self;
-    if (n && (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)))
+    if (
+      n &&
+      (isLabel(n) ||
+        isFileInput(n) ||
+        isColorInput(n) ||
+        isToggleInput(n) ||
+        isLink(n) ||
+        isSubmitButton(n) ||
+        isResetButton(n))
+    )
       on = true;
   }
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {

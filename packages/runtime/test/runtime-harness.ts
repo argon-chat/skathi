@@ -707,6 +707,8 @@ export function createRuntime(
     "__sk_perf_advise",
     "__sk_perf_frame",
     "__sk_perf_visible",
+    "__sk_toggle_begin",
+    "__sk_toggle_end",
     ...Object.keys(style.fns),
   ];
   const args = [
@@ -907,6 +909,8 @@ export function createRuntime(
           return host.perf.visible(id);
         }
       : undefined,
+    () => -1,
+    () => false,
     ...Object.entries(style.fns).map(([name, fn]) => (...a: unknown[]) => {
       host.styleCalls[name] = (host.styleCalls[name] ?? 0) + 1;
       return Reflect.apply(fn, undefined, a);

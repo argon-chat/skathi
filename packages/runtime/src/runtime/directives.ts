@@ -75,24 +75,97 @@ export const vModelText = {
   },
 };
 
-// Every input renders as a text field: dynamic/checkbox/radio fall back to text behavior with an advisory.
-function modelFallback(kind: string) {
-  return {
-    created(el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) {
-      warnCompat(
-        `v-model:${kind}`,
-        `v-model on ${kind} inputs is not implemented natively yet — falling back to text ` +
-          `semantics; use modelValue/onUpdate:modelValue on a component meanwhile`,
-      );
-      vModelText.created(el, binding, vnode);
-    },
-    mounted: vModelText.mounted,
-    beforeUpdate: vModelText.beforeUpdate,
-  };
+const own = (el: MirrorElement, key: string): boolean => Object.prototype.hasOwnProperty.call(el, key);
+
+/** runtime-dom's `getValue`: the bound `:value` as it was, not its string. */
+const toggleValue = (el: MirrorElement): unknown => (own(el, "_rawValue") ? el._rawValue : el.value);
+
+function checkboxValue(el: MirrorElement, checked: boolean): unknown {
+  const key = checked ? "_trueValue" : "_falseValue";
+  return own(el, key) ? el[key] : checked;
 }
-export const vModelDynamic = modelFallback("dynamic");
-export const vModelCheckbox = modelFallback("checkbox");
-export const vModelRadio = modelFallback("radio");
+
+function setChecked(el: MirrorElement, { value, oldValue }: DirectiveBindingLike, vnode: VNodeLike): void {
+  el._modelValue = value;
+  let checked: boolean;
+  if (Array.isArray(value)) checked = looseIndexOf(value, vnode.props?.value) > -1;
+  else if (value instanceof Set) checked = value.has(vnode.props?.value);
+  else {
+    if (value === oldValue) return;
+    checked = looseEqual(value, checkboxValue(el, true));
+  }
+  if (el.checked !== checked) el.checked = checked;
+}
+
+export const vModelCheckbox = {
+  deep: true,
+  created(el: MirrorElement, _binding: DirectiveBindingLike, vnode: VNodeLike) {
+    el[assignKey] = modelAssigner(vnode);
+    el.addEventListener("change", () => {
+      const model = el._modelValue;
+      const value = toggleValue(el);
+      const checked = el.checked;
+      const assign = el[assignKey] as ((value: unknown) => void) | null | undefined;
+      if (!assign) return;
+      if (Array.isArray(model)) {
+        const index = looseIndexOf(model, value);
+        if (checked && index === -1) assign(model.concat([value]));
+        else if (!checked && index !== -1) assign(model.filter((_, i) => i !== index));
+      } else if (model instanceof Set) {
+        const next = new Set(model);
+        if (checked) next.add(value);
+        else next.delete(value);
+        assign(next);
+      } else {
+        assign(checkboxValue(el, checked));
+      }
+    });
+  },
+  mounted: setChecked,
+  beforeUpdate(el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) {
+    el[assignKey] = modelAssigner(vnode);
+    setChecked(el, binding, vnode);
+  },
+};
+
+export const vModelRadio = {
+  created(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
+    el.checked = looseEqual(value, vnode.props?.value);
+    el[assignKey] = modelAssigner(vnode);
+    el.addEventListener("change", () => {
+      (el[assignKey] as ((value: unknown) => void) | null | undefined)?.(toggleValue(el));
+    });
+  },
+  beforeUpdate(el: MirrorElement, { value, oldValue }: DirectiveBindingLike, vnode: VNodeLike) {
+    el[assignKey] = modelAssigner(vnode);
+    if (value !== oldValue) el.checked = looseEqual(value, vnode.props?.value);
+  },
+};
+
+type ModelHook = "created" | "mounted" | "beforeUpdate" | "updated";
+type ModelDirective = Partial<
+  Record<ModelHook, (el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) => void>
+>;
+
+function dynamicModel(el: MirrorElement, vnode: VNodeLike): ModelDirective {
+  if (el.tag === "select") return vModelSelect;
+  if (el.tag === "textarea") return vModelText;
+  const type = vnode.props?.type;
+  return type === "checkbox" ? vModelCheckbox : type === "radio" ? vModelRadio : vModelText;
+}
+
+const dynamicHook =
+  (hook: ModelHook) =>
+  (el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike): void =>
+    dynamicModel(el, vnode)[hook]?.(el, binding, vnode);
+
+/** `v-model` on an `<input :type>`: the directive the type picks, as runtime-dom does. */
+export const vModelDynamic = {
+  created: dynamicHook("created"),
+  mounted: dynamicHook("mounted"),
+  beforeUpdate: dynamicHook("beforeUpdate"),
+  updated: dynamicHook("updated"),
+};
 
 function looseEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;

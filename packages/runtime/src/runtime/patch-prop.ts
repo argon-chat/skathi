@@ -12,7 +12,7 @@ import {
   selectednessChanged,
   setOptionSelected,
 } from "./select";
-import { isRangeInput, syncRangeValue, writeControlValue } from "./controls";
+import { isRangeInput, isToggleInput, syncRangeValue, writeControlValue } from "./controls";
 import { notifyMutation } from "./mutation-observer";
 import { RUNTIME_FIRED_EVENTS } from "./forms";
 import { adviseJsSourced } from "./labels";
@@ -120,11 +120,13 @@ export function patchProp(el: MirrorElement, key: string, prev: unknown, next: u
   } else if (key === "selected" && isOptionEl(el) && !foreignNamespace(namespace)) {
     patchAttribute(el, ...attributeOf(el, key, next, namespace));
     setOptionSelected(el, next === "" || !!next);
+  } else if ((key === "checked" || key === "indeterminate") && el.tag === "input" && !foreignNamespace(namespace)) {
+    // runtime-dom assigns the property: the attribute stays the default, as in a browser.
+    el[key] = next === "" || !!next;
   } else {
     if (key === "true-value") el._trueValue = next;
     else if (key === "false-value") el._falseValue = next;
-    else if (key === "checked" && el.tag === "input" && !foreignNamespace(namespace))
-      el._checked = next === "" || !!next;
+    else if (key === "value" && isToggleInput(el) && !foreignNamespace(namespace)) el._rawValue = next;
     patchAttribute(el, ...attributeOf(el, key, next, namespace));
   }
 }
@@ -136,7 +138,9 @@ function attributeOf(el: MirrorElement, key: string, next: unknown, namespace: u
   const on = (): string | null => (next === "" || !!next ? "" : null); // runtime-dom's includeBooleanAttr
   if (SPECIAL_BOOLEAN_ATTRS.has(key)) return [key, on()];
   if (foreignNamespace(namespace)) return [key, next];
-  if ((key === "checked" && el.tag === "input") || (key === "selected" && el.tag === "option")) return [key, on()];
+  if (key === "selected" && el.tag === "option") return [key, on()];
+  // A checkbox's model value can be any object; `_rawValue` keeps it, the attribute gets its string.
+  if (key === "value" && isToggleInput(el) && next !== null && typeof next === "object") return [key, String(next)];
   const r = reflectedOf(el, key);
   if (!r) return [key, next];
   if (r.kind === "bool") return [r.attr, on()];

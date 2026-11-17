@@ -15,7 +15,7 @@ import { MEDIA_CONSTANTS, TAG_CLASSES, TAG_PARENTS } from "./tags";
 
 /** Members each tag class's PROTOTYPE carries as own accessors; each delegates to the element's own path, so behaviour is the same however it is reached. */
 const TAG_ACCESSORS: Record<string, readonly string[]> = {
-  INPUT: ["value", "checked", "defaultValue", "defaultChecked"],
+  INPUT: ["value", "checked", "defaultValue", "defaultChecked", "indeterminate"],
   TEXTAREA: ["value", "defaultValue"],
   SELECT: ["value", "selectedIndex"],
   OPTION: ["value", "selected"],

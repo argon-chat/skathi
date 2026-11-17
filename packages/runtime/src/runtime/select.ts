@@ -87,6 +87,12 @@ export function selectValue(sel: MirrorElement): string {
 }
 
 function showSelected(sel: MirrorElement): void {
+  for (const o of selectOptions(sel)) {
+    const on = !!o._selected;
+    if (!!o._shownChecked === on) continue;
+    o._shownChecked = on;
+    __sk_set_prop(o.__skId, I(":checked"), on ? "" : undefined);
+  }
   const ix = selectedIndexOf(sel);
   if (sel._shown === ix) return;
   sel._shown = ix;

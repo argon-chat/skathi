@@ -10,6 +10,7 @@ import {
   mods,
   propagate,
   propagateAtDocument,
+  propagateClick,
   synthesize,
   withProps,
 } from "./events";
@@ -345,7 +346,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
     const ev = synthesize(name, a, b, c, d, key, data, isImg || isFrameEl(target) ? "img" : undefined);
     if (focusChange) withRelatedTarget(ev, focusRelated);
     if (!proceed && ev.preventDefault) ev.preventDefault();
-    proceed = propagate(target, name, ev) && proceed;
+    proceed = (name === "click" ? propagateClick(target, ev) : propagate(target, name, ev)) && proceed;
     if (link && proceed) activate(target, true);
     if (name === "contextmenu" && proceed) {
       warnCompat(

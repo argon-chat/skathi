@@ -6,7 +6,7 @@ import { branded } from "./collections";
 import { setClassText } from "./patch-prop";
 import { canonicalEvent } from "./event-names";
 import { isMirrorEl, ownExpando } from "./controls";
-import { propagate } from "./events";
+import { propagate, propagateClick } from "./events";
 import { domError } from "./tree-ops";
 import { activate, activateWindowControl, isActivationEvent } from "./links";
 import { AttrImpl, attrParts } from "./attr";
@@ -292,7 +292,7 @@ defineDom(
   function (this: MirrorNode, ev: Event) {
     if (!ev || typeof ev.type !== "string") return true;
     const name = canonicalEvent(ev.type);
-    const proceed = propagate(this, name, ev);
+    const proceed = name === "click" ? propagateClick(this, ev) : propagate(this, name, ev);
     // DOM activation step: an uncancelled dispatched click acts like a real one (FileSaver.js; `el.click()` is built on it).
     if (proceed && name === "click" && isActivationEvent(ev)) {
       activateWindowControl(this);

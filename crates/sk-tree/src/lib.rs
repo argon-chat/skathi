@@ -44,6 +44,7 @@ mod sticky;
 mod style_decl;
 pub mod surface;
 mod svg;
+mod toggle;
 mod tree;
 mod video;
 mod view_transition;
@@ -198,6 +199,9 @@ host_fn!(fn sk_set_prop(g, args) {
     perf::note_dom(perf::DomOp::Prop);
     let (img_src, frame_attr) = tree::with_tree(|t| {
         t.set_prop(id, key, value);
+        if t.name(key) == "checked" {
+            toggle::attribute_changed(t, id);
+        }
         let tag = t.node(id).map(|n| t.name(n.tag));
         let name = t.name(key);
         (name == "src" && tag == Some("img"), tag == Some("iframe") && iframe::is_frame_attr(name))
@@ -459,6 +463,7 @@ pub fn install(rt: &JsRuntime) {
     pointer::install(rt);
     native_dom::install(rt);
     geometry_js::install(rt);
+    toggle::install(rt);
     pointer_lock::install(rt);
     observe::install(rt);
     font_api::install(rt);

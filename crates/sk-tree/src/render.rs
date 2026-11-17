@@ -2335,10 +2335,12 @@ fn build_node<V: 'static>(
                 let is_color = t.name(node.tag) == "input"
                     && t.prop(id, "type")
                         .is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
+                let toggle = crate::toggle::kind(t, id);
                 let is_input = matches!(t.name(node.tag), "input" | "textarea")
                     && !is_file_input
                     && !is_range
-                    && !is_color;
+                    && !is_color
+                    && toggle.is_none();
                 // Both are tabbable by default in HTML; a plain <div> is not. A disabled file input is
                 // not focusable at all.
                 let file_tab =
@@ -2349,7 +2351,10 @@ fn build_node<V: 'static>(
                 // container's `@keydown` hears descendants by bubbling).
                 let disabled = !is_input && actually_disabled(t, id);
                 let tab_index = tab_index_of(t, id)
-                    .or((is_input || file_tab || is_range || is_color).then_some(0))
+                    .or(
+                        (is_input || file_tab || is_range || is_color || toggle.is_some())
+                            .then_some(0),
+                    )
                     .or_else(|| default_tab_index(t, id))
                     .filter(|_| !disabled);
 
@@ -2406,6 +2411,7 @@ fn build_node<V: 'static>(
                     // A `<select>`'s keys: its popup's before the page's, a closed one's after them.
                     d = crate::select::bind_root(d);
                     d = crate::range::bind_root(d);
+                    d = crate::toggle::bind_root(d);
                     d = bind_root_key_clicks(d);
                 }
 
@@ -2491,6 +2497,12 @@ fn build_node<V: 'static>(
                     }
                     if is_file_input {
                         kids.push(file_input_children(t, id, node, case));
+                    } else if let Some(k) = toggle {
+                        let skin = extras.appearance_none != Some(true);
+                        crate::toggle::defaults(d.style(), k, skin);
+                        if skin {
+                            kids.push(crate::toggle::skin(t, id, k, window));
+                        }
                     } else if is_select {
                         let skin = extras.appearance_none != Some(true);
                         kids.extend(crate::select::closed_children(t, id, skin, case));
@@ -3738,7 +3750,7 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
     crate::range::press_settled(press.cancelled, window, cx);
 }
 
-fn sync_focus_events(window: &mut Window, cx: &mut App) {
+pub(crate) fn sync_focus_events(window: &mut Window, cx: &mut App) {
     let k = windows::key(window);
     let now = match focused_node(window, cx) {
         None => 0,

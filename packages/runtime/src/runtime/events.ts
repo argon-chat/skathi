@@ -6,11 +6,11 @@ import { ClipboardEventClass, isResetButton, isSubmitButton } from "./forms";
 import { traceCallbackBegin, traceCallbackEnd } from "./realm";
 import { bucketsAlive, disposeGlobalListener, globalHandlers, isMirrorNode, syncListenerFlag } from "./listeners";
 import { handlers } from "./nodes";
-import { isColorInput, isFileInput, isLabel } from "./file-input";
-import { isLink } from "./links";
+import { fileEvent, isColorInput, isFileInput, isLabel } from "./file-input";
+import { isActivationEvent, isLink } from "./links";
 import { appRoot } from "./root";
 import { theGlobal } from "./interfaces";
-import { isMirrorEl, ownExpando } from "./controls";
+import { isMirrorEl, isToggleInput, ownExpando } from "./controls";
 
 // `on<event>` IDL handlers: one listener per element and type, kept in its place in the listener order while
 // the handler changes; `null` removes it; a handler returning `false` cancels the event. On a non-mirror
@@ -541,6 +541,17 @@ export function propagate(target: MirrorNode, name: string, ev: Event): boolean 
   return !ev.defaultPrevented;
 }
 
+/** A click on a checkbox or radio toggles it before the listeners run and is put back if one cancels it; otherwise `input` and `change` follow. */
+export function propagateClick(target: MirrorNode, ev: Event): boolean {
+  const token = isToggleInput(target) && isActivationEvent(ev) ? __sk_toggle_begin(target.__skId) : -1;
+  const proceed = propagate(target, "click", ev);
+  if (token !== -1 && __sk_toggle_end(target.__skId, token, !proceed)) {
+    propagate(target, "input", fileEvent("input"));
+    propagate(target, "change", fileEvent("change"));
+  }
+  return proceed;
+}
+
 /** An event targeted at the document (`selectionchange`): window capture, the document's own, then window bubble if it bubbles. */
 export function propagateAtDocument(name: string, ev: Event): boolean {
   const document = globalThis.document as object | undefined;
@@ -615,7 +626,15 @@ export const ACTIVATING_EVENTS = new Set([
 
 export function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
-    if (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))
+    if (
+      isLabel(n) ||
+      isFileInput(n) ||
+      isColorInput(n) ||
+      isToggleInput(n) ||
+      isLink(n) ||
+      isSubmitButton(n) ||
+      isResetButton(n)
+    )
       return true;
   }
   return false;

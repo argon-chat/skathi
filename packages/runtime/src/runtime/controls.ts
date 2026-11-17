@@ -13,6 +13,16 @@ export function isMirrorEl(x: unknown): x is MirrorElement {
   return !!x && typeof x === "object" && Object.prototype.hasOwnProperty.call(x, "_value");
 }
 
+/** A checkbox or radio: the host holds its state and runs its activation. */
+export function isToggleInput(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  if (!e || e.kind !== 1 || e.tag !== "input") return false;
+  const type = String(e.attrs?.type ?? "")
+    .trim()
+    .toLowerCase();
+  return type === "checkbox" || type === "radio";
+}
+
 export function isRangeInput(el: MirrorElement): boolean {
   return el.kind === 1 && el.tag === "input" && String(el.attrs?.type ?? "").toLowerCase() === "range";
 }
@@ -78,6 +88,7 @@ defineDomGet(
     if (!isMirrorEl(this)) return undefined;
     if (isSelectEl(this)) return selectValue(this);
     if (isOptionEl(this)) return optionValue(this);
+    if (isToggleInput(this)) return this.attrs.value ?? "on";
     if (isRangeInput(this)) return rangeValue(this, this._value);
     if (isColorInput(this)) return colorValue(this._value);
     return this._value;
@@ -85,7 +96,7 @@ defineDomGet(
   function (this: MirrorElement, v: unknown) {
     if (!isMirrorEl(this)) return ownExpando(this, "value", v);
     if (isSelectEl(this)) setSelectValue(this, String(v));
-    else if (isOptionEl(this)) patchAttribute(this, "value", String(v));
+    else if (isOptionEl(this) || isToggleInput(this)) patchAttribute(this, "value", String(v));
     else if (VALUE_TAGS.has(this.tag)) writeControlValue(this, v);
     else this._value = v as string;
   } as (value: never) => void,
@@ -124,28 +135,6 @@ defineDom("stepDown", function (this: MirrorElement, n?: unknown) {
   stepRange(this, n, -1);
 });
 
-function attrChecked(el: MirrorElement): boolean {
-  const a = el.attrs?.checked;
-  return a != null && a !== "false";
-}
-
-defineDomGet(
-  "checked",
-  function (this: MirrorElement) {
-    if (!isMirrorEl(this) || this.tag !== "input") return isMirrorEl(this) ? this._checked : undefined;
-    return this._checked ?? attrChecked(this);
-  },
-  function (this: MirrorElement, v: unknown) {
-    if (!isMirrorEl(this)) return ownExpando(this, "checked", v);
-    if (this.tag !== "input") {
-      this._checked = v as boolean;
-      return;
-    }
-    this._checked = !!v;
-    __sk_set_prop(this.__skId, I("checked"), String(!!v));
-  } as (value: never) => void,
-);
-
 defineDomGet(
   "defaultValue",
   function (this: MirrorElement) {
@@ -159,17 +148,5 @@ defineDomGet(
       return ownExpando(this, "defaultValue", v);
     if (this.tag === "input") this.setAttribute("value", v == null ? "" : String(v));
     else (this as unknown as { textContent: string }).textContent = v == null ? "" : String(v);
-  } as (value: never) => void,
-);
-
-defineDomGet(
-  "defaultChecked",
-  function (this: MirrorElement) {
-    return isMirrorEl(this) && this.tag === "input" ? attrChecked(this) : undefined;
-  },
-  function (this: MirrorElement, v: unknown) {
-    if (!isMirrorEl(this) || this.tag !== "input") return ownExpando(this, "defaultChecked", v);
-    if (v) this.setAttribute("checked", "");
-    else this.removeAttribute("checked");
   } as (value: never) => void,
 );
