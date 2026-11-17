@@ -7,6 +7,7 @@ import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import PageActions from "../components/PageActions.vue";
 import Parallax from "../components/Parallax.astro";
+import Pup from "../components/Pup.astro";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, statusLabels, version } from "../lib/docs";
@@ -156,6 +157,7 @@ const structuredData = {
           ))
         }
       </nav>
+      <div class="sidebar-pup"><Pup /></div>
       <div class="sidebar-bottom">
         <a class="agent-link" href="/llms.txt"
           ><Icon name="terminal" size={17} /><span>Built for your agent, too</span><Icon name="arrow" size={14} /></a
@@ -291,6 +293,7 @@ const structuredData = {
     <script>
       import "../scripts/docs";
       import "../scripts/parallax";
+      import "../scripts/pup";
     </script>
   </body>
 </html>

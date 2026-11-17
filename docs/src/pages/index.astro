@@ -11,6 +11,7 @@ import slang from "../lib/slang";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import Parallax from "../components/Parallax.astro";
+import Pup from "../components/Pup.astro";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { docsHome, repository, version } from "../lib/docs";
 import { fetchStats } from "../lib/stats";
@@ -453,11 +454,13 @@ const structuredData = {
         target="_blank"
         rel="noreferrer">MIT / Apache-2.0</a
       >
+      <Pup class="landing-pup" />
     </footer>
     <script>
       import "../scripts/docs";
       import "../scripts/landing";
       import "../scripts/parallax";
+      import "../scripts/pup";
     </script>
   </body>
 </html>

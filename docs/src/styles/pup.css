@@ -1,0 +1,115 @@
+@layer components {
+  /* An art pixel is k device pixels, k being devicePixelRatio rounded with halves down; pup.ts covers
+     the ratios not listed here. 75px divides evenly at 1.25, 1.5 and 2.5, and the art keeps a clear
+     edge all round. */
+  .pup {
+    --pup-px: 1;
+    position: relative;
+    width: calc(75px * var(--pup-px));
+    height: calc(75px * var(--pup-px));
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  @media (resolution: 1.25dppx) {
+    .pup {
+      --pup-px: calc(1 / 1.25);
+    }
+  }
+  @media (resolution: 1.5dppx) {
+    .pup {
+      --pup-px: calc(1 / 1.5);
+    }
+  }
+  @media (resolution: 1.75dppx) {
+    .pup {
+      --pup-px: calc(2 / 1.75);
+    }
+  }
+  @media (resolution: 2.5dppx) {
+    .pup {
+      --pup-px: calc(2 / 2.5);
+    }
+  }
+  .pup-body {
+    position: absolute;
+    left: var(--pup-dx, 0px);
+    top: var(--pup-dy, 0px);
+    width: 100%;
+    height: 100%;
+  }
+  .pup-body img {
+    width: 100%;
+    height: 100%;
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+    pointer-events: none;
+  }
+  .pup:hover .pup-body {
+    animation: pup-hop 700ms step-end;
+  }
+  .pup-heart {
+    position: absolute;
+    left: calc(17px * var(--pup-px) + var(--pup-dx, 0px));
+    top: calc(18px * var(--pup-px) + var(--pup-dy, 0px));
+    width: calc(7px * var(--pup-px));
+    height: calc(6px * var(--pup-px));
+    fill: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .pup.is-loved .pup-heart {
+    animation: pup-love 960ms step-end;
+  }
+  @keyframes pup-hop {
+    0%,
+    30%,
+    60% {
+      transform: none;
+    }
+    12%,
+    42% {
+      transform: translateY(calc(-3px * var(--pup-px)));
+    }
+  }
+  @keyframes pup-love {
+    0% {
+      opacity: 1;
+      transform: none;
+    }
+    25% {
+      transform: translateY(calc(-2px * var(--pup-px)));
+    }
+    50% {
+      transform: translateY(calc(-4px * var(--pup-px)));
+    }
+    75% {
+      opacity: 0.5;
+      transform: translateY(calc(-6px * var(--pup-px)));
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  .sidebar-pup {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 22px;
+  }
+  /* The art's clear bottom row lies over the line, so the feet stand on it. */
+  .sidebar-pup .pup {
+    margin-bottom: calc(-1px * var(--pup-px));
+  }
+  .landing-footer {
+    position: relative;
+  }
+  .landing-pup {
+    position: absolute;
+    right: 8px;
+    bottom: calc(100% + 1px - 1px * var(--pup-px));
+  }
+  @media (max-height: 640px) {
+    .sidebar-pup {
+      display: none;
+    }
+  }
+}
