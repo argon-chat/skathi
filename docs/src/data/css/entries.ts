@@ -2837,8 +2837,19 @@ const valuesAndUnits = section("Values and units", [
   sh("all", NO, "Resets every property of an element, except `direction` and `unicode-bidi`, at once.", {
     related: ["keyword-initial", "keyword-unset", "keyword-revert"],
   }),
-  fn("calc-size()", NO, "Performs calculations on intrinsic sizes such as `auto` or `fit-content`.", {
-    related: ["function-calc"],
+  fn("calc-size()", OK, "Performs calculations on intrinsic sizes such as `auto` or `fit-content`.", {
+    since: "0.4.0",
+    notes: [
+      "Works in `width`, `height`, their `min-*` and `max-*`, the logical sizes and `flex-basis`: `calc-size(auto, size + 20px)`, `calc-size(fit-content, size * .5)`.",
+      "The basis is `auto`, `min-content`, `max-content`, `fit-content`, `content` (in `flex-basis`), `any`, a length or percentage, or another `calc-size()`. Layout measures the box at its basis and `size` is that measured size.",
+      "Interpolates with lengths and with another `calc-size()` of the same basis, so `height: 0` to `calc-size(auto, size)` transitions; `interpolate-size: allow-keywords` does the same for `auto`.",
+    ],
+    limitations: [
+      "The calculation is linear in `size`: `min()`, `max()`, `clamp()` and the stepped functions around `size`, and a percentage multiplied by `size`, make the declaration invalid.",
+      "A box is measured with every other `calc-size()` box in the same layout at its basis, so a `calc-size()` box inside another sees its parent's basis size.",
+      "`stretch` is not a basis.",
+    ],
+    related: ["function-calc", "interpolate-size", "width", "height", "flex-basis"],
   }),
   fn("anchor-size()", NO, "Returns a size of an anchor element, for sizing a positioned element.", {
     related: ["function-anchor", "anchor-name"],
