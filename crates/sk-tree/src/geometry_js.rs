@@ -79,7 +79,7 @@ unsafe fn note_stale(g: *mut c_void) {
 unsafe fn rect(g: *mut c_void, this: u64, kind: &str, painted: bool) -> Option<Rect> {
     let id = node_id(g, this)?;
     perf::note_read(Read::Layout);
-    match crate::dom::bounds(id) {
+    match crate::dom::current_bounds(id) {
         (Some(r), _) => Some(if painted {
             crate::dom::transformed(id).unwrap_or(r)
         } else {

@@ -1,4 +1,5 @@
-import type { MirrorElement } from "./types";
+import type { MirrorElement, MirrorRect } from "./types";
+import { nodeOps } from "./node-ops";
 import { writeClass } from "./patch-prop";
 import {
   BaseTransition,
@@ -8,6 +9,7 @@ import {
   defineComponent,
   getCurrentInstance,
   getTransitionRawChildren,
+  onUpdated,
   h,
   resolveTransitionHooks,
   setTransitionHooks,
@@ -15,7 +17,6 @@ import {
   useTransitionState,
 } from "@vue/runtime-core";
 import type { VNode } from "@vue/runtime-core";
-import { warnCompat } from "../compat";
 
 // `<Transition>`/`<TransitionGroup>` live in runtime-dom, but libraries import them from "vue" at module scope, so
 // their absence breaks builds. Ported onto our transition engine.
@@ -65,42 +66,87 @@ function listTimeout(delays: string[], durations: string[]): number {
   return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i]!)));
 }
 
-function transitionTimeout(el: MirrorElement): number {
-  // `getComputedStyle` is installed by this file, so it is off the engine's declared surface; hence the cast.
-  const styles = (
+type CssKind = "transition" | "animation";
+interface TransitionInfo {
+  type: CssKind | null;
+  timeout: number;
+  propCount: number;
+  hasTransform: boolean;
+}
+
+function computedStyle(el: MirrorElement): Record<string, string> {
+  // `getComputedStyle` is installed by this runtime, so it is off the engine's declared surface; hence the cast.
+  return (
     globalThis as unknown as { getComputedStyle: (el: MirrorElement) => Record<string, string> }
   ).getComputedStyle(el);
+}
+
+/** runtime-dom's `getTransitionInfo`: which of the CSS transitions and animations an element runs ends last, or `expected`'s. */
+function transitionInfo(el: MirrorElement, expected?: string): TransitionInfo {
+  const styles = computedStyle(el);
   const split = (k: string) => String(styles[k] || "").split(", ");
-  return listTimeout(split("transitionDelay"), split("transitionDuration"));
+  const transitionDurations = split("transitionDuration");
+  const transitionTimeout = listTimeout(split("transitionDelay"), transitionDurations);
+  const animationDurations = split("animationDuration");
+  const animationTimeout =
+    String(styles.animationName || "none") === "none" ? 0 : listTimeout(split("animationDelay"), animationDurations);
+  let type: CssKind | null = null;
+  let timeout = 0;
+  let propCount = 0;
+  if (expected === "transition") {
+    if (transitionTimeout > 0)
+      [type, timeout, propCount] = ["transition", transitionTimeout, transitionDurations.length];
+  } else if (expected === "animation") {
+    if (animationTimeout > 0) [type, timeout, propCount] = ["animation", animationTimeout, animationDurations.length];
+  } else {
+    timeout = Math.max(transitionTimeout, animationTimeout);
+    type = timeout > 0 ? (transitionTimeout > animationTimeout ? "transition" : "animation") : null;
+    propCount =
+      type === "transition" ? transitionDurations.length : type === "animation" ? animationDurations.length : 0;
+  }
+  const hasTransform = type === "transition" && /\b(transform|all)(,|$)/.test(String(styles.transitionProperty || ""));
+  return { type, timeout, propCount, hasTransform };
 }
 
 let endId = 0;
-/// Ends a phase on the real `transitionend`, with the computed timeout as a safety net (the timer alone reports the
-/// declared duration even when the engine cut the transition short).
-function whenTransitionEnds(el: MirrorElement, explicitTimeout: number | null | undefined, resolve: () => void): void {
+/// Ends a phase when the element's own `transitionend`s or `animationend`s have all arrived, with the computed timeout
+/// as a safety net (the timer alone reports the declared duration even when the engine cut the run short).
+function whenTransitionEnds(
+  el: MirrorElement,
+  expectedType: string | undefined,
+  explicitTimeout: number | null | undefined,
+  resolve: () => void,
+): void {
   const id = (el._endId = ++endId);
   let done = false;
   const resolveIfNotStale = () => {
     if (done || id !== el._endId) return;
     done = true;
-    el.removeEventListener?.("transitionend", onEnd);
     resolve();
-  };
-  const onEnd = (e: Event) => {
-    // Only this element's own transitions end the phase; a descendant's bubbles through.
-    if (e.target === el) resolveIfNotStale();
   };
   if (explicitTimeout != null) {
     setTimeout(resolveIfNotStale, explicitTimeout);
     return;
   }
-  const timeout = transitionTimeout(el);
-  if (!timeout) {
+  const { type, timeout, propCount } = transitionInfo(el, expectedType);
+  if (!type) {
     resolve();
     return;
   }
-  el.addEventListener?.("transitionend", onEnd);
-  setTimeout(resolveIfNotStale, timeout + 1);
+  const endEvent = `${type}end`;
+  let ended = 0;
+  const finish = () => {
+    el.removeEventListener?.(endEvent, onEnd);
+    resolveIfNotStale();
+  };
+  const onEnd = (e: Event) => {
+    // Only this element's own runs end the phase; a descendant's bubbles through.
+    if (e.target === el && ++ended >= propCount) finish();
+  };
+  el.addEventListener?.(endEvent, onEnd);
+  setTimeout(() => {
+    if (ended < propCount) finish();
+  }, timeout + 1);
 }
 
 const callHook = (hook: unknown, args: unknown[] = []) => {
@@ -147,6 +193,7 @@ export function resolveTransitionProps(rawProps: TransitionRawProps) {
   if (rawProps.css === false) return baseProps;
   const {
     name = "v",
+    type,
     duration,
     enterFromClass = `${name}-enter-from`,
     enterActiveClass = `${name}-enter-active`,
@@ -191,7 +238,7 @@ export function resolveTransitionProps(rawProps: TransitionRawProps) {
     nextFrame(() => {
       removeTransitionClass(el, isAppear ? appearFromClass : enterFromClass);
       addTransitionClass(el, isAppear ? appearToClass : enterToClass);
-      if (!hasExplicitCallback(hook)) whenTransitionEnds(el, enterDuration, resolve);
+      if (!hasExplicitCallback(hook)) whenTransitionEnds(el, type, enterDuration, resolve);
     });
   };
 
@@ -217,7 +264,7 @@ export function resolveTransitionProps(rawProps: TransitionRawProps) {
         if (!el._isLeaving) return;
         removeTransitionClass(el, leaveFromClass);
         addTransitionClass(el, leaveToClass);
-        if (!hasExplicitCallback(onLeave)) whenTransitionEnds(el, leaveDuration, resolve);
+        if (!hasExplicitCallback(onLeave)) whenTransitionEnds(el, type, leaveDuration, resolve);
       });
       callHook(onLeave, [el, resolve]);
     },
@@ -253,27 +300,102 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
     moveClass: String,
   }),
   setup(props, { slots }) {
-    const instance = getCurrentInstance();
+    const instance = getCurrentInstance()!;
     const state = useTransitionState();
-    let children: unknown[] | undefined;
+    let prevChildren: VNode[] = [];
+    let children: VNode[] | undefined;
+
+    // FLIP, as runtime-dom does it: each item's box before the patch (read in render), after it (a geometry read
+    // lays the reordered list out), the difference put back as a transform, then the move class animates it away.
+    onUpdated(() => {
+      const moved = prevChildren;
+      prevChildren = [];
+      if (!moved.length) return;
+      const rawProps = toRaw(props) as TransitionRawProps & { moveClass?: string };
+      const moveClass = rawProps.moveClass || `${rawProps.name || "v"}-move`;
+      const first = moved[0]!.el as MirrorElement;
+      if (!hasCssTransform(first, instance.vnode.el as MirrorElement | null, moveClass)) return;
+      for (const c of moved) ((c.el as MirrorElement)[moveCbKey] as (() => void) | undefined)?.();
+      for (const c of moved) newPositions.set(c, (c.el as MirrorElement).getBoundingClientRect());
+      const shifted = moved.filter(applyTranslation);
+      if (!shifted.length) return;
+      // The forced style flush a browser's `offsetHeight` read makes: the items start from their old place.
+      void computedStyle(shifted[0]!.el as MirrorElement).transform;
+      for (const c of shifted) {
+        const el = c.el as MirrorElement;
+        addTransitionClass(el, moveClass);
+        const style = (el as unknown as { style: Record<string, string> }).style;
+        style.transform = "";
+        style.transitionDuration = "";
+        const done = (e?: Event) => {
+          if (e && e.target !== el) return;
+          if (!e || String((e as TransitionEvent).propertyName).endsWith("transform")) {
+            el.removeEventListener("transitionend", done);
+            el[moveCbKey] = undefined;
+            removeTransitionClass(el, moveClass);
+          }
+        };
+        el[moveCbKey] = done;
+        el.addEventListener("transitionend", done);
+      }
+    });
+
     return () => {
       const rawProps = toRaw(props) as TransitionRawProps;
       const cssTransitionProps = resolveTransitionProps(rawProps);
       const tag = rawProps.tag || Fragment;
-      if (rawProps.moveClass || (children && children.length)) {
-        warnCompat(
-          "TransitionGroup:move",
-          "<TransitionGroup> animates enter and leave, but NOT the move of the items that stay — " +
-            "`moveClass` is ignored and reordered items jump to their new place",
-        );
+      prevChildren = [];
+      for (const child of children ?? []) {
+        if (child.el && (child.el as MirrorElement).kind === 1) {
+          prevChildren.push(child);
+          setTransitionHooks(child, resolveTransitionHooks(child, cssTransitionProps, state, instance));
+          positions.set(child, (child.el as MirrorElement).getBoundingClientRect());
+        }
       }
       children = slots.default ? getTransitionRawChildren(slots.default()) : [];
-      for (const child of children as VNode[]) {
+      for (const child of children) {
         if (child.key != null) {
-          setTransitionHooks(child, resolveTransitionHooks(child, cssTransitionProps, state, instance!));
+          setTransitionHooks(child, resolveTransitionHooks(child, cssTransitionProps, state, instance));
         }
       }
       return createVNode(tag as never, null, children as never);
     };
   },
 });
+
+const moveCbKey = Symbol("skMoveCb");
+const positions = new WeakMap<VNode, MirrorRect>();
+const newPositions = new WeakMap<VNode, MirrorRect>();
+
+function applyTranslation(c: VNode): boolean {
+  const before = positions.get(c);
+  const after = newPositions.get(c);
+  if (!before || !after) return false;
+  const dx = before.left - after.left;
+  const dy = before.top - after.top;
+  if (!dx && !dy) return false;
+  const style = (c.el as { style: Record<string, string> }).style;
+  style.transform = `translate(${dx}px,${dy}px)`;
+  style.transitionDuration = "0s";
+  return true;
+}
+
+/** Whether the move class transitions `transform`, read off a hidden clone so the item's own style does not change. */
+function hasCssTransform(el: MirrorElement, root: MirrorElement | null, moveClass: string): boolean {
+  const clone = el.cloneNode() as MirrorElement;
+  const vtc = el._vtc;
+  const classes = String(el._class || "")
+    .split(/\s+/)
+    .filter((c) => c && !vtc?.has(c));
+  clone._vtc = undefined;
+  (clone as unknown as { className: string }).className = [...classes, ...moveClass.split(/\s+/)]
+    .filter(Boolean)
+    .join(" ");
+  (clone as unknown as { style: Record<string, string> }).style.display = "none";
+  const container = (root && root.kind === 1 ? root : el.parentNode) as MirrorElement | null;
+  if (!container) return false;
+  nodeOps.insert(clone, container, null);
+  const { hasTransform } = transitionInfo(clone);
+  nodeOps.remove(clone);
+  return hasTransform;
+}

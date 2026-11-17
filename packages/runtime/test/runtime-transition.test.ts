@@ -80,7 +80,11 @@ describe("the class pipeline", () => {
   test("the end of a phase is timed from the element's computed transition-duration", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    rt.host.computedById.set(node.__skId, "transition-duration=0.05s\ntransition-delay=0s\n");
+    rt.host.computedById.set(
+      node.__skId,
+      "transition-duration=0.05s\ntransition-delay=0s\ntransition-property=all\n" +
+        "animation-name=none\nanimation-duration=0s\nanimation-delay=0s\n",
+    );
     const hooks = phaseHooks(rt, { name: "fade" });
     let done = false;
     hooks.onEnter(node, () => (done = true));
@@ -92,6 +96,25 @@ describe("the class pipeline", () => {
     await new Promise((r) => setTimeout(r, 80));
     expect(done).toBe(true);
     expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a phase run by a CSS animation ends on its animationend, not at once", async () => {
+    const rt = createRuntime();
+    const node = el(rt);
+    rt.host.computedById.set(
+      node.__skId,
+      "transition-duration=0s\nanimation-name=pop\nanimation-duration=5s\nanimation-delay=0s\n",
+    );
+    const hooks = phaseHooks(rt, { name: "pop" });
+    let done = false;
+    hooks.onEnter(node, () => (done = true));
+    await tick();
+    await tick();
+    await tick();
+    node.dispatchEvent(new CustomEvent("transitionend", { bubbles: true }));
+    expect(done).toBe(false);
+    node.dispatchEvent(new CustomEvent("animationend", { bubbles: true }));
+    expect(done).toBe(true);
   });
 
   test("a real transitionend ends the phase before the timer would", async () => {

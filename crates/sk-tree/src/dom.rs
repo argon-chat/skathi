@@ -115,6 +115,18 @@ pub fn bounds(id: u32) -> (Option<(f32, f32, f32, f32)>, bool) {
     (bounds_now(id), stale)
 }
 
+/// [`bounds`] for a script's geometry read: lays out first when changes are pending, as a
+/// browser's forced reflow does.
+pub(crate) fn current_bounds(id: u32) -> (Option<(f32, f32, f32, f32)>, bool) {
+    if id == 0 || crate::render::bounds_of(id).is_none() {
+        return bounds(id);
+    }
+    if crate::layout_owed() && tree::read_tree(|t| t.node(id).is_some()) {
+        crate::sync_layout_by(crate::perf::SyncCaller::Bounds);
+    }
+    (bounds_now(id), false)
+}
+
 pub fn transformed(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::transformed_of(id)?;
     let (ox, oy) = root_origin();
@@ -173,6 +185,8 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "z-index",
     "pointer-events",
     "transform",
+    "transform-origin",
+    "zoom",
     "translate",
     "rotate",
     "scale",
@@ -312,6 +326,24 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         // The function list, not the `matrix()` a browser resolves to: it is what the cascade holds,
         // and floating-ui only tests it against `"none"`.
         "transform" => transform_text(cs.base.vn_transform),
+        // Resolved against the border box, as a browser's computed value is: Svelte's `flip` divides it
+        // by the size.
+        "transform-origin" => {
+            let (w, h) = crate::render::bounds_of(id).map_or((0.0, 0.0), |(_, _, w, h)| (w, h));
+            let at = |len: gpui::TransformLength, size: f32| match len {
+                gpui::TransformLength::Pixels(px) => px,
+                gpui::TransformLength::Fraction(f) => f * size,
+            };
+            let (ox, oy) = cs.base.vn_transform.map_or(
+                (
+                    gpui::TransformLength::Fraction(0.5),
+                    gpui::TransformLength::Fraction(0.5),
+                ),
+                |t| t.origin,
+            );
+            format!("{}px {}px", at(ox, w), at(oy, h))
+        }
+        "zoom" => "1".into(),
         // The individual transform properties are not mapped (`transform` is the only one that
         // applies), plus three not implemented.
         "translate" | "rotate" | "scale" | "perspective" | "filter" => "none".into(),
