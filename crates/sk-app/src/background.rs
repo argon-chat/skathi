@@ -47,13 +47,15 @@ thread_local! {
     static LAST_FRAME: Cell<Option<Instant>> = const { Cell::new(None) };
     static WAVES: Cell<u64> = const { Cell::new(0) };
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static REPORTED: Cell<bool> = const { Cell::new(false) };
     /// Until the JS context or the host next has work, as of the last background wave.
     static NEXT_WORK: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
 pub fn note_frame() {
     LAST_FRAME.with(|c| c.set(Some(Instant::now())));
-    if ACTIVE.with(|a| a.replace(false)) {
+    let was_active = ACTIVE.with(|a| a.replace(false));
+    if was_active && REPORTED.with(|r| r.replace(false)) {
         let n = WAVES.with(|w| w.get());
         sk_tree::log::record(
             "window",
@@ -154,7 +156,9 @@ fn wave(window: &mut gpui::Window, cx: &mut App) {
         crate::crash_window::on_poisoned(cx);
         return;
     }
-    if !ACTIVE.with(|a| a.replace(true)) {
+    ACTIVE.with(|a| a.set(true));
+    // A visible idle window draws no frames by design; only a hidden page is worth a log line.
+    if crate::window::page_hidden() && !REPORTED.with(|r| r.replace(true)) {
         sk_tree::log::record(
             "window",
             "[window] no frames (the window is minimised or hidden) — timers, sockets and devtools now run \
