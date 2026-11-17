@@ -14,7 +14,7 @@ The first tables were measured: the same small app, built four times, on one mac
 
 - **Skathi** for desktop apps written in Vue or Svelte that look and behave the same on Windows, macOS and Linux. One renderer and one JavaScript engine everywhere, one process per app with every window sharing its state, Rust called in the same process, native GPU content inside the UI, and a Rust program that can embed the whole UI. It is desktop-only and implements a documented subset of the web platform.
 - **Electron** when you need all of Chromium and Node.js. You pay with a 357 MiB app folder, four processes for one window and another renderer process per window, and a new Chromium major to ship every 8 weeks.
-- **Tauri** when the smallest download matters most, or the app must also run on iOS and Android. You pay with three WebView engines to test, whose versions the OS picks, and a process hop on every call into Rust: 1.2 ms per call here.
+- **Tauri** when the app must also run on iOS and Android, or a 2 MiB download matters most and your users already have WebView2 (878 MiB, installed with Windows). You pay with three WebView engines to test, whose versions the OS picks, and a process hop on every call into Rust: 1.2 ms per call here.
 - **Qt** when the program is C++, runs on embedded devices, or needs vendor long-term support. You pay with C++ and QML instead of web technology, and LGPL obligations or a commercial license.
 
 ## Measured
@@ -23,32 +23,34 @@ One app, four times: a window with a heading, a counter button and a scrolling l
 
 <div class="wide">
 
-| Size on Windows | Skathi    | Electron               | Tauri 2              | Qt 6                      |
-| --------------- | --------- | ---------------------- | -------------------- | ------------------------- |
-| What you ship   | one exe   | a folder with 73 files | one exe              | a folder with 1,378 files |
-| On disk         | 107.1 MiB | 357.0 MiB              | **4.1 MiB**          | 122.6 MiB                 |
-| Zipped          | 46.4 MiB  | 155.0 MiB              | **1.7 MiB**          | 59.6 MiB                  |
-| Also needed     | nothing   | nothing                | the WebView2 runtime | the MSVC runtime          |
+| Size on Windows                       | Skathi        | Electron               | Tauri 2                                                                      | Qt 6                                         |
+| ------------------------------------- | ------------- | ---------------------- | ---------------------------------------------------------------------------- | -------------------------------------------- |
+| What runs                             | one exe       | a folder with 73 files | one exe and the WebView2 runtime                                             | a folder with 1,378 files from `windeployqt` |
+| On disk                               | **107.1 MiB** | 357.0 MiB              | 882.3 MiB: 4.1 MiB + 878.2 MiB of WebView2, installed system-wide and shared | 122.6 MiB                                    |
+| Download for a machine without it     | **46.4 MiB**  | 155.0 MiB              | 206.9 MiB: 1.7 MiB + WebView2's 205.2 MiB installer                          | 59.6 MiB                                     |
+| With the runtime fixed to one version | —             | —                      | 682.2 MiB on disk, 298.2 MiB to download                                     | —                                            |
 
 </div>
 
-Tauri's size leaves out WebView2, which comes with Windows 10 and 11 and which its installer (1.33 MiB here) downloads where it is missing. Qt's folder includes a software OpenGL fallback and the MSVC runtime's installer, both added by `windeployqt`; without them it is 85.2 MiB.
+Every size is what the app needs to run; zipped sizes stand for the download. Where WebView2 is already installed, as on most Windows 10 and 11 machines, Tauri's download is 1.7 MiB and its installer 1.33 MiB, and the 878.2 MiB runtime is shared with the other apps that use it. Qt's folder includes a software OpenGL fallback and the MSVC runtime's installer, both added by `windeployqt`; without them it is 85.2 MiB.
 
 <div class="wide">
 
-| Running, median of 3            | Skathi    | Electron  | Tauri 2                                   | Qt 6         |
-| ------------------------------- | --------- | --------- | ----------------------------------------- | ------------ |
-| Processes                       | **1**     | 4         | 7: the app and 6 WebView2 processes       | **1**        |
-| Window on screen                | 743 ms    | 977 ms    | **76 ms**, empty until the WebView paints | 281 ms       |
-| First frame of the app          | 743 ms    | 1,009 ms  | 597 ms                                    | **469 ms**   |
-| Private memory, idle            | 85.7 MiB  | 87.2 MiB  | 93.6 MiB, across all 7 processes          | **28.0 MiB** |
-| Private memory, after scrolling | 85.1 MiB  | 86.4 MiB  | 96.7 MiB                                  | **28.9 MiB** |
-| Working set, all processes      | 149.4 MiB | 316.0 MiB | 353.8 MiB                                 | **81.9 MiB** |
-| Dedicated GPU memory            | 28.8 MiB  | 22.7 MiB  | **18.0 MiB**                              | 21.9 MiB     |
-| CPU when idle, % of one core    | 1.4       | **0.3**   | 0.6                                       | 0.5          |
-| CPU when idle after scrolling   | 1.1       | 0.8       | **0.2**                                   | **0.2**      |
+| Running, median of 3            | Skathi    | Electron  | Tauri 2                               | Qt 6         |
+| ------------------------------- | --------- | --------- | ------------------------------------- | ------------ |
+| Processes                       | **1**     | 4         | 7 (app + 6 WebView2)                  | **1**        |
+| First frame with content        | 743 ms    | 1,009 ms  | 597 ms                                | **469 ms**   |
+| Window on screen                | 743 ms    | 977 ms    | 76 ms, empty until the WebView paints | 281 ms       |
+| Private memory, idle            | 85.7 MiB  | 87.2 MiB  | 93.6 MiB                              | **28.0 MiB** |
+| Private memory, after scrolling | 85.1 MiB  | 86.4 MiB  | 96.7 MiB                              | **28.9 MiB** |
+| Working set, all processes      | 149.4 MiB | 316.0 MiB | 353.8 MiB                             | **81.9 MiB** |
+| Dedicated GPU memory            | 28.8 MiB  | 22.7 MiB  | **18.0 MiB**                          | 21.9 MiB     |
+| CPU when idle, % of one core    | 1.4       | **0.3**   | 0.6                                   | 0.5          |
+| CPU when idle after scrolling   | 1.1       | 0.8       | **0.2**                               | **0.2**      |
 
 </div>
+
+Each row counts every process the app runs, WebView2's included.
 
 A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one after another, then 50 sends of 1 MiB of bytes to native code, which returns the length. Electron and Tauri calls are awaited promises; Skathi and Qt calls return directly.
 
@@ -65,10 +67,11 @@ A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one af
 ### How it was measured
 
 - **Machine.** AMD Ryzen 9 9950X (16 cores, 32 threads), 96 GB of RAM, GeForce RTX 5070 and RTX 3070 Ti (driver 32.0.16.1692), a 2560×1440 primary display, Windows 11 Pro Insider build 29683.
+- **WebView2.** The installed Evergreen runtime 157.0.4341.46 is 878.2 MiB in 918 files. The standalone x64 installer is 205.2 MiB and the bootstrapper 1.8 MiB. The fixed-version runtime 157.0.4341.60 for x64 is a 296.5 MiB cab that unpacks to 678.1 MiB.
 - **Versions.** Skathi 0.3.0 with its release host (no devtools). Electron 45.3.3 (Chromium 156), packaged with `@electron/packager` 20.3.0. Tauri 2.12.6 with wry 0.57.2 on WebView2 157.0.4341.46, NSIS bundle. Qt 6.12.0 for MSVC 2022, built with Visual Studio 2026 and CMake. Vue 3.5.45 and Vite 8.3.8 for the web apps. Skathi's native-call numbers come from an embedder built in release mode against the current `skathi` crate.
 - **Runs.** Each app started four times. The first start filled the disk cache and each engine's own caches and is not counted; the tables show the median of the other three. Each app opened its window without taking focus and was closed by the script.
-- **Start.** From process creation to the first visible window with the app's title, and to the app's first frame. The web apps change the window title in the second `requestAnimationFrame` after mounting; Qt does it on its first `frameSwapped`. A script polls the window titles every millisecond.
-- **Memory.** Summed over the app's process tree, Electron's helpers and Tauri's `msedgewebview2.exe` processes included, 5 seconds after start and 3 seconds after the scroll ended. Private memory is the private working set that Task Manager shows; the working set adds shared pages, once per process; GPU memory comes from Windows' GPU Process Memory counters.
+- **Start.** Both times run from process creation. _First frame with content_ ends when the app has drawn its UI: the web apps change the window title in the second `requestAnimationFrame` after mounting, and Qt does it on its first `frameSwapped`. _Window on screen_ ends when a visible window with the app's title exists, drawn or not. A script polls the window titles every millisecond.
+- **Memory.** Summed over every process in the app's process tree, for every framework: Electron's helpers and Tauri's six `msedgewebview2.exe` processes are counted in each memory, GPU and CPU row. Samples are taken 5 seconds after start and 3 seconds after the scroll ended. Private memory is the private working set that Task Manager shows; the working set adds shared pages, once per process; GPU memory comes from Windows' GPU Process Memory counters.
 - **CPU.** CPU time of the process tree over 10 seconds, idle, after each memory sample.
 - **Noise.** Other work ran on the machine, at 10 to 37 % of total CPU before a start. Single starts varied: one of Electron's took 3.7 seconds. The native-call numbers vary by about 20 % between runs.
 
