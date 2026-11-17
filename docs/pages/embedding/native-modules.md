@@ -82,6 +82,79 @@ Three kinds of export, one rule each:
 
 The module object exists before any app code runs, so a top-level `import` sees it at once. `skathi` is the only dependency this needs: `#[skathi::data]` brings serde and the type information along.
 
+This page is the tour. The rest of the section goes deeper:
+
+- [Values and types](/embedding/native-modules/values/): every Rust type and what it is in the app, borrowed strings and bytes, typed arrays, `#[skathi::data]`'s attributes, and what a call costs.
+- [Errors, tasks and threads](/embedding/native-modules/errors-and-tasks/): what JS sees for an `Err`, a panic or a wrong argument, and how tasks run.
+- [Events](/embedding/native-modules/events/): sending them from your threads and from the module itself.
+- [Types, tests and CI](/embedding/native-modules/types-and-testing/): the generated `.d.ts`, testing a module, and keeping both honest in CI.
+- [Migrating from appHost.call](/embedding/native-modules/migrating/): the old JSON functions, side by side with modules.
+
+## Your first module, step by step
+
+Say the app shows the files your program worked on recently and how much room a folder takes. Four steps get it there.
+
+**1. Describe the values.** Every struct or enum that crosses gets `#[skathi::data]`. Rename its fields the way the app spells them:
+
+```rust
+#[skathi::data]
+#[serde(rename_all = "camelCase")]
+pub struct FolderSize {
+    pub files: u32,
+    pub total_bytes: u64,
+}
+```
+
+**2. Write the methods.** A struct holds whatever state the module needs; an `impl` block with `#[skathi::module]` exports its `pub fn`s. Reading a list from memory is quick, so it is a plain function; walking a folder touches the disk, which can stall on a network drive, so it is a task:
+
+```rust
+pub struct Files {
+    recent: std::sync::Mutex<Vec<String>>,
+}
+
+#[skathi::module]
+impl Files {
+    pub fn recent(&self) -> Vec<String> {
+        self.recent.lock().unwrap().clone()
+    }
+
+    #[task]
+    pub fn folder_size(&self, path: String) -> Result<FolderSize, String> {
+        let mut size = FolderSize { files: 0, total_bytes: 0 };
+        for entry in std::fs::read_dir(&path).map_err(|e| format!("{path}: {e}"))? {
+            let meta = entry.and_then(|e| e.metadata()).map_err(|e| format!("{path}: {e}"))?;
+            if meta.is_file() {
+                size.files += 1;
+                size.total_bytes += meta.len();
+            }
+        }
+        Ok(size)
+    }
+}
+```
+
+**3. Register it.** One line on the builder names the module:
+
+```rust
+let builder = skathi::Builder::new().module(
+    "files",
+    Files {
+        recent: std::sync::Mutex::new(Vec::new()),
+    },
+);
+```
+
+**4. Import it.** Build the exe, run `bunx sk types --exe <your exe>` in the app (or start it with [`sk dev --exe`](/embedding/dev-loop/)), and the app has `native:files`, typed:
+
+```ts
+import { folderSize, recent } from "native:files";
+
+const files: string[] = recent();
+const { totalBytes } = await folderSize("C:\\Users\\me\\Documents");
+```
+
+`folder_size` is `folderSize` in the app, and `total_bytes` is `totalBytes` because of `rename_all`. Its `Result` became a promise that rejects with the `Err` text.
+
 ## What #[skathi::module] exports
 
 - **Every `pub fn` that takes `&self`**, under its name in camelCase: `fetch_all` is `fetchAll` in the app. The parameters keep their names, camelCased the same way, in the generated types.
@@ -89,230 +162,57 @@ The module object exists before any app code runs, so a top-level `import` sees 
 - **`&self` only.** The value is moved into an `Arc` and shared by the UI thread and the task workers, so `&mut self` or `self` on a `pub fn` is a compile error: keep changing state behind a `Mutex` or an atomic. For the same reason the type must be `Send + Sync + 'static`.
 - **Plain signatures.** Owned parameter types, named with plain identifiers, at most eight; no generics, no `async fn` (a `#[task]` is the slow path). The borrowed exceptions are `&str` and slices of numbers (`&[u8]`, `&[f32]`, …), which a function reads in place; a task takes the owned type instead. Each of these is a compile error that points at the parameter or method.
 - **JS names.** A method named like a JS keyword (`delete`) or like a module's own exports (`available`, `on`, `off`) does not compile: rename it.
+- **Event names as written.** `events(window_changed = …)` is `"window_changed"` in the app, not camelCased like a function. Write the name the app should use: `events(windowChanged = …)`.
 
-## #[skathi::data]
+## Where things run
 
-The attribute goes on every struct and enum that crosses: parameters, results and events. It derives serde's `Serialize` and `Deserialize` and, with the `types` feature, `skathi::Type`, all through `skathi`'s own paths, so your `Cargo.toml` needs no serde or specta. It also gives the type a direct conversion to and from JS values, which is faster than serde's (see [How values cross](#how-values-cross)).
+|                    | Runs on             | May block?       | The app gets                      |
+| ------------------ | ------------------- | ---------------- | --------------------------------- |
+| a `pub fn`         | the Skathi thread   | no: it is the UI | a value, or a throw               |
+| a `#[task]` method | a worker thread     | yes              | a promise                         |
+| `Handle::emit_to`  | any thread          | it never blocks  | delivered in the app's next frame |
+| an `on` handler    | the app's JS thread | no: it is the UI | —                                 |
 
-- Your serde attributes stay in force: `#[serde(rename_all = "camelCase")]` renames the fields in the app and in the generated types alike.
-- A `Vec<u8>` or `Option<Vec<u8>>` field is a `Uint8Array` in the app, not an array of numbers. A field with its own `#[serde(with = …)]` keeps it.
-- A derive the type already has is not added again: `#[derive(Serialize)]` of your own serde keeps working beside it. Put `#[skathi::data]` above the derives so it sees them.
+A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task. [Errors, tasks and threads](/embedding/native-modules/errors-and-tasks/) has the details.
 
-Deriving the type information yourself works too: `#[derive(serde::Serialize, skathi::Type)]` with `#[specta(crate = skathi::specta)]` on the type, since the derive otherwise looks for a `specta` crate of your own.
+## Several modules, one state
 
-## Functions return a value now
-
-A function's parameters are its JavaScript arguments, each read into the type you declared; its result is handed to the app as an ordinary object, array, string or number, the one JSON would give. Both are read and built straight from the engine's own values: no JSON text is written or parsed, and a call with a few numbers costs about what a [native function](/embedding/native-api/) does.
+A program usually has more than one concern: a voice engine, an updater, the tray. Give each its own module, so the app imports `native:voice` and `native:updater` rather than one bag of everything, and let them share the state behind an `Arc`:
 
 ```rust
+use std::sync::Arc;
+
+#[derive(Default)]
+pub struct Services {
+    pub volume: std::sync::atomic::AtomicU32,
+    pub update_ready: std::sync::atomic::AtomicBool,
+}
+
+pub struct Voice(Arc<Services>);
+pub struct Updater(Arc<Services>);
+
 #[skathi::module]
-impl Tools {
-    pub fn slug(&self, title: String, max: Option<usize>) -> Result<String, String> {
-        let words: Vec<String> = title.split_whitespace().map(str::to_lowercase).collect();
-        if words.is_empty() {
-            return Err("a note needs a title".into());
-        }
-        Ok(words.join("-").chars().take(max.unwrap_or(40)).collect())
+impl Voice {
+    pub fn volume(&self) -> u32 {
+        self.0.volume.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
-```
 
-- **Arguments by position.** `slug("Groceries for Sunday")` returns `"groceries-for-sunday"`. A missing trailing argument is `null`, so an `Option<T>` parameter like `max` may be left out; extra arguments are ignored. A struct parameter takes an options object.
-- **A wrong argument throws.** `slug(42)` throws a `TypeError` that names the function and the argument: ``native:tools.slug: argument 1: invalid type: integer `42`, expected a string``.
-- **`Err` throws.** Return `Result<T, E>` and an `Err` throws an `Error` in the app. A `String` error is its message. A struct error goes along as `error.data`, and its `message` field, if it has one, becomes the message. `E` must be `Serialize`: turn an `anyhow::Error` into text with `.map_err(|e| e.to_string())`.
-- **A panic throws too.** The app gets an `Error` that says the function panicked, and keeps running.
-
-A value means what it would in JSON, so the app sees the same thing whether it calls the module or posts the value to a server:
-
-- **Numbers.** `NaN` and the infinities arrive as `null` (an `f64` parameter refuses them; an `Option<f64>` is `None`), and a result's `NaN` is `null`. `-0` is `0` to an integer. An integer type takes only a whole number in its range: `1.5` or `300` for a `u8` is a `TypeError`. An `f32` result is its shortest decimal: `0.1f32` is `0.1`, not `0.10000000149011612`.
-- **What JSON leaves out.** A property that is `undefined`, a function or a symbol is missing, and an array element that is one is `null`. An object's `toJSON` is called, so a `Date` reaches a `String` parameter as its ISO text. A `BigInt` or an object that contains itself is a `TypeError`.
-- **Extra arguments** are not read at all.
-
-A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task.
-
-## How values cross
-
-No JSON text is written or parsed on either side. There are two ways a value crosses, and the macros pick the faster one for each type on their own:
-
-- **A `#[skathi::data]` type converts directly.** An argument object has its fields looked up by name, all in one call into the engine, with the names made into engine strings once and reused; each field is then read by its own type's conversion, so nested data types, `Vec`, `Option`, `Box` and maps with string keys compose. A result is written into one flat buffer that the engine turns into objects and arrays in a single call, and objects of the same fields share their engine layout. Numbers, strings, `bool` and `Vec<u8>` (as a `Uint8Array`) convert directly too.
-- **Anything else goes through serde**, still over the engine's values rather than text: a type with only `#[derive(Serialize, Deserialize)]`, tuples, maps with keys other than strings, `serde_json::Value`. It means the same, a little slower.
-
-The direct conversion honors the serde attributes that shape the value: `rename`, `rename_all`, `skip`, `skip_serializing`, `skip_deserializing`, `default`, `skip_serializing_if`, and an enum's representation (`tag`, `content`, `untagged`). A type with any other serde attribute (`flatten`, `deny_unknown_fields`, `with`, `alias`, a `default` on the type, …) gets no direct conversion and keeps serde's meaning exactly. An enum argument other than a plain variant name is read through serde.
-
-A direct read differs from serde's in two ways, both about values that are not JSON anyway. A struct reads only its own fields, so an object whose other properties hold a `BigInt` or a cycle is accepted. When several fields are wrong, the first one in the struct is reported rather than the first one in the object.
-
-What a call costs, measured with a release build on Windows (a Ryzen 9 9950X, medians of five runs), against the same calls when values crossed as JSON text. The struct is `{ id: u32, name: String, tags: Vec<String>, score: Option<f64> }` with `#[skathi::data]`; a bare [native function](/embedding/native-api/) that adds two numbers takes 0.04 µs.
-
-| Call                                               | As JSON text | Now      |
-| -------------------------------------------------- | ------------ | -------- |
-| `add(a: f64, b: f64) -> f64`                       | 0.51 µs      | 0.06 µs  |
-| a 32-character `String` argument                   | 0.62 µs      | 0.08 µs  |
-| a 1 MiB `Uint8Array` as a `Vec<u8>` argument       | 36 ms        | 0.015 ms |
-| a 1 MiB `Vec<u8>` result                           | 13.5 ms      | 0.13 ms  |
-| `flip(p: Point) -> Point`                          | 0.90 µs      | 0.27 µs  |
-| 1000 structs as a result                           | 0.37 ms      | 0.24 ms  |
-| 1000 structs as an argument                        | 0.72 ms      | 0.31 ms  |
-| an event, from `emit_to` to the handler, in bursts | 1.2 µs       | 0.6 µs   |
-| `emit_to` itself, on the sending thread            | 0.81 µs      | 0.42 µs  |
-
-## Tasks do the slow work
-
-A task is a method marked `#[task]`. It runs on a worker thread, and the app gets a promise; an `Err` or a panic rejects it.
-
-```rust
-// In `impl Notes`, beside `get` and `search`:
-#[task]
-pub fn save_as(&self, note: Note, path: String) -> Result<u64, String> {
-    let text = format!("# {}\n\n{}\n", note.title, note.body);
-    std::fs::write(&path, &text).map_err(|e| format!("{path}: {e}"))?;
-    Ok(text.len() as u64)
-}
-```
-
-```ts
-import { saveAs, type Note } from "native:notes";
-
-export async function exportNote(note: Note, path: string): Promise<string> {
-  try {
-    return `saved ${await saveAs(note, path)} bytes`;
-  } catch (e) {
-    return (e as Error).message; // "D:/notes/42.md: Access is denied. (os error 5)"
-  }
-}
-```
-
-Tasks run on four worker threads Skathi owns. A program with its own pool hands them over instead:
-
-```rust
-let builder = skathi::Builder::new().task_executor(|job| {
-    std::thread::spawn(job);
-});
-```
-
-`job` is a `Box<dyn FnOnce() + Send>`: give it to `rayon::spawn`, to a tokio runtime's `spawn_blocking`, or to a thread of yours. A job your executor drops without running rejects its promise, so the app never waits forever.
-
-A page reload drops the promises still waiting; their tasks finish and their results are discarded.
-
-The arguments are read inside the call, on the UI thread, before the task is queued: a wrong argument rejects the promise at once, and the worker gets owned Rust values. The result is serialized on the worker and turned into JS values when the promise settles.
-
-## Bytes
-
-Binary data crosses as typed arrays, not as arrays of numbers:
-
-```rust
 #[skathi::module]
-impl Images {
-    pub fn checksum(&self, data: &[u8]) -> u32 {
-        data.iter().map(|&b| u32::from(b)).sum()
+impl Updater {
+    pub fn ready(&self) -> bool {
+        self.0.update_ready.load(std::sync::atomic::Ordering::Relaxed)
     }
+}
 
-    #[task]
-    pub fn thumbnail(&self, png: Vec<u8>, width: u32) -> Result<Vec<u8>, String> {
-        shrink(&png, width).map_err(|e| e.to_string())
-    }
+pub fn register(builder: skathi::Builder, services: &Arc<Services>) -> skathi::Builder {
+    builder
+        .module("voice", Voice(services.clone()))
+        .module("updater", Updater(services.clone()))
 }
 ```
 
-```ts
-import { checksum, thumbnail } from "native:images";
-
-const file = new Uint8Array(await (await fetch("photo.png")).arrayBuffer());
-checksum(file); // reads the app's memory where it is
-const small: Uint8Array = await thumbnail(file, 256);
-```
-
-- **`&[u8]`** in a function reads the bytes in place, without a copy, from any typed array, `DataView` or `ArrayBuffer` (a view of 16-bit numbers is its bytes). The slice lives for the call; take `Vec<u8>` to keep the bytes.
-- **`&[f32]`, `&[i16]`, `&[f64]`, …** read a typed array of exactly that kind in place: `&[f32]` from a `Float32Array`. Anything else that holds numbers, an array included, is copied into the slice's type, so the function works either way; only the copy costs.
-- **`Vec<u8>`** as a parameter copies the bytes once. A task takes `Vec<u8>` (or `skathi::Bytes`), since it runs after the call: `&[u8]` on a `#[task]` does not compile.
-- **`Vec<u8>` as a result** is a `Uint8Array`, also inside `Result` or `Option`. A task's result hands its memory to the app without a copy on the UI thread.
-- An array of numbers still works where bytes are expected, one element at a time, and a `SharedArrayBuffer` is copied rather than read in place, since another thread may write to it.
-
-serde has no way to tell a `Vec<u8>` from any other list, so the attribute does this only where it sees the type: a parameter, a result, a `#[skathi::data]` field. Elsewhere, such as inside a `Vec<Vec<u8>>` or a closure module, use `skathi::Bytes`, a `Vec<u8>` that serializes as bytes, or `#[serde(with = "skathi::bytes")]` on a field of your own type.
-
-## Events tell the app
-
-Declare each event with its payload type in the attribute, `events(progress = SyncProgress)`, then send it from any thread with the `Handle`:
-
-```rust
-let events = ui.clone();
-std::thread::spawn(move || {
-    for done in 1..=3 {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let progress = SyncProgress { done, total: 3 };
-        if events.emit_to("notes", "progress", &progress).is_err() {
-            break; // the app has closed
-        }
-    }
-});
-```
-
-```vue
-<script setup lang="ts">
-import { onScopeDispose, ref } from "vue";
-import { on, type SyncProgress } from "native:notes";
-
-const progress = ref<SyncProgress>({ done: 0, total: 0 });
-onScopeDispose(on("progress", (p) => (progress.value = p)));
-</script>
-
-<template>
-  <progress :value="progress.done" :max="progress.total" />
-</template>
-```
-
-- An event name that is not a Rust identifier is a string: `events("sync-done" = Summary)`.
-- Delivery happens in the app's next frame, in order. Nothing is queued for later: an event sent while nothing listens is dropped.
-- `on(event, handler)` returns a function that removes the handler; `off(event, handler)` does the same. A reload drops every handler.
-- `emit_to` refuses an event the module did not declare (`EmitError::NotDeclared`), data that cannot be serialized, such as a map whose keys are not strings or numbers (`EmitError::NotJson`), and anything after the app closed (`EmitError::Closed`).
-- The data is serialized on the thread that sends it; the app's thread only builds the JS values.
-- `on` with an event the module did not declare throws a `TypeError` that lists the ones it did.
-
-Events are for news. When the app needs an answer, it calls a function or a task.
-
-> **Tip:** An event per item of a fast stream (log lines, sensor samples) costs a delivery per item. Batch them per frame, or use a [native namespace](/embedding/native-api/) with the dispatcher.
-
-## Types for the app
-
-From the module's signatures and its `#[skathi::data]` types, your executable describes its modules in TypeScript, and the CLI writes them into the app:
-
-```sh
-cargo build
-cd app && bunx sk types --exe ../target/debug/notes.exe
-```
-
-That writes `app/src/native-modules.d.ts`:
-
-```ts title="app/src/native-modules.d.ts"
-// The native modules of the program that embeds this app. Generated by `sk types`; do not edit.
-
-declare module "native:notes" {
-  export type Note = {
-    id: number;
-    title: string;
-    body: string;
-  };
-  export type SearchOptions = {
-    limit: number | null;
-  };
-  export type SyncProgress = {
-    done: number;
-    total: number;
-  };
-  export const available: boolean;
-  export function get(id: number): Note;
-  export function search(text: string, options: SearchOptions): Promise<Note[]>;
-  export function on(event: "progress", handler: (data: SyncProgress) => void): () => void;
-  export function off(event: "progress", handler: (data: SyncProgress) => void): void;
-}
-```
-
-- [`sk dev --exe`](/embedding/dev-loop/) does the same every time it starts, and writes the file only when it changed. Commit it: the app then type-checks and builds without your Rust toolchain.
-- Without it, TypeScript stops at the import with `Cannot find module 'native:notes'`. That is the reminder to run `sk types`.
-- An enum of unit variants becomes a union of strings, and serde's renames apply.
-- Every Rust number is a TypeScript `number`. A `u64` above 2^53 loses precision on the way, as it would in any JSON: send such ids as strings.
-- Bytes are a `Uint8Array` in results and fields; a `&[u8]` or `Vec<u8>` parameter takes `ArrayBufferView | ArrayBuffer`, and `&[f32]` a `Float32Array`.
-- A `Result` return declares its `Ok` type: `get` returns `Note`, and an `Err` is a throw.
-- The `types` feature (on by default) is what pulls in [specta](https://docs.rs/specta). Off, `#[skathi::data]` derives serde only, `sk types` says the exe was built without it, and the modules work the same.
+A function that registers every module, like `register`, is also what you call to [answer `sk types` early](/embedding/native-modules/types-and-testing/#answer-sk-types-before-anything-else).
 
 ## Closures, for a few functions
 
@@ -334,7 +234,8 @@ let builder = skathi::Builder::new().module("about", move |m: &mut skathi::Modul
 - The closure's parameter needs its type, `&mut skathi::Module`: Rust cannot infer it from `module`, which also takes a `#[skathi::module]` type.
 - `m.function`, `m.task` and `m.event` are what the attribute generates. The export name is the string, used as written.
 - `.params([...])` names the parameters in the generated types; without it they are `arg1`, `arg2`, …
-- A closure sees only serde types, so `Vec<u8>` is an array of numbers there: take and return `skathi::Bytes` for a `Uint8Array`.
+- Each closure must be `Send + Sync`: wrap what is not (a `RefCell`, an `Rc`) or keep it on another thread and send to it.
+- A closure sees only serde types, so `Vec<u8>` is an array of numbers there and `&str` is not accepted: take and return `skathi::Bytes` for a `Uint8Array`, and `String` for text.
 
 ## One app, with or without a program
 
@@ -350,30 +251,8 @@ export function noteOrDraft(id: number): Note {
 
 A module the program did not register behaves the same, with an error that names the module, so a typo in an import shows up at the first call.
 
-## Where things run
-
-|                    | Runs on             | May block?       | The app gets                      |
-| ------------------ | ------------------- | ---------------- | --------------------------------- |
-| a `pub fn`         | the Skathi thread   | no: it is the UI | a value, or a throw               |
-| a `#[task]` method | a worker thread     | yes              | a promise                         |
-| `Handle::emit_to`  | any thread          | it never blocks  | delivered in the app's next frame |
-| an `on` handler    | the app's JS thread | no: it is the UI | —                                 |
+This stand-in is Skathi's: its builders resolve `native:*`. A build of the same code by another tool, such as a Vite web build or vitest, needs one of its own; [Types, tests and CI](/embedding/native-modules/types-and-testing/#the-same-code-in-a-web-build) shows a ten-line plugin.
 
 The low-level way in is still there: [Native APIs](/embedding/native-api/) build JS objects directly in the engine, for hot calls and streams.
 
-## Deprecated: appHost.call
-
-Before 0.4.0 the two sides talked through `appHost`: `Builder::function(name, handler)` with JSON text in and out, called as `appHost.call(name, ...args)`, and `Handle::emit(event, json)` heard by `appHost.on(event, …)`. Both still work. The Rust compiler marks them deprecated, and the app prints a `[skathi compat]` advisory once for each. They will be removed in a later release.
-
-| Before                                        | Now                                                   |
-| --------------------------------------------- | ----------------------------------------------------- |
-| `.function("notes.get", \|call\| …)`          | `pub fn get(&self, id: u64)` in a `#[skathi::module]` |
-| `serde_json::from_str(call.args())`           | typed parameters                                      |
-| `call.into_reply()` and a thread              | `#[task]`                                             |
-| `appHost.call<Note>("notes.get", 42)`         | `get(42)` from `"native:notes"`                       |
-| `ui.emit("sync.progress", &json.to_string())` | `ui.emit_to("notes", "progress", &progress)`          |
-| `appHost.on("sync.progress", …)`              | `on("progress", …)` from `"native:notes"`             |
-
-`appHost.available` stays: it tells whether a program embeds the app at all.
-
-Next: [Native APIs](/embedding/native-api/), for JS objects of your own design.
+Next: [Values and types](/embedding/native-modules/values/).

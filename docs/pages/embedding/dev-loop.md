@@ -43,7 +43,7 @@ cargo build --no-default-features          # a dev build of your exe
 cd app && bunx sk dev --exe ../target/debug/notes.exe
 ```
 
-`sk dev` first asks your exe for its [native modules' types](/embedding/native-modules/#types-for-the-app) (`notes.exe --sk-host-types`, which prints them and exits before any window) and writes `app/src/native-modules.d.ts` when they changed. Then it builds the app, starts your exe with the dev output, and watches:
+`sk dev` first asks your exe for its [native modules' types](/embedding/native-modules/types-and-testing/) (`notes.exe --sk-host-types`, which prints them and exits before any window) and writes `app/src/native-modules.d.ts` when they changed. Then it builds the app, starts your exe with the dev output, and watches:
 
 - Edits to `.vue`, `.svelte`, `.ts` and `.css` apply in place, without a restart; component state survives where the framework allows.
 - An edit to a `shaders/*.slang` effect recompiles it and reloads it in the running app.

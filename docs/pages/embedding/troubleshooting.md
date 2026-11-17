@@ -40,6 +40,18 @@ order: 10
 
   **Fix:** Write it `|m: &mut skathi::Module|`.
 
+- `a #[task] runs on a worker after the call has returned, so it cannot borrow from it`
+
+  **Cause:** A `#[task]` method takes `&str` or a slice. Its arguments are read in the call and used later, on a worker.
+
+  **Fix:** Take the owned type the error names: `String`, `Vec<u8>`, `skathi::Bytes`. See [borrowed parameters](/embedding/native-modules/values/#borrowed-parameters).
+
+- `Failed to resolve import "native:…"` from Vite or vitest
+
+  **Cause:** Only Skathi's builders know the `native:` scheme; a Vite web build or a vitest run of the same code does not.
+
+  **Fix:** Add the [stand-in plugin](/embedding/native-modules/types-and-testing/#the-same-code-in-a-web-build) to that tool's config.
+
 - A stack overflow on deep recursion in JavaScript
 
   **Cause:** The link arguments from `DEP_SKATHI_LINK_ARGS`, which set the 8 MiB stack, did not reach the exe.
@@ -114,7 +126,7 @@ order: 10
 
   **Cause:** A module method runs on the Skathi thread, so the frame waits for it.
 
-  **Fix:** Mark it `#[task]` (`m.task` in the closure form): it runs on a worker and the app gets a promise. See [Tasks](/embedding/native-modules/#tasks-do-the-slow-work).
+  **Fix:** Mark it `#[task]` (`m.task` in the closure form): it runs on a worker and the app gets a promise. See [Tasks](/embedding/native-modules/errors-and-tasks/#tasks-do-the-slow-work).
 
 - `native:notes.… is provided by the program that embeds this app, and this app is not embedded`
 
@@ -139,6 +151,18 @@ order: 10
   **Cause:** The exe was built against a skathi older than 0.4. One built without the `types` feature answers, but says so and fails.
 
   **Fix:** Build it against 0.4 or later, with `types` on.
+
+- `sk types` opens a log, starts crash reporting or registers the app with the OS
+
+  **Cause:** The exe answers `--sk-host-types` in `spawn`, and everything `main` does before it still runs.
+
+  **Fix:** Check for the flag at the top of `main` and build only the modules. See [answer sk types before anything else](/embedding/native-modules/types-and-testing/#answer-sk-types-before-anything-else).
+
+- An event arrives in one component but not in another, or not after a reload
+
+  **Cause:** An event is delivered to the handlers subscribed when it arrives, and dropped when there are none. A component that mounted later missed it.
+
+  **Fix:** Pair the event with a function that returns the current state, and read it right after subscribing. See [state plus an event](/embedding/native-modules/events/#state-plus-an-event).
 
 - A task rejects with `the task was dropped before it ran`
 
