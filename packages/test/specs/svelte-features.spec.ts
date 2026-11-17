@@ -96,17 +96,82 @@ describe("svelte features", () => {
   );
 
   test(
-    "bind:value, bind:this, bind:clientWidth, <svelte:window bind:innerWidth> and a select driven by value and onchange",
+    "bind:value on text fields and selects, bind:this, bind:clientWidth and <svelte:window bind:innerWidth>",
     async () => {
       await app.locator("#b-text").type("hi");
+      bunExpect(await js(`document.querySelector("#b-select").querySelector(":checked").value`)).toBe("b");
       await js(`(() => {
         const select = document.querySelector("#b-select");
         select.value = "c";
         select.dispatchEvent(new Event("change", { bubbles: true }));
+        const many = document.querySelector("#b-many");
+        many.options[1].selected = true;
+        many.dispatchEvent(new Event("change", { bubbles: true }));
       })()`);
       await expect(app.locator("#b-out")).toHaveText(
-        JSON.stringify({ text: "hi", picked: "c", el: "measured", width: 123, innerWidth: 640 }),
+        JSON.stringify({ text: "hi", picked: "c", many: ["y"], el: "measured", width: 123, innerWidth: 640 }),
       );
+      bunExpect(
+        await js(`(() => {
+          const s = document.querySelector("#b-select");
+          return [s.selectedIndex, s.selectedOptions.length, s.selectedOptions[0].value, s.options[2].selected];
+        })()`),
+      ).toEqual([2, 1, "c", true]);
+    },
+    T,
+  );
+
+  test(
+    "bind:checked, bind:indeterminate and bind:group on checkboxes and radios, with labels",
+    async () => {
+      const out = () => typed<string>(`document.querySelector("#s-out").textContent`);
+      bunExpect(JSON.parse(await out())).toEqual({ agreed: false, mixed: true, fruits: ["pear"], size: "m" });
+      bunExpect(await js(`document.querySelector("#s-m").checked`)).toBe(true);
+      await app.locator("#s-cb-label").click();
+      await app.locator("#s-mixed").click();
+      await app.locator("#s-apple").click();
+      await app.locator("#s-l-label").click();
+      await expect(app.locator("#s-out")).toHaveText(
+        JSON.stringify({ agreed: true, mixed: false, fruits: ["apple", "pear"], size: "l" }),
+      );
+      bunExpect(await js(`[...document.querySelectorAll("#toggles :checked")].map((e) => e.id).join()`)).toBe(
+        "s-cb,s-mixed,s-apple,s-pear,s-l",
+      );
+      await app.locator("#s-cb").press("Space");
+      await expect(app.locator("#s-out")).toHaveText(/"agreed":false/);
+    },
+    T,
+  );
+
+  test(
+    "animate:flip moves the items of a keyed {#each} that stay",
+    async () => {
+      await js(`(() => {
+        const tops = (globalThis.__tops = []);
+        const sample = () => {
+          tops.push(Math.round(document.querySelector("#flip .flip-item").getBoundingClientRect().top));
+          if (tops.length < 20) requestAnimationFrame(sample);
+        };
+        document.querySelector("#flip-go").addEventListener("click", () => requestAnimationFrame(sample), { once: true });
+      })()`);
+      await app.locator("#flip-go").click();
+      bunExpect(await until(`__tops.length >= 20`)).toBe(true);
+      bunExpect(new Set(await typed<number[]>("__tops")).size).toBeGreaterThan(3);
+      bunExpect(await text("#flip .flip-item")).toBe("3");
+    },
+    T,
+  );
+
+  test(
+    "an error thrown by an onclick handler is reported as uncaught, past a <svelte:boundary>, as in a browser",
+    async () => {
+      await app.locator("#click-boom").click();
+      bunExpect(await until(`__sf.includes("window-error:click-boom")`)).toBe(true);
+      bunExpect(await events()).not.toContain("boundary:click-boom");
+      bunExpect(await js(`!!document.querySelector("#click-boom")`)).toBe(true);
+      const { entries } = await app.logs();
+      const report = entries.find((e) => e.text.includes("click-boom"));
+      bunExpect(report?.text).toMatch(/Error: click-boom\n\S/);
     },
     T,
   );

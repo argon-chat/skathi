@@ -38,6 +38,14 @@ const trimmed = ref("");
 const model = ref("start");
 const title = ref("old");
 
+const agreed = ref(false);
+const wrapped = ref(false);
+const yesNo = ref("no");
+const fruits = ref<string[]>(["pear"]);
+const size = ref("m");
+const showBounce = ref(false);
+const shuffle = () => (items.value = [...items.value].reverse());
+
 const tint = ref("rgb(255, 0, 0)");
 const count = ref(0);
 const memoKey = ref(0);
@@ -66,6 +74,29 @@ onMounted(async () => {
 
 <template>
   <main id="page">
+    <section id="toggles">
+      <input id="cb" type="checkbox" v-model="agreed" />
+      <label id="cb-label" for="cb">agree</label>
+      <label id="wrap-label"><input id="cb-wrapped" type="checkbox" v-model="wrapped" />wrapped</label>
+      <input id="cb-yes" type="checkbox" v-model="yesNo" true-value="yes" false-value="no" />
+      <input id="f-apple" type="checkbox" value="apple" v-model="fruits" />
+      <input id="f-pear" type="checkbox" value="pear" v-model="fruits" />
+      <input id="r-s" type="radio" name="size" value="s" v-model="size" />
+      <input id="r-m" type="radio" name="size" value="m" v-model="size" />
+      <input id="r-l" type="radio" name="size" value="l" v-model="size" />
+      <input id="cb-off" type="checkbox" disabled />
+      <input id="cb-veto" type="checkbox" @click.prevent="log('veto')" />
+      <input
+        id="cb-events"
+        type="checkbox"
+        @click="(e: Event) => log(`ev:click:${(e.target as HTMLInputElement).checked}`)"
+        @input="log('ev:input')"
+        @change="log('ev:change')"
+      />
+      <input id="cb-custom" class="custom" type="checkbox" />
+      <p id="t-out">{{ JSON.stringify({ agreed, wrapped, yesNo, fruits, size }) }}</p>
+    </section>
+
     <section id="suspense">
       <Suspense @pending="log('suspense:pending')" @resolve="log('suspense:resolve')">
         <AsyncChild />
@@ -101,9 +132,14 @@ onMounted(async () => {
       </Transition>
       <button id="tg-add" @click="items.push(nextItem++)">add</button>
       <button id="tg-remove" @click="items.shift()">remove</button>
+      <button id="tg-shuffle" @click="shuffle">shuffle</button>
       <TransitionGroup name="list" tag="ul" id="tg">
         <li v-for="n in items" :key="n" class="tg-item">{{ n }}</li>
       </TransitionGroup>
+      <button id="bounce-toggle" @click="showBounce = !showBounce">bounce</button>
+      <Transition name="bounce" @after-enter="log('bounce:entered')" @after-leave="log('bounce:left')">
+        <p v-if="showBounce" id="bounce-el">bounce</p>
+      </Transition>
     </section>
 
     <section id="async">
@@ -182,5 +218,42 @@ onMounted(async () => {
 .list-enter-from,
 .list-leave-to {
   opacity: 0;
+}
+.list-move {
+  transition: transform 0.5s;
+}
+.bounce-enter-active {
+  animation: bounce-in 0.6s;
+}
+.bounce-leave-active {
+  animation: bounce-in 0.6s reverse;
+}
+@keyframes bounce-in {
+  from {
+    transform: scale(0.2);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+#cb:checked + label {
+  color: rgb(0, 128, 0);
+}
+#toggles {
+  accent-color: rgb(200, 0, 100);
+}
+.custom {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background-color: rgb(0, 0, 255);
+  color: rgb(0, 0, 255);
+}
+.custom:checked {
+  background-color: rgb(255, 0, 0);
+  color: rgb(255, 0, 0);
+}
+.custom:checked::before {
+  content: "x";
 }
 </style>

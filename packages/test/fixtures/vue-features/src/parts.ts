@@ -27,7 +27,10 @@ export const Thrower = defineComponent(() => {
   onMounted(() => {
     throw new Error("mounted-boom");
   });
-  return () => h("span", { id: "thrower" }, "thrower");
+  const boom = () => {
+    throw new Error("click-boom");
+  };
+  return () => [h("span", { id: "thrower" }, "thrower"), h("button", { id: "click-boom", onClick: boom }, "boom")];
 });
 
 export const InjectChild = defineComponent(() => {

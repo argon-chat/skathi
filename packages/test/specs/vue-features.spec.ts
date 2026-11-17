@@ -2,7 +2,7 @@
 // transitions, async components, v-model, directives, refs, provide/inject, error hooks, scoped CSS and the router.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch } from "../src/index";
+import { expect, launch, uiaSupported, uiaTree } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/vue-features/src/main.ts",
@@ -89,6 +89,25 @@ describe("vue features", () => {
   );
 
   test(
+    "a <Transition> driven by a CSS animation waits for its animationend, entering and leaving",
+    async () => {
+      await app.locator("#bounce-toggle").click();
+      bunExpect(await until(`document.querySelector("#bounce-el")?.classList.contains("bounce-enter-active")`)).toBe(
+        true,
+      );
+      await sleep(250);
+      bunExpect(await js(`document.querySelector("#bounce-el").classList.contains("bounce-enter-active")`)).toBe(true);
+      bunExpect(await until(`__vf.includes("bounce:entered")`)).toBe(true);
+      await app.locator("#bounce-toggle").click();
+      await sleep(250);
+      bunExpect(await js(`document.querySelector("#bounce-el")?.className`)).toContain("bounce-leave-active");
+      bunExpect(await until(`__vf.includes("bounce:left")`)).toBe(true);
+      bunExpect(await text("#bounce-el")).toBeNull();
+    },
+    T,
+  );
+
+  test(
     "<TransitionGroup> plays enter and leave on list items",
     async () => {
       await app.locator("#tg-add").click();
@@ -102,6 +121,32 @@ describe("vue features", () => {
       bunExpect(await until(`document.querySelectorAll(".tg-item").length === 3`)).toBe(true);
       bunExpect(await until(`!document.querySelector("#tg .list-enter-active")`)).toBe(true);
       bunExpect(await items()).toBe("2:tg-item 3:tg-item 4:tg-item");
+    },
+    T,
+  );
+
+  test(
+    "<TransitionGroup> moves the items that stay with the move class (FLIP)",
+    async () => {
+      await js(`(() => {
+        const item = () => document.querySelector("#tg .tg-item");
+        const tops = (globalThis.__tops = []);
+        const sample = () => {
+          tops.push(Math.round(item().getBoundingClientRect().top));
+          if (tops.length < 20) requestAnimationFrame(sample);
+        };
+        document.querySelector("#tg-shuffle").addEventListener("click", () => requestAnimationFrame(sample), { once: true });
+      })()`);
+      const first = await typed<string>(`document.querySelector("#tg .tg-item").textContent`);
+      await app.locator("#tg-shuffle").click();
+      bunExpect(
+        await until(`[...document.querySelectorAll("#tg .tg-item")].some((e) => e.classList.contains("list-move"))`),
+      ).toBe(true);
+      bunExpect(await until(`!document.querySelector("#tg .list-move")`, 3000)).toBe(true);
+      bunExpect(await until(`__tops.length >= 20`)).toBe(true);
+      const tops = await typed<number[]>("__tops");
+      bunExpect(new Set(tops).size).toBeGreaterThan(3);
+      bunExpect(await js(`document.querySelector("#tg .tg-item:last-child").textContent`)).toBe(first);
     },
     T,
   );
@@ -191,6 +236,108 @@ describe("vue features", () => {
     async () => {
       bunExpect(await events()).toContain("captured:mounted-boom:mounted hook");
       bunExpect(await events()).toContain("errorHandler:mounted-boom:mounted hook");
+    },
+    T,
+  );
+
+  test(
+    "an error thrown by an @click handler reaches onErrorCaptured and app.config.errorHandler",
+    async () => {
+      await app.locator("#click-boom").click();
+      bunExpect(await until(`__vf.includes("errorHandler:click-boom:native event handler")`)).toBe(true);
+      bunExpect(await events()).toContain("captured:click-boom:native event handler");
+    },
+    T,
+  );
+
+  test(
+    "a throwing listener is reported as uncaught (window.onerror, the error event) and the next listener still runs",
+    async () => {
+      await js(`(() => {
+        const seen = (globalThis.__errs = []);
+        const el = document.querySelector("#thrower");
+        el.addEventListener("x.ping", () => { throw new Error("listener-boom"); });
+        el.addEventListener("x.ping", () => seen.push("next"));
+        window.addEventListener("error", (e) => (seen.push("event:" + e.error.message), e.preventDefault()), { once: true });
+        window.onerror = (message) => void seen.push("onerror:" + message);
+        el.dispatchEvent(new CustomEvent("x.ping"));
+        window.onerror = null;
+      })()`);
+      bunExpect(await js("__errs")).toEqual(["event:listener-boom", "onerror:Uncaught Error: listener-boom", "next"]);
+    },
+    T,
+  );
+
+  test(
+    "checkboxes and radios: click, label, Space, arrow keys, disabled, a cancelled click, events and v-model",
+    async () => {
+      const out = async () => JSON.parse((await text("#t-out")) ?? "{}") as Record<string, unknown>;
+      await app.locator("#cb").click();
+      await expect(app.locator("#t-out")).toHaveText(/"agreed":true/);
+      bunExpect(await color("#cb-label")).toBe("rgb(0, 128, 0)");
+      await app.locator("#cb-label").click();
+      await expect(app.locator("#t-out")).toHaveText(/"agreed":false/);
+      await app.locator("#cb").press("Space");
+      await expect(app.locator("#t-out")).toHaveText(/"agreed":true/);
+      await app.locator("#wrap-label").click();
+      await app.locator("#cb-yes").click();
+      await app.locator("#f-apple").click();
+      await app.locator("#f-pear").click();
+      await app.locator("#r-s").click();
+      await expect(app.locator("#t-out")).toHaveText(/"size":"s"/);
+      bunExpect(await out()).toEqual({ agreed: true, wrapped: true, yesNo: "yes", fruits: ["apple"], size: "s" });
+      await app.locator("#r-s").press("ArrowRight");
+      await expect(app.locator("#t-out")).toHaveText(/"size":"m"/);
+      bunExpect(await until(`document.activeElement?.id === "r-m"`)).toBe(true);
+      bunExpect(await js(`[...document.querySelectorAll("#toggles :checked")].map((e) => e.id).join()`)).toBe(
+        "cb,cb-wrapped,cb-yes,f-apple,r-m",
+      );
+
+      await app.locator("#cb-off").click();
+      bunExpect(
+        await js(`[document.querySelector("#cb-off").checked, document.querySelector("#cb-off").matches(":disabled")]`),
+      ).toEqual([false, true]);
+      await app.locator("#cb-veto").click();
+      bunExpect(await until(`__vf.includes("veto")`)).toBe(true);
+      bunExpect(await js(`document.querySelector("#cb-veto").checked`)).toBe(false);
+
+      await js(`document.querySelector("#cb-events").indeterminate = true`);
+      bunExpect(await js(`document.querySelector("#cb-events").matches(":indeterminate")`)).toBe(true);
+      await app.locator("#cb-events").click();
+      bunExpect(await until(`__vf.includes("ev:change")`)).toBe(true);
+      bunExpect((await events()).filter((e) => e.startsWith("ev:"))).toEqual([
+        "ev:click:true",
+        "ev:input",
+        "ev:change",
+      ]);
+      bunExpect(await js(`document.querySelector("#cb-events").matches(":indeterminate")`)).toBe(false);
+
+      await app.locator("#cb-custom").click();
+      bunExpect(await until(`getComputedStyle(document.querySelector("#cb-custom")).color === "rgb(255, 0, 0)"`)).toBe(
+        true,
+      );
+      bunExpect(
+        await js(`(() => {
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.setAttribute("checked", "");
+          const before = [box.checked, box.defaultChecked];
+          box.checked = false;
+          box.setAttribute("checked", "");
+          return [...before, box.checked, box.value];
+        })()`),
+      ).toEqual([true, true, false, "on"]);
+    },
+    T,
+  );
+
+  test.skipIf(!uiaSupported())(
+    "a native checkbox tells UI Automation it is a checkbox and whether it is checked",
+    async () => {
+      const nodes = await uiaTree(app.pid, { minNodes: 20, timeout: 30_000 });
+      const agree = nodes.filter((n) => n.type === "CheckBox" && n.name === "agree");
+      bunExpect(agree.map((n) => n.toggle)).toEqual(["On"]);
+      bunExpect(nodes.filter((n) => n.type === "RadioButton").length).toBe(3);
     },
     T,
   );

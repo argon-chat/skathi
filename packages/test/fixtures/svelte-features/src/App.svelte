@@ -7,6 +7,7 @@
   import { MediaQuery, SvelteMap, SvelteSet } from "svelte/reactivity";
   import { derived, writable } from "svelte/store";
   import { fade, fly } from "svelte/transition";
+  import { flip } from "svelte/animate";
   import Boom from "./Boom.svelte";
   import Child from "./Child.svelte";
   import LegacyParent from "./LegacyParent.svelte";
@@ -29,6 +30,12 @@
 
   let text = $state("");
   let picked = $state("b");
+  let many = $state<string[]>([]);
+  let agreed = $state(false);
+  let mixed = $state(true);
+  let fruits = $state<string[]>(["pear"]);
+  let size = $state("m");
+  let list = $state([1, 2, 3]);
   let el = $state<HTMLElement>();
   let width = $state(0);
   let innerWidth = $state(0);
@@ -51,6 +58,7 @@
   };
 
   onMount(async () => {
+    window.addEventListener("error", (e) => log(`window-error:${(e.error as Error).message}`));
     count = 1;
     await tick();
     log(`tick:${document.querySelector("#count")?.textContent ?? ""}`);
@@ -63,6 +71,16 @@
 <svelte:head><title>svelte head title</title></svelte:head>
 
 <main id="page">
+  <section id="toggles">
+    <input id="s-cb" type="checkbox" bind:checked={agreed} />
+    <label id="s-cb-label" for="s-cb">agree</label>
+    <input id="s-mixed" type="checkbox" bind:indeterminate={mixed} />
+    <input id="s-apple" type="checkbox" value="apple" bind:group={fruits} />
+    <input id="s-pear" type="checkbox" value="pear" bind:group={fruits} />
+    <label id="s-l-label"><input id="s-l" type="radio" name="s-size" value="l" bind:group={size} />large</label>
+    <input id="s-m" type="radio" name="s-size" value="m" bind:group={size} />
+    <p id="s-out">{JSON.stringify({ agreed, mixed, fruits, size })}</p>
+  </section>
   <p id="label">{label}</p>
   <button id="inc" onclick={() => count++}>inc</button>
   <p id="count">{count} {doubled}</p>
@@ -88,13 +106,31 @@
   <p id="tween">{Math.round(tween.current)} {Math.round(spring.current)}</p>
 
   <input id="b-text" bind:value={text} />
-  <select id="b-select" value={picked} onchange={(e) => (picked = e.currentTarget.value)}>
+  <select id="b-select" bind:value={picked}>
     <option value="a">A</option>
     <option value="b">B</option>
     <option value="c">C</option>
   </select>
+  <select id="b-many" multiple bind:value={many}>
+    <option value="x">X</option>
+    <option value="y">Y</option>
+  </select>
   <div id="measured" bind:this={el} bind:clientWidth={width} style="width: 123px">measured</div>
-  <p id="b-out">{JSON.stringify({ text, picked, el: el?.id, width, innerWidth })}</p>
+  <p id="b-out">{JSON.stringify({ text, picked, many, el: el?.id, width, innerWidth })}</p>
+
+  <button id="flip-go" onclick={() => (list = [...list].reverse())}>flip</button>
+  <ul id="flip">
+    {#each list as n (n)}<li class="flip-item" animate:flip={{ duration: 500 }}>{n}</li>{/each}
+  </ul>
+
+  <svelte:boundary onerror={(e) => log(`boundary:${(e as Error).message}`)}>
+    <button
+      id="click-boom"
+      onclick={() => {
+        throw new Error("click-boom");
+      }}>click boom</button
+    >
+  </svelte:boundary>
 
   <svelte:element this={tag} id="dynamic">dynamic</svelte:element>
   <button id="tag" onclick={() => (tag = "article")}>tag</button>
