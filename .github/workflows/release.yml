@@ -3,8 +3,10 @@ name: Release
 # A `v<version>` tag publishes the prebuilt hosts `sk build` and `sk dev` download (cli/host-fetch.ts):
 # every published variant and the dev host for Windows x64, macOS arm64 and Linux x64, gzipped, plus
 # hosts.json, and the full ICU data the Windows and Linux prod hosts leave out (sk-icu-*.dat.gz, shipped by
-# `sk build` as icu.skpk); then @skathi-native/runtime and @skathi-native/cli at that version to npm, and the Rust
-# crates (skathi and everything under it) to crates.io (scripts/publish-crates.ts).
+# `sk build` as icu.skpk); then @skathi-native/runtime and @skathi-native/cli at that version to npm, and Skathi's
+# Rust crates to crates.io (scripts/publish-crates.ts, whose header has the release order). skathi-gpui, redjs and
+# skathi-taffy are released from their own repositories first: the `vendor` job stops the release before anything
+# is built while crates.io lacks the versions Skathi requires.
 # Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
 # ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the sk-aot
 # that compiled it (.github/workflows/sk-aot.yml) is published beside them for `sk build --aot`.
@@ -30,7 +32,26 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  vendor:
+    name: Vendor crates on crates.io
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: Check out the vendor submodules
+        run: git submodule update --init --depth 1 vendor/gpui vendor/redjs vendor/taffy
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - run: bun scripts/publish-crates.ts --tag "$TAG" --check
+
   sk-aot:
+    needs: [vendor]
     uses: ./.github/workflows/sk-aot.yml
     with:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
@@ -131,9 +152,9 @@ jobs:
             release-hosts/*.gz
             release-hosts/hosts.json
 
-  # Windows, where every crate's packaged sources are verified to build. The first release of a crate
-  # is rate-limited by crates.io (5, then one per 10 minutes) and can outlast the job: re-run it, and
-  # it goes on from the first crate crates.io does not have.
+  # Windows, where every crate's packaged sources are verified to build. crates.io takes 30 new versions
+  # at once, then one a minute, and new crates 5, then one per 10 minutes; a run that stops early is
+  # re-run, and goes on from the first crate crates.io does not have.
   crates:
     name: crates.io
     needs: [publish]

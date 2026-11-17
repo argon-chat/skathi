@@ -1,13 +1,14 @@
 // Packages every crate Skathi publishes, in publish order, without publishing anything.
 //
-//   bun scripts/package-crates.ts [--out <dir>] [--no-verify]
+//   bun scripts/package-crates.ts [--out <dir>] [--no-verify] [--vendor]
 //
 // Writes the devtools inspector bundle the published sk-app carries (crates/sk-app/devtools/),
-// then runs `cargo package` for skathi-taffy, the skathi-gpui workspace, redjs and Skathi's own
-// crates. Each step verifies against the unpacked packages of the steps before it (a
-// `[patch.crates-io]` in <out>/patch.toml), so only what would be uploaded is compiled. <out>
-// (default target/crates) is also the target directory: <out>/package holds the .crate files and
-// their unpacked contents, and the final patch.toml points another project at all of them.
+// then runs `cargo package` for Skathi's own crates, verified against the skathi-gpui, redjs and
+// skathi-taffy that crates.io has. --vendor packages those three from vendor/ first and verifies
+// against these packages instead (a `[patch.crates-io]` in <out>/patch.toml): a dry run of a release
+// that needs versions of them not published yet. <out> (default target/crates) is also the target
+// directory: <out>/package holds the .crate files and their unpacked contents, and the final
+// patch.toml points another project at all of them.
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -15,12 +16,12 @@ import { parseArgs } from "node:util";
 
 export const ROOT = resolve(import.meta.dir, "..");
 
+// Released from their own repositories (scripts/publish-crates.ts there), in this order.
 // `only`: the one crate of a workspace that is published; otherwise every member not `publish = false`.
-export const STEPS: { dir: string; only?: string }[] = [
+export const VENDOR: { dir: string; only?: string }[] = [
   { dir: "vendor/taffy", only: "skathi-taffy" },
   { dir: "vendor/gpui" },
   { dir: "vendor/redjs/redjs" },
-  { dir: "." },
 ];
 
 function run(cmd: string[], cwd: string): void {
@@ -34,6 +35,8 @@ export interface Package {
   version: string;
   publish: string[] | null;
   dependencies: { name: string; req: string }[];
+  manifest_path: string;
+  repository: string | null;
 }
 
 export function publishable(cwd: string, only: string | undefined): Package[] {
@@ -47,8 +50,9 @@ if (import.meta.main) packageAll();
 
 function packageAll(): void {
   const { values } = parseArgs({
-    options: { out: { type: "string" }, "no-verify": { type: "boolean" } },
+    options: { out: { type: "string" }, "no-verify": { type: "boolean" }, vendor: { type: "boolean" } },
   });
+  const steps: { dir: string; only?: string }[] = [...(values.vendor ? VENDOR : []), { dir: "." }];
   const out = resolve(values.out ?? join(ROOT, "target", "crates"));
   const packages = join(out, "package");
   const patch = join(out, "patch.toml");
@@ -69,7 +73,7 @@ function packageAll(): void {
 
   mkdirSync(packages, { recursive: true });
   const done: Package[] = [];
-  for (const step of STEPS) {
+  for (const step of steps) {
     const cwd = join(ROOT, step.dir);
     const these = publishable(cwd, step.only);
     writePatch(done);
