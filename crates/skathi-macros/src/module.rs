@@ -87,7 +87,35 @@ struct Export {
     js: String,
     method: syn::Ident,
     task: bool,
-    params: Vec<(String, Type)>,
+    params: Vec<(String, Param)>,
+}
+
+enum Param {
+    Owned(Type),
+    Borrowed(Borrowed),
+}
+
+/// A parameter read in place for the length of a synchronous call.
+enum Borrowed {
+    Str,
+}
+
+impl Borrowed {
+    fn of(r: &syn::TypeReference) -> Option<Self> {
+        if r.mutability.is_some() || r.lifetime.as_ref().is_some_and(|l| l.ident != "_") {
+            return None;
+        }
+        match &*r.elem {
+            Type::Path(p) if p.qself.is_none() && p.path.is_ident("str") => Some(Borrowed::Str),
+            _ => None,
+        }
+    }
+
+    fn owned(&self) -> &'static str {
+        match self {
+            Borrowed::Str => "String",
+        }
+    }
 }
 
 fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
@@ -163,11 +191,29 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
             ));
         }
         match &*arg.ty {
-            Type::Reference(_) => {
-                return Err(syn::Error::new_spanned(
-                    &arg.ty,
-                    "take an owned type (`String`, not `&str`): arguments are read with serde",
-                ))
+            Type::Reference(r) => {
+                let Some(borrowed) = Borrowed::of(r) else {
+                    return Err(syn::Error::new_spanned(
+                        &arg.ty,
+                        "take an owned type (`String`, not `&String`): only `&str` and slices of \
+                         numbers (`&[u8]`, `&[f32]`, …) are read in place",
+                    ));
+                };
+                if task {
+                    return Err(syn::Error::new_spanned(
+                        &arg.ty,
+                        format!(
+                            "a #[task] runs on a worker after the call has returned, so it cannot \
+                             borrow from it: take `{}` instead",
+                            borrowed.owned()
+                        ),
+                    ));
+                }
+                params.push((
+                    camel_case(&pat.ident.to_string()),
+                    Param::Borrowed(borrowed),
+                ));
+                continue;
             }
             Type::ImplTrait(_) => {
                 return Err(syn::Error::new_spanned(
@@ -177,7 +223,10 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
             }
             _ => {}
         }
-        params.push((camel_case(&pat.ident.to_string()), (*arg.ty).clone()));
+        params.push((
+            camel_case(&pat.ident.to_string()),
+            Param::Owned((*arg.ty).clone()),
+        ));
     }
     if params.len() > MAX_PARAMS {
         return Err(syn::Error::new_spanned(
@@ -279,13 +328,24 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         let args: Vec<_> = (0..params.len())
             .map(|i| format_ident!("arg{}", i, span = Span::mixed_site()))
             .collect();
-        let types = params.iter().map(|(_, ty)| ty);
+        let types = params.iter().map(|(_, param)| match param {
+            Param::Owned(ty) => quote!(#ty),
+            Param::Borrowed(Borrowed::Str) => quote!(#krate::__private::Str),
+        });
+        let values = params
+            .iter()
+            .zip(&args)
+            .map(|((_, param), arg)| match param {
+                Param::Owned(_) => quote!(#arg),
+                // SAFETY: read in this call, used only inside it.
+                Param::Borrowed(_) => quote!(unsafe { #arg.get() }),
+            });
         let names = (!params.is_empty()).then(|| quote!(.params([#(#names),*])));
         quote! {
             {
                 let #this = ::std::sync::Arc::clone(&#this);
                 #module
-                    .#kind(#js, move |#(#args: #types),*| <#ty>::#method(&*#this, #(#args),*))
+                    .#kind(#js, move |#(#args: #types),*| <#ty>::#method(&*#this, #(#values),*))
                     #names;
             }
         }
@@ -339,7 +399,9 @@ mod tests {
             quote!(impl N { pub async fn f(&self) {} }),
             quote!(impl N { pub fn f<T>(&self, t: T) {} }),
             quote!(impl N { pub fn f(&self, (a, b): (u8, u8)) {} }),
-            quote!(impl N { pub fn f(&self, s: &str) {} }),
+            quote!(impl N { pub fn f(&self, s: &String) {} }),
+            quote!(impl N { pub fn f(&self, s: &'static str) {} }),
+            quote!(impl N { #[task] pub fn f(&self, s: &str) {} }),
             quote!(impl N { pub fn f(&self, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8, i: u8) {} }),
             quote!(impl N { pub fn delete(&self) {} }),
             quote!(impl N { #[task] fn f(&self) {} }),

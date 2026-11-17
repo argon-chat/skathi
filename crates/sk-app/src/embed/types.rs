@@ -351,6 +351,10 @@ declare module "native:empty" {
             }]
         }
 
+        pub fn label(&self, text: &str) -> String {
+            text.to_owned()
+        }
+
         #[task]
         pub fn sync_now(&self) -> Result<u32, String> {
             Ok(0)
@@ -369,6 +373,7 @@ declare module "native:store" {
   export type Mood = "Calm" | "Busy";
   export const available: boolean;
   export function fetchAll(maxCount: number, mood?: Mood | null): Entry[];
+  export function label(text: string): string;
   export function syncNow(): Promise<number>;
   export function on(event: "changed", handler: (data: Entry) => void): () => void;
   export function on(event: "mood-swing", handler: (data: Mood) => void): () => void;

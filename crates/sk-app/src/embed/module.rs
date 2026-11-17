@@ -1,8 +1,9 @@
 //! Native modules: typed functions, tasks and events an embedder gives the app as `native:<name>`.
 //!
-//! Arguments and results cross as JSON (serde on this side, `JSON.parse`/`JSON.stringify` on the
-//! VM thread); the app sees ordinary values. A function runs inside the JS call; a task runs on a
-//! worker and settles a promise in a later frame.
+//! Arguments are read from the engine's values straight into serde types and results built
+//! straight into engine values, with the meaning a JSON round trip gives them (`marshal`). A
+//! function runs inside the JS call; a task reads its arguments in the call, runs on a worker
+//! and settles a promise in a later frame.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -16,6 +17,7 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use sk_runtime::JsRuntime;
 
+use super::marshal;
 use crate::js::{self, Context, HostArgs, Value};
 
 #[cfg(feature = "types")]
@@ -74,13 +76,43 @@ impl Failure {
     }
 }
 
+impl From<Failure> for Fail {
+    fn from(failure: Failure) -> Self {
+        Fail::Failure(failure)
+    }
+}
+
+/// Why a call failed: a JS exception thrown while reading the arguments, or a [`Failure`].
+#[doc(hidden)]
+#[derive(Debug)]
+pub enum Fail {
+    Thrown(Value),
+    Failure(Failure),
+}
+
+/// A task's work, made in the call from its arguments and run on a worker.
+#[doc(hidden)]
+pub type Work = Box<dyn FnOnce() -> Result<String, Failure> + Send + 'static>;
+
 /// A Rust closure the app can call: `Fn(A1, ..., An) -> R` for up to eight arguments, each
-/// `Deserialize`, with `R: Serialize`. An `Err(e)` result throws (or rejects) with `e`.
+/// `Deserialize`, with `R: Serialize`. An `Err(e)` result throws with `e`.
 pub trait Function<Args>: Send + Sync + 'static {
     #[doc(hidden)]
     const ARITY: usize;
     #[doc(hidden)]
-    fn invoke(&self, args: Vec<Json>) -> Result<String, Failure>;
+    fn invoke(&self, context: &Context, args: &HostArgs) -> Result<Value, Fail>;
+    #[cfg(feature = "types")]
+    #[doc(hidden)]
+    fn signature(types: &mut Types) -> (Vec<DataType>, DataType);
+}
+
+/// A [`Function`] run on a worker: its arguments are read in the call, so they are also `Send`.
+/// An `Err(e)` result rejects with `e`.
+pub trait Task<Args>: Send + Sync + 'static {
+    #[doc(hidden)]
+    const ARITY: usize;
+    #[doc(hidden)]
+    fn prepare(self: Arc<Self>, context: &Context, args: &HostArgs) -> Result<Work, Fail>;
     #[cfg(feature = "types")]
     #[doc(hidden)]
     fn signature(types: &mut Types) -> (Vec<DataType>, DataType);
@@ -96,12 +128,32 @@ macro_rules! function {
         {
             const ARITY: usize = $n;
 
-            #[allow(unused_mut, unused_variables)]
-            fn invoke(&self, mut args: Vec<Json>) -> Result<String, Failure> {
-                args.resize($n, Json::Null);
-                let mut args = args.into_iter();
-                $(let $a = argument::<$A>(args.next().unwrap_or(Json::Null), $i)?;)*
-                answer(&(self)($($a),*))
+            #[allow(unused_variables)]
+            #[inline]
+            fn invoke(&self, context: &Context, args: &HostArgs) -> Result<Value, Fail> {
+                $(let $a = argument::<$A>(context, args.arg($i - 1), $i)?;)*
+                answer(context, &(self)($($a),*))
+            }
+
+            #[cfg(feature = "types")]
+            #[allow(unused_variables)]
+            fn signature(types: &mut Types) -> (Vec<DataType>, DataType) {
+                (vec![$(types.define::<$A>()),*], types.define::<R>())
+            }
+        }
+
+        impl<F, R, $($A,)*> Task<($($A,)*)> for F
+        where
+            F: Fn($($A),*) -> R + Send + Sync + 'static,
+            R: Serialize + Typed,
+            $($A: DeserializeOwned + Typed + Send + 'static,)*
+        {
+            const ARITY: usize = $n;
+
+            #[allow(unused_variables)]
+            fn prepare(self: Arc<Self>, context: &Context, args: &HostArgs) -> Result<Work, Fail> {
+                $(let $a = argument::<$A>(context, args.arg($i - 1), $i)?;)*
+                Ok(Box::new(move || answer_json(&(self)($($a),*))))
             }
 
             #[cfg(feature = "types")]
@@ -123,12 +175,40 @@ function!(6; A1 a1 1, A2 a2 2, A3 a3 3, A4 a4 4, A5 a5 5, A6 a6 6);
 function!(7; A1 a1 1, A2 a2 2, A3 a3 3, A4 a4 4, A5 a5 5, A6 a6 6, A7 a7 7);
 function!(8; A1 a1 1, A2 a2 2, A3 a3 3, A4 a4 4, A5 a5 5, A6 a6 6, A7 a7 7, A8 a8 8);
 
-fn argument<A: DeserializeOwned>(value: Json, position: usize) -> Result<A, Failure> {
-    serde_json::from_value(value)
-        .map_err(|e| Failure::type_error(format!("argument {position}: {e}")))
+#[inline]
+fn argument<A: DeserializeOwned>(
+    context: &Context,
+    value: Value,
+    position: usize,
+) -> Result<A, Fail> {
+    A::deserialize(marshal::Arg::new(context, value)).map_err(|e| match e {
+        marshal::Error::Message(m) => {
+            Fail::Failure(Failure::type_error(format!("argument {position}: {m}")))
+        }
+        marshal::Error::Thrown(v) => Fail::Thrown(v),
+        marshal::Error::NotJson(m) => Fail::Thrown(context.error(1, &m)),
+    })
 }
 
-fn answer<R: Serialize + ?Sized>(value: &R) -> Result<String, Failure> {
+#[inline]
+fn answer<R: Serialize + ?Sized>(context: &Context, value: &R) -> Result<Value, Fail> {
+    match value.serialize(marshal::Out { context, top: true }) {
+        Ok(v) => Ok(v),
+        Err(marshal::OutError::Err(json)) => Err(Failure::from_err(json).into()),
+        Err(marshal::OutError::Message(m)) => {
+            Err(Failure::new(format!("the result cannot be serialized: {m}")).into())
+        }
+        Err(marshal::OutError::Compound) => {
+            let json = answer_json(value)?;
+            marshal::parse(context, &json).map_err(|e| match e {
+                marshal::Error::Thrown(v) => Fail::Thrown(v),
+                other => Fail::Failure(Failure::new(other.to_string())),
+            })
+        }
+    }
+}
+
+fn answer_json<R: Serialize + ?Sized>(value: &R) -> Result<String, Failure> {
     match value.serialize(ResultProbe) {
         Ok(Probed::Ok(json)) => Ok(json),
         Ok(Probed::Err(json)) => Err(Failure::from_err(json)),
@@ -265,17 +345,26 @@ impl serde::Serializer for ResultProbe {
     }
 }
 
-type Invoke = Arc<dyn Fn(Vec<Json>) -> Result<String, Failure> + Send + Sync>;
+enum Invoke {
+    Function(Box<dyn Fn(&Context, &HostArgs) -> Result<Value, Fail> + Send + Sync>),
+    Task(Box<dyn Fn(&Context, &HostArgs) -> Result<Work, Fail> + Send + Sync>),
+}
 
 pub(crate) struct Entry {
     pub(crate) name: String,
+    #[cfg(feature = "types")]
     pub(crate) task: bool,
     pub(crate) arity: usize,
     pub(crate) params: Vec<String>,
     invoke: Invoke,
     #[cfg(feature = "types")]
-    pub(crate) signature: fn(&mut Types) -> (Vec<DataType>, DataType),
+    pub(crate) signature: Signature,
 }
+
+#[cfg(feature = "types")]
+type Signature = fn(&mut Types) -> (Vec<DataType>, DataType);
+#[cfg(not(feature = "types"))]
+type Signature = ();
 
 pub(crate) struct Event {
     pub(crate) name: String,
@@ -372,19 +461,26 @@ impl Module {
         true
     }
 
-    fn add<Args, H: Function<Args>>(&mut self, name: &str, handler: H, task: bool) -> Declared<'_> {
+    #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+    fn add(
+        &mut self,
+        name: &str,
+        arity: usize,
+        invoke: Invoke,
+        signature: Signature,
+    ) -> Declared<'_> {
         if !self.claim(name) {
             return Declared { entry: None };
         }
-        let handler = Arc::new(handler);
         self.functions.push(Entry {
             name: name.to_owned(),
-            task,
-            arity: H::ARITY,
-            params: Vec::new(),
-            invoke: Arc::new(move |args| handler.invoke(args)),
             #[cfg(feature = "types")]
-            signature: H::signature,
+            task: matches!(invoke, Invoke::Task(_)),
+            arity,
+            params: Vec::new(),
+            invoke,
+            #[cfg(feature = "types")]
+            signature,
         });
         Declared {
             entry: self.functions.last_mut(),
@@ -394,12 +490,43 @@ impl Module {
     /// A synchronous export: runs on the UI thread inside the call and returns its value. Keep it
     /// short; anything slow is a [`Self::task`].
     pub fn function<Args, H: Function<Args>>(&mut self, name: &str, handler: H) -> Declared<'_> {
-        self.add(name, handler, false)
+        let signature: Signature;
+        #[cfg(feature = "types")]
+        {
+            signature = H::signature;
+        }
+        #[cfg(not(feature = "types"))]
+        {
+            signature = ();
+        }
+        self.add(
+            name,
+            H::ARITY,
+            Invoke::Function(Box::new(move |context, args| handler.invoke(context, args))),
+            signature,
+        )
     }
 
     /// An export that runs on a worker thread and returns a `Promise` in the app.
-    pub fn task<Args, H: Function<Args>>(&mut self, name: &str, handler: H) -> Declared<'_> {
-        self.add(name, handler, true)
+    pub fn task<Args, H: Task<Args>>(&mut self, name: &str, handler: H) -> Declared<'_> {
+        let signature: Signature;
+        #[cfg(feature = "types")]
+        {
+            signature = H::signature;
+        }
+        #[cfg(not(feature = "types"))]
+        {
+            signature = ();
+        }
+        let handler = Arc::new(handler);
+        self.add(
+            name,
+            H::ARITY,
+            Invoke::Task(Box::new(move |context, args| {
+                handler.clone().prepare(context, args)
+            })),
+            signature,
+        )
     }
 
     /// Declares an event `Handle::emit_to` may send with a `T` payload; the app subscribes with `on`.
@@ -452,19 +579,45 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "a panic".into())
 }
 
-fn call(module: &Module, entry: &Entry, args: Vec<Json>) -> Result<String, Failure> {
-    let label = format!("native:{}.{}", module.name, entry.name);
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (entry.invoke)(args))) {
-        Ok(Err(failure)) if failure.kind == 1 => Err(Failure {
-            message: format!("{label}: {}", failure.message),
+fn labeled(module: &Module, entry: &Entry, failure: Failure) -> Failure {
+    if failure.kind == 1 {
+        Failure {
+            message: format!("native:{}.{}: {}", module.name, entry.name, failure.message),
             ..failure
-        }),
-        Ok(result) => result,
-        Err(payload) => Err(Failure::new(format!(
-            "{label} panicked: {}",
-            panic_message(payload.as_ref())
-        ))),
+        }
+    } else {
+        failure
     }
+}
+
+fn panicked(module: &Module, entry: &Entry, payload: &(dyn std::any::Any + Send)) -> Failure {
+    Failure::new(format!(
+        "native:{}.{} panicked: {}",
+        module.name,
+        entry.name,
+        panic_message(payload)
+    ))
+}
+
+/// Runs a call's part on the JS thread: a panic becomes a [`Failure`], a type error is labeled.
+fn guarded<T>(
+    module: &Module,
+    entry: &Entry,
+    run: impl FnOnce() -> Result<T, Fail>,
+) -> Result<T, Fail> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(Fail::Failure(failure))) => Err(Fail::Failure(labeled(module, entry, failure))),
+        Ok(Err(thrown)) => Err(thrown),
+        Err(payload) => Err(Fail::Failure(panicked(module, entry, payload.as_ref()))),
+    }
+}
+
+fn thrown(context: &Context, fail: Fail) -> js::Error {
+    js::Error::Exception(match fail {
+        Fail::Thrown(value) => value,
+        Fail::Failure(failure) => error_value(context, &failure),
+    })
 }
 
 /// Runs one task's work; see `Builder::task_executor`.
@@ -568,8 +721,6 @@ struct Pending {
 
 #[derive(Default)]
 struct State {
-    json_parse: Option<Value>,
-    json_stringify: Option<Value>,
     executor: Option<Executor>,
     modules: HashMap<String, Value>,
     listeners: HashMap<(String, String), Vec<Value>>,
@@ -584,26 +735,11 @@ fn type_error(context: &Context, message: &str) -> js::Error {
     js::Error::Exception(context.error(1, message))
 }
 
-fn json_fn(pick: fn(&State) -> Option<Value>) -> js::Result<Value> {
-    STATE.with(|s| pick(&s.borrow())).ok_or(js::Error::BadArg)
-}
-
 fn parse(context: &Context, json: &str) -> js::Result<Value> {
-    let parse = json_fn(|s| s.json_parse)?;
-    context.call(parse, Value::undefined(), &[context.string(json)])
-}
-
-fn arguments(context: &Context, args: &HostArgs) -> js::Result<Vec<Json>> {
-    let count = args.argc();
-    let array = context.array(count)?;
-    for i in 0..count {
-        context.set_index(array, i, args.arg(i))?;
-    }
-    let stringify = json_fn(|s| s.json_stringify)?;
-    let text = context.call(stringify, Value::undefined(), &[array])?;
-    let text = context.read_string(text)?;
-    serde_json::from_str(&text)
-        .map_err(|e| type_error(context, &format!("the arguments are not JSON: {e}")))
+    marshal::parse(context, json).map_err(|e| match e {
+        marshal::Error::Thrown(v) => js::Error::Exception(v),
+        _ => js::Error::BadArg,
+    })
 }
 
 fn error_value(context: &Context, failure: &Failure) -> Value {
@@ -620,17 +756,14 @@ fn sync_function(
     context: &Context,
     module: &'static Module,
     entry: &'static Entry,
+    invoke: &'static (dyn Fn(&Context, &HostArgs) -> Result<Value, Fail> + Send + Sync),
 ) -> js::Result<Value> {
     js::function(
         context,
         &entry.name,
         entry.arity as u32,
         move |context, args| {
-            let values = arguments(context, &args)?;
-            match call(module, entry, values) {
-                Ok(json) => parse(context, &json),
-                Err(failure) => Err(js::Error::Exception(error_value(context, &failure))),
-            }
+            guarded(module, entry, || invoke(context, &args)).map_err(|f| thrown(context, f))
         },
     )
 }
@@ -639,14 +772,31 @@ fn task_function(
     context: &Context,
     module: &'static Module,
     entry: &'static Entry,
+    prepare: &'static (dyn Fn(&Context, &HostArgs) -> Result<Work, Fail> + Send + Sync),
 ) -> js::Result<Value> {
     js::function(
         context,
         &entry.name,
         entry.arity as u32,
         move |context, args| {
-            let values = arguments(context, &args)?;
+            let work = match guarded(module, entry, || prepare(context, &args)) {
+                Err(Fail::Thrown(e)) => return Err(js::Error::Exception(e)),
+                work => work,
+            };
             let (promise, resolve, reject) = context.promise()?;
+            let work = match work {
+                Ok(work) => work,
+                Err(Fail::Thrown(e)) => return Err(js::Error::Exception(e)),
+                // Arguments of the wrong type reject, as when they were read on the worker.
+                Err(Fail::Failure(failure)) => {
+                    context.call(
+                        reject,
+                        Value::undefined(),
+                        &[error_value(context, &failure)],
+                    )?;
+                    return Ok(promise);
+                }
+            };
             context.protect(resolve);
             context.protect(reject);
             let token = loop {
@@ -665,7 +815,11 @@ fn task_function(
                 token,
                 settled: false,
             };
-            let job: Job = Box::new(move || reply.settle(call(module, entry, values)));
+            let job: Job = Box::new(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                    .unwrap_or_else(|payload| Err(panicked(module, entry, payload.as_ref())));
+                reply.settle(result)
+            });
             match executor {
                 Some(executor) => {
                     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| executor(job)))
@@ -754,10 +908,9 @@ fn build(context: &Context, module: &'static Module) -> js::Result<Value> {
     let object = context.object();
     context.set(object, &context.atom("available"), Value::boolean(true))?;
     for entry in &module.functions {
-        let f = if entry.task {
-            task_function(context, module, entry)?
-        } else {
-            sync_function(context, module, entry)?
+        let f = match &entry.invoke {
+            Invoke::Task(prepare) => task_function(context, module, entry, &**prepare)?,
+            Invoke::Function(invoke) => sync_function(context, module, entry, &**invoke)?,
         };
         context.set(object, &context.atom(&entry.name), f)?;
     }
@@ -886,17 +1039,8 @@ pub(crate) fn install(
     modules: &'static [Module],
     executor: Option<Executor>,
 ) -> js::Result<()> {
-    let json = context.global_get("JSON")?;
-    let parse = context.get(json, &context.atom("parse"))?;
-    let stringify = context.get(json, &context.atom("stringify"))?;
-    context.protect(parse);
-    context.protect(stringify);
-    STATE.with(|s| {
-        let mut s = s.borrow_mut();
-        s.json_parse = Some(parse);
-        s.json_stringify = Some(stringify);
-        s.executor = executor;
-    });
+    marshal::install(context)?;
+    STATE.with(|s| s.borrow_mut().executor = executor);
     for module in modules {
         let object = build(context, module)?;
         context.protect(object);
@@ -933,67 +1077,6 @@ mod tests {
         y: i32,
     }
 
-    fn invoke<Args, H: Function<Args>>(handler: H, args: Json) -> Result<Json, Failure> {
-        let Json::Array(args) = args else {
-            panic!("an array")
-        };
-        handler
-            .invoke(args)
-            .map(|json| serde_json::from_str(&json).unwrap())
-    }
-
-    #[test]
-    fn arguments_deserialize_and_results_serialize_with_err_as_a_failure() {
-        let add = |a: i32, b: Option<i32>| a + b.unwrap_or(10);
-        assert_eq!(
-            invoke(add, serde_json::json!([2, 3])),
-            Ok(serde_json::json!(5))
-        );
-        assert_eq!(
-            invoke(add, serde_json::json!([2])),
-            Ok(serde_json::json!(12))
-        );
-        assert_eq!(
-            invoke(add, serde_json::json!([2, 3, 99])),
-            Ok(serde_json::json!(5))
-        );
-        let flip = |p: Point| Point { x: p.y, y: p.x };
-        assert_eq!(
-            invoke(flip, serde_json::json!([{ "x": 1, "y": 2 }])),
-            Ok(serde_json::json!({ "x": 2, "y": 1 }))
-        );
-        let wrong = invoke(flip, serde_json::json!(["nope"])).unwrap_err();
-        assert_eq!(wrong.kind, 1);
-        let found = |id: u32| -> Result<Point, String> {
-            if id == 1 {
-                Ok(Point { x: 1, y: 1 })
-            } else {
-                Err(format!("no point {id}"))
-            }
-        };
-        assert_eq!(
-            invoke(found, serde_json::json!([1])),
-            Ok(serde_json::json!({ "x": 1, "y": 1 }))
-        );
-        assert_eq!(
-            invoke(found, serde_json::json!([2])),
-            Err(Failure::new("no point 2"))
-        );
-        let structured = || -> Result<(), Point> { Err(Point { x: 0, y: 7 }) };
-        let failure = invoke(structured, serde_json::json!([])).unwrap_err();
-        assert_eq!(failure.data.as_deref(), Some(r#"{"x":0,"y":7}"#));
-        // A user enum shaped like `{ "Ok": … }` is a value, not a Result.
-        #[derive(serde::Serialize)]
-        #[cfg_attr(feature = "types", derive(specta::Type))]
-        enum Status {
-            Ok(u8),
-        }
-        assert_eq!(
-            invoke(|| Status::Ok(1), serde_json::json!([])),
-            Ok(serde_json::json!({ "Ok": 1 }))
-        );
-    }
-
     #[test]
     fn module_names_and_exports_are_checked() {
         let mut m = Module::new("notes".into());
@@ -1027,6 +1110,28 @@ mod tests {
                     }
                 });
                 m.task("crash", || -> u8 { panic!("worker kaboom") });
+                m.task("halve", |p: Point| p.x / 2);
+                m.function("add", |a: i32, b: Option<i32>| a + b.unwrap_or(10));
+                m.function("found", |id: u32| -> Result<Point, String> {
+                    if id == 1 {
+                        Ok(Point { x: 1, y: 1 })
+                    } else {
+                        Err(format!("no point {id}"))
+                    }
+                });
+                m.function("structured", || -> Result<(), Point> {
+                    Err(Point { x: 0, y: 7 })
+                });
+                #[derive(serde::Serialize)]
+                #[cfg_attr(feature = "types", derive(specta::Type))]
+                enum Status {
+                    Ok(u8),
+                }
+                m.function("status", || Status::Ok(1));
+                m.function("shout", |s: marshal::Str, n: u8| {
+                    // SAFETY: used inside the call.
+                    unsafe { s.get() }.to_uppercase().repeat(n as usize)
+                });
                 m.event::<Point>("moved");
                 let modules: &'static [Module] = Box::leak(vec![m].into_boxed_slice());
                 install(context, modules, None).unwrap();
@@ -1072,11 +1177,36 @@ mod tests {
                     "TypeError"
                 );
                 assert_eq!(eval("typeof __sk_native_module('missing')"), "undefined");
+                assert_eq!(
+                    eval("[__nm.add(2, 3), __nm.add(2), __nm.add(2, 3, 99)].join()"),
+                    "5,12,5"
+                );
+                assert_eq!(
+                    eval("JSON.stringify([__nm.found(1), __nm.status()])"),
+                    r#"[{"x":1,"y":1},{"Ok":1}]"#
+                );
+                assert_eq!(
+                    eval("[__nm.shout('ab', 2), __nm.shout('éß中', 1)].join()"),
+                    "ABAB,ÉSS中"
+                );
+                assert_eq!(
+                    eval("try { __nm.shout(1, 1); 'no' } catch (e) { e.message }"),
+                    "native:demo.shout: argument 1: invalid type: integer `1`, expected a string"
+                );
+                assert_eq!(
+                    eval("try { __nm.found(2); 'no' } catch (e) { e.message + '|' + e.name }"),
+                    "no point 2|Error"
+                );
+                assert_eq!(
+                    eval("try { __nm.structured(); 'no' } catch (e) { JSON.stringify(e.data) }"),
+                    r#"{"x":0,"y":7}"#
+                );
                 eval(
                     "globalThis.__settled = {};
                      __nm.slow(21).then((v) => __settled.ok = v);
                      __nm.slow(0).catch((e) => __settled.err = e.message);
                      __nm.crash().catch((e) => __settled.crash = e.message.includes('worker kaboom'));
+                     __nm.halve('x').catch((e) => __settled.bad = e.name + ': ' + e.message);
                      ''",
                 );
                 emit("demo", "moved", r#"{"x":3,"y":4}"#.into());
@@ -1084,6 +1214,10 @@ mod tests {
                 assert_eq!(
                     eval("[__settled.ok, __settled.err, __settled.crash].join()"),
                     "42,zero,true"
+                );
+                assert_eq!(
+                    eval("__settled.bad"),
+                    "TypeError: native:demo.halve: argument 1: invalid type: string \"x\", expected struct Point"
                 );
                 assert_eq!(eval("JSON.stringify(__seen)"), "[7]");
                 eval("__off(); ''");

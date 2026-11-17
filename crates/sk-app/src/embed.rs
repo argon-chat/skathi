@@ -23,12 +23,20 @@ use sk_runtime::redjs::api::Value;
 use sk_runtime::{host_fn, JsRuntime};
 
 mod host_context;
+mod marshal;
 mod module;
 #[cfg(feature = "types")]
 mod types;
 pub use host_context::{HostContext, HostCookie, SameSite};
-pub use module::{Declared, Function, IntoModule, Job, Module, Typed};
+pub use module::{Declared, Function, IntoModule, Job, Module, Task, Typed};
 pub use serde;
+
+/// What `#[skathi::module]` expands to; not an API.
+#[doc(hidden)]
+pub mod __private {
+    pub use super::marshal::Str;
+}
+
 pub use sk_tree::surface::{
     surface, D3D11Device, D3D12Device, D3D12Fence, MetalDevice, MetalEvent, SharedTexture,
     SurfaceDisplay, SurfaceError, SurfaceEvent, SurfaceFormat, SurfaceHandle, SurfaceInfo,

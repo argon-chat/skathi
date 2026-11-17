@@ -154,7 +154,7 @@ pub use sk_app::embed::{
     encrypt_local_storage_at, surface, Builder, Call, D3D11Device, D3D12Device, D3D12Fence,
     Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext, HostCookie,
     IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent,
-    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Typed,
+    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Task, Typed,
 };
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};
@@ -163,3 +163,6 @@ pub use sk_app::embed::{MetalDevice, MetalEvent, SurfaceDisplay, SurfaceFormat};
 pub use sk_app::hotkeys;
 pub use sk_app::{js, run_exe, tray, HostAllocator};
 pub use skathi_macros::{data, module};
+
+#[doc(hidden)]
+pub use sk_app::embed::__private;
