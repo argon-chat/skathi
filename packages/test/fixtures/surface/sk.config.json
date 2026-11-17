@@ -1,0 +1,13 @@
+{
+  "$comment": "<sk-surface>: frames an embedder presents (crates/sk-app/examples/surface.rs), composited with object-fit, radii, z-order and visibility.",
+
+  "name": "sk-test-surface",
+
+  "window": {
+    "title": "Skathi — surface (fixture)",
+    "width": 720,
+    "height": 480,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

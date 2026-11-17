@@ -1,0 +1,684 @@
+//! `<sk-surface name="…">`: a picture native code produces and a Skathi element shows, composited
+//! like any other content (object-fit, clipping, radii, transforms, z-order).
+//!
+//! A producer gets a [`SurfaceHandle`] by name ([`surface`]) and presents frames from any thread.
+//! The latest frame wins; an element picks it up on its next paint, and only while it is visible.
+//! On Windows a frame can be a D3D11 texture on the renderer's own device (GPU copy, no readback) or
+//! a DXGI shared texture from another device or process; everywhere it can be CPU BGRA.
+
+#[cfg(windows)]
+mod d3d11;
+pub(crate) mod node;
+
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::fmt;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::Duration;
+
+/// The largest frame side accepted, the renderer's texture limit.
+const MAX_SIDE: u32 = 16384;
+
+// Producers present from their own threads.
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    const fn send<T: Send>() {}
+    send_sync::<SurfaceHandle>();
+    send_sync::<D3D11Device>();
+    send::<SharedTexture>();
+};
+
+/// The surface named `name`, created on first use. Every handle and element with that name shares it.
+pub fn surface(name: &str) -> SurfaceHandle {
+    let mut map = lock(registry());
+    let shared = map
+        .entry(name.to_string())
+        .or_insert_with(|| {
+            ANY.store(true, Ordering::Relaxed);
+            Arc::new(Shared {
+                name: name.into(),
+                state: Mutex::new(State::default()),
+                watchers: Mutex::new(Vec::new()),
+            })
+        })
+        .clone();
+    SurfaceHandle { shared }
+}
+
+/// Why a surface call failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SurfaceError {
+    /// This platform has no GPU path for surfaces; [`SurfaceHandle::present_bgra`] works everywhere.
+    NotSupported,
+    /// The renderer has no device yet (no window has drawn) or could not make one.
+    NoDevice(String),
+    /// The renderer recreated its device: ask for [`SurfaceHandle::d3d11_device`] again and recreate
+    /// textures (or reopen shared ones) on it.
+    DeviceChanged,
+    /// The texture was made on another device; open it as a [`SharedTexture`] instead.
+    WrongDevice,
+    /// A pixel format the renderer cannot take; the message names it.
+    Format(String),
+    /// A zero or oversized frame, or a buffer too short for it.
+    Size(String),
+    /// The keyed mutex was not released to the acquire key in time; nothing was presented.
+    Timeout,
+    /// The platform call failed; the message carries its error.
+    Platform(String),
+}
+
+impl fmt::Display for SurfaceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotSupported => f.write_str(
+                "GPU surfaces are Windows-only for now; present CPU frames with present_bgra",
+            ),
+            Self::NoDevice(why) => write!(f, "the renderer has no D3D11 device: {why}"),
+            Self::DeviceChanged => f.write_str(
+                "the renderer recreated its D3D11 device; get it again and recreate the textures",
+            ),
+            Self::WrongDevice => f.write_str(
+                "the texture is not on the device d3d11_device() returns; share it \
+                 (IDXGIResource1::CreateSharedHandle) and present it as a SharedTexture",
+            ),
+            Self::Format(why) | Self::Size(why) => f.write_str(why),
+            Self::Timeout => f.write_str(
+                "the producer did not release the keyed mutex to the acquire key in time",
+            ),
+            Self::Platform(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceError {}
+
+/// Where the elements showing a surface are, for a producer that renders at the painted size.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SurfaceInfo {
+    /// The largest element's content box in physical pixels; 0 while no element shows the surface.
+    pub width: u32,
+    pub height: u32,
+    /// That element's window scale factor.
+    pub scale: f32,
+    /// Whether any element showing it can be on screen. A hidden one takes no frames.
+    pub visible: bool,
+}
+
+/// What [`SurfaceHandle::on_change`] reports.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SurfaceEvent {
+    Changed(SurfaceInfo),
+    /// The renderer recreated its device; the frame is gone and GPU resources must be recreated.
+    DeviceLost,
+}
+
+/// Frame counters, for a producer that wants to know whether its frames are seen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceStats {
+    pub presented: u64,
+    /// Frames that reached at least one element. A frame replaced before a visible element painted
+    /// it is not counted.
+    pub shown: u64,
+}
+
+/// A named surface. Cheap to clone, `Send + Sync`; present from any thread.
+#[derive(Clone)]
+pub struct SurfaceHandle {
+    shared: Arc<Shared>,
+}
+
+impl fmt::Debug for SurfaceHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SurfaceHandle")
+            .field("name", &self.shared.name)
+            .finish()
+    }
+}
+
+type Watcher = Arc<dyn Fn(&SurfaceHandle, SurfaceEvent) + Send + Sync>;
+
+pub(crate) struct Shared {
+    name: Arc<str>,
+    state: Mutex<State>,
+    watchers: Mutex<Vec<(u64, Watcher)>>,
+}
+
+#[derive(Default)]
+pub(crate) struct State {
+    pub(crate) seq: u64,
+    pub(crate) frame: Option<Frame>,
+    /// Why the frame went, when it did: the element's `surfacelost` reason.
+    pub(crate) lost: &'static str,
+    presented: u64,
+    shown: u64,
+    shown_seq: u64,
+    info: SurfaceInfo,
+    #[cfg(windows)]
+    gpu: d3d11::SurfaceGpu,
+}
+
+#[derive(Clone)]
+pub(crate) enum Frame {
+    /// BGRA, straight alpha, rows packed.
+    Cpu {
+        width: u32,
+        height: u32,
+        bgra: Arc<[u8]>,
+    },
+    /// In the surface's own texture on the renderer's device.
+    #[cfg(windows)]
+    Gpu { width: u32, height: u32 },
+}
+
+impl Frame {
+    pub(crate) fn size(&self) -> (u32, u32) {
+        match self {
+            Frame::Cpu { width, height, .. } => (*width, *height),
+            #[cfg(windows)]
+            Frame::Gpu { width, height } => (*width, *height),
+        }
+    }
+}
+
+impl State {
+    fn put(&mut self, frame: Frame) {
+        self.seq += 1;
+        self.presented += 1;
+        self.frame = Some(frame);
+        self.lost = "";
+    }
+
+    pub(crate) fn note_shown(&mut self, seq: u64) {
+        if seq > self.shown_seq {
+            self.shown_seq = seq;
+            self.shown += 1;
+        }
+    }
+
+    /// The texture holding a [`Frame::Gpu`], referenced for the caller.
+    #[cfg(windows)]
+    pub(crate) fn gpu_texture(&self) -> Option<d3d11::Texture> {
+        self.gpu.texture()
+    }
+}
+
+fn registry() -> &'static Mutex<HashMap<String, Arc<Shared>>> {
+    static REGISTRY: std::sync::OnceLock<Mutex<HashMap<String, Arc<Shared>>>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static ANY: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn any() -> bool {
+    ANY.load(Ordering::Relaxed)
+}
+
+pub(crate) fn all() -> Vec<SurfaceHandle> {
+    lock(registry())
+        .values()
+        .map(|shared| SurfaceHandle {
+            shared: shared.clone(),
+        })
+        .collect()
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+impl SurfaceHandle {
+    pub fn name(&self) -> &str {
+        &self.shared.name
+    }
+
+    pub fn info(&self) -> SurfaceInfo {
+        self.state().info
+    }
+
+    pub fn stats(&self) -> SurfaceStats {
+        let st = self.state();
+        SurfaceStats {
+            presented: st.presented,
+            shown: st.shown,
+        }
+    }
+
+    /// Calls `f` on the UI thread when [`SurfaceInfo`] changes or the device is lost, until the
+    /// returned guard drops. Keep it short; it may present.
+    pub fn on_change(
+        &self,
+        f: impl Fn(&SurfaceHandle, SurfaceEvent) + Send + Sync + 'static,
+    ) -> SurfaceWatch {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        lock(&self.shared.watchers).push((id, Arc::new(f)));
+        SurfaceWatch {
+            shared: Arc::downgrade(&self.shared),
+            id,
+        }
+    }
+
+    /// Presents a CPU frame: BGRA with straight alpha, `stride` bytes per row. Works on every platform.
+    pub fn present_bgra(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        stride: usize,
+    ) -> Result<(), SurfaceError> {
+        self.present_cpu(pixels, width, height, stride, false)
+    }
+
+    /// [`Self::present_bgra`] for BGRX: the fourth byte is ignored and the frame is opaque.
+    pub fn present_bgrx(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        stride: usize,
+    ) -> Result<(), SurfaceError> {
+        self.present_cpu(pixels, width, height, stride, true)
+    }
+
+    fn present_cpu(
+        &self,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        stride: usize,
+        opaque: bool,
+    ) -> Result<(), SurfaceError> {
+        check_size(width, height)?;
+        let row = width as usize * 4;
+        let need = stride * (height as usize - 1) + row;
+        if stride < row || pixels.len() < need {
+            return Err(SurfaceError::Size(format!(
+                "a {width}x{height} BGRA frame with stride {stride} needs {need} bytes and a stride \
+                 of at least {row}; got {} bytes",
+                pixels.len()
+            )));
+        }
+        let mut packed = Vec::with_capacity(row * height as usize);
+        for y in 0..height as usize {
+            packed.extend_from_slice(&pixels[y * stride..y * stride + row]);
+        }
+        if opaque {
+            for alpha in packed.iter_mut().skip(3).step_by(4) {
+                *alpha = 255;
+            }
+        }
+        self.state().put(Frame::Cpu {
+            width,
+            height,
+            bgra: packed.into(),
+        });
+        sk_runtime::frames::wake();
+        Ok(())
+    }
+
+    /// Withdraws the frame: elements paint nothing and fire `surfacelost` with reason `"cleared"`.
+    pub fn clear(&self) {
+        let mut st = self.state();
+        if st.frame.take().is_some() {
+            st.seq += 1;
+            st.lost = "cleared";
+        }
+        drop(st);
+        sk_runtime::frames::wake();
+    }
+
+    /// The renderer's D3D11 device. Textures for [`Self::present_d3d11_texture`] are made on it.
+    pub fn d3d11_device(&self) -> Result<D3D11Device, SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d11::device(&self.shared.state).map(|inner| D3D11Device { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            Err(SurfaceError::NotSupported)
+        }
+    }
+
+    /// Presents an `ID3D11Texture2D` made on [`Self::d3d11_device`]: `B8G8R8A8_UNORM`, `_UNORM_SRGB`
+    /// or `_TYPELESS`, straight alpha, mip 0, any sample count. The texture is copied on the GPU before
+    /// this returns, so the producer may render its next frame into it at once.
+    ///
+    /// # Safety
+    /// `texture` is a live `ID3D11Texture2D` COM pointer, or null.
+    pub unsafe fn present_d3d11_texture(&self, texture: *mut c_void) -> Result<(), SurfaceError> {
+        #[cfg(windows)]
+        {
+            // SAFETY: the caller's.
+            unsafe { d3d11::present_texture(&self.shared.state, texture) }?;
+            sk_runtime::frames::wake();
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = texture;
+            Err(SurfaceError::NotSupported)
+        }
+    }
+
+    /// Presents a shared texture from another device or process (see [`SharedTexture`]).
+    pub fn present_shared(&self, texture: &SharedTexture) -> Result<(), SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d11::present_shared(&self.shared.state, &texture.inner)?;
+            sk_runtime::frames::wake();
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            match texture.never {}
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, State> {
+        lock(&self.shared.state)
+    }
+
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        &self.shared
+    }
+
+    pub(crate) fn lock_state(&self) -> MutexGuard<'_, State> {
+        self.state()
+    }
+
+    /// Records what the elements report and tells the watchers when it changed.
+    pub(crate) fn set_info(&self, info: SurfaceInfo) {
+        let changed = {
+            let mut st = self.state();
+            std::mem::replace(&mut st.info, info) != info
+        };
+        if changed {
+            self.notify(SurfaceEvent::Changed(info));
+        }
+    }
+
+    pub(crate) fn notify(&self, event: SurfaceEvent) {
+        let watchers: Vec<Watcher> = lock(&self.shared.watchers)
+            .iter()
+            .map(|(_, w)| w.clone())
+            .collect();
+        for watcher in watchers {
+            watcher(self, event);
+        }
+    }
+
+    /// The renderer replaced its device: a GPU frame and its texture are gone.
+    pub(crate) fn device_lost(&self) {
+        #[cfg(windows)]
+        {
+            let mut st = self.state();
+            if matches!(st.frame, Some(Frame::Gpu { .. })) {
+                st.frame = None;
+                st.seq += 1;
+                st.lost = "device";
+            }
+            st.gpu.forget();
+        }
+        self.notify(SurfaceEvent::DeviceLost);
+    }
+}
+
+fn check_size(width: u32, height: u32) -> Result<(), SurfaceError> {
+    if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE {
+        return Err(SurfaceError::Size(format!(
+            "a {width}x{height} frame: each side must be 1 to {MAX_SIDE} pixels"
+        )));
+    }
+    Ok(())
+}
+
+/// Ends an [`SurfaceHandle::on_change`] subscription when dropped.
+#[must_use = "dropping the guard ends the subscription"]
+pub struct SurfaceWatch {
+    shared: Weak<Shared>,
+    id: u64,
+}
+
+impl Drop for SurfaceWatch {
+    fn drop(&mut self) {
+        if let Some(shared) = self.shared.upgrade() {
+            lock(&shared.watchers).retain(|(id, _)| *id != self.id);
+        }
+    }
+}
+
+/// The renderer's `ID3D11Device`, referenced while this lives. Multithread-protected: use it and its
+/// immediate context from any thread. Raw, so any `windows` crate version can wrap it
+/// (`ID3D11Device::from_raw_borrowed(&device.as_raw())`).
+pub struct D3D11Device {
+    #[cfg(windows)]
+    inner: d3d11::Device,
+    #[cfg(not(windows))]
+    never: std::convert::Infallible,
+}
+
+impl D3D11Device {
+    /// The `ID3D11Device*`, borrowed from this value.
+    pub fn as_raw(&self) -> *mut c_void {
+        #[cfg(windows)]
+        {
+            self.inner.as_raw()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+
+    /// Changes when the renderer recreates its device.
+    pub fn generation(&self) -> u64 {
+        #[cfg(windows)]
+        {
+            self.inner.generation()
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+}
+
+impl fmt::Debug for D3D11Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("D3D11Device")
+            .field("raw", &self.as_raw())
+            .field("generation", &self.generation())
+            .finish()
+    }
+}
+
+/// A DXGI shared texture opened on the renderer's device: BGRA8, from a device of another API,
+/// adapter queue or process. Reopen it after [`SurfaceError::DeviceChanged`].
+pub struct SharedTexture {
+    #[cfg(windows)]
+    inner: d3d11::Opened,
+    #[cfg(not(windows))]
+    never: std::convert::Infallible,
+}
+
+impl SharedTexture {
+    /// Opens a handle this process holds: an NT handle (`IDXGIResource1::CreateSharedHandle`) or a
+    /// legacy one (`IDXGIResource::GetSharedHandle`). The handle stays the caller's to close.
+    pub fn open(handle: u64) -> Result<Self, SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d11::open(handle).map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = handle;
+            Err(SurfaceError::NotSupported)
+        }
+    }
+
+    /// Duplicates the NT handle `handle` of process `pid` into this process and opens it. Needs
+    /// `PROCESS_DUP_HANDLE` on that process, which a child or a same-user process grants.
+    pub fn open_from_process(pid: u32, handle: u64) -> Result<Self, SurfaceError> {
+        #[cfg(windows)]
+        {
+            d3d11::open_from_process(pid, handle).map(|inner| Self { inner })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (pid, handle);
+            Err(SurfaceError::NotSupported)
+        }
+    }
+
+    /// Synchronises through the texture's `IDXGIKeyedMutex`: each present acquires `acquire` and
+    /// releases `release`. Required for a texture made with `SHARED_KEYEDMUTEX`.
+    pub fn with_keyed_mutex(self, acquire: u64, release: u64) -> Self {
+        #[cfg(windows)]
+        {
+            let mut this = self;
+            this.inner.keys = Some((acquire, release));
+            this
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (acquire, release);
+            match self.never {}
+        }
+    }
+
+    /// How long a present waits for the acquire key (default 100 ms).
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        #[cfg(windows)]
+        {
+            let mut this = self;
+            this.inner.timeout_ms = timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+            this
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = timeout;
+            match self.never {}
+        }
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        #[cfg(windows)]
+        {
+            (self.inner.width, self.inner.height)
+        }
+        #[cfg(not(windows))]
+        {
+            match self.never {}
+        }
+    }
+}
+
+impl fmt::Debug for SharedTexture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedTexture")
+            .field("size", &self.size())
+            .finish()
+    }
+}
+
+/// The renderer recreated its device: every surface drops its GPU frame and texture.
+pub(crate) fn device_changed() {
+    #[cfg(windows)]
+    d3d11::forget_device();
+    for surface in all() {
+        surface.device_lost();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_name_is_one_surface() {
+        let a = surface("tests:one-name");
+        let b = surface("tests:one-name");
+        a.present_bgra(&[1, 2, 3, 4], 1, 1, 4).unwrap();
+        assert_eq!(b.stats().presented, 1);
+        assert_eq!(surface("tests:other-name").stats().presented, 0);
+    }
+
+    #[test]
+    fn a_padded_frame_is_packed_and_a_short_one_refused() {
+        let s = surface("tests:stride");
+        let mut pixels = vec![0u8; 12 * 2];
+        pixels[..8].copy_from_slice(&[1, 1, 1, 1, 2, 2, 2, 2]);
+        pixels[12..20].copy_from_slice(&[3, 3, 3, 3, 4, 4, 4, 4]);
+        s.present_bgra(&pixels, 2, 2, 12).unwrap();
+        match s.state().frame.clone() {
+            Some(Frame::Cpu { bgra, .. }) => {
+                assert_eq!(&*bgra, &[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
+            }
+            _ => panic!("a CPU frame"),
+        }
+        assert!(matches!(
+            s.present_bgra(&pixels[..19], 2, 2, 12),
+            Err(SurfaceError::Size(_))
+        ));
+        assert!(matches!(
+            s.present_bgra(&pixels, 4, 2, 12),
+            Err(SurfaceError::Size(_))
+        ));
+        assert!(matches!(
+            s.present_bgra(&[], 0, 0, 0),
+            Err(SurfaceError::Size(_))
+        ));
+        assert_eq!(s.stats().presented, 1);
+        s.present_bgrx(&pixels, 2, 2, 12).unwrap();
+        let frame = s.state().frame.clone();
+        match frame {
+            Some(Frame::Cpu { bgra, .. }) => {
+                assert_eq!(
+                    &*bgra,
+                    &[1, 1, 1, 255, 2, 2, 2, 255, 3, 3, 3, 255, 4, 4, 4, 255]
+                )
+            }
+            _ => panic!("a CPU frame"),
+        }
+    }
+
+    #[test]
+    fn watchers_hear_changes_once_and_stop_when_dropped() {
+        let s = surface("tests:watch");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let watch = s.on_change(move |_, e| lock(&sink).push(e));
+        let info = SurfaceInfo {
+            width: 640,
+            height: 360,
+            scale: 1.5,
+            visible: true,
+        };
+        s.set_info(info);
+        s.set_info(info);
+        s.device_lost();
+        drop(watch);
+        s.set_info(SurfaceInfo::default());
+        assert_eq!(
+            *lock(&heard),
+            vec![SurfaceEvent::Changed(info), SurfaceEvent::DeviceLost]
+        );
+        assert_eq!(s.info(), SurfaceInfo::default());
+    }
+
+    #[test]
+    fn clearing_withdraws_the_frame_once() {
+        let s = surface("tests:clear");
+        s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        let seq = s.state().seq;
+        s.clear();
+        s.clear();
+        let st = s.state();
+        assert!(st.frame.is_none());
+        assert_eq!(st.lost, "cleared");
+        assert_eq!(st.seq, seq + 1);
+    }
+}

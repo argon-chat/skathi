@@ -80,6 +80,11 @@ export const EV_CODES = {
   // an error's `key` "Name: message".
   pointerlockchange: 53,
   pointerlockerror: 54,
+  // `<sk-surface>`: the painted size (a × b physical px, c the scale), the first frame shown (a × b), the frame gone
+  // (`key` "cleared" or "device").
+  surfaceresize: 55,
+  surfaceready: 56,
+  surfacelost: 57,
 } as const;
 
 /** `InputEvent.inputType` by host code: indexes sk-elements' `text_input::InputType` (lockstep, test/protocol-codes.test.ts). 0: none. */
@@ -189,6 +194,9 @@ export const NO_BUBBLE = new Set<string>([
   "error",
   "emptied",
   "load",
+  "surfaceresize",
+  "surfaceready",
+  "surfacelost",
 ]);
 export const MEDIA_EVENTS = new Set<string>([
   "loadstart",

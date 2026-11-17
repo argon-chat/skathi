@@ -132,7 +132,7 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     }
     if matches!(
         t.name(node.tag),
-        "input" | "textarea" | "video" | "canvas" | "iframe"
+        "input" | "textarea" | "video" | "canvas" | "iframe" | "sk-surface"
     ) {
         return true;
     }

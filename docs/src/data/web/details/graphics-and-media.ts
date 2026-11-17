@@ -536,6 +536,34 @@ player.addEventListener("error", () => console.warn(player.error?.code, player.e
       "`error` is a plain `{ code, message }` object whose message names the decoder this machine is missing.",
     ],
   },
+  "sk-surface": {
+    examples: [
+      {
+        title: "Show a native player under Vue controls",
+        lang: "vue",
+        code: `<script setup lang="ts">
+import { appHost } from "@skathi-native/runtime";
+
+function resized(e: SkSurfaceEvent) {
+  void appHost.call("player.resize", e.width, e.height);
+}
+</script>
+
+<template>
+  <div class="player">
+    <sk-surface name="player" class="video" @surfaceresize="resized" />
+    <div class="controls"><button @click="appHost.call('player.toggle')">Play</button></div>
+  </div>
+</template>`,
+        note: 'The embedder renders into `skathi::surface("player")`; the controls are ordinary elements over it.',
+      },
+    ],
+    edgeCases: [
+      "Several elements with one `name` show the same frame. The size the producer sees is the largest of them.",
+      "A frame presented while the element is hidden, scrolled out of its clip or `display: none` is not uploaded. The newest one shows when it becomes visible.",
+      'After a GPU device loss the frame is gone and `surfacelost` fires with `reason: "device"`; the producer recreates its textures on the new device.',
+    ],
+  },
   "navigator-media-session": {
     examples: [
       {

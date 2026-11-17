@@ -42,6 +42,7 @@ mod select;
 mod selection;
 mod sticky;
 mod style_decl;
+pub mod surface;
 mod svg;
 mod tree;
 mod video;
@@ -646,6 +647,12 @@ pub unsafe fn install_video_device_provider(
     unsafe { sk_video::mf::install_shared_device_provider(provider) }
 }
 
+/// The renderer recreated its D3D11 device: every `<sk-surface>` drops its GPU frame and producers
+/// hear [`surface::SurfaceEvent::DeviceLost`].
+pub fn surface_device_changed() {
+    surface::device_changed();
+}
+
 /// The renderer recreated its D3D11 device; rebuild every `<video>` on the new one, keeping
 /// position and transport state.
 pub fn video_device_changed() -> usize {
@@ -674,6 +681,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let video_moved = video::tick(window, cx);
     let stickers_moved = render::sticker::tick(window, cx);
     let canvas_moved = render::canvas::tick(window);
+    let surfaces_moved = surface::node::tick(window, cx);
     let gliding = scroll::tick();
     let scrolled = scroll::dispatch_pending(window, cx) | gliding;
     let fonts_moved = fonts::tick(window, cx);
@@ -688,6 +696,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
         | video_moved
         | stickers_moved
         | canvas_moved
+        | surfaces_moved
         | scrolled
         | fonts_moved
         | resampled
@@ -712,6 +721,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
     render::sticker::window_tick(window);
+    surface::node::window_tick(window);
     render::apply_pending_blur(window, cx);
     render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
@@ -723,6 +733,7 @@ pub fn forget_window(key: windows::WinKey) {
     windows::forget(key);
     render::sticker::forget_window(key);
     lottie::forget_window(key);
+    surface::node::forget_window(key);
     iframe::forget_window(key);
     pointer_lock::window_closed(key);
 }

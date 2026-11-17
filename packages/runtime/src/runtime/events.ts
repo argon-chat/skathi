@@ -324,6 +324,12 @@ export function synthesize(
         if (typeof AnimationEvent === "function")
           return new AnimationEvent(name, { ...common, animationName: key ?? "", elapsedTime: a });
         break;
+      case "surfaceresize":
+      case "surfaceready":
+      case "surfacelost": {
+        const detail = surfaceDetail(name, a, b, c, key);
+        return withProps(new CustomEvent(name, { ...common, detail }), detail);
+      }
       case "complete":
       case "loopComplete":
       case "enterFrame":
@@ -400,6 +406,14 @@ export function withProps(ev: Event, props: Record<string, unknown>): Event {
 // MediaError.code and b is currentTime; `e.target.error` is served live off `__sk_media_state`.
 function mediaDetail(a: number, b: number, c: number, d: number) {
   return { currentTime: a, duration: b, readyState: c, playbackRate: d };
+}
+
+// `<sk-surface>`: `surfaceresize` a × b physical px at scale c, `surfaceready` a × b the first frame, `surfacelost`
+// `key` the reason.
+function surfaceDetail(name: string, a: number, b: number, c: number, key: string | undefined) {
+  if (name === "surfacelost") return { reason: key ?? "" };
+  if (name === "surfaceready") return { width: a, height: b };
+  return { width: a, height: b, devicePixelRatio: c };
 }
 
 function lottieDetail(name: string, a: number, b: number, c: number, d: number) {

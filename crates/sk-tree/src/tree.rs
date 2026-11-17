@@ -82,6 +82,11 @@ pub const EV_MESSAGE: u32 = 52;
 /// "Name: message"). Delivered at node 0; the runtime fires both at `document`.
 pub const EV_POINTERLOCKCHANGE: u32 = 53;
 pub const EV_POINTERLOCKERROR: u32 = 54;
+/// `<sk-surface>` (`crate::surface`): its painted size changed (`a` × `b` physical px, `c` scale),
+/// it showed its first frame (`a` × `b` the frame), or the frame went (`key` = "cleared" | "device").
+pub const EV_SURFACERESIZE: u32 = 55;
+pub const EV_SURFACEREADY: u32 = 56;
+pub const EV_SURFACELOST: u32 = 57;
 
 /// Every host event code with the name JS knows it by; devtools lists from here.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
@@ -139,6 +144,9 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_MESSAGE, "message"),
     (EV_POINTERLOCKCHANGE, "pointerlockchange"),
     (EV_POINTERLOCKERROR, "pointerlockerror"),
+    (EV_SURFACERESIZE, "surfaceresize"),
+    (EV_SURFACEREADY, "surfaceready"),
+    (EV_SURFACELOST, "surfacelost"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

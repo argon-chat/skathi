@@ -88,6 +88,34 @@ pub unsafe fn set_shared_device(ptr: *mut c_void, generation: u64) {
     SHARED_GENERATION.store(generation, Ordering::Release);
 }
 
+/// The renderer's D3D11 device and its generation, `None` before a renderer exists. The lease keeps
+/// a native D3D12 renderer's D3D11On12 bridge alive; atlas uploads need that bridge to exist.
+pub fn renderer_device() -> Result<Option<SharedVideoDevice>, String> {
+    if let Some(provider) = SHARED_DEVICE_PROVIDER.get() {
+        return provider();
+    }
+    let raw = SHARED_DEVICE.load(Ordering::Acquire);
+    if raw.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: the host publishes a device it owns for the renderer's life.
+    let Some(device) = (unsafe { ID3D11Device::from_raw_borrowed(&raw) }) else {
+        return Ok(None);
+    };
+    let device = device.clone();
+    let pointer = device.as_raw();
+    Ok(Some(SharedVideoDevice {
+        device: pointer,
+        generation: SHARED_GENERATION.load(Ordering::Acquire),
+        keep_alive: Arc::new(SendDevice(device)),
+    }))
+}
+
+struct SendDevice(#[allow(dead_code)] ID3D11Device);
+// SAFETY: the renderer's device is multithread-protected; this only holds a reference.
+unsafe impl Send for SendDevice {}
+unsafe impl Sync for SendDevice {}
+
 ///
 /// # Safety
 /// `texture` is null or a live COM pointer.

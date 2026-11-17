@@ -13,7 +13,7 @@ export type Kind =
   | "media-feature"
   | "unit"
   | "feature";
-export type Release = "0.2.0" | "0.3.0";
+export type Release = "0.2.0" | "0.3.0" | "0.4.0";
 /** The release a platform's support arrived in, for the platforms where it differs from the entry's `since`. */
 export type PlatformSince = Partial<Record<Platform, Release>>;
 

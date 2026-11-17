@@ -67,6 +67,18 @@ export type {
   TrayPixels,
 } from "@skathi-native/runtime";
 
+declare module "svelte/elements" {
+  interface SvelteHTMLElements {
+    /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */
+    "sk-surface": HTMLAttributes<HTMLElement> & {
+      name?: string | undefined;
+      onsurfaceresize?: ((event: SkSurfaceEvent) => void) | undefined;
+      onsurfaceready?: ((event: SkSurfaceEvent) => void) | undefined;
+      onsurfacelost?: ((event: SkSurfaceEvent) => void) | undefined;
+    };
+  }
+}
+
 /** `<SkWindow>`'s events as Svelte callback props: `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow`, `onhide`. */
 export type SkWindowCallbacks = { [K in keyof SkWindowEvents as `on${K}`]?: SkWindowEvents[K] | undefined };
 

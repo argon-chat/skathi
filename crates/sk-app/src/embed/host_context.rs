@@ -82,6 +82,11 @@ impl<'a> HostContext<'a> {
             .expect("HostContext::runtime is only available inside Builder::setup")
     }
 
+    /// The surface `<sk-surface name="…">` elements show: present frames to it from any thread.
+    pub fn surface(&self, name: &str) -> super::SurfaceHandle {
+        sk_tree::surface::surface(name)
+    }
+
     /// Called on the VM thread once per frame before the frame's wave drains: deliver what worker
     /// threads queued here, so a JS handler never observes a half-applied patch. Keep it bounded;
     /// it is on the frame's critical path. Runs until shutdown.

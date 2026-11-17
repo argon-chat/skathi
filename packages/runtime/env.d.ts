@@ -61,6 +61,9 @@ declare global {
     scrollend: Event;
     select: Event;
     submit: Event;
+    surfacelost: SkSurfaceEvent;
+    surfaceready: SkSurfaceEvent;
+    surfaceresize: SkSurfaceEvent;
     transitioncancel: TransitionEvent;
     transitionend: TransitionEvent;
     transitionrun: TransitionEvent;
@@ -848,6 +851,16 @@ declare global {
     readonly readyState: number;
     readonly playbackRate: number;
   }
+  /** `<sk-surface>`'s events, read off the event or `detail`. Not web API. */
+  interface SkSurfaceEvent extends Event {
+    /** `surfaceresize`: the painted content box in physical pixels. `surfaceready`: the first frame's size. */
+    readonly width: number;
+    readonly height: number;
+    /** `surfaceresize` only. */
+    readonly devicePixelRatio: number;
+    /** `surfacelost`: `"cleared"` (the producer withdrew the frame) or `"device"` (the GPU device was recreated). */
+    readonly reason: "cleared" | "device";
+  }
   /** `<lottie>`'s `loop` event. Not web API. */
   interface SkLottieLoopEvent extends Event {
     readonly currentTime: number;
@@ -1028,6 +1041,7 @@ declare global {
     script: HTMLScriptElement;
     section: HTMLElement;
     select: HTMLSelectElement;
+    "sk-surface": HTMLElement;
     slot: HTMLSlotElement;
     small: HTMLElement;
     source: HTMLSourceElement;

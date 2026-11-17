@@ -44,7 +44,8 @@
 //! [`Builder::payload_static`] takes `include_bytes!` of the payload instead, for a single-file
 //! executable. [`Builder::setup`] runs before any app JS with a [`HostContext`]: direct
 //! JavaScriptCore access ([`js`]), cookies, OS-sealed secrets and frame, reload and shutdown hooks.
-//! [`tray`] and [`hotkeys`] are the native tray and system-wide hotkeys.
+//! [`tray`] and [`hotkeys`] are the native tray and system-wide hotkeys. [`surface`] hands frames
+//! a native renderer draws (a D3D11 texture on Windows, CPU BGRA anywhere) to `<sk-surface>` elements.
 //!
 //! # The app payload
 //!
@@ -129,7 +130,8 @@
 //! redjs pins.
 
 pub use sk_app::embed::{
-    encrypt_local_storage_at, Builder, Call, EmitError, Error, Exit, Handle, Handler, HostContext,
-    HostCookie, Reply, SameSite,
+    encrypt_local_storage_at, surface, Builder, Call, D3D11Device, EmitError, Error, Exit, Handle,
+    Handler, HostContext, HostCookie, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent,
+    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
 };
 pub use sk_app::{hotkeys, js, run_exe, tray, HostAllocator};

@@ -423,6 +423,7 @@ pub(crate) fn gc_node_state() {
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
+    crate::surface::node::gc(live);
     crate::iframe::gc(live);
     sticker::gc(live);
     crate::svg::gc(live);
@@ -2183,6 +2184,16 @@ fn build_node<V: 'static>(
                 sticky,
                 false,
                 sticker::build(t, id, node, window, cx, now, control_area),
+            ),
+        ),
+        Kind::Element if t.name(node.tag) == "sk-surface" => stack(
+            own.clone(),
+            &extras,
+            placed(
+                id,
+                sticky,
+                false,
+                build_surface(t, id, node, window, cx, now, control_area),
             ),
         ),
         Kind::Element if t.name(node.tag) == "canvas" => stack(
@@ -5285,6 +5296,96 @@ fn build_iframe<V: 'static>(
         cx,
     )
     .into_any_element()
+}
+
+/// `<sk-surface name="…">`: a replaced box, 300 x 150 unless CSS sizes it, showing the frame a native
+/// producer presented to the surface of that name (`crate::surface`). `object-fit` defaults to
+/// `contain`, as on `<video>`.
+fn build_surface<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let win = windows::key(window);
+    let name = t.prop(id, "name").unwrap_or("").trim().to_string();
+    let image = crate::surface::node::note_build(id, win, &name);
+
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+    let auto = |l: Option<gpui::Length>| matches!(l, None | Some(gpui::Length::Auto));
+    if auto(d.style().size.width) {
+        d.style().size.width = Some(gpui::px(300.0).into());
+    }
+    if auto(d.style().size.height) {
+        d.style().size.height = Some(gpui::px(150.0).into());
+    }
+
+    let reporter = gpui::canvas(
+        move |bounds, window, _| {
+            crate::surface::node::note_painted(
+                id,
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+                window.scale_factor(),
+            );
+        },
+        |_, (), _, _| {},
+    )
+    .absolute()
+    .size_full();
+    if let Some(image) = image {
+        let fit = node
+            .computed
+            .as_ref()
+            .and_then(|cs| cs.extras.object_fit)
+            .map(gpui_object_fit)
+            .unwrap_or(gpui::ObjectFit::Contain);
+        // Absolute: an in-flow `height: 100%` under an absolutely positioned box resolved to the
+        // frame's aspect ratio instead of the box.
+        let mut picture = gpui::img(gpui::ImageSource::Render(image))
+            .object_fit(fit)
+            .absolute()
+            .size_full();
+        picture.style().vn_object_position = Some(object_position_of(d.style()));
+        let radii = padding_box_radii(d.style(), window.rem_size());
+        d = if radii.is_square() {
+            d.child(picture)
+        } else {
+            let mut clip = div()
+                .absolute()
+                .size_full()
+                .overflow_hidden()
+                .child(picture);
+            radii.apply(clip.style());
+            d.child(clip)
+        };
+    }
+    d = d.child(reporter);
+
+    let mask = pointer_mask(node);
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some();
+    let styled_focus = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        d = d.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 /// `<video>`: a replaced element whose content is the frame the pump last pulled from the OS media

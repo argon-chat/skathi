@@ -875,6 +875,7 @@ fn publish_video_device() {
     if first {
         return;
     }
+    sk_tree::surface_device_changed();
     let rebuilt = sk_tree::video_device_changed();
     let msg = format!(
         "[video] the renderer recreated its D3D11 device (generation {generation}) — rebuilt \

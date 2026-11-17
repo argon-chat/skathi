@@ -121,6 +121,9 @@ type SkDispatcher = (
  * | lottie `enterFrame`       | currentTime  | totalTime   | elapsed     | progress   | —               |
  * | lottie `loopComplete`     | currentTime  | totalTime   | currentLoop | —          | —               |
  * | lottie `complete`         | currentTime  | totalTime   | loops       | —          | —               |
+ * | `surfaceresize`           | width (px)   | height (px) | scale       | —          | —               |
+ * | `surfaceready`            | frame width  | frame height | —          | —          | —               |
+ * | `surfacelost`             | —            | —           | —           | —          | "cleared"/"device" |
  * | transitionend             | elapsedTime  | —           | —           | —          | property name   |
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
  * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
@@ -192,7 +195,10 @@ type SkEventCode =
   | 51 // compositionend
   | 52 // message            (an <iframe>'s document to its parent)
   | 53 // pointerlockchange  (`a` = the request it settles, 0: none)
-  | 54; // pointerlockerror   (`a` = the request, `key` = "Name: message")
+  | 54 // pointerlockerror   (`a` = the request, `key` = "Name: message")
+  | 55 // surfaceresize      (<sk-surface>)
+  | 56 // surfaceready
+  | 57; // surfacelost
 
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __sk_selection_get(): string;

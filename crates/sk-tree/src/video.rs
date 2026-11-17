@@ -568,7 +568,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     moved
 }
 
-fn attached(id: u32) -> bool {
+pub(crate) fn attached(id: u32) -> bool {
     tree::read_tree(|t| {
         let root = t.root;
         let mut cursor = id;
