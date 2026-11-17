@@ -38,7 +38,11 @@ import { currentPlatform, hostsFor, repoHostExe, type Platform } from "./platfor
 import { PAYLOAD_NAME } from "./stamp";
 
 export const PKG_DIR = resolve(import.meta.dir, "..");
-export const CLI_VERSION: string = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")).version;
+const PKG: { version: string; engines: { bun: string } } = JSON.parse(
+  readFileSync(join(PKG_DIR, "package.json"), "utf8"),
+);
+export const CLI_VERSION = PKG.version;
+export const BUN_RANGE = PKG.engines.bun;
 
 export const REPO_ROOT: string | null = (() => {
   const root = resolve(PKG_DIR, "../..");

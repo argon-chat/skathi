@@ -979,6 +979,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
   const selfRoot = packageRootOf(candidates[0]!, splitSpec(spec)[0]);
   const requires = new Set<string>();
   let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
+  let failure: unknown = null;
   let entry = candidates[0]!;
   for (const [i, candidate] of candidates.entries()) {
     entry = candidate;
@@ -992,14 +993,14 @@ async function buildNpmModule(id: string): Promise<boolean> {
       // nothing.
       plugins: [npmShapesPlugin, npmSharePlugin(selfKey, selfRoot, requires), vuePlugin],
       define: DEFINES,
-    }).catch(() => null);
+    }).catch((e: unknown) => ((failure = e), null));
     if (result?.success) break;
     if (i + 1 < candidates.length) {
       warn(`${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1]!)}`);
     }
   }
   if (!result?.success) {
-    for (const log of result?.logs ?? []) console.error(log);
+    reportBuildFailure(result, failure);
     throw new Error(`npm module build failed: ${id}`);
   }
   npmBare.set(id, Array.from(requires).sort());
@@ -1010,6 +1011,12 @@ async function buildNpmModule(id: string): Promise<boolean> {
     tagModuleNamespaces(await result.outputs[0]!.text()).code,
   );
   return true;
+}
+
+function reportBuildFailure(result: Awaited<ReturnType<typeof Bun.build>> | null, failure: unknown): void {
+  for (const log of result?.logs ?? []) console.error(log);
+  if (failure instanceof AggregateError) for (const e of failure.errors) console.error(e);
+  else if (failure) console.error(failure);
 }
 
 const GROUP_ENTRY = "__sk_npm_group__.js";
@@ -1033,6 +1040,7 @@ async function buildNpmGroup(root: string, members: string[]): Promise<{ built: 
   const probe = join(root, GROUP_ENTRY); // never written: the plugin answers for it
   const requires = new Set<string>();
   let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
+  let failure: unknown = null;
   const attempts = Math.max(...lists.map((l) => l.length));
   for (let i = 0; i < attempts; i++) {
     const source = lists.map((l, k) => `export * as e${k} from ${J(l[Math.min(i, l.length - 1)])};`).join("\n");
@@ -1054,11 +1062,11 @@ async function buildNpmGroup(root: string, members: string[]): Promise<{ built: 
         vuePlugin,
       ],
       define: DEFINES,
-    }).catch(() => null);
+    }).catch((e: unknown) => ((failure = e), null));
     if (result?.success) break;
   }
   if (!result?.success) {
-    for (const log of result?.logs ?? []) console.error(log);
+    reportBuildFailure(result, failure);
     throw new Error(`npm module build failed: ${built.join(", ")} (bundled together as ${gid})`);
   }
   npmBare.set(gid, Array.from(requires).sort());

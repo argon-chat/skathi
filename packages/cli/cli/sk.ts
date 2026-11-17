@@ -10,7 +10,7 @@ import { ConfigError, parseVariant, PARTS_NOT_SELECTABLE, VARIANTS, type Variant
 import { createCommand } from "./create";
 import { dev } from "./dev";
 import { helpFormat, section } from "./help";
-import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
+import { addHost, BUN_RANGE, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
 import { fetchHost } from "./host-fetch";
 import { currentPlatform, parsePlatform } from "./platform";
 import { colorEnabled, lineProgress, logTo, paint, progressFor } from "./term";
@@ -475,6 +475,14 @@ export async function main(argv: string[]): Promise<number> {
 }
 
 if (import.meta.main) {
+  if (!Bun.semver.satisfies(Bun.version, BUN_RANGE)) {
+    // Package scripts run the first `bun` executable on PATH, which can be an older install.
+    console.error(
+      `error: Skathi needs Bun ${BUN_RANGE}, but this is Bun ${Bun.version} (${process.execPath}). ` +
+        `Upgrade it (\`"${process.execPath}" upgrade\`) or put a newer Bun first on PATH.`,
+    );
+    process.exit(1);
+  }
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {
