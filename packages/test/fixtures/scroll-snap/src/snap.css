@@ -1,0 +1,113 @@
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #f4f4f4;
+  font:
+    14px/20px "Segoe UI",
+    sans-serif;
+  color: #222;
+}
+
+#carousel {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 400px;
+  height: 120px;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  background: #ddd;
+}
+
+.slide {
+  flex: 0 0 300px;
+  height: 100%;
+  scroll-snap-align: center;
+  border: 1px solid #888;
+  background: #fff;
+}
+
+#carousel.narrow .slide {
+  flex-basis: 200px;
+}
+
+#near {
+  position: absolute;
+  left: 460px;
+  top: 20px;
+  width: 300px;
+  height: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 200px;
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+  background: #ddd;
+}
+
+.row {
+  flex: 0 0 100px;
+  scroll-snap-align: start;
+  background: #cde;
+}
+
+#pages {
+  position: absolute;
+  left: 20px;
+  top: 180px;
+  width: 400px;
+  height: 300px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  background: #ddd;
+}
+
+.page {
+  flex: 0 0 120px;
+  scroll-snap-align: start;
+  border-bottom: 1px solid #888;
+  background: #efe;
+}
+
+#p4 {
+  scroll-snap-stop: always;
+}
+
+#padded {
+  position: absolute;
+  left: 460px;
+  top: 340px;
+  width: 300px;
+  height: 300px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scroll-padding-top: 40px;
+  background: #ddd;
+}
+
+.line {
+  flex: 0 0 60px;
+  border-bottom: 1px solid #aaa;
+}
+
+#l12 {
+  scroll-margin-top: 10px;
+}

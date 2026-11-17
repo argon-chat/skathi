@@ -348,7 +348,7 @@ export const COMMANDS: CommandSpec[] = [
       "means (gpui carries the platform's opposite sign; the conversion is one place on each " +
       "side). Aim it with a selector or with x + y.",
     usage: [
-      "  wheel    [selector] [--x N --y N] --dy N [--dx N] [--ctrl] [--shift] [--alt]",
+      "  wheel    [selector] [--x N --y N] --dy N [--dx N] [--lines] [--ctrl] [--shift] [--alt]",
       "                                     a REAL wheel event through gpui's hit",
       "                                     test — what an app's own @wheel handler",
       "                                     sees. DOM signs: --dy 200 scrolls DOWN.",
@@ -362,6 +362,7 @@ export const COMMANDS: CommandSpec[] = [
       y: int("window y, when no selector is given"),
       dy: int("vertical delta, DOM signs: positive scrolls DOWN"),
       dx: int("horizontal delta"),
+      lines: bool("the deltas count lines, as a notched mouse wheel reports them; a touchpad reports pixels"),
       ctrl: bool("Ctrl is held (a ctrl+wheel zooms in most apps)"),
       shift: bool("Shift is held"),
       alt: bool("Alt is held"),
@@ -374,6 +375,7 @@ export const COMMANDS: CommandSpec[] = [
         ...(flags.ctrl ? { ctrl: true } : {}),
         ...(flags.shift ? { shift: true } : {}),
         ...(flags.alt ? { alt: true } : {}),
+        ...(flags.lines ? { lines: true } : {}),
       };
       if (rest[0]) return withIndex({ selector: rest[0], dx, dy, ...keys }, flags);
       const x = num(flags.x);

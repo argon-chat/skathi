@@ -11,6 +11,8 @@
 //! - A smooth scroll (`behavior: "smooth"`, or `auto` on a box with `scroll-behavior: smooth`)
 //!   glides there over the next frames ([`tick`]); a read sees where it is so far. An instant
 //!   scroll of the same box, or the user scrolling it, stops the glide.
+//! - A box with `scroll-snap-type` lands on a snap position ([`crate::snap`]).
+//! - The keyboard scrolls too ([`bind_root`]).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -162,6 +164,7 @@ pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     PENDING.with(|p| p.borrow_mut().retain(|&id| live(id)));
     AT_BUILD.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     GLIDES.with(|g| g.borrow_mut().retain(|&id, _| live(id)));
+    crate::snap::gc(live);
 }
 
 pub(crate) fn info(id: u32) -> Option<Info> {
@@ -201,10 +204,20 @@ pub(crate) fn set(
         x: left.map_or(current.x, |v| px(-v)),
         y: top.map_or(current.y, |v| px(-v)),
     };
+    let want = snapped(id, &handle, want, current, false, None);
     Some(apply(id, &handle, want, stale, smooth).0)
 }
 
 pub(crate) fn by(id: u32, dx: f32, dy: f32, behavior: Behavior) -> Option<Info> {
+    by_inner(id, dx, dy, behavior, true)
+}
+
+/// [`by`] without scroll snapping: a selection drag's autoscroll.
+pub(crate) fn by_free(id: u32, dx: f32, dy: f32, behavior: Behavior) -> Option<Info> {
+    by_inner(id, dx, dy, behavior, false)
+}
+
+fn by_inner(id: u32, dx: f32, dy: f32, behavior: Behavior, snap: bool) -> Option<Info> {
     let (handle, stale) = layout_then_handle(id)?;
     let smooth = behavior.smooth_for(id);
     // A smooth scrollBy during a glide adds to where it is going, as in browsers.
@@ -216,11 +229,59 @@ pub(crate) fn by(id: u32, dx: f32, dy: f32, behavior: Behavior) -> Option<Info> 
         x: current.x - px(dx),
         y: current.y - px(dy),
     };
+    let want = if snap {
+        snapped(id, &handle, want, current, true, None)
+    } else {
+        want
+    };
     Some(apply(id, &handle, want, stale, smooth).0)
 }
 
-fn glide_target(id: u32) -> Option<Point<Pixels>> {
+/// `want` moved onto a snap position of `id`, if it snaps (`crate::snap`). Programmatic: no
+/// `scroll-snap-stop`.
+fn snapped(
+    id: u32,
+    handle: &ScrollHandle,
+    want: Point<Pixels>,
+    from: Point<Pixels>,
+    toward: bool,
+    prefer: Option<u32>,
+) -> Point<Pixels> {
+    let css = |p: Point<Pixels>| (-f32::from(p.x), -f32::from(p.y));
+    let aim = crate::snap::Aim {
+        to: css(want),
+        from: css(from),
+        toward,
+        user: false,
+        prefer,
+    };
+    let (x, y) = crate::snap::settle(id, handle, aim);
+    Point {
+        x: px(-x),
+        y: px(-y),
+    }
+}
+
+pub(crate) fn glide_target(id: u32) -> Option<Point<Pixels>> {
     GLIDES.with(|g| g.borrow().get(&id).map(|glide| glide.to))
+}
+
+/// A snap's glide to CSS position `to`, on the programmatic curve.
+pub(crate) fn glide_to(id: u32, handle: &ScrollHandle, to: (f32, f32)) {
+    let want = Point {
+        x: px(-to.0),
+        y: px(-to.1),
+    };
+    apply(id, handle, want, false, true);
+}
+
+/// A re-snap's move to CSS position `to`, at once.
+pub(crate) fn jump_to(id: u32, handle: &ScrollHandle, to: (f32, f32)) {
+    let want = Point {
+        x: px(-to.0),
+        y: px(-to.1),
+    };
+    apply(id, handle, want, false, false);
 }
 
 /// Moves (or starts gliding) to `want`, clamped; answers the position now and the one it goes to.
@@ -320,7 +381,7 @@ pub(crate) fn into_view(
              would not scroll to it either"
         ));
     };
-    let chain = tree::read_tree(|t| {
+    let (chain, margin) = tree::read_tree(|t| {
         let mut out = Vec::new();
         let mut cur = t.node(id).map(|n| n.parent).unwrap_or(0);
         // A depth cap for the same reason `Tree::touch` has one: a corrupt parent link must not
@@ -329,13 +390,26 @@ pub(crate) fn into_view(
             if cur == 0 {
                 break;
             }
-            out.push(cur);
+            let padding = t
+                .node(cur)
+                .and_then(|n| n.computed.as_ref())
+                .map(|cs| cs.extras.snap.clone())
+                .unwrap_or_default();
+            out.push((cur, padding));
             cur = t.node(cur).map(|n| n.parent).unwrap_or(0);
         }
-        out
+        let margin = t
+            .node(id)
+            .and_then(|n| n.computed.as_ref())
+            .map_or([0.0; 4], |cs| cs.extras.snap.margin_px());
+        (out, margin)
     });
+    // `scroll-margin` grows the target: top, right, bottom, left.
+    x -= margin[3];
+    y -= margin[0];
+    let (w, h) = (w + margin[3] + margin[1], h + margin[0] + margin[2]);
     let mut scrolled = false;
-    for ancestor in chain {
+    for (ancestor, snap) in chain {
         let Some(handle) = render::scroll_handle_of(ancestor) else {
             continue;
         };
@@ -343,25 +417,32 @@ pub(crate) fn into_view(
         if viewport.size.width <= px(0.) && viewport.size.height <= px(0.) {
             continue;
         }
+        let (vw, vh) = (
+            f32::from(viewport.size.width),
+            f32::from(viewport.size.height),
+        );
+        // `scroll-padding` shrinks the viewport it aligns to.
+        let pad = snap.padding_px(vw, vh);
         let dx = align_delta(
             inline,
             x,
             w,
-            f32::from(viewport.origin.x),
-            f32::from(viewport.size.width),
+            f32::from(viewport.origin.x) + pad[3],
+            (vw - pad[3] - pad[1]).max(0.0),
         );
         let dy = align_delta(
             block,
             y,
             h,
-            f32::from(viewport.origin.y),
-            f32::from(viewport.size.height),
+            f32::from(viewport.origin.y) + pad[0],
+            (vh - pad[0] - pad[2]).max(0.0),
         );
         let before = handle.offset();
         let want = Point {
             x: before.x - px(dx),
             y: before.y - px(dy),
         };
+        let want = snapped(ancestor, &handle, want, before, false, Some(id));
         let smooth = behavior.smooth_for(ancestor);
         let (_, after) = apply(ancestor, &handle, want, stale, smooth);
         x -= f32::from(before.x - after.x);
@@ -400,6 +481,153 @@ fn align_delta(
             }
         }
     }
+}
+
+/// Chromium's arrow-key step.
+const LINE: f32 = 40.0;
+/// A page is this much of the scrollport, so the last lines of one stay in view on the next.
+const PAGE: f32 = 0.875;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum KeyStep {
+    Line { vertical: bool, dir: f32 },
+    Page(f32),
+    Edge(f32),
+}
+
+impl KeyStep {
+    fn of(key: &str, shift: bool) -> Option<Self> {
+        Some(match key {
+            "up" => KeyStep::Line {
+                vertical: true,
+                dir: -1.0,
+            },
+            "down" => KeyStep::Line {
+                vertical: true,
+                dir: 1.0,
+            },
+            "left" => KeyStep::Line {
+                vertical: false,
+                dir: -1.0,
+            },
+            "right" => KeyStep::Line {
+                vertical: false,
+                dir: 1.0,
+            },
+            "pageup" => KeyStep::Page(-1.0),
+            "pagedown" => KeyStep::Page(1.0),
+            "space" => KeyStep::Page(if shift { -1.0 } else { 1.0 }),
+            "home" => KeyStep::Edge(-1.0),
+            "end" => KeyStep::Edge(1.0),
+            _ => return None,
+        })
+    }
+}
+
+/// Arrow keys, Page Up/Down, Space, Home and End scroll the focused element's nearest scroll
+/// container that can move that way. Bound on the root after every other key listener, so it runs
+/// after the app's handlers and not when one cancelled the key.
+pub(crate) fn bind_root<E: gpui::InteractiveElement>(e: E, root: u32) -> E {
+    e.on_key_down(move |ev: &gpui::KeyDownEvent, window, _| {
+        if window.default_prevented() || crate::windows::here(window, |w| w.key_prevented) {
+            return;
+        }
+        let k = &ev.keystroke;
+        let m = &k.modifiers;
+        if m.control || m.alt || m.platform || m.function {
+            return;
+        }
+        let Some(step) = KeyStep::of(k.key.as_str(), m.shift) else {
+            return;
+        };
+        let focused = crate::windows::focused_node(crate::windows::key(window));
+        let chain = tree::read_tree(|t| {
+            let start = if t.node(focused).is_some() {
+                focused
+            } else {
+                root
+            };
+            let tag = t.node(start).map_or("", |n| t.name(n.tag));
+            let own_keys = matches!(tag, "input" | "textarea" | "select")
+                || k.key == "space" && matches!(tag, "button" | "summary" | "a");
+            if own_keys {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            let mut cur = start;
+            for _ in 0..4096 {
+                let Some(n) = t.node(cur) else { break };
+                out.push(cur);
+                if n.parent == 0 {
+                    break;
+                }
+                cur = n.parent;
+            }
+            out
+        });
+        for id in chain {
+            if key_scroll(id, step) {
+                return;
+            }
+        }
+    })
+}
+
+/// Scrolls `id` one key step, snapped and gliding; false when it is not a scroll container or
+/// cannot move that way.
+fn key_scroll(id: u32, step: KeyStep) -> bool {
+    let Some(handle) = render::scroll_handle_of(id) else {
+        return false;
+    };
+    let max = handle.max_offset();
+    let max = (f32::from(max.x), f32::from(max.y));
+    let at = glide_target(id).unwrap_or_else(|| handle.offset());
+    let at = (-f32::from(at.x), -f32::from(at.y));
+    let view = handle.bounds().size;
+    let mut to = at;
+    let toward = match step {
+        KeyStep::Line { vertical, dir } => {
+            if vertical {
+                to.1 += dir * LINE;
+            } else {
+                to.0 += dir * LINE;
+            }
+            true
+        }
+        KeyStep::Page(dir) => {
+            to.1 += dir * (f32::from(view.height) * PAGE).max(LINE);
+            true
+        }
+        KeyStep::Edge(dir) => {
+            to.1 = if dir < 0.0 { 0.0 } else { max.1 };
+            false
+        }
+    };
+    let clamped = (to.0.clamp(0.0, max.0), to.1.clamp(0.0, max.1));
+    if (clamped.0 - at.0).abs() < 0.5 && (clamped.1 - at.1).abs() < 0.5 {
+        return false;
+    }
+    // Home and End go to the edge on purpose, past any `scroll-snap-stop: always`.
+    let aim = crate::snap::Aim {
+        to,
+        from: at,
+        toward,
+        user: toward,
+        prefer: None,
+    };
+    let (x, y) = crate::snap::settle(id, &handle, aim);
+    let smooth = !tree::env().reduce_motion;
+    apply(
+        id,
+        &handle,
+        Point {
+            x: px(-x),
+            y: px(-y),
+        },
+        false,
+        smooth,
+    );
+    true
 }
 
 pub(crate) fn dispatch_pending(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {

@@ -1120,6 +1120,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             num("y"),
             num("dx"),
             num("dy"),
+            req.get("lines").and_then(Json::as_bool).unwrap_or(false),
             gpui::Modifiers {
                 control: req.get("ctrl").and_then(Json::as_bool).unwrap_or(false),
                 shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
@@ -2286,6 +2287,7 @@ fn cmd_wheel(
     y: Option<f64>,
     dx: Option<f64>,
     dy: Option<f64>,
+    lines: bool,
     modifiers: gpui::Modifiers,
 ) -> String {
     let (point, node) = match (selector, x, y) {
@@ -2323,7 +2325,11 @@ fn cmd_wheel(
             gpui::PlatformInput::Scroll(gpui::ScrollEvent {
                 position,
                 // Negated: gpui's sign is the platform's, the DOM's is the opposite.
-                delta: gpui::ScrollDelta::Pixels(gpui::Point::new(gpui::px(-dx), gpui::px(-dy))),
+                delta: if lines {
+                    gpui::ScrollDelta::Lines(gpui::Point::new(-dx, -dy))
+                } else {
+                    gpui::ScrollDelta::Pixels(gpui::Point::new(gpui::px(-dx), gpui::px(-dy)))
+                },
                 modifiers,
                 touch_phase: gpui::TouchPhase::Moved,
                 // A wheel as `gpui_windows` reports one, not a touch pan (which goes through the gesture recognizer).

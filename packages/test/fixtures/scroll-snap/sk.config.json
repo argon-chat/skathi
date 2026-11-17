@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS scroll snap: a mandatory centre-aligned carousel, a proximity list, a mandatory list for the keyboard and the scrollbar, and a padded list for scrollIntoView().",
+
+  "name": "sk-test-scroll-snap",
+
+  "window": {
+    "title": "Skathi — scroll-snap (fixture)",
+    "width": 900,
+    "height": 700,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

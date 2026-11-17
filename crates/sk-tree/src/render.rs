@@ -1333,8 +1333,21 @@ fn scrollbar_for<V: 'static>(
     } else {
         sb
     };
+    let sb = if snaps(node) {
+        let scroll = handle.clone();
+        sb.on_gesture(move |g| crate::snap::note_gesture(id, &scroll, g))
+    } else {
+        sb
+    };
     let scroll = handle.clone();
     sb.on_scrolled(move |window, cx| report_scroll_later(id, &scroll, window, cx))
+}
+
+fn snaps(node: &crate::tree::Node) -> bool {
+    node.computed
+        .as_ref()
+        .and_then(|cs| cs.extras.snap.snap_type)
+        .is_some_and(|s| s.snaps())
 }
 
 /// [`report_scroll`] once gpui's dispatch is over, from the window the scroll happened in, off
@@ -2333,6 +2346,7 @@ fn build_node<V: 'static>(
                     // Where this container stood at build, so `getBoundingClientRect()` after a scroll
                     // and before the next paint can correct for the difference (`crate::scroll`).
                     crate::scroll::note_built(id, h);
+                    crate::snap::note_built(id, snaps(node));
                 }
 
                 let mask = if id == root {
@@ -2428,6 +2442,7 @@ fn build_node<V: 'static>(
                     d = crate::range::bind_root(d);
                     d = crate::toggle::bind_root(d);
                     d = bind_root_key_clicks(d);
+                    d = crate::scroll::bind_root(d, id);
                 }
 
                 // `scroll` reports the position after the move, once the wheel's dispatch is over

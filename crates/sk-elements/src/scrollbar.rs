@@ -321,6 +321,18 @@ fn can_move(handle: &ScrollHandle, axis: Axis, delta: Pixels) -> bool {
     (next - current).abs() > px(0.01)
 }
 
+/// What the user did to a scroll box, for scroll snapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gesture {
+    /// A wheel or touchpad event over the box, before it scrolls anything; `discrete` for a
+    /// notched wheel (line deltas).
+    Wheel { discrete: bool },
+    /// A press on the scrollbar began a thumb drag or a track jump.
+    Grab,
+    /// That press ended.
+    Release,
+}
+
 /// An overlay scrollbar for one `overflow: auto | scroll` box, plus its wheel routing; paint it as
 /// the container's last child.
 pub struct Scrollbar {
@@ -332,6 +344,7 @@ pub struct Scrollbar {
     line_height: Pixels,
     on_wheel: Option<Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App) -> bool>>,
     on_scrolled: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    on_gesture: Option<Rc<dyn Fn(Gesture)>>,
 }
 
 impl Scrollbar {
@@ -345,7 +358,13 @@ impl Scrollbar {
             line_height: px(16.),
             on_wheel: None,
             on_scrolled: None,
+            on_gesture: None,
         }
+    }
+
+    pub fn on_gesture(mut self, f: impl Fn(Gesture) + 'static) -> Self {
+        self.on_gesture = Some(Rc::new(f));
+        self
     }
 
     /// Dispatches the DOM `wheel` event for a gesture this element takes over; `true` is `preventDefault()`.
@@ -675,9 +694,15 @@ impl Element for Scrollbar {
             let hitbox_id = viewport.id;
             let on_wheel = self.on_wheel.clone();
             let on_scrolled = self.on_scrolled.clone();
+            let on_gesture = self.on_gesture.clone();
             window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if !phase.capture() || !hitbox_id.should_handle_scroll(window) {
                     return;
+                }
+                if let Some(f) = &on_gesture {
+                    f(Gesture::Wheel {
+                        discrete: matches!(event.delta, gpui::ScrollDelta::Lines(_)),
+                    });
                 }
                 BEFORE_WHEEL.with(|b| {
                     let mut b = b.borrow_mut();
@@ -800,6 +825,9 @@ impl Element for Scrollbar {
         {
             s.dragging = None;
             state.set(s);
+            if let Some(f) = &self.on_gesture {
+                f(Gesture::Release);
+            }
         }
 
         if prepaint.axes.is_empty() || opacity <= 0.001 {
@@ -843,6 +871,7 @@ impl Element for Scrollbar {
                     let travel = ax.thumb_travel;
                     let hitbox = ax.hitbox.clone();
                     let on_scrolled = self.on_scrolled.clone();
+                    let on_gesture = self.on_gesture.clone();
                     window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                         if !phase.bubble()
                             || !hitbox.is_hovered(window)
@@ -851,6 +880,9 @@ impl Element for Scrollbar {
                             return;
                         }
                         cx.stop_propagation();
+                        if let Some(f) = &on_gesture {
+                            f(Gesture::Grab);
+                        }
                         let vertical = axis == Axis::Vertical;
                         let mut s = state.get();
                         let mut jumped = false;
@@ -984,6 +1016,7 @@ impl Element for Scrollbar {
                     let max_offset = ax.max_offset;
                     let travel = ax.thumb_travel;
                     let on_scrolled = self.on_scrolled.clone();
+                    let on_gesture = self.on_gesture.clone();
                     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                         if !phase.bubble() {
                             return;
@@ -1021,6 +1054,9 @@ impl Element for Scrollbar {
                                 if let Some(f) = &on_scrolled {
                                     f(window, cx);
                                 }
+                            }
+                            if let Some(f) = &on_gesture {
+                                f(Gesture::Release);
                             }
                             cx.notify(view);
                         }

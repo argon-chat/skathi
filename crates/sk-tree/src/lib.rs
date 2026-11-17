@@ -46,6 +46,7 @@ mod resample;
 mod scroll;
 mod select;
 mod selection;
+mod snap;
 mod sticky;
 mod style_decl;
 pub mod surface;
@@ -717,7 +718,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let stickers_moved = render::sticker::tick(window, cx);
     let canvas_moved = render::canvas::tick(window);
     let surfaces_moved = surface::node::tick(window, cx);
-    let gliding = scroll::tick();
+    let snapped = snap::tick();
+    let gliding = scroll::tick() | snapped;
     let scrolled = scroll::dispatch_pending(window, cx) | gliding;
     let fonts_moved = fonts::tick(window, cx);
     let resampled = resample::tick(window, cx);
