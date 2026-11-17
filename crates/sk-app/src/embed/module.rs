@@ -1016,8 +1016,13 @@ fn drain() -> usize {
     n
 }
 
-/// Page reload: the old page's subscriptions and unsettled promises are dropped.
+/// Page reload: the old page's subscriptions, unsettled promises and undelivered events are dropped.
 fn reset(context: &Context) {
+    if let Ok(mut queue) = QUEUE.lock() {
+        let before = queue.len();
+        queue.retain(|item| matches!(item, Item::Task { .. }));
+        QUEUED.fetch_sub(before - queue.len(), Ordering::AcqRel);
+    }
     let (listeners, pending) = STATE.with(|s| {
         let mut s = s.borrow_mut();
         (
@@ -1246,6 +1251,12 @@ mod tests {
                 emit("demo", "moved", event_data(&Point { x: 1, y: 1 }).unwrap());
                 settle();
                 assert_eq!(eval("JSON.stringify(__seen)"), "[7]");
+                emit("demo", "moved", event_data(&Point { x: 2, y: 2 }).unwrap());
+                reset(context);
+                eval("__nm.on('moved', (p) => __seen.push(p.x + p.y)); ''");
+                emit("demo", "moved", event_data(&Point { x: 5, y: 5 }).unwrap());
+                settle();
+                assert_eq!(eval("JSON.stringify(__seen)"), "[7,10]");
             })
         });
     }

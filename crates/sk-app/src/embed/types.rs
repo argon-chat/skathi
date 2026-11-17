@@ -61,6 +61,63 @@ fn fields(fields: &mut Fields) {
     }
 }
 
+/// `/// text` keeps the space after the slashes, and the comment adds its own.
+fn tidy(text: &mut std::borrow::Cow<'static, str>) {
+    if text.lines().any(|l| l.starts_with(' ')) {
+        let lines: Vec<&str> = text
+            .lines()
+            .map(|l| l.strip_prefix(' ').unwrap_or(l))
+            .collect();
+        *text = lines.join("\n").into();
+    }
+}
+
+/// Doc comments as TypeScript can place them: on types and fields, not inside a union of variants.
+fn docs(dt: &mut DataType) {
+    match dt {
+        DataType::List(list) => docs(&mut list.ty),
+        DataType::Map(map) => {
+            docs(map.key_ty_mut());
+            docs(map.value_ty_mut());
+        }
+        DataType::Struct(s) => field_docs(&mut s.fields),
+        DataType::Enum(e) => {
+            for (_, variant) in &mut e.variants {
+                variant.docs = "".into();
+                field_docs(&mut variant.fields);
+            }
+        }
+        DataType::Tuple(t) => t.elements.iter_mut().for_each(docs),
+        DataType::Nullable(inner) => docs(inner),
+        DataType::Intersection(parts) => parts.iter_mut().for_each(docs),
+        DataType::Reference(Reference::Named(r)) => {
+            if let NamedReferenceType::Inline { dt, .. } = &mut r.inner {
+                docs(dt);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn field_docs(fields: &mut Fields) {
+    match fields {
+        Fields::Unit => {}
+        Fields::Unnamed(f) => f
+            .fields
+            .iter_mut()
+            .filter_map(|f| f.ty.as_mut())
+            .for_each(docs),
+        Fields::Named(f) => {
+            for (_, field) in &mut f.fields {
+                tidy(&mut field.docs);
+                if let Some(ty) = field.ty.as_mut() {
+                    docs(ty);
+                }
+            }
+        }
+    }
+}
+
 /// Object type members end in `;`, as TypeScript formatters write them.
 fn members(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -117,8 +174,10 @@ impl Renderer {
             .map_err(|e| e.to_string())?
             .into_owned();
         types.iter_mut(|ndt| {
+            tidy(&mut ndt.docs);
             if let Some(ty) = ndt.ty.as_mut() {
                 numbers(ty);
+                docs(ty);
             }
         });
         Ok(Self {
@@ -198,7 +257,11 @@ fn module(module: &Module) -> Result<String, String> {
             list.push(format!("{name}{mark}: {}", any_bytes(r.render(param)?)));
         }
         let ret = unwrap_result(&r.raw, ret);
-        let ret = r.render(&ret)?;
+        let ret = if matches!(&ret, DataType::Tuple(t) if t.elements.is_empty()) {
+            "void".to_owned()
+        } else {
+            r.render(&ret)?
+        };
         let ret = if entry.task {
             format!("Promise<{ret}>")
         } else {
@@ -258,6 +321,8 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct Note {
         id: u64,
+        /// Markdown,
+        /// with front matter.
         body_text: String,
         tags: Vec<Tag>,
     }
@@ -265,6 +330,7 @@ mod tests {
     #[derive(serde::Serialize, serde::Deserialize, specta::Type)]
     #[serde(rename_all = "lowercase")]
     enum Tag {
+        /// Paid hours.
         Work,
         Home,
     }
@@ -296,6 +362,10 @@ mod tests {
 declare module "native:notes" {
   export type Note = {
     id: number;
+    /**
+     * Markdown,
+     * with front matter.
+     */
     bodyText: string;
     tags: Tag[];
   };
@@ -317,7 +387,7 @@ declare module "native:notes" {
 
 declare module "native:empty" {
   export const available: boolean;
-  export function ping(): null;
+  export function ping(): void;
   export function on(event: never, handler: (data: never) => void): () => void;
   export function off(event: never, handler: (data: never) => void): void;
 }
