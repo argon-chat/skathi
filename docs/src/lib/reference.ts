@@ -1,8 +1,8 @@
 import cli from "../../../packages/cli/package.json";
-import type { Platform, Release, Status, ValueSupport } from "../data/css/entries";
+import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../data/css/entries";
 import type { Detail, Example, Param } from "../data/details";
 
-export type { Example, Param, Platform, Release, Status, ValueSupport };
+export type { Example, Param, Platform, PlatformSince, Release, Status, ValueSupport };
 
 export interface RefEntry extends Detail {
   slug: string;
@@ -13,6 +13,7 @@ export interface RefEntry extends Detail {
   status: Status;
   platforms: Record<Platform, Status>;
   since?: Release;
+  platformSince?: PlatformSince;
   experimental?: boolean;
   webDeprecated?: boolean;
   skathiOnly?: boolean;
@@ -51,9 +52,12 @@ export type CatalogEntry = Pick<
   | "experimental"
   | "skathiOnly"
   | "aliases"
-> & { changed?: Release; split?: boolean };
+  | "platformSince"
+> & { changed?: Release; split?: boolean; fresh?: string };
 
 export const currentVersion = cli.version;
+/** The marker on what arrived in the current release: "New in 0.3". */
+export const newLabel = `New in ${currentVersion.split(".").slice(0, 2).join(".")}`;
 
 export const platforms: readonly {
   id: Platform;
@@ -152,11 +156,48 @@ export function platformsDiffer(entry: Pick<RefEntry, "platforms">): boolean {
   return new Set(Object.values(entry.platforms)).size > 1;
 }
 
-export function changedIn(entry: RefEntry): Release | undefined {
-  const releases = [entry.since, ...(entry.values ?? []).map((value) => value.since)].filter(
-    (release): release is Release => release !== undefined,
-  );
+export function changedIn(entry: Pick<RefEntry, "since" | "platformSince" | "values">): Release | undefined {
+  const releases = [
+    entry.since,
+    ...Object.values(entry.platformSince ?? {}),
+    ...(entry.values ?? []).map((value) => value.since),
+  ].filter((release): release is Release => release !== undefined);
   return releases.sort().at(-1);
+}
+
+/** The release `platform` got the entry in; none where it is not supported. */
+export function sinceOn(
+  entry: Pick<RefEntry, "since" | "platformSince" | "platforms">,
+  platform: Platform,
+): Release | undefined {
+  const status = entry.platforms[platform];
+  if (status !== "supported" && status !== "partial") return undefined;
+  return entry.platformSince?.[platform] ?? entry.since;
+}
+
+/** "0.2.0; macOS, Linux 0.3.0": the entry's release and the platforms that got it later. */
+export function sinceText(entry: Pick<RefEntry, "since" | "platformSince" | "platforms">): string {
+  if (!entry.since) return "";
+  const later = new Map<Release, string[]>();
+  for (const p of platforms) {
+    const since = sinceOn(entry, p.id);
+    if (since !== undefined && since !== entry.since) later.set(since, [...(later.get(since) ?? []), p.label]);
+  }
+  return [entry.since, ...[...later].map(([since, labels]) => `${labels.join(", ")} ${since}`)].join("; ");
+}
+
+/** What arrived in the current release, for the marker's tooltip; undefined when nothing did. */
+export function freshNote(
+  entry: Pick<RefEntry, "since" | "platformSince" | "platforms" | "values">,
+): string | undefined {
+  if (changedIn(entry) !== currentVersion) return undefined;
+  if (entry.since === currentVersion) return `Arrived in ${currentVersion}`;
+  const parts: string[] = [];
+  const os = platforms.filter((p) => sinceOn(entry, p.id) === currentVersion).map((p) => p.label);
+  if (os.length) parts.push(`${os.join(" and ")} support`);
+  const values = (entry.values ?? []).filter((v) => v.since === currentVersion).map((v) => plain(v.value));
+  if (values.length) parts.push(values.join(", "));
+  return `${parts.join("; ")} arrived in ${currentVersion}`;
 }
 
 export function catalogEntries(ref: Reference): CatalogEntry[] {
@@ -171,8 +212,11 @@ export function catalogEntries(ref: Reference): CatalogEntry[] {
       platforms: entry.platforms,
     };
     if (entry.since) slim.since = entry.since;
+    if (entry.platformSince) slim.platformSince = entry.platformSince;
     const changed = changedIn(entry);
     if (changed) slim.changed = changed;
+    const fresh = freshNote(entry);
+    if (fresh) slim.fresh = fresh;
     if (entry.experimental) slim.experimental = true;
     if (entry.skathiOnly) slim.skathiOnly = true;
     if (entry.aliases?.length) slim.aliases = entry.aliases;
@@ -201,7 +245,12 @@ export function inline(text: string): string {
 }
 
 function platformLine(entry: RefEntry): string {
-  return platforms.map((p) => `${p.label}: ${statuses[entry.platforms[p.id]].label.toLowerCase()}`).join(", ");
+  return platforms
+    .map((p) => {
+      const since = entry.platformSince ? sinceOn(entry, p.id) : undefined;
+      return `${p.label}: ${statuses[entry.platforms[p.id]].label.toLowerCase()}${since ? ` since ${since}` : ""}`;
+    })
+    .join(", ");
 }
 
 export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): string {
@@ -216,6 +265,8 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
     `- Status in Skathi: ${statuses[entry.status].label}${entry.since ? ` since ${entry.since}` : ""}`,
     `- Platforms: ${platformLine(entry)}`,
   ];
+  const fresh = freshNote(entry);
+  if (fresh) lines.push(`- ${newLabel}: ${fresh}.`);
   if (entry.skathiOnly) lines.push("- Skathi only: not part of the web platform; browsers ignore it.");
   if (entry.experimental) lines.push("- Experimental on the web.");
   if (entry.webDeprecated) lines.push("- Deprecated on the web.");
@@ -279,7 +330,7 @@ export function catalogMarkdown(ref: Reference, site: URL): string {
                 .join(", ")
             : "all";
           const notes = [...(entry.limitations ?? []), ...(entry.workaround ? [entry.workaround] : [])].join(" ");
-          return `| [\`${entry.name}\`](${new URL(entryMarkdownUrl(ref, entry.slug), site).href}) | ${statuses[entry.status].label} | ${where} | ${entry.since ?? ""} | ${notes} |`;
+          return `| [\`${entry.name}\`](${new URL(entryMarkdownUrl(ref, entry.slug), site).href}) | ${statuses[entry.status].label} | ${where} | ${sinceText(entry)} | ${notes} |`;
         });
       return [
         `## ${category}`,

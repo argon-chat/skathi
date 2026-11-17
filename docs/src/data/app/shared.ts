@@ -1,4 +1,4 @@
-import type { Platform, Release, Status, ValueSupport } from "../css/entries";
+import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../css/entries";
 import type { Detail } from "../details";
 
 export type Kind = "property" | "method" | "event" | "interface";
@@ -27,6 +27,7 @@ export interface AppEntry extends Detail {
   status: Status;
   platforms: Record<Platform, Status>;
   since?: Release;
+  platformSince?: PlatformSince;
   skathiOnly?: boolean;
   values?: ValueSupport[];
   notes?: string[];
@@ -57,13 +58,13 @@ function overall(p: Record<Platform, Status>): Status {
   return s.includes(PLAN) ? PLAN : NO;
 }
 
-export type Draft = Omit<AppEntry, "category" | "status" | "since" | "skathiOnly">;
+export type Draft = Omit<AppEntry, "category" | "status" | "skathiOnly">;
 
 export function section(category: Category, drafts: readonly Draft[]): AppEntry[] {
   return drafts.map((d) => {
     const status = overall(d.platforms);
     const e: AppEntry = { ...d, category, status, skathiOnly: true };
-    if (status === OK || status === PART) e.since = FIRST_RELEASE;
+    if (status === OK || status === PART) e.since = d.since ?? FIRST_RELEASE;
     return e;
   });
 }

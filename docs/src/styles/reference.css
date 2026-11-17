@@ -459,6 +459,29 @@
     color: var(--planned);
     border-color: color-mix(in srgb, var(--planned) 40%, transparent);
   }
+  .flag-new,
+  .sheet-badge-new {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  .sheet-badge-new {
+    border-style: solid;
+  }
+  .flag-new::before,
+  .sheet-badge-new::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .pinout .flag-new {
+    margin-left: 8px;
+    vertical-align: 1px;
+  }
 
   .platform-matrix {
     display: grid;
@@ -641,6 +664,17 @@
     font-variant-numeric: tabular-nums;
   }
   .spec-since .is-new {
+    color: var(--accent);
+  }
+  .spec-cell dd.spec-os-since {
+    margin-top: -3px;
+    font-weight: 500;
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .spec-cell dd.spec-os-since.is-new {
     color: var(--accent);
   }
   .sheet-actions {

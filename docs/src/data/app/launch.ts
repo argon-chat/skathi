@@ -124,6 +124,7 @@ export function deepLinks(go: (path: string) => void): void {
     summary:
       'Whether this process holds the single-instance lock: `"singleInstance": true` is set and it was the first to start.',
     platforms: all(OK),
+    platformSince: { macos: "0.3.0" },
     syntax: "readonly appLaunch.singleInstance: boolean",
     notes: [
       'With `"singleInstance": true` in `sk.config.json`, a second launch hands its command line, working folder and URL to the running process and exits before it opens a window. The running one gets a `launch` event and, unless `"raiseOnSecondInstance": false`, its window is brought to the front.',
@@ -153,6 +154,7 @@ console.log(appLaunch.singleInstance ? "Single instance: later launches come her
     kind: "event",
     summary: "Fires in the running app when the app is started again and the second launch is handed over.",
     platforms: all(OK),
+    platformSince: { macos: "0.3.0" },
     syntax: `appLaunch.addEventListener("launch", (event: SkLaunchEvent) => void)
 
 interface SkLaunchEvent extends Event {

@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { inline, isProseName, platforms, type CatalogEntry, type Platform, type Status } from "../../lib/reference";
+import {
+  inline,
+  isProseName,
+  newLabel,
+  platforms,
+  type CatalogEntry,
+  type Platform,
+  type Status,
+} from "../../lib/reference";
 import PlatformMatrix from "./PlatformMatrix.vue";
 import StatusMark from "./StatusMark.vue";
 
@@ -372,13 +380,18 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   >
                   <span v-if="entry.skathiOnly" class="flag flag-skathi">Skathi</span>
                   <span v-if="entry.experimental" class="flag flag-experimental">Experimental</span>
+                  <span v-if="entry.fresh" class="flag flag-new" :title="entry.fresh">{{ newLabel }}</span>
                 </span>
                 <span class="row-summary"
                   ><span class="row-category">{{ entry.category }}</span
                   ><span v-html="inline(entry.summary)"></span
                 ></span>
               </span>
-              <PlatformMatrix v-if="entry.split && platform === 'all'" :platforms="entry.platforms" />
+              <PlatformMatrix
+                v-if="entry.split && platform === 'all'"
+                :platforms="entry.platforms"
+                :since="entry.platformSince"
+              />
               <span v-else class="row-status" :data-status="statusOf(entry)"
                 ><StatusMark :status="statusOf(entry)" :size="14" />{{ statusLabels[statusOf(entry)] }}</span
               >
@@ -402,10 +415,15 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                     ><span v-else class="row-name-text" v-html="inline(entry.name)"></span>
                     <span v-if="entry.skathiOnly" class="flag flag-skathi">Skathi</span>
                     <span v-if="entry.experimental" class="flag flag-experimental">Experimental</span>
+                    <span v-if="entry.fresh" class="flag flag-new" :title="entry.fresh">{{ newLabel }}</span>
                   </span>
                   <span class="row-summary" v-html="inline(entry.summary)"></span>
                 </span>
-                <PlatformMatrix v-if="entry.split && platform === 'all'" :platforms="entry.platforms" />
+                <PlatformMatrix
+                  v-if="entry.split && platform === 'all'"
+                  :platforms="entry.platforms"
+                  :since="entry.platformSince"
+                />
                 <span v-else class="row-status" :data-status="statusOf(entry)"
                   ><StatusMark :status="statusOf(entry)" :size="14" />{{ statusLabels[statusOf(entry)] }}</span
                 >

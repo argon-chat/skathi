@@ -1,7 +1,19 @@
 import schemaJson from "../../../packages/runtime/sk.config.schema.json";
 import { groups, notes, type ConfigNote } from "../data/config/notes";
 import { entries as windowEntries, type WindowEntry } from "../data/window/entries";
-import { categoryId, entryMarkdownUrl, entryUrl, platforms, platformsDiffer, statuses, type Status } from "./reference";
+import {
+  categoryId,
+  entryMarkdownUrl,
+  entryUrl,
+  freshNote,
+  newLabel,
+  platforms,
+  platformsDiffer,
+  sinceOn,
+  statuses,
+  type Release,
+  type Status,
+} from "./reference";
 import { windowReference } from "./window";
 
 interface Schema {
@@ -43,7 +55,9 @@ export interface ConfigOption {
   constraints: string[];
   required: boolean;
   /** Per-OS support, only when it differs between them. */
-  support?: { label: string; status: Status }[];
+  support?: { label: string; status: Status; since?: Release }[];
+  /** What arrived in the current release, from the matching Window API entry. */
+  fresh?: string;
   platforms?: string;
   notes: string[];
   limitations: string[];
@@ -321,8 +335,13 @@ function build(): ConfigSection[] {
     if (exampleText !== undefined) result.example = exampleText;
     if (entry) {
       result.more = { name: entry.name, slug: entry.slug };
-      if (platformsDiffer(entry))
-        result.support = platforms.map((p) => ({ label: p.label, status: entry.platforms[p.id] }));
+      if (platformsDiffer(entry) || entry.platformSince)
+        result.support = platforms.map((p) => {
+          const since = entry.platformSince ? sinceOn(entry, p.id) : undefined;
+          return { label: p.label, status: entry.platforms[p.id], ...(since ? { since } : {}) };
+        });
+      const fresh = freshNote(entry);
+      if (fresh) result.fresh = fresh;
     }
     return result;
   };
@@ -368,8 +387,9 @@ function optionMarkdown(o: ConfigOption, depth: number, site: URL): string[] {
   if (o.constraints.length) lines.push(`- Constraints: ${constraintText(o.constraints)}`);
   if (o.support)
     lines.push(
-      `- Platforms: ${o.support.map((s) => `${s.label}: ${statuses[s.status].label.toLowerCase()}`).join(", ")}`,
+      `- Platforms: ${o.support.map((s) => `${s.label}: ${statuses[s.status].label.toLowerCase()}${s.since ? ` since ${s.since}` : ""}`).join(", ")}`,
     );
+  if (o.fresh) lines.push(`- ${newLabel}: ${o.fresh}.`);
   if (o.platforms) lines.push(`- ${o.support ? "Platform notes" : "Platforms"}: ${o.platforms}`);
   if (o.values.length) {
     lines.push("- Allowed values:");

@@ -14,6 +14,8 @@ export type Kind =
   | "unit"
   | "feature";
 export type Release = "0.2.0" | "0.3.0";
+/** The release a platform's support arrived in, for the platforms where it differs from the entry's `since`. */
+export type PlatformSince = Partial<Record<Platform, Release>>;
 
 export const categories = [
   "Stylesheets",
@@ -66,6 +68,7 @@ export interface CssEntry {
   status: Status;
   platforms: Record<Platform, Status>;
   since?: Release;
+  platformSince?: PlatformSince;
   experimental?: boolean;
   /** Deprecated on the web (BCD), as opposed to `status: "deprecated"` in Skathi. */
   webDeprecated?: boolean;
@@ -97,6 +100,7 @@ type Extra = Partial<
     | "skathiOnly"
     | "experimental"
     | "since"
+    | "platformSince"
     | "platforms"
   >
 > & { slug?: string };
@@ -692,6 +696,7 @@ const layout = section("Layout", [
         "sticky",
         OK,
         "Held at `top`, `right`, `bottom` and `left` from the nearest scroll container's edges, without leaving its parent.",
+        "0.3.0",
       ),
     ],
     notes: [
@@ -1909,6 +1914,7 @@ const interaction = section("Interaction", [
       "`window-drag` is read as the same property.",
       'On Windows, the OS moves the window. On macOS and Linux, the host does, in the main window and in a popout with `chrome="hidden"`.',
     ],
+    platformSince: { macos: "0.3.0" },
     aliases: ["-webkit-app-region", "window-drag", "drag region", "titlebar"],
     related: ["window-control"],
   }),
@@ -1919,6 +1925,7 @@ const interaction = section("Interaction", [
       "On Windows, the OS performs the action. On macOS and Linux, the host performs it when the mouse button is released.",
       "In the main window, `close` dispatches `close-requested`, `beforeunload` and `pagehide`, as the OS close button does.",
     ],
+    platformSince: { macos: "0.3.0" },
     aliases: ["window buttons", "titlebar buttons"],
     related: ["app-region"],
   }),

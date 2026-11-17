@@ -1,4 +1,4 @@
-import type { Platform, Release, Status, ValueSupport } from "../css/entries";
+import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../css/entries";
 import type { Detail } from "../details";
 
 export type Kind = "method" | "property" | "event" | "component" | "prop" | "exposed" | "option" | "function";
@@ -38,6 +38,7 @@ export interface WindowEntry extends Detail {
   status: Status;
   platforms: Record<Platform, Status>;
   since?: Release;
+  platformSince?: PlatformSince;
   skathiOnly?: boolean;
   mdn?: string;
   values?: ValueSupport[];
@@ -59,6 +60,8 @@ const MDN = "https://developer.mozilla.org/docs/Web/";
 const all = (status: Status): Record<Platform, Status> => ({ windows: status, macos: status, linux: status });
 const os = (windows: Status, macos: Status, linux: Status): Record<Platform, Status> => ({ windows, macos, linux });
 
+const MAC_LINUX_0_3: PlatformSince = { macos: "0.3.0", linux: "0.3.0" };
+
 function v(value: string, status: Status, note?: string): ValueSupport {
   return { value, status, ...(note === undefined ? {} : { note }) };
 }
@@ -70,13 +73,13 @@ function overall(p: Record<Platform, Status>): Status {
   return s.includes(PLAN) ? PLAN : NO;
 }
 
-type Draft = Omit<WindowEntry, "category" | "status" | "since" | "skathiOnly"> & { web?: boolean };
+type Draft = Omit<WindowEntry, "category" | "status" | "skathiOnly"> & { web?: boolean };
 
 function section(category: Category, drafts: readonly Draft[]): WindowEntry[] {
   return drafts.map(({ web, ...d }) => {
     const status = overall(d.platforms);
     const e: WindowEntry = { ...d, category, status };
-    if (status === OK || status === PART) e.since = FIRST_RELEASE;
+    if (status === OK || status === PART) e.since = d.since ?? FIRST_RELEASE;
     if (!web && d.mdn === undefined) e.skathiOnly = true;
     return e;
   });
@@ -97,7 +100,7 @@ const mainWindow = section("Main window", [
     platforms: os(OK, OK, PART),
     syntax: `${IMPORT}\n\nconst appWindow: SkAppWindow; // extends EventTarget`,
     notes: [
-      "Its getters and its `is*()` and `get*()` methods are reactive: read inside a template, `computed` or `watch`, they update when the window changes. In Svelte they are reactive in markup, `$derived` and `$effect` once the app imports `@skathi-native/runtime/svelte`.",
+      "Its getters and its `is*()` and `get*()` methods are reactive: read inside a template, `computed` or `watch`, they update when the window changes. In Svelte, since 0.3.0, they are reactive in markup, `$derived` and `$effect` once the app imports `@skathi-native/runtime/svelte`.",
       "Every verb is synchronous and returns `undefined`. Inside an input handler it applies in the same frame; elsewhere, at the top of the next frame.",
       "It always addresses the main window, also when the code runs from a pop-out's handler. A pop-out has no handle object; it is controlled through the props of `<SkWindow>`.",
       "It is an `EventTarget` for the host events: `close-requested`, `resize`, `focus`, `blur`, `maximize`, `unmaximize`, `minimize`, `restore`, `move`, `fullscreenchange` and `backdropchange`. `resize`, `focus` and `blur` also fire on the global `window`.",
@@ -225,6 +228,7 @@ if (!localStorage.getItem("launched")) {
     kind: "method",
     summary: "Restores a maximized main window to its previous size and position.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.unmaximize(): void",
     returns: "`undefined`.",
     notes: [
@@ -252,6 +256,7 @@ export function applyLayout(rect: { x: number; y: number; width: number; height:
     kind: "method",
     summary: "Maximizes the main window, or restores it if it is maximized.",
     platforms: all(OK),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.toggleMaximize(): void",
     returns: "`undefined`.",
     examples: [
@@ -278,6 +283,7 @@ ${IMPORT}
     kind: "method",
     summary: "Brings a minimized or maximized main window back to its normal size.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.restore(): void",
     returns: "`undefined`.",
     notes: [
@@ -356,6 +362,7 @@ onMounted(() =>
     kind: "method",
     summary: "Moves the main window to the center of the work area of its monitor.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.center(): void",
     returns: "`undefined`.",
     notes: ["The outer rectangle, frame included, is centered within the work area of the monitor the window is on."],
@@ -402,6 +409,7 @@ if (appTray.available) {
     kind: "method",
     summary: "Hides the main window and its taskbar button while the app keeps running.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.hide(): void",
     returns: "`undefined`.",
     notes: [
@@ -435,6 +443,7 @@ appWindow.addEventListener("close-requested", (e) => {
     kind: "method",
     summary: "Returns whether the main window is shown, as opposed to hidden with `hide()`.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.isVisible(): boolean",
     returns: "`true` when the window is shown. A minimized window counts as shown.",
     notes: ["It re-reads the window first, so it is exact right after a verb in the same handler.", "It is reactive."],
@@ -539,6 +548,7 @@ ${IMPORT}
     kind: "method",
     summary: "Returns whether the main window is minimized.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.isMinimized(): boolean",
     returns: "`true` while the window is minimized.",
     notes: ["It is reactive and re-reads the window first."],
@@ -700,6 +710,7 @@ export function windowInfo() {
     kind: "method",
     summary: "Moves or resizes the main window, frame included, in CSS px.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.setBounds(rect: Partial<SkWindowRect>): void",
     params: [
       { name: "rect.x", type: "number", description: "Left edge of the outer window.", optional: true },
@@ -743,6 +754,7 @@ export function dockRight() {
     kind: "method",
     summary: "Moves or resizes the main window so its client area has the given rectangle, in CSS px.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.setContentBounds(rect: Partial<SkWindowRect>): void",
     params: [
       { name: "rect.x", type: "number", description: "Left edge of the client area.", optional: true },
@@ -944,6 +956,7 @@ function pick(theme: string) {
     kind: "property",
     summary: "Reads or sets whether the main window stays above other windows.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.alwaysOnTop: boolean",
     notes: [
       "The window stays above other windows without being activated.",
@@ -1201,6 +1214,7 @@ function openInspector() {
     kind: "function",
     summary: "Moves the main window's top-left corner to a screen position.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     mdn: `${MDN}API/Window/moveTo`,
     syntax: "window.moveTo(x: number, y: number): void",
     params: [
@@ -1230,6 +1244,7 @@ function openInspector() {
     kind: "function",
     summary: "Moves the main window by the given offsets.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     mdn: `${MDN}API/Window/moveBy`,
     syntax: "window.moveBy(dx: number, dy: number): void",
     params: [
@@ -1361,6 +1376,7 @@ const quit = () => window.close();
     kind: "property",
     summary: "Reads whether the main window can be seen: shown, or hidden, minimized or covered.",
     platforms: os(OK, PART, PART),
+    platformSince: MAC_LINUX_0_3,
     mdn: `${MDN}API/Document/visibilityState`,
     syntax: 'readonly document.visibilityState: "visible" | "hidden"\nreadonly document.hidden: boolean',
     notes: [
@@ -1797,6 +1813,7 @@ export const discardAndClose = () => appWindow.close();`,
     notes: [
       "It fires when `innerWidth`, `innerHeight` or `devicePixelRatio` changes, at most once a frame. On `window` it also fires once at the first frame.",
       "It fires on `window` before the other window events of the same frame, and on `appWindow` right after `visibilitychange`.",
+      "On `appWindow` since 0.3.0; on `window` since 0.2.0.",
       "`matchMedia()` in the handler already answers for the new size.",
       "A pop-out's size is `<SkWindow @resize>`.",
     ],
@@ -1830,7 +1847,11 @@ onUnmounted(() => removeEventListener("resize", update));
     mdn: `${MDN}API/Window/focus_event`,
     syntax:
       'addEventListener("focus", (event: Event) => void)\nappWindow.addEventListener("focus", (event: Event) => void)',
-    notes: ["It fires on `window` first, then on `appWindow`.", "A pop-out's activation is `<SkWindow @focus>`."],
+    notes: [
+      "It fires on `window` first, then on `appWindow`.",
+      "On `appWindow` since 0.3.0; on `window` since 0.2.0.",
+      "A pop-out's activation is `<SkWindow @focus>`.",
+    ],
     examples: [
       {
         title: "Refresh the inbox when the user comes back",
@@ -1854,6 +1875,7 @@ onUnmounted(() => removeEventListener("resize", update));
     notes: [
       "It also fires when one of the app's own pop-outs becomes active.",
       "It fires on `window` first, then on `appWindow`.",
+      "On `appWindow` since 0.3.0; on `window` since 0.2.0.",
     ],
     examples: [
       {
@@ -1931,6 +1953,7 @@ appWindow.addEventListener("unmaximize", () => {
     kind: "event",
     summary: "Fires on `appWindow` when the main window is minimized.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: 'appWindow.addEventListener("minimize", (event: Event) => void)',
     notes: [HOST_EVENT, "It fires after `visibilitychange` in the same frame."],
     examples: [
@@ -1953,6 +1976,7 @@ export function pauseWhenMinimized(player: HTMLMediaElement) {
     kind: "event",
     summary: "Fires on `appWindow` when the main window comes back from minimized.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: 'appWindow.addEventListener("restore", (event: Event) => void)',
     notes: [HOST_EVENT, "It means only that the window left the minimized state; leaving maximized is `unmaximize`."],
     examples: [
@@ -2088,6 +2112,7 @@ sync();`,
     kind: "event",
     summary: "Fires on `document` when the main window becomes hidden or visible.",
     platforms: os(OK, PART, PART),
+    platformSince: MAC_LINUX_0_3,
     mdn: `${MDN}API/Document/visibilitychange_event`,
     syntax: 'document.addEventListener("visibilitychange", (event: Event) => void)',
     notes: [
@@ -2166,7 +2191,12 @@ const startup = section("Startup configuration", [
     params: [
       { name: "options.title", type: "string", description: "Sets `document.title`.", optional: true },
       { name: "options.backdrop", type: "string", description: "Sets `appWindow.backdrop`.", optional: true },
-      { name: "options.theme", type: "string", description: "Sets `appWindow.theme`.", optional: true },
+      {
+        name: "options.theme",
+        type: "string",
+        description: "Sets `appWindow.theme`. Accepted since 0.3.0.",
+        optional: true,
+      },
       { name: "options.alwaysOnTop", type: "boolean", description: "Sets `appWindow.alwaysOnTop`.", optional: true },
       {
         name: "options.titleBarHeight",
@@ -2665,6 +2695,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Sets whether the user can resize the main window.",
     platforms: all(OK),
+    platformSince: { linux: "0.3.0" },
     syntax: '{ "window": { "resizable": boolean } }',
     params: [
       {
@@ -2697,6 +2728,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Sets whether the main window has a minimize button.",
     platforms: all(OK),
+    platformSince: { linux: "0.3.0" },
     syntax: '{ "window": { "minimizable": boolean } }',
     params: [
       {
@@ -2728,6 +2760,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Sets whether the user can maximize the main window.",
     platforms: all(OK),
+    since: "0.3.0",
     syntax: '{ "window": { "maximizable": boolean } }',
     params: [
       {
@@ -2761,6 +2794,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Starts the main window above other windows.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '{ "window": { "alwaysOnTop": boolean } }',
     params: [
       {
@@ -2846,6 +2880,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Keeps one running copy of the app: a second launch hands its arguments to the first and exits.",
     platforms: all(OK),
+    platformSince: { macos: "0.3.0" },
     syntax: '{ "singleInstance": boolean }',
     params: [
       {
@@ -2858,7 +2893,7 @@ createApp(App).mount("#app");`,
     ],
     notes: [
       "The lock is keyed by the app's `id`.",
-      'A second launch forwards its arguments, working directory and URL, exits with code 0 and opens no window. The first instance receives them as a launch event with `source: "second-instance"`.',
+      'A second launch forwards its arguments, working directory and URL, exits with code 0 and opens no window. The first instance receives them as a launch event with `source: "second-instance"`, or `"open-url"` when a link started it.',
       "If the first instance does not answer within 5 s, the second launch exits with code 2. If it is closing, the second launch waits up to 6 s and starts afresh.",
       "`SK_SINGLE_INSTANCE=0` in the environment turns it off.",
     ],
@@ -2881,6 +2916,7 @@ createApp(App).mount("#app");`,
     kind: "option",
     summary: "Brings the running app's window to the front when a second launch is forwarded to it.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '{ "raiseOnSecondInstance": boolean }',
     params: [
       {
@@ -3020,6 +3056,7 @@ paint();`,
     kind: "method",
     summary: "Starts moving the main window with the mouse, from a `mousedown` handler.",
     platforms: all(OK),
+    platformSince: MAC_LINUX_0_3,
     syntax: "appWindow.startDragging(): void",
     returns: "`undefined`.",
     notes: [
@@ -3289,6 +3326,7 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     kind: "property",
     summary: "Marks the elements by which the user drags the window, as in an installed web app.",
     platforms: all(OK),
+    platformSince: { macos: "0.3.0" },
     web: true,
     syntax: "app-region: drag | no-drag;\n-webkit-app-region: drag | no-drag;\nwindow-drag: move | none;",
     values: [
@@ -3339,6 +3377,7 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
     kind: "property",
     summary: "Turns an element into the window's minimize, maximize or close button.",
     platforms: all(OK),
+    platformSince: { macos: "0.3.0" },
     syntax: "--window-control: minimize | maximize | close | none;",
     values: [
       v("minimize", OK, "Minimizes the window."),
@@ -3409,7 +3448,7 @@ const popouts = section("Pop-out windows", [
       "Focus is per window: an `<input>` in the pop-out keeps its focus while the main window keeps its own.",
       "All pop-outs close when the main window closes. A pop-out cannot cancel its own close.",
       "It follows `appWindow.theme`.",
-      "In Svelte, import it from `@skathi-native/runtime/svelte`. The props keep their camelCase names, the events are the callback props `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`, and the exposed values are read with `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale`. `bind:this` gives `mapFromMain()`.",
+      "In Svelte, since 0.3.0, import it from `@skathi-native/runtime/svelte`. The props keep their camelCase names, the events are the callback props `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`, and the exposed values are read with `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale`. `bind:this` gives `mapFromMain()`.",
     ],
     examples: [
       {
@@ -3483,6 +3522,7 @@ const title = computed(() => "Palette - " + tool.value);
     kind: "prop",
     summary: "Sets where the pop-out opens and how big its client area is, in CSS px.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow :bounds="{ x: 60, y: 80, width: 320, height: 400 }" />',
     params: [
       { name: "x", type: "number", description: "Left edge on the screen.", optional: true },
@@ -3620,6 +3660,7 @@ ${SK_IMPORT}
     kind: "prop",
     summary: "Keeps the pop-out above other windows.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow :always-on-top="true" />',
     params: [
       {
@@ -3824,6 +3865,7 @@ const open = ref(false);
     kind: "prop",
     summary: "Hides or shows the pop-out while keeping it open and painted.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow :visible="shown" />',
     params: [
       { name: "visible", type: "boolean", description: "`false` hides the window.", default: "`true`", optional: true },
@@ -3865,6 +3907,7 @@ const peeking = ref(false);
     kind: "prop",
     summary: "Makes the pop-out a borderless window that covers a whole monitor, taskbar included.",
     platforms: os(OK, PART, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow cover="monitor" />',
     params: [
       {
@@ -3995,6 +4038,7 @@ defineProps<{ photo: string }>();
     kind: "prop",
     summary: "Lets every mouse event pass through the pop-out to the windows under it.",
     platforms: os(OK, OK, PART),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow :ignore-mouse-events="true" />',
     params: [
       {
@@ -4084,6 +4128,7 @@ defineProps<{ fps: number }>();
     kind: "prop",
     summary: "Keeps the pop-out out of screenshots and screen sharing.",
     platforms: os(OK, OK, NO),
+    platformSince: { macos: "0.3.0" },
     syntax: '<SkWindow :content-protection="true" />',
     params: [
       {
@@ -4333,6 +4378,7 @@ const onResize = (m: SkWindowMetrics) => (wide.value = m.width > 360);
     kind: "event",
     summary: "Fires when the pop-out appears, with the time it took to paint.",
     platforms: all(OK),
+    platformSince: MAC_LINUX_0_3,
     syntax:
       '<SkWindow @show="(shown: { firstFrameMs: number; width: number; height: number; scale: number }) => void" />',
     params: [
@@ -4374,6 +4420,7 @@ defineProps<{ shown: boolean }>();
     kind: "event",
     summary: "Fires when the pop-out is hidden through `visible`.",
     platforms: all(OK),
+    platformSince: MAC_LINUX_0_3,
     syntax: '<SkWindow @hide="() => void" />',
     notes: ["It fires when `visible` goes from `true` to `false`.", "In Svelte, it is the `onhide` callback prop."],
     examples: [

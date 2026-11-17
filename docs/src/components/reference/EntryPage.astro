@@ -12,11 +12,14 @@ import {
   entryMarkdownUrl,
   entryUrl,
   find,
+  freshNote,
   inline,
   isProseName,
   kindLabel,
+  newLabel,
   plain,
   platforms,
+  sinceOn,
   statuses,
   type RefEntry,
   type Reference,
@@ -33,6 +36,7 @@ const { reference, entry, previous, next } = Astro.props;
 const status = statuses[entry.status];
 const related = (entry.related ?? []).map((slug) => find(reference, slug)).filter((r) => r !== undefined);
 const valueSince = entry.values?.some((value) => value.since && value.since !== entry.since) ?? false;
+const fresh = freshNote(entry);
 const behavior = entry.notes ?? [];
 const examples = entry.examples ?? [];
 const edgeCases = entry.edgeCases ?? [];
@@ -85,6 +89,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
     {
       platforms.map((platform, index) => {
         const value = entry.platforms[platform.id];
+        const since = entry.platformSince ? sinceOn(entry, platform.id) : undefined;
         return (
           <div class="spec-cell" data-tone={statuses[value].tone} style={`--delay: ${(index + 1) * 70}ms`}>
             <dt>{platform.label}</dt>
@@ -92,6 +97,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
               <StatusMark status={value} size={16} />
               {statuses[value].label}
             </dd>
+            {since && <dd class:list={["spec-os-since", { "is-new": since === currentVersion }]}>since {since}</dd>}
           </div>
         );
       })
@@ -128,6 +134,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         </span>
       )
     }
+    {fresh && <span class="sheet-badge sheet-badge-new" title={fresh}>{newLabel}</span>}
     {entry.experimental && <span class="sheet-badge sheet-badge-planned">Experimental on the web</span>}
     {entry.webDeprecated && <span class="sheet-badge sheet-badge-no">Deprecated on the web</span>}
   </div>
@@ -220,6 +227,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
                 <tr>
                   <td>
                     <code>{value.value}</code>
+                    {value.since === currentVersion && <span class="flag flag-new">{newLabel}</span>}
                   </td>
                   <td>
                     <span class="pin-status" data-status={value.status}>

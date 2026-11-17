@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { Platform, Status } from "../../lib/reference";
+import type { Platform, PlatformSince, Status } from "../../lib/reference";
 import StatusMark from "./StatusMark.vue";
 
-defineProps<{ platforms: Record<Platform, Status> }>();
+defineProps<{ platforms: Record<Platform, Status>; since?: PlatformSince | undefined }>();
 
 const columns: { id: Platform; short: string; label: string }[] = [
   { id: "windows", short: "Win", label: "Windows" },
@@ -26,7 +26,7 @@ const labels: Record<Status, string> = {
       :key="column.id"
       class="platform-cell"
       :data-status="platforms[column.id]"
-      :title="`${column.label}: ${labels[platforms[column.id]]}`"
+      :title="`${column.label}: ${labels[platforms[column.id]]}${since?.[column.id] ? ` since ${since[column.id]}` : ''}`"
     >
       <StatusMark :status="platforms[column.id]" :size="13" />
       <span>{{ column.short }}</span>
