@@ -1,0 +1,54 @@
+---
+title: Performance
+description: Watch frame times live, record an interaction and read each frame's calls, find forced layouts and wasted re-renders, and see where the process's memory goes.
+section: Devtools
+order: 4
+---
+
+import Shot from "../../src/components/Shot.astro";
+import overviewShot from "../../src/assets/devtools/performance-overview.png";
+import framesShot from "../../src/assets/devtools/performance-frames.png";
+
+The **Performance** tab has three views: **Overview** is always running, **Frames** records an interaction, and **Allocations** tracks the host's native memory.
+
+## Overview: is it smooth right now?
+
+<Shot
+  src={overviewShot}
+  alt="The Performance overview: frame work p50 1.61 ms, p95 2.13 ms and worst 48.85 ms in red, a bar chart of the last 240 frames against a 6.06 ms budget, and a memory breakdown with committed, private and working-set totals and a bar by category"
+  caption="A 165 Hz display gives a 6.06 ms budget per frame. Most frames here take under 2 ms of work."
+/>
+
+The chart shows the last few hundred frames: the work each frame took, the time it waited for the next frame, and the display's frame budget. Work past 60% of the budget is amber, past the budget red. Above the chart are the median, 95th percentile and worst frame work. Waiting never counts against the budget: a long bar of waiting is the clock resting, not a slow frame.
+
+Leave it open while you use the app. A spike on one interaction tells you which interaction to record.
+
+Under the chart, a memory breakdown by category, with **Refresh memory**, **Measure RAM** and **Force GC**. Force GC changes the app's state: it runs two full garbage collections. The memory breakdown is available on Windows and macOS.
+
+Start the app with `SK_PERF=1` in its environment to also print a per-phase breakdown of each frame to the terminal.
+
+## Frames: why did that click stutter?
+
+Press **Record interaction**, do the thing that feels slow, and press **Stop recording**. The timeline shows one bar per frame, its work stacked by category: JavaScript, microtasks, DOM, style, layout, paint, render and native work. The frame with the most work is selected; click another bar, or use the Left and Right keys.
+
+<Shot
+  src={framesShot}
+  alt="A recorded interaction in the Frames view: a timeline with three tall frames, the selected 20.36 ms frame split into microtask, render, layout, paint, native, js and style time, its ordered calls with a bounding_client_rect call inside a JavaScript callback, and two hints: a Heatmap component re-rendered 631 elements on click when 2 changed, and geometry reads forced synchronous layout"
+  caption="Clicking a cell of a 600-cell grid. The frame's hints name the component and the cause."
+/>
+
+A selected frame shows its calls in order, as a tree with self and total time, which you can zoom (+ and -) and pan (Shift+Left and Shift+Right). Select a call to see its source location and counters such as layout reads, style reads and DOM writes.
+
+Under the calls, the frame lists its hints:
+
+- **Long callback**: a JavaScript callback held the main thread for more than 8 ms.
+- **Forced synchronous layout**: a geometry read, such as `getBoundingClientRect()`, made the engine lay out in the middle of the frame. Batch DOM writes before reads.
+- **Read-write ping-pong**: DOM writes after a forced layout caused another one.
+- **DOM node churn**: more than 128 nodes were created and more than 128 removed in the same frame. Check list keys and components that remount.
+- Under `sk dev`, the [performance advisories](/guides/performance-advisories/) for that frame, with a count when one repeated. The one above, a wasted re-render, is the most common: a selection read by every cell makes every cell re-render.
+
+Times are main-thread CPU time. GPU execution is not timed. On Windows the recording also includes the Direct3D 12 draw, submit and present steps.
+
+## Allocations: what is holding native memory?
+
+**Start tracking** records allocations made by the native host, grouped by category and site. **Snapshot** reads the live totals, and **Set baseline** shows the change from a snapshot to the next. JavaScript objects are not part of it: this view is for memory held by the native side. Take a snapshot, set it as the baseline, repeat the interaction a few times and snapshot again: a site that grows with every repetition is the one to look at.

@@ -57,7 +57,7 @@ An exe built against a skathi older than 0.4 has no `--sk-host-types`; `sk dev` 
 
 ## Devtools
 
-F12 and `appDevtools.open()` start the [inspector](/guides/devtools/) as a separate process, which is normally Skathi's own `sk-app.exe`. In your exe there is none, so point the builder at your own exe and route the flag to the inspector:
+F12 and `appDevtools.open()` start the [inspector](/devtools/overview/) as a separate process, which is normally Skathi's own `sk-app.exe`. In your exe there is none, so point the builder at your own exe and route the flag to the inspector:
 
 ```rust
 fn main() {
@@ -69,7 +69,7 @@ fn main() {
 }
 ```
 
-`skathi::run_exe()` runs the full standalone host, which here starts as the inspector. Without `inspector_exe`, F12 says why nothing opened; the devtools protocol works either way, so the [devtools command line](/guides/devtools/) (`devtools/ctl.ts`) still connects. The `no-devtools` feature compiles both out of a release build.
+`skathi::run_exe()` runs the full standalone host, which here starts as the inspector. Without `inspector_exe`, F12 says why nothing opened; the devtools protocol works either way, so the [devtools command line](/devtools/scripting/) (`devtools/ctl.ts`) still connects. The `no-devtools` feature compiles both out of a release build.
 
 ## Logs and the allocator
 

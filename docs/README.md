@@ -39,7 +39,7 @@ label: Windows
 ---
 ```
 
-Sections are `Getting started`, `Reference`, and `Contributing`. Navigation and previous/next links follow the section and `order`. `label` is optional. `pages/index.md` is `/`; `pages/guides/windows.md` is `/guides/windows/`. Use level-two and level-three headings for the outline; the layout already supplies the page title.
+Sections are `Getting started`, `Guides`, `Devtools`, `Embedding`, `Reference`, and `Contributing`. Navigation and previous/next links follow the section and `order`. `label` is optional. `pages/index.md` is `/`; `pages/guides/windows.md` is `/guides/windows/`. Use level-two and level-three headings for the outline; the layout already supplies the page title.
 
 Use site paths for links (`/css/`). Relative `.md` and `.mdx` links are also converted to site paths for HTML output. Sätteri, Astro 7's native Markdown processor, handles both Markdown and MDX. MDX supports imported Vue components with `client:visible`, `client:load`, and other Astro directives. See `pages/authoring.mdx` for a working example and fences for `slang`, `js`, `ts`, and `rust`.
 
@@ -55,7 +55,7 @@ Titles, descriptions, canonical URLs, Open Graph/Twitter tags, a social image, J
 
 ## Cloudflare Workers
 
-`wrangler.jsonc` publishes `dist/` as Worker static assets. A server adapter is unnecessary. `_headers` sets Markdown MIME types, cache headers for hashed assets, and basic response headers. Unknown paths serve the generated `404.html` with a 404 response.
+`wrangler.jsonc` publishes `dist/` as Worker static assets. A server adapter is unnecessary. `_headers` sets Markdown MIME types, cache headers for hashed assets, and basic response headers. `_redirects` keeps moved pages reachable at their old URLs. Unknown paths serve the generated `404.html` with a 404 response.
 
 Authenticate once with `bunx wrangler login`, then set the real domain and deploy (PowerShell):
 

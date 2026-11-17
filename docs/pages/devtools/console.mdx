@@ -1,0 +1,51 @@
+---
+title: Console
+description: Read your app's console output, uncaught errors and advisories as they arrive, filter them, and run JavaScript in the app from the prompt.
+section: Devtools
+order: 2
+---
+
+import Shot from "../../src/components/Shot.astro";
+import consoleShot from "../../src/assets/devtools/console.png";
+
+The console is a drawer under every tab, so it stays in view while you look at elements or requests. Open it with **console**, Esc, or Ctrl+` to go straight to the prompt.
+
+## A click that does nothing
+
+You click **Save** and nothing happens. No dialog, no error on screen. Open the console: an uncaught exception from the click handler is there in red, with the function it came from, and the **error** count in the filter bar has gone up. The **Elements** tab shows the same count on its tab, so you notice it even with the console closed.
+
+<Shot
+  src={consoleShot}
+  alt="The console drawer with a styled log line, an info line with an object, a yellow warning, a debug line and a red uncaught TypeError from saveDraft, followed by two evaluated expressions and their results: Count up · 3 as a string and 15 as a number"
+  caption="Output from the app, then two expressions run at the prompt. Each result is shown with its type."
+/>
+
+The console shows:
+
+- `console.log`, `info`, `warn`, `error` and `debug` calls, with `%c` styling rendered;
+- uncaught errors, marked `[js uncaught]`;
+- CSS and runtime advisories, such as a property the engine does not support;
+- the `[skathi perf]` [performance advisories](/guides/performance-advisories/);
+- the host's own `[window]` and `[storage]` lines.
+
+## Ask the app
+
+The prompt at the bottom evaluates JavaScript in the app, not in the inspector. Use it to read state, check a selector, or try a fix before you write it:
+
+```js
+document.querySelector(".btn.primary").textContent; // "Count up · 3"
+document.querySelectorAll(".feature").length; // 15
+localStorage.getItem("note");
+```
+
+The result comes back with its type; an error comes back with its stack. Up and Down walk the history, and Tab completes global names. The prompt has no `$0` or other console helpers: select elements with `document.querySelector`.
+
+Under `sk dev` the prompt can also reach your modules: `__SK__.require("<module id>")` returns a module's exports, where the id is the path of the source file from the project root, such as `src/stores/counter.ts`.
+
+## Cut through the noise
+
+- **Filter** by level with **error**, **warn**, **info** and **debug**, each with its count, or by text with the filter box.
+- **follow** keeps the newest line in view. Turn it off to read a line while more arrive.
+- **preserve** keeps the lines when the inspector reattaches, for example after the app restarts.
+- **clear** (Ctrl+L) empties the drawer.
+- Right-click a line to copy it, the selected lines or every visible line.

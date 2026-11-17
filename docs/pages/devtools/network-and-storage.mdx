@@ -1,0 +1,52 @@
+---
+title: Network and storage
+description: See every fetch, XMLHttpRequest and WebSocket the app made with headers, payload, response and timing, and read or edit localStorage, sessionStorage and IndexedDB.
+section: Devtools
+order: 3
+---
+
+import Shot from "../../src/components/Shot.astro";
+import networkShot from "../../src/assets/devtools/network.png";
+import storageShot from "../../src/assets/devtools/storage.png";
+
+## Network
+
+The **Network** tab lists every `fetch`, `XMLHttpRequest` and `WebSocket` the app made since it started, with method, URL, protocol, connection, status and time. The header sums it up: how many requests were recorded, their average time, and how many HTTP/2 connections carried them and how often one was reused.
+
+### Did the request go out, and what came back?
+
+A list that "never loads" is usually one of three things, and the list tells them apart at a glance: no row at all (the code never called `fetch`), a 4xx or 5xx status (the server said no), or a 200 whose body is not what the code expects. Click the row to open it:
+
+<Shot
+  src={networkShot}
+  alt="The Network tab with five fetch rows, one of them a 404, and two WebSocket rows; the selected request to api.github.com/repos/vuejs/core is open on its Response tab, showing 5.8 KB of pretty-printed JSON"
+  caption="A JSON response, pretty-printed. The 404 above it is the request with the wrong path."
+/>
+
+- **Headers**: the general facts (URL, method, status, remote address, protocol, whether the connection was reused, whether the HTTP cache stored the response, the request options and the initiator), then the response headers and the request headers. Cookie and authorization values are masked until you press **show**.
+- **Payload**: query string parameters, form data and the request body. The bytes of uploaded files are not kept.
+- **Response**: the body, pretty-printed or raw for JSON, as hex for binary.
+- **Timing**: when the request started, when the response arrived and when the body was read. There is no DNS, connect or TLS breakdown.
+
+A `(disk cache)` protocol means the response came from the HTTP cache.
+
+A WebSocket row has **Socket** and **Timing** instead: the URL, subprotocol, state, close code and reason, and the number of messages and bytes sent and received. The messages themselves are not logged.
+
+### Take a request elsewhere
+
+Filter by URL with the box at the top. Right-click a row, or use the buttons in the detail header, to copy its URL, a cURL command, a `fetch()` call, the response body or the response headers. The cURL command is the quickest way to ask "is it my app or the server?": run it in a terminal and compare.
+
+Bodies are kept for recent requests only, 256 KB each. There is no request throttling or blocking.
+
+## Storage
+
+The **Storage** tab shows `localStorage`, `sessionStorage` and IndexedDB, as the app sees them. Use it to answer "did the setting save?" and to put the app into a state without clicking through it.
+
+<Shot
+  src={storageShot}
+  alt="The Storage tab on localStorage with five keys: visits, note, theme, sidebar.width and recent, each with its value, size in bytes, an edit button and a delete button"
+  caption="localStorage of the Showcase template. Each key can be edited or deleted in place."
+/>
+
+- In `localStorage` and `sessionStorage` you can edit a value in place, delete a key, add one with the fields at the bottom, or **clear** the area. To see what a new user sees, clear the area and reload; to test a migration from an old settings format, edit the value into the old shape.
+- IndexedDB is read-only: pick a database, an object store and optionally an index, then page or search through the records, 50 at a time. The panel shows the store's key path and indexes.

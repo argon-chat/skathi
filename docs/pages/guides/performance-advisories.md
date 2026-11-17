@@ -11,7 +11,7 @@ Under `sk dev`, the runtime watches how much work each update does and warns whe
 ## Where they appear
 
 - **The console.** A `[skathi perf]` line, once per distinct cause: the same component, triggered the same way, is reported once per run, not every frame.
-- **The devtools Performance tab.** Press **Record interaction**, use the app, stop, and select a frame. The advisories for that frame are listed under its calls, next to the built-in ones such as forced synchronous layout. A frame where the same advisory happened several times shows it once with a count.
+- **The devtools [Performance tab](/devtools/performance/).** Press **Record interaction**, use the app, stop, and select a frame. The advisories for that frame are listed under its calls, next to the built-in ones such as forced synchronous layout. A frame where the same advisory happened several times shows it once with a count.
 
 ## Wasted re-render
 

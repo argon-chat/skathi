@@ -226,4 +226,4 @@ To start on a page other than `/`, create the history first and call `history.re
 
 ## Devtools
 
-Not supported by design: the Vue Devtools browser extension and the standalone Vue Devtools app cannot attach to a Skathi window, and Skathi ships its own. Skathi's own inspector (F12) shows the element tree, matched CSS rules, console, network and a frame profiler, and the [performance advisories](/guides/performance-advisories/) name the Vue components that re-render. See [Devtools](/guides/devtools/).
+Not supported by design: the Vue Devtools browser extension and the standalone Vue Devtools app cannot attach to a Skathi window, and Skathi ships its own. Skathi's own inspector (F12) shows the element tree, matched CSS rules, console, network and a frame profiler, and the [performance advisories](/guides/performance-advisories/) name the Vue components that re-render. See [Devtools](/devtools/overview/).

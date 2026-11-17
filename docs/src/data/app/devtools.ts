@@ -22,7 +22,7 @@ appDevtools.open(): boolean
 appDevtools.info(): DevtoolsInfo
 appDevtools.onChange(listener: (enabled: boolean) => void): () => void`,
     notes: [
-      "With devtools on, the app listens on a local port for the inspector and F12 opens it. See [Devtools](/guides/devtools/).",
+      "With devtools on, the app listens on a local port for the inspector and F12 opens it. See [Devtools](/devtools/overview/).",
       '`"devtools": false` in `sk.config.json` starts the app with them off; the environment variable `SK_DEVTOOLS=1` turns them on and makes `disable()` refuse.',
     ],
     examples: [

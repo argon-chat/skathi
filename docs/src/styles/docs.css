@@ -1190,10 +1190,12 @@
     background: var(--surface);
     box-shadow: var(--lift);
   }
-  .demo-frame video {
+  .demo-frame video,
+  .prose .shot img {
     display: block;
     width: 100%;
     height: auto;
+    border-radius: 0;
   }
   .demo-pending .demo-frame {
     display: grid;

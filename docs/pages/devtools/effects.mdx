@@ -1,0 +1,33 @@
+---
+title: Effects
+description: Tune a shader effect on a live element with a slider for each parameter, then copy the --shading declaration into your stylesheet.
+section: Devtools
+order: 5
+---
+
+import Shot from "../../src/components/Shot.astro";
+import effectsShot from "../../src/assets/devtools/effects.png";
+
+Shader effects are hard to tune by editing numbers in a stylesheet: is the glass too thick at `22px` or at `28px`, is a dispersion of `.2` enough? The **Effects** tab answers that with sliders, on the element itself, while the app runs.
+
+<Shot
+  src={effectsShot}
+  alt="The Effects tab: on the left, the elements that use an effect, such as div.lens with an edited badge, div.nebula and button.orbit-pill marked animated, and the available effects below; on the right, the lens effect with sliders for depth, bevel and dispersion, a tint colour with an alpha slider, and the resulting --shading declaration with Apply, Copy and Reset"
+  caption="The liquid glass of the Showcase template's Shaders page, with its dispersion raised from 0.2 to 0.45."
+/>
+
+## Tune an effect
+
+1. **Pick the element.** The left column lists **In use**: every element that paints an effect through `--shading`, with the declaration it has now. Effects that animate are marked. Select one.
+2. **Move the sliders.** The editor shows the effect's description, its signature, and one control per parameter: a slider and a number for lengths and numbers, a colour picker with an alpha slider for colours, and a switch for an optional parameter. Each change applies to the element in the app at once, and the element is marked **edited**.
+3. **Copy the result.** The **CSS** box shows the resulting declaration, such as `--shading: lens(22px, 32px, 0.45, #ffffff0d);`, and under it what it **was** and the rule it came from. **Copy** puts it on the clipboard for your stylesheet; **Reset** drops the change.
+
+A value out of an effect's range is clamped, and the editor says so under the CSS box.
+
+The **Available** list below shows every effect the app can use, built-in or its own, with flags for what each one does, such as **reads backdrop**, **reads content**, **animated** or **bleeds** past the element's box. Select one there to see its controls, and press **Apply** to put it on the selected element.
+
+The change lives only in the running app; it does not touch your files.
+
+## See also
+
+- [Shader effects](/css/shading/): writing an effect and applying it with `--shading`.

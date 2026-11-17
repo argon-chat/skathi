@@ -160,15 +160,15 @@ The question is whether the UI's code calls native code in its own process or se
 
 <div class="wide leaders">
 
-|                       | Skathi                                                                 | Electron                                                                 | Tauri 2                                                         |
-| --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| Libraries             | Partial<sup>1</sup>                                                    | **✓ npm, the web and Node.js**                                           | npm and the web within each WebView's support, plus Rust crates |
-| Hot reload            | ✓ Vue templates keep their state; Svelte components hot-update         | ✓ The renderer; main-process changes restart the app                     | ✓ The frontend; Rust changes rebuild and restart the app        |
-| Devtools              | The [inspector](/guides/devtools/), no breakpoint debugger<sup>2</sup> | **✓ Chrome DevTools**                                                    | A different WebView inspector on each OS                        |
-| What a build needs    | **Bun**<sup>3</sup>                                                    | **Node.js**                                                              | Rust, MSVC on Windows, and Node.js<sup>4</sup>                  |
-| Installer and updates | Yours: `sk publish` makes the exe, or a `.app` on macOS                | ✓ Electron Forge or electron-builder; `autoUpdater` on macOS and Windows | ✓ MSI, NSIS, DMG, AppImage, deb and rpm; an updater plugin      |
-| License               | MIT or Apache-2.0                                                      | MIT                                                                      | MIT or Apache-2.0                                               |
-| Releases              | 0.x: APIs can still change between minor releases                      | A major every 8 weeks; the latest three are supported                    | 2.x since October 2024                                          |
+|                       | Skathi                                                                   | Electron                                                                 | Tauri 2                                                         |
+| --------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| Libraries             | Partial<sup>1</sup>                                                      | **✓ npm, the web and Node.js**                                           | npm and the web within each WebView's support, plus Rust crates |
+| Hot reload            | ✓ Vue templates keep their state; Svelte components hot-update           | ✓ The renderer; main-process changes restart the app                     | ✓ The frontend; Rust changes rebuild and restart the app        |
+| Devtools              | The [inspector](/devtools/overview/), no breakpoint debugger<sup>2</sup> | **✓ Chrome DevTools**                                                    | A different WebView inspector on each OS                        |
+| What a build needs    | **Bun**<sup>3</sup>                                                      | **Node.js**                                                              | Rust, MSVC on Windows, and Node.js<sup>4</sup>                  |
+| Installer and updates | Yours: `sk publish` makes the exe, or a `.app` on macOS                  | ✓ Electron Forge or electron-builder; `autoUpdater` on macOS and Windows | ✓ MSI, NSIS, DMG, AppImage, deb and rpm; an updater plugin      |
+| License               | MIT or Apache-2.0                                                        | MIT                                                                      | MIT or Apache-2.0                                               |
+| Releases              | 0.x: APIs can still change between minor releases                        | A major every 8 weeks; the latest three are supported                    | 2.x since October 2024                                          |
 
 </div>
 

@@ -199,7 +199,7 @@ const app = await launch({
 
 With `packaged`, the harness builds nothing and does not need the debug host. `app` is only a label here. The packaged app finds its own bundle, and the harness connects to it through the file it writes in the system's temporary folder.
 
-The test needs the devtools port. `sk build` makes a debug build, which always has it. `sk publish` makes a release build without devtools unless `sk.config.json` has `"publishDevtools": true`, and such a build cannot be tested this way. An app that turns devtools off at startup with `appDevtools.disable()` cannot be tested either; see [Devtools](/guides/devtools/).
+The test needs the devtools port. `sk build` makes a debug build, which always has it. `sk publish` makes a release build without devtools unless `sk.config.json` has `"publishDevtools": true`, and such a build cannot be tested this way. An app that turns devtools off at startup with `appDevtools.disable()` cannot be tested either; see [Turning devtools off](/devtools/release-builds/).
 
 Inside the checkout, `packagedExe({ app })` runs `sk build` for you and returns `{ exe, name }` to pass to `launch()`. It needs a prebuilt host, the one `sk build` would use, and may otherwise build one with Cargo, which takes minutes.
 

@@ -32,7 +32,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   Embedding:
     "`appHost` is the app's side of a program that runs Skathi as a library (`sk_app::embed`): call its functions, receive its events. In a standalone app it is inert, with `available` set to `false`.",
   Devtools:
-    "`appDevtools` turns the devtools listener off and on at run time and opens the inspector from code. It exists in every build; without devtools it answers `false`. See [Devtools](/guides/devtools/).",
+    "`appDevtools` turns the devtools listener off and on at run time and opens the inspector from code. It exists in every build; without devtools it answers `false`. See [Devtools](/devtools/overview/).",
 };
 
 export const entries: readonly AppEntry[] = [

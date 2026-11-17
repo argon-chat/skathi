@@ -1,0 +1,62 @@
+---
+title: Elements and styles
+description: Pick an element in the app, see where it sits in the tree, which CSS rules matched it and which of their declarations won, and what each state resolves to.
+section: Devtools
+order: 1
+---
+
+import Shot from "../../src/components/Shot.astro";
+import rulesShot from "../../src/assets/devtools/elements-rules.png";
+import computedShot from "../../src/assets/devtools/elements-computed.png";
+
+The **Elements** tab is where you go when something looks wrong: a button sits 2px lower than its neighbour, a hover colour never shows, a panel is wider than you asked. The tree on the left is your app's live element tree; the styles on the right say why the selected element looks the way it does.
+
+## Why is this button 2px off?
+
+Start from the thing you can see. Press **⌖ inspect** (Ctrl+Shift+C) and click the button in the app. The click selects it instead of reaching your app, the tree opens down to it, and the app outlines it with its selector and size, such as `button.btn.primary · 103×32`. Esc cancels the pick.
+
+<Shot
+  src={rulesShot}
+  alt="The Elements tab with button.btn.primary selected in the tree. The styles pane lists five rules: .btn.primary:hover with a hover badge, .btn.primary, .btn:active, .btn:hover and .btn, each with its specificity and source order; overridden declarations such as the .btn background are dimmed"
+  caption="The Count up button of the Showcase template, picked in the app. .btn.primary overrides the background and colour that .btn sets."
+/>
+
+The **rules** view lists every CSS rule that matched the element, the one that wins first, with:
+
+- its selector, and the `@media` condition it sits in;
+- its specificity and source order, the two numbers on the right (`2048·18`), which decide which rule wins;
+- the state it applies in, such as `hover` or `active`; a rule that matched through an ancestor's state is shown as `group-hover`;
+- its declarations, with the ones another rule overrides dimmed.
+
+For the 2px: look for the `height`, `padding`, `border` or `margin` the two buttons do not share. A declaration the engine does not support carries its advisory under the rule, so a property Skathi ignores does not go unnoticed.
+
+Each rule has a copy button that copies it as CSS.
+
+## What did it end up with?
+
+Rules say what was asked for; **computed** says what the element got. It lists the resolved values, grouped by state:
+
+- **live** is what is in effect this frame;
+- **base**, **hover**, **active**, **focus**, **focus-visible** and **focus-within** are what each state resolves to.
+
+<Shot
+  src={computedShot}
+  alt="The computed view for the same button: the live group, marked in effect this frame, lists display, size, padding, border widths, alignment, gap, background, border colour, corner radii, box shadow, text style and mouse cursor; collapsed groups for base, hover, active, extras and transitions follow"
+  caption="Computed values for the same button. Each state group opens on its own."
+/>
+
+The values are the engine's own: sizes, edges and corners as the layout and paint code receive them. That makes this the place to check a value you computed with `calc()` or a variable, or to compare **live** with **hover** when a hover style does not show.
+
+## Find an element without clicking it
+
+Some elements are hard to click: hidden ones, zero-sized ones, ones under an overlay.
+
+- **Search.** **find** (Ctrl+F) searches the whole tree. A row matches when its tag, class names, id or text contains what you typed, written without `.` or `#`: `primary` finds `button.btn.primary`, `reset` finds the button labelled Reset. Enter and Shift+Enter, or the arrows, step through the hits; each step selects the hit and expands its parents.
+- **Breadcrumbs.** The bar under the tree lists the selected element's ancestors; click one to select it. It is the fastest way from a label to the flex container that positions it.
+- **Vue fragment anchors.** The `<!---->` toggle shows the empty comment nodes Vue leaves for `v-if` and `v-for`. They paint nothing, so they are hidden by default; turn them on when you count children or debug a list that renders nothing.
+
+Click a row to select it. The selected element is outlined in the app.
+
+## What it does not do
+
+The tree and the styles are read-only: the inspector does not edit attributes, text or CSS. To try a change, edit the file; `sk dev` applies a CSS or template edit in place, without a restart. To try a value without editing a file, set it from the [console](/devtools/console/): `document.querySelector(".btn").style.height = "34px"`.

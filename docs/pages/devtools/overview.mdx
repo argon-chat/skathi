@@ -1,0 +1,91 @@
+---
+title: Devtools
+label: Overview
+description: Every development build of a Skathi app carries an inspector. Open it with F12, find your way around it, and see which builds have it.
+section: Devtools
+order: 0
+---
+
+import Shot from "../../src/components/Shot.astro";
+import appAndInspector from "../../src/assets/devtools/app-and-inspector.png";
+
+Press **F12** in a running Skathi app and a second window opens beside it: the inspector. It shows the live element tree with the CSS rules that matched each element, a console wired into the app's JavaScript, every request the app made, its storage, its shader effects and a frame profiler. You will recognise most of it from a browser's devtools; what differs is that it is a native window of its own, built for a native app.
+
+<Shot
+  src={appAndInspector}
+  alt="The Showcase sample app on the left with its Count up button outlined and labelled button.btn.primary 103×32; on the right the inspector's Elements tab with the same button selected in the tree and its five matched rules listed"
+  caption="The inspector beside the Showcase template. The selected button is outlined in the app, with its selector and size."
+/>
+
+The inspector runs in a process of its own and reads the app over a local connection. An app that hangs in a loop or crashes does not take the inspector down with it.
+
+## Open it
+
+Run the app with `bun run dev` (`sk dev`) and press **F12** in its window. The inspector opens without taking focus from the app, so a focused input keeps its caret. Press F12 again and the inspector already open comes to the front instead of a second one. Pressed in a [pop-out window](/guides/pop-out-windows/), F12 opens an inspector on that window.
+
+F12 is caught before your app's key handlers, so an app cannot swallow it by accident. Your app still receives the `keydown`, as in a browser. F12 with Ctrl, Alt, Shift or Cmd held does not open the inspector.
+
+The inspector closes when the app quits.
+
+### From your own code
+
+`appDevtools.open()` does what F12 does, for example from a Help menu:
+
+```ts
+import { appDevtools } from "@skathi-native/runtime";
+
+export function openDevtools(): void {
+  if (appDevtools.available) appDevtools.open();
+}
+```
+
+## Find your way around
+
+The inspector attaches on its own to the app that opened it. Its title bar says what it is looking at: the app's slot (the directory that identifies a running app, `.sk-dev` under `sk dev`), its process id and the window it inspects. On the right, **live** means the app pushes updates as they happen; **polling** means the inspector fell back to asking once a second.
+
+Under it, the toolbar holds **⌖ inspect**, the tabs **Elements**, **Network**, **Performance**, **Storage**, **Targets** and **Effects**, and a **console** button. When the app has pop-out windows, a row of chips selects which window's tree the inspector shows.
+
+| Key              | Does                                          |
+| ---------------- | --------------------------------------------- |
+| Ctrl+Shift+C     | pick an element in the app                    |
+| Ctrl+F           | search the element tree                       |
+| Ctrl+1 to Ctrl+6 | switch tabs, in toolbar order                 |
+| Esc              | open or close the console drawer              |
+| Ctrl+`           | open the console and focus its prompt         |
+| Ctrl+C           | copy the selected console line or network URL |
+
+On macOS, Cmd works wherever Ctrl is listed.
+
+## Where to go next
+
+Each tab answers a different question about your app:
+
+- **"Why does this look wrong?"** [Elements and styles](/devtools/elements/): pick an element, read the rules that matched it and the values it ended up with.
+- **"What just happened?"** [Console](/devtools/console/): errors, warnings and advisories as they arrive, and a prompt that runs JavaScript in the app.
+- **"What did it send, what did it keep?"** [Network and storage](/devtools/network-and-storage/): every `fetch`, `XMLHttpRequest` and WebSocket with headers and bodies, and `localStorage`, `sessionStorage` and IndexedDB.
+- **"Why does it stutter?"** [Performance](/devtools/performance/): a live frame chart, recorded frames with their calls, and the advisories that name the component at fault.
+- **"How should this effect look?"** [Effects](/devtools/effects/): sliders for every parameter of a `--shading` effect, applied live, with the CSS to copy.
+- **"Can a script do this?"** [Scripting the app](/devtools/scripting/): every panel's data and real input from the command line, for tests and coding agents.
+- **"What ships to users?"** [Release builds](/devtools/release-builds/): turning devtools off, and what `sk publish` leaves out.
+
+## More than one app or window
+
+The **Targets** tab lists the running Skathi apps the inspector can find, with their process ids and ports, and the windows of the one attached. Apps built with `sk build` are found wherever they run; development hosts are found beside the one the inspector was opened from. Click a row to attach to another app, or to inspect another window. **capture** takes a screenshot of the selected window without raising it.
+
+## Which builds have devtools
+
+| Command                          | Devtools                                                |
+| -------------------------------- | ------------------------------------------------------- |
+| `bun run dev` (`sk dev`)         | yes                                                     |
+| `bun run build` (`sk build`)     | yes: a debug build in `dist/debug`                      |
+| `bunx sk run`                    | yes: `sk build`, then starts the app                    |
+| `bun run publish` (`sk publish`) | only with `"publishDevtools": true` in `sk.config.json` |
+
+`bun create skathi` asks whether published builds keep devtools and writes the answer to `publishDevtools`. Without it, `sk publish` packages a host built without devtools; [Release builds](/devtools/release-builds/) says what that changes.
+
+## See also
+
+- [Performance advisories](/guides/performance-advisories/): the `[skathi perf]` warnings and how to fix each one.
+- [Pop-out windows](/guides/pop-out-windows/): the windows the inspector can switch between.
+- [`window.devtools`](/window-api/config-window-devtools/) in `sk.config.json`.
+- [Dev loop and devtools](/embedding/dev-loop/#devtools) when Skathi is embedded in your own executable.

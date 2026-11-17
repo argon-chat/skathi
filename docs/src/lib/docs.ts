@@ -5,7 +5,7 @@ import { catalogMarkdown } from "./reference";
 import { references } from "./references";
 import { expandSamples } from "./samples";
 
-export const sections = ["Getting started", "Guides", "Embedding", "Reference", "Contributing"] as const;
+export const sections = ["Getting started", "Guides", "Devtools", "Embedding", "Reference", "Contributing"] as const;
 export const repository = "https://github.com/argon-chat/skathi";
 export const version = cli.version;
 export const docsHome = "/introduction/";
