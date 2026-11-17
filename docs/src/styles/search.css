@@ -294,12 +294,50 @@
     margin-left: auto;
   }
 
-  @media (prefers-reduced-motion: no-preference) {
+  /* Transitions rather than keyframes, so a reopen during the exit turns back from where it is. */
+  .search-dialog {
+    transform-origin: 50% 0;
+    transition:
+      opacity 180ms ease-out,
+      transform 180ms var(--ease-out);
+  }
+  .search-dialog::backdrop {
+    transition: opacity 180ms ease-out;
+  }
+  .search-dialog[data-closing] {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+    transition-duration: 130ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  .search-dialog[data-closing]::backdrop {
+    opacity: 0;
+    transition-duration: 130ms;
+    transition-timing-function: ease-in;
+  }
+  @starting-style {
     .search-dialog[open] {
-      animation: search-pop 170ms var(--ease-out);
+      opacity: 0;
+      transform: translateY(-8px) scale(0.98);
     }
     .search-dialog[open]::backdrop {
-      animation: search-fade 170ms ease-out;
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .search-dialog {
+      transform: none !important;
+      transition: opacity 150ms ease-out !important;
+    }
+    .search-dialog[data-closing] {
+      transition: opacity 120ms ease-in !important;
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    [data-enter] .search-hit {
+      animation: search-hit-in 200ms var(--ease-out) both;
+      animation-delay: calc(var(--i, 6) * 14ms + 30ms);
     }
     .search-hit,
     .search-hit-icon,
@@ -320,15 +358,10 @@
       animation-delay: 300ms;
     }
   }
-  @keyframes search-pop {
+  @keyframes search-hit-in {
     from {
       opacity: 0;
-      transform: translateY(-6px) scale(0.985);
-    }
-  }
-  @keyframes search-fade {
-    from {
-      opacity: 0;
+      transform: translateY(4px);
     }
   }
   @keyframes search-pulse {
@@ -392,14 +425,17 @@
     }
   }
   @media (max-width: 700px) and (prefers-reduced-motion: no-preference) {
-    .search-dialog[open] {
-      animation: search-sheet 200ms var(--ease-out);
+    .search-dialog {
+      transition-duration: 200ms;
     }
-  }
-  @keyframes search-sheet {
-    from {
-      opacity: 0;
-      transform: translateY(14px);
+    .search-dialog[data-closing] {
+      transform: translateY(16px);
+      transition-duration: 140ms;
+    }
+    @starting-style {
+      .search-dialog[open] {
+        transform: translateY(24px);
+      }
     }
   }
 }

@@ -69,7 +69,10 @@ const failed = ref(false);
 const active = ref(0);
 const modifier = ref("Ctrl");
 const recents = ref<Recent[]>([]);
+const entering = ref(false);
 const trimmed = computed(() => query.value.trim());
+let exit: { timer: ReturnType<typeof setTimeout>; done: (event: TransitionEvent) => void } | undefined;
+let enterTimer: ReturnType<typeof setTimeout> | undefined;
 
 function plainItem(entry: Recent, icon: Icon, prefix: string): Item {
   return {
@@ -177,10 +180,29 @@ function remember(item: Item): void {
   }
 }
 
+function cancelExit(): void {
+  if (!exit) return;
+  clearTimeout(exit.timer);
+  dialog.value?.removeEventListener("transitionend", exit.done);
+  dialog.value?.removeAttribute("data-closing");
+  exit = undefined;
+}
+
 async function open(): Promise<void> {
-  if (!dialog.value || dialog.value.open) return;
+  const element = dialog.value;
+  if (!element) return;
+  if (element.open) {
+    if (exit) {
+      cancelExit();
+      input.value?.focus();
+    }
+    return;
+  }
   recents.value = readRecents();
-  dialog.value.showModal();
+  entering.value = true;
+  clearTimeout(enterTimer);
+  enterTimer = setTimeout(() => (entering.value = false), 400);
+  element.showModal();
   document.documentElement.classList.add("search-open");
   await nextTick();
   input.value?.focus();
@@ -188,11 +210,24 @@ async function open(): Promise<void> {
   void warm();
 }
 
+/** Plays the exit transition with the dialog still open, then closes it; `open()` during the exit reverses it. */
 function close(): void {
-  dialog.value?.close();
+  const element = dialog.value;
+  if (!element?.open || exit) return;
+  const finish = (): void => {
+    cancelExit();
+    element.close();
+  };
+  const done = (event: TransitionEvent): void => {
+    if (event.target === element && !event.pseudoElement && event.propertyName === "opacity") finish();
+  };
+  element.addEventListener("transitionend", done);
+  exit = { timer: setTimeout(finish, 250), done };
+  element.setAttribute("data-closing", "");
 }
 
 function onClose(): void {
+  cancelExit();
   document.documentElement.classList.remove("search-open");
 }
 
@@ -238,7 +273,7 @@ function typing(target: EventTarget | null): boolean {
 function onShortcut(event: KeyboardEvent): void {
   if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
     event.preventDefault();
-    if (dialog.value?.open) close();
+    if (dialog.value?.open && !exit) close();
     else void open();
     return;
   }
@@ -259,6 +294,8 @@ onMounted(() => {
   window.addEventListener("skathi:search", open);
 });
 onUnmounted(() => {
+  cancelExit();
+  clearTimeout(enterTimer);
   document.documentElement.classList.remove("search-open");
   window.removeEventListener("keydown", onShortcut);
   window.removeEventListener("skathi:search", open);
@@ -281,7 +318,15 @@ onUnmounted(() => {
     </svg>
     <span>Search docs…</span><kbd aria-hidden="true">{{ modifier }} K</kbd>
   </button>
-  <dialog ref="dialog" class="search-dialog" aria-label="Search documentation" @close="onClose" @click="onDialogClick">
+  <dialog
+    ref="dialog"
+    class="search-dialog"
+    aria-label="Search documentation"
+    @close="onClose"
+    @cancel.prevent="close"
+    @keydown.esc.prevent.stop="close"
+    @click="onDialogClick"
+  >
     <div class="search-panel">
       <div class="search-bar">
         <svg
@@ -358,7 +403,13 @@ onUnmounted(() => {
             <a href="/app-api/" @click="close">App APIs</a> or <a href="/css/" @click="close">CSS coverage</a>.
           </p>
         </div>
-        <div v-show="items.length" id="search-listbox" role="listbox" aria-label="Search results">
+        <div
+          v-show="items.length"
+          id="search-listbox"
+          role="listbox"
+          aria-label="Search results"
+          :data-enter="entering || undefined"
+        >
           <div
             v-for="(group, groupIndex) in groups"
             :key="group.label"
@@ -376,6 +427,7 @@ onUnmounted(() => {
               role="option"
               tabindex="-1"
               :aria-selected="active === (offsets[groupIndex] ?? 0) + itemIndex"
+              :style="{ '--i': Math.min((offsets[groupIndex] ?? 0) + itemIndex, 6) }"
               @pointermove="active = (offsets[groupIndex] ?? 0) + itemIndex"
               @click="choose(item, $event)"
             >
