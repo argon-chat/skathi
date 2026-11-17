@@ -669,11 +669,12 @@ describe("custom events and dispatchEvent", () => {
     expect(ev.target).toBe(inner);
   });
 
-  test("…and a listener that throws is reported, not the end of the dispatch", () => {
-    const reported: (() => void)[] = [];
-    const rt = createRuntime({ globals: { queueMicrotask: (f: () => void) => reported.push(f) } });
-    const { button: inner } = tree(rt);
+  test("…and a listener that throws is reported as uncaught at once, not the end of the dispatch", () => {
     const ran: string[] = [];
+    const rt = createRuntime({
+      globals: { reportError: (e: unknown) => ran.push(`reported ${(e as Error).message}`) },
+    });
+    const { button: inner } = tree(rt);
     inner.addEventListener("x.boom", () => {
       throw new Error("listener");
     });
@@ -681,9 +682,7 @@ describe("custom events and dispatchEvent", () => {
     inner.parentNode?.addEventListener("x.boom", () => ran.push("ancestor"));
     const ev = new CustomEvent("x.boom", { bubbles: true });
     expect(inner.dispatchEvent(ev)).toBe(true);
-    expect(ran).toEqual(["same node", "ancestor"]);
-    expect(reported.length).toBe(1);
-    expect(() => reported[0]?.()).toThrow("listener");
+    expect(ran).toEqual(["reported listener", "same node", "ancestor"]);
     expect(ev.currentTarget).toBe(null);
     expect(ev.eventPhase).toBe(0);
   });

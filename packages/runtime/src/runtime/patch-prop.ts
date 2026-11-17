@@ -34,7 +34,7 @@ export function toLong(v: unknown): number {
 }
 
 /** `@vue/shared`'s `isOn`: `on` then anything but a lowercase letter. `once`, `online` are attributes. */
-function isOn(key: string): boolean {
+export function isOn(key: string): boolean {
   const c = key.charCodeAt(2);
   return key.charCodeAt(0) === 111 && key.charCodeAt(1) === 110 && (c > 122 || c < 97);
 }

@@ -430,7 +430,16 @@ interface PropagationState {
 
 const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
 
-/** One listener call. A throwing listener does not end the dispatch: the error is reported from a microtask, after the walk. */
+/** HTML's "report an exception": the window's `error` event and `onerror`, then the console unless cancelled. */
+export function reportException(e: unknown): void {
+  const report = (globalThis as { reportError?: unknown }).reportError;
+  if (typeof report === "function") return void (report as (e: unknown) => void)(e);
+  (globalThis.queueMicrotask ?? queueMicrotask)(() => {
+    throw e;
+  });
+}
+
+/** One listener call. A throwing listener does not end the dispatch: the error is reported as uncaught and the next listener runs. */
 export function callListener(
   fn: (this: unknown, ev: Event) => unknown,
   self: unknown,
@@ -446,9 +455,7 @@ export function callListener(
     traceToken = traceCallbackBegin?.(fn) ?? 0;
     fn.call(self, ev);
   } catch (e) {
-    (globalThis.queueMicrotask ?? queueMicrotask)(() => {
-      throw e;
-    });
+    reportException(e);
   } finally {
     if (traceToken !== 0) traceCallbackEnd!(traceToken);
     if (passive) {

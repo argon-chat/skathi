@@ -4,6 +4,7 @@
 import {
   Fragment,
   Teleport,
+  callWithAsyncErrorHandling,
   createRenderer,
   defineComponent,
   isRef,
@@ -12,13 +13,13 @@ import {
   toRaw,
   version,
 } from "@vue/runtime-core";
-import type { App, ComponentPublicInstance } from "@vue/runtime-core";
+import type { App, ComponentInternalInstance, ComponentPublicInstance } from "@vue/runtime-core";
 export * from "./dom";
 import { warnCompat } from "./compat";
 import { ensureDocumentRoot, teardownDocumentRoot } from "./runtime/root";
 import type { MirrorElement } from "./runtime/types";
 import { nodeOps, patchTeleport } from "./runtime/node-ops";
-import { patchProp } from "./runtime/patch-prop";
+import { isOn, patchProp } from "./runtime/patch-prop";
 import { isMirrorNode } from "./runtime/listeners";
 import { installStylesheet } from "./runtime/stylesheet";
 import { watchVueRenders } from "./runtime/perf-advice";
@@ -46,7 +47,59 @@ trackWindowReads(
   () => void windowState.value++,
 );
 
-const makeRenderer = () => createRenderer({ ...nodeOps, patchProp });
+const NATIVE_EVENT_HANDLER = 5; // runtime-core's ErrorCodes.NATIVE_EVENT_HANDLER
+
+type Handler = (ev: Event) => void;
+type Invoker = Handler & { value: Handler | Handler[] };
+const invokers = new WeakMap<MirrorElement, Record<string, Invoker | undefined>>();
+
+/** A list of handlers stops at `stopImmediatePropagation()`, as runtime-dom's `patchStopImmediatePropagation` does. */
+function stoppable(ev: Event, value: Handler | Handler[]): Handler | Handler[] {
+  if (!Array.isArray(value)) return value;
+  let stopped = false;
+  const stop = ev.stopImmediatePropagation;
+  ev.stopImmediatePropagation = () => {
+    stopped = true;
+    stop.call(ev);
+  };
+  return value.map((fn) => (e: Event) => {
+    if (!stopped) fn(e);
+  });
+}
+
+/** runtime-dom's invoker: a template's handler runs through `callWithAsyncErrorHandling`, so what it throws or rejects with reaches `app.config.errorHandler` and `onErrorCaptured`. */
+function invoker(el: MirrorElement, key: string, next: unknown, instance: ComponentInternalInstance | null): unknown {
+  const mine = invokers.get(el);
+  if (!next) {
+    if (mine) delete mine[key];
+    return next;
+  }
+  if (typeof next !== "function" && !Array.isArray(next)) return next;
+  const known = mine?.[key];
+  if (known) {
+    known.value = next as Handler | Handler[];
+    return known;
+  }
+  const fresh: Invoker = Object.assign(
+    (ev: Event) => void callWithAsyncErrorHandling(stoppable(ev, fresh.value), instance, NATIVE_EVENT_HANDLER, [ev]),
+    { value: next as Handler | Handler[] },
+  );
+  if (mine) mine[key] = fresh;
+  else invokers.set(el, { [key]: fresh });
+  return fresh;
+}
+
+const vuePatchProp = (
+  el: MirrorElement,
+  key: string,
+  prev: unknown,
+  next: unknown,
+  namespace?: unknown,
+  parentComponent?: ComponentInternalInstance | null,
+): void =>
+  patchProp(el, key, prev, isOn(key) && parentComponent ? invoker(el, key, next, parentComponent) : next, namespace);
+
+const makeRenderer = () => createRenderer({ ...nodeOps, patchProp: vuePatchProp });
 let renderer: ReturnType<typeof makeRenderer> | null = null;
 
 /** Vue's renderer, made on first use: an app that renders through the DOM alone does not carry it. */
