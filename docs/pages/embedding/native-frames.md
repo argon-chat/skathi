@@ -60,7 +60,7 @@ let stats = surface.stats();      // frames presented, frames shown
 let _watch = surface.on_change(|surface, event| match event {
     skathi::SurfaceEvent::Changed(info) => resize_render_target(info.width, info.height),
     skathi::SurfaceEvent::DeviceLost => recreate_gpu_resources(),
-    skathi::SurfaceEvent::DisplayChanged(display) => retarget(display),
+    skathi::SurfaceEvent::DisplayChanged(_) => retarget(&surface.info()),
 });
 ```
 
@@ -185,20 +185,22 @@ macOS sends nothing when the EDR headroom moves with the brightness, and Windows
 
 ### A video player
 
-A player that tone-maps HDR video itself sizes its output to `output_headroom`. With libmpv, whose linear output has 1.0 at its 203-nit reference white, that is `target-peak`; `display-fps-override` feeds its display-synced playback:
+A player that tone-maps HDR video itself sizes its output to `info.content_headroom()`: `output_headroom` as the element's [`dynamic-range-limit`](/css/dynamic-range-limit/) allows it. With libmpv, whose linear output has 1.0 at its 203-nit reference white, that is `target-peak`; `display-fps-override` feeds its display-synced playback:
 
 ```rust
-fn retarget(player: &mpv::Handle, display: skathi::SurfaceDisplay) {
+fn retarget(player: &mpv::Handle, info: &skathi::SurfaceInfo) {
     // 1.0 in the surface is SDR white, and mpv's reference white is 203 nits.
-    let peak = 203.0 * display.output_headroom;
+    let peak = 203.0 * info.content_headroom();
     player.set_property("target-peak", format!("{peak:.0}"));
-    if let Some(hz) = display.refresh_hz {
+    if let Some(hz) = info.display.refresh_hz {
         player.set_property("display-fps-override", format!("{hz:.3}"));
     }
 }
 ```
 
-Today `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. Once windows output HDR it follows `headroom`, and the same code gives highlights the room the screen has. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
+Today `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. Once windows output HDR it follows `headroom`, and the same code gives highlights the room the screen has, no more than `dynamic-range-limit` allows: `standard` keeps them at SDR white, `constrained` at twice it, and a `dynamic-range-limit-mix()` in between, mixed in stops. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
+
+`info.dynamic_range_limit` is the computed value itself, as weights of the three keywords, for a producer that applies it some other way: `dynamic_range_limit.headroom(display.headroom)` is the limit on the screen's own headroom. The value is the largest element's, and a change to it fires `SurfaceEvent::Changed`.
 
 ## Knowing when a frame is on screen
 

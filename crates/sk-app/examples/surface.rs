@@ -14,7 +14,7 @@
 //!   and presents half floats instead: the colour is then linear `[r, g, b, a]`, and may go
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
-//! - `stats(name)` answers `{ presented, shown, width, height, visible }`.
+//! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
 //! - `feedbackStart(name, fps, paced)` and `feedbackStop(name)`: frames at `fps` with
 //!   `on_frame` listening; the stop prints each frame's event and the cadence, and answers a
 //!   summary.
@@ -181,6 +181,8 @@ fn main() {
                     "width": info.width,
                     "height": info.height,
                     "visible": info.visible,
+                    "dynamicRangeLimit": info.dynamic_range_limit.to_css(),
+                    "contentHeadroom": info.content_headroom(),
                     "display": {
                         "known": info.display.known,
                         "headroom": info.display.headroom,

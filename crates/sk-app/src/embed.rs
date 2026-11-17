@@ -39,6 +39,8 @@ pub mod __private {
     pub use super::module::private::*;
 }
 
+/// [`SurfaceInfo::dynamic_range_limit`]'s type.
+pub use sk_css::DynamicRangeLimit;
 pub use sk_tree::surface::{
     monotonic_ns, surface, D3D11Device, D3D12Device, D3D12Fence, FrameDropReason, FrameEvent,
     FramePrecision, FramePresent, FrameWatch, MetalDevice, MetalEvent, SharedTexture,

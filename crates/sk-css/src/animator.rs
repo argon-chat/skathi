@@ -32,6 +32,132 @@ enum Animatable {
     Overflow(gpui::Overflow),
     ObjectPosition(gpui::ObjectPosition),
     TextShadows(TextShadows),
+    /// A sizing length with a `calc-size()` or an intrinsic keyword on one side.
+    Size(SizeForm),
+}
+
+/// `scale * size + fraction% + pixels`, `size` being the basis's intrinsic size: the form both a
+/// `calc-size()` and a plain length take, so the two interpolate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SizeForm {
+    basis: Option<gpui::VnSizeBasis>,
+    scale: f32,
+    fraction: f32,
+    pixels: f32,
+}
+
+impl SizeForm {
+    fn of(length: Length) -> Self {
+        let plain = |fraction: f32, pixels: f32| SizeForm {
+            basis: None,
+            scale: 0.,
+            fraction,
+            pixels,
+        };
+        let definite = |d: DefiniteLength| match d {
+            DefiniteLength::Absolute(a) => {
+                plain(0., a.to_pixels(gpui::px(crate::rem_basis())).into())
+            }
+            DefiniteLength::Fraction(f) => plain(f, 0.),
+            DefiniteLength::Calc { fraction, pixels } => plain(fraction, pixels.into()),
+        };
+        match length {
+            Length::Definite(d) => definite(d),
+            Length::Auto => SizeForm {
+                basis: Some(gpui::VnSizeBasis::Auto),
+                scale: 1.,
+                ..plain(0., 0.)
+            },
+            Length::VnCalcSize(c) => SizeForm {
+                basis: Some(c.basis),
+                scale: c.scale,
+                ..definite(c.offset)
+            },
+        }
+    }
+
+    fn length(self) -> Length {
+        let offset = match (self.fraction, self.pixels) {
+            (f, p) if f == 0. => DefiniteLength::Absolute(gpui::px(p).into()),
+            (f, p) if p == 0. => DefiniteLength::Fraction(f),
+            (fraction, p) => DefiniteLength::Calc {
+                fraction,
+                pixels: gpui::px(p),
+            },
+        };
+        match self.basis {
+            Some(basis) if self.scale != 0. => Length::VnCalcSize(gpui::VnCalcSize {
+                basis,
+                scale: self.scale,
+                offset,
+            }),
+            _ => Length::Definite(offset),
+        }
+    }
+
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        SizeForm {
+            basis: a.basis.or(b.basis),
+            scale: f32::interpolate(a.scale, b.scale, t),
+            fraction: f32::interpolate(a.fraction, b.fraction, t),
+            pixels: f32::interpolate(a.pixels, b.pixels, t),
+        }
+    }
+}
+
+fn is_sizing(p: &TransitionProperty) -> bool {
+    use TransitionProperty::*;
+    matches!(
+        p,
+        Width | Height | MinWidth | MinHeight | MaxWidth | MaxHeight
+    )
+}
+
+/// Turns a pair of sizing slots into a pair that interpolates when one side is a `calc-size()`,
+/// or, with `interpolate-size: allow-keywords`, `auto`. `None` leaves the pair as it was.
+fn size_pair(from: Slot, to: Slot, p: &TransitionProperty, keywords: bool) -> Option<(Slot, Slot)> {
+    if !is_sizing(p) {
+        return None;
+    }
+    use TransitionProperty::*;
+    let auto_is_initial = matches!(p, Width | Height | MinWidth | MinHeight);
+    let lift = |s: Slot| -> Option<SizeForm> {
+        match s {
+            Slot::Value(Animatable::Size(form)) => Some(form),
+            Slot::Value(Animatable::Pixels(px)) => Some(SizeForm::of(Length::Definite(px.into()))),
+            Slot::Value(Animatable::Rems(r)) => Some(SizeForm::of(Length::Definite(r.into()))),
+            Slot::Opaque(Opaque::Fraction(f)) => {
+                Some(SizeForm::of(Length::Definite(DefiniteLength::Fraction(f))))
+            }
+            Slot::Opaque(Opaque::Calc(fraction, pixels)) => {
+                Some(SizeForm::of(Length::Definite(DefiniteLength::Calc {
+                    fraction,
+                    pixels: gpui::px(pixels),
+                })))
+            }
+            Slot::Opaque(Opaque::Auto) if keywords && auto_is_initial => {
+                Some(SizeForm::of(Length::Auto))
+            }
+            Slot::Missing if keywords && auto_is_initial => Some(SizeForm::of(Length::Auto)),
+            _ => None,
+        }
+    };
+    let sized = |s: &Slot| match s {
+        Slot::Value(Animatable::Size(_)) => true,
+        Slot::Opaque(Opaque::Auto) | Slot::Missing => keywords && auto_is_initial,
+        _ => false,
+    };
+    if !sized(&from) && !sized(&to) {
+        return None;
+    }
+    let (a, b) = (lift(from)?, lift(to)?);
+    if a.basis.is_some() && b.basis.is_some() && a.basis != b.basis {
+        return None;
+    }
+    Some((
+        Slot::Value(Animatable::Size(a)),
+        Slot::Value(Animatable::Size(b)),
+    ))
 }
 
 /// A longer `text-shadow` list snaps instead of interpolating.
@@ -129,6 +255,7 @@ fn slot_length(v: Option<Length>) -> Slot {
         None => Slot::Missing,
         Some(Length::Auto) => Slot::Opaque(Opaque::Auto),
         Some(Length::Definite(d)) => slot_definite(Some(d)),
+        Some(c @ Length::VnCalcSize(_)) => Slot::Value(Animatable::Size(SizeForm::of(c))),
     }
 }
 
@@ -285,7 +412,10 @@ fn slot_paint(paint: Option<crate::SvgPaint>, color: Option<Hsla>) -> Slot {
 fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProperty, v: Animatable) {
     use TransitionProperty::*;
     let definite = || to_absolute(v).map(DefiniteLength::Absolute);
-    let length = || to_absolute(v).map(|a| Length::Definite(DefiniteLength::Absolute(a)));
+    let length = || match v {
+        Animatable::Size(form) => Some(form.length()),
+        _ => to_absolute(v).map(|a| Length::Definite(DefiniteLength::Absolute(a))),
+    };
     let color = || match v {
         Animatable::Color(c) => Some(c),
         _ => None,
@@ -603,6 +733,9 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (Transform(_), Transform(_)) => Some((a, b)),
         (ObjectPosition(_), ObjectPosition(_)) => Some((a, b)),
         (TextShadows(_), TextShadows(_)) => Some((a, b)),
+        (Size(x), Size(y)) if x.basis.is_none() || y.basis.is_none() || x.basis == y.basis => {
+            Some((a, b))
+        }
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
         (Rems(r), Pixels(p)) if p.as_f32() == 0.0 => Some((Rems(r), Rems(gpui::Rems(0.0)))),
@@ -642,6 +775,7 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             y_offset: gpui::Pixels::interpolate(a.y_offset, b.y_offset, t),
         }),
         (TextShadows(a), TextShadows(b)) => TextShadows(lerp_text_shadows(a, b, t)),
+        (Size(a), Size(b)) => Size(SizeForm::lerp(a, b, t)),
         _ => to,
     }
 }
@@ -766,6 +900,8 @@ pub struct Animator {
     warned: HashSet<String>,
     diagnostics: Vec<String>,
     reduce_motion: bool,
+    /// Nodes under `interpolate-size: allow-keywords`.
+    keywords: HashSet<u32>,
 }
 
 mod script;
@@ -792,6 +928,15 @@ impl Animator {
             }
         }
         self.reduce_motion = reduce_motion;
+    }
+
+    /// The node's inherited `interpolate-size`: whether `auto` sizes interpolate with lengths.
+    pub fn set_interpolate_keywords(&mut self, node: u32, allow: bool) {
+        if allow {
+            self.keywords.insert(node);
+        } else {
+            self.keywords.remove(&node);
+        }
     }
 
     /// `old = None` is the first styling of the node: CSS does not transition initial style, so
@@ -843,7 +988,7 @@ impl Animator {
             };
             let to_slot = slot_inherited(&new.base, property, new.color, &new.extras);
 
-            match self.endpoints(from_slot, to_slot, property) {
+            match self.endpoints(node, from_slot, to_slot, property) {
                 Endpoints::Pair(from, to) => {
                     if let Some(i) = index {
                         if tracks[i].to == to {
@@ -960,7 +1105,7 @@ impl Animator {
                 s => s,
             };
 
-            match self.endpoints(from_slot, to_slot, property) {
+            match self.endpoints(node, from_slot, to_slot, property) {
                 Endpoints::Pair(from, to) => {
                     if let Some(i) = index {
                         if tracks[i].to == to {
@@ -1082,6 +1227,7 @@ impl Animator {
         // script's), and that half lives in JS; only the painting half goes with the node.
         self.scripts.retain(|&id, _| alive(id));
         self.script_nodes.retain(|_, node| alive(*node));
+        self.keywords.retain(|&id| alive(id));
     }
 
     /// Explicitly resets CSS motion state. A stylesheet replacement instead rebinds its keyframes
@@ -1108,7 +1254,18 @@ impl Animator {
         }
     }
 
-    fn endpoints(&mut self, from: Slot, to: Slot, property: &TransitionProperty) -> Endpoints {
+    fn endpoints(
+        &mut self,
+        node: u32,
+        from: Slot,
+        to: Slot,
+        property: &TransitionProperty,
+    ) -> Endpoints {
+        if from == to {
+            return Endpoints::Snap;
+        }
+        let keywords = self.keywords.contains(&node);
+        let (from, to) = size_pair(from, to, property, keywords).unwrap_or((from, to));
         if from == to {
             return Endpoints::Snap;
         }
@@ -2516,7 +2673,8 @@ impl Animator {
                 }
             };
             let r = out.get_or_insert_with(StyleRefinement::default);
-            apply_keyframes(r, base, &run.frames, &run.spec, progress);
+            let keywords = self.keywords.contains(&node);
+            apply_keyframes(r, base, &run.frames, &run.spec, progress, keywords);
         }
         out
     }
@@ -2537,6 +2695,7 @@ fn apply_keyframes(
     frames: &Keyframes,
     spec: &AnimationSpec,
     progress: f32,
+    keywords: bool,
 ) {
     for property in TransitionProperty::keyframed() {
         let declares: &dyn Fn(&StyleRefinement) -> bool =
@@ -2558,6 +2717,7 @@ fn apply_keyframes(
             .to
             .map(|k| slot_of(&k.style, &property))
             .unwrap_or_else(implicit);
+        let (from, to) = size_pair(from, to, &property, keywords).unwrap_or((from, to));
         let (Slot::Value(a), Slot::Value(b)) = (from, to) else {
             if let Slot::Value(v) = from {
                 install(out, base, &property, v);
@@ -2615,5 +2775,168 @@ mod border_colors_regressions {
         clear(&mut overlay, &TransitionProperty::BorderColor);
         assert_eq!(overlay.vn_border_colors.left, None);
         assert_eq!(overlay.border_color, None);
+    }
+}
+
+#[cfg(test)]
+mod size_interpolation {
+    use super::*;
+    use gpui::{px, VnCalcSize, VnSizeBasis};
+    use std::rc::Rc;
+
+    fn computed(style: &str) -> ComputedStates {
+        let mut diagnostics = Vec::new();
+        let inline = crate::parse_inline_style(
+            &format!("{style}; transition: height 1s linear"),
+            &mut diagnostics,
+        );
+        let mut base = inline.refinement.map(|r| (*r).clone()).unwrap_or_default();
+        let transitions = inline.transitions.map(|t| (*t).clone()).unwrap_or_default();
+        for (name, value) in inline.dynamic.iter() {
+            crate::mapper::apply_dynamic(
+                name,
+                value,
+                &crate::Vars::default(),
+                &crate::Env::default(),
+                &mut base,
+                &mut crate::Extras::default(),
+                &mut diagnostics,
+            );
+        }
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        ComputedStates {
+            base: Rc::new(base),
+            transitions: Rc::new(transitions),
+            ..Default::default()
+        }
+    }
+
+    fn height_at(keywords: bool, from: &str, to: &str, ms: u64) -> Option<Length> {
+        let mut a = Animator::new();
+        a.set_interpolate_keywords(1, keywords);
+        let now = Instant::now();
+        a.on_computed(1, Some(&computed(from)), &computed(to), now);
+        a.overlay(
+            1,
+            &StyleRefinement::default(),
+            now + Duration::from_millis(ms),
+        )
+        .and_then(|r| r.size.height)
+    }
+
+    fn auto_times(scale: f32, pixels: f32) -> Option<Length> {
+        Some(Length::VnCalcSize(VnCalcSize {
+            basis: VnSizeBasis::Auto,
+            scale,
+            offset: px(pixels).into(),
+        }))
+    }
+
+    #[test]
+    fn allow_keywords_interpolates_auto_with_a_length() {
+        assert_eq!(
+            height_at(true, "height: 0px", "height: auto", 250),
+            auto_times(0.25, 0.)
+        );
+        assert_eq!(
+            height_at(true, "height: auto", "height: 40px", 250),
+            auto_times(0.75, 10.)
+        );
+        assert_eq!(
+            height_at(true, "height: 10px", "width: 1px", 500),
+            auto_times(0.5, 5.),
+            "an unset height is auto"
+        );
+    }
+
+    #[test]
+    fn numeric_only_snaps_between_auto_and_a_length() {
+        assert_eq!(height_at(false, "height: 0px", "height: auto", 250), None);
+    }
+
+    #[test]
+    fn calc_size_interpolates_without_allow_keywords() {
+        assert_eq!(
+            height_at(false, "height: 0px", "height: calc-size(auto, size)", 500),
+            auto_times(0.5, 0.)
+        );
+        assert_eq!(
+            height_at(
+                false,
+                "height: calc-size(auto, size + 20px)",
+                "height: 100px",
+                500
+            ),
+            auto_times(0.5, 60.)
+        );
+        assert_eq!(
+            height_at(false, "height: 50%", "height: calc-size(auto, size)", 500),
+            Some(Length::VnCalcSize(VnCalcSize {
+                basis: VnSizeBasis::Auto,
+                scale: 0.5,
+                offset: DefiniteLength::Fraction(0.25),
+            }))
+        );
+    }
+
+    #[test]
+    fn different_bases_do_not_interpolate() {
+        assert_eq!(
+            height_at(
+                true,
+                "height: calc-size(fit-content, size)",
+                "height: calc-size(min-content, size)",
+                500
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_script_animation_to_auto_interpolates_under_allow_keywords() {
+        let frames = [
+            ScriptFrame {
+                offset: 0.,
+                easing: None,
+                decls: vec![("height".into(), "0px".into())],
+            },
+            ScriptFrame {
+                offset: 1.,
+                easing: None,
+                decls: vec![("height".into(), "auto".into())],
+            },
+        ];
+        let (frames, notes) =
+            script_keyframes(&frames, &crate::Vars::default(), &crate::Env::default());
+        assert!(notes.diagnostics.is_empty(), "{notes:?}");
+        let mut a = Animator::new();
+        let t0 = Instant::now();
+        a.set_timeline_origin(t0);
+        a.set_interpolate_keywords(7, true);
+        a.script_set(
+            1,
+            7,
+            frames,
+            ScriptTiming {
+                duration: 1000.,
+                ..ScriptTiming::default()
+            },
+        );
+        a.script_clock(
+            1,
+            ScriptClock {
+                start: Some(0.),
+                hold: None,
+                rate: 1.,
+            },
+        );
+        let height = a
+            .overlay(
+                7,
+                &StyleRefinement::default(),
+                t0 + Duration::from_millis(400),
+            )
+            .and_then(|r| r.size.height);
+        assert_eq!(height, auto_times(0.4, 0.));
     }
 }

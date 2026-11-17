@@ -222,6 +222,12 @@ pub struct Extras {
     /// blend.
     pub plus_lighter: Option<bool>,
     pub snap: crate::snap::SnapPatch,
+    /// `interpolate-size` as declared (`Some(true)` is `allow-keywords`); it inherits, so the
+    /// renderer reads it through the ancestors.
+    pub interpolate_size: Option<bool>,
+    /// `dynamic-range-limit` as declared; it inherits, so the renderer reads it through the
+    /// ancestors.
+    pub dynamic_range_limit: Option<crate::DynamicRangeLimit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -571,6 +577,12 @@ impl Extras {
             self.plus_lighter = other.plus_lighter;
         }
         self.snap.refine(&other.snap);
+        if other.interpolate_size.is_some() {
+            self.interpolate_size = other.interpolate_size;
+        }
+        if other.dynamic_range_limit.is_some() {
+            self.dynamic_range_limit = other.dynamic_range_limit;
+        }
         if other.positioned.is_some() {
             self.positioned = other.positioned;
         }
@@ -2117,6 +2129,14 @@ fn lp_calc_px(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<
 
 fn calc_dropped() {
     CALC_DROPPED.with(|c| c.set(true));
+}
+
+pub(crate) fn lp_linear(lp: &LengthPercentage) -> Option<(f32, f32)> {
+    match lp {
+        DimensionPercentage::Dimension(d) => Some((0.0, length_value_px(d)?)),
+        DimensionPercentage::Percentage(p) => Some((p.0, 0.0)),
+        DimensionPercentage::Calc(c) => calc_linear(c),
+    }
 }
 
 fn calc_linear(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<(f32, f32)> {
@@ -4633,6 +4653,12 @@ fn apply_property(
         MinHeight(v) => r.min_size.height = size_length(v),
         MaxWidth(v) => r.max_size.width = max_size_length(v),
         MaxHeight(v) => r.max_size.height = max_size_length(v),
+        InlineSize(v) => r.size.width = size_length(v),
+        BlockSize(v) => r.size.height = size_length(v),
+        MinInlineSize(v) => r.min_size.width = size_length(v),
+        MinBlockSize(v) => r.min_size.height = size_length(v),
+        MaxInlineSize(v) => r.max_size.width = max_size_length(v),
+        MaxBlockSize(v) => r.max_size.height = max_size_length(v),
         Padding(v) => {
             r.padding.top = lp_definite_of_lpa(&v.top);
             r.padding.right = lp_definite_of_lpa(&v.right);
@@ -6041,6 +6067,40 @@ fn apply_property(
                 crate::snap::apply_keywords(name.0.as_ref(), &c.value, &mut x.snap, diagnostics);
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(name.0.as_ref(), "interpolate-size" | "dynamic-range-limit") =>
+            {
+                let value = value_text(p).unwrap_or_default();
+                let keyword = value.trim().to_ascii_lowercase();
+                let inherited = matches!(
+                    keyword.as_str(),
+                    "inherit" | "unset" | "revert" | "revert-layer"
+                );
+                if name.0.as_ref() == "interpolate-size" {
+                    match keyword.as_str() {
+                        _ if inherited => {}
+                        "allow-keywords" => x.interpolate_size = Some(true),
+                        "numeric-only" | "initial" => x.interpolate_size = Some(false),
+                        _ => unsupported(
+                            diagnostics,
+                            "interpolate-size (`numeric-only` or `allow-keywords`)",
+                        ),
+                    }
+                } else if !inherited {
+                    let parsed = if keyword == "initial" {
+                        Ok(crate::DynamicRangeLimit::NO_LIMIT)
+                    } else {
+                        crate::DynamicRangeLimit::parse(&value)
+                    };
+                    match parsed {
+                        Ok(limit) => x.dynamic_range_limit = Some(limit),
+                        Err(why) => once(
+                            diagnostics,
+                            format!("`dynamic-range-limit` was dropped: {why}"),
+                        ),
+                    }
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "contain" =>
             {
                 if let Some((paint, size)) = contain(&c.value, diagnostics) {
@@ -6382,6 +6442,39 @@ fn apply_property(
     }
 }
 
+/// A sizing property set to a `calc-size()`; `None` when it is not one.
+fn apply_calc_size(
+    u: &lightningcss::properties::custom::UnparsedProperty,
+    r: &mut StyleRefinement,
+    diagnostics: &mut Vec<String>,
+) -> Option<bool> {
+    use lightningcss::properties::custom::TokenOrValue;
+    let slot = match u.property_id {
+        PropertyId::Width | PropertyId::InlineSize => &mut r.size.width,
+        PropertyId::Height | PropertyId::BlockSize => &mut r.size.height,
+        PropertyId::MinWidth | PropertyId::MinInlineSize => &mut r.min_size.width,
+        PropertyId::MinHeight | PropertyId::MinBlockSize => &mut r.min_size.height,
+        PropertyId::MaxWidth | PropertyId::MaxInlineSize => &mut r.max_size.width,
+        PropertyId::MaxHeight | PropertyId::MaxBlockSize => &mut r.max_size.height,
+        PropertyId::FlexBasis(_) => &mut r.flex_basis,
+        _ => return None,
+    };
+    let calls_it = u.value.0.iter().any(
+        |t| matches!(t, TokenOrValue::Function(f) if f.name.0.eq_ignore_ascii_case("calc-size")),
+    );
+    if !calls_it {
+        return None;
+    }
+    let name = u.property_id.name();
+    let text = value_text(&Property::Unparsed(u.clone()))?;
+    let max = name.starts_with("max-");
+    match crate::calc_size::parse(&text, max, name == "flex-basis") {
+        Ok(length) => *slot = Some(length),
+        Err(why) => once(diagnostics, format!("`{name}: {text}` was dropped: {why}")),
+    }
+    Some(true)
+}
+
 /// A value lightningcss left as tokens without a substitution in it; false when it is not one the
 /// mapper knows, which is to say invalid.
 fn apply_unparsed(
@@ -6390,6 +6483,9 @@ fn apply_unparsed(
     x: &mut Extras,
     diagnostics: &mut Vec<String>,
 ) -> bool {
+    if let Some(done) = apply_calc_size(u, r, diagnostics) {
+        return done;
+    }
     let reset = initial_inset_sides(u.property_id.name(), &u.value);
     if reset != 0 {
         if reset & 0b0001 != 0 {

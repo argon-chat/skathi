@@ -1,7 +1,7 @@
 import type { Details } from "../../details";
 
 const logicalSizeEdge =
-  "A declaration prints an advisory in `sk dev` and changes nothing, and `CSS.supports()` answers `false` for it.";
+  "The inline axis is horizontal and the block axis vertical: `writing-mode` is not applied, so the mapping never turns.";
 
 export const details: Details = {
   width: {
@@ -69,6 +69,21 @@ const collapsed = ref(false);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}`,
+      },
+      {
+        title: "Open a disclosure panel to its content height",
+        lang: "css",
+        code: `:root {
+  interpolate-size: allow-keywords;
+}
+.panel {
+  height: 0;
+  overflow: hidden;
+  transition: height 200ms ease;
+}
+.panel.open {
+  height: auto;
 }`,
       },
     ],
@@ -250,10 +265,10 @@ const open = ref(false);
   "inline-size": {
     examples: [
       {
-        title: "Instead: size a search field's width",
+        title: "Size a search field's width",
         lang: "css",
         code: `.search-field {
-  width: 280px;
+  inline-size: 280px;
 }`,
       },
     ],
@@ -264,10 +279,10 @@ const open = ref(false);
       "A transition between two ratios interpolates them on a log scale, as browsers do; to or from `auto` it snaps.",
     examples: [
       {
-        title: "Instead: give a toolbar a fixed height",
+        title: "Give a toolbar a fixed height",
         lang: "css",
         code: `.toolbar {
-  height: 40px;
+  block-size: 40px;
 }`,
       },
     ],
@@ -276,10 +291,10 @@ const open = ref(false);
   "min-inline-size": {
     examples: [
       {
-        title: "Instead: keep a button from getting too narrow",
+        title: "Keep a button from getting too narrow",
         lang: "css",
         code: `.dialog-button {
-  min-width: 88px;
+  min-inline-size: 88px;
 }`,
       },
     ],
@@ -288,10 +303,10 @@ const open = ref(false);
   "max-inline-size": {
     examples: [
       {
-        title: "Instead: cap a paragraph's line length",
+        title: "Cap a paragraph's line length",
         lang: "css",
         code: `.release-notes p {
-  max-width: 640px;
+  max-inline-size: 640px;
 }`,
       },
     ],
@@ -300,10 +315,10 @@ const open = ref(false);
   "min-block-size": {
     examples: [
       {
-        title: "Instead: reserve height for an empty list",
+        title: "Reserve height for an empty list",
         lang: "css",
         code: `.empty-list {
-  min-height: 120px;
+  min-block-size: 120px;
 }`,
       },
     ],
@@ -312,10 +327,10 @@ const open = ref(false);
   "max-block-size": {
     examples: [
       {
-        title: "Instead: cap a popover's height",
+        title: "Cap a popover's height",
         lang: "css",
         code: `.popover {
-  max-height: 360px;
+  max-block-size: 360px;
   overflow-y: auto;
 }`,
       },

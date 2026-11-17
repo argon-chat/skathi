@@ -28,6 +28,8 @@ type Stats = {
   width: number;
   height: number;
   visible: boolean;
+  dynamicRangeLimit: string;
+  contentHeadroom: number;
   display: { known: boolean; headroom: number; refreshHz: number | null };
 };
 
@@ -370,6 +372,38 @@ test(
     }
     const events = () => app.eval("globalThis.surfaceEvents.join('|')") as Promise<string>;
     expect(await until(events, (e) => e.includes("fill:lost:cleared"))).toContain("fill:lost:cleared");
+  },
+  T,
+);
+
+test(
+  "the element's dynamic-range-limit reaches SurfaceInfo, inherited or its own",
+  async () => {
+    const set = (id: string, value: string) =>
+      app.eval(`document.getElementById("${id}").style.setProperty("dynamic-range-limit", "${value}"); 0`);
+    const computed = () =>
+      app.eval(`getComputedStyle(document.getElementById("contain")).getPropertyValue("dynamic-range-limit")`);
+    const limit = (want: string) =>
+      until(
+        () => stats("contain"),
+        (s) => s.dynamicRangeLimit === want,
+      );
+    expect((await limit("no-limit")).dynamicRangeLimit).toBe("no-limit");
+    try {
+      await set("root", "standard");
+      expect(await computed()).toBe("standard");
+      const standard = await limit("standard");
+      expect(standard.dynamicRangeLimit).toBe("standard");
+      expect(standard.contentHeadroom).toBe(1);
+
+      const mix = "dynamic-range-limit-mix(standard 25%, constrained 75%)";
+      await set("contain", "dynamic-range-limit-mix(constrained 75%, standard 25%)");
+      expect(await computed()).toBe(mix);
+      expect((await limit(mix)).dynamicRangeLimit).toBe(mix);
+    } finally {
+      await set("root", "");
+      await set("contain", "");
+    }
   },
   T,
 );

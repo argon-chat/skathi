@@ -182,6 +182,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                     info.height = node.painted.1;
                     info.scale = node.painted.2;
                     info.display = on;
+                    info.dynamic_range_limit = crate::inherit::dynamic_range_limit(id);
                 } else if !info.display.known {
                     info.display = on;
                 }

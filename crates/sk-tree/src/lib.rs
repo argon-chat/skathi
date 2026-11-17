@@ -26,6 +26,7 @@ mod geometry_js;
 mod idmap;
 pub mod iframe;
 mod img;
+mod inherit;
 mod inline_style;
 mod live;
 mod live_state;
@@ -74,6 +75,7 @@ pub use img::{
     asset_base, asset_store, content_key, dev_asset_file, read_app_asset, set_asset_base,
     set_asset_store, set_dev_asset_files, AssetLookup,
 };
+pub use inherit::dynamic_range_limit;
 pub use observe::update_layout_observers;
 pub use pointer_lock::{
     intercept_escape as pointer_lock_intercept_escape, navigated as pointer_lock_navigated,

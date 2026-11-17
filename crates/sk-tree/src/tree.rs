@@ -1800,6 +1800,15 @@ impl Tree {
                 let self_none = states.base.display == Some(gpui::Display::None);
                 let animated = !states.animations.is_empty() || animator.has_animations(id);
                 let hidden = animated && (self_none || self.hidden_above(id));
+                let keywords = (animated
+                    || !states.transitions.is_empty()
+                    || animator.has_script_animations(id))
+                    && crate::inherit::interpolate_keywords(
+                        self,
+                        id,
+                        states.extras.interpolate_size,
+                    );
+                animator.set_interpolate_keywords(id, keywords);
                 if let Some(n) = self.node_mut(id) {
                     let was_none = n
                         .computed
@@ -2182,15 +2191,23 @@ pub(crate) fn script_anim_set(
     frames: &[sk_css::ScriptFrame],
     timing: sk_css::ScriptTiming,
 ) -> sk_css::ScriptKeyframeNotes {
-    let vars = read_tree(|t| {
-        t.node(node)
-            .and_then(|n| n.computed.as_ref().map(|c| c.vars.clone()))
-    })
-    .unwrap_or_default();
+    let (vars, keywords) = read_tree(|t| {
+        let own = t.node(node).and_then(|n| n.computed.as_ref());
+        (
+            own.map(|c| c.vars.clone()),
+            crate::inherit::interpolate_keywords(
+                t,
+                node,
+                own.and_then(|c| c.extras.interpolate_size),
+            ),
+        )
+    });
+    let vars = vars.unwrap_or_default();
     let (keyframes, notes) = sk_css::script_keyframes(frames, &vars, &env());
     let previous = ANIMATOR.with(|a| {
         let mut a = a.borrow_mut();
         ensure_timeline_origin(&mut a);
+        a.set_interpolate_keywords(node, keywords);
         let previous = a.script_node(id);
         a.script_set(id, node, keyframes, timing);
         previous

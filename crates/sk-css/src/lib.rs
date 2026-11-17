@@ -11,10 +11,12 @@
 //!   [`audit_selector`], never compiled into a rule that silently never matches.
 
 mod animator;
+mod calc_size;
 pub mod catalog;
 pub mod container;
 #[cfg(test)]
 mod container_tests;
+mod dynamic_range;
 mod element;
 #[cfg(test)]
 mod em_tests;
@@ -47,6 +49,7 @@ pub use animator::{
     script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock,
     ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming,
 };
+pub use dynamic_range::{DynamicRangeLimit, CONSTRAINED_HEADROOM};
 pub use element::{Interaction, MatchDom};
 #[doc(hidden)]
 pub use keyframes::AnimationDeclarations;

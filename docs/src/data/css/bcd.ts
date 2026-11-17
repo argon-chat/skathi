@@ -675,6 +675,16 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.properties.print-color-adjust",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/print-color-adjust",
   },
+  "dynamic-range-limit": {
+    key: "css.properties.dynamic-range-limit",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/dynamic-range-limit",
+    experimental: true,
+  },
+  "function-dynamic-range-limit-mix": {
+    key: "css.types.dynamic-range-limit-mix",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/dynamic-range-limit-mix",
+    experimental: true,
+  },
   "background-color": {
     key: "css.properties.background-color",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/background-color",
@@ -960,6 +970,11 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "transition-behavior": {
     key: "css.properties.transition-behavior",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/transition-behavior",
+  },
+  "interpolate-size": {
+    key: "css.properties.interpolate-size",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/interpolate-size",
+    experimental: true,
   },
   animation: {
     key: "css.properties.animation",

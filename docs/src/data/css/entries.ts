@@ -199,6 +199,15 @@ const SIZING_KEYWORDS = [
   v("fit-content", NO, "Ignored without an advisory; use flex or grid sizing."),
   v("stretch", NO, "Ignored without an advisory; use flex or grid sizing."),
 ];
+const SIZING_VALUES = [
+  ...SIZING_KEYWORDS,
+  v(
+    "calc-size()",
+    OK,
+    "Sizes the box from its `auto`, `min-content`, `max-content`, `fit-content` or `content` size; see `calc-size()`.",
+    "0.4.0",
+  ),
+];
 const SIZING = ["width", "height", "min-width", "min-height", "max-width", "max-height"];
 const LOGICAL_SIZING = [
   "inline-size",
@@ -401,37 +410,37 @@ const stylesheets = section("Stylesheets", [
 const boxModel = section("Box model and sizing", [
   prop("width", OK, "Sets the width of an element's box.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: SIZING.filter((s) => s !== "width"),
   }),
   prop("height", OK, "Sets the height of an element's box.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: SIZING.filter((s) => s !== "height"),
   }),
   prop("min-width", OK, "Sets the smallest width an element's box can shrink to.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: ["width", "max-width"],
   }),
   prop("min-height", OK, "Sets the smallest height an element's box can shrink to.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: ["height", "max-height"],
   }),
   prop("max-width", OK, "Sets the largest width an element's box can grow to.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: ["width", "min-width"],
   }),
   prop("max-height", OK, "Sets the largest height an element's box can grow to.", {
     notes: [SIZE_NOTE],
-    values: SIZING_KEYWORDS,
+    values: SIZING_VALUES,
     animates: "interpolated",
     related: ["height", "min-height"],
   }),
@@ -459,10 +468,12 @@ const boxModel = section("Box model and sizing", [
   ...LOGICAL_SIZING.map((name) =>
     prop(
       name,
-      PLAN,
+      OK,
       `The flow-relative counterpart of \`${name.replace("inline-size", "width").replace("block-size", "height")}\`: sets the box's size along the ${name.includes("inline") ? "inline" : "block"} axis.`,
       {
-        workaround: "Use `width` / `height`.",
+        since: "0.4.0",
+        notes: [`${FLOW_RELATIVE} ${SIZE_NOTE}`],
+        values: SIZING_VALUES.map(({ since: _, ...value }) => value),
         related: LOGICAL_SIZING.filter((s) => s !== name),
       },
     ),
@@ -546,7 +557,11 @@ const layout = section("Layout", [
     aliases: ["-webkit-flex-shrink"],
   }),
   prop("flex-basis", OK, "Sets the starting size of a flex item before free space is distributed.", {
-    values: [v("content", NO), v("min-content", NO)],
+    values: [
+      v("content", NO),
+      v("min-content", NO),
+      v("calc-size()", OK, "Starts from the item's measured size, such as `calc-size(content, size * 2)`.", "0.4.0"),
+    ],
     related: ["flex", "flex-grow", "flex-shrink"],
     aliases: ["-webkit-flex-basis"],
   }),
@@ -1250,6 +1265,33 @@ const color = section("Color", [
   prop("print-color-adjust", NO, "Sets whether the browser may adjust colors to save ink when printing.", {
     aliases: ["-webkit-print-color-adjust"],
   }),
+  prop("dynamic-range-limit", PART, "Limits how bright high dynamic range (HDR) content in an element may be.", {
+    since: "0.4.0",
+    values: [
+      v("standard", OK, "No brighter than SDR white."),
+      v("constrained", OK, "Up to twice SDR white, one stop of headroom."),
+      v("no-limit", OK, "The display's full headroom; the initial value."),
+      v("dynamic-range-limit-mix()", OK),
+    ],
+    notes: [
+      "Parsed, computed and inherited; `getComputedStyle(el).dynamicRangeLimit` reads it, with a mix written as `dynamic-range-limit-mix()`.",
+      "An `<sk-surface>` producer reads it from `SurfaceInfo::dynamic_range_limit`, and `SurfaceInfo::content_headroom()` turns it into the brightest value a frame should reach on the surface's display, such as a video player's target peak.",
+    ],
+    limitations: [
+      "Windows draw SDR, so it has no visible effect on `<video>`, images or the page; only what an `<sk-surface>` producer does with it.",
+      "Transitions and animations of it snap to the end value.",
+    ],
+    aliases: ["hdr", "high dynamic range"],
+    related: ["function-dynamic-range-limit-mix", "media-dynamic-range"],
+  }),
+  fn("dynamic-range-limit-mix()", OK, "Mixes `dynamic-range-limit` keywords by percentage.", {
+    since: "0.4.0",
+    notes: [
+      "`dynamic-range-limit-mix(standard 30%, no-limit 70%)` takes two or more limits, each a keyword or another mix, with percentages that are normalized when they do not sum to 100%.",
+      "The limits mix in stops of brightness: half `standard` and half `no-limit` on a display with four stops of headroom allows two.",
+    ],
+    related: ["dynamic-range-limit"],
+  }),
 ]);
 
 const backgrounds = section("Backgrounds and borders", [
@@ -1707,6 +1749,22 @@ const transitions = section("Transitions and animations", [
     values: [v("allow-discrete", NO)],
     related: ["transition", "at-starting-style"],
   }),
+  prop(
+    "interpolate-size",
+    OK,
+    "Lets sizes animate to and from intrinsic keywords such as `auto`, `min-content` and `fit-content`.",
+    {
+      since: "0.4.0",
+      notes: [
+        "Inherited: set `interpolate-size: allow-keywords` on `:root` and `height: auto` transitions, in `@keyframes` and in `element.animate()`, as if it were `calc-size(auto, size)`.",
+        "Under `numeric-only`, the initial value, a keyword snaps.",
+      ],
+      limitations: [
+        "Only `auto` interpolates: `min-content`, `max-content` and `fit-content` are not sizes Skathi applies.",
+      ],
+      related: ["function-calc-size", "transition", "height"],
+    },
+  ),
   sh(
     "animation",
     OK,

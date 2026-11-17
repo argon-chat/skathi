@@ -199,6 +199,18 @@ pub struct SurfaceInfo {
     pub visible: bool,
     /// The display that element is on; the last one known while no element shows the surface.
     pub display: SurfaceDisplay,
+    /// That element's computed `dynamic-range-limit`.
+    pub dynamic_range_limit: sk_css::DynamicRangeLimit,
+}
+
+impl SurfaceInfo {
+    /// The brightest value a frame should reach, in [`SurfaceDisplay`]'s unit (1.0 is SDR white):
+    /// [`SurfaceDisplay::output_headroom`] as `dynamic-range-limit` allows it, for a producer that
+    /// tone-maps itself, such as a video player's target peak.
+    pub fn content_headroom(&self) -> f32 {
+        self.dynamic_range_limit
+            .headroom(self.display.output_headroom)
+    }
 }
 
 /// A display, in a surface's unit: 1.0 is SDR (paper) white, as in macOS EDR and as Windows

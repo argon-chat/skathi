@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use gpui::{Hsla, StyleRefinement};
 
-use super::{initial, install, lerp, slot_of, unify, Animatable, Animator, Slot};
+use super::{initial, install, lerp, size_pair, slot_of, unify, Animatable, Animator, Slot};
 use crate::keyframes::{Direction, FillMode, Keyframe, Keyframes};
 use crate::transition::{Easing, TransitionProperty};
 
@@ -239,6 +239,10 @@ impl Animator {
         );
     }
 
+    pub fn has_script_animations(&self, node: u32) -> bool {
+        self.scripts.contains_key(&node)
+    }
+
     pub fn script_node(&self, id: u32) -> Option<u32> {
         self.script_nodes.get(&id).copied()
     }
@@ -278,7 +282,13 @@ impl Animator {
             return Some(out);
         };
         let mut r = StyleRefinement::default();
-        apply_script_keyframes(&mut r, base, &a.frames, progress);
+        apply_script_keyframes(
+            &mut r,
+            base,
+            &a.frames,
+            progress,
+            self.keywords.contains(&node),
+        );
         for property in TransitionProperty::keyframed() {
             if let Slot::Value(v) = slot_of(&r, &property) {
                 if let Some(css) = css_value(v) {
@@ -305,7 +315,7 @@ impl Animator {
                 continue;
             };
             let r = out.get_or_insert_with(StyleRefinement::default);
-            apply_script_keyframes(r, base, &a.frames, progress);
+            apply_script_keyframes(r, base, &a.frames, progress, self.keywords.contains(&node));
         }
     }
 }
@@ -315,6 +325,7 @@ fn apply_script_keyframes(
     base: &StyleRefinement,
     frames: &Keyframes,
     progress: f64,
+    keywords: bool,
 ) {
     let p = progress as f32;
     for property in TransitionProperty::keyframed() {
@@ -371,10 +382,12 @@ fn apply_script_keyframes(
             .and_then(|k| k.easing)
             .unwrap_or(Easing::Linear)
             .eval(distance);
-        let (Slot::Value(a), Slot::Value(b)) = (value(k0), value(k1)) else {
-            if let Slot::Value(v) = value(k0) {
+        let (from, to) = (value(k0), value(k1));
+        let (from, to) = size_pair(from, to, &property, keywords).unwrap_or((from, to));
+        let (Slot::Value(a), Slot::Value(b)) = (from, to) else {
+            if let Slot::Value(v) = from {
                 install(out, base, &property, v);
-            } else if let Slot::Value(v) = value(k1) {
+            } else if let Slot::Value(v) = to {
                 install(out, base, &property, v);
             }
             continue;
@@ -412,6 +425,7 @@ fn css_value(v: Animatable) -> Option<String> {
             )
         }
         Animatable::TextShadows(shadows) => crate::text_shadow_css(shadows.list(), shadows.current),
+        Animatable::Size(form) => form.length().to_string(),
         Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
     })
 }

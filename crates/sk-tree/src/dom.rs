@@ -219,6 +219,8 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "border-bottom-width",
     "border-left-width",
     "direction",
+    "interpolate-size",
+    "dynamic-range-limit",
     "font-size",
     "color",
     "text-shadow",
@@ -410,6 +412,15 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         }
         _ if edge_of(name).is_some() => edge_px(t, id, cs, name)?,
         "direction" => "ltr".into(),
+        "interpolate-size" => {
+            if crate::inherit::interpolate_keywords(t, id, cs.extras.interpolate_size) {
+                "allow-keywords"
+            } else {
+                "numeric-only"
+            }
+        }
+        .into(),
+        "dynamic-range-limit" => crate::inherit::dynamic_range_limit_in(t, id).to_css(),
         "font-size" => {
             let mut px = None;
             let mut at = id;
@@ -579,7 +590,7 @@ fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option
             .map_or(gpui::px(0.0), |l| l.to_pixels(parent_width(), rem)),
         EdgeBox::Margin => match side_of(&cs.base.margin, side) {
             Some(gpui::Length::Definite(l)) => l.to_pixels(parent_width(), rem),
-            Some(gpui::Length::Auto) | None => gpui::px(0.0),
+            Some(gpui::Length::Auto | gpui::Length::VnCalcSize(_)) | None => gpui::px(0.0),
         },
         EdgeBox::Border => {
             side_of(&cs.base.border_widths, side).map_or(gpui::px(0.0), |l| l.to_pixels(rem))
