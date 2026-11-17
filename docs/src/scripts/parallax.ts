@@ -30,6 +30,12 @@ function startParallax(): void {
   document.addEventListener("astro:before-swap", () => events.abort(), { once: true });
   const { signal } = events;
   const sides = [...layer.querySelectorAll<HTMLElement>("[data-side]")];
+  const docs = layer.dataset["parallax"] === "docs";
+  const reach = docs ? 40 : 60;
+  const layers = [...layer.querySelectorAll<HTMLElement>(".parallax-layer")].map((element) => ({
+    element,
+    depth: Number(element.style.getPropertyValue("--depth")) || 0,
+  }));
   const moving = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let measure = sides.length > 0;
   let frame = 0;
@@ -42,9 +48,12 @@ function startParallax(): void {
       placeSides(sides);
     }
     if (!moving) return;
-    layer.style.setProperty("--scroll", String(window.scrollY));
-    layer.style.setProperty("--px", px.toFixed(3));
-    layer.style.setProperty("--py", py.toFixed(3));
+    for (const { element, depth } of layers) {
+      const drift = window.scrollY * depth;
+      // The docs layers repeat every viewport height, so they wrap instead of running out on long pages.
+      const y = (docs ? -(drift % window.innerHeight) : -drift) + py * depth * reach;
+      element.style.transform = `translate3d(${px * depth * reach}px, ${y}px, 0)`;
+    }
   };
   const schedule = () => {
     if (!frame) frame = window.requestAnimationFrame(update);

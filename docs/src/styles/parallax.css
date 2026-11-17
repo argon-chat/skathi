@@ -24,11 +24,6 @@
     position: absolute;
     inset: 0 0 auto;
     height: 260vh;
-    transform: translate3d(
-      calc(var(--px, 0) * var(--depth) * 60px),
-      calc(var(--scroll, 0) * var(--depth) * -1px + var(--py, 0) * var(--depth) * 60px),
-      0
-    );
     will-change: transform;
   }
   .parallax-glow {
@@ -83,12 +78,6 @@
   }
   .parallax-docs .parallax-layer {
     height: 200vh;
-    /* The items repeat every 100vh, so the layer wraps instead of running out on long pages. */
-    transform: translate3d(
-      calc(var(--px, 0) * var(--depth) * 40px),
-      calc(var(--py, 0) * var(--depth) * 40px - mod(var(--scroll, 0) * var(--depth) * 1px, 100vh)),
-      0
-    );
   }
   .parallax-docs .parallax-glow {
     left: 0;
