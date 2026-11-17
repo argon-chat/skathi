@@ -228,7 +228,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::AlreadyStarted => write!(f, "Skathi already ran in this process; it runs once"),
-            Error::NoPayload => write!(f, "no app: give the builder a payload (sk build writes dist/.sk/app.skpk)"),
+            Error::NoPayload => write!(
+                f,
+                "no app: give the builder a payload (`sk publish --payload-only` writes dist/release/.sk/app.skpk)"
+            ),
             Error::PayloadNeedsProd => {
                 write!(f, "a payload needs sk-app's `prod` feature; a dev build boots the dev dist instead")
             }
@@ -248,7 +251,7 @@ impl std::error::Error for Error {}
 ///
 /// ```no_run
 /// let ui = sk_app::embed::Builder::new()
-///     .payload_file("apps/hello/dist/.sk/app.skpk")
+///     .payload_file("apps/hello/dist/release/.sk/app.skpk")
 ///     .function("db.query", |call| {
 ///         let reply = call.into_reply();
 ///         std::thread::spawn(move || reply.resolve(r#"{"rows":[]}"#));

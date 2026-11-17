@@ -4,7 +4,7 @@
 //! ```text
 //! cargo build -p sk-app --example embed --features prod
 //! bun packages/cli/cli/sk.ts build packages/test/fixtures/embed --payload-only
-//! target\x86_64-pc-windows-msvc\debug\examples\embed.exe packages\test\fixtures\embed\dist\.sk\app.skpk
+//! target\x86_64-pc-windows-msvc\debug\examples\embed.exe packages\test\fixtures\embed\dist\debug\.sk\app.skpk
 //! ```
 //!
 //! Interactive, it prints every call the app makes and reads commands from

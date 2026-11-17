@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { EXE_SUFFIX, REPO, TARGET, WINDOWS } from "../src/index";
 
 const EXE = join(REPO, "target", TARGET, "debug", "examples", `embed${EXE_SUFFIX}`);
-const PAYLOAD = join(REPO, "packages", "test", "fixtures", "embed", "dist", ".sk", "app.skpk");
+const PAYLOAD = join(REPO, "packages", "test", "fixtures", "embed", "dist", "debug", ".sk", "app.skpk");
 
 function run(cmd: string, args: string[], timeout: number) {
   const r = spawnSync(cmd, args, { cwd: REPO, encoding: "utf8", timeout, windowsHide: true });

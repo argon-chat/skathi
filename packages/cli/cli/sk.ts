@@ -195,7 +195,7 @@ export function cli(run: Run): Command {
       .option("--json", "Print the result as JSON")
       .optionsGroup("Advanced")
       .option("--workload <exe>", "Stamp this workload instead of the cached one")
-      .option("--payload-only", "Write dist/.sk/app.skpk and stop")
+      .option("--payload-only", "Write only the app payload (dist/<mode>/.sk/app.skpk) and stop")
       .option("--aot-inputs", "Keep the typed sources for a later AOT compile")
       .option("--aot-compiler <exe>", "Compile native images with this sk-aot.exe (or SK_AOT_COMPILER)")
       .option("--shader-compiler <exe>", "Compile effect shaders with this redslangc (or SK_REDSLANGC)")
