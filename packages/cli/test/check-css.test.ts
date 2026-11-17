@@ -67,7 +67,6 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("-moz-appearance", "none")).toBeNull();
   });
 
-  test("selectors: only what the matcher cannot answer", () => {
   test("@container: only queries the engine cannot evaluate", () => {
     expect(containerProblem("card (width >= 24rem) and style(--mode: 50%)")).toBeNull();
     expect(containerProblem("(orientation: portrait) or (min-height: 10em)")).toBeNull();
@@ -76,6 +75,7 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(containerProblem("(min-width: 50%)")).not.toBeNull();
   });
 
+  test("selectors: only what the matcher cannot answer", () => {
     const count = (selector: string) => selectorProblems(selector).length;
     expect(count(".a:not(:hover)")).toBe(1);
     expect(count("li:nth-child(2 of .x)")).toBe(1);

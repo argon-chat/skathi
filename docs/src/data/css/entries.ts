@@ -2142,6 +2142,7 @@ const containment = section("Containment and hints", [
     notes: [
       "Size containment sizes the box from its own `width`, `height`, `min-*` and `max-*`, its padding and border, and what its parent gives it (a stretched block or a flex item that grows), never from its content.",
     ],
+    limitations: ["`getComputedStyle()` reads `contain` as `none`."],
     related: ["content-visibility", "container-type"],
   }),
   prop("will-change", OK, "Hints which properties of an element are expected to change.", {
@@ -2247,7 +2248,6 @@ const selectors = section("Selectors", [
     aliases: ["element selector", "tag selector"],
   }),
   sel("selector-class", "Class selector", OK, "Matches elements by class, such as `.card`."),
-    limitations: ["`getComputedStyle()` reads `contain` as `none`."],
   sel("selector-id", "ID selector", OK, "Matches the element with a given `id`, such as `#main`."),
   sel("selector-universal", "Universal selector (`*`)", OK, "Matches elements of any type.", { aliases: ["*"] }),
   sel(

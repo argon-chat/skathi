@@ -260,6 +260,8 @@ const open = ref(false);
     edgeCases: [
       "The ratio fills in only the dimension that is `auto`: with both `width` and `height` set, it is ignored.",
       "A single number is a ratio over `1`, so `aspect-ratio: 1.5` is `3 / 2`.",
+      "With `max-width: 200px` and a ratio of `2`, a block that would stretch to 400px is 200 × 100: the limit carries through the ratio.",
+      "A transition between two ratios interpolates them on a log scale, as browsers do; to or from `auto` it snaps.",
     ],
   },
   "inline-size": {
@@ -275,8 +277,6 @@ const open = ref(false);
     edgeCases: [logicalSizeEdge],
   },
   "block-size": {
-      "With `max-width: 200px` and a ratio of `2`, a block that would stretch to 400px is 200 × 100: the limit carries through the ratio.",
-      "A transition between two ratios interpolates them on a log scale, as browsers do; to or from `auto` it snaps.",
     examples: [
       {
         title: "Give a toolbar a fixed height",
