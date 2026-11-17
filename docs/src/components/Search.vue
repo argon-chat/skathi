@@ -7,17 +7,22 @@ interface Entry {
   description: string;
   url: string;
   body: string;
+  status: string;
 }
 interface SearchResult {
   id: string;
   url: string;
   title: string;
+  status: string;
   excerpt: string;
 }
 interface Pagefind {
-  search(
-    query: string,
-  ): Promise<{ results: { id: string; data(): Promise<{ url: string; meta: { title: string }; excerpt: string }> }[] }>;
+  search(query: string): Promise<{
+    results: {
+      id: string;
+      data(): Promise<{ url: string; meta: { title: string; status?: string }; excerpt: string }>;
+    }[];
+  }>;
 }
 
 const props = defineProps<{ entries: Entry[] }>();
@@ -63,7 +68,13 @@ async function search(term: string, token: number): Promise<void> {
           words.every((word) => `${entry.title} ${entry.description} ${entry.body}`.toLowerCase().includes(word)),
         )
         .slice(0, 12)
-        .map((entry) => ({ id: entry.url, url: entry.url, title: entry.title, excerpt: entry.description }));
+        .map((entry) => ({
+          id: entry.url,
+          url: entry.url,
+          title: entry.title,
+          status: entry.status,
+          excerpt: entry.description,
+        }));
     } else {
       const moduleUrl = "/pagefind/pagefind.js";
       pagefind ??= import(/* @vite-ignore */ moduleUrl) as Promise<Pagefind>;
@@ -75,6 +86,7 @@ async function search(term: string, token: number): Promise<void> {
             id: result.id,
             url: data.url,
             title: data.meta.title,
+            status: data.meta.status ?? "",
             excerpt: data.excerpt.replace(/<[^>]+>/g, ""),
           };
         }),
@@ -205,7 +217,8 @@ onUnmounted(() => {
             :class="{ 'is-active': index === active }"
             @pointerenter="active = index"
           >
-            <span>{{ result.title }}</span
+            <span
+              >{{ result.title }}<span v-if="result.status" class="search-status">{{ result.status }}</span></span
             ><small>{{ result.excerpt }}</small>
           </a>
         </template>

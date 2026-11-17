@@ -8,7 +8,7 @@ import Icon from "../components/Icon.astro";
 import PageActions from "../components/PageActions.vue";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
-import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, version } from "../lib/docs";
+import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, statusLabels, version } from "../lib/docs";
 
 interface Link {
   label: string;
@@ -63,11 +63,18 @@ const section = page?.data.section ?? parent?.data.section ?? "Navigation";
 const indexable = Boolean(page || sub);
 const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 const canonical = new URL(sub?.path ?? (page ? pageUrl(page.id) : "/404/"), Astro.site);
-const sectionIcons = { "Getting started": "book", Guides: "monitor", Reference: "layers", Contributing: "code" } as const;
+const sectionIcons = {
+  "Getting started": "book",
+  Guides: "monitor",
+  Reference: "layers",
+  Contributing: "code",
+} as const;
+const status = page?.data.status;
 const searchEntries = pages.map((entry) => ({
   title: entry.data.title,
   description: entry.data.description,
   url: pageUrl(entry.id),
+  status: entry.data.status ? statusLabels[entry.data.status] : "",
   body: import.meta.env.DEV ? (entry.body ?? "") : "",
 }));
 const structuredData = {
@@ -139,6 +146,12 @@ const structuredData = {
                         aria-current={page?.id === entry.id ? "page" : navId === entry.id ? "true" : undefined}
                       >
                         {entry.data.label ?? entry.data.title}
+                        {entry.data.status && (
+                          <span class="nav-status" title={statusLabels[entry.data.status]}>
+                            <Icon name="flask" size={12} />
+                            <span class="sr-only">{statusLabels[entry.data.status]}</span>
+                          </span>
+                        )}
                       </a>
                     </li>
                   ))}
@@ -187,7 +200,17 @@ const structuredData = {
             </div>
           ) : (
             <div class="article-heading">
-              <h1 data-pagefind-meta="title">{title}</h1>
+              {status ? (
+                <div class="article-title">
+                  <h1 data-pagefind-meta="title">{title}</h1>
+                  <span class="page-status" data-status={status} data-pagefind-meta={`status:${statusLabels[status]}`}>
+                    <Icon name="flask" size={15} />
+                    {statusLabels[status]}
+                  </span>
+                </div>
+              ) : (
+                <h1 data-pagefind-meta="title">{title}</h1>
+              )}
               {markdownHref && <PageActions client:load markdownUrl={markdownHref} />}
             </div>
           )
@@ -243,10 +266,8 @@ const structuredData = {
       </main>
       <aside class="right-sidebar" aria-label="On this page">
         <nav class="toc">
-          <p class="toc-title">On this page</p><a
-            href="#main-content"
-            class="toc-link is-active"
-            data-toc-overview>Overview</a
+          <p class="toc-title">On this page</p><a href="#main-content" class="toc-link is-active" data-toc-overview
+            >Overview</a
           >{
             toc.map((heading) => (
               <a

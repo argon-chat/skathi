@@ -312,6 +312,17 @@
     border-radius: 2px;
     background: var(--accent);
   }
+  .nav-status {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 17px;
+    margin-left: 7px;
+    vertical-align: -2px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--planned) 40%, transparent);
+    color: var(--planned);
+  }
   .sidebar-bottom {
     padding: 16px 20px 18px;
     border-top: 1px solid var(--border);
@@ -428,6 +439,28 @@
     letter-spacing: -0.025em;
     font-weight: 550;
     margin: 0;
+  }
+  .article-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    min-width: 0;
+  }
+  .page-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 8px;
+    border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--planned) 40%, transparent);
+    background: color-mix(in srgb, var(--planned) 8%, transparent);
+    color: var(--planned);
+    font-size: var(--fs-sm);
+    line-height: 1.6;
+    font-weight: 550;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
   }
   .right-sidebar {
     position: sticky;
@@ -686,6 +719,9 @@
   }
   .article-heading h1 {
     animation: rise-in 650ms var(--ease-out) both;
+  }
+  .article-heading .page-status {
+    animation: rise-in 650ms var(--ease-out) 40ms both;
   }
   .article-heading + .prose > .rail + *,
   .article-heading + .prose > :first-child:not(.rail) {
@@ -1127,6 +1163,194 @@
   .prose .lead {
     font-size: var(--fs-lead);
   }
+  .tradeoffs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin: 30px 0 36px;
+  }
+  .tradeoff {
+    --tone: var(--ok);
+    padding: 18px 20px 4px;
+    border: 1px solid color-mix(in srgb, var(--tone) 26%, var(--border));
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--tone) 4%, var(--surface));
+  }
+  .tradeoff[data-tone="cost"] {
+    --tone: var(--partial);
+  }
+  .prose .tradeoff > p:first-child {
+    margin: 0 0 10px;
+    font-size: var(--fs-sm);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .prose .tradeoff > p:first-child strong {
+    color: var(--tone);
+  }
+  .prose .tradeoff ul {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    font-size: var(--fs-md);
+    line-height: 1.65;
+  }
+  .prose .tradeoff li {
+    position: relative;
+    margin: 0 0 12px;
+    padding-left: 16px;
+  }
+  .prose .tradeoff li::before {
+    content: "";
+    position: absolute;
+    top: 0.68em;
+    left: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--tone) 70%, transparent);
+  }
+  .pipeline {
+    --node: 30px;
+    --tone: var(--accent);
+    margin: 28px 0 22px;
+    padding: 22px 24px 6px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--surface) 50%, transparent);
+  }
+  .prose .pipeline-phase {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 16px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    line-height: 1.5;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .prose .pipeline-phase::before {
+    content: "";
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--tone);
+  }
+  .prose .pipeline-phase::after {
+    content: "";
+    flex: 1;
+    min-width: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .prose .pipeline-phase code {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 1em;
+  }
+  .pipeline-phase[data-tone="run"],
+  .pipeline-phase[data-tone="run"] ~ ol {
+    --tone: var(--planned);
+  }
+  .prose .pipeline ol {
+    list-style: none;
+    margin: 0 0 6px;
+    padding: 0;
+  }
+  .prose .pipeline li {
+    position: relative;
+    margin: 0;
+    padding: 0 0 16px calc(var(--node) + 16px);
+  }
+  .prose .pipeline li::before {
+    content: counter(list-item);
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: grid;
+    place-items: center;
+    width: var(--node);
+    height: var(--node);
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--tone) 50%, var(--border));
+    background: color-mix(in srgb, var(--tone) 10%, var(--bg));
+    color: var(--tone);
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    line-height: 1;
+  }
+  .prose .pipeline li::after {
+    content: "";
+    position: absolute;
+    top: calc(var(--node) + 5px);
+    bottom: 5px;
+    left: calc(var(--node) / 2 - 0.5px);
+    width: 1px;
+    background: linear-gradient(color-mix(in srgb, var(--tone) 45%, transparent), var(--border));
+  }
+  .prose .pipeline li:last-child::after {
+    display: none;
+  }
+  .prose .pipeline li > p {
+    margin: 0;
+    font-size: var(--fs-md);
+    line-height: 1.7;
+  }
+  .prose .pipeline li > p:first-child {
+    margin: 2px 0 4px;
+    line-height: 1.6;
+  }
+  .prose .pipeline li > p:first-child strong {
+    margin-right: 6px;
+    font-size: var(--fs-lg);
+  }
+  .prose .pipeline li > p:first-child code {
+    color: var(--tone);
+    background: color-mix(in srgb, var(--tone) 10%, transparent);
+  }
+  .prose .fixes ul {
+    display: grid;
+    gap: 12px;
+    list-style: none;
+    margin: 14px 0 28px;
+    padding: 0;
+  }
+  .prose .fixes li {
+    margin: 0;
+    padding: 14px 18px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface) 45%, transparent);
+  }
+  .prose .fixes li > p {
+    position: relative;
+    margin: 0 0 4px;
+    padding-left: 58px;
+    font-size: var(--fs-md);
+    line-height: 1.7;
+  }
+  .prose .fixes li > p:first-child {
+    margin-bottom: 10px;
+    padding: 0 0 10px;
+    border-bottom: 1px dashed var(--border);
+    color: var(--text);
+    font-weight: 550;
+  }
+  .prose .fixes li > p > strong:first-child {
+    position: absolute;
+    top: 0.3em;
+    left: 0;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .prose .fixes li > p:last-child > strong:first-child {
+    color: var(--ok);
+  }
   .vue-example {
     display: flex;
     align-items: center;
@@ -1258,6 +1482,18 @@
     font-size: var(--fs-lg);
     font-weight: 600;
     margin-bottom: 6px;
+  }
+  .search-status {
+    margin-left: 10px;
+    padding: 0 6px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--planned) 40%, transparent);
+    color: var(--planned);
+    font-size: var(--fs-xs);
+    line-height: 1.7;
+    font-weight: 550;
+    letter-spacing: 0.02em;
+    vertical-align: 2px;
   }
   .search-result small {
     display: block;
@@ -1576,6 +1812,23 @@
       padding: 18px;
       gap: 14px;
       flex-wrap: wrap;
+    }
+    .tradeoffs {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .pipeline {
+      --node: 26px;
+      padding: 18px 16px 4px;
+    }
+    .prose .pipeline li {
+      padding-left: calc(var(--node) + 12px);
+    }
+    .prose .fixes li > p {
+      padding-left: 0;
+    }
+    .prose .fixes li > p > strong:first-child {
+      position: static;
+      margin-right: 6px;
     }
   }
   @media (prefers-reduced-motion: reduce) {

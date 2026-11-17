@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { getDocs, markdownUrl, sections } from "../lib/docs";
+import { getDocs, markdownUrl, sections, statusLabels } from "../lib/docs";
 
 export const GET: APIRoute = async ({ site }) => {
   if (!site) throw new Error("Set site in the Astro configuration to generate documentation URLs.");
@@ -8,7 +8,10 @@ export const GET: APIRoute = async ({ site }) => {
     (section) =>
       `## ${section}\n\n${pages
         .filter((page) => page.data.section === section)
-        .map((page) => `- [${page.data.title}](${new URL(markdownUrl(page.id), site)}): ${page.data.description}`)
+        .map(
+          (page) =>
+            `- [${page.data.title}](${new URL(markdownUrl(page.id), site)})${page.data.status ? ` (${statusLabels[page.data.status]})` : ""}: ${page.data.description}`,
+        )
         .join("\n")}`,
   );
   return new Response(

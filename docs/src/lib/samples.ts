@@ -81,12 +81,14 @@ export function expandSamples(body: string): string {
 }
 
 function expandTags(text: string): string {
-  return text.replace(/<Sample\s([^>]*?)\/>/gs, (_tag, attrs: string) => {
-    const props: Record<string, string> = {};
-    for (const [, key, value] of attrs.matchAll(/(\w+)="([^"]*)"/g)) if (key) props[key] = value ?? "";
-    if (!props["src"]) return _tag;
-    return sampleVariants(props as unknown as SampleProps)
-      .map((v) => `\`\`\`${v.lang} title="${v.title}"\n${v.code}\n\`\`\``)
-      .join("\n\n");
-  });
+  return text
+    .replace(/^import\s[^\n]*\sfrom\s+["'][^"']+["'];?[ \t]*(?:\r?\n|$)/gm, "")
+    .replace(/<Sample\s([^>]*?)\/>/gs, (_tag, attrs: string) => {
+      const props: Record<string, string> = {};
+      for (const [, key, value] of attrs.matchAll(/(\w+)="([^"]*)"/g)) if (key) props[key] = value ?? "";
+      if (!props["src"]) return _tag;
+      return sampleVariants(props as unknown as SampleProps)
+        .map((v) => `\`\`\`${v.lang} title="${v.title}"\n${v.code}\n\`\`\``)
+        .join("\n\n");
+    });
 }

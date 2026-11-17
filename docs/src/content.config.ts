@@ -14,6 +14,7 @@ const docs = defineCollection({
     section: z.enum(["Getting started", "Guides", "Reference", "Contributing"]),
     order: z.number().default(0),
     label: z.string().optional(),
+    status: z.enum(["experimental"]).optional(),
   }),
 });
 

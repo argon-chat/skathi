@@ -10,6 +10,10 @@ export const repository = "https://github.com/argon-chat/skathi";
 export const version = cli.version;
 export const docsHome = "/introduction/";
 
+export type PageStatus = NonNullable<CollectionEntry<"docs">["data"]["status"]>;
+
+export const statusLabels: Record<PageStatus, string> = { experimental: "Experimental" };
+
 export function pageUrl(id: string): string {
   return `/${id}/`;
 }
@@ -35,5 +39,6 @@ export function pageMarkdown(page: CollectionEntry<"docs">, site: URL): string {
     : page.id === configPage.id
       ? `\n\n${configMarkdown(site)}`
       : "";
-  return `# ${page.data.title}\n\n> ${page.data.description}\n\nSource: ${new URL(pageUrl(page.id), site).href}\n\n${body}${catalog}\n`;
+  const status = page.data.status ? `\n\nStatus: ${statusLabels[page.data.status]}` : "";
+  return `# ${page.data.title}\n\n> ${page.data.description}\n\nSource: ${new URL(pageUrl(page.id), site).href}${status}\n\n${body}${catalog}\n`;
 }
