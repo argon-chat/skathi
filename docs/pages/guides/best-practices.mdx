@@ -120,7 +120,7 @@ In Vue, an object `:style` is compared with the previous render's value before a
 - When any value differs, the element gets one native call with every entry, and the native side writes only what changed.
 - A string `:style` replaces the element's whole inline style when the string changes.
 
-As in React, `:style` and direct `el.style` writes can disagree. If your code writes `el.style.opacity` and the template also binds `:style="{ opacity }"`, the direct write stays until the bound `opacity` value changes; a re-render with the same value does not put it back. Pick one owner per property: the template, or code holding a template ref.
+As in React, `:style` and direct `el.style` writes can disagree. If your code writes `el.style.opacity` and the template also binds `:style="{ opacity }"`, the direct write stays while the bound object's values stay the same. When any value in that `:style` changes, the element gets the whole binding again, and `opacity` goes back to the bound value. Pick one owner per property: the template, or code holding a template ref.
 
 **Avoid** binding the same changing value on every element. Resizing a column here re-renders every cell with a new width:
 
