@@ -112,6 +112,29 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# examples/surface.rs renders Metal frames, IOSurfaces and CVPixelBuffers for `<sk-surface>`.
+objc2 = "0.6"
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFDictionary", "CFString"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2-io-surface"] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-io-surface",
+    "MTLAllocation",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLEvent",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+] }
+
 [build-dependencies]
 serde_json = "1"
 sha2 = "0.10"

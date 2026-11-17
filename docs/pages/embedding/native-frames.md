@@ -10,7 +10,7 @@ This is the part a webview cannot do. Some content is drawn by native code: a vi
 
 The program that embeds Skathi presents frames to a surface by name, and every `<sk-surface>` with that `name` shows the newest one.
 
-New in 0.4.0. **Windows first:** on Windows a frame can be a Direct3D 11 or 12 texture, or one shared from another device, process or Vulkan, and never leaves the GPU. On macOS and Linux the element and the API exist, and frames are CPU BGRA.
+New in 0.4.0. On Windows a frame can be a Direct3D 11 or 12 texture, or one shared from another device, process or Vulkan; on macOS a Metal texture, an IOSurface or a CVPixelBuffer. Either way it never leaves the GPU. On Linux the element and the API exist, and frames are CPU BGRA.
 
 ## The element
 
@@ -105,23 +105,26 @@ std::thread::spawn(move || {
 
 Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time. `stats().shown` against `stats().presented` tells how many reach the screen.
 
-## GPU frames, Windows
+## GPU frames, Windows and macOS
 
-On Windows the frame can stay on the GPU. Pick the path by what the producer renders with:
+On Windows and macOS the frame can stay on the GPU. Pick the path by what the producer renders with:
 
-| Producer                                                | Path                                                   |
-| ------------------------------------------------------- | ------------------------------------------------------ |
-| D3D11, can use Skathi's device                          | `present_d3d11_texture` on `d3d11_device()`            |
-| D3D12, can use Skathi's device                          | `present_d3d12` on `d3d12_device()`, with a fence      |
-| D3D11 or D3D12 on its own device, or in another process | `SharedTexture` with a keyed mutex or a fence          |
-| Vulkan                                                  | a D3D12 shared texture and fence, imported into Vulkan |
-| CPU, or anything else                                   | `present_bgra`, `present_bgrx`                         |
+| Producer                                                         | Path                                                       |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| D3D11, can use Skathi's device                                   | `present_d3d11_texture` on `d3d11_device()`                |
+| D3D12, can use Skathi's device                                   | `present_d3d12` on `d3d12_device()`, with a fence          |
+| D3D11 or D3D12 on its own device, or in another process          | `SharedTexture` with a keyed mutex or a fence              |
+| Vulkan on Windows                                                | a D3D12 shared texture and fence, imported into Vulkan     |
+| Metal, can use Skathi's device                                   | `present_metal_texture` on `metal_device()`, with an event |
+| Metal on another device, another process, anything on IOSurfaces | `SharedTexture::from_iosurface` or `from_mach_port`        |
+| VideoToolbox, AVFoundation, ScreenCaptureKit                     | `present_cv_pixel_buffer`                                  |
+| CPU, or anything else                                            | `present_bgra`, `present_bgrx`                             |
 
-[GPU frames on Windows](/embedding/gpu-frames/) walks through each, with code. Every GPU present copies the frame into a texture the surface owns, so the producer gets its texture back right away.
+[GPU frames on Windows](/embedding/gpu-frames/) and [GPU frames on macOS](/embedding/gpu-frames-macos/) walk through each, with code. Every GPU present copies the frame into a texture the surface owns, so the producer gets its texture back as soon as that copy has run.
 
 ## Device loss
 
-When the GPU driver resets, Skathi recreates its device. Every surface drops its GPU frame, the elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and a present with an old texture returns `SurfaceError::DeviceChanged`. Get the device again, recreate your textures (or reopen shared ones), and present. CPU frames are not affected.
+When the GPU driver resets on Windows, Skathi recreates its device; on macOS the same happens if a window comes up on another GPU. Every surface drops its GPU frame, the elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and a present with an old texture returns `SurfaceError::DeviceChanged`. Get the device again, recreate your textures (or reopen shared ones), and present. CPU frames are not affected.
 
 ## Errors
 
@@ -138,10 +141,10 @@ When the GPU driver resets, Skathi recreates its device. Every surface drops its
 
 ## Platform support
 
-| Platform | `<sk-surface>` | CPU frames | D3D11 textures | D3D12 textures      | Shared textures (keyed mutex, fence) |
-| -------- | -------------- | ---------- | -------------- | ------------------- | ------------------------------------ |
-| Windows  | yes            | yes        | yes            | D3D12 renderer only | yes                                  |
-| macOS    | yes            | yes        | no             | no                  | no                                   |
-| Linux    | yes            | yes        | no             | no                  | no                                   |
+| Platform | `<sk-surface>` | CPU frames | GPU textures on Skathi's device       | Shared textures                           | Video frames               |
+| -------- | -------------- | ---------- | ------------------------------------- | ----------------------------------------- | -------------------------- |
+| Windows  | yes            | yes        | D3D11; D3D12 under the D3D12 renderer | NT handles, with a keyed mutex or a fence | no                         |
+| macOS    | yes            | yes        | Metal, with an `MTLSharedEvent`       | IOSurfaces, with an `MTLSharedEvent`      | CVPixelBuffer: BGRA, 4:2:0 |
+| Linux    | yes            | yes        | no                                    | no                                        | no                         |
 
-Next: [GPU frames on Windows](/embedding/gpu-frames/).
+Next: [GPU frames on Windows](/embedding/gpu-frames/), [GPU frames on macOS](/embedding/gpu-frames-macos/).

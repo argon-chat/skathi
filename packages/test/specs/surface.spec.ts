@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { launch, readPng, REPO, type Bounds } from "../src/index";
+import { EXE_SUFFIX, launch, MACOS, readPng, REPO, SCREENSHOTS, TARGET, WINDOWS, type Bounds } from "../src/index";
 
-const EXE = join(REPO, "target", "x86_64-pc-windows-msvc", "debug", "examples", "surface.exe");
-const build = spawnSync("cargo", ["build", "-p", "sk-app", "--example", "surface"], {
+const EXE = join(REPO, "target", TARGET, "debug", "examples", `surface${EXE_SUFFIX}`);
+const build = spawnSync("cargo", ["build", "-p", "sk-app", "--target", TARGET, "--example", "surface"], {
   cwd: REPO,
   encoding: "utf8",
   timeout: 900_000,
@@ -67,10 +67,11 @@ const shoot = async () => {
   return (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k));
 };
 
-const near = (got: Rgb, want: Rgb) => got.every((c, i) => Math.abs(c - want[i]!) <= 3);
+const near = (got: Rgb, want: Rgb, by = 3) => got.every((c, i) => Math.abs(c - want[i]!) <= by);
 const WHITE: Rgb = [255, 255, 255];
 
-test(
+// gpui's Linux backend has no render_to_image: there the pixel checks are skipped.
+test.skipIf(!SCREENSHOTS)(
   "frames from each path fill their element under object-fit, radius and z-order",
   async () => {
     // [b, g, r, a]
@@ -122,6 +123,7 @@ test(
       (s) => s.shown === 1,
     );
     expect(shown).toMatchObject({ presented: 2, shown: 1, visible: true });
+    if (!SCREENSHOTS) return;
     const b = await box("#hidden");
     expect((await shoot())(b.x + b.w / 2, b.y + b.h / 2)).toEqual([0, 255, 255]);
   },
@@ -138,6 +140,7 @@ test(
     );
     expect(s.shown).toBeGreaterThanOrEqual(3);
     expect(await app.eval("globalThis.surfaceEvents.join('|')")).toContain(`live:ready:${s.width}x${s.height}`);
+    if (!SCREENSHOTS) return;
     const b = await box("#live");
     const first = (await shoot())(b.x + b.w / 2, b.y + b.h / 2);
     const moved = await until(shoot, (p) => !near(p(b.x + b.w / 2, b.y + b.h / 2), first), 3_000);
@@ -146,29 +149,49 @@ test(
   T,
 );
 
-test(
+/** Presents each `[b, g, r, a]` frame in the mode its element is named after, and checks it fills its box. */
+async function handOver(colors: Record<string, [number, number, number, number]>, tolerance = 3) {
+  for (const [name, color] of Object.entries(colors)) await call("present", name, name, color, 48, 32);
+  for (const name of Object.keys(colors))
+    await until(
+      () => stats(name),
+      (s) => s.shown === 1,
+    );
+  const px = await shoot();
+  for (const [name, [b, g, r]] of Object.entries(colors)) {
+    const at = await box(`#${name}`);
+    expect(near(px(at.x + at.w / 2, at.y + at.h / 2), [r, g, b], tolerance), name).toBe(true);
+    expect(near(px(at.x + 4, at.y + 4), [r, g, b], tolerance), `${name} fills its box`).toBe(true);
+  }
+  const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
+  for (const name of Object.keys(colors)) expect(events).toContain(`${name}:ready:48x32`);
+}
+
+test.skipIf(!WINDOWS)(
   "D3D12 producers on the renderer's device and on their own, and a D3D11 fence, hand frames over",
   async () => {
-    const colors: Record<string, [number, number, number, number]> = {
+    // Each mode waits on the CPU until the surface released its texture (or fence value 2).
+    await handOver({
       d3d12: [255, 0, 255, 255],
       "d3d12-shared": [0, 128, 255, 255],
       "d3d11-fence": [64, 192, 0, 255],
-    };
-    // Each mode waits on the CPU until the surface released its texture (or fence value 2).
-    for (const [name, color] of Object.entries(colors)) await call("present", name, name, color, 48, 32);
-    for (const name of Object.keys(colors))
-      await until(
-        () => stats(name),
-        (s) => s.shown === 1,
-      );
-    const px = await shoot();
-    for (const [name, [b, g, r]] of Object.entries(colors)) {
-      const at = await box(`#${name}`);
-      expect(near(px(at.x + at.w / 2, at.y + at.h / 2), [r, g, b]), name).toBe(true);
-      expect(near(px(at.x + 4, at.y + 4), [r, g, b]), `${name} fills its box`).toBe(true);
-    }
-    const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
-    for (const name of Object.keys(colors)) expect(events).toContain(`${name}:ready:48x32`);
+    });
+  },
+  T,
+);
+
+test.skipIf(!MACOS)(
+  "Metal textures, IOSurfaces and CVPixelBuffers hand frames over",
+  async () => {
+    // metal and iosurface wait on the CPU until the surface signalled their release value.
+    await handOver({
+      metal: [255, 0, 255, 255],
+      iosurface: [0, 128, 255, 255],
+      "mach-port": [64, 192, 0, 255],
+      "cv-bgra": [200, 40, 90, 255],
+    });
+    // 4:2:0 video range rounds each channel a little.
+    await handOver({ "cv-nv12": [40, 160, 220, 255] }, 6);
   },
   T,
 );
@@ -176,11 +199,20 @@ test(
 test(
   "clearing withdraws the frame and tells the element",
   async () => {
+    const before = (await stats("fill")).shown;
+    await call("present", "fill", "bgra", [255, 0, 0, 255], 32, 32);
+    await until(
+      () => stats("fill"),
+      (s) => s.shown > before,
+    );
     await call("clear", "fill");
-    const b = await box("#fill");
-    const px = await until(shoot, (p) => near(p(b.x + b.w - 10, b.y + b.h - 10), WHITE));
-    expect(px(b.x + b.w - 10, b.y + b.h - 10)).toEqual(WHITE);
-    expect(await app.eval("globalThis.surfaceEvents.join('|')")).toContain("fill:lost:cleared");
+    if (SCREENSHOTS) {
+      const b = await box("#fill");
+      const px = await until(shoot, (p) => near(p(b.x + b.w - 10, b.y + b.h - 10), WHITE));
+      expect(px(b.x + b.w - 10, b.y + b.h - 10)).toEqual(WHITE);
+    }
+    const events = () => app.eval("globalThis.surfaceEvents.join('|')") as Promise<string>;
+    expect(await until(events, (e) => e.includes("fill:lost:cleared"))).toContain("fill:lost:cleared");
   },
   T,
 );

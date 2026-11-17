@@ -244,6 +244,26 @@ impl LiveTile {
         }
     }
 
+    /// [`LiveTile::write_gpu`] for a finished Metal texture on the renderer's device; `owner` is
+    /// retained until the atlas copy has run.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn write_metal(
+        &mut self,
+        window: &mut Window,
+        texture: GpuTextureHandle,
+        owner: Arc<dyn std::any::Any + Send + Sync>,
+        visible: bool,
+    ) -> Option<Shown> {
+        match window.write_image_tile_metal(&self.image, 0, texture, owner) {
+            Ok(TileWrite::Refused) => None,
+            Err(error) => {
+                crate::log::record("window", format!("Metal atlas copy failed: {error:#}"));
+                None
+            }
+            Ok(write) => Some(shown(write, visible)),
+        }
+    }
+
     /// Hands the tile back to its window's atlas on that window's next frame, when no scene samples
     /// it any more. The frame that stops painting it must be a draw (see the module docs).
     pub(crate) fn retire(self) {

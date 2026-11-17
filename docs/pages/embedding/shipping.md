@@ -140,7 +140,7 @@ fn main() {
 - The callback runs on a separate thread after shutdown (or its deadline): stop workers, flush logs, return the exit code. A panic in it exits with code 1.
 - Startup errors return normally, so the same `eprintln!` path handles both platforms.
 
-On macOS and Linux, frames for `<sk-surface>` are CPU BGRA; see [Native frames](/embedding/native-frames/#platform-support).
+On Linux, frames for `<sk-surface>` are CPU BGRA; on macOS they can be Metal textures, IOSurfaces or CVPixelBuffers. See [Native frames](/embedding/native-frames/#platform-support).
 
 ## Before you ship
 

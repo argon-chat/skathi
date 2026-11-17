@@ -44,6 +44,38 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `<sk-surface>` copies Metal textures, IOSurfaces and CVPixelBuffers. The versions gpui uses.
+block2 = "0.6"
+objc2 = "0.6"
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFString"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2-io-surface"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "objc2-io-surface",
+    "MTLAllocation",
+    "MTLBlitCommandEncoder",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePipeline",
+    "MTLDevice",
+    "MTLEvent",
+    "MTLLibrary",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["CFDictionary"] }
+objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLBuffer"] }
+
 [target.'cfg(not(windows))'.dependencies]
 # No DirectWrite here; Core Text and cosmic-text take only sfnt.
 wuff = "0.2.10"

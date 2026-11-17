@@ -39,5 +39,8 @@ createApp({
       ...["d3d12", "d3d12-shared", "d3d11-fence"].map((name, i) =>
         h("sk-surface", { id: name, name, style: at(20 + i * 120, 260, 100, 80, "object-fit: fill"), ...log(name) }),
       ),
+      ...["metal", "iosurface", "mach-port", "cv-bgra", "cv-nv12"].map((name, i) =>
+        h("sk-surface", { id: name, name, style: at(20 + i * 120, 360, 100, 80, "object-fit: fill"), ...log(name) }),
+      ),
     ]),
 }).mount();

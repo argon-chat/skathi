@@ -3,10 +3,12 @@
 //!
 //! - `present(name, mode, [b, g, r, a], width, height)` presents one solid frame from a thread of
 //!   ours. `mode` is `"bgra"` (CPU), `"texture"` (a texture on the renderer's device) or `"shared"`
-//!   (a texture on a device of our own, handed over as a shared NT handle with a keyed mutex),
-//!   `"d3d11-fence"` (the same with a shared `ID3D11Fence`), `"d3d12"` (a resource on the
-//!   renderer's D3D12 device) or `"d3d12-shared"` (a D3D12 device of our own, shared resource and
-//!   fence).
+//!   (a texture on a device of our own, handed over as a shared NT handle with a keyed mutex, or
+//!   an IOSurface with an `MTLSharedEvent` on macOS), `"d3d11-fence"` (the same with a shared
+//!   `ID3D11Fence`), `"d3d12"` (a resource on the renderer's D3D12 device) or `"d3d12-shared"` (a
+//!   D3D12 device of our own, shared resource and fence). On macOS also `"metal"` (a texture on
+//!   the renderer's `MTLDevice`), `"iosurface"`, `"mach-port"` (an IOSurface looked up from a
+//!   mach port), `"cv-bgra"` and `"cv-nv12"` (CVPixelBuffers).
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible }`.
 //!
@@ -62,6 +64,9 @@ fn main() {
                     "d3d11-fence" => gpu::present_d3d11_fenced(&surface, color, width, height),
                     "d3d12" => gpu::d3d12::present(&surface, color, width, height),
                     "d3d12-shared" => gpu::d3d12::present_shared(&surface, color, width, height),
+                    "metal" | "iosurface" | "mach-port" | "cv-bgra" | "cv-nv12" => {
+                        metal::present(&surface, &mode, color, width, height)
+                    }
                     _ => {
                         let frame = color.repeat((width * height) as usize);
                         surface
@@ -98,13 +103,21 @@ fn main() {
                 .to_string(),
             );
         });
-    let ui = builder.spawn().unwrap_or_else(|e| {
+    #[cfg(target_os = "macos")]
+    if let Err(e) = builder.run_on_main_thread(|exit| i32::from(!exit.clean)) {
         eprintln!("surface: {e}");
         std::process::exit(2)
-    });
-    let exit = ui.wait();
-    std::thread::sleep(Duration::from_millis(10));
-    std::process::exit(if exit.clean { 0 } else { 1 });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let ui = builder.spawn().unwrap_or_else(|e| {
+            eprintln!("surface: {e}");
+            std::process::exit(2)
+        });
+        let exit = ui.wait();
+        std::thread::sleep(Duration::from_millis(10));
+        std::process::exit(if exit.clean { 0 } else { 1 });
+    }
 }
 
 #[cfg(windows)]
@@ -570,8 +583,39 @@ mod gpu {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 mod gpu {
+    use sk_app::embed::SurfaceHandle;
+
+    pub use super::metal::animate;
+
+    pub fn present_texture(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
+        super::metal::present(s, "metal", c, w, h)
+    }
+
+    pub fn present_shared(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
+        super::metal::present(s, "iosurface", c, w, h)
+    }
+
+    pub fn present_d3d11_fenced(
+        s: &SurfaceHandle,
+        _: [u8; 4],
+        _: u32,
+        _: u32,
+    ) -> Result<(), String> {
+        s.d3d11_device().map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    pub mod d3d12 {
+        pub use super::present_d3d11_fenced as present;
+        pub use super::present_d3d11_fenced as present_shared;
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+mod gpu {
+    use std::time::{Duration, Instant};
+
     use sk_app::embed::SurfaceHandle;
 
     pub fn present_texture(s: &SurfaceHandle, _: [u8; 4], _: u32, _: u32) -> Result<(), String> {
@@ -595,5 +639,307 @@ mod gpu {
         pub use super::{present_shared, present_texture as present};
     }
 
-    pub fn animate(_: SurfaceHandle) {}
+    /// CPU frames at the painted size: no GPU path here.
+    pub fn animate(surface: SurfaceHandle) {
+        let start = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(16));
+            let info = surface.info();
+            if !info.visible || info.width == 0 {
+                continue;
+            }
+            let t = start.elapsed().as_secs_f32();
+            let c = |k: f32| ((0.5 + 0.5 * (t * k).sin()) * 255.0) as u8;
+            let frame = [c(0.7), c(1.3), c(1.0), 255].repeat((info.width * info.height) as usize);
+            let _ = surface.present_bgra(&frame, info.width, info.height, info.width as usize * 4);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+mod metal {
+    use sk_app::embed::SurfaceHandle;
+
+    pub fn present(s: &SurfaceHandle, _: &str, _: [u8; 4], _: u32, _: u32) -> Result<(), String> {
+        s.metal_device().map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod metal {
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+    use std::time::{Duration, Instant};
+
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2_core_foundation::{CFDictionary, CFRetained, CFType};
+    use objc2_core_video::{
+        kCVPixelBufferIOSurfacePropertiesKey, kCVPixelFormatType_32BGRA,
+        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess, CVPixelBuffer,
+        CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
+        CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeightOfPlane,
+        CVPixelBufferGetIOSurface, CVPixelBufferGetWidthOfPlane, CVPixelBufferLockBaseAddress,
+        CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    };
+    use objc2_io_surface::IOSurfaceRef;
+    use objc2_metal::{
+        MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
+        MTLCreateSystemDefaultDevice, MTLDevice, MTLLoadAction, MTLPixelFormat,
+        MTLRenderPassDescriptor, MTLSharedEvent, MTLStorageMode, MTLStoreAction, MTLTexture,
+        MTLTextureDescriptor, MTLTextureUsage,
+    };
+    use sk_app::embed::{SharedTexture, SurfaceError, SurfaceHandle};
+
+    type Result<T> = std::result::Result<T, String>;
+    type Device = ProtocolObject<dyn MTLDevice>;
+    type Texture = ProtocolObject<dyn MTLTexture>;
+    type Event = ProtocolObject<dyn MTLSharedEvent>;
+
+    fn err(e: impl std::fmt::Display) -> String {
+        e.to_string()
+    }
+
+    fn raw<T: ?Sized>(object: &T) -> *mut c_void {
+        (object as *const T).cast_mut().cast()
+    }
+
+    /// The renderer's device, retained as this crate's `objc2` sees it.
+    fn renderer(surface: &SurfaceHandle) -> Result<Retained<Device>> {
+        let device = surface.metal_device().map_err(err)?;
+        unsafe { Retained::retain(device.as_raw().cast::<Device>()) }.ok_or("null device".into())
+    }
+
+    fn texture(
+        device: &Device,
+        w: u32,
+        h: u32,
+        on: Option<&IOSurfaceRef>,
+    ) -> Result<Retained<Texture>> {
+        let desc = MTLTextureDescriptor::new();
+        desc.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+        unsafe {
+            desc.setWidth(w as usize);
+            desc.setHeight(h as usize);
+        }
+        desc.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        let texture = match on {
+            Some(surface) => device.newTextureWithDescriptor_iosurface_plane(&desc, surface, 0),
+            None => {
+                desc.setStorageMode(MTLStorageMode::Private);
+                device.newTextureWithDescriptor(&desc)
+            }
+        };
+        texture.ok_or("no texture".into())
+    }
+
+    /// Clears `target` on `device`'s new queue, then signals `event` to `value`.
+    fn clear(
+        device: &Device,
+        target: &Texture,
+        [b, g, r, a]: [u8; 4],
+        signal: Option<(&Event, u64)>,
+    ) -> Result<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
+        let queue = device.newCommandQueue().ok_or("no queue")?;
+        let command = queue.commandBuffer().ok_or("no command buffer")?;
+        let pass = MTLRenderPassDescriptor::new();
+        let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+        color.setTexture(Some(target));
+        color.setLoadAction(MTLLoadAction::Clear);
+        color.setStoreAction(MTLStoreAction::Store);
+        let unit = |c: u8| f64::from(c) / 255.0;
+        color.setClearColor(MTLClearColor {
+            red: unit(r),
+            green: unit(g),
+            blue: unit(b),
+            alpha: unit(a),
+        });
+        command
+            .renderCommandEncoderWithDescriptor(&pass)
+            .ok_or("no encoder")?
+            .endEncoding();
+        if let Some((event, value)) = signal {
+            command.encodeSignalEvent_value(ProtocolObject::from_ref(event), value);
+        }
+        command.commit();
+        Ok(command)
+    }
+
+    fn reached(event: &Event, value: u64) -> Result<()> {
+        let until = Instant::now() + Duration::from_secs(2);
+        while event.signaledValue() < value {
+            if Instant::now() > until {
+                return Err(format!("the shared event did not reach {value}"));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    fn pixel_buffer(w: u32, h: u32, format: u32) -> Result<CFRetained<CVPixelBuffer>> {
+        let key = unsafe { kCVPixelBufferIOSurfacePropertiesKey };
+        let attributes =
+            CFDictionary::from_slices(&[key], &[&*CFDictionary::<CFType, CFType>::empty()]);
+        let mut buffer = std::ptr::null_mut();
+        let status = unsafe {
+            CVPixelBufferCreate(
+                None,
+                w as usize,
+                h as usize,
+                format,
+                Some(attributes.as_opaque()),
+                NonNull::from(&mut buffer),
+            )
+        };
+        if status != kCVReturnSuccess {
+            return Err(format!("CVPixelBufferCreate: {status}"));
+        }
+        let buffer = NonNull::new(buffer).ok_or("no pixel buffer")?;
+        Ok(unsafe { CFRetained::from_raw(buffer) })
+    }
+
+    fn fill(buffer: &CVPixelBuffer, plane: usize, texel: &[u8]) {
+        unsafe {
+            CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::empty());
+            let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane).cast::<u8>();
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane);
+            let width = CVPixelBufferGetWidthOfPlane(buffer, plane);
+            for y in 0..CVPixelBufferGetHeightOfPlane(buffer, plane) {
+                let row = std::slice::from_raw_parts_mut(base.add(y * stride), width * texel.len());
+                for px in row.chunks_exact_mut(texel.len()) {
+                    px.copy_from_slice(texel);
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, CVPixelBufferLockFlags::empty());
+        }
+    }
+
+    /// BT.709 video-range Y, Cb, Cr of a BGRA colour.
+    fn ycbcr([b, g, r, _]: [u8; 4]) -> [u8; 3] {
+        let [r, g, b] = [r, g, b].map(|c| f32::from(c) / 255.0);
+        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let cb = (b - y) / 1.8556;
+        let cr = (r - y) / 1.5748;
+        [16.0 + 219.0 * y, 128.0 + 224.0 * cb, 128.0 + 224.0 * cr].map(|v| v.round() as u8)
+    }
+
+    pub fn present(
+        surface: &SurfaceHandle,
+        mode: &str,
+        color: [u8; 4],
+        w: u32,
+        h: u32,
+    ) -> Result<()> {
+        match mode {
+            "metal" => {
+                // A producer on the renderer's device: its own queue, a GPU-side handoff.
+                let device = renderer(surface)?;
+                let event = device.newSharedEvent().ok_or("no event")?;
+                let target = texture(&device, w, h, None)?;
+                clear(&device, &target, color, Some((&event, 1)))?;
+                let released = unsafe {
+                    surface.present_metal_texture(raw(&*target), Some((raw(&*event), 1)))
+                }
+                .map_err(err)?;
+                let release = surface.release_event().map_err(err)?;
+                if release.wait(released, Duration::from_secs(2)) {
+                    Ok(())
+                } else {
+                    Err("the release event did not reach the returned value".into())
+                }
+            }
+            "iosurface" | "mach-port" => {
+                // What another device or process does: render into an IOSurface of its own.
+                let device = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
+                let buffer = pixel_buffer(w, h, kCVPixelFormatType_32BGRA)?;
+                let iosurface = CVPixelBufferGetIOSurface(Some(&buffer)).ok_or("no IOSurface")?;
+                let target = texture(&device, w, h, Some(&iosurface))?;
+                if mode == "mach-port" {
+                    clear(&device, &target, color, None)?.waitUntilCompleted();
+                    let port = iosurface.create_mach_port();
+                    let shared = SharedTexture::from_mach_port(port);
+                    unsafe {
+                        mach2::mach_port::mach_port_deallocate(mach2::traps::mach_task_self(), port)
+                    };
+                    return surface.present_shared(&shared.map_err(err)?).map_err(err);
+                }
+                let event = device.newSharedEvent().ok_or("no event")?;
+                clear(&device, &target, color, Some((&event, 1)))?;
+                let shared = unsafe { SharedTexture::from_iosurface(raw(&*iosurface)) }
+                    .and_then(|t| unsafe { t.with_shared_event(raw(&*event)) })
+                    .map_err(err)?;
+                surface.present_shared_fenced(&shared, 1, 2).map_err(err)?;
+                reached(&event, 2)
+            }
+            "cv-bgra" => {
+                let buffer = pixel_buffer(w, h, kCVPixelFormatType_32BGRA)?;
+                fill(&buffer, 0, &color);
+                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }.map_err(err)
+            }
+            _ => {
+                let buffer = pixel_buffer(w, h, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)?;
+                let [y, cb, cr] = ycbcr(color);
+                fill(&buffer, 0, &[y]);
+                fill(&buffer, 1, &[cb, cr]);
+                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }.map_err(err)
+            }
+        }
+    }
+
+    /// Renders at the element's painted size, recreating its texture after a resize or a device
+    /// change, and reuses it once the surface released it.
+    pub fn animate(surface: SurfaceHandle) {
+        let start = Instant::now();
+        let mut held: Option<(
+            (u32, u32),
+            Retained<Device>,
+            Retained<Texture>,
+            Retained<Event>,
+        )> = None;
+        let mut value = 0;
+        loop {
+            std::thread::sleep(Duration::from_millis(16));
+            let info = surface.info();
+            if !info.visible || info.width == 0 {
+                continue;
+            }
+            let size = (info.width, info.height);
+            if held.as_ref().is_none_or(|(s, ..)| *s != size) {
+                held = renderer(&surface).ok().and_then(|device| {
+                    let target = texture(&device, size.0, size.1, None).ok()?;
+                    let event = device.newSharedEvent()?;
+                    Some((size, device, target, event))
+                });
+                value = 0;
+            }
+            let Some((_, device, target, event)) = held.as_ref() else {
+                continue;
+            };
+            let t = start.elapsed().as_secs_f32();
+            let c = |k: f32| ((0.5 + 0.5 * (t * k).sin()) * 255.0) as u8;
+            value += 1;
+            if clear(
+                device,
+                target,
+                [c(0.7), c(1.3), c(1.0), 255],
+                Some((event, value)),
+            )
+            .is_err()
+            {
+                continue;
+            }
+            let presented = unsafe {
+                surface.present_metal_texture(raw(&**target), Some((raw(&**event), value)))
+            };
+            match presented {
+                Ok(released) => {
+                    if let Ok(release) = surface.release_event() {
+                        release.wait(released, Duration::from_millis(100));
+                    }
+                }
+                Err(SurfaceError::DeviceChanged | SurfaceError::WrongDevice) => held = None,
+                Err(_) => {}
+            }
+        }
+    }
 }

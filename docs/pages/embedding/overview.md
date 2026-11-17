@@ -94,7 +94,7 @@ Start with native modules. Most embedders never need more, and the app stays eas
 - [Your first embedder](/embedding/first-embedder/): a Cargo project that runs an app, from an empty folder.
 - [Native modules](/embedding/native-modules/): typed functions, worker tasks and events the app imports from `native:<name>`, and the TypeScript generated for them.
 - [Native APIs](/embedding/native-api/): the `setup` hook, native namespaces, posting from worker threads, cookies and secrets.
-- [Native frames](/embedding/native-frames/) and [GPU frames on Windows](/embedding/gpu-frames/): `<sk-surface>` and the producer's side of it.
+- [Native frames](/embedding/native-frames/), [GPU frames on Windows](/embedding/gpu-frames/) and [GPU frames on macOS](/embedding/gpu-frames-macos/): `<sk-surface>` and the producer's side of it.
 - [Window, tray and hotkeys](/embedding/desktop/): showing, hiding and closing the app from Rust, the tray, global hotkeys, single instance and deep links.
 - [Dev loop and devtools](/embedding/dev-loop/): hot reload inside your own exe.
 - [Shipping](/embedding/shipping/): the payload, the profile, binary size, macOS.

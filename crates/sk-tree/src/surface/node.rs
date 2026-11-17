@@ -38,6 +38,11 @@ enum Gpu {
     D3D12(super::d3d12::Ready),
 }
 
+#[cfg(target_os = "macos")]
+enum Gpu {
+    Metal(super::metal::Ready),
+}
+
 enum Event {
     Resize(u32, u32, f32),
     Ready(u32, u32),
@@ -121,6 +126,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     if !super::any() {
         return false;
     }
+    #[cfg(target_os = "macos")]
+    super::metal::watch_device();
     let here = windows::key(window);
     let page_hidden = live::page_hidden();
     let here_shown = window.is_visible();
@@ -227,7 +234,12 @@ fn write(
             Some(Frame::D3D12 { .. }) => st.gpu12.ready().map(Gpu::D3D12),
             _ => st.gpu_texture().map(Gpu::D3D11),
         };
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        let texture = match st.frame {
+            Some(Frame::Metal { .. }) => st.metal.ready().map(Gpu::Metal),
+            _ => None,
+        };
+        #[cfg(not(any(windows, target_os = "macos")))]
         let texture = ();
         (st.seq, st.frame.clone(), st.lost, texture)
     };
@@ -238,6 +250,13 @@ fn write(
     // the atlas before it ran would stall the renderer's queue on the producer.
     #[cfg(windows)]
     if let Some(Gpu::D3D12(ready)) = &texture {
+        if node.visible && !ready.done() {
+            sk_runtime::frames::wake();
+            return (Shown::Nowhere, None);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(Gpu::Metal(ready)) = &texture {
         if node.visible && !ready.done() {
             sk_runtime::frames::wake();
             return (Shown::Nowhere, None);
@@ -267,19 +286,26 @@ fn write(
         node.tile = Some(LiveTile::new(here, size.0, size.1));
     }
     let tile = node.tile.as_mut().expect("just made");
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let () = texture;
     let wrote = match frame {
         Frame::Cpu { bgra, .. } => tile.write_bgra(window, bgra.to_vec(), true),
-        #[cfg(windows)]
-        Frame::Gpu { .. } | Frame::D3D12 { .. } => {
+        #[cfg(any(windows, target_os = "macos"))]
+        _ => {
             let written = match texture {
+                #[cfg(windows)]
                 Some(Gpu::D3D11(texture)) => {
                     tile.write_gpu(window, gpui::GpuTextureHandle(texture.as_raw()), true)
                 }
+                #[cfg(windows)]
                 Some(Gpu::D3D12(ready)) => {
                     let handle = ready.handle();
                     tile.write_d3d12(window, handle, Arc::new(ready), true)
+                }
+                #[cfg(target_os = "macos")]
+                Some(Gpu::Metal(ready)) => {
+                    let handle = ready.handle();
+                    tile.write_metal(window, handle, Arc::new(ready), true)
                 }
                 None => return (Shown::Nowhere, None),
             };
