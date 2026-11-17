@@ -112,6 +112,11 @@
       "type": "boolean",
       "default": false
     },
+    "intl": {
+      "description": "The ICU locale data sk build and sk publish ship on Windows and Linux. \"full\": every locale, as icu.skpk (about 12 MB) beside the app. \"invariant\": the root locale only: Intl and toLocale* format dates, numbers and lists the root way (\"2024 M01 15\", \"1,234.5\") whatever locale is asked for, localeCompare and Intl.Collator sort by the root order, Intl.DisplayNames returns the codes it is given, and Intl.Segmenter finds no words in Chinese, Japanese, Thai, Khmer, Lao or Burmese text. Nothing throws. sk dev and macOS always have every locale.",
+      "enum": ["full", "invariant"],
+      "default": "full"
+    },
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "assets": {
       "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",

@@ -47,6 +47,8 @@ pub mod kind {
     pub const NATIVE_IMAGE: u16 = 6;
     /// The app's own `--shading` effects: `sk/effects/effects.json` and the shaders it names.
     pub const EFFECT: u16 = 7;
+    /// ICU common data (`sk/icu/<package>.dat`), alone in the `icu.skpk` pack.
+    pub const ICU_DATA: u16 = 8;
     pub const ASSET: u16 = 16;
 }
 
@@ -59,6 +61,8 @@ pub mod name {
     pub const NATIVE_IMAGE: &str = "sk/app.image";
     /// The prefix of every [`super::kind::EFFECT`] entry.
     pub const EFFECTS_DIR: &str = "sk/effects/";
+    /// The prefix of the [`super::kind::ICU_DATA`] entry.
+    pub const ICU_DIR: &str = "sk/icu/";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +279,14 @@ impl<'a> Payload<'a> {
         self.entries
             .iter()
             .find(|e| e.kind == kind::NATIVE_IMAGE && e.name == name::NATIVE_IMAGE)
+            .map(|e| e.data)
+    }
+
+    /// The ICU common-data package of an `icu.skpk` pack.
+    pub fn icu_data(&self) -> Option<&'a [u8]> {
+        self.entries
+            .iter()
+            .find(|e| e.kind == kind::ICU_DATA)
             .map(|e| e.data)
     }
 

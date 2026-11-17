@@ -28,6 +28,7 @@ export const KIND = {
   NATIVE_MANIFEST: 5,
   NATIVE_IMAGE: 6,
   EFFECT: 7,
+  ICU_DATA: 8,
   ASSET: 16,
 } as const;
 
@@ -39,6 +40,7 @@ export const NAMES = {
   NATIVE_MANIFEST: "sk/app.native.json",
   NATIVE_IMAGE: "sk/app.image",
   EFFECTS_DIR: "sk/effects/",
+  ICU_DIR: "sk/icu/",
 } as const;
 
 export const FLAG_HAS_BYTECODE = 1;

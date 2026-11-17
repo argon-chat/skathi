@@ -35,6 +35,8 @@ pub struct Meta {
     pub host_variant: String,
     pub launch: Option<String>,
     pub packs: Vec<PackRef>,
+    /// `"invariant"`: the app asked for the root locale only; anything else is every locale.
+    pub intl: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,6 +126,9 @@ impl AppPayload {
     pub fn asset_ignoring_case(&self, key: &str) -> Option<(&str, &[u8])> {
         self.0.borrow_dependent().asset_ignoring_case(key)
     }
+    fn icu_data(&self) -> Option<&[u8]> {
+        self.0.borrow_dependent().icu_data()
+    }
 }
 
 pub struct Loaded {
@@ -159,17 +164,21 @@ pub fn pack_id(payload: &AppPayload) -> String {
         .collect()
 }
 
+fn payload_dir(dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    match dir {
+        Some(dir) => Some(dir.to_path_buf()),
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+    }
+}
+
 fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, String> {
     if meta.packs.is_empty() {
         return Ok(Vec::new());
     }
-    let dir = match dir {
-        Some(dir) => dir.to_path_buf(),
-        None => std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
-            .ok_or("the app's asset packs are beside the executable, whose folder is unknown")?,
-    };
+    let dir = payload_dir(dir)
+        .ok_or("the app's asset packs are beside the executable, whose folder is unknown")?;
     meta.packs
         .iter()
         .map(|r| {
@@ -197,6 +206,39 @@ fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, S
         .collect()
 }
 
+/// The full ICU data, beside the payload like the asset packs.
+pub const ICU_PACK: &str = "icu.skpk";
+
+/// Hands ICU the full data from [`ICU_PACK`] when this host links only the root locale and the
+/// app did not ask for that alone. Without the pack, Intl runs on the root locale.
+fn install_icu(meta: &Meta, dir: Option<&std::path::Path>) {
+    if redjs::icu::LINKED != redjs::icu::Linked::Root || meta.intl == "invariant" {
+        return;
+    }
+    let Some(path) = payload_dir(dir).map(|d| d.join(ICU_PACK)) else {
+        return;
+    };
+    if let Err(e) = open_icu(&path) {
+        eprintln!(
+            "[payload] {e} — Intl and toLocale* fall back to the root locale. Ship the {ICU_PACK} \
+             that sk build writes beside the app, or build with \"intl\": \"invariant\""
+        );
+    }
+}
+
+fn open_icu(path: &std::path::Path) -> Result<(), String> {
+    let file = crate::mapped_file::MappedFile::open(path)
+        .map_err(|e| format!("the ICU data {}: {e}", path.display()))?;
+    let pack: &'static AppPayload = Box::leak(Box::new(
+        AppPayload::parse(PayloadBytes::File(file))
+            .map_err(|e| format!("the ICU data {}: {e}", path.display()))?,
+    ));
+    let data = pack
+        .icu_data()
+        .ok_or_else(|| format!("the ICU data {} holds no ICU package", path.display()))?;
+    redjs::icu::set_common_data(data).map_err(|e| format!("the ICU data {}: {e}", path.display()))
+}
+
 static LOADED: OnceLock<Option<Loaded>> = OnceLock::new();
 
 /// Resolved on first ask. `None` on a bare host; a corrupt payload is fatal, since running no app silently would be worse.
@@ -222,6 +264,7 @@ pub(crate) fn set_external(
         ));
     }
     let packs = open_packs(&meta, dir)?;
+    install_icu(&meta, dir);
     LOADED
         .set(Some(Loaded {
             payload,
@@ -287,6 +330,7 @@ fn load() -> Option<Loaded> {
         Source::Embedded | Source::Embedder(_) => None,
     };
     let packs = open_packs(&meta, dir.as_deref()).unwrap_or_else(|e| fatal(&e));
+    install_icu(&meta, dir.as_deref());
     Some(Loaded {
         payload,
         packs,
@@ -336,6 +380,7 @@ fn parse_meta(text: &str) -> Meta {
                 }
             })
             .collect(),
+        intl: s("intl"),
     }
 }
 
@@ -620,6 +665,14 @@ pub fn host_info_json() -> String {
         ("features", Json::arr(features)),
         ("jscPin", Json::s(env!("SK_JSC_PIN"))),
         ("payloadFormat", Json::n(f64::from(sk_payload::FORMAT))),
+        // `root`: `sk build` ships the rest as [`ICU_PACK`], cut from `<package>.dat`.
+        (
+            "icu",
+            Json::obj(vec![
+                ("linked", Json::s(redjs::icu::LINKED.as_str())),
+                ("package", redjs::icu::package().map_or(Json::Null, Json::s)),
+            ]),
+        ),
         // What a dev host takes from `sk dev` in place, besides JS modules (`dev::poll_frame`).
         (
             "devReload",

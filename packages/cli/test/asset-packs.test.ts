@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { splitPacks } from "../cli/build-app";
+import { splitPacks, writeIcuPack } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
 import { KIND, NAMES, PAGE, readSkpk } from "../cli/skpk";
 
@@ -41,6 +41,7 @@ describe("config", () => {
     for (const packs of [
       {},
       [{ name: "app" }],
+      [{ name: "icu" }],
       [{ name: "Fonts" }],
       [{ name: "../x" }],
       [{ name: "a" }, { name: "a" }],
@@ -51,6 +52,23 @@ describe("config", () => {
       expect(() => loadAppConfig(app("bad", { packs }))).toThrow(ConfigError);
     }
   });
+});
+
+test('"intl" is "full" unless the config says "invariant", and nothing else is accepted', () => {
+  expect(loadAppConfig(app("intl-default", {})).intl).toBe("full");
+  expect(loadAppConfig(app("intl-invariant", { intl: "invariant" })).intl).toBe("invariant");
+  for (const intl of ["none", true, "Invariant"]) {
+    expect(() => loadAppConfig(app("intl-bad", { intl }))).toThrow(ConfigError);
+  }
+});
+
+test("the ICU pack holds the data file alone, page-aligned for the host to map", () => {
+  const dat = join(root, "icudt79l.dat");
+  writeFileSync(dat, "pretend ICU data");
+  const pack = readSkpk(writeIcuPack(dat));
+  expect(pack.entries.map((e) => [e.kind, e.name])).toEqual([[KIND.ICU_DATA, "sk/icu/icudt79l.dat"]]);
+  expect(pack.entries[0]!.start % PAGE).toBe(0);
+  expect(new TextDecoder().decode(pack.bytes(pack.entries[0]!))).toBe("pretend ICU data");
 });
 
 test("splitPacks deals the assets out in the packs' order", () => {

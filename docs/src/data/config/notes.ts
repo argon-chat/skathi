@@ -52,7 +52,7 @@ export const groups: readonly ConfigGroup[] = [
     title: "Build and packaging",
     intro:
       "Read by `sk build`, `sk publish` and `sk check`: what goes into the package, how the bundle is built, and for which OSes.",
-    keys: ["platforms", "assets", "publicDir", "packs", "define", "aliases", "aot", "publishDevtools", "check"],
+    keys: ["platforms", "assets", "publicDir", "packs", "define", "aliases", "aot", "intl", "publishDevtools", "check"],
   },
   {
     title: "Windows exe",
@@ -199,6 +199,15 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   aot: {
     platforms: "Windows x64 only: building for another OS, or on another machine, needs `--no-aot`.",
     example: true,
+  },
+  intl: {
+    platforms: "Windows and Linux. macOS apps use the system's ICU and always have every locale.",
+    notes: [
+      "`sk dev` always has every locale.",
+      'With `"full"`, `icu.skpk` ships beside the exe and the app reads it at start. Without it, the app runs as if `"invariant"` and says so on stderr.',
+      "[Best practices](/guides/best-practices/#choose-how-much-locale-data-to-ship) shows what changes in invariant mode.",
+    ],
+    example: "invariant",
   },
   publishDevtools: { example: true },
   check: { example: { allow: { SK2001: ["some-package", "src/legacy/**"] } } },

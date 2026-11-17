@@ -2,7 +2,8 @@ name: Release
 
 # A `v<version>` tag publishes the prebuilt hosts `sk build` and `sk dev` download (cli/host-fetch.ts):
 # every published variant and the dev host for Windows x64, macOS arm64 and Linux x64, gzipped, plus
-# hosts.json; then @skathi-native/runtime and @skathi-native/cli at that version to npm, and the Rust
+# hosts.json, and the full ICU data the Windows and Linux prod hosts leave out (sk-icu-*.dat.gz, shipped by
+# `sk build` as icu.skpk); then @skathi-native/runtime and @skathi-native/cli at that version to npm, and the Rust
 # crates (skathi and everything under it) to crates.io (scripts/publish-crates.ts).
 # Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
 # ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the sk-aot

@@ -126,6 +126,10 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
 
   mkdirSync(dirname(exe), { recursive: true });
   cpSync(DEFAULT_EXE, exe);
+  // `icu-root`: the full ICU data cargo writes beside the exe, which `sk build` ships as icu.skpk.
+  for (const name of readdirSync(dirname(DEFAULT_EXE)).filter((n) => /^icudt\w+\.dat$/.test(n))) {
+    cpSync(join(dirname(DEFAULT_EXE), name), join(dirname(exe), name));
+  }
 
   // Put the tree back: the next `cargo build` in somebody's editor must not find a prod host where
   // the dev host belongs.

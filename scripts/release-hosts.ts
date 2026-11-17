@@ -2,7 +2,8 @@
 //
 //   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>]
 //     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
-//     and describe it in <dir>/hosts-<platform>-<arch>.json. With --native-inspector (Windows x64: the
+//     and describe it in <dir>/hosts-<platform>-<arch>.json. The prod hosts link only the root ICU locale;
+//     the full ICU data they leave out goes beside them, gzipped, for `sk build` to ship as icu.skpk. With --native-inspector (Windows x64: the
 //     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
 //     built with --aot runs from its image), every host with devtools embeds the inspector's native
 //     image, and the sk-aot that compiled it is published beside them (<dir>/aot-<platform>-<arch>.json).
@@ -19,13 +20,14 @@ import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
   aotCompilerAssetName,
   hostAssetName,
+  icuAssetName,
   MANIFEST_NAME,
   sha256,
   type AotCompilerEntry,
   type HostManifest,
   type HostManifestEntry,
 } from "../packages/cli/cli/host-fetch";
-import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo } from "../packages/cli/cli/host";
+import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo, icuDataPath } from "../packages/cli/cli/host";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -61,7 +63,7 @@ if (values.merge) {
   const hosts = parts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as HostManifestEntry[]);
   const aotParts = readdirSync(dir).filter((n) => /^aot-.+\.json$/.test(n));
   const aot = aotParts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as AotCompilerEntry[]);
-  for (const { file } of [...hosts, ...aot]) {
+  for (const { file } of [...hosts, ...hosts.flatMap((h) => (h.icu ? [h.icu] : [])), ...aot]) {
     if (!existsSync(join(dir, file))) throw new Error(`${file} is listed but missing from ${dir}`);
   }
   const manifest: HostManifest = { skathi: CLI_VERSION, hosts, ...(aot.length ? { aot } : {}) };
@@ -126,7 +128,16 @@ for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
   const bytes = new Uint8Array(readFileSync(exe));
   const file = hostAssetName(platform, arch, variant);
   writeFileSync(join(out, file), Bun.gzipSync(bytes, { level: 9 }));
-  entries.push({ platform, arch, variant, file, sha256: sha256(bytes), size: bytes.length, info });
+  const entry: HostManifestEntry = { platform, arch, variant, file, sha256: sha256(bytes), size: bytes.length, info };
+  const icu = icuDataPath({ exe, info });
+  if (icu) {
+    if (!existsSync(icu)) throw new Error(`${exe} links only the root ICU locale, but cargo left no ${icu} beside it`);
+    const data = new Uint8Array(readFileSync(icu));
+    const icuFile = icuAssetName(platform, arch);
+    if (!existsSync(join(out, icuFile))) writeFileSync(join(out, icuFile), Bun.gzipSync(data, { level: 9 }));
+    entry.icu = { file: icuFile, sha256: sha256(data), size: data.length };
+  }
+  entries.push(entry);
   console.log(`[release] ${file}: ${(bytes.length / 1048576).toFixed(1)} MB, cargo ${(ms / 1000).toFixed(0)} s`);
 }
 writeFileSync(join(out, `hosts-${platform}-${arch}.json`), JSON.stringify(entries, null, 2) + "\n");

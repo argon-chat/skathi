@@ -10,11 +10,12 @@
 // and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
 // copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts adds
 // the app's native image to the SKPK. The app's shaders/*.slang go in as `sk/effects/*` (effects.ts), every
-// renderer's target whatever the OS.
+// renderer's target whatever the OS. A host that links only the root ICU locale gets the rest as `icu.skpk`
+// beside the payload, unless sk.config.json says "intl": "invariant".
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { parseCheckConfig } from "../check/config";
 import { cssDiagnostics, readStyleSources } from "../check/css";
 import { diagnosticLine } from "../check/finding";
@@ -24,7 +25,7 @@ import { collectAssets, type AssetFile } from "./assets";
 import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
 import { buildAppEffects, type BuiltEffects } from "./effects";
 import { stampElf, type ElfStampResult } from "./elf";
-import { CLI_VERSION, PKG_DIR, type ResolvedHost } from "./host";
+import { CLI_VERSION, HostError, icuDataPath, PKG_DIR, type ResolvedHost } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
 import { iconImagesFrom } from "./icon";
 import {
@@ -138,6 +139,8 @@ export interface BuildResult {
   bundleBytes: number;
   payloadBytes: number;
   packs: { name: string; path: string; bytes: number; assets: number }[];
+  /** The full ICU data shipped beside the app (`"intl": "full"` on a host that links only the root locale). */
+  icu: { path: string; bytes: number } | null;
   aotInputs: string | null;
   /** The app's own --shading effects, compiled into the payload. */
   effects: { names: string[]; dir: string; compiler: string } | null;
@@ -174,6 +177,7 @@ export function appMeta(
     entry,
     assets: assetCount,
     launch: config.launch,
+    intl: config.intl,
     ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });
 }
@@ -218,11 +222,37 @@ export function writePack(name: string, files: AssetFile[]): BuiltPack {
   return { name, file: `${name}.skpk`, id, blob, assets: files };
 }
 
+/** Beside the payload, like the asset packs; the host reads it before the first JS runs. */
+export const ICU_PACK = "icu.skpk";
+
+/** The ICU pack: the full common data `datPath` as one entry, page-aligned in the file. */
+export function writeIcuPack(datPath: string): Uint8Array {
+  const inputs: SkpkInput[] = [
+    {
+      name: `${NAMES.ICU_DIR}${basename(datPath)}`,
+      kind: KIND.ICU_DATA,
+      data: new Uint8Array(readFileSync(datPath)),
+      alignLog2: 12,
+    },
+  ];
+  const unskewed = writeSkpk(inputs);
+  const skew = skewFor(0, readHeader(unskewed));
+  return skew ? writeSkpk(inputs, { skew }) : unskewed;
+}
+
+/** The asset packs and the ICU pack into `dir`; a stale ICU pack goes when this build has none. */
+function writeSidecars(dir: string, packs: BuiltPack[], icu: Uint8Array | null) {
+  for (const p of packs) writeFileSync(join(dir, p.file), p.blob);
+  if (icu) writeFileSync(join(dir, ICU_PACK), icu);
+  else rmSync(join(dir, ICU_PACK), { force: true });
+}
+
 interface PackageInput {
   config: AppConfig;
   host: ResolvedHost;
   inputs: SkpkInput[];
   packs: BuiltPack[];
+  icu: Uint8Array | null;
   outDir: string;
   work: string;
   options: BuildOptions;
@@ -238,8 +268,8 @@ interface Packaged {
   elf?: ElfStampResult;
 }
 
-function stampExe({ config, host, inputs, packs, outDir, options, log }: PackageInput): Packaged {
-  for (const p of packs) writeFileSync(join(outDir, p.file), p.blob);
+function stampExe({ config, host, inputs, packs, icu, outDir, options, log }: PackageInput): Packaged {
+  writeSidecars(outDir, packs, icu);
   const fv = numericVersion(config.version);
   const exeFile = `${config.exeName}.exe`;
   const exe = join(outDir, exeFile);
@@ -289,7 +319,7 @@ export function macInfoFor(config: AppConfig, hasIcon: boolean) {
   };
 }
 
-function macBundle({ config, host, inputs, packs, outDir, work, options, warnings, log }: PackageInput): Packaged {
+function macBundle({ config, host, inputs, packs, icu, outDir, work, options, warnings, log }: PackageInput): Packaged {
   const m = config.macos;
   if (m.bundleIdFrom === "id" && !m.bundleId.includes(".")) {
     warnings.push(
@@ -321,7 +351,7 @@ function macBundle({ config, host, inputs, packs, outDir, work, options, warning
     infoPlist: plistXml(infoPlist(info)),
     log,
   });
-  for (const p of packs) writeFileSync(join(written.app, "Contents", "Resources", p.file), p.blob);
+  writeSidecars(join(written.app, "Contents", "Resources"), packs, icu);
 
   const onMac = process.platform === "darwin";
   const plan = signPlan({
@@ -347,8 +377,8 @@ function macBundle({ config, host, inputs, packs, outDir, work, options, warning
   };
 }
 
-function linuxExe({ config, host, inputs, packs, outDir }: PackageInput): Packaged {
-  for (const p of packs) writeFileSync(join(outDir, p.file), p.blob);
+function linuxExe({ config, host, inputs, packs, icu, outDir }: PackageInput): Packaged {
+  writeSidecars(outDir, packs, icu);
   const elf = stampElf({
     host: host.exe,
     out: join(outDir, config.exeName),
@@ -524,7 +554,24 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     ...(effects?.inputs ?? []),
   ];
   const skpk = join(work, "app.skpk");
-  for (const p of packs) writeFileSync(join(work, p.file), p.blob);
+  const icuData = host ? icuDataPath(host) : null;
+  let icu: Uint8Array | null = null;
+  if (config.intl === "full" && icuData) {
+    if (!existsSync(icuData)) {
+      throw new HostError(
+        `the ${variant} workload links only the root ICU locale and the rest of its ICU data, ${icuData}, is missing — ` +
+          `reinstall the workload (sk workload install ${variant}), or set "intl": "invariant" in sk.config.json to ship without it`,
+      );
+    }
+    icu = writeIcuPack(icuData);
+  } else if (config.intl === "invariant" && host && !icuData) {
+    warnings.push(
+      host.info.icu?.linked === "system"
+        ? `"intl": "invariant" changes nothing on macOS, where the app uses the system's ICU`
+        : '"intl": "invariant" ships no ICU data, but this workload links every locale itself, so Intl keeps them all',
+    );
+  }
+  writeSidecars(work, packs, icu);
   progress.detail(`${collected.files.length} files · ${kib(collected.totalBytes)}`);
 
   let native: NativeBuild | null = null;
@@ -551,7 +598,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     const skew = packs.length ? skewFor(0, readHeader(unskewed)) : 0;
     writeFileSync(skpk, skew ? writeSkpk(inputs, { skew }) : unskewed);
   } else {
-    packaged = PACKAGERS[platform]({ config, host, inputs, packs, outDir, work, options, warnings, log });
+    packaged = PACKAGERS[platform]({ config, host, inputs, packs, icu, outDir, work, options, warnings, log });
     writeFileSync(skpk, packaged.payload);
   }
   const msStamp = performance.now() - ts;
@@ -595,6 +642,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       bytes: p.blob.length,
       assets: p.assets.length,
     })),
+    icu: icu && { path: join(work, ICU_PACK), bytes: icu.length },
     warnings,
     ms: {
       bundle: Math.round(msBundle),
@@ -672,6 +720,7 @@ export function summary(r: BuildResult, color = false): string {
   }
   for (const pk of r.packs)
     lines.push(row("pack", `${pk.name}: ${pk.assets} asset(s), ${kib(pk.bytes)} ${p.dim(pk.path)}`));
+  if (r.icu) lines.push(row("icu", `every locale, ${mib(r.icu.bytes)} ${p.dim(r.icu.path)}`));
   lines.push(`${p.green("done")} in ${seconds(r.ms.total)}`);
   return lines.join("\n");
 }

@@ -9,6 +9,7 @@ import {
   fetchAotCompiler,
   fetchHost,
   hostAssetName,
+  icuAssetName,
   sha256,
   type HostManifest,
 } from "../cli/host-fetch";
@@ -132,6 +133,30 @@ test("a Linux host is named without .exe and cached under the XDG cache", async 
   expect(path).toBe(join(cache, "skathi", "hosts", VERSION, "standard", "sk-host"));
   expect(new Uint8Array(readFileSync(path))).toEqual(elf);
   await expect(fetchStandard()).rejects.toThrow();
+});
+
+test("a host that links only the root ICU locale is cached with the full ICU data beside it", async () => {
+  const data = new TextEncoder().encode("pretend icudt79l.dat");
+  const icuFile = icuAssetName("windows", "x64");
+  const rootInfo: HostInfo = { ...info, icu: { linked: "root", package: "icudt79l" } };
+  const icu = { file: icuFile, sha256: sha256(data), size: data.length };
+  const entry = {
+    platform: "windows" as const,
+    arch: "x64",
+    variant: "standard",
+    file,
+    sha256: sha256(host),
+    size: host.length,
+  };
+  publish({ hosts: [{ ...entry, info: rootInfo, icu }] });
+  served[icuFile] = Bun.gzipSync(data);
+  const { path } = await fetchStandard();
+  expect(new Uint8Array(readFileSync(join(path, "..", "icudt79l.dat")))).toEqual(data);
+
+  publish({ hosts: [{ ...entry, info: rootInfo, icu: { ...icu, sha256: "0".repeat(64) } }] });
+  served[icuFile] = Bun.gzipSync(data);
+  await expect(fetchStandard()).rejects.toThrow();
+  expect(existsSync(join(cachedHost(VERSION, "standard", "windows"), "..", "icudt79l.dat"))).toBe(false);
 });
 
 test("sk-aot comes from the same release, checked and cached with what it compiles for", async () => {

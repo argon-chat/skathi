@@ -1,6 +1,6 @@
 // Where `sk build` gets the prebuilt bare host it stamps: `cargo build --release -p sk-app
-// --features prod` (the whole engine, no app), built once per Skathi version and variant: `standard`, or
-// `no-devtools` with the devtools compiled out.
+// --features prod,icu-root` (the whole engine, no app, the root ICU locale), built once per Skathi version and
+// variant: `standard`, or `no-devtools` with the devtools compiled out.
 //
 // Resolution, first hit wins: 1. `--workload <exe>` or `SK_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/sk-app.exe, when that is a prod host of this variant and
@@ -61,6 +61,21 @@ export interface HostInfo {
   devReload?: string[];
   /** A host built with the native AOT loader: what an app image must be compiled against. */
   aot?: HostAot | null;
+  /** The ICU data it links; absent on older hosts, which link every locale. */
+  icu?: HostIcu;
+}
+
+export interface HostIcu {
+  /** `root`: the root locale only, the rest ships beside the app as icu.skpk (`sk.config.json` "intl"). */
+  linked: "full" | "root" | "system";
+  /** `icudt79l`; null with the system ICU. */
+  package: string | null;
+}
+
+/** Where a host that links only the root ICU locale keeps the full data (`<package>.dat` beside it); null for any other host. */
+export function icuDataPath(host: { exe: string; info: HostInfo }): string | null {
+  const icu = host.info.icu;
+  return icu?.linked === "root" && icu.package ? join(dirname(host.exe), `${icu.package}.dat`) : null;
 }
 
 export interface HostAot extends CompilerInfo {
@@ -331,6 +346,8 @@ export function addHost(exe: string, log: (line: string) => void = () => {}): { 
   if (process.platform !== "win32") chmodSync(tmp, 0o755);
   rmSync(dest, { force: true });
   renameSync(tmp, dest);
+  const icu = icuDataPath({ exe: src, info });
+  if (icu && existsSync(icu)) copyFileSync(icu, icuDataPath({ exe: dest, info })!);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(info, null, 2) + "\n");
   log(`cached ${info.variant} workload ${info.skathi} (${info.profile}) → ${dest}`);
   return { path: dest, info };

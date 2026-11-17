@@ -23,6 +23,10 @@ webgpu = ["sk-runtime/webgpu", "sk-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # name, assets) is the SKPK payload `sk build` stamps into a copy of this exe (src/payload.rs,
 # src/prod.rs). Not implied by `--release`; `sk workload build` opts in.
 prod = []
+# Links only the root locale of ICU's data (Windows, Linux): ~9 MB smaller. The rest ships as
+# icu.skpk beside the app, which `sk build` cuts from the icudt<NN>l.dat cargo writes beside
+# this exe, and the host loads at start unless sk.config.json says "intl": "invariant".
+icu-root = ["redjs/icu-root"]
 
 # Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
 # build includes otherwise (an app can also disable them at runtime). For a build that must prove

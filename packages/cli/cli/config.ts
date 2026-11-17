@@ -10,6 +10,7 @@
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
 //   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
+//   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
@@ -40,8 +41,12 @@ export function parseVariant(v: unknown, where: string): Variant {
   throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a workload variant — ${VARIANTS.join(" or ")}`);
 }
 
+/** A published host links only the root ICU locale; `sk build` ships the rest beside the app (`"intl"`). */
 export function cargoFeatureArgs(variant: Variant): string[] {
-  return ["--features", parseVariant(variant, "cargo") === "no-devtools" ? "prod,no-devtools" : "prod"];
+  return [
+    "--features",
+    parseVariant(variant, "cargo") === "no-devtools" ? "prod,no-devtools,icu-root" : "prod,icu-root",
+  ];
 }
 
 export interface WindowsConfig {
@@ -87,6 +92,8 @@ export interface AppConfig {
   aot: boolean;
   /** Whether `sk publish` stamps the standard host (devtools in) instead of no-devtools. */
   publishDevtools: boolean;
+  /** `full`: every ICU locale, shipped as icu.skpk beside the app; `invariant`: the root locale only. */
+  intl: IntlMode;
   windows: WindowsConfig;
   macos: MacConfig;
   exeName: string;
@@ -104,7 +111,12 @@ export interface PackConfig {
   match: string[] | null;
 }
 
+export type IntlMode = "full" | "invariant";
+export const INTL_MODES: readonly IntlMode[] = ["full", "invariant"];
+
 const PACK_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+/** Pack file names the build writes itself. */
+const RESERVED_PACKS = new Set(["app", "icu"]);
 export const PACK_KEYS: ReadonlySet<string> = new Set(["name", "match"]);
 
 function parsePacks(raw: unknown): PackConfig[] {
@@ -120,9 +132,9 @@ function parsePacks(raw: unknown): PackConfig[] {
       throw bad(
         `entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are ${[...PACK_KEYS].join(", ")}`,
       );
-    if (typeof name !== "string" || !PACK_NAME.test(name) || name === "app") {
+    if (typeof name !== "string" || !PACK_NAME.test(name) || RESERVED_PACKS.has(name)) {
       throw bad(
-        `entry ${i}: "name" must be lowercase letters, digits, "-" or "_" (and not "app") — it names the file <name>.skpk`,
+        `entry ${i}: "name" must be lowercase letters, digits, "-" or "_" (and not "app" or "icu") — it names the file <name>.skpk`,
       );
     }
     if (seen.has(name)) throw bad(`two packs are named ${JSON.stringify(name)}`);
@@ -155,6 +167,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "devtools",
   "publishDevtools",
   "aot",
+  "intl",
   "httpCache",
   "assets",
   "publicDir",
@@ -490,6 +503,10 @@ export function loadAppConfig(
   if (raw.aot !== undefined && typeof raw.aot !== "boolean") {
     throw new ConfigError('sk.config.json "aot" must be true or false');
   }
+  if (raw.intl !== undefined && !INTL_MODES.includes(raw.intl as IntlMode)) {
+    throw new ConfigError('sk.config.json "intl" must be "full" (every locale) or "invariant" (the root locale only)');
+  }
+  const intl: IntlMode = raw.intl === "invariant" ? "invariant" : "full";
 
   const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
@@ -566,6 +583,7 @@ export function loadAppConfig(
     publicDir,
     packs,
     publishDevtools,
+    intl,
     aot: raw.aot === true,
     windows,
     macos,

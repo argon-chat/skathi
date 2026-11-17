@@ -225,6 +225,25 @@ Some browser behaviors have nothing to act on in a desktop app. Skathi keeps the
 - **Storage.** [`localStorage`](/web-platform/local-storage/) and [IndexedDB](/web-platform/indexed-db/) are saved to disk. To move them to another folder or encrypt them at rest, call `appStorage.setStorageFolder(path, { encrypted: true })` before the first `indexedDB` call, which fixes the folder for the run. `localStorage` reaches the disk at most once per frame and when the app quits; `appStorage.flush()` writes the pending change at once.
 - **Events the host does not deliver.** Adding a listener for one, or an `@event` handler, prints an advisory that the handler will never fire. Treat that advisory as a bug in your code, not as noise.
 
+## Choose how much locale data to ship
+
+On Windows and Linux, `Intl`, `toLocaleString()`, `localeCompare()` and `Intl.Segmenter` read ICU's locale data. A published app carries only the root locale in its exe, and `sk build` and `sk publish` put the rest beside it as `icu.skpk`, about 12 MB. An app that shows no locale-formatted text, or formats it itself, can leave that file out with `"intl": "invariant"` in [sk.config.json](/sk-config/#intl). `sk dev` and macOS apps always have every locale.
+
+In invariant mode nothing throws, and anything that does not depend on a locale works as before: time zones, plural rules, `normalize()`, case mapping (`"i".toLocaleUpperCase("tr")` is still `"İ"`) and grapheme segmentation. Everything else answers from the root locale, whatever locale is asked for:
+
+| Call                                                                    | Every locale         | Invariant             |
+| ----------------------------------------------------------------------- | -------------------- | --------------------- |
+| `new Intl.DateTimeFormat("de", { dateStyle: "long" }).format(date)`     | `15. Januar 2024`    | `2024 M01 15`         |
+| `date.toLocaleString("ja-JP")`                                          | `2024/1/15 12:30:00` | `2024-01-15 12:30:00` |
+| `(1234.5).toLocaleString("de")`                                         | `1.234,5`            | `1,234.5`             |
+| `new Intl.ListFormat("de").format(["a", "b", "c"])`                     | `a, b und c`         | `a, b, c`             |
+| `new Intl.RelativeTimeFormat("de").format(-1, "day")`                   | `vor 1 Tag`          | `-1 d`                |
+| `["z", "ä", "a"].sort(new Intl.Collator("sv").compare)`                 | `a z ä`              | `a ä z`               |
+| `new Intl.DisplayNames("en", { type: "region" }).of("DE")`              | `Germany`            | `DE`                  |
+| `Intl.Segmenter("ja", { granularity: "word" })` over `日本語の文章です` | 4 words              | 1 segment             |
+
+Dates come out ISO-like, numbers use `,` and `.` the English way, sorting follows the Unicode root order, display names are the codes you pass, and Chinese, Japanese, Thai, Khmer, Lao and Burmese text is not split into words. `resolvedOptions().locale` still reports the locale you asked for. Use invariant mode when the text the app formats is technical (logs, ISO timestamps, byte counts) or when the app brings its own formatting; keep the default when people read dates, numbers or sorted names in their own language.
+
 ## Tools
 
 - **Performance advisories.** Under `sk dev`, the runtime warns about wasted re-renders, long lists without virtualization and too many native writes in one frame, naming the component and suggesting a fix. See [Performance advisories](/guides/performance-advisories/).

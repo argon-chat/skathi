@@ -1,7 +1,8 @@
 // Prebuilt bare hosts from the Skathi GitHub release of the CLI's own version, so `sk build`
 // needs neither a checkout nor a Rust toolchain. The release (.github/workflows/release.yml,
 // scripts/release-hosts.ts) carries one gzipped host per platform, arch and variant, plus
-// `hosts.json`, which names each with its sha256 and its `--sk-host-info`.
+// `hosts.json`, which names each with its sha256 and its `--sk-host-info`. A host that links only the root ICU
+// locale comes with the full ICU data, cached beside it.
 //
 // Assets are read through the GitHub API, so a private repository works with GH_TOKEN or
 // GITHUB_TOKEN set. SK_HOST_REPO (owner/name) and SK_HOST_API point elsewhere, a fork or a mirror.
@@ -15,6 +16,7 @@ import {
   cachedHost,
   cacheRoot,
   HostError,
+  icuDataPath,
   resolveHost,
   type HostInfo,
   type ResolvedHost,
@@ -35,6 +37,8 @@ export interface HostManifestEntry {
   sha256: string;
   size: number;
   info: HostInfo;
+  /** A host that links only the root ICU locale: the full data, gzipped (`<package>.dat` once cached). */
+  icu?: { file: string; sha256: string; size: number };
 }
 
 /** sk-aot (`sk build --aot`), matching the release's hosts. */
@@ -58,6 +62,8 @@ export interface HostManifest {
 
 export const hostAssetName = (platform: Platform, arch: string, variant: Variant): string =>
   `sk-host-${platform}-${arch}-${variant}${platform === "windows" ? ".exe" : ""}.gz`;
+
+export const icuAssetName = (platform: Platform, arch: string): string => `sk-icu-${platform}-${arch}.dat.gz`;
 
 export const aotCompilerAssetName = (platform: Platform, arch: string): string =>
   `sk-aot-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
@@ -192,6 +198,8 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   }
   const dest = cachedHost(version, options.variant, platform);
   await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log, options.onBytes);
+  const icu = icuDataPath({ exe: dest, info: entry.info });
+  if (icu && entry.icu) await cacheAsset(release, entry.icu.file, entry.icu.size, entry.icu.sha256, icu, log);
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(entry.info, null, 2) + "\n");
   log(`cached ${options.variant} workload ${version} → ${dest}`);
   return { path: dest, info: entry.info };

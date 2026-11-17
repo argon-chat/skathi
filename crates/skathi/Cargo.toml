@@ -19,6 +19,8 @@ default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "nat
 # Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
 prod = ["sk-app/prod"]
 audio = ["sk-app/audio"]
+# Links only the root locale of ICU's data; see sk-app's `icu-root`.
+icu-root = ["sk-app/icu-root"]
 storages = ["sk-app/storages"]
 clipboard = ["sk-app/clipboard"]
 indexeddb = ["sk-app/indexeddb"]

@@ -264,6 +264,7 @@ export function cli(run: Run): Command {
             bundleBytes: result.bundleBytes,
             payloadBytes: result.payloadBytes,
             ...(result.packs.length ? { packs: result.packs } : {}),
+            ...(result.icu ? { icu: result.icu } : {}),
             stamp: s && {
               bytes: s.bytes,
               skew: s.skew,
