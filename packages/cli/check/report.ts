@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { paint, type Paint } from "../cli/term";
-import { ALL_CODES, codeInfo, RANGES } from "./codes";
+import { ALL_CODES, codeInfo, RANGES, RETIRED } from "./codes";
 import type { Highlight } from "./highlight";
 import type { CheckReport, Diagnostic, TypingScore } from "./schema";
 
@@ -185,7 +185,10 @@ export function explain(code: string, options: { color?: boolean; highlight?: Hi
       return null;
     }
   })();
-  if (!info) return null;
+  if (!info) {
+    const retired = RETIRED.get(code.toUpperCase());
+    return retired ? `${code.toUpperCase()} is retired: ${retired}, so sk check no longer reports it.` : null;
+  }
   const p = paint(options.color ?? false);
   const highlight = options.highlight ?? plain;
   const severity = info.severity === "error" ? p.red : p.yellow;

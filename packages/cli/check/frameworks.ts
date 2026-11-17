@@ -179,49 +179,21 @@ interface TemplateProp {
 }
 
 const ELEMENT = 1;
-const ATTRIBUTE = 6;
 const DIRECTIVE = 7;
 
 const htmlString = (what: string): Rule => ({
   code: "SK5003",
   message: `${what} renders nothing: Skathi's DOM does not parse HTML strings`,
 });
-const toggleInput = (type: string): Rule => ({
-  code: "SK5005",
-  message: `\`<input type="${type}">\` renders as a text field: Skathi has no native ${type === "radio" ? "radio buttons" : "checkboxes"}`,
-});
-const MOVES: Rule = {
-  code: "SK5007",
-  message: "moves are not animated: items that stay in the list jump to their new place",
-};
 
 const modifierNames = (prop: TemplateProp) =>
   (prop.modifiers ?? []).map((m) => (typeof m === "string" ? m : m.content));
-const staticAttr = (node: TemplateNode, name: string) =>
-  node.props?.find((p) => p.type === ATTRIBUTE && p.name === name);
 const boundArg = (prop: TemplateProp, ...names: string[]) =>
   prop.type === DIRECTIVE && prop.name === "bind" && !!prop.arg?.isStatic && names.includes(prop.arg.content);
 
-const TRANSITION_TAGS = new Set(["Transition", "transition", "TransitionGroup", "transition-group"]);
-const ANIMATED: Rule = {
-  code: "SK5014",
-  message: "a CSS animation in the transition classes is not waited for: the element enters and leaves at once",
-};
-
-/** The component's own styles give this transition's enter or leave class a CSS `animation`. */
-function animated(node: TemplateNode, styles: string): boolean {
-  const dynamic = node.props?.some((p) => boundArg(p, "name"));
-  const name = dynamic ? "[\\w-]+" : (staticAttr(node, "name")?.value?.content ?? "v").replace(/[^\w-]/g, "");
-  const phase = new RegExp(`\\.${name}-(enter|leave|appear)-active(?![\\w-])`);
-  for (const m of styles.matchAll(/([^{}]*)\{([^{}]*)\}/g))
-    if (phase.test(m[1]!) && /(^|[\s;])animation(-name)?\s*:/.test(m[2]!)) return true;
-  return false;
-}
-
-function vueTemplate(c: Collector, root: TemplateNode, styles: string): void {
+function vueTemplate(c: Collector, root: TemplateNode): void {
   const visit = (node: TemplateNode): void => {
     if (node.type === ELEMENT && node.tag) {
-      const tagEnd = node.loc.start.offset + 1 + node.tag.length;
       for (const prop of node.props ?? []) {
         if (prop.type === DIRECTIVE && prop.name === "html")
           c.add(htmlString("`v-html`"), prop.loc.start.offset, prop.loc.end.offset);
@@ -236,20 +208,6 @@ function vueTemplate(c: Collector, root: TemplateNode, styles: string): void {
             prop.loc.start.offset,
             prop.loc.end.offset,
           );
-      }
-      const type = node.tag === "input" ? staticAttr(node, "type")?.value?.content.toLowerCase() : undefined;
-      if (type === "checkbox" || type === "radio") c.add(toggleInput(type), node.loc.start.offset, tagEnd);
-      if (TRANSITION_TAGS.has(node.tag) && animated(node, styles)) c.add(ANIMATED, node.loc.start.offset, tagEnd);
-      if (node.tag === "TransitionGroup" || node.tag === "transition-group") {
-        const moveClass = node.props?.some(
-          (p) => (p.type === ATTRIBUTE && /^move-?class$/i.test(p.name)) || boundArg(p, "moveClass", "move-class"),
-        );
-        const name = staticAttr(node, "name")?.value?.content;
-        const dynamicName = node.props?.some((p) => boundArg(p, "name"));
-        const moveRule = dynamicName
-          ? /-move(?![\w-])/.test(styles)
-          : new RegExp(`\\.${(name ?? "v").replace(/[^\w-]/g, "")}-move(?![\\w-])`).test(styles);
-        if (moveClass || moveRule) c.add(MOVES, node.loc.start.offset, tagEnd);
       }
     }
     for (const child of node.children ?? []) if (child && typeof child === "object") visit(child);
@@ -281,8 +239,7 @@ function vueFile(typescript: TypeScript | null, c: Collector): void {
       );
     if (style.lang && PREPROCESSED.test(style.lang)) c.add(preprocessed(style.lang), start, style.loc.start.offset);
   }
-  const styles = descriptor.styles.map((s) => s.content).join("\n");
-  if (descriptor.template?.ast) vueTemplate(c, descriptor.template.ast as unknown as TemplateNode, styles);
+  if (descriptor.template?.ast) vueTemplate(c, descriptor.template.ast as unknown as TemplateNode);
   if (!typescript) return;
   const scripts = vueScripts(c.text, c.file);
   if (scripts) scanScript(typescript, c, scripts.text, false);
@@ -331,12 +288,6 @@ function svelteParser(dir: string): SvelteParse | null {
   return svelteParsers.get(path) ?? null;
 }
 
-function staticText(value: unknown): string | null {
-  if (!Array.isArray(value)) return null;
-  const parts = value as SvelteNode[];
-  return parts.every((p) => p.type === "Text") ? parts.map((p) => String(p.data ?? "")).join("") : null;
-}
-
 const SKIP_KEYS = new Set(["metadata", "parent", "loc", "expression"]);
 
 function svelteMarkup(c: Collector, fragment: unknown): void {
@@ -351,27 +302,6 @@ function svelteMarkup(c: Collector, fragment: unknown): void {
     const node = value as SvelteNode;
     const at = (n: SvelteNode, end = n.end) => [n.start ?? 0, end ?? n.start ?? 0] as const;
     if (node.type === "HtmlTag") c.add(htmlString("`{@html}`"), ...at(node));
-    if (node.type === "AnimateDirective") c.add(MOVES, ...at(node));
-    if (node.type === "RegularElement" && node.start !== undefined) {
-      const tagEnd = node.start + 1 + String(node.name).length;
-      const attrs = node.attributes ?? [];
-      if (node.name === "input") {
-        const type = attrs.find((a) => a.type === "Attribute" && a.name === "type");
-        const text = type ? staticText(type.value)?.toLowerCase() : undefined;
-        if (text === "checkbox" || text === "radio") c.add(toggleInput(text), node.start, tagEnd);
-      }
-      if (node.name === "select") {
-        const bind = attrs.find((a) => a.type === "BindDirective" && a.name === "value");
-        if (bind)
-          c.add(
-            {
-              code: "SK5006",
-              message: "`bind:value` on a `<select>` reads the first option, not the one picked",
-            },
-            ...at(bind),
-          );
-      }
-    }
     for (const [key, child] of Object.entries(node)) if (!SKIP_KEYS.has(key)) visit(child);
   };
   visit(fragment);

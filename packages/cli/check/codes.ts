@@ -270,34 +270,6 @@ const CODES: CodeInfo[] = [
     fix: 'Use `<style scoped>` and plain class names (`class="red"`); `v-bind()` in the styles covers values that come from script.',
   },
   {
-    code: "SK5005",
-    severity: "error",
-    title: "checkbox and radio inputs",
-    explanation:
-      '`<input type="checkbox">` and `<input type="radio">` render as text fields: Skathi has no native toggle controls. A click does not check them, `checked` does not change, and `v-model`, `bind:checked` and `bind:group` never update.',
-    example: '<input type="checkbox" v-model="agreed" />',
-    fix: 'Make the control from a button, for example `<button role="checkbox" :aria-checked="agreed" @click="agreed = !agreed">`, or use a UI library\'s checkbox and radio group components built that way (reka-ui, bits-ui).',
-  },
-  {
-    code: "SK5006",
-    severity: "error",
-    title: "Svelte `bind:value` on a `<select>`",
-    explanation:
-      'Svelte reads the picked option with `select.querySelector(":checked")`, and in Skathi `:checked` does not match the selected option, so `bind:value` always reads the first option. Setting the value from the state works.',
-    example: '<select bind:value={size}>\n  <option value="s">S</option>\n  <option value="m">M</option>\n</select>',
-    fix: "Set the value and listen for `change`: `<select value={size} onchange={(e) => (size = e.currentTarget.value)}>`.",
-  },
-  {
-    code: "SK5007",
-    severity: "warning",
-    title: "list move animations: `<TransitionGroup>` moves, `animate:`",
-    explanation:
-      "Enter and leave transitions play, but items that stay in the list jump to their new place: `getBoundingClientRect()` reports the old layout until the next frame, so a FLIP animation sees no movement. Vue ignores the `-move` class and `moveClass`; Svelte's `animate:flip` does nothing.",
-    example:
-      '<TransitionGroup name="list" tag="ul">…</TransitionGroup>\n\n<style>\n.list-move { transition: transform 0.3s; }\n</style>',
-    fix: "Keep the enter and leave transitions and drop the move animation, or animate positions you compute yourself with `element.animate()`.",
-  },
-  {
     code: "SK5008",
     severity: "warning",
     title: "vue-router web and hash history",
@@ -348,22 +320,20 @@ const CODES: CodeInfo[] = [
     title: "a dependency uses Vue or Svelte features Skathi does not support",
     explanation:
       "Components or modules the app imports from this package use what the other SK5 codes report. One diagnostic per package; the places are listed as related locations. The app may not reach them in the parts of the package it uses.",
-    example: 'a UI kit whose checkbox is a native `<input type="checkbox">`',
+    example: "a UI kit that renders markdown with `v-html`",
     fix: "Check that the parts of the package the app uses work; allow SK5013 for the package when they do.",
-  },
-  {
-    code: "SK5014",
-    severity: "warning",
-    title: "a Vue `<Transition>` driven by a CSS animation",
-    explanation:
-      "Skathi's `<Transition>` waits for the CSS transitions of the `-enter-active` and `-leave-active` classes, not for a CSS `animation` in them: with only an animation, the element enters at once and is removed at once when it leaves, so the animation is cut short or never shows. Reported when the component's own styles give the transition's classes an `animation`.",
-    example:
-      '<Transition name="bounce"><p v-if="show">hi</p></Transition>\n\n<style>\n.bounce-enter-active { animation: bounce-in 0.5s; }\n</style>',
-    fix: 'Animate with `transition` on the `-enter-from`/`-leave-to` classes, or play the keyframes from the JavaScript hooks: `@enter="(el, done) => el.animate(keyframes, 500).finished.then(done)"`.',
   },
 ];
 
 export const REGISTRY: ReadonlyMap<string, CodeInfo> = new Map(CODES.map((c) => [c.code, c]));
+
+/** Codes no longer reported because the feature now works; the numbers are not reused. */
+export const RETIRED: ReadonlyMap<string, string> = new Map([
+  ["SK5005", "checkbox and radio inputs work, with v-model, bind:checked and bind:group"],
+  ["SK5006", "Svelte `bind:value` on a `<select>` works"],
+  ["SK5007", "`<TransitionGroup>` moves and Svelte's `animate:` play"],
+  ["SK5014", "a Vue `<Transition>` waits for a CSS animation"],
+]);
 
 export function codeInfo(code: string): CodeInfo {
   const info = REGISTRY.get(code);

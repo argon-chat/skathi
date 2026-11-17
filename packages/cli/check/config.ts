@@ -1,4 +1,4 @@
-import { REGISTRY } from "./codes";
+import { REGISTRY, RETIRED } from "./codes";
 
 export interface CheckConfig {
   /** Code -> package names and app-relative globs whose diagnostics of that code are not reported. */
@@ -32,6 +32,7 @@ export function parseCheckConfig(raw: unknown): CheckConfig {
     return { allow, problems };
   }
   for (const [code, value] of Object.entries(list as Record<string, unknown>)) {
+    if (RETIRED.has(code)) continue;
     const info = REGISTRY.get(code);
     if (!info) {
       problems.push({

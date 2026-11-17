@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectFindings, runCheck } from "../check";
-import { ALL_CODES, REGISTRY } from "../check/codes";
+import { ALL_CODES, REGISTRY, RETIRED } from "../check/codes";
+import { parseCheckConfig } from "../check/config";
+import { explain } from "../check/report";
 import { analyzeCss, analyzeFrameworks, analyzeRules, analyzeUnit, FIXTURES } from "./check-fixtures";
 
 const CHECK_DIR = join(import.meta.dir, "..", "check");
@@ -11,6 +13,12 @@ describe("the code registry", () => {
   test("codes are unique", () => {
     const codes = ALL_CODES.map((c) => c.code);
     expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  test("a retired code is not reused, stays valid in check.allow, and sk explain says it is retired", () => {
+    for (const code of RETIRED.keys()) expect(REGISTRY.has(code)).toBe(false);
+    expect(parseCheckConfig({ allow: { SK5005: ["some-package"] } }).problems).toEqual([]);
+    expect(explain("sk5005")).toContain("retired");
   });
 
   test("every code the checker emits is registered", () => {

@@ -76,7 +76,6 @@ const PSEUDO_CLASSES: Record<string, string> = Object.fromEntries([
     "read-write",
     "required",
     "optional",
-    "indeterminate",
     "default",
     "autofill",
     "valid",
