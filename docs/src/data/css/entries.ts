@@ -1841,28 +1841,49 @@ const scrolling = section("Scrolling", [
   prop("scroll-behavior", OK, "Sets whether programmatic and navigation scrolling is instant or smooth.", {
     values: [v("smooth", OK)],
   }),
-  prop("scroll-snap-type", PLAN, "Makes a scroll container snap to positions on its children.", {
-    related: ["scroll-snap-align", "scroll-snap-stop"],
+  prop("scroll-snap-type", OK, "Makes a scroll container snap to positions on its children.", {
+    since: "0.4.0",
+    values: [
+      v("x, y, block, inline, both", OK),
+      v("mandatory", OK),
+      v("proximity", OK, "Snaps within a third of the snapport of a snap position."),
+    ],
+    notes: [
+      "Wheel, touchpad and touch scrolling snap once the gesture and its momentum stop; a notched wheel moves at least to the next snap position.",
+      "A scrollbar drag or track click snaps on release.",
+      "Arrow keys, Page Up, Page Down and Space scroll the focused element's scroll container to a snap position in that direction; Home and End to the nearest one at the edge.",
+      "`scrollTo()`, `scrollBy()`, `scrollIntoView()` and writes to `scrollTop` and `scrollLeft` land on a snap position, gliding there when smooth.",
+      "After a layout change, such as a resize or new content, the container goes back to the element it was snapped to.",
+    ],
+    limitations: [
+      "With `both`, each axis picks its snap position on its own, so the two can come from different elements.",
+      "The `scrollsnapchange` and `scrollsnapchanging` events are not fired.",
+    ],
+    related: ["scroll-snap-align", "scroll-snap-stop", "scroll-padding", "scroll-margin"],
   }),
-  prop("scroll-snap-align", PLAN, "Sets the snap position of an element inside a snapping scroll container.", {
+  prop("scroll-snap-align", OK, "Sets the snap position of an element inside a snapping scroll container.", {
+    since: "0.4.0",
+    values: [v("none, start, end, center", OK)],
+    notes: ["The two-value form is block (y) then inline (x)."],
     related: ["scroll-snap-type", "scroll-snap-stop"],
   }),
-  prop(
-    "scroll-snap-stop",
-    PLAN,
-    "Sets whether a snapping scroll container may scroll past an element's snap position.",
-    { related: ["scroll-snap-type", "scroll-snap-align"] },
-  ),
-  sh("scroll-padding", PLAN, "Sets the inset of a scroll container's snap and scroll-into-view area.", {
-    limitations: [
-      "The shorthand and its physical longhands are accepted without an effect for now.",
-      "`scroll-padding-inline`, `scroll-padding-block` and their `-start` and `-end` longhands are dropped with an advisory.",
+  prop("scroll-snap-stop", OK, "Sets whether a snapping scroll container may scroll past an element's snap position.", {
+    since: "0.4.0",
+    values: [v("normal", OK), v("always", OK)],
+    notes: [
+      "`always` stops wheel, touchpad, arrow-key and paging scrolls; Home, End, scrollbar drags and scripts pass it.",
     ],
+    related: ["scroll-snap-type", "scroll-snap-align"],
+  }),
+  sh("scroll-padding", OK, "Sets the inset of a scroll container's snap and scroll-into-view area.", {
+    since: "0.4.0",
+    notes: ["Shrinks the area snap positions and `scrollIntoView()` align to. `auto` is 0."],
     aliases: ["scroll-padding-*", "scroll-padding-top", "scroll-padding-inline", "scroll-padding-block"],
     related: ["scroll-margin", "scroll-snap-type"],
   }),
-  sh("scroll-margin", PLAN, "Sets the outset of an element's snap and scroll-into-view area.", {
-    limitations: ["Accepted without an effect for now."],
+  sh("scroll-margin", OK, "Sets the outset of an element's snap and scroll-into-view area.", {
+    since: "0.4.0",
+    notes: ["Grows the box snap positions and `scrollIntoView()` align."],
     aliases: ["scroll-margin-*", "scroll-margin-top", "scroll-margin-inline", "scroll-margin-block"],
     related: ["scroll-padding", "scroll-snap-align"],
   }),

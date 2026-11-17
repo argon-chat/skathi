@@ -156,26 +156,84 @@ messages.scrollTo({ top: 0, behavior: "instant" });`,
     ],
   },
   "scroll-snap-type": {
+    examples: [
+      {
+        title: "A carousel that always rests on a centred slide",
+        lang: "css",
+        code: `.carousel {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.slide {
+  flex: 0 0 80%;
+  scroll-snap-align: center;
+}`,
+      },
+      {
+        title: "A list that snaps to a row only when it stops near one",
+        lang: "css",
+        code: `.history {
+  height: 100%;
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+}
+.history > .day {
+  scroll-snap-align: start;
+}`,
+      },
+    ],
     edgeCases: [
-      "A `scroll-snap-type` declaration is dropped with an advisory, and `CSS.supports()` returns `false` for it.",
+      "Snap positions come from the container's descendants whose nearest scroll container it is; a nested scroll container is itself a snap area, but its children are not.",
+      "A snap area longer than the snapport can be scrolled through freely; the container snaps again past its edges.",
+      "With `mandatory`, the container snaps on its first layout too.",
+      'A snap glide uses the same curve as `scrollTo({ behavior: "smooth" })`, and the user scrolling again stops it.',
     ],
   },
   "scroll-snap-align": {
     edgeCases: [
-      "A `scroll-snap-align` declaration is dropped with an advisory, and `CSS.supports()` returns `false` for it.",
+      "A snap position that falls outside the scroll range is clamped to it, so the first and last elements still snap with `center` or `end`.",
+      "`scrollIntoView()` on an element that is a snap area lands on that element's snap position, whatever `block` and `inline` ask for.",
     ],
   },
   "scroll-snap-stop": {
-    edgeCases: [
-      "A `scroll-snap-stop` declaration is dropped with an advisory, and `CSS.supports()` returns `false` for it.",
+    examples: [
+      {
+        title: "Stop at every page of an onboarding flow",
+        lang: "css",
+        code: `.pages {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.page {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}`,
+      },
     ],
   },
   "scroll-padding": {
-    edgeCases: ['`CSS.supports("scroll-padding", "10px")` returns `true`, and so do the physical longhands.'],
+    examples: [
+      {
+        title: "Keep snapped and scrolled-to rows clear of a sticky header",
+        lang: "css",
+        code: `.list {
+  overflow-y: auto;
+  scroll-padding-top: 48px;
+}`,
+      },
+    ],
+    edgeCases: [
+      "A percentage is of the scroll container's own size on that axis.",
+      "`scroll-padding-inline` sets left and right, `scroll-padding-block` top and bottom.",
+    ],
   },
   "scroll-margin": {
     edgeCases: [
-      "`scroll-margin` and all its longhands, the logical ones included, are accepted without an advisory, and `CSS.supports()` returns `true`.",
+      "It takes a length; `auto` and percentages are invalid and the declaration is dropped with an advisory, as in browsers.",
+      "`scroll-margin-inline` sets left and right, `scroll-margin-block` top and bottom.",
     ],
   },
 };

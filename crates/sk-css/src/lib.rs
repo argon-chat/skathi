@@ -24,6 +24,7 @@ pub mod perf;
 mod prefix;
 mod registered;
 mod share;
+pub mod snap;
 mod transition;
 mod vars;
 pub mod view_transition;

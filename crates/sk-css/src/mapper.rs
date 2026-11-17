@@ -217,6 +217,7 @@ pub struct Extras {
     /// `mix-blend-mode: plus-lighter` (`Some(false)` is `normal`); only view transition images
     /// blend.
     pub plus_lighter: Option<bool>,
+    pub snap: crate::snap::SnapPatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -565,6 +566,7 @@ impl Extras {
         if other.plus_lighter.is_some() {
             self.plus_lighter = other.plus_lighter;
         }
+        self.snap.refine(&other.snap);
         if other.positioned.is_some() {
             self.positioned = other.positioned;
         }
@@ -2068,7 +2070,7 @@ fn calc_linear(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option
     }
 }
 
-fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
+pub(crate) fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
         DimensionPercentage::Percentage(p) => Some(relative(p.0)),
@@ -5908,6 +5910,14 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "scroll-snap-type" | "scroll-snap-align" | "scroll-snap-stop"
+                ) =>
+            {
+                crate::snap::apply_keywords(name.0.as_ref(), &c.value, &mut x.snap, diagnostics);
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "contain" =>
             {
                 if let Some((paint, size)) = contain(&c.value, diagnostics) {
@@ -6182,7 +6192,15 @@ fn apply_property(
         | ScrollPaddingBottom(_)
         | ScrollPaddingLeft(_)
         | ScrollPaddingRight(_)
-        | ScrollPadding(_) => {}
+        | ScrollPadding(_)
+        | ScrollPaddingBlock(_)
+        | ScrollPaddingInline(_)
+        | ScrollPaddingBlockStart(_)
+        | ScrollPaddingBlockEnd(_)
+        | ScrollPaddingInlineStart(_)
+        | ScrollPaddingInlineEnd(_) => {
+            crate::snap::apply_box(p, &mut x.snap, diagnostics);
+        }
         TextTransform(t) => {
             use crate::mapper::TextTransform as TT;
             use lightningcss::properties::text::TextTransformCase as C;
