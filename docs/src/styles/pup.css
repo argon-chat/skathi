@@ -120,19 +120,10 @@
       display: none;
     }
   }
-  .landing-footer {
-    position: relative;
-  }
-  /* Level with the footer line, in the left gutter where there is room for it, else above the line. */
+  /* First in the footer row, its feet on the bottom edge of the page. */
   .landing-pup {
-    position: absolute;
-    left: 0;
-    bottom: calc(100% + 1px - 1px * var(--pup-px));
-  }
-  @media (min-width: 1320px) {
-    .landing-pup {
-      left: auto;
-      right: calc(100% + 10px);
-    }
+    order: -1;
+    align-self: flex-end;
+    margin: -40px -4px -20px 0;
   }
 }
