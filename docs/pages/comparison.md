@@ -8,7 +8,7 @@ order: 0.5
 
 Electron ships Chromium and Node.js inside every app. Tauri puts a web UI in the WebView the OS provides and gives it a Rust backend in another process. Qt is a C++ toolkit with its own scene graph and the QML language. Skathi runs Vue or Svelte in JavaScriptCore and draws it with its own renderer, in one process with your Rust code.
 
-The first tables were measured: the same small app, built four times, on one machine. The rest comes from each project's documentation, linked under [Sources](#sources).
+The first tables were measured: the same small app, built four times, on one machine. The rest comes from each project's documentation, linked under [Sources](#sources). The best value in each row is highlighted; ties are all highlighted.
 
 ## When to pick which
 
@@ -21,46 +21,70 @@ The first tables were measured: the same small app, built four times, on one mac
 
 One app, four times: a window with a heading, a counter button and a scrolling list of 1,000 rows. Skathi builds a Vue single-file component with `sk publish`. Electron and Tauri build the same component with Vite. Qt runs a Qt Quick window with a `ListView` (which creates only the visible rows), built in release mode and deployed with `windeployqt`. Twenty seconds after its first frame, each app scrolls its list to the end from a timer; nothing touches the window.
 
-<div class="wide">
+Every size is what the app needs to run.
 
-| Size on Windows                       | Skathi        | Electron               | Tauri 2                                                                      | Qt 6                                         |
-| ------------------------------------- | ------------- | ---------------------- | ---------------------------------------------------------------------------- | -------------------------------------------- |
-| What runs                             | one exe       | a folder with 73 files | one exe and the WebView2 runtime                                             | a folder with 1,378 files from `windeployqt` |
-| On disk                               | **107.1 MiB** | 357.0 MiB              | 882.3 MiB: 4.1 MiB + 878.2 MiB of WebView2, installed system-wide and shared | 122.6 MiB                                    |
-| Download for a machine without it     | **46.4 MiB**  | 155.0 MiB              | 206.9 MiB: 1.7 MiB + WebView2's 205.2 MiB installer                          | 59.6 MiB                                     |
-| With the runtime fixed to one version | —             | —                      | 682.2 MiB on disk, 298.2 MiB to download                                     | —                                            |
+<div class="wide leaders">
+
+| Size on Windows                       | Skathi                   | Electron               | Tauri 2                                  | Qt 6                                         |
+| ------------------------------------- | ------------------------ | ---------------------- | ---------------------------------------- | -------------------------------------------- |
+| What runs                             | one exe                  | a folder with 73 files | one exe and the WebView2 runtime         | a folder with 1,378 files from `windeployqt` |
+| On disk                               | **107.1 MiB**            | 357.0 MiB              | 882.3 MiB<sup>1</sup>                    | 122.6 MiB<sup>2</sup>                        |
+| Download for a machine without it     | **46.4 MiB**<sup>3</sup> | 155.0 MiB<sup>3</sup>  | 206.9 MiB<sup>4</sup>                    | 59.6 MiB<sup>3</sup>                         |
+| With the runtime fixed to one version | —                        | —                      | 682.2 MiB on disk, 298.2 MiB to download | —                                            |
+
+</div>
+
+<div class="table-notes">
+
+1. 4.1 MiB of app and 878.2 MiB of WebView2, which is installed system-wide and shared with the other apps that use it.
+2. `windeployqt` adds a software OpenGL fallback and the MSVC runtime's installer; without them the folder is 85.2 MiB.
+3. The zipped app, standing for the download.
+4. Tauri's zipped app, 1.7 MiB, and WebView2's 205.2 MiB standalone installer. Where WebView2 is already installed, as on most Windows 10 and 11 machines, Tauri's download is 1.7 MiB and its installer 1.33 MiB.
 
 </div>
 
-Every size is what the app needs to run; zipped sizes stand for the download. Where WebView2 is already installed, as on most Windows 10 and 11 machines, Tauri's download is 1.7 MiB and its installer 1.33 MiB, and the 878.2 MiB runtime is shared with the other apps that use it. Qt's folder includes a software OpenGL fallback and the MSVC runtime's installer, both added by `windeployqt`; without them it is 85.2 MiB.
+<div class="wide leaders">
 
-<div class="wide">
-
-| Running, median of 3            | Skathi    | Electron  | Tauri 2                               | Qt 6         |
-| ------------------------------- | --------- | --------- | ------------------------------------- | ------------ |
-| Processes                       | **1**     | 4         | 7 (app + 6 WebView2)                  | **1**        |
-| First frame with content        | 743 ms    | 1,009 ms  | 597 ms                                | **469 ms**   |
-| Window on screen                | 743 ms    | 977 ms    | 76 ms, empty until the WebView paints | 281 ms       |
-| Private memory, idle            | 85.7 MiB  | 87.2 MiB  | 93.6 MiB                              | **28.0 MiB** |
-| Private memory, after scrolling | 85.1 MiB  | 86.4 MiB  | 96.7 MiB                              | **28.9 MiB** |
-| Working set, all processes      | 149.4 MiB | 316.0 MiB | 353.8 MiB                             | **81.9 MiB** |
-| Dedicated GPU memory            | 28.8 MiB  | 22.7 MiB  | **18.0 MiB**                          | 21.9 MiB     |
-| CPU when idle, % of one core    | 1.4       | **0.3**   | 0.6                                   | 0.5          |
-| CPU when idle after scrolling   | 1.1       | 0.8       | **0.2**                               | **0.2**      |
+| Running, median of 3            | Skathi    | Electron  | Tauri 2               | Qt 6         |
+| ------------------------------- | --------- | --------- | --------------------- | ------------ |
+| Processes                       | **1**     | 4         | 7 (app + 6 WebView2)  | **1**        |
+| First frame with content        | 743 ms    | 1,009 ms  | 597 ms                | **469 ms**   |
+| Window on screen                | 743 ms    | 977 ms    | **76 ms**<sup>1</sup> | 281 ms       |
+| Private memory, idle            | 85.7 MiB  | 87.2 MiB  | 93.6 MiB              | **28.0 MiB** |
+| Private memory, after scrolling | 85.1 MiB  | 86.4 MiB  | 96.7 MiB              | **28.9 MiB** |
+| Working set, all processes      | 149.4 MiB | 316.0 MiB | 353.8 MiB             | **81.9 MiB** |
+| Dedicated GPU memory            | 28.8 MiB  | 22.7 MiB  | **18.0 MiB**          | 21.9 MiB     |
+| CPU when idle, % of one core    | 1.4       | **0.3**   | 0.6                   | 0.5          |
+| CPU when idle after scrolling   | 1.1       | 0.8       | **0.2**               | **0.2**      |
 
 </div>
+
+<div class="table-notes">
 
 Each row counts every process the app runs, WebView2's included.
 
+1. Empty until the WebView paints; Tauri's first frame with content comes at 597 ms.
+
+</div>
+
 A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one after another, then 50 sends of 1 MiB of bytes to native code, which returns the length. Electron and Tauri calls are awaited promises; Skathi and Qt calls return directly.
 
-<div class="wide">
+<div class="wide leaders">
 
-| Native call           | Skathi                                                                                                | Electron                                      | Tauri 2                                     | Qt 6                                                  |
-| --------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------- | ----------------------------------------------------- |
-| Where the call runs   | in the same process                                                                                   | in the main process, over IPC                 | in the app process, over IPC                | in the same process                                   |
-| `add(a, b)`, per call | 0.62 µs through a native module; **0.05 µs** through a native API                                     | 124 µs                                        | 1,183 µs                                    | 0.1–0.2 µs (QML's clock counts milliseconds)          |
-| 1 MiB to native code  | 1.0 ms as a string through a native module; **0.002 ms** as a typed array a native API reads in place | 1.18 ms, a structured clone of a `Uint8Array` | 9.5 ms, an `ArrayBuffer` sent as a raw body | 0.12 ms, an `ArrayBuffer` converted to a `QByteArray` |
+| Native call           | Skathi                           | Electron                      | Tauri 2                      | Qt 6                    |
+| --------------------- | -------------------------------- | ----------------------------- | ---------------------------- | ----------------------- |
+| Where the call runs   | **in the same process**          | in the main process, over IPC | in the app process, over IPC | **in the same process** |
+| `add(a, b)`, per call | **0.05 µs**, 0.62 µs<sup>1</sup> | 124 µs                        | 1,183 µs                     | 0.1–0.2 µs<sup>2</sup>  |
+| 1 MiB to native code  | **0.002 ms**, 1.0 ms<sup>3</sup> | 1.18 ms<sup>4</sup>           | 9.5 ms<sup>4</sup>           | 0.12 ms<sup>4</sup>     |
+
+</div>
+
+<div class="table-notes">
+
+1. 0.05 µs through a [native API](/embedding/native-api/), 0.62 µs through a [native module](/embedding/native-modules/).
+2. QML's clock counts milliseconds.
+3. 0.002 ms as a typed array a native API reads in place, 1.0 ms as a string through a native module.
+4. Electron sends a structured clone of a `Uint8Array`, Tauri an `ArrayBuffer` as a raw body, and Qt converts an `ArrayBuffer` to a `QByteArray`.
 
 </div>
 
@@ -77,20 +101,36 @@ A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one af
 
 ## Rendering and platforms
 
-<div class="wide">
+<div class="wide leaders">
 
-|                                         | Skathi                                                                                                                                                                                  | Electron                                                                                                                                   | Tauri 2                                                                                                                                                               | Qt 6                                                                            |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| What draws the UI                       | Skathi's renderer: a Rust element tree, CSS engine and layout on DirectX, Metal or wgpu (Vulkan)                                                                                        | Chromium, a copy in every app                                                                                                              | The OS WebView: WebView2 (Chromium) on Windows, WKWebView (WebKit) on macOS, WebKitGTK on Linux                                                                       | Qt Quick's scene graph on Direct3D 11 or 12, Vulkan, Metal or OpenGL            |
-| JavaScript engine                       | JavaScriptCore, one revision on every OS                                                                                                                                                | V8, in every app                                                                                                                           | V8 on Windows, JavaScriptCore on macOS and Linux                                                                                                                      | QML's own engine                                                                |
-| Engine version chosen by                | ✓ The app                                                                                                                                                                               | ✓ The app, with a new Chromium major every 8 weeks; only the latest three get fixes                                                        | ✗ The OS: WebView2 updates itself, WebKit comes with macOS and WebKitGTK with the distribution                                                                        | ✓ The app                                                                       |
-| Same result on Windows, macOS and Linux | ✓ One renderer, CSS engine, JavaScriptCore revision and sRGB colour pipeline. OS services vary; each [reference](/web-platform/) page lists its platforms                               | ✓ One Chromium, at 357 MiB per app                                                                                                         | ✗ Three engines to test: CSS and API support, GPU paths, colour handling and rendering bugs are each engine's own, and WebKitGTK has documented GPU problems on Linux | ✓ One scene graph; Qt Quick Controls default to a different style per OS        |
-| Web platform                            | Flexbox, grid, Canvas 2D, WebGPU, `fetch`, WebSocket, IndexedDB and more ([web platform](/web-platform/), [CSS](/css/)). No Web Workers, WebGL, WebRTC or Shadow DOM                    | ✓ All of Chromium, plus Node.js                                                                                                            | Each WebView's, so it differs by OS: WebGPU, for one, is partial in Safari                                                                                            | ✗ QML is not HTML or CSS; web content needs Qt WebEngine, a Chromium of its own |
-| UI code                                 | Vue 3 or Svelte 5, with TypeScript                                                                                                                                                      | Any web framework                                                                                                                          | Any web framework, tested against three engines                                                                                                                       | QML and C++, or C++ Widgets                                                     |
-| Native GPU content inside the UI        | ✓ [`<sk-surface>`](/embedding/native-frames/): D3D11, D3D12 and shared Vulkan textures on Windows, Metal on macOS, CPU frames on Linux; composited like any element, with the UI on top | Partial: the experimental `sharedTexture` module (Electron 40 and later) turns a shared texture into a `VideoFrame` for a canvas or WebGPU | ✗ Not in the page: native content can only sit behind or beside a transparent WebView                                                                                 | ✓ `QQuickRhiItem` and native textures wrapped as `QSGTexture`, in C++           |
-| More windows                            | ✓ [Pop-outs](/guides/pop-out-windows/) in the same process share one JavaScript realm and the same reactive state                                                                       | Each `BrowserWindow` is another renderer process with its own memory and start-up; windows exchange state over IPC                         | Each window is another WebView with its own JavaScript; windows exchange events through the Rust side                                                                 | ✓ Windows in one process share their C++ and QML objects                        |
-| Desktop OSes                            | Windows x64, macOS on Apple silicon, Linux x64                                                                                                                                          | Windows 10 and later, macOS 13 and later, Linux; x64 and arm64                                                                             | Windows, macOS, Linux                                                                                                                                                 | Windows, macOS, Linux, embedded Linux, QNX, VxWorks, INTEGRITY, WebAssembly     |
-| Mobile                                  | ✗                                                                                                                                                                                       | ✗                                                                                                                                          | ✓ iOS and Android since 2.0                                                                                                                                           | ✓ Android and iOS                                                               |
+|                                         | Skathi                                                                              | Electron                                                       | Tauri 2                                          | Qt 6                                                                            |
+| --------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| What draws the UI                       | Skathi's renderer<sup>1</sup>                                                       | Chromium, a copy in every app                                  | The OS WebView<sup>2</sup>                       | Qt Quick's scene graph<sup>3</sup>                                              |
+| JavaScript engine                       | JavaScriptCore, one revision on every OS                                            | V8, in every app                                               | V8 on Windows, JavaScriptCore on macOS and Linux | QML's own engine                                                                |
+| Engine version chosen by                | ✓ The app                                                                           | ✓ The app, a new Chromium major every 8 weeks<sup>4</sup>      | ✗ The OS<sup>5</sup>                             | ✓ The app                                                                       |
+| Same result on Windows, macOS and Linux | ✓ The rendering; OS services vary<sup>6</sup>                                       | ✓ One Chromium, at 357 MiB per app                             | ✗ Three engines to test<sup>7</sup>              | ✓ One scene graph; Qt Quick Controls default to a different style per OS        |
+| Web platform                            | Partial<sup>8</sup>                                                                 | **✓ All of Chromium, plus Node.js**                            | Differs by OS<sup>9</sup>                        | ✗ QML, not HTML or CSS<sup>10</sup>                                             |
+| UI code                                 | Vue 3 or Svelte 5, with TypeScript                                                  | **Any web framework**                                          | **Any web framework**, on three engines          | QML and C++, or C++ Widgets                                                     |
+| Native GPU content inside the UI        | **✓ [`<sk-surface>`](/embedding/native-frames/)**; CPU frames on Linux<sup>11</sup> | Partial, experimental<sup>12</sup>                             | ✗ Only behind or beside a transparent WebView    | **✓ `QQuickRhiItem`** and native textures as `QSGTexture`, in C++               |
+| More windows                            | **✓ [Pop-outs](/guides/pop-out-windows/) share one realm and its state**            | A renderer process per window, state over IPC                  | A WebView per window, events through Rust        | **✓ One process, shared C++ and QML objects**                                   |
+| Desktop OSes                            | Windows x64, macOS on Apple silicon, Linux x64                                      | Windows 10 and later, macOS 13 and later, Linux; x64 and arm64 | Windows, macOS, Linux                            | **Windows, macOS, Linux, embedded Linux, QNX, VxWorks, INTEGRITY, WebAssembly** |
+
+</div>
+
+<div class="table-notes">
+
+1. A Rust element tree, CSS engine and layout on DirectX, Metal or wgpu (Vulkan).
+2. WebView2 (Chromium) on Windows, WKWebView (WebKit) on macOS, WebKitGTK on Linux.
+3. On Direct3D 11 or 12, Vulkan, Metal or OpenGL.
+4. Only the latest three majors get fixes.
+5. WebView2 updates itself, WebKit comes with macOS and WebKitGTK with the distribution.
+6. One renderer, CSS engine, JavaScriptCore revision and sRGB colour pipeline on every OS. OS services vary; each [reference](/web-platform/) page lists its platforms.
+7. CSS and API support, GPU paths, colour handling and rendering bugs are each engine's own, and WebKitGTK has documented GPU problems on Linux.
+8. Flexbox, grid, Canvas 2D, WebGPU, `fetch`, WebSocket, IndexedDB and more, listed under [web platform](/web-platform/) and [CSS](/css/). No Web Workers, WebGL, WebRTC or Shadow DOM.
+9. Each WebView's own: WebGPU, for one, is partial in Safari.
+10. Web content needs Qt WebEngine, a Chromium of its own.
+11. D3D11, D3D12 and shared Vulkan textures on Windows, Metal on macOS, CPU frames on Linux; composited like any element, with the UI on top.
+12. The experimental `sharedTexture` module (Electron 40 and later) turns a shared texture into a `VideoFrame` for a canvas or WebGPU.
 
 </div>
 
@@ -98,30 +138,54 @@ A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one af
 
 The question is whether the UI's code calls native code in its own process or sends a message to another one. The measured cost is in the [native call](#measured) table.
 
-<div class="wide">
+<div class="wide leaders">
 
-|                                  | Skathi                                                                                                                                                                                                                                                                   | Electron                                                                                                                                                                                                    | Tauri 2                                                                                               | Qt 6                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Native language                  | Rust, through the [`skathi` crate](/embedding/overview/). An app built with `sk` needs none                                                                                                                                                                              | JavaScript in Node.js, C++ in Node-API addons                                                                                                                                                               | Rust                                                                                                  | C++                                                                                     |
-| Calling it from the UI           | ✓ In process. A [native module](/embedding/native-modules/) function runs inside the JavaScript call, its values passed through JSON and serde; a `#[task]` runs on a worker and returns a promise. A [native API](/embedding/native-api/) passes engine values directly | IPC: `ipcRenderer.invoke` sends a structured clone to the main process. In process only through a Node-API addon in a renderer with the sandbox turned off, which Electron's security guide advises against | IPC: `invoke` sends JSON, or raw bytes, from the WebView's process to the app's and returns a promise | ✓ In process: `Q_INVOKABLE` methods and properties, values converted through `QVariant` |
-| Types across the boundary        | ✓ `sk types` writes the app's `.d.ts` from the Rust signatures                                                                                                                                                                                                           | Written by hand for the preload API                                                                                                                                                                         | tauri-specta, a release candidate outside Tauri                                                       | ✓ `QML_ELEMENT` registers C++ types for the QML tooling                                 |
-| Embedding in an existing program | ✓ The `skathi` crate runs the UI on its own thread inside your Rust program; `main` stays yours                                                                                                                                                                          | ✗ Electron is the program; your code runs inside it or beside it                                                                                                                                            | Partial: Tauri owns the main thread's event loop; wry alone can put a WebView in an existing window   | ✓ A C++ library: a `QQuickView` or `QQuickWidget` goes into an existing program         |
+|                                  | Skathi                                                             | Electron                                      | Tauri 2                                         | Qt 6                                                        |
+| -------------------------------- | ------------------------------------------------------------------ | --------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------- |
+| Native language                  | Rust, optional<sup>1</sup>                                         | JavaScript in Node.js, C++ in Node-API addons | Rust                                            | C++                                                         |
+| Calling it from the UI           | **✓ In process**<sup>2</sup>                                       | IPC, a structured clone<sup>3</sup>           | IPC, JSON or raw bytes<sup>4</sup>              | **✓ In process**<sup>5</sup>                                |
+| Types across the boundary        | **✓ `sk types`** writes the app's `.d.ts` from the Rust signatures | Written by hand for the preload API           | tauri-specta, a release candidate outside Tauri | **✓ `QML_ELEMENT`** registers C++ types for the QML tooling |
+| Embedding in an existing program | **✓ A Rust crate**<sup>6</sup>                                     | ✗ Electron is the program                     | Partial<sup>7</sup>                             | **✓ A C++ library**<sup>8</sup>                             |
+
+</div>
+
+<div class="table-notes">
+
+1. Through the [`skathi` crate](/embedding/overview/). An app built with `sk` needs none.
+2. A [native module](/embedding/native-modules/) function runs inside the JavaScript call, its values passed through JSON and serde; a `#[task]` runs on a worker and returns a promise. A [native API](/embedding/native-api/) passes engine values directly.
+3. `ipcRenderer.invoke` sends a structured clone to the main process. In process only through a Node-API addon in a renderer with the sandbox turned off, which Electron's security guide advises against.
+4. `invoke` sends JSON, or raw bytes, from the WebView's process to the app's and returns a promise.
+5. `Q_INVOKABLE` methods and properties, values converted through `QVariant`.
+6. The `skathi` crate runs the UI on its own thread inside your Rust program; `main` stays yours.
+7. Tauri owns the main thread's event loop; wry alone can put a WebView in an existing window.
+8. A `QQuickView` or `QQuickWidget` goes into an existing program.
 
 </div>
 
 ## Tooling and licensing
 
-<div class="wide">
+<div class="wide leaders">
 
-|                       | Skathi                                                                                                                                                                                               | Electron                                                                   | Tauri 2                                                                           | Qt 6                                                                                                                                                                                                                                                                               |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Libraries             | npm, Vue and Svelte libraries and Tailwind CSS work, except code that needs a browser feature the engine lacks; `sk check` flags unsupported CSS and framework features, in the app and its packages | ✓ npm, the web and Node.js                                                 | npm and the web within each WebView's support, plus Rust crates                   | Qt's modules and C++ libraries; third-party QML components are few next to npm                                                                                                                                                                                                     |
-| Hot reload            | ✓ `sk dev` re-renders a Vue template in place and keeps state; Svelte components hot-update                                                                                                          | ✓ In the renderer, through a bundler; main-process changes restart the app | ✓ The frontend through its dev server; Rust changes rebuild and restart the app   | ✓ QML hot reload since Qt 6.12; C++ changes rebuild                                                                                                                                                                                                                                |
-| Devtools              | The [inspector](/guides/devtools/): elements, styles, console, network, storage and a frame profiler; no breakpoint debugger                                                                         | ✓ Chrome DevTools                                                          | A different WebView inspector on each OS                                          | ✓ Qt Creator's QML debugger and profiler                                                                                                                                                                                                                                           |
-| What a build needs    | Bun. `sk publish` stamps a prebuilt host, so an app needs no compiler                                                                                                                                | Node.js                                                                    | Rust, MSVC on Windows, and Node.js; 2 min 43 s for this app's first release build | A C++ compiler, CMake and the Qt SDK                                                                                                                                                                                                                                               |
-| Installer and updates | Yours: `sk publish` makes the exe, or a `.app` on macOS                                                                                                                                              | ✓ Electron Forge or electron-builder; `autoUpdater` on macOS and Windows   | ✓ MSI, NSIS, DMG, AppImage, deb and rpm; an updater plugin                        | ✓ `windeployqt` and `macdeployqt`; the Qt Installer Framework                                                                                                                                                                                                                      |
-| License               | MIT or Apache-2.0                                                                                                                                                                                    | MIT                                                                        | MIT or Apache-2.0                                                                 | LGPLv3 or GPLv3, or commercial. Graphs, Quick 3D, Virtual Keyboard and other modules are GPLv3 or commercial only. LGPL requires that users can relink your app against another Qt. Later LTS patch releases are commercial only; the small-business license starts at €546 a year |
-| Releases              | 0.x: APIs can still change between minor releases                                                                                                                                                    | A major every 8 weeks; the latest three are supported                      | 2.x since October 2024                                                            | 6.12 is an LTS release, from September 2026                                                                                                                                                                                                                                        |
+|                       | Skathi                                                                 | Electron                                                                 | Tauri 2                                                         | Qt 6                                                          |
+| --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| Libraries             | Partial<sup>1</sup>                                                    | **✓ npm, the web and Node.js**                                           | npm and the web within each WebView's support, plus Rust crates | Qt's modules and C++ libraries<sup>2</sup>                    |
+| Hot reload            | ✓ Vue templates keep their state; Svelte components hot-update         | ✓ The renderer; main-process changes restart the app                     | ✓ The frontend; Rust changes rebuild and restart the app        | ✓ QML since Qt 6.12; C++ changes rebuild                      |
+| Devtools              | The [inspector](/guides/devtools/), no breakpoint debugger<sup>3</sup> | **✓ Chrome DevTools**                                                    | A different WebView inspector on each OS                        | **✓ Qt Creator's QML debugger and profiler**                  |
+| What a build needs    | **Bun**<sup>4</sup>                                                    | **Node.js**                                                              | Rust, MSVC on Windows, and Node.js<sup>5</sup>                  | A C++ compiler, CMake and the Qt SDK                          |
+| Installer and updates | Yours: `sk publish` makes the exe, or a `.app` on macOS                | ✓ Electron Forge or electron-builder; `autoUpdater` on macOS and Windows | ✓ MSI, NSIS, DMG, AppImage, deb and rpm; an updater plugin      | ✓ `windeployqt` and `macdeployqt`; the Qt Installer Framework |
+| License               | MIT or Apache-2.0                                                      | MIT                                                                      | MIT or Apache-2.0                                               | LGPLv3 or commercial<sup>6</sup>                              |
+| Releases              | 0.x: APIs can still change between minor releases                      | A major every 8 weeks; the latest three are supported                    | 2.x since October 2024                                          | 6.12 is an LTS release, from September 2026                   |
+
+</div>
+
+<div class="table-notes">
+
+1. npm, Vue and Svelte libraries and Tailwind CSS work, except code that needs a browser feature the engine lacks; `sk check` flags unsupported CSS and framework features, in the app and its packages.
+2. Third-party QML components are few next to npm.
+3. Elements, styles, console, network, storage and a frame profiler.
+4. `sk publish` stamps a prebuilt host, so an app needs no compiler.
+5. 2 min 43 s for this app's first release build.
+6. LGPLv3 or GPLv3, or commercial. Graphs, Quick 3D, Virtual Keyboard and other modules are GPLv3 or commercial only. The LGPL requires that users can relink your app against another Qt. Later LTS patch releases are commercial only. The Small Business license starts at €546 a year.
 
 </div>
 
