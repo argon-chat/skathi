@@ -14,11 +14,11 @@ The first tables were measured: the same small app, built three times, on one ma
 
 - **Skathi** for desktop apps written in Vue or Svelte that look and behave the same on Windows, macOS and Linux. One renderer and one JavaScript engine everywhere, one process per app with every window sharing its state, Rust called in the same process, native GPU content inside the UI, and a Rust program that can embed the whole UI. It is desktop-only and implements a documented subset of the web platform.
 - **Electron** when you need all of Chromium and Node.js. You pay with a 357 MiB app folder, four processes for one window and another renderer process per window, and a new Chromium major to ship every 8 weeks.
-- **Tauri** when the app must also run on iOS and Android, or a 2 MiB download matters most and your users already have WebView2 (878 MiB, installed with Windows). You pay with three WebView engines to test, whose versions the OS picks, and a process hop on every call into Rust: 1.2 ms per call here.
+- **Tauri** when the app must also run on iOS and Android, or a 2 MiB download matters most and your users already have WebView2 (878 MiB, installed with Windows). You pay with three WebView engines to test, whose versions the OS picks, and a process hop on every call into Rust: 0.9 ms per call here.
 
 ## Measured
 
-One app, three times: a window with a heading, a counter button and a scrolling list of 1,000 rows. Skathi builds a Vue single-file component with `sk publish`. Electron and Tauri build the same component with Vite. Twenty seconds after its first frame, each app scrolls its list to the end from a timer; nothing touches the window.
+One app, three times: a window with a heading, a counter button and a scrolling list of 1,000 rows. Skathi builds a Vue single-file component with `sk publish` into a small Rust program that embeds Skathi with only the features the app uses. Electron and Tauri build the same component with Vite. Twenty seconds after its first frame, each app scrolls its list to the end from a timer; nothing touches the window.
 
 Every size is what the app needs to run.
 
@@ -27,8 +27,8 @@ Every size is what the app needs to run.
 | Size on Windows                       | Skathi                   | Electron               | Tauri 2                                  |
 | ------------------------------------- | ------------------------ | ---------------------- | ---------------------------------------- |
 | What runs                             | one exe                  | a folder with 73 files | one exe and the WebView2 runtime         |
-| On disk                               | **107.1 MiB**            | 357.0 MiB              | 882.3 MiB<sup>1</sup>                    |
-| Download for a machine without it     | **46.4 MiB**<sup>2</sup> | 155.0 MiB<sup>2</sup>  | 206.9 MiB<sup>3</sup>                    |
+| On disk                               | **70.8 MiB**             | 357.0 MiB              | 882.3 MiB<sup>1</sup>                    |
+| Download for a machine without it     | **28.7 MiB**<sup>2</sup> | 155.0 MiB<sup>2</sup>  | 206.9 MiB<sup>3</sup>                    |
 | With the runtime fixed to one version | —                        | —                      | 682.2 MiB on disk, 298.2 MiB to download |
 
 </div>
@@ -43,16 +43,16 @@ Every size is what the app needs to run.
 
 <div class="wide leaders">
 
-| Running, median of 3            | Skathi             | Electron  | Tauri 2              |
-| ------------------------------- | ------------------ | --------- | -------------------- |
-| Processes                       | **1**              | 4         | 7 (app + 6 WebView2) |
-| First frame with content        | 743 ms<sup>1</sup> | 1,009 ms  | **597 ms**           |
-| Private memory, idle            | **85.7 MiB**       | 87.2 MiB  | 93.6 MiB             |
-| Private memory, after scrolling | **85.1 MiB**       | 86.4 MiB  | 96.7 MiB             |
-| Working set, all processes      | **149.4 MiB**      | 316.0 MiB | 353.8 MiB            |
-| Dedicated GPU memory            | 28.8 MiB           | 22.7 MiB  | **18.0 MiB**         |
-| CPU when idle, % of one core    | 1.4                | **0.3**   | 0.6                  |
-| CPU when idle after scrolling   | 1.1                | 0.8       | **0.2**              |
+| Running, median of 5            | Skathi                 | Electron  | Tauri 2              |
+| ------------------------------- | ---------------------- | --------- | -------------------- |
+| Processes                       | **1**                  | 4         | 7 (app + 6 WebView2) |
+| First frame with content        | **359 ms**<sup>1</sup> | 392 ms    | 435 ms               |
+| Private memory, idle            | **55.1 MiB**           | 86.3 MiB  | 95.3 MiB             |
+| Private memory, after scrolling | **56.3 MiB**           | 87.7 MiB  | 98.6 MiB             |
+| Working set, all processes      | **112.1 MiB**          | 307.0 MiB | 356.6 MiB            |
+| Dedicated GPU memory            | 24.1 MiB               | 22.7 MiB  | **19.9 MiB**         |
+| CPU when idle, % of one core    | **0.2**<sup>2</sup>    | 0.5       | 0.5                  |
+| CPU when idle after scrolling   | 0.2<sup>2</sup>        | **0.0**   | 0.3                  |
 
 </div>
 
@@ -61,6 +61,7 @@ Every size is what the app needs to run.
 Each row counts every process the app runs, WebView2's included.
 
 1. Skathi shows its window only once its first frame is drawn.
+2. Windows counts CPU time in 15.6 ms ticks: 0.2 % is one tick in 10 seconds. Skathi's ten samples were 0, 1 or 2 ticks, and once 4.
 
 </div>
 
@@ -68,18 +69,18 @@ A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one af
 
 <div class="wide leaders">
 
-| Native call           | Skathi                           | Electron                      | Tauri 2                      |
-| --------------------- | -------------------------------- | ----------------------------- | ---------------------------- |
-| Where the call runs   | **in the same process**          | in the main process, over IPC | in the app process, over IPC |
-| `add(a, b)`, per call | **0.05 µs**, 0.62 µs<sup>1</sup> | 124 µs                        | 1,183 µs                     |
-| 1 MiB to native code  | **0.002 ms**, 1.0 ms<sup>2</sup> | 1.18 ms<sup>3</sup>           | 9.5 ms<sup>3</sup>           |
+| Native call           | Skathi                              | Electron                      | Tauri 2                      |
+| --------------------- | ----------------------------------- | ----------------------------- | ---------------------------- |
+| Where the call runs   | **in the same process**             | in the main process, over IPC | in the app process, over IPC |
+| `add(a, b)`, per call | **0.06 µs**, 0.04 µs<sup>1</sup>    | 109 µs                        | 932 µs                       |
+| 1 MiB to native code  | **<0.001 ms**, 0.014 ms<sup>2</sup> | 1.14 ms<sup>3</sup>           | 8.9 ms<sup>3</sup>           |
 
 </div>
 
 <div class="table-notes">
 
-1. 0.05 µs through a [native API](/embedding/native-api/), 0.62 µs through a [native module](/embedding/native-modules/).
-2. 0.002 ms as a typed array a native API reads in place, 1.0 ms as a string through a native module.
+1. 0.06 µs through a [native module](/embedding/native-modules/), 0.04 µs through a [native API](/embedding/native-api/).
+2. A `Uint8Array` to a native module function: under 0.001 ms as a `&[u8]` it reads in place, 0.014 ms as a `Vec<u8>`, copied once. A native API reads it in place in 0.002 ms.
 3. Electron sends a structured clone of a `Uint8Array`, Tauri an `ArrayBuffer` as a raw body.
 
 </div>
@@ -88,12 +89,13 @@ A native call, measured inside the same apps: 10,000 calls of `add(a, b)` one af
 
 - **Machine.** AMD Ryzen 9 9950X (16 cores, 32 threads), 96 GB of RAM, GeForce RTX 5070 and RTX 3070 Ti (driver 32.0.16.1692), a 2560×1440 primary display, Windows 11 Pro Insider build 29683.
 - **WebView2.** The installed Evergreen runtime 157.0.4341.46 is 878.2 MiB in 918 files. The standalone x64 installer is 205.2 MiB and the bootstrapper 1.8 MiB. The fixed-version runtime 157.0.4341.60 for x64 is a 296.5 MiB cab that unpacks to 678.1 MiB.
-- **Versions.** Skathi 0.3.0 with its release host (no devtools). Electron 45.3.3 (Chromium 156), packaged with `@electron/packager` 20.3.0. Tauri 2.12.6 with wry 0.57.2 on WebView2 157.0.4341.46, NSIS bundle. Vue 3.5.45 and Vite 8.3.8 for the Electron and Tauri apps. Skathi's native-call numbers come from an embedder built in release mode against the current `skathi` crate.
-- **Runs.** Each app started four times. The first start filled the disk cache and each engine's own caches and is not counted; the tables show the median of the other three. Each app opened its window without taking focus and was closed by the script.
-- **Start.** _First frame with content_ runs from process creation until the app has drawn its UI: each app changes the window title in the second `requestAnimationFrame` after mounting, and a script polls the window titles every millisecond.
+- **Versions.** Skathi 0.4 development build, `dc81c4ac`. Electron 45.3.3 (Chromium 156), packaged with `@electron/packager` 20.3.0. Tauri 2.12.6 with wry 0.57.2 on WebView2 157.0.4341.46, NSIS bundle. Vue 3.5.45 in all three apps, and Vite 8.3.8 for the Electron and Tauri ones.
+- **Skathi's build.** The app is built with only the features it uses: `sk publish --payload-only` with `"intl": "invariant"` makes the payload, and a Rust `main` that spawns it and waits holds it, built against `skathi` with `default-features = false` and the features `prod`, `icu-root` and `no-devtools` ([features and size](/embedding/features/)). The exe is built in release mode with the size profile from [Shipping](/embedding/shipping/#binary-size) and linked with `rust-lld`; it is one file. With every default feature on, the same app is a 96.9 MiB exe (42.9 MiB zipped) that draws its first frame in 409 ms and uses 86.6 MiB of private memory, a 149.5 MiB working set and 28.1 MiB of GPU memory (median of 3). The native-call numbers come from a second embedder with the same features and profile.
+- **Runs.** Each app started six times, in turn: Skathi, Electron, Tauri, then again. The first round filled the disk cache and each engine's own caches and is not counted; the tables show the median of the other five. Each app opened its window without taking focus and was closed by the script. The native calls ran five times per app, in turn as well.
+- **Start.** _First frame with content_ runs from process creation until the app has drawn its UI: each app changes the window title in the second `requestAnimationFrame` after mounting, and a script polls the titles of the started process's windows every millisecond.
 - **Memory.** Summed over every process in the app's process tree, for every framework: Electron's helpers and Tauri's six `msedgewebview2.exe` processes are counted in each memory, GPU and CPU row. Samples are taken 5 seconds after start and 3 seconds after the scroll ended. Private memory is the private working set that Task Manager shows; the working set adds shared pages, once per process; GPU memory comes from Windows' GPU Process Memory counters.
 - **CPU.** CPU time of the process tree over 10 seconds, idle, after each memory sample.
-- **Noise.** Other work ran on the machine, at 10 to 37 % of total CPU before a start. Single starts varied: one of Electron's took 3.7 seconds. The native-call numbers vary by about 20 % between runs.
+- **Noise.** The machine was otherwise quiet: 2 to 5 % of total CPU before each start, and up to 9 % before a native-call run. A run would have been repeated above 10 %; none had to be. One app's first frames stayed within 36 ms of each other. Each of Electron's and Tauri's native-call numbers stayed within 9 % across runs; Skathi's, a fraction of a microsecond each, varied by up to a third.
 
 ## Rendering and platforms
 
@@ -146,7 +148,7 @@ The question is whether the UI's code calls native code in its own process or se
 <div class="table-notes">
 
 1. Through the [`skathi` crate](/embedding/overview/). An app built with `sk` needs none.
-2. A [native module](/embedding/native-modules/) function runs inside the JavaScript call, its values passed through JSON and serde; a `#[task]` runs on a worker and returns a promise. A [native API](/embedding/native-api/) passes engine values directly.
+2. A [native module](/embedding/native-modules/) function runs inside the JavaScript call, its values read and built straight from the engine's, with no JSON, and bytes read in place; a `#[task]` runs on a worker and returns a promise. A [native API](/embedding/native-api/) passes engine values directly.
 3. `ipcRenderer.invoke` sends a structured clone to the main process. In process only through a Node-API addon in a renderer with the sandbox turned off, which Electron's security guide advises against.
 4. `invoke` sends JSON, or raw bytes, from the WebView's process to the app's and returns a promise.
 5. The `skathi` crate runs the UI on its own thread inside your Rust program; `main` stays yours.
