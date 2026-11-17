@@ -468,8 +468,8 @@ const notify = ref(true);
       },
     ],
     edgeCases: [
-      'It reads the `checked` attribute of any element, and `checked="false"` does not match, so a boolean binding works on a `<button>` as in the example.',
-      "On an `<input>`, setting `input.checked` from script updates the match as well.",
+      "On a checkbox or radio button it follows the control's state, as `input.checked` reads it, and on an `<option>` it matches the selected one. A click, Space, `v-model` and `bind:checked` update the match.",
+      'On any other element it reads the `checked` attribute, and `checked="false"` does not match, so a boolean binding works on a `<button>` as in the example.',
     ],
   },
 
@@ -882,15 +882,29 @@ const query = ref("");
   "pseudo-indeterminate": {
     examples: [
       {
-        title: "Instead: draw a partly checked tree node from aria-checked",
-        lang: "css",
-        code: `.tree-check[aria-checked="mixed"] .mark {
-  width: 8px;
-  height: 2px;
-}`,
+        title: "Dim a select-all checkbox while only some rows are picked",
+        lang: "vue",
+        code: `<script setup lang="ts">
+import { computed, ref } from "vue";
+const rows = ref([true, false, true]);
+const all = computed(() => rows.value.every(Boolean));
+const some = computed(() => rows.value.some(Boolean) && !all.value);
+</script>
+
+<template>
+  <input type="checkbox" class="all" :checked="all" :indeterminate="some" />
+</template>
+
+<style scoped>
+.all:indeterminate {
+  opacity: 0.6;
+}
+</style>`,
       },
     ],
-    edgeCases: DROPPED_PSEUDO_CLASS,
+    edgeCases: [
+      "It matches a checkbox whose `indeterminate` property is true; a click clears it. Radio buttons and progress bars never match.",
+    ],
   },
 
   "pseudo-default": {

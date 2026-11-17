@@ -1898,7 +1898,7 @@ const interaction = section("Interaction", [
     aliases: ["-webkit-appearance"],
   }),
   prop("accent-color", PART, "Sets the accent color of form controls, such as the filled part of a range input.", {
-    limitations: ['Only `<input type="range">` reads it; checkboxes and radio buttons keep their default color.'],
+    limitations: ["Range inputs, checkboxes and radio buttons read it; other controls keep their default color."],
   }),
   prop("caret-color", NO, "Sets the color of the text insertion caret.", { related: ["caret-shape"] }),
   prop("caret-shape", NO, "Sets the shape of the text insertion caret: bar, block or underscore.", {
@@ -2190,6 +2190,7 @@ const selectors = section("Selectors", [
       [":disabled", "Matches form controls that are disabled."],
       [":enabled", "Matches form controls that are enabled."],
       [":checked", "Matches checkboxes, radio buttons and options that are checked or selected."],
+      [":indeterminate", "Matches a checkbox in an indeterminate state, partly checked."],
       [":fullscreen", "Matches the element that is in fullscreen mode."],
       [":root", "Matches the root element of the document."],
       [":empty", "Matches elements that have no children."],
@@ -2237,7 +2238,6 @@ const selectors = section("Selectors", [
       [":placeholder-shown", "Matches an input or textarea that is showing its placeholder."],
       [":read-only", "Matches elements the user cannot edit."],
       [":required", "Matches form fields that are required."],
-      [":indeterminate", "Matches form controls in an indeterminate state, such as a partly checked checkbox."],
       [":default", "Matches the default option of a group of form controls."],
       [":autofill", "Matches an input whose value the browser has autofilled."],
       [":valid", "Matches form fields whose content validates."],

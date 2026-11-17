@@ -164,6 +164,7 @@ input[type="range"].volume::-webkit-slider-thumb {
     edgeCases: [
       "On `<select>`, `none` removes the chevron and the internal padding drawn around the selected label.",
       'On `<input type="range">`, `none` removes the grey track and its filled part; the thumb stays, in `accent-color`.',
+      "On a checkbox or radio button, `none` removes the box, the check mark and the dot: the input draws only its own background, border and `::before`.",
       "Any value other than `none`, such as `auto` or `menulist-button`, keeps the native look.",
       "`-webkit-appearance` is read as `appearance`; `-moz-appearance` is not.",
     ],
@@ -191,6 +192,7 @@ input[type="range"].volume::-webkit-slider-thumb {
     ],
     edgeCases: [
       'On `<input type="range">` it colours the thumb and the filled part of the track. `auto` uses `#0075ff`.',
+      "On a checked checkbox or radio button it colours the box and the dot. They take it from the nearest ancestor that sets it, so one rule on a form colours all of them.",
       "A `background` in a `::-webkit-slider-thumb` rule overrides the accent colour on the thumb, and a styled `::-webkit-slider-runnable-track` drops the filled part.",
     ],
   },

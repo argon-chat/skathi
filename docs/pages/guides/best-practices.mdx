@@ -174,16 +174,15 @@ panel.animate([{ transform: "translateX(0)" }, { transform: "translateX(240px)" 
 - Motion that follows input, such as a drag, is fine as one `transform` write per event on the element being dragged.
 - Prefer `transform` and `opacity`. Only some properties interpolate (the list is under [Transitions and animations](/css/#transitions-and-animations) in the CSS reference); any other property snaps to its end value.
 - **Avoid** `getComputedStyle()` in a per-frame loop. Each property read applies pending style changes first, then asks the native tree. It also answers a fixed set of properties (`display`, `position`, `transform`, `opacity`, sizes, margins, paddings, border widths, `color`, `font-size`, the `transition-*` and `animation-*` properties and the like, plus every custom property); others read `""` with an advisory. Read once, or keep the value in your own state.
-- `<TransitionGroup>` animates entering and leaving items, but not the items that move: they jump to their new place and `moveClass` is ignored.
+- **Avoid** move animations (`<TransitionGroup>` with a `-move` class, Svelte's `animate:flip`) on a list that changes every frame or holds thousands of items. Each update measures every item before and after it, and the second pass forces a layout.
 - `v-show` inside `<Transition>` switches `display` without the enter and leave phases. Use `v-if` for an animated show and hide.
 
 ## Measure layout at the right time
 
 Geometry reads behave differently from a browser's, and the difference affects correctness as well as speed.
 
-- `getBoundingClientRect()`, `offsetWidth`, `offsetHeight`, `clientWidth` and `clientHeight` answer from the last painted frame. For an element that has been painted before, they do not lay out again: change its size and read it in the same handler, and you get the old size.
+- `getBoundingClientRect()`, `offsetWidth`, `offsetHeight`, `clientWidth`, `clientHeight`, `scrollTop`, `scrollLeft`, `scrollWidth`, `scrollHeight`, `scrollTo()`, `scrollBy()`, `scrollIntoView()` and writes to `scrollTop` draw the window once when the tree holds changes that no frame has laid out yet, as a browser's forced layout does. In `keydown`, `keyup`, `mousedown`, `wheel`, clipboard, `focus` and `blur` handlers they cannot, and answer from the last painted frame: change an element's size there and read it, and you get the old size; `list.scrollTop = list.scrollHeight` right after appending a row stops one row short.
 - For an element that has never been painted, such as one mounted in this update, Skathi draws the window once so it has a rectangle. Inside a mouse or keyboard event it cannot, so the element reads `0` and the console shows an advisory.
-- `scrollTop`, `scrollLeft`, `scrollWidth`, `scrollHeight`, `scrollTo()`, `scrollBy()`, `scrollIntoView()` and writes to `scrollTop` draw the window once when the tree holds changes that no frame has laid out yet. In `keydown`, `keyup`, `mousedown`, `wheel`, clipboard, `focus` and `blur` handlers they cannot, and answer from the last painted frame: `list.scrollTop = list.scrollHeight` right after appending a row there stops one row short.
 - `offsetTop` and `offsetLeft` are measured from the window, not from an offset parent. Use `getBoundingClientRect()`.
 
 **Do** measure where the layout is current: in a `ResizeObserver` callback, which runs when an element's size changes, or in `requestAnimationFrame()`.
@@ -194,7 +193,7 @@ list.scrollTop = list.scrollHeight; // [!code --]
 requestAnimationFrame(() => (list.scrollTop = list.scrollHeight)); // [!code ++]
 ```
 
-**Avoid** alternating writes and scroll reads in a loop. Each read after a write draws the window again. Make all the writes, then read once. Every forced layout shows up in the devtools Performance tab as a **Forced layout** span in that frame, with the hint "Geometry reads forced synchronous layout"; writes between two of them add "DOM writes occurred after a forced layout".
+**Avoid** alternating writes and geometry reads in a loop. Each read after a write draws the window again. Make all the writes, then read once. Every forced layout shows up in the devtools Performance tab as a **Forced layout** span in that frame, with the hint "Geometry reads forced synchronous layout"; writes between two of them add "DOM writes occurred after a forced layout".
 
 ## Check CSS support instead of assuming it
 
