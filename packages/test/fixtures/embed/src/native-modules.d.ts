@@ -13,6 +13,9 @@ declare module "native:demo" {
   export function point(x: number, y: number): Point;
   export function refuse(): number;
   export function uiThread(): string;
+  export function checksum(data: ArrayBufferView | ArrayBuffer): number;
+  export function reversed(data: ArrayBufferView | ArrayBuffer): Uint8Array;
+  export function repeat(data: ArrayBufferView | ArrayBuffer, times: number): Promise<Uint8Array>;
   export function double(n: number): Promise<number>;
   export function worker(): Promise<string>;
   export function crash(): Promise<number>;

@@ -22,19 +22,21 @@ use std::time::Duration;
 use sk_runtime::redjs::api::Value;
 use sk_runtime::{host_fn, JsRuntime};
 
+pub mod bytes;
 mod host_context;
 mod marshal;
 mod module;
 #[cfg(feature = "types")]
 mod types;
+pub use bytes::Bytes;
 pub use host_context::{HostContext, HostCookie, SameSite};
 pub use module::{Declared, Function, IntoModule, Job, Module, Task, Typed};
 pub use serde;
 
-/// What `#[skathi::module]` expands to; not an API.
+/// What `#[skathi::module]` and `#[skathi::data]` expand to; not an API.
 #[doc(hidden)]
 pub mod __private {
-    pub use super::marshal::Str;
+    pub use super::marshal::{Element, Slice, Str};
 }
 
 pub use sk_tree::surface::{

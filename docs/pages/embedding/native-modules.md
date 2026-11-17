@@ -87,21 +87,22 @@ The module object exists before any app code runs, so a top-level `import` sees 
 - **Every `pub fn` that takes `&self`**, under its name in camelCase: `fetch_all` is `fetchAll` in the app. The parameters keep their names, camelCased the same way, in the generated types.
 - **Nothing else.** Private methods and associated functions without `self`, such as `new`, stay Rust-only helpers.
 - **`&self` only.** The value is moved into an `Arc` and shared by the UI thread and the task workers, so `&mut self` or `self` on a `pub fn` is a compile error: keep changing state behind a `Mutex` or an atomic. For the same reason the type must be `Send + Sync + 'static`.
-- **Plain signatures.** Owned parameter types (`String`, not `&str`), named with plain identifiers, at most eight; no generics, no `async fn` (a `#[task]` is the slow path). Each of these is a compile error that points at the parameter or method.
+- **Plain signatures.** Owned parameter types, named with plain identifiers, at most eight; no generics, no `async fn` (a `#[task]` is the slow path). The borrowed exceptions are `&str` and slices of numbers (`&[u8]`, `&[f32]`, …), which a function reads in place; a task takes the owned type instead. Each of these is a compile error that points at the parameter or method.
 - **JS names.** A method named like a JS keyword (`delete`) or like a module's own exports (`available`, `on`, `off`) does not compile: rename it.
 
 ## #[skathi::data]
 
 The attribute goes on every struct and enum that crosses: parameters, results and events. It derives serde's `Serialize` and `Deserialize` and, with the `types` feature, `skathi::Type`, all through `skathi`'s own paths, so your `Cargo.toml` needs no serde or specta.
 
-- Your serde attributes stay in force: `#[serde(rename_all = "camelCase")]` renames the fields on the wire and in the generated types alike.
+- Your serde attributes stay in force: `#[serde(rename_all = "camelCase")]` renames the fields in the app and in the generated types alike.
+- A `Vec<u8>` or `Option<Vec<u8>>` field is a `Uint8Array` in the app, not an array of numbers. A field with its own `#[serde(with = …)]` keeps it.
 - A derive the type already has is not added again: `#[derive(Serialize)]` of your own serde keeps working beside it. Put `#[skathi::data]` above the derives so it sees them.
 
 Deriving the type information yourself works too: `#[derive(serde::Serialize, skathi::Type)]` with `#[specta(crate = skathi::specta)]` on the type, since the derive otherwise looks for a `specta` crate of your own.
 
 ## Functions return a value now
 
-A function's parameters are its JavaScript arguments, each read with `serde` into the type you declared; its result is whatever `Serialize` makes of it, handed to the app as an ordinary object, array, string or number. The app never sees JSON text.
+A function's parameters are its JavaScript arguments, each read with `serde` into the type you declared; its result is whatever `Serialize` makes of it, handed to the app as an ordinary object, array, string or number. Both are read and built straight from the engine's own values: no JSON text is written or parsed, and a call with a few numbers costs about what a [native function](/embedding/native-api/) does.
 
 ```rust
 #[skathi::module]
@@ -120,6 +121,12 @@ impl Tools {
 - **A wrong argument throws.** `slug(42)` throws a `TypeError` that names the function and the argument: ``native:tools.slug: argument 1: invalid type: integer `42`, expected a string``.
 - **`Err` throws.** Return `Result<T, E>` and an `Err` throws an `Error` in the app. A `String` error is its message. A struct error goes along as `error.data`, and its `message` field, if it has one, becomes the message. `E` must be `Serialize`: turn an `anyhow::Error` into text with `.map_err(|e| e.to_string())`.
 - **A panic throws too.** The app gets an `Error` that says the function panicked, and keeps running.
+
+A value means what it would in JSON, so the app sees the same thing whether it calls the module or posts the value to a server:
+
+- **Numbers.** `NaN` and the infinities arrive as `null` (an `f64` parameter refuses them; an `Option<f64>` is `None`), and a result's `NaN` is `null`. `-0` is `0` to an integer. An integer type takes only a whole number in its range: `1.5` or `300` for a `u8` is a `TypeError`. An `f32` result is its shortest decimal: `0.1f32` is `0.1`, not `0.10000000149011612`.
+- **What JSON leaves out.** A property that is `undefined`, a function or a symbol is missing, and an array element that is one is `null`. An object's `toJSON` is called, so a `Date` reaches a `String` parameter as its ISO text. A `BigInt` or an object that contains itself is a `TypeError`.
+- **Extra arguments** are not read at all.
 
 A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task.
 
@@ -161,6 +168,42 @@ let builder = skathi::Builder::new().task_executor(|job| {
 
 A page reload drops the promises still waiting; their tasks finish and their results are discarded.
 
+The arguments are read inside the call, on the UI thread, before the task is queued: a wrong argument rejects the promise at once, and the worker gets owned Rust values. The result is serialized on the worker and turned into JS values when the promise settles.
+
+## Bytes
+
+Binary data crosses as typed arrays, not as arrays of numbers:
+
+```rust
+#[skathi::module]
+impl Images {
+    pub fn checksum(&self, data: &[u8]) -> u32 {
+        data.iter().map(|&b| u32::from(b)).sum()
+    }
+
+    #[task]
+    pub fn thumbnail(&self, png: Vec<u8>, width: u32) -> Result<Vec<u8>, String> {
+        shrink(&png, width).map_err(|e| e.to_string())
+    }
+}
+```
+
+```ts
+import { checksum, thumbnail } from "native:images";
+
+const file = new Uint8Array(await (await fetch("photo.png")).arrayBuffer());
+checksum(file); // reads the app's memory where it is
+const small: Uint8Array = await thumbnail(file, 256);
+```
+
+- **`&[u8]`** in a function reads the bytes in place, without a copy, from any typed array, `DataView` or `ArrayBuffer` (a view of 16-bit numbers is its bytes). The slice lives for the call; take `Vec<u8>` to keep the bytes.
+- **`&[f32]`, `&[i16]`, `&[f64]`, …** read a typed array of exactly that kind in place: `&[f32]` from a `Float32Array`. Anything else that holds numbers, an array included, is copied into the slice's type, so the function works either way; only the copy costs.
+- **`Vec<u8>`** as a parameter copies the bytes once. A task takes `Vec<u8>` (or `skathi::Bytes`), since it runs after the call: `&[u8]` on a `#[task]` does not compile.
+- **`Vec<u8>` as a result** is a `Uint8Array`, also inside `Result` or `Option`. A task's result hands its memory to the app without a copy on the UI thread.
+- An array of numbers still works where bytes are expected, one element at a time, and a `SharedArrayBuffer` is copied rather than read in place, since another thread may write to it.
+
+serde has no way to tell a `Vec<u8>` from any other list, so the attribute does this only where it sees the type: a parameter, a result, a `#[skathi::data]` field. Elsewhere, such as inside a `Vec<Vec<u8>>` or a closure module, use `skathi::Bytes`, a `Vec<u8>` that serializes as bytes, or `#[serde(with = "skathi::bytes")]` on a field of your own type.
+
 ## Events tell the app
 
 Declare each event with its payload type in the attribute, `events(progress = SyncProgress)`, then send it from any thread with the `Handle`:
@@ -195,12 +238,13 @@ onScopeDispose(on("progress", (p) => (progress.value = p)));
 - An event name that is not a Rust identifier is a string: `events("sync-done" = Summary)`.
 - Delivery happens in the app's next frame, in order. Nothing is queued for later: an event sent while nothing listens is dropped.
 - `on(event, handler)` returns a function that removes the handler; `off(event, handler)` does the same. A reload drops every handler.
-- `emit_to` refuses an event the module did not declare (`EmitError::NotDeclared`), data `serde_json` cannot write (`EmitError::NotJson`) and anything after the app closed (`EmitError::Closed`).
+- `emit_to` refuses an event the module did not declare (`EmitError::NotDeclared`), data that cannot be serialized, such as a map whose keys are not strings or numbers (`EmitError::NotJson`), and anything after the app closed (`EmitError::Closed`).
+- The data is serialized on the thread that sends it; the app's thread only builds the JS values.
 - `on` with an event the module did not declare throws a `TypeError` that lists the ones it did.
 
 Events are for news. When the app needs an answer, it calls a function or a task.
 
-> **Tip:** An event per item of a fast stream (log lines, sensor samples) costs a round of JSON per item. Batch them per frame, or use a [native namespace](/embedding/native-api/) with the dispatcher.
+> **Tip:** An event per item of a fast stream (log lines, sensor samples) costs a delivery per item. Batch them per frame, or use a [native namespace](/embedding/native-api/) with the dispatcher.
 
 ## Types for the app
 
@@ -241,6 +285,7 @@ declare module "native:notes" {
 - Without it, TypeScript stops at the import with `Cannot find module 'native:notes'`. That is the reminder to run `sk types`.
 - An enum of unit variants becomes a union of strings, and serde's renames apply.
 - Every Rust number is a TypeScript `number`. A `u64` above 2^53 loses precision on the way, as it would in any JSON: send such ids as strings.
+- Bytes are a `Uint8Array` in results and fields; a `&[u8]` or `Vec<u8>` parameter takes `ArrayBufferView | ArrayBuffer`, and `&[f32]` a `Float32Array`.
 - A `Result` return declares its `Ok` type: `get` returns `Note`, and an `Err` is a throw.
 - The `types` feature (on by default) is what pulls in [specta](https://docs.rs/specta). Off, `#[skathi::data]` derives serde only, `sk types` says the exe was built without it, and the modules work the same.
 
@@ -264,6 +309,7 @@ let builder = skathi::Builder::new().module("about", move |m: &mut skathi::Modul
 - The closure's parameter needs its type, `&mut skathi::Module`: Rust cannot infer it from `module`, which also takes a `#[skathi::module]` type.
 - `m.function`, `m.task` and `m.event` are what the attribute generates. The export name is the string, used as written.
 - `.params([...])` names the parameters in the generated types; without it they are `arg1`, `arg2`, …
+- A closure sees only serde types, so `Vec<u8>` is an array of numbers there: take and return `skathi::Bytes` for a `Uint8Array`.
 
 ## One app, with or without a program
 
@@ -305,4 +351,4 @@ Before 0.4.0 the two sides talked through `appHost`: `Builder::function(name, ha
 
 `appHost.available` stays: it tells whether a program embeds the app at all.
 
-Next: [Native APIs](/embedding/native-api/), for when a module's JSON is not enough.
+Next: [Native APIs](/embedding/native-api/), for JS objects of your own design.

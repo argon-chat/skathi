@@ -46,6 +46,13 @@ test.skipIf(!WINDOWS)(
     expect(first.doubleZero).toMatchObject({ error: "Error", message: "zero has no double worth computing" });
     expect(first.crash.error).toBe("Error");
     expect(first.legacy).toEqual({ ok: { pong: "hello" } });
+    expect(first.bytes).toEqual({
+      checksum: 6,
+      checksumBuffer: 9,
+      checksumArray: 13,
+      reversed: "Uint8Array:3,2,1",
+      repeated: "Uint8Array:7,8,7,8",
+    });
     expect(out.second).toEqual({ tick: { n: 1 } });
     expect(out.third).toEqual({ legacy: { n: 2 } });
     expect(out.undeclared).not.toBeNull();
@@ -67,6 +74,10 @@ test.skipIf(!WINDOWS)("sk types writes the declarations the embedding program gi
   expect(declared).toContain('export function on(event: "tick", handler: (data: Tick) => void): () => void;');
   expect(declared).toContain("export function uiThread(): string;");
   expect(declared).toContain("export function sum(a: number, b: number): number;");
+  expect(declared).toContain("export function checksum(data: ArrayBufferView | ArrayBuffer): number;");
+  expect(declared).toContain(
+    "export function repeat(data: ArrayBufferView | ArrayBuffer, times: number): Promise<Uint8Array>;",
+  );
   run("bun", ["packages/cli/cli/sk.ts", "types", "packages/test/fixtures/embed", "--exe", EXE], 120_000);
   expect(readFileSync(join(REPO, "packages", "test", "fixtures", "embed", "src", "native-modules.d.ts"), "utf8")).toBe(
     declared,

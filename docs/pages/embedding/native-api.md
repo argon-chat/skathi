@@ -1,12 +1,12 @@
 ---
 title: Native APIs in the setup hook
 label: Native APIs
-description: Go past JSON. Builder::setup and HostContext, native namespaces backed by Rust functions, posting results from worker threads into the page, frame, reload and shutdown hooks, cookies and OS-sealed secrets.
+description: Build JS objects of your own in the engine. Builder::setup and HostContext, native namespaces backed by Rust functions, posting results from worker threads into the page, frame, reload and shutdown hooks, cookies and OS-sealed secrets.
 section: Embedding
 order: 3
 ---
 
-[Native modules](/embedding/native-modules/) carry serde values between two worlds that never touch. That is the right default, and also its limit: every value goes through JSON on the way, and every event is a separate delivery. When the app calls something a thousand times a second, or Rust has a stream to deliver, or you want a JS object that behaves like a browser API, you build it directly in the engine.
+[Native modules](/embedding/native-modules/) carry serde values between Rust and the app, read and built straight from the engine's values, with bytes passed in place. That is the right default, and fast enough for a call per frame or a thousand a second. Its limit is its shape: values in, a value out, and every event a separate delivery. When Rust holds on to an app's callback, has a stream to deliver, or you want a JS object that behaves like a browser API, you build it directly in the engine.
 
 That happens in `Builder::setup`. It runs **once**, on the Skathi thread, after storage is ready and before any app code or window, and gets a `HostContext`:
 
@@ -39,7 +39,7 @@ An `Err` or a panic in `setup` stops startup; `spawn` then never shows a window.
 
 ## A native namespace
 
-A global object whose methods are Rust functions. They run synchronously, take and return real JS values, and cost no more than any other native call:
+A global object whose methods are Rust functions. They run synchronously, take and return real JS values, and cost no more than any other native call (a native module's function costs about the same; what you gain here is control over the values):
 
 ```rust
 use skathi::js;

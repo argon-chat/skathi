@@ -93,6 +93,16 @@ fn unwrap_result(types: &Types, dt: DataType) -> DataType {
     dt
 }
 
+/// A bytes parameter reads any view of memory, not only a `Uint8Array`.
+fn any_bytes(param: String) -> String {
+    match param.strip_prefix("Uint8Array") {
+        Some(rest) if rest.is_empty() || rest.starts_with(" | ") => {
+            format!("ArrayBufferView | ArrayBuffer{rest}")
+        }
+        _ => param,
+    }
+}
+
 struct Renderer {
     ts: Typescript,
     raw: Types,
@@ -185,7 +195,7 @@ fn module(module: &Module) -> Result<String, String> {
                 .cloned()
                 .unwrap_or_else(|| format!("arg{}", i + 1));
             let mark = if i >= optional_from { "?" } else { "" };
-            list.push(format!("{name}{mark}: {}", r.render(param)?));
+            list.push(format!("{name}{mark}: {}", any_bytes(r.render(param)?)));
         }
         let ret = unwrap_result(&r.raw, ret);
         let ret = r.render(&ret)?;
@@ -323,6 +333,7 @@ declare module "native:empty" {
     #[serde(rename_all = "camelCase")]
     struct Entry {
         entry_id: u32,
+        thumbnail: Option<Vec<u8>>,
     }
 
     #[skathi_macros::data(crate = crate::embed)]
@@ -348,11 +359,21 @@ declare module "native:empty" {
             let _ = (max_count, mood);
             vec![Entry {
                 entry_id: self.first_id(),
+                thumbnail: None,
             }]
         }
 
         pub fn label(&self, text: &str) -> String {
             text.to_owned()
+        }
+
+        pub fn digest(&self, data: &[u8], key: Option<Vec<u8>>) -> Vec<u8> {
+            let _ = key;
+            data.to_vec()
+        }
+
+        pub fn peak(&self, samples: &[f32]) -> f32 {
+            samples.iter().copied().fold(0.0, f32::max)
         }
 
         #[task]
@@ -369,11 +390,14 @@ declare module "native:empty" {
 declare module "native:store" {
   export type Entry = {
     entryId: number;
+    thumbnail?: Uint8Array | null;
   };
   export type Mood = "Calm" | "Busy";
   export const available: boolean;
   export function fetchAll(maxCount: number, mood?: Mood | null): Entry[];
   export function label(text: string): string;
+  export function digest(data: ArrayBufferView | ArrayBuffer, key?: ArrayBufferView | ArrayBuffer | null): Uint8Array;
+  export function peak(samples: Float32Array): number;
   export function syncNow(): Promise<number>;
   export function on(event: "changed", handler: (data: Entry) => void): () => void;
   export function on(event: "mood-swing", handler: (data: Mood) => void): () => void;

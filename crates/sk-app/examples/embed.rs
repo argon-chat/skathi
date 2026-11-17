@@ -65,6 +65,21 @@ impl Demo {
         thread_name()
     }
 
+    // Bytes: any typed array or ArrayBuffer in, read in place; a Uint8Array out.
+    pub fn checksum(&self, data: &[u8]) -> u32 {
+        data.iter().map(|&b| u32::from(b)).sum()
+    }
+
+    pub fn reversed(&self, mut data: Vec<u8>) -> Vec<u8> {
+        data.reverse();
+        data
+    }
+
+    #[task]
+    pub fn repeat(&self, data: Vec<u8>, times: usize) -> Vec<u8> {
+        data.repeat(times)
+    }
+
     // Runs on a worker; the app gets a promise.
     #[task]
     pub fn double(&self, n: u32) -> Result<u32, String> {

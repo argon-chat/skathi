@@ -151,10 +151,10 @@
 /// The serde `#[skathi::data]` derives with.
 pub use sk_app::embed::serde;
 pub use sk_app::embed::{
-    encrypt_local_storage_at, surface, Builder, Call, D3D11Device, D3D12Device, D3D12Fence,
-    Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext, HostCookie,
-    IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent,
-    SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Task, Typed,
+    bytes, encrypt_local_storage_at, surface, Builder, Bytes, Call, D3D11Device, D3D12Device,
+    D3D12Fence, Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext,
+    HostCookie, IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError,
+    SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Task, Typed,
 };
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};

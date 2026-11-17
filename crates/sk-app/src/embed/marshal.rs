@@ -13,7 +13,7 @@ use serde::de::{self, DeserializeSeed, IntoDeserializer, Unexpected, Visitor};
 use serde::ser::{self, Serialize};
 use serde_json::Value as Json;
 
-use crate::js::{Context, Value};
+use crate::js::{Context, TaKind, Value};
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -364,6 +364,175 @@ impl specta::Type for Str {
     }
 }
 
+/// Element kinds of `rjs_typedarray_info`; an `ArrayBuffer` reads as a `DataView`.
+const TA_U8: u32 = 2;
+const TA_BIG_I64: u32 = 10;
+const TA_BIG_U64: u32 = 11;
+const TA_DATAVIEW: u32 = 12;
+const TA_F16: u32 = 13;
+
+/// The memory of an `ArrayBufferView` or an `ArrayBuffer`.
+#[derive(Clone, Copy)]
+struct Buffer {
+    data: *const u8,
+    len: usize,
+    kind: u32,
+    shared: bool,
+}
+
+impl Buffer {
+    /// # Safety
+    /// While the buffer's owner is alive and JS has not run.
+    unsafe fn bytes<'s>(&self) -> &'s [u8] {
+        if self.len == 0 {
+            return &[];
+        }
+        unsafe { std::slice::from_raw_parts(self.data, self.len) }
+    }
+}
+
+fn buffer(context: &Context, v: Value) -> Option<Buffer> {
+    if !v.is_cell() {
+        return None;
+    }
+    match context.kind(v) {
+        11 => {
+            let info = context.typedarray_info(v).ok()?;
+            Some(Buffer {
+                data: info.data as *const u8,
+                len: if info.detached != 0 {
+                    0
+                } else {
+                    info.byte_length as usize
+                },
+                kind: info.kind,
+                shared: info.shared != 0,
+            })
+        }
+        12 => {
+            let info = context.arraybuffer_info(v).ok()?;
+            Some(Buffer {
+                data: info.data as *const u8,
+                len: if info.detached != 0 {
+                    0
+                } else {
+                    info.byte_length as usize
+                },
+                kind: TA_DATAVIEW,
+                shared: info.shared != 0,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A number type a typed array holds, for `&[T]` parameters.
+#[doc(hidden)]
+pub trait Element: Copy + for<'de> de::Deserialize<'de> + 'static {
+    const TOKEN: &'static str;
+    #[cfg(feature = "types")]
+    const ARRAY: &'static str;
+}
+
+macro_rules! elements {
+    ($($t:ty => $kind:literal $array:literal,)*) => {
+        $(impl Element for $t {
+            const TOKEN: &'static str = concat!("\0skathi::Slice<", stringify!($t), ">");
+            #[cfg(feature = "types")]
+            const ARRAY: &'static str = $array;
+        })*
+
+        /// The typed array kind a `&[T]` borrows from, by `T`'s token.
+        fn slice_kind(token: &str) -> Option<u32> {
+            $(if token == <$t as Element>::TOKEN {
+                return Some($kind);
+            })*
+            None
+        }
+    };
+}
+
+elements! {
+    u8 => 2 "Uint8Array",
+    i8 => 1 "Int8Array",
+    i16 => 4 "Int16Array",
+    u16 => 5 "Uint16Array",
+    i32 => 6 "Int32Array",
+    u32 => 7 "Uint32Array",
+    f32 => 8 "Float32Array",
+    f64 => 9 "Float64Array",
+    i64 => 10 "BigInt64Array",
+    u64 => 11 "BigUint64Array",
+}
+
+/// A macro-generated `&[T]` parameter: the typed array read in place for the length of one call,
+/// or a copy of what else was passed.
+#[doc(hidden)]
+pub struct Slice<T: Element> {
+    borrowed: (*const T, usize),
+    owned: Option<Vec<T>>,
+}
+
+impl<T: Element> Slice<T> {
+    /// # Safety
+    /// Only inside the call whose arguments produced it.
+    pub unsafe fn get(&self) -> &[T] {
+        match &self.owned {
+            Some(v) => v,
+            None if self.borrowed.1 == 0 => &[],
+            None => unsafe { std::slice::from_raw_parts(self.borrowed.0, self.borrowed.1) },
+        }
+    }
+}
+
+impl<'de, T: Element> de::Deserialize<'de> for Slice<T> {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SliceVisitor<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Element> Visitor<'de> for SliceVisitor<T> {
+            type Value = Slice<T>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a typed array")
+            }
+            fn visit_borrowed_bytes<E: de::Error>(self, v: &'de [u8]) -> Result<Slice<T>, E> {
+                Ok(Slice {
+                    borrowed: (v.as_ptr() as *const T, v.len() / std::mem::size_of::<T>()),
+                    owned: None,
+                })
+            }
+            fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Slice<T>, E> {
+                if std::mem::size_of::<T>() != 1 {
+                    return Err(E::invalid_type(Unexpected::Bytes(&v), &self));
+                }
+                let mut v = std::mem::ManuallyDrop::new(v);
+                // SAFETY: `T` is `u8` or `i8`, the same layout as the `u8` buffer.
+                let owned =
+                    unsafe { Vec::from_raw_parts(v.as_mut_ptr() as *mut T, v.len(), v.capacity()) };
+                Ok(Slice {
+                    borrowed: (std::ptr::null(), 0),
+                    owned: Some(owned),
+                })
+            }
+            fn visit_newtype_struct<D: de::Deserializer<'de>>(
+                self,
+                d: D,
+            ) -> Result<Slice<T>, D::Error> {
+                Ok(Slice {
+                    borrowed: (std::ptr::null(), 0),
+                    owned: Some(<Vec<T> as de::Deserialize>::deserialize(d)?),
+                })
+            }
+        }
+        deserializer.deserialize_newtype_struct(T::TOKEN, SliceVisitor(std::marker::PhantomData))
+    }
+}
+
+#[cfg(feature = "types")]
+impl<T: Element> specta::Type for Slice<T> {
+    fn definition(_: &mut specta::Types) -> specta::datatype::DataType {
+        specta_typescript::define(T::ARRAY).into()
+    }
+}
+
 /// serde_json gives up past this many nested arrays and objects, the arguments' array included.
 const DEPTH: usize = 127;
 
@@ -387,6 +556,7 @@ impl<'a> Walk<'a> {
             walk: self,
             key: Key::Index(index),
             value,
+            pre: std::cell::Cell::new(None),
         }
     }
 
@@ -414,6 +584,11 @@ impl Drop for Entered<'_, '_> {
     }
 }
 
+/// `rjs_brand`'s answers that JSON.stringify treats apart from a plain object.
+const BRAND_PROXY: u32 = 4;
+const BRAND_BOOLEAN_OBJECT: u32 = 10;
+const BRAND_BIGINT_OBJECT: u32 = 13;
+
 /// The key `toJSON` is called with.
 #[derive(Clone, Copy)]
 enum Key {
@@ -436,6 +611,8 @@ pub(crate) struct Js<'w, 'a> {
     walk: &'w Walk<'a>,
     key: Key,
     value: Value,
+    /// The node already made of `value`: `toJSON` runs once per value.
+    pre: std::cell::Cell<Option<Node<'static>>>,
 }
 
 impl<'w, 'a> Js<'w, 'a> {
@@ -445,6 +622,9 @@ impl<'w, 'a> Js<'w, 'a> {
 
     /// SerializeJSONProperty: `None` is what an object leaves out and an array writes as null.
     fn node<'s>(&self) -> Result<Option<Node<'s>>, Error> {
+        if let Some(node) = self.pre.take() {
+            return Ok(Some(node));
+        }
         let context = self.context();
         let mut v = self.value;
         if let Some(node) = scalar(v) {
@@ -459,7 +639,7 @@ impl<'w, 'a> Js<'w, 'a> {
             return Ok(None);
         }
         let to_json = with_atom(context, "toJSON", |atom| context.get(v, atom)).map_err(engine)?;
-        if context.kind(to_json) == 9 {
+        if !to_json.is_undefined() && context.kind(to_json) == 9 {
             let key = match self.key {
                 Key::Index(i) => string(context, &i.to_string()),
                 Key::Name(name) => name,
@@ -489,6 +669,13 @@ impl<'w, 'a> Js<'w, 'a> {
     /// An object that may be a boxed primitive or an array behind a Proxy.
     fn object<'s>(&self, v: Value) -> Result<Option<Node<'s>>, Error> {
         let context = self.context();
+        let mut brand = glue::RjsBrandInfo::default();
+        // SAFETY: plain FFI on a live value.
+        match unsafe { glue::rjs_brand(context.raw(), v.0, &mut brand) } {
+            BRAND_PROXY => {}
+            BRAND_BOOLEAN_OBJECT..=BRAND_BIGINT_OBJECT => {}
+            _ => return Ok(Some(Node::Object(v))),
+        }
         let mut inner = 0u64;
         // SAFETY: plain FFI on a live value.
         if unsafe { glue::rjs_wrapper_value(context.raw(), v.0, &mut inner) } == glue::OK {
@@ -523,7 +710,7 @@ impl<'w, 'a> Js<'w, 'a> {
         }))
     }
 
-    fn require(&self) -> Result<Node<'_>, Error> {
+    fn require<'s>(&self) -> Result<Node<'s>, Error> {
         Ok(self.node()?.unwrap_or(Node::Null))
     }
 
@@ -536,7 +723,14 @@ impl<'w, 'a> Js<'w, 'a> {
             walk: self.walk,
             key,
             value,
+            pre: std::cell::Cell::new(None),
         }
+    }
+
+    fn child_node(&self, key: Key, value: Value, node: Node<'static>) -> Js<'w, 'a> {
+        let child = self.child(key, value);
+        child.pre.set(Some(node));
+        child
     }
 
     fn seq<'de, V: Visitor<'de>>(&self, array: Value, visitor: V) -> Result<V::Value, Error> {
@@ -636,6 +830,117 @@ impl<'de> de::SeqAccess<'de> for Seq<'_, '_, '_> {
     }
 }
 
+/// A typed array, a DataView or an ArrayBuffer read as a sequence of its numbers.
+fn elements<'de, V: Visitor<'de>>(b: Buffer, visitor: V) -> Result<V::Value, Error> {
+    let width = match b.kind {
+        TA_F16 => {
+            return Err(de::Error::custom(
+                "a Float16Array cannot be read: pass a Float32Array",
+            ))
+        }
+        4 | 5 => 2,
+        6..=8 => 4,
+        9..=11 => 8,
+        _ => 1,
+    };
+    let mut seq = Elements {
+        b,
+        width,
+        next: 0,
+        len: b.len / width,
+    };
+    let value = visitor.visit_seq(&mut seq)?;
+    if seq.next < seq.len {
+        return Err(de::Error::invalid_length(
+            seq.len,
+            &"fewer elements in array",
+        ));
+    }
+    Ok(value)
+}
+
+struct Elements {
+    b: Buffer,
+    width: usize,
+    next: usize,
+    len: usize,
+}
+
+impl Elements {
+    fn item(&self, i: usize) -> Item {
+        // SAFETY: `i < len`, inside the buffer, which is held by the caller's frame and does not
+        // change while no JS runs.
+        unsafe {
+            let p = self.b.data.add(i * self.width);
+            match self.b.kind {
+                1 => Item::Number(p.cast::<i8>().read() as f64),
+                4 => Item::Number(p.cast::<i16>().read_unaligned() as f64),
+                5 => Item::Number(p.cast::<u16>().read_unaligned() as f64),
+                6 => Item::Number(p.cast::<i32>().read_unaligned() as f64),
+                7 => Item::Number(p.cast::<u32>().read_unaligned() as f64),
+                8 => Item::Number(p.cast::<f32>().read_unaligned() as f64),
+                9 => Item::Number(p.cast::<f64>().read_unaligned()),
+                TA_BIG_I64 => Item::I64(p.cast::<i64>().read_unaligned()),
+                TA_BIG_U64 => Item::U64(p.cast::<u64>().read_unaligned()),
+                _ => Item::U8(p.read()),
+            }
+        }
+    }
+}
+
+impl<'de> de::SeqAccess<'de> for Elements {
+    type Error = Error;
+
+    #[inline]
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>, Error> {
+        if self.next >= self.len {
+            return Ok(None);
+        }
+        let item = self.item(self.next);
+        self.next += 1;
+        seed.deserialize(item).map(Some)
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.len - self.next)
+    }
+}
+
+/// One element of a typed array.
+#[derive(Clone, Copy)]
+enum Item {
+    U8(u8),
+    Number(f64),
+    I64(i64),
+    U64(u64),
+}
+
+impl<'de> de::Deserializer<'de> for Item {
+    type Error = Error;
+
+    #[inline]
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        match self {
+            Item::U8(b) => visitor.visit_u8(b),
+            Item::Number(n) => visit_number(n, visitor),
+            Item::I64(i) => visitor.visit_i64(i),
+            Item::U64(u) => visitor.visit_u64(u),
+        }
+    }
+
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        visitor.visit_some(self)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf unit
+        unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
+    }
+}
+
 /// An object's enumerable own string keys, in order, leaving out what JSON.stringify leaves out.
 struct Map<'p, 'w, 'a> {
     parent: &'p Js<'w, 'a>,
@@ -644,7 +949,7 @@ struct Map<'p, 'w, 'a> {
     next: u32,
     len: u32,
     taken: usize,
-    value: Option<Value>,
+    value: Option<(Value, Node<'static>)>,
     key: Value,
 }
 
@@ -686,11 +991,11 @@ impl<'p, 'w, 'a> Map<'p, 'w, 'a> {
                 _ => return Err(Error::Message("not an object".into())),
             }
             let value = Value(out);
-            if self.parent.child(Key::Name(key), value).node()?.is_none() {
+            let Some(node) = self.parent.child(Key::Name(key), value).node()? else {
                 continue;
-            }
+            };
             self.key = key;
-            self.value = Some(value);
+            self.value = Some((value, node));
             return Ok(true);
         }
         Ok(false)
@@ -727,7 +1032,9 @@ impl<'de> de::MapAccess<'de> for Map<'_, '_, '_> {
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value, Error> {
         match self.value.take() {
-            Some(value) => seed.deserialize(self.parent.child(Key::Name(self.key), value)),
+            Some((value, node)) => {
+                seed.deserialize(self.parent.child_node(Key::Name(self.key), value, node))
+            }
             None => Err(de::Error::custom("value is missing")),
         }
     }
@@ -929,6 +1236,11 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        if let Some(b) = buffer(self.context(), self.value) {
+            // SAFETY: the view is an argument or a property value held by this frame, and the
+            // visitor copies the bytes before any JS runs.
+            return visitor.visit_bytes(unsafe { b.bytes() });
+        }
         match self.require()? {
             Node::Str(Cow::Borrowed(s)) => visitor.visit_str(s),
             Node::Str(Cow::Owned(s)) => visitor.visit_string(s),
@@ -940,7 +1252,10 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         match self.node()? {
             None | Some(Node::Null) => visitor.visit_none(),
-            Some(_) => visitor.visit_some(self),
+            Some(node) => {
+                self.pre.set(Some(node));
+                visitor.visit_some(self)
+            }
         }
     }
 
@@ -965,22 +1280,42 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
         visitor: V,
     ) -> Result<V::Value, Error> {
         if name == STR_TOKEN {
-            if let Node::Str(Cow::Borrowed(s)) = self.require()? {
+            let node: Node<'de> = self.require()?;
+            if let Node::Str(Cow::Borrowed(s)) = node {
                 // SAFETY: the engine's string outlives the call, which is as long as a `Str` is
                 // used.
-                let s: &'de str = unsafe { &*(s as *const str) };
                 return visitor.visit_borrowed_str(s);
             }
+            // SAFETY: as above; the node is read again at once.
+            self.pre.set(Some(unsafe {
+                std::mem::transmute::<Node<'de>, Node<'static>>(node)
+            }));
             return self.deserialize_string(visitor);
         }
         if name == RAW_VALUE_TOKEN {
             return de::Deserializer::deserialize_newtype_struct(self.json()?, name, visitor)
                 .map_err(|e| Error::Message(e.to_string()));
         }
+        if let Some(kind) = slice_kind(name) {
+            if let Some(b) = buffer(self.context(), self.value) {
+                // SAFETY: as for `Str`; a `&[u8]` may view any buffer's bytes, other slices
+                // only their own element type, which typed arrays keep aligned.
+                let bytes: &'de [u8] = unsafe { b.bytes() };
+                if !b.shared && (kind == TA_U8 || b.kind == kind) {
+                    return visitor.visit_borrowed_bytes(bytes);
+                }
+                if kind == TA_U8 {
+                    return visitor.visit_byte_buf(bytes.to_vec());
+                }
+            }
+        }
         visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        if let Some(b) = buffer(self.context(), self.value) {
+            return elements(b, visitor);
+        }
         match self.require()? {
             Node::Array(a) => self.seq(a, visitor),
             node => Err(de::Error::invalid_type(unexpected(&node), &visitor)),
@@ -1047,7 +1382,7 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
                     Some(s) => s?.into_owned(),
                     None => return Err(de::Error::custom("a key is not a string")),
                 };
-                let value = value.map(|v| self.child(Key::Name(key), v));
+                let value = value.map(|(v, node)| self.child_node(Key::Name(key), v, node));
                 visitor.visit_enum(Variant { variant, value })
             }
             node => Err(de::Error::invalid_type(unexpected(&node), &"string or map")),
@@ -1152,7 +1487,8 @@ pub(crate) fn f32_number(v: f32) -> f64 {
         .unwrap_or(v as f64)
 }
 
-/// Where a result is built: engine values on the JS thread, or an [`Owned`] tree anywhere.
+/// Where a result is built: engine values on the JS thread, or an [`Owned`] encoding anywhere.
+/// An object's key comes before its value, so an encoding can be written in one pass.
 pub(crate) trait Build: Copy {
     type Value;
     type Array;
@@ -1162,17 +1498,14 @@ pub(crate) trait Build: Copy {
     fn number(self, v: f64) -> Self::Value;
     fn string(self, v: &str) -> Self::Value;
     fn raw_json(self, json: &str) -> Result<Self::Value, Error>;
+    fn bytes(self, v: &[u8]) -> Result<Self::Value, Error>;
     fn array(self, len: usize) -> Result<Self::Array, Error>;
     fn push(self, array: &mut Self::Array, v: Self::Value) -> Result<(), Error>;
     fn end_array(self, array: Self::Array) -> Self::Value;
     fn object(self) -> Result<Self::Object, Error>;
-    fn field(
-        self,
-        object: &mut Self::Object,
-        key: &'static str,
-        v: Self::Value,
-    ) -> Result<(), Error>;
-    fn entry(self, object: &mut Self::Object, key: String, v: Self::Value) -> Result<(), Error>;
+    fn field(self, object: &mut Self::Object, key: &'static str);
+    fn entry(self, object: &mut Self::Object, key: String);
+    fn put(self, object: &mut Self::Object, v: Self::Value) -> Result<(), Error>;
     fn end_object(self, object: Self::Object) -> Self::Value;
 }
 
@@ -1186,23 +1519,54 @@ fn is_index(key: &str) -> bool {
         && key.parse::<u64>().is_ok_and(|n| n < u32::MAX as u64)
 }
 
+fn define(context: &Context, object: Value, key: Value, v: Value) -> Result<(), Error> {
+    // SAFETY: plain FFI on live values.
+    match unsafe { glue::rjs_define_v(context.raw(), object.0, key.0, v.0) } {
+        glue::OK => Ok(()),
+        _ => Err(Error::Message("the result cannot be built".into())),
+    }
+}
+
+fn define_field(
+    context: &Context,
+    object: Value,
+    key: &'static str,
+    v: Value,
+) -> Result<(), Error> {
+    if is_index(key) {
+        return define(context, object, string(context, key), v);
+    }
+    with_atom(context, key, |atom| context.define(object, atom, v, 0)).map_err(engine)
+}
+
+fn define_entry(context: &Context, object: Value, key: &str, v: Value) -> Result<(), Error> {
+    define(context, object, string(context, key), v)
+}
+
+fn push_index(context: &Context, array: &mut (Value, u32), v: Value) -> Result<(), Error> {
+    // SAFETY: plain FFI on live values.
+    match unsafe { glue::rjs_define_index(context.raw(), array.0 .0, array.1, v.0) } {
+        glue::OK => {
+            array.1 += 1;
+            Ok(())
+        }
+        _ => Err(Error::Message("the result cannot be built".into())),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Engine<'a>(pub(crate) &'a Context);
 
-impl<'a> Engine<'a> {
-    fn define(self, object: Value, key: Value, v: Value) -> Result<(), Error> {
-        // SAFETY: plain FFI on live values.
-        match unsafe { glue::rjs_define_v(self.0.raw(), object.0, key.0, v.0) } {
-            glue::OK => Ok(()),
-            _ => Err(Error::Message("the result cannot be built".into())),
-        }
-    }
+pub(crate) enum PendingKey {
+    None,
+    Field(&'static str),
+    Entry(String),
 }
 
 impl<'a> Build for Engine<'a> {
     type Value = Value;
     type Array = (Value, u32);
-    type Object = Value;
+    type Object = (Value, PendingKey);
 
     fn null(self) -> Value {
         Value::null()
@@ -1223,6 +1587,15 @@ impl<'a> Build for Engine<'a> {
     fn raw_json(self, json: &str) -> Result<Value, Error> {
         parse(self.0, json)
     }
+    fn bytes(self, v: &[u8]) -> Result<Value, Error> {
+        let array = self.0.typedarray(TaKind::U8, v.len()).map_err(engine)?;
+        if !v.is_empty() {
+            let info = self.0.typedarray_info(array).map_err(engine)?;
+            // SAFETY: the new array's storage is `v.len()` bytes and nothing else sees it yet.
+            unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), info.data as *mut u8, v.len()) };
+        }
+        Ok(array)
+    }
     fn array(self, len: usize) -> Result<(Value, u32), Error> {
         let array = self
             .0
@@ -1231,132 +1604,283 @@ impl<'a> Build for Engine<'a> {
         Ok((array, 0))
     }
     fn push(self, array: &mut (Value, u32), v: Value) -> Result<(), Error> {
-        // SAFETY: plain FFI on live values.
-        match unsafe { glue::rjs_define_index(self.0.raw(), array.0 .0, array.1, v.0) } {
-            glue::OK => {
-                array.1 += 1;
-                Ok(())
-            }
-            _ => Err(Error::Message("the result cannot be built".into())),
-        }
+        push_index(self.0, array, v)
     }
     fn end_array(self, array: (Value, u32)) -> Value {
         array.0
     }
-    fn object(self) -> Result<Value, Error> {
-        Ok(self.0.object())
+    fn object(self) -> Result<(Value, PendingKey), Error> {
+        Ok((self.0.object(), PendingKey::None))
     }
-    fn field(self, object: &mut Value, key: &'static str, v: Value) -> Result<(), Error> {
-        if is_index(key) {
-            return self.define(*object, string(self.0, key), v);
+    fn field(self, object: &mut (Value, PendingKey), key: &'static str) {
+        object.1 = PendingKey::Field(key);
+    }
+    fn entry(self, object: &mut (Value, PendingKey), key: String) {
+        object.1 = PendingKey::Entry(key);
+    }
+    fn put(self, object: &mut (Value, PendingKey), v: Value) -> Result<(), Error> {
+        match std::mem::replace(&mut object.1, PendingKey::None) {
+            PendingKey::Field(key) => define_field(self.0, object.0, key, v),
+            PendingKey::Entry(key) => define_entry(self.0, object.0, &key, v),
+            PendingKey::None => Err(Error::Message("a value without a key".into())),
         }
-        with_atom(self.0, key, |atom| self.0.define(*object, atom, v, 0)).map_err(engine)
     }
-    fn entry(self, object: &mut Value, key: String, v: Value) -> Result<(), Error> {
-        let key = string(self.0, &key);
-        self.define(*object, key, v)
-    }
-    fn end_object(self, object: Value) -> Value {
-        object
+    fn end_object(self, object: (Value, PendingKey)) -> Value {
+        object.0
     }
 }
 
-/// A result or an event made off the JS thread, built into engine values on it.
-#[derive(Debug, Clone, PartialEq)]
+/// A result or an event made off the JS thread, encoded in one buffer (and byte arrays in their
+/// own) for the JS thread to build engine values from.
+#[derive(Debug, Default)]
 #[doc(hidden)]
-pub enum Owned {
-    Null,
-    Bool(bool),
-    Number(f64),
-    Str(String),
-    Array(Vec<Owned>),
-    Object(Vec<(Cow<'static, str>, Owned)>),
-    Json(String),
+pub struct Owned {
+    code: Vec<u8>,
+    blobs: Vec<Vec<u8>>,
 }
 
+const NULL: u8 = 0;
+const FALSE: u8 = 1;
+const TRUE: u8 = 2;
+const NUMBER: u8 = 3;
+const STRING: u8 = 4;
+const JSON: u8 = 5;
+const BYTES: u8 = 6;
+const ARRAY: u8 = 7;
+const OBJECT: u8 = 8;
+const FIELD: u8 = 9;
+const ENTRY: u8 = 10;
+
+unsafe extern "C" fn free_bytes(bytes: *mut std::ffi::c_void, capacity: *mut std::ffi::c_void) {
+    // SAFETY: `bytes` and `capacity` are a `Vec<u8>`'s, handed over by `uint8_array`.
+    drop(unsafe { Vec::from_raw_parts(bytes as *mut u8, 0, capacity as usize) });
+}
+
+/// A `Uint8Array` over `v`'s own memory.
+fn uint8_array(context: &Context, v: Vec<u8>) -> Result<Value, Error> {
+    if v.is_empty() {
+        return Engine(context).bytes(&[]);
+    }
+    let mut v = std::mem::ManuallyDrop::new(v);
+    // SAFETY: the engine owns the memory from here and frees it through `free_bytes`; on failure
+    // it is leaked rather than risk freeing it twice.
+    unsafe {
+        context.typedarray_external(
+            TaKind::U8,
+            v.as_mut_ptr() as *mut std::ffi::c_void,
+            v.len(),
+            Some(free_bytes),
+            v.capacity() as *mut std::ffi::c_void,
+        )
+    }
+    .map_err(engine)
+}
+
+/// Writes an [`Owned`].
 #[derive(Clone, Copy)]
-pub(crate) struct Tree;
+pub(crate) struct Tree<'a>(pub(crate) &'a RefCell<Owned>);
 
-impl Build for Tree {
-    type Value = Owned;
-    type Array = Vec<Owned>;
-    type Object = Vec<(Cow<'static, str>, Owned)>;
+impl Tree<'_> {
+    fn tag(self, tag: u8) {
+        self.0.borrow_mut().code.push(tag);
+    }
 
-    fn null(self) -> Owned {
-        Owned::Null
+    fn text(self, tag: u8, v: &str) {
+        let code = &mut self.0.borrow_mut().code;
+        code.push(tag);
+        code.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        code.extend_from_slice(v.as_bytes());
     }
-    fn bool(self, v: bool) -> Owned {
-        Owned::Bool(v)
+
+    /// A tag and a count to fill in at the end.
+    fn open(self, tag: u8) -> (usize, u32) {
+        let code = &mut self.0.borrow_mut().code;
+        code.push(tag);
+        let at = code.len();
+        code.extend_from_slice(&[0; 4]);
+        (at, 0)
     }
-    fn number(self, v: f64) -> Owned {
-        if v.is_finite() {
-            Owned::Number(v)
-        } else {
-            Owned::Null
-        }
-    }
-    fn string(self, v: &str) -> Owned {
-        Owned::Str(v.to_owned())
-    }
-    fn raw_json(self, json: &str) -> Result<Owned, Error> {
-        Ok(Owned::Json(json.to_owned()))
-    }
-    fn array(self, len: usize) -> Result<Vec<Owned>, Error> {
-        Ok(Vec::with_capacity(len))
-    }
-    fn push(self, array: &mut Vec<Owned>, v: Owned) -> Result<(), Error> {
-        array.push(v);
-        Ok(())
-    }
-    fn end_array(self, array: Vec<Owned>) -> Owned {
-        Owned::Array(array)
-    }
-    fn object(self) -> Result<Self::Object, Error> {
-        Ok(Vec::new())
-    }
-    fn field(self, object: &mut Self::Object, key: &'static str, v: Owned) -> Result<(), Error> {
-        object.push((Cow::Borrowed(key), v));
-        Ok(())
-    }
-    fn entry(self, object: &mut Self::Object, key: String, v: Owned) -> Result<(), Error> {
-        object.push((Cow::Owned(key), v));
-        Ok(())
-    }
-    fn end_object(self, object: Self::Object) -> Owned {
-        Owned::Object(object)
+
+    fn close(self, (at, count): (usize, u32)) {
+        self.0.borrow_mut().code[at..at + 4].copy_from_slice(&count.to_le_bytes());
     }
 }
 
-impl Owned {
-    pub(crate) fn to_js(&self, context: &Context) -> Result<Value, Error> {
-        let b = Engine(context);
-        Ok(match self {
-            Owned::Null => Value::null(),
-            Owned::Bool(v) => Value::boolean(*v),
-            Owned::Number(v) => b.number(*v),
-            Owned::Str(s) => string(context, s),
-            Owned::Json(json) => parse(context, json)?,
-            Owned::Array(items) => {
-                let mut array = b.array(items.len())?;
-                for item in items {
-                    let v = item.to_js(context)?;
-                    b.push(&mut array, v)?;
+impl Build for Tree<'_> {
+    type Value = ();
+    type Array = (usize, u32);
+    type Object = (usize, u32);
+
+    fn null(self) {
+        self.tag(NULL);
+    }
+    fn bool(self, v: bool) {
+        self.tag(if v { TRUE } else { FALSE });
+    }
+    fn number(self, v: f64) {
+        if !v.is_finite() {
+            return self.tag(NULL);
+        }
+        let code = &mut self.0.borrow_mut().code;
+        code.push(NUMBER);
+        code.extend_from_slice(&v.to_le_bytes());
+    }
+    fn string(self, v: &str) {
+        self.text(STRING, v);
+    }
+    fn raw_json(self, json: &str) -> Result<(), Error> {
+        self.text(JSON, json);
+        Ok(())
+    }
+    fn bytes(self, v: &[u8]) -> Result<(), Error> {
+        let mut owned = self.0.borrow_mut();
+        let index = owned.blobs.len() as u32;
+        owned.blobs.push(v.to_vec());
+        owned.code.push(BYTES);
+        owned.code.extend_from_slice(&index.to_le_bytes());
+        Ok(())
+    }
+    fn array(self, _: usize) -> Result<(usize, u32), Error> {
+        Ok(self.open(ARRAY))
+    }
+    fn push(self, array: &mut (usize, u32), _: ()) -> Result<(), Error> {
+        array.1 += 1;
+        Ok(())
+    }
+    fn end_array(self, array: (usize, u32)) {
+        self.close(array);
+    }
+    fn object(self) -> Result<(usize, u32), Error> {
+        Ok(self.open(OBJECT))
+    }
+    fn field(self, _: &mut (usize, u32), key: &'static str) {
+        let code = &mut self.0.borrow_mut().code;
+        code.push(FIELD);
+        code.extend_from_slice(&(key.as_ptr() as usize).to_le_bytes());
+        code.extend_from_slice(&key.len().to_le_bytes());
+    }
+    fn entry(self, _: &mut (usize, u32), key: String) {
+        self.text(ENTRY, &key);
+    }
+    fn put(self, object: &mut (usize, u32), _: ()) -> Result<(), Error> {
+        object.1 += 1;
+        Ok(())
+    }
+    fn end_object(self, object: (usize, u32)) {
+        self.close(object);
+    }
+}
+
+struct Reader<'c> {
+    context: &'c Context,
+    code: &'c [u8],
+    at: usize,
+    blobs: Vec<Vec<u8>>,
+}
+
+impl Reader<'_> {
+    fn take<const N: usize>(&mut self) -> [u8; N] {
+        let bytes = self.code[self.at..self.at + N].try_into().unwrap_or([0; N]);
+        self.at += N;
+        bytes
+    }
+
+    fn u32(&mut self) -> u32 {
+        u32::from_le_bytes(self.take())
+    }
+
+    fn usize(&mut self) -> usize {
+        usize::from_le_bytes(self.take())
+    }
+
+    fn text(&mut self) -> &str {
+        let len = self.u32() as usize;
+        let bytes = &self.code[self.at..self.at + len];
+        self.at += len;
+        // SAFETY: `Tree` wrote these bytes from a `&str`.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    fn value(&mut self) -> Result<Value, Error> {
+        let context = self.context;
+        let tag = self.code[self.at];
+        self.at += 1;
+        Ok(match tag {
+            NULL => Value::null(),
+            FALSE => Value::boolean(false),
+            TRUE => Value::boolean(true),
+            NUMBER => Value::number(f64::from_le_bytes(self.take())),
+            STRING => string(context, self.text()),
+            JSON => {
+                let json = self.text();
+                parse(context, json)?
+            }
+            BYTES => {
+                let index = self.u32() as usize;
+                uint8_array(context, std::mem::take(&mut self.blobs[index]))?
+            }
+            ARRAY => {
+                let count = self.u32();
+                let mut array = (context.array(count).map_err(engine)?, 0);
+                for _ in 0..count {
+                    let v = self.value()?;
+                    push_index(context, &mut array, v)?;
                 }
                 array.0
             }
-            Owned::Object(fields) => {
-                let mut object = context.object();
-                for (key, item) in fields {
-                    let v = item.to_js(context)?;
-                    match key {
-                        Cow::Borrowed(key) => b.field(&mut object, key, v)?,
-                        Cow::Owned(key) => b.entry(&mut object, key.clone(), v)?,
+            OBJECT => {
+                let count = self.u32();
+                let object = context.object();
+                for _ in 0..count {
+                    match self.code[self.at] {
+                        FIELD => {
+                            self.at += 1;
+                            let (ptr, len) = (self.usize(), self.usize());
+                            // SAFETY: `Tree::field` wrote a `&'static str`'s address and length.
+                            let key: &'static str = unsafe {
+                                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                                    ptr as *const u8,
+                                    len,
+                                ))
+                            };
+                            let v = self.value()?;
+                            define_field(context, object, key, v)?;
+                        }
+                        _ => {
+                            self.at += 1;
+                            let key = string(context, self.text());
+                            let v = self.value()?;
+                            define(context, object, key, v)?;
+                        }
                     }
                 }
                 object
             }
+            _ => return Err(Error::Message("the result cannot be built".into())),
         })
     }
+}
+
+impl Owned {
+    pub(crate) fn to_js(self, context: &Context) -> Result<Value, Error> {
+        let mut reader = Reader {
+            context,
+            code: &self.code,
+            at: 0,
+            blobs: self.blobs,
+        };
+        reader.value()
+    }
+}
+
+/// Serializes `value` off the JS thread.
+pub(crate) fn owned<T: Serialize + ?Sized>(value: &T, top: bool) -> Result<Owned, OutError> {
+    let owned = RefCell::new(Owned::default());
+    value.serialize(Out {
+        build: Tree(&owned),
+        top,
+    })?;
+    Ok(owned.into_inner())
 }
 
 #[derive(Debug)]
@@ -1413,31 +1937,40 @@ pub(crate) struct Compound<B: Build> {
     build: B,
     array: Option<B::Array>,
     object: Option<B::Object>,
-    variant: Option<&'static str>,
-    key: Option<String>,
-    raw: bool,
+    /// `{ "Variant": … }` around a tuple or struct variant.
+    outer: Option<B::Object>,
+    raw: Option<String>,
 }
 
 impl<B: Build> Compound<B> {
+    fn outer(build: B, variant: Option<&'static str>) -> Result<Option<B::Object>, OutError> {
+        let Some(variant) = variant else {
+            return Ok(None);
+        };
+        let mut outer = build.object()?;
+        build.field(&mut outer, variant);
+        Ok(Some(outer))
+    }
+
     fn array(build: B, len: usize, variant: Option<&'static str>) -> Result<Self, OutError> {
+        let outer = Self::outer(build, variant)?;
         Ok(Self {
             build,
             array: Some(build.array(len)?),
             object: None,
-            variant,
-            key: None,
-            raw: false,
+            outer,
+            raw: None,
         })
     }
 
     fn object(build: B, variant: Option<&'static str>) -> Result<Self, OutError> {
+        let outer = Self::outer(build, variant)?;
         Ok(Self {
             build,
             array: None,
             object: Some(build.object()?),
-            variant,
-            key: None,
-            raw: false,
+            outer,
+            raw: None,
         })
     }
 
@@ -1453,14 +1986,15 @@ impl<B: Build> Compound<B> {
     }
 
     fn field<T: Serialize + ?Sized>(&mut self, key: &'static str, v: &T) -> Result<(), OutError> {
+        let Some(object) = &mut self.object else {
+            return Err(OutError::Message("not an object".into()));
+        };
+        self.build.field(object, key);
         let v = v.serialize(Out {
             build: self.build,
             top: false,
         })?;
-        match &mut self.object {
-            Some(object) => Ok(self.build.field(object, key, v)?),
-            None => Err(OutError::Message("not an object".into())),
-        }
+        Ok(self.build.put(self.object.as_mut().unwrap(), v)?)
     }
 
     fn finish(self) -> Result<B::Value, OutError> {
@@ -1469,10 +2003,9 @@ impl<B: Build> Compound<B> {
             (_, Some(object)) => self.build.end_object(object),
             _ => return Err(OutError::Message("an empty compound".into())),
         };
-        match self.variant {
-            Some(variant) => {
-                let mut outer = self.build.object()?;
-                self.build.field(&mut outer, variant, value)?;
+        match self.outer {
+            Some(mut outer) => {
+                self.build.put(&mut outer, value)?;
                 Ok(self.build.end_object(outer))
             }
             None => Ok(value),
@@ -1528,20 +2061,22 @@ impl<B: Build> ser::SerializeMap for Compound<B> {
     type Ok = B::Value;
     type Error = OutError;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), OutError> {
-        self.key = Some(key.serialize(KeySer)?);
-        Ok(())
+        let key = key.serialize(KeySer)?;
+        match &mut self.object {
+            Some(object) => {
+                self.build.entry(object, key);
+                Ok(())
+            }
+            None => Err(OutError::Message("not an object".into())),
+        }
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, v: &T) -> Result<(), OutError> {
-        let key = self
-            .key
-            .take()
-            .ok_or_else(|| OutError::Message("a map value without a key".into()))?;
         let v = v.serialize(Out {
             build: self.build,
             top: false,
         })?;
         match &mut self.object {
-            Some(object) => Ok(self.build.entry(object, key, v)?),
+            Some(object) => Ok(self.build.put(object, v)?),
             None => Err(OutError::Message("not an object".into())),
         }
     }
@@ -1558,22 +2093,19 @@ impl<B: Build> ser::SerializeStruct for Compound<B> {
         key: &'static str,
         v: &T,
     ) -> Result<(), OutError> {
-        if self.raw {
-            let Owned::Str(json) = v.serialize(Out {
-                build: Tree,
-                top: false,
-            })?
+        if self.raw.is_some() {
+            let serde_json::Value::String(json) =
+                serde_json::to_value(v).map_err(|e| OutError::Message(e.to_string()))?
             else {
                 return Err(OutError::Message("a RawValue without its JSON".into()));
             };
-            self.key = Some(json);
+            self.raw = Some(json);
             return Ok(());
         }
         self.field(key, v)
     }
     fn end(self) -> Result<B::Value, OutError> {
-        if self.raw {
-            let json = self.key.unwrap_or_default();
+        if let Some(json) = self.raw {
             return Ok(self.build.raw_json(&json)?);
         }
         self.finish()
@@ -1656,12 +2188,7 @@ impl<B: Build> ser::Serializer for Out<B> {
         Ok(self.build.string(v))
     }
     fn serialize_bytes(self, v: &[u8]) -> Result<B::Value, OutError> {
-        let mut array = self.build.array(v.len())?;
-        for &byte in v {
-            self.build
-                .push(&mut array, self.build.number(byte as f64))?;
-        }
-        Ok(self.build.end_array(array))
+        Ok(self.build.bytes(v)?)
     }
     fn serialize_none(self) -> Result<B::Value, OutError> {
         Ok(self.build.null())
@@ -1709,9 +2236,10 @@ impl<B: Build> ser::Serializer for Out<B> {
                 _ => {}
             }
         }
-        let inner = v.serialize(self.inner())?;
         let mut object = self.build.object()?;
-        self.build.field(&mut object, variant, inner)?;
+        self.build.field(&mut object, variant);
+        let inner = v.serialize(self.inner())?;
+        self.build.put(&mut object, inner)?;
         Ok(self.build.end_object(object))
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<Compound<B>, OutError> {
@@ -1736,9 +2264,16 @@ impl<B: Build> ser::Serializer for Out<B> {
         Compound::object(self.build, None)
     }
     fn serialize_struct(self, name: &'static str, _: usize) -> Result<Compound<B>, OutError> {
-        let mut compound = Compound::object(self.build, None)?;
-        compound.raw = name == RAW_VALUE_TOKEN;
-        Ok(compound)
+        if name == RAW_VALUE_TOKEN {
+            return Ok(Compound {
+                build: self.build,
+                array: None,
+                object: None,
+                outer: None,
+                raw: Some(String::new()),
+            });
+        }
+        Compound::object(self.build, None)
     }
     fn serialize_struct_variant(
         self,
@@ -2222,8 +2757,12 @@ mod tests {
             // A value that is not JSON as a whole still fails, but reading stops at the first
             // problem, so a wrong type met before it is what gets reported.
             let whole = |e: &String| !e.starts_with("argument 1: ");
+            // Sequences and bytes read typed arrays and buffers as their elements, which JSON
+            // turned into objects with index keys.
+            let memory = buffer(context, eval(context, src)).is_some();
             let agree = match (&before, &now) {
                 (Err(old), Err(_)) if whole(old) => true,
+                (Err(_), _) if memory => true,
                 _ => before == now,
             };
             if !agree {
@@ -2302,14 +2841,6 @@ mod tests {
         }
     }
 
-    struct RawBytes(&'static [u8]);
-
-    impl Serialize for RawBytes {
-        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-            s.serialize_bytes(self.0)
-        }
-    }
-
     fn result<T: Serialize>(context: &Context, name: &str, value: T, mismatches: &mut Vec<String>) {
         let before = serde_json::to_string(&value)
             .map_err(|e| e.to_string())
@@ -2320,11 +2851,7 @@ mod tests {
                 top: false,
             })
             .map_err(|e| e.to_string());
-        let owned = value
-            .serialize(Out {
-                build: Tree,
-                top: false,
-            })
+        let owned = owned(&value, false)
             .map_err(|e| e.to_string())
             .map(|tree| tree.to_js(context).unwrap());
         let same = intrinsics_same(context);
@@ -2470,7 +2997,6 @@ mod tests {
                     Keyed(&[(1u8, "a"), (1, "b")]),
                     Fails,
                     vec![Some(Fails)],
-                    RawBytes(&[1, 2, 255]),
                     serde_json::json!({ "b": [1, 2.5, null], "a": { "c": "d" } }),
                     RawValue::from_string(r#"{ "x": [1, 2.50] }"#.into()).unwrap(),
                 );
@@ -2483,5 +3009,129 @@ mod tests {
             mismatches.len(),
             mismatches.join("\n")
         );
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Frame {
+        #[serde(with = "crate::embed::bytes")]
+        data: Vec<u8>,
+        #[serde(with = "crate::embed::bytes::option", default)]
+        mask: Option<Vec<u8>>,
+    }
+
+    #[test]
+    fn typed_arrays_and_buffers_are_bytes_and_bytes_are_uint8_arrays() {
+        use crate::embed::Bytes;
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|runtime| {
+                let context = runtime.ctx();
+                install(context).unwrap();
+                let read = |src: &str| direct::<Bytes>(context, eval(context, src)).map(|b| b.0);
+                assert_eq!(read("new Uint8Array([1, 2, 255])"), Ok(vec![1, 2, 255]));
+                assert_eq!(
+                    read("new Uint8Array([9, 1, 2, 3]).subarray(1, 3)"),
+                    Ok(vec![1, 2])
+                );
+                assert_eq!(read("new Uint8Array([4, 5]).buffer"), Ok(vec![4, 5]));
+                assert_eq!(
+                    read("new DataView(new Uint8Array([4, 5, 6]).buffer, 1)"),
+                    Ok(vec![5, 6])
+                );
+                assert_eq!(read("new Uint16Array([0x0102])"), Ok(vec![2, 1]));
+                assert_eq!(read("[7, 8]"), Ok(vec![7, 8]));
+                assert_eq!(read("new Uint8Array(0)"), Ok(vec![]));
+                assert_eq!(
+                    read("'ab'"),
+                    Err("argument 1: invalid type: string \"ab\", expected a Uint8Array, an ArrayBuffer or an array of bytes".into())
+                );
+                assert_eq!(
+                    read("[256]"),
+                    Err("argument 1: invalid value: integer `256`, expected u8".into())
+                );
+
+                assert_eq!(
+                    direct::<Vec<u8>>(context, eval(context, "new Uint8Array([1, 2])")),
+                    Ok(vec![1, 2])
+                );
+                assert_eq!(
+                    direct::<Vec<f32>>(context, eval(context, "new Float32Array([0.5, -2])")),
+                    Ok(vec![0.5, -2.0])
+                );
+                assert_eq!(
+                    direct::<Vec<i64>>(context, eval(context, "new BigInt64Array([-5n])")),
+                    Ok(vec![-5])
+                );
+                assert_eq!(
+                    direct::<(u8, u8)>(context, eval(context, "new Uint8Array([1, 2, 3])")),
+                    Err("argument 1: invalid length 3, expected fewer elements in array".into())
+                );
+                assert_eq!(
+                    direct::<Vec<u8>>(context, eval(context, "new Int16Array([-1])")),
+                    Err("argument 1: invalid value: integer `-1`, expected u8".into())
+                );
+                assert_eq!(
+                    direct::<Json>(context, eval(context, "new Uint8Array([1, 2])")),
+                    Ok(serde_json::json!({ "0": 1, "1": 2 })),
+                    "a value of any type reads a typed array as JSON.stringify sees it"
+                );
+                assert_eq!(
+                    direct::<Frame>(context, eval(context, "({ data: new Uint8Array([3]) })")),
+                    Ok(Frame {
+                        data: vec![3],
+                        mask: None
+                    })
+                );
+
+                let floats = eval(context, "new Float32Array([1.5, 2.5])");
+                let data = context.typedarray_info(floats).unwrap().data;
+                let walk = Walk::new(context);
+                let slice = Slice::<f32>::deserialize(walk.arg(0, floats)).unwrap();
+                // SAFETY: `floats` is alive on this frame and no JS runs.
+                let read = unsafe { slice.get() };
+                assert_eq!(
+                    (read, read.as_ptr() as usize),
+                    (&[1.5f32, 2.5][..], data as usize)
+                );
+                let slice =
+                    Slice::<f32>::deserialize(walk.arg(0, eval(context, "[1, 2]"))).unwrap();
+                assert_eq!(unsafe { slice.get() }, &[1.0f32, 2.0]);
+                let wide = eval(context, "new Uint16Array([0x0102])");
+                let slice = Slice::<u8>::deserialize(walk.arg(0, wide)).unwrap();
+                assert_eq!(unsafe { slice.get() }, &[2u8, 1]);
+
+                let show = context
+                    .eval("(v) => `${v.constructor.name}:${Array.from(v.data ?? v).join(',')}`")
+                    .unwrap();
+                let shown = |v: Value| {
+                    context
+                        .to_rust_string(context.call(show, Value::undefined(), &[v]).unwrap())
+                        .unwrap()
+                };
+                let bytes = Bytes(vec![1, 2, 255]);
+                let direct = bytes
+                    .serialize(Out {
+                        build: Engine(context),
+                        top: false,
+                    })
+                    .unwrap();
+                let tree = owned(&bytes, false).unwrap();
+                assert_eq!(shown(direct), "Uint8Array:1,2,255");
+                assert_eq!(shown(tree.to_js(context).unwrap()), "Uint8Array:1,2,255");
+                let empty = owned(&Bytes(Vec::new()), false).unwrap();
+                assert_eq!(shown(empty.to_js(context).unwrap()), "Uint8Array:");
+                let frame = Frame {
+                    data: vec![4],
+                    mask: None,
+                };
+                let frame = frame
+                    .serialize(Out {
+                        build: Engine(context),
+                        top: false,
+                    })
+                    .unwrap();
+                let data = context.get(frame, &context.atom("data")).unwrap();
+                assert_eq!(shown(data), "Uint8Array:4");
+            })
+        });
     }
 }

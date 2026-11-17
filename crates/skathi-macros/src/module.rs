@@ -88,16 +88,74 @@ struct Export {
     method: syn::Ident,
     task: bool,
     params: Vec<(String, Param)>,
+    ret: Bytes,
 }
 
 enum Param {
     Owned(Type),
+    Bytes(Bytes),
     Borrowed(Borrowed),
+}
+
+/// Where a `Vec<u8>` sits in a parameter or a result: it goes to JS as a `Uint8Array`.
+#[derive(Clone, Copy, PartialEq)]
+enum Bytes {
+    None,
+    Plain,
+    Option,
+    Result,
+}
+
+const ELEMENTS: [&str; 10] = [
+    "u8", "i8", "i16", "u16", "i32", "u32", "f32", "f64", "i64", "u64",
+];
+
+/// The first type argument of `Name<T, …>`.
+fn argument_of<'t>(ty: &'t Type, name: &str) -> Option<&'t Type> {
+    let Type::Path(p) = ty else { return None };
+    let last = p.path.segments.last()?;
+    if p.qself.is_some() || last.ident != name {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    match args.args.first()? {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    }
+}
+
+fn is_ident(ty: &Type, name: &str) -> bool {
+    matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(name))
+}
+
+pub(crate) fn is_vec_u8(ty: &Type) -> bool {
+    argument_of(ty, "Vec").is_some_and(|t| is_ident(t, "u8"))
+}
+
+pub(crate) fn is_option_vec_u8(ty: &Type) -> bool {
+    argument_of(ty, "Option").is_some_and(is_vec_u8)
+}
+
+impl Bytes {
+    fn of(ty: &Type, result: bool) -> Self {
+        if is_vec_u8(ty) {
+            Bytes::Plain
+        } else if is_option_vec_u8(ty) {
+            Bytes::Option
+        } else if result && argument_of(ty, "Result").is_some_and(is_vec_u8) {
+            Bytes::Result
+        } else {
+            Bytes::None
+        }
+    }
 }
 
 /// A parameter read in place for the length of a synchronous call.
 enum Borrowed {
     Str,
+    Slice(Type),
 }
 
 impl Borrowed {
@@ -106,14 +164,19 @@ impl Borrowed {
             return None;
         }
         match &*r.elem {
-            Type::Path(p) if p.qself.is_none() && p.path.is_ident("str") => Some(Borrowed::Str),
+            t if is_ident(t, "str") => Some(Borrowed::Str),
+            Type::Slice(s) if ELEMENTS.iter().any(|e| is_ident(&s.elem, e)) => {
+                Some(Borrowed::Slice((*s.elem).clone()))
+            }
             _ => None,
         }
     }
 
-    fn owned(&self) -> &'static str {
+    fn owned(&self) -> String {
         match self {
-            Borrowed::Str => "String",
+            Borrowed::Str => "`String`".into(),
+            Borrowed::Slice(t) if is_ident(t, "u8") => "`Vec<u8>` or `skathi::Bytes`".into(),
+            Borrowed::Slice(t) => format!("`Vec<{}>`", quote!(#t)),
         }
     }
 }
@@ -204,7 +267,7 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
                         &arg.ty,
                         format!(
                             "a #[task] runs on a worker after the call has returned, so it cannot \
-                             borrow from it: take `{}` instead",
+                             borrow from it: take {} instead",
                             borrowed.owned()
                         ),
                     ));
@@ -223,10 +286,11 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
             }
             _ => {}
         }
-        params.push((
-            camel_case(&pat.ident.to_string()),
-            Param::Owned((*arg.ty).clone()),
-        ));
+        let param = match Bytes::of(&arg.ty, false) {
+            Bytes::None => Param::Owned((*arg.ty).clone()),
+            bytes => Param::Bytes(bytes),
+        };
+        params.push((camel_case(&pat.ident.to_string()), param));
     }
     if params.len() > MAX_PARAMS {
         return Err(syn::Error::new_spanned(
@@ -248,6 +312,10 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
         method: sig.ident.clone(),
         task,
         params,
+        ret: match &sig.output {
+            ReturnType::Type(_, ty) => Bytes::of(ty, true),
+            ReturnType::Default => Bytes::None,
+        },
     }))
 }
 
@@ -318,6 +386,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             method,
             task,
             params,
+            ret,
         } = e;
         let kind = if *task {
             quote!(task)
@@ -330,22 +399,33 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
         let types = params.iter().map(|(_, param)| match param {
             Param::Owned(ty) => quote!(#ty),
+            Param::Bytes(Bytes::Option) => quote!(::core::option::Option<#krate::Bytes>),
+            Param::Bytes(_) => quote!(#krate::Bytes),
             Param::Borrowed(Borrowed::Str) => quote!(#krate::__private::Str),
+            Param::Borrowed(Borrowed::Slice(t)) => quote!(#krate::__private::Slice<#t>),
         });
         let values = params
             .iter()
             .zip(&args)
             .map(|((_, param), arg)| match param {
                 Param::Owned(_) => quote!(#arg),
+                Param::Bytes(Bytes::Option) => quote!(#arg.map(|b| b.0)),
+                Param::Bytes(_) => quote!(#arg.0),
                 // SAFETY: read in this call, used only inside it.
                 Param::Borrowed(_) => quote!(unsafe { #arg.get() }),
             });
         let names = (!params.is_empty()).then(|| quote!(.params([#(#names),*])));
+        let call = quote!(<#ty>::#method(&*#this, #(#values),*));
+        let call = match ret {
+            Bytes::None => call,
+            Bytes::Plain => quote!(#krate::Bytes(#call)),
+            Bytes::Option | Bytes::Result => quote!(#call.map(#krate::Bytes)),
+        };
         quote! {
             {
                 let #this = ::std::sync::Arc::clone(&#this);
                 #module
-                    .#kind(#js, move |#(#args: #types),*| <#ty>::#method(&*#this, #(#values),*))
+                    .#kind(#js, move |#(#args: #types),*| #call)
                     #names;
             }
         }
@@ -402,6 +482,9 @@ mod tests {
             quote!(impl N { pub fn f(&self, s: &String) {} }),
             quote!(impl N { pub fn f(&self, s: &'static str) {} }),
             quote!(impl N { #[task] pub fn f(&self, s: &str) {} }),
+            quote!(impl N { #[task] pub fn f(&self, b: &[u8]) {} }),
+            quote!(impl N { pub fn f(&self, b: &mut [u8]) {} }),
+            quote!(impl N { pub fn f(&self, b: &[bool]) {} }),
             quote!(impl N { pub fn f(&self, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8, i: u8) {} }),
             quote!(impl N { pub fn delete(&self) {} }),
             quote!(impl N { #[task] fn f(&self) {} }),

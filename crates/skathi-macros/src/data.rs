@@ -91,7 +91,57 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         out.push(syn::parse_quote!(#[specta(crate = #krate::specta)]));
     }
     *attrs = out;
+    match &mut item {
+        Item::Struct(s) => s.fields.iter_mut().for_each(|f| bytes(f, &krate, types)),
+        Item::Enum(e) => e
+            .variants
+            .iter_mut()
+            .flat_map(|v| v.fields.iter_mut())
+            .for_each(|f| bytes(f, &krate, types)),
+        _ => {}
+    }
     quote!(#item)
+}
+
+/// Whether some `#[tool(...)]` on a field already says one of `words`.
+fn says(attrs: &[Attribute], tool: &str, words: &[&str]) -> bool {
+    attrs.iter().filter(|a| a.path().is_ident(tool)).any(|a| {
+        a.meta.require_list().is_ok_and(|list| {
+            list.tokens
+                .clone()
+                .into_iter()
+                .any(|t| matches!(t, TokenTree::Ident(i) if words.iter().any(|w| i == w)))
+        })
+    })
+}
+
+/// A `Vec<u8>` field is a `Uint8Array` in JS, unless the field says how it is (de)serialized.
+fn bytes(field: &mut syn::Field, krate: &TokenStream, types: bool) {
+    let option = crate::module::is_option_vec_u8(&field.ty);
+    if !option && !crate::module::is_vec_u8(&field.ty) {
+        return;
+    }
+    let with = ["with", "serialize_with", "deserialize_with"];
+    if !says(&field.attrs, "serde", &with) {
+        let module = if option {
+            quote!(#krate::bytes::option)
+        } else {
+            quote!(#krate::bytes)
+        };
+        let path = module.to_string().replace(' ', "");
+        field.attrs.push(syn::parse_quote!(#[serde(with = #path)]));
+        if option && !says(&field.attrs, "serde", &["default"]) {
+            field.attrs.push(syn::parse_quote!(#[serde(default)]));
+        }
+    }
+    if types && !says(&field.attrs, "specta", &["type"]) {
+        let ty = if option {
+            quote!(::core::option::Option<#krate::Bytes>)
+        } else {
+            quote!(#krate::Bytes)
+        };
+        field.attrs.push(syn::parse_quote!(#[specta(type = #ty)]));
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +164,35 @@ mod tests {
         assert!(derives.iter().any(|d| d == "Deserialize"));
         assert_eq!(derives.iter().any(|d| d == "Type"), cfg!(feature = "types"));
         assert!(names_crate(&s.attrs, "serde"));
+    }
+
+    #[test]
+    fn byte_fields_become_uint8_arrays_unless_they_say_otherwise() {
+        let out = expand(
+            quote!(),
+            quote! {
+                struct S {
+                    a: Vec<u8>,
+                    b: Option<Vec<u8>>,
+                    #[serde(with = "mine")]
+                    c: Vec<u8>,
+                    d: Vec<u16>,
+                }
+            },
+        );
+        let s: syn::ItemStruct = syn::parse2(out).unwrap();
+        let attrs: Vec<String> = s
+            .fields
+            .iter()
+            .map(|f| {
+                let a = &f.attrs;
+                quote!(#(#a)*).to_string()
+            })
+            .collect();
+        assert!(attrs[0].contains("\"::skathi::bytes\""), "{}", attrs[0]);
+        assert!(attrs[1].contains("\"::skathi::bytes::option\"") && attrs[1].contains("default"));
+        assert!(!attrs[2].contains("skathi::bytes"));
+        assert!(!attrs[3].contains("bytes"));
     }
 
     #[test]

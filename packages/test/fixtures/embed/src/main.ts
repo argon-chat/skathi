@@ -1,5 +1,6 @@
 import { appHost, createApp, h, ref } from "@skathi-native/runtime";
-import { available, crash, double, on, point, refuse, report, uiThread, worker, type Value } from "native:demo";
+import { available, checksum, crash, double, on, point, refuse, repeat, report, reversed } from "native:demo";
+import { uiThread, worker, type Value } from "native:demo";
 import { sum } from "native:extra";
 
 const status = ref("starting");
@@ -22,6 +23,10 @@ async function settle(p: Promise<unknown>): Promise<unknown> {
   }
 }
 
+function shown(bytes: Uint8Array): string {
+  return `${bytes.constructor.name}:${bytes.join()}`;
+}
+
 async function run(): Promise<void> {
   const seen = {
     available,
@@ -35,6 +40,13 @@ async function run(): Promise<void> {
     crash: await settle(crash()),
     worker: await settle(worker()),
     legacy: await settle(appHost.call("ping", "hello")),
+    bytes: {
+      checksum: checksum(new Uint8Array([1, 2, 3])),
+      checksumBuffer: checksum(new Uint8Array([4, 5]).buffer),
+      checksumArray: checksum([6, 7] as unknown as Uint8Array),
+      reversed: shown(reversed(new Uint8Array([1, 2, 3]))),
+      repeated: shown(await repeat(new Uint8Array([7, 8]), 2)),
+    },
   };
   on("tick", (tick) => {
     status.value = "ticked";

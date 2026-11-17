@@ -211,11 +211,7 @@ fn answer<R: Serialize + ?Sized>(context: &Context, value: &R) -> Result<Value, 
 
 /// A task's result, made on its worker.
 fn answer_owned<R: Serialize + ?Sized>(value: &R) -> Result<marshal::Owned, Failure> {
-    outcome(value.serialize(marshal::Out {
-        build: marshal::Tree,
-        top: true,
-    }))
-    .map_err(|e| match e {
+    outcome(marshal::owned(value, true)).map_err(|e| match e {
         Fail::Failure(failure) => failure,
         Fail::Thrown(_) => Failure::new("the result cannot be serialized"),
     })
@@ -223,11 +219,7 @@ fn answer_owned<R: Serialize + ?Sized>(value: &R) -> Result<marshal::Owned, Fail
 
 /// An event's data, made on the thread that emits it.
 pub(crate) fn event_data<T: Serialize + ?Sized>(data: &T) -> Option<marshal::Owned> {
-    data.serialize(marshal::Out {
-        build: marshal::Tree,
-        top: false,
-    })
-    .ok()
+    marshal::owned(data, false).ok()
 }
 
 enum Invoke {
@@ -811,7 +803,7 @@ fn build(context: &Context, module: &'static Module) -> js::Result<Value> {
     Ok(object)
 }
 
-fn deliver_event(context: &Context, module: &str, event: &str, data: &marshal::Owned) {
+fn deliver_event(context: &Context, module: &str, event: &str, data: marshal::Owned) {
     let key = (module.to_owned(), event.to_owned());
     let listeners = STATE.with(|s| s.borrow().listeners.get(&key).cloned().unwrap_or_default());
     if listeners.is_empty() {
@@ -888,7 +880,7 @@ fn drain() -> usize {
                     module,
                     event,
                     data,
-                } => deliver_event(context, &module, &event, &data),
+                } => deliver_event(context, &module, &event, data),
             }
         });
         n += 1;
@@ -1017,6 +1009,17 @@ mod tests {
                     // SAFETY: used inside the call.
                     unsafe { s.get() }.to_uppercase().repeat(n as usize)
                 });
+                m.function("sum", |b: marshal::Slice<u8>| {
+                    // SAFETY: used inside the call.
+                    unsafe { b.get() }.iter().map(|&b| b as u32).sum::<u32>()
+                });
+                m.function("reversed", |mut b: crate::embed::Bytes| {
+                    b.reverse();
+                    b
+                });
+                m.task("doubled", |b: crate::embed::Bytes| {
+                    crate::embed::Bytes(b.iter().map(|b| b * 2).collect())
+                });
                 m.event::<Point>("moved");
                 let modules: &'static [Module] = Box::leak(vec![m].into_boxed_slice());
                 install(context, modules, None).unwrap();
@@ -1086,8 +1089,17 @@ mod tests {
                     eval("try { __nm.structured(); 'no' } catch (e) { JSON.stringify(e.data) }"),
                     r#"{"x":0,"y":7}"#
                 );
+                assert_eq!(
+                    eval("[__nm.sum(new Uint8Array([1, 2, 3])), __nm.sum([4, 5]), __nm.sum(new Uint8Array([9, 9]).buffer)].join()"),
+                    "6,9,18"
+                );
+                assert_eq!(
+                    eval("const r = __nm.reversed(new Uint8Array([1, 2, 3])); r.constructor.name + ':' + r.join()"),
+                    "Uint8Array:3,2,1"
+                );
                 eval(
                     "globalThis.__settled = {};
+                     __nm.doubled(new Uint8Array([1, 2])).then((v) => __settled.bytes = v.constructor.name + ':' + v.join());
                      __nm.slow(21).then((v) => __settled.ok = v);
                      __nm.slow(0).catch((e) => __settled.err = e.message);
                      __nm.crash().catch((e) => __settled.crash = e.message.includes('worker kaboom'));
@@ -1097,8 +1109,8 @@ mod tests {
                 emit("demo", "moved", event_data(&Point { x: 3, y: 4 }).unwrap());
                 settle();
                 assert_eq!(
-                    eval("[__settled.ok, __settled.err, __settled.crash].join()"),
-                    "42,zero,true"
+                    eval("[__settled.ok, __settled.err, __settled.crash, __settled.bytes].join()"),
+                    "42,zero,true,Uint8Array:2,4"
                 );
                 assert_eq!(
                     eval("__settled.bad"),
