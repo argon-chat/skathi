@@ -1,12 +1,21 @@
 // What the JS engine provides, under the web's names. tsconfig omits lib.dom on purpose: a name
 // missing here must fail to type-check. Declare a symbol only if redjs really has it.
 
+// `count`, `time` and their kin exist but do nothing, so they are left out.
 interface Console {
   log(...args: unknown[]): void;
+  info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
-  info?(...args: unknown[]): void;
-  debug?(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
+  trace(...args: unknown[]): void;
+  assert(condition?: boolean, ...args: unknown[]): void;
+  dir(...args: unknown[]): void;
+  table(...args: unknown[]): void;
+  group(...args: unknown[]): void;
+  groupCollapsed(...args: unknown[]): void;
+  groupEnd(): void;
+  clear(): void;
 }
 declare var console: Console;
 
@@ -445,14 +454,48 @@ type RequestInit = Record<string, unknown>;
 declare function fetch(input: string | URL, init?: RequestInit): Promise<Response>;
 
 interface URL {
-  readonly href: string;
-  readonly protocol: string;
+  href: string;
+  readonly origin: string;
+  protocol: string;
+  username: string;
+  password: string;
+  host: string;
+  hostname: string;
+  port: string;
+  pathname: string;
+  search: string;
+  readonly searchParams: URLSearchParams;
+  hash: string;
+  toString(): string;
+  toJSON(): string;
 }
 declare var URL: {
   new (url: string | URL, base?: string | URL): URL;
   prototype: URL;
+  canParse(url: string | URL, base?: string | URL): boolean;
   createObjectURL(obj: Blob): string;
   revokeObjectURL(url: string): void;
+};
+
+interface URLSearchParams {
+  readonly size: number;
+  append(name: string, value: string): void;
+  delete(name: string): void;
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string): boolean;
+  set(name: string, value: string): void;
+  sort(): void;
+  forEach(callbackfn: (value: string, key: string, parent: URLSearchParams) => void, thisArg?: unknown): void;
+  entries(): IterableIterator<[string, string]>;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+  toString(): string;
+}
+declare var URLSearchParams: {
+  new (init?: string | Iterable<readonly [string, string]> | Record<string, string> | URLSearchParams): URLSearchParams;
+  prototype: URLSearchParams;
 };
 
 // Web Audio.

@@ -89,7 +89,7 @@ export const profile = (at >= 0 && appLaunch.argv[at + 1]) || "default";`,
     syntax: "readonly appLaunch.url: string | null",
     notes: [
       'Set when Windows started the app for a scheme registered with `registerProtocol()` or the `"protocols"` key. The URL is taken whole from the command line, so quotes and spaces in it arrive unchanged.',
-      "With `singleInstance`, a link opened while the app runs arrives as a `launch` event with `url` instead.",
+      'With `singleInstance`, a link opened while the app runs arrives as a `launch` event with `source: "open-url"` and `url` instead.',
       UNTRUSTED,
     ],
     examples: [
@@ -98,12 +98,11 @@ export const profile = (at >= 0 && appLaunch.argv[at + 1]) || "default";`,
         lang: "ts",
         code: `import { appLaunch, type SkLaunchEvent } from "@skathi-native/runtime";
 
-const PREFIX = "notes://note/";
-
 function route(link: string | null, go: (path: string) => void): void {
-  if (!link?.toLowerCase().startsWith(PREFIX)) return;
-  const id = link.slice(PREFIX.length).split(/[/?#]/)[0];
-  if (id && /^[\\w-]+$/.test(id)) go(\`/note/\${id}\`);
+  if (!link || !URL.canParse(link)) return;
+  const url = new URL(link);
+  const id = url.pathname.slice(1);
+  if (url.protocol === "notes:" && url.hostname === "note" && /^[\\w-]+$/.test(id)) go(\`/note/\${id}\`);
 }
 
 export function deepLinks(go: (path: string) => void): void {
@@ -161,11 +160,11 @@ interface SkLaunchEvent extends Event {
   readonly cwd: string;
   readonly url: string | null;
   readonly paths: readonly string[];
-  readonly source: "second-instance" | "open-url" | "reopen";
+  readonly source: "second-instance" | "open-url";
 }`,
     notes: [
       "`argv`, `cwd` and `url` are the second launch's; `paths` are its file arguments resolved against its own working folder.",
-      '`source` is `"second-instance"`. `"open-url"` and `"reopen"` are reserved in the type and not sent yet; a click on the Dock icon with no window shows the window without an event.',
+      '`source` is `"open-url"` when the second launch was started for a link to a registered scheme (Windows; macOS planned), and `"second-instance"` otherwise. A click on the Dock icon with no window shows the window without an event.',
       "After the event, `launchQueue`'s consumer receives the same launch as `LaunchParams`.",
       'The window is also brought to the front, unless `"raiseOnSecondInstance"` is `false`, either process runs with `SK_WINDOW_FOCUS=never`, or `SK_LAUNCH_RAISE=off` is set.',
       UNTRUSTED,

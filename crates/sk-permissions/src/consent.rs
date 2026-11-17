@@ -11,7 +11,8 @@
 //! | granted / prompt / unsupported | Block | `denied` (by the user) |
 //!
 //! Other capabilities are the platform's, except that the capture latches also apply to one the OS
-//! itself prompts for (macOS screen recording).
+//! itself prompts for (macOS screen recording). Where nothing gates a capture ([`AppConsent::ungated`],
+//! Linux), the app asks nothing either and the platform's state stands.
 //!
 //! [`PermissionHost::request`] on a prompting capability: an OS denial opens the platform's settings
 //! page and, once lifted, goes on to the question; a stored Allow grants at once; otherwise the question
@@ -179,6 +180,7 @@ impl Inner {
 struct Shared {
     os: &'static dyn PermissionHost,
     hooks: Hooks,
+    asks: bool,
     store: Mutex<Store>,
     inner: Mutex<Inner>,
 }
@@ -202,12 +204,16 @@ impl Shared {
         self.os.status(cap)
     }
 
+    fn prompts(&self, cap: Capability) -> bool {
+        self.asks && prompts(cap)
+    }
+
     fn native_prompt(&self, cap: Capability) -> bool {
         self.os.has_native_prompt(cap) && !(self.hooks.fake)()
     }
 
     fn status(&self, cap: Capability) -> PermissionState {
-        if !prompts(cap) {
+        if !self.prompts(cap) {
             // The latches still govern one that only the OS asks about (macOS screen recording).
             return if self.os.has_native_prompt(cap) {
                 self.os_state(cap)
@@ -277,14 +283,30 @@ pub struct AppConsent {
 
 impl AppConsent {
     pub fn new(os: &'static dyn PermissionHost, hooks: Hooks) -> AppConsent {
+        Self::with(os, hooks, true)
+    }
+
+    /// For a platform with no per-app gate on capture: the app asks nothing, so a state never reads
+    /// `prompt` only to be granted without a question.
+    pub fn ungated(os: &'static dyn PermissionHost, hooks: Hooks) -> AppConsent {
+        Self::with(os, hooks, false)
+    }
+
+    fn with(os: &'static dyn PermissionHost, hooks: Hooks, asks: bool) -> AppConsent {
         AppConsent {
             shared: Arc::new(Shared {
                 os,
                 hooks,
+                asks,
                 store: Mutex::new(Store::new()),
                 inner: Mutex::new(Inner::default()),
             }),
         }
+    }
+
+    /// Whether this layer asks about `cap` itself, rather than reporting the platform's state.
+    pub fn prompts(&self, cap: Capability) -> bool {
+        self.shared.prompts(cap)
     }
 
     pub fn set_decisions_file(&self, path: Option<std::path::PathBuf>) {
@@ -305,7 +327,7 @@ impl AppConsent {
             None => Capability::ALL
                 .iter()
                 .copied()
-                .filter(|c| prompts(*c))
+                .filter(|c| self.prompts(*c))
                 .collect(),
         };
         let mut forgotten = Vec::new();
@@ -323,7 +345,7 @@ impl AppConsent {
 
     fn os_request(&self, cap: Capability) -> RequestOutcome {
         match self.shared.os.request(cap) {
-            RequestOutcome::Settled(s) if !prompts(cap) => RequestOutcome::Settled(s),
+            RequestOutcome::Settled(s) if !self.prompts(cap) => RequestOutcome::Settled(s),
             RequestOutcome::Settled(_) => RequestOutcome::Settled(self.shared.status(cap)),
             RequestOutcome::Pending(inner) => {
                 let mut i = self.shared.lock_inner();
@@ -385,11 +407,11 @@ impl PermissionHost for AppConsent {
     }
 
     fn denied_by_system(&self, cap: Capability) -> bool {
-        !prompts(cap) || self.shared.os_state(cap) == PermissionState::Denied
+        !self.prompts(cap) || self.shared.os_state(cap) == PermissionState::Denied
     }
 
     fn request(&self, cap: Capability) -> RequestOutcome {
-        if !prompts(cap) {
+        if !self.prompts(cap) {
             let latched = (self.shared.hooks.forbidden)() || (self.shared.hooks.fake)();
             if latched && self.shared.os.has_native_prompt(cap) {
                 return RequestOutcome::Settled(self.shared.os_state(cap));
@@ -425,7 +447,7 @@ impl PermissionHost for AppConsent {
             let Waiter::Os { outer, cap, .. } = i.waiting.remove(pos) else {
                 continue;
             };
-            let state = if prompts(cap) {
+            let state = if self.prompts(cap) {
                 drop(i);
                 let s = self.shared.status(cap);
                 // An OS denial now lifted, with no Allow yet: ask rather than settle `prompt`.

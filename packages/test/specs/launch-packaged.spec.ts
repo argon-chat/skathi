@@ -164,6 +164,7 @@ describe("a second launch of the packaged exe", () => {
       const got = await untilEvents(before + 1, 15_000);
       bunExpect(got.opened.at(-1)).toBe("ok");
       bunExpect(got.events.length).toBe(before + 1);
+      bunExpect(got.events.at(-1)!.source).toBe("open-url");
       bunExpect(got.events.at(-1)!.url).toBe(url);
       bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
     },

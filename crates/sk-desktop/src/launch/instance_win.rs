@@ -722,7 +722,7 @@ mod tests {
         };
         let v: serde_json::Value = serde_json::from_str(&found).unwrap();
         assert_eq!(v["kind"], "launch");
-        assert_eq!(v["source"], "second-instance");
+        assert_eq!(v["source"], "open-url");
         assert_eq!(v["url"], "vntest://a?b=\"c d\"");
         assert_eq!(v["argv"][1], "--y");
     }

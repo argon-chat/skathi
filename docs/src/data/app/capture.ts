@@ -56,7 +56,9 @@ onMounted(async () => {
 </template>`,
       },
     ],
-    limitations: ["On Linux, `getSources()` rejects with `NotSupportedError` and every permission is `unsupported`."],
+    limitations: [
+      "On Linux, `getSources()` rejects with `NotSupportedError`; the microphone reads `granted`, the camera and screen capture `unsupported`.",
+    ],
     related: ["capture-get-sources", "capture-set-pending-source", "capture-permission", "app-permissions"],
     aliases: ["desktopCapturer", "screen share", "screen picker", "getDisplayMedia"],
   },
@@ -207,7 +209,9 @@ export const canShareScreen = () => appCapture.permission("screen_share").state 
       },
     ],
     edgeCases: ["Any other source throws a `TypeError`."],
-    limitations: ["On Linux, the camera and screen capture are `unsupported`; the microphone has the app's own state."],
+    limitations: [
+      "On Linux, the microphone is `granted` (the desktop does not gate it), the camera and screen capture `unsupported`.",
+    ],
     related: ["capture-request-permission", "capture-permission-hint", "permissions-list"],
     aliases: ["CapturePermission", "CaptureSource"],
   },

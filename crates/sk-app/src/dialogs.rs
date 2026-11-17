@@ -22,9 +22,6 @@ pub fn owner() -> Option<sk_desktop::dialog::Owner> {
     crate::window::dialog_parent_of(key).map(|hwnd| sk_desktop::dialog::Owner { key, hwnd })
 }
 
-/// On Linux nobody is asked: Allow, as a desktop browser without a portal grants its own capture.
-/// The desktop has no per-app microphone permission to stand in for, and its only question dialogs
-/// (zenity, kdialog) are often not installed. The answer is stored like any other.
 pub fn ask_permission(q: sk_permissions::Question, reply: Box<dyn FnOnce(Option<usize>) + Send>) {
     let capability = q.capability;
     let ask = sk_desktop::dialog::Ask {
@@ -43,12 +40,7 @@ pub fn ask_permission(q: sk_permissions::Question, reply: Box<dyn FnOnce(Option<
         }),
         reply,
     );
-    #[cfg(target_os = "linux")]
-    {
-        let _ = capability;
-        sk_desktop::dialog::ask_with(ask, Box::new(|_, _, _| Ok(Some(0))), reply);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = capability;
         sk_desktop::dialog::ask(ask, reply);

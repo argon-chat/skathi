@@ -119,6 +119,7 @@ describe("a second launch", () => {
       bunExpect(r.status).toBe(0);
       const got = await untilEvents(2);
       const ev = got.events[1]!;
+      bunExpect(ev.source).toBe("open-url");
       bunExpect(ev.url).toBe(url);
       bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
       bunExpect(ev.argv.includes("--devtools")).toBe(false);

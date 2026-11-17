@@ -340,7 +340,7 @@ pub(crate) fn deliver(msg: Forward) {
     };
     let event = json!({
         "kind": "launch",
-        "source": "second-instance",
+        "source": if msg.url.is_some() { "open-url" } else { "second-instance" },
         "argv": msg.argv,
         "cwd": msg.cwd,
         "url": msg.url,

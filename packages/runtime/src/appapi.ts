@@ -122,7 +122,8 @@ export interface SkLaunchEvent extends Event {
   readonly cwd: string;
   readonly url: string | null;
   readonly paths: readonly string[];
-  readonly source: "second-instance" | "open-url" | "reopen";
+  /** `"open-url"` when the second launch was started for a registered scheme, else `"second-instance"`. */
+  readonly source: "second-instance" | "open-url";
 }
 
 /** Tier 2 of launching (tier 1 is `launchQueue`): raw argv, cwd, existing-path arguments, the single-instance lock, the `launch` event. Untrusted input. */

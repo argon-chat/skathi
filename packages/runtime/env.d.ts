@@ -766,6 +766,7 @@ declare global {
   interface HTMLDetailsElement extends HTMLElement {
     open: boolean;
   }
+  /** Only the `open` attribute: `show()`, `close()` and `showModal()` are not implemented. */
   interface HTMLDialogElement extends HTMLElement {
     open: boolean;
   }

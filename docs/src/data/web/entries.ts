@@ -460,6 +460,7 @@ const networking = section("Networking", [
     aliases: ["server-sent events", "SSE"],
   }),
   iface("URL", OK, "Parses, builds and normalizes URLs.", {
+    limitations: ["`URL.parse()` is missing: check with `URL.canParse()`, then call `new URL()`."],
     related: ["url-search-params", "url-pattern"],
   }),
   iface("URLSearchParams", OK, "Reads and writes the query string of a URL.", {

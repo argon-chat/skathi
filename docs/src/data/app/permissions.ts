@@ -23,7 +23,7 @@ appPermissions.addEventListener("change", listener)`,
       {
         value: "microphone",
         status: OK,
-        note: "Windows: the app's own Allow or Block prompt, under the system's privacy switches. macOS: the system prompt. Linux: `prompt` until the first request, which grants without a dialog.",
+        note: "Windows: the app's own Allow or Block prompt, under the system's privacy switches. macOS: the system prompt. Linux: `granted`, with nothing to ask.",
       },
       {
         value: "camera",
@@ -52,6 +52,7 @@ appPermissions.addEventListener("change", listener)`,
       "The same states as `navigator.permissions.query()`, read synchronously, plus `unsupported` for a permission this platform has no switch for.",
       "On Windows the system never asks a desktop app. For the microphone, Skathi asks itself with an Allow or Block dialog (Block is the default button) and keeps the answer in `permissions.json` in the storage folder. The other permissions read the system's privacy switches: `granted` or `denied`, never `prompt`.",
       "On macOS, the microphone, camera and screen recording use the system's own prompts and settings; Skathi stores no answer of its own.",
+      "On Linux, the desktop has no per-app microphone permission: access is the user's device permissions, or a Flatpak or Snap sandbox's own, which Skathi does not read. The microphone reads `granted` from the start and nothing is ever asked.",
       "Group Policy that denies a capability on Windows reads as `denied`.",
       "Nothing in it is reactive: listen for `change`.",
     ],
@@ -113,7 +114,7 @@ onUnmounted(() => appPermissions.removeEventListener("change", refresh));
     ],
     returns: "The state as the system and the app's stored answer give it now.",
     notes: [
-      "`prompt` means asking would show a question: the app's own dialog on Windows and Linux, the system's on macOS.",
+      "`prompt` means asking would show a question: the app's own dialog on Windows, the system's on macOS. On Linux nothing reads `prompt`.",
       "It reads the state each call; there is no cache to go stale.",
     ],
     examples: [
@@ -225,7 +226,7 @@ appPermissions.addEventListener("change", (event) => {
 });`,
       },
     ],
-    limitations: ["On Linux, the only change is the microphone answer stored by a request."],
+    limitations: ["On Linux, it never fires: no state changes while the app runs."],
     related: ["app-permissions", "permissions-query"],
     aliases: ["onchange", "PermissionStatus.onchange"],
   },
@@ -238,7 +239,7 @@ appPermissions.addEventListener("change", (event) => {
     syntax: "readonly appPermissions.names: string[]\nreadonly appPermissions.platform: string",
     notes: [
       "`names` is `microphone`, `camera`, `display-capture`, `notifications`, `clipboard-read`, `clipboard-write`, `geolocation` on every platform, also where some read `unsupported`.",
-      '`platform` is `"Windows"` or `"macOS"`; on Linux it reads `"this platform"`.',
+      '`platform` is `"Windows"`, `"macOS"` or `"Linux"`.',
     ],
     examples: [
       {

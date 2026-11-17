@@ -20,6 +20,9 @@ pub mod win;
 #[cfg(target_os = "macos")]
 pub mod mac;
 
+#[cfg(any(target_os = "linux", test))]
+pub mod linux;
+
 #[cfg(any(target_os = "macos", test))]
 mod tcc;
 
@@ -31,7 +34,13 @@ const DRAIN_CAP: usize = 16;
 /// The backend for this build: the platform's, with the app's own prompt on top ([`consent`]).
 fn backend() -> &'static consent::AppConsent {
     static C: std::sync::OnceLock<consent::AppConsent> = std::sync::OnceLock::new();
-    C.get_or_init(|| consent::AppConsent::new(platform(), consent::Hooks::process()))
+    C.get_or_init(|| {
+        if cfg!(target_os = "linux") {
+            consent::AppConsent::ungated(platform(), consent::Hooks::process())
+        } else {
+            consent::AppConsent::new(platform(), consent::Hooks::process())
+        }
+    })
 }
 
 /// `permissions.json` in the app's storage folder, where its answers are kept; `None`: this run only.
@@ -49,7 +58,7 @@ pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
         ),
     };
     if let Some(c) = cap {
-        if !consent::prompts(c) {
+        if !backend().prompts(c) {
             return Err(format!(
                 "{n} has no prompt of this app's to reset: its state is the platform's",
                 n = c.web_name()
@@ -74,7 +83,7 @@ pub fn describe_json() -> String {
             "{{\"name\":\"{}\",\"state\":\"{}\",\"prompts\":{}}}",
             cap.web_name(),
             state_of(cap).as_str(),
-            consent::prompts(cap)
+            b.prompts(cap)
         ));
     }
     s.push_str("],\"decisions\":[");
@@ -291,11 +300,16 @@ fn platform() -> &'static dyn PermissionHost {
         static H: mac::MacHost = mac::MacHost::new();
         &H
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        static H: linux::LinuxHost = linux::LinuxHost;
+        &H
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         use std::sync::OnceLock;
         static H: OnceLock<stub::StubHost> = OnceLock::new();
-        H.get_or_init(|| stub::StubHost::unsupported("this platform"))
+        H.get_or_init(|| stub::StubHost::unsupported(std::env::consts::OS))
     }
 }
 
