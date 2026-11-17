@@ -77,7 +77,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
   }}
 >
   <header class="sheet-head" slot="heading">
-    <h1 class:list={["sheet-title", { "sheet-title-prose": prose }]} data-pagefind-meta="title" set:html={inline(entry.name)} />
+    <h1 class:list={["sheet-title", { "sheet-title-prose": prose }]} set:html={inline(entry.name)} />
     <p class="sheet-lead" set:html={inline(entry.summary)} />
   </header>
 

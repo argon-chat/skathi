@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && pagefind --site dist",
+    "build": "astro build",
     "preview": "astro preview",
     "preview:cloudflare": "wrangler dev",
     "check": "astro check && vue-tsc --noEmit -p tsconfig.json && bun run check:samples",
@@ -37,7 +37,6 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.12",
-    "pagefind": "^1.6.0",
     "prettier": "^3",
     "prettier-plugin-astro": "^0.14",
     "svelte-check": "^4",

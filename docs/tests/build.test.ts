@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SearchData } from "../src/lib/search";
 
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const read = (path: string): string => readFileSync(join(dist, path), "utf8");
@@ -16,7 +17,6 @@ describe("built documentation (run bun run build first)", () => {
       const html = read(pagePath(id));
       const markdown = read(`${id}.md`);
       expect(html).toContain('<html lang="en"');
-      expect(html).toContain("data-pagefind-body");
       expect([...html.matchAll(/<h1\b/g)]).toHaveLength(1);
       expect(html).toContain(`href="/${id}.md"`);
       expect(markdown).toMatch(/^# /);
@@ -62,10 +62,8 @@ describe("built documentation (run bun run build first)", () => {
     expect(sitemap).not.toContain("404");
     expect(read("robots.txt")).toContain(`${origin}/sitemap-index.xml`);
     expect(read("llms.txt")).toContain(`${origin}/introduction.md`);
-    expect(existsSync(join(dist, "pagefind/pagefind.js"))).toBe(true);
     expect(existsSync(join(dist, "social.png"))).toBe(true);
     expect(read("404.html")).toContain('name="robots" content="noindex"');
-    expect(read("404.html")).not.toContain("data-pagefind-body");
   });
 
   test("has no broken internal page, asset, or heading links", async () => {
@@ -84,6 +82,18 @@ describe("built documentation (run bun run build first)", () => {
           expect(readFileSync(resolved, "utf8"), `${file}: ${value}`).toContain(`id="${id}"`);
         }
       }
+    }
+  });
+
+  test("points every search result at a built page and heading", () => {
+    const index = JSON.parse(read("search-index.json")) as SearchData;
+    const pages = new Map<string, string>();
+    for (const [, , , url] of index.records) {
+      const [path = "", hash] = url.split("#");
+      const file = `${path.replace(/^\//, "")}index.html`;
+      if (!pages.has(file)) pages.set(file, existsSync(join(dist, file)) ? read(file) : "");
+      expect(pages.get(file), url).not.toBe("");
+      if (hash) expect(pages.get(file), url).toContain(`id="${hash}"`);
     }
   });
 });
