@@ -24,6 +24,7 @@ pub mod cache;
 pub mod clock;
 pub mod core;
 pub mod engine;
+#[cfg(feature = "video")]
 pub mod video;
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};

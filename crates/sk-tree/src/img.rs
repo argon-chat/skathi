@@ -959,6 +959,7 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
     }
 }
 
+#[cfg(feature = "video")]
 /// The [`sk_video::MediaSource`] behind a `<video src>`: a path, an http(s) URL verbatim (the
 /// platform streams it), or bytes for `data:`.
 pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSource, String> {
@@ -1327,6 +1328,7 @@ fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
     ))))
 }
 
+#[cfg(feature = "video")]
 /// `<video src="blob:…">`: a whole picked file is a path (the OS streams it); an in-memory Blob is
 /// its own `Arc`.
 fn blob_media(
@@ -1700,6 +1702,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "video")]
     #[test]
     fn video_sources_resolve_to_the_shape_the_platform_wants() {
         use sk_video::MediaSource;
@@ -1832,6 +1835,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "video")]
     #[test]
     fn lottie_and_video_read_the_same_store() {
         use sk_video::MediaSource;
@@ -1876,6 +1880,7 @@ mod tests {
             as_path(resolve("C%3A/x.png")),
             Some(at("Y:\\base\\C%3A\\x.png"))
         );
+        #[cfg(feature = "video")]
         assert!(matches!(
             resolve_media("video", "assets/clip.mp4"),
             Ok(sk_video::MediaSource::Path(_))
@@ -1935,6 +1940,7 @@ mod tests {
             as_path(blob_image(src, Some(f.target(None, "image/png")))),
             Some(f.0.clone())
         );
+        #[cfg(feature = "video")]
         assert!(matches!(
             blob_media("video", src, Some(f.target(None, "video/mp4"))),
             Ok(sk_video::MediaSource::Path(p)) if p == f.0
@@ -1953,12 +1959,14 @@ mod tests {
             Some(ImageSource::Image(_))
         ));
         let arc = std::sync::Arc::new(PNG_1PX.to_vec());
+        #[cfg(feature = "video")]
         let whole = BlobTarget::Bytes {
             bytes: arc.clone(),
             offset: 0,
             len: arc.len(),
             mime: "video/mp4".into(),
         };
+        #[cfg(feature = "video")]
         match blob_media("video", src, Some(whole)) {
             Ok(sk_video::MediaSource::Bytes { data, mime }) => {
                 assert!(std::sync::Arc::ptr_eq(&data, &arc));
@@ -1989,9 +1997,11 @@ mod tests {
         let t = f.target(None, "image/png");
         std::fs::write(&f.0, b"a different file now").unwrap();
         assert!(blob_image(src, Some(t.clone())).is_none());
+        #[cfg(feature = "video")]
         assert!(blob_media("video", src, Some(t)).is_err());
         assert!(resolve(src).is_none());
         assert!(read_bytes("lottie", src).is_err());
+        #[cfg(feature = "video")]
         assert!(resolve_media("video", src).is_err());
     }
 
@@ -2039,6 +2049,7 @@ mod tests {
                 Some(f.0.clone()),
                 "a picked file is handed on by path"
             );
+            #[cfg(feature = "video")]
             assert!(
                 matches!(resolve_media("video", &by_path), Ok(sk_video::MediaSource::Path(p)) if p == f.0)
             );

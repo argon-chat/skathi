@@ -19,7 +19,9 @@ const CAPTURE: &str =
     "the desktop host is missing (sk_desktop::install did not run) — `appCapture` has no sources.";
 const LAUNCH: &str =
     "the desktop host is missing (sk_desktop::install did not run) — `appLaunch` is empty.";
-const NO_HOTKEYS: &str = "global hotkeys are unavailable in this host";
+const NO_HOTKEYS: &str =
+    "global hotkeys are unavailable in this host: its platform has none, or it was \
+     built without Skathi's `hotkeys` feature";
 const NO_TRAY: &str = "native tray is unavailable in this host";
 
 const PERMISSION_NAMES: [&str; 7] = [

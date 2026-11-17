@@ -56,7 +56,7 @@ skathi = "0.4"
 embed-resource = "3"
 ```
 
-The default features give the app everything Skathi's own host has: Web Audio, storage, the clipboard, IndexedDB, WebGPU and the Direct3D 12 renderer. [Features](#features) below lists what to turn off or on.
+The default features give the app everything Skathi's own host has: Web Audio, storage, the clipboard, IndexedDB, WebGPU, the Direct3D 12 renderer, `<video>`, `<lottie>` and stickers, `<iframe>` and global hotkeys. [Features](#features) below lists what to turn off or on, and [Features and size](/embedding/features/) what each one costs.
 
 ## 3. The static CRT (Windows)
 
@@ -161,12 +161,18 @@ The window that opens belongs to your process. Close it and `wait` returns; your
 | `indexeddb`       | on      | IndexedDB                                                                        |
 | `webgpu`          | on      | WebGPU                                                                           |
 | `native-dx12`     | on      | The Direct3D 12 renderer on Windows; off, Direct3D 11                            |
+| `lottie`          | on      | `<lottie>` and `<sk-sticker>`                                                    |
+| `video`           | on      | `<video>`, and WebM stickers with `lottie`                                       |
+| `hotkeys`         | on      | Global hotkeys: `appHotkeys` and `skathi::hotkeys`                               |
+| `webview`         | on      | `<iframe>` (WebView2, Windows)                                                   |
 | `icu-root`        | off     | Links only ICU's root locale, about 12 MB less                                   |
 | `battery`         | off     | The Battery Status API                                                           |
 | `no-devtools`     | off     | Compiles out the devtools protocol and the inspector                             |
 | `runtime-shaders` | off     | macOS: compiles the Metal shaders at startup instead of at build time            |
 
 With `icu-root`, `Intl` and `toLocale*` format in the root locale unless the full data is shipped as `icu.skpk` beside the payload. Without it the exe carries every locale.
+
+What each feature adds to the exe and the build, what an app sees with it off, and feature sets for common kinds of program are on [Features and size](/embedding/features/).
 
 The `prod` feature is also how the [dev loop](/embedding/dev-loop/) works: a build without it runs the app `sk dev` is building, with hot reload.
 

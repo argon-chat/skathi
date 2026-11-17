@@ -8,17 +8,21 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["webgpu"]
+default = ["webgpu", "lottie", "video"]
 webgpu = ["sk-runtime/webgpu"]
+# `<lottie>` and `<sk-sticker>` (ThorVG). Off, both lay out as empty boxes and warn once.
+lottie = ["dep:sk-lottie", "dep:sk-sticker"]
+# `<video>`, and `.webm` stickers when `lottie` is on.
+video = ["dep:sk-video", "sk-sticker?/video"]
 
 [dependencies]
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.3.0", default-features = false }
 sk-css = { path = "../sk-css", version = "0.3.0" }
 sk-effects = { path = "../sk-effects", version = "0.3.0" }
 sk-elements = { path = "../sk-elements", version = "0.3.0" }
-sk-lottie = { path = "../sk-lottie", version = "0.3.0" }
-sk-video = { path = "../sk-video", version = "0.3.0" }
-sk-sticker = { path = "../sk-sticker", version = "0.3.0" }
+sk-lottie = { path = "../sk-lottie", version = "0.3.0", optional = true }
+sk-video = { path = "../sk-video", version = "0.3.0", optional = true }
+sk-sticker = { path = "../sk-sticker", version = "0.3.0", default-features = false, optional = true }
 sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false }
 sk-payload = { path = "../sk-payload", version = "0.3.0" }
 sk-resample = { path = "../sk-resample", version = "0.3.0" }

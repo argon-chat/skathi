@@ -389,7 +389,13 @@ pub(super) fn side_json(side: &[(&'static str, u64)]) -> Json {
     Json::obj(side.iter().map(|(k, v)| (*k, Json::n(*v as f64))).collect())
 }
 
+#[cfg(not(feature = "lottie"))]
+pub(super) fn stickers() -> Json {
+    Json::Null
+}
+
 /// `null` until `<sk-sticker>` has been used.
+#[cfg(feature = "lottie")]
 pub(super) fn stickers() -> Json {
     let Some(s) = sk_sticker::stats() else {
         return Json::Null;

@@ -17,7 +17,7 @@ Give your crate a feature that turns `prod` on, on by default:
 
 ```toml title="Cargo.toml"
 [dependencies]
-skathi = { version = "0.4", default-features = false, features = ["types", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"] }
+skathi = { version = "0.4", default-features = false, features = ["types", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "lottie", "video", "hotkeys", "webview"] }
 
 [features]
 default = ["release"]

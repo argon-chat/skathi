@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::clock::Timeline;
+#[cfg(feature = "video")]
 use crate::video::{DecodeOptions, Target as VideoTarget, VideoDecoder, VideoSource};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,6 +57,7 @@ pub fn load(bytes: &Arc<[u8]>) -> Result<Box<dyn Engine>, String> {
         Some(Kind::Lottie) => sk_lottie::Animation::load(bytes)
             .map(|animation| Box::new(LottieEngine { animation }) as Box<dyn Engine>)
             .map_err(|error| error.to_string()),
+        #[cfg(feature = "video")]
         Some(Kind::Video) => VideoSource::open(bytes.clone())
             .map(|source| {
                 Box::new(VideoEngine {
@@ -65,6 +67,12 @@ pub fn load(bytes: &Arc<[u8]>) -> Result<Box<dyn Engine>, String> {
                 }) as Box<dyn Engine>
             })
             .map_err(|error| error.to_string()),
+        #[cfg(not(feature = "video"))]
+        Some(Kind::Video) => Err(
+            "a WebM sticker needs Skathi's `video` feature, which this app's host was built \
+             without. Enable it in the `skathi` dependency's features."
+                .into(),
+        ),
         None => Err("neither a Lottie (.json, .tgs) nor a WebM file".into()),
     }
 }
@@ -114,17 +122,20 @@ impl Engine for LottieEngine {
     }
 }
 
+#[cfg(feature = "video")]
 struct Cursor {
     decoder: VideoDecoder,
     current: Option<u32>,
 }
 
+#[cfg(feature = "video")]
 struct VideoEngine {
     source: Arc<VideoSource>,
     color: Option<Cursor>,
     alpha: Option<Cursor>,
 }
 
+#[cfg(feature = "video")]
 impl VideoEngine {
     fn cursor(&mut self, alpha_only: bool) -> Result<&mut Cursor, String> {
         let slot = if alpha_only {
@@ -146,6 +157,7 @@ impl VideoEngine {
     }
 }
 
+#[cfg(feature = "video")]
 impl Engine for VideoEngine {
     fn kind(&self) -> Kind {
         Kind::Video

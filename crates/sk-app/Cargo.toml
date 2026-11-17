@@ -39,7 +39,7 @@ devtools = []
 
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
-default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types"]
+default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview"]
 audio = ["sk-runtime/audio", "sk-permissions/audio"]
 
 # `localStorage` / `sessionStorage` and the `appStorage` extension. Off, the whole surface
@@ -54,6 +54,14 @@ indexeddb = ["sk-runtime/indexeddb", "sk-storage?/indexeddb"]
 # Native modules record their argument, result and event types (specta), and an embedding exe
 # answers `--sk-host-types` with the app's `native:*` declarations.
 types = ["dep:specta", "dep:specta-serde", "dep:specta-typescript"]
+# `<lottie>` and `<sk-sticker>` (ThorVG). Off, both are empty boxes that warn once.
+lottie = ["sk-tree/lottie", "dep:sk-sticker"]
+# `<video>` over the OS player, and libvpx for `.webm` stickers. Off, `<video>` is an empty box.
+video = ["sk-tree/video", "sk-sticker?/video"]
+# `appHotkeys`. Off, it reports `available: false`, as on a platform without global hotkeys.
+hotkeys = ["dep:sk-hotkeys"]
+# `<iframe>` (WebView2 on Windows). Off, an `<iframe>` fires `error` and stays empty.
+webview = ["dep:sk-webview"]
 
 [dependencies]
 # `stacker` makes `stacksafe` opt-in in gpui; an arbitrary-depth user DOM needs it for
@@ -76,13 +84,13 @@ sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = fal
 # Direct, so build.rs gets the engine pin (DEP_REDJS_WEBKIT_VERSION).
 redjs = { path = "../../vendor/redjs/redjs", version = "0.3.0", default-features = false }
 sk-tree = { path = "../sk-tree", version = "0.3.0", default-features = false }
-sk-webview = { path = "../sk-webview", version = "0.3.0" }
-sk-sticker = { path = "../sk-sticker", version = "0.3.0" }
+sk-webview = { path = "../sk-webview", version = "0.3.0", optional = true }
+sk-sticker = { path = "../sk-sticker", version = "0.3.0", default-features = false, optional = true }
 sk-payload = { path = "../sk-payload", version = "0.3.0" }
 memmap2 = "0.9"
 self_cell = "1"
 sk-desktop = { path = "../sk-desktop", version = "0.3.0" }
-sk-hotkeys = { path = "../sk-hotkeys", version = "0.3.0" }
+sk-hotkeys = { path = "../sk-hotkeys", version = "0.3.0", optional = true }
 sk-permissions = { path = "../sk-permissions", version = "0.3.0" }
 sk-locale = { path = "../sk-locale", version = "0.3.0" }
 sk-storage = { path = "../sk-storage", version = "0.3.0", optional = true }

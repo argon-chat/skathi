@@ -149,6 +149,17 @@ thread_local! {
     static PAINTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static DREW: RefCell<Vec<crate::windows::WinKey>> = const { RefCell::new(Vec::new()) };
     static REFUSED: RefCell<HashMap<u32, FrameAttrs>> = RefCell::new(HashMap::new());
+    static UNAVAILABLE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// Why `<iframe>` has no backend, as the console and the `error` event say it.
+pub fn set_unavailable(reason: &'static str) {
+    UNAVAILABLE.with(|u| u.set(Some(reason)));
+}
+
+/// The host's reason, when it gave one: the build left the webview out.
+pub(crate) fn unavailable() -> Option<&'static str> {
+    UNAVAILABLE.with(std::cell::Cell::get)
 }
 
 pub fn set_backend(backend: Rc<dyn Backend>, wake: Rc<dyn Fn()>) {
@@ -268,11 +279,14 @@ fn show(
     let Some(backend) = backend else {
         let again = REFUSED.with(|r| r.borrow().get(&id) == Some(&attrs));
         if !again {
+            let reason = unavailable().unwrap_or("no webview backend on this system");
+            crate::render::warn_compat(
+                "iframe-unavailable",
+                &format!("<iframe> shows nothing: {reason}"),
+            );
             EVENTS.with(|q| {
-                q.borrow_mut().push_back((
-                    id,
-                    FrameEvent::Failed("no webview backend on this system".into()),
-                ))
+                q.borrow_mut()
+                    .push_back((id, FrameEvent::Failed(reason.into())))
             });
             REFUSED.with(|r| r.borrow_mut().insert(id, attrs));
         }

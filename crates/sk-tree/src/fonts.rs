@@ -2185,6 +2185,7 @@ mod tests {
         }
         assert_eq!(crate::img::read_bytes("font", url).unwrap(), data);
         assert_eq!(crate::img::resolve_path("img", url).unwrap(), path);
+        #[cfg(feature = "video")]
         assert!(
             matches!(crate::img::resolve_media("video", url), Ok(sk_video::MediaSource::Path(got)) if got == path)
         );

@@ -6,6 +6,8 @@
 //! also move (implicit detach), `remove` destroys the whole subtree. Mutations mark the tree dirty
 //! and the frame pump notifies the root view after the JS wave.
 
+#[cfg(not(all(feature = "lottie", feature = "video")))]
+mod absent;
 mod aria;
 mod bgimage;
 mod cache;
@@ -27,6 +29,10 @@ mod inline_style;
 mod live;
 mod live_state;
 pub mod log;
+#[cfg(feature = "lottie")]
+mod lottie;
+#[cfg(not(feature = "lottie"))]
+#[path = "absent/lottie.rs"]
 mod lottie;
 mod mask;
 mod native_dom;
@@ -46,7 +52,13 @@ pub mod surface;
 mod svg;
 mod toggle;
 mod tree;
+#[cfg(feature = "video")]
 mod video;
+#[cfg(not(feature = "video"))]
+#[path = "absent/video.rs"]
+mod video;
+#[cfg(windows)]
+mod video_device;
 mod view_transition;
 mod view_transition_js;
 mod waapi;
@@ -114,9 +126,18 @@ host_fn!(fn sk_intern(g, args) {
     ret_id(tree::with_tree(|t| t.intern(&name)))
 });
 
-host_fn!(fn sk_create_element(_g, args) {
+host_fn!(fn sk_create_element(g, args) {
     let tag = arg_id(args.arg(0));
     perf::note_dom(perf::DomOp::Create);
+    #[cfg(not(all(feature = "lottie", feature = "video")))]
+    absent::advise(g, tag);
+    if let Some(reason) = iframe::unavailable() {
+        if tree::with_tree(|t| t.name(tag) == "iframe") {
+            let msg = format!("<iframe> shows nothing: {reason}");
+            // SAFETY: the live context of this host function.
+            unsafe { sk_runtime::host::warn_compat(g, "absent:iframe", &msg) };
+        }
+    }
     ret_id(tree::with_tree(|t| t.create_element(tag)))
 });
 
@@ -636,12 +657,12 @@ pub fn videos_playing() -> bool {
 /// `ptr` must be a live `ID3D11Device` COM pointer owned by the caller.
 #[cfg(windows)]
 pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
-    sk_video::mf::set_shared_device(ptr, generation);
+    unsafe { video_device::set_device(ptr, generation) }
 }
 
 /// A lazy provider of the renderer's D3D11 device, resolved when the first video backend asks.
 #[cfg(windows)]
-pub use sk_video::mf::{SharedDeviceProvider, SharedVideoDevice};
+pub use video_device::{SharedDeviceProvider, SharedVideoDevice};
 
 /// # Safety
 /// The provider's successful lease must retain its live D3D11 device.
@@ -649,7 +670,7 @@ pub use sk_video::mf::{SharedDeviceProvider, SharedVideoDevice};
 pub unsafe fn install_video_device_provider(
     provider: SharedDeviceProvider,
 ) -> Result<(), &'static str> {
-    unsafe { sk_video::mf::install_shared_device_provider(provider) }
+    unsafe { video_device::install_provider(provider) }
 }
 
 /// The renderer recreated its D3D11 device: every `<sk-surface>` drops its GPU frame and producers

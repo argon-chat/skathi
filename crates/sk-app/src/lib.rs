@@ -50,6 +50,7 @@ mod content_dialog;
 pub mod crash_window;
 mod dialogs;
 pub mod embed;
+#[cfg(feature = "hotkeys")]
 pub mod hotkeys;
 #[cfg(sk_devtools)]
 mod inspector;
@@ -796,6 +797,7 @@ fn publish_app_root() {
     }
 }
 
+#[cfg(feature = "webview")]
 fn install_iframe_backend() {
     #[cfg(feature = "storages")]
     let data = embed::data_dir()
@@ -819,6 +821,14 @@ fn install_iframe_backend() {
     if let Some(backend) = sk_webview::backend(config) {
         sk_tree::iframe::set_backend(backend, std::rc::Rc::new(sk_runtime::frames::wake));
     }
+}
+
+#[cfg(not(feature = "webview"))]
+fn install_iframe_backend() {
+    sk_tree::iframe::set_unavailable(
+        "this app's host was built without Skathi's `webview` feature. Enable it in the `skathi` \
+         dependency's features to use <iframe>.",
+    );
 }
 
 /// Closes every `<iframe>` document on quit, so no browser process outlives the app.
@@ -1180,6 +1190,7 @@ fn run_app() {
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;
+                #[cfg(feature = "hotkeys")]
                 hotkeys::install(rt)?;
                 embed::setup(rt)?;
             }

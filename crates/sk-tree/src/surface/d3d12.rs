@@ -99,7 +99,7 @@ fn platform(what: &str, e: windows::core::Error) -> SurfaceError {
 fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
     let Some(provider) = PROVIDER.get() else {
         // The host installs the provider on its first frame.
-        return Err(match sk_video::mf::renderer_device() {
+        return Err(match crate::video_device::renderer_device() {
             Ok(Some(_)) => SurfaceError::NotSupported(D3D11_RENDERER),
             _ => SurfaceError::NoDevice("no window has drawn yet".into()),
         });

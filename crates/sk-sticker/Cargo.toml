@@ -8,6 +8,11 @@ repository.workspace = true
 homepage.workspace = true
 include = ["src/**/*.rs"]
 
+[features]
+default = ["video"]
+# WebM (VP9 + alpha) stickers. Off, a WebM source fails to load with a message naming the feature.
+video = ["dep:sk-vpx-sys", "dep:sk-yuv"]
+
 [dependencies]
 # Lottie stickers draw through `sk_lottie::Animation` (ThorVG by default):
 # whole frames, straight alpha, on the worker thread.
@@ -17,5 +22,5 @@ sk-lottie = { path = "../sk-lottie", version = "0.3.0" }
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
 # The video track (`src/video/`): libvpx 1.17's VP9 decoder, and the I420 +
 # alpha to straight BGRA kernel (a crate of its own, optimised in dev).
-sk-vpx-sys = { path = "../sk-vpx-sys", version = "0.3.0" }
-sk-yuv = { path = "../sk-yuv", version = "0.3.0" }
+sk-vpx-sys = { path = "../sk-vpx-sys", version = "0.3.0", optional = true }
+sk-yuv = { path = "../sk-yuv", version = "0.3.0", optional = true }

@@ -43,7 +43,7 @@ fn platform(what: &str, e: windows::core::Error) -> SurfaceError {
 }
 
 fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
-    let lease = sk_video::mf::renderer_device()
+    let lease = crate::video_device::renderer_device()
         .map_err(SurfaceError::NoDevice)?
         .ok_or_else(|| SurfaceError::NoDevice("no window has drawn yet".into()))?;
     let mut cached = lock(&GPU);

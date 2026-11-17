@@ -83,6 +83,7 @@ pub struct WindowState {
     pub env: Option<sk_css::Env>,
 
     pub pending_drops: Vec<Arc<RenderImage>>,
+    #[cfg(feature = "video")]
     pub pending_uploads: Vec<PendingUpload>,
 }
 
@@ -93,6 +94,7 @@ pub struct PendingMouseMove {
     pub modifiers: gpui::Modifiers,
 }
 
+#[cfg(feature = "video")]
 /// A decoded `<video>` frame still in GPU memory that must reach one window's atlas before its next
 /// draw. The texture is HELD: the window may not draw for a while.
 pub struct PendingUpload {
@@ -140,6 +142,14 @@ pub fn queue_drops(k: WinKey, images: impl IntoIterator<Item = std::sync::Arc<gp
         return;
     }
     of(k, |w| w.pending_drops.extend(images));
+}
+
+/// Hands this window's queued images back to its atlas.
+#[cfg(not(all(feature = "lottie", feature = "video")))]
+pub(crate) fn drain_drops(window: &mut gpui::Window, cx: &mut gpui::App) {
+    for image in here(window, |w| std::mem::take(&mut w.pending_drops)) {
+        cx.drop_image(image, Some(window));
+    }
 }
 
 pub fn peek<R>(k: WinKey, f: impl FnOnce(&WindowState) -> R) -> Option<R> {

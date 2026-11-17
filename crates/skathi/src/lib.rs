@@ -159,5 +159,7 @@ pub use sk_app::embed::{
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};
 pub use sk_app::embed::{MetalDevice, MetalEvent};
-pub use sk_app::{hotkeys, js, run_exe, tray, HostAllocator};
+#[cfg(feature = "hotkeys")]
+pub use sk_app::hotkeys;
+pub use sk_app::{js, run_exe, tray, HostAllocator};
 pub use skathi_macros::{data, module};

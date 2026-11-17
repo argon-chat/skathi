@@ -93,14 +93,17 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 With `rust-lld`, which ships with rustc, the crate's build script tells yours to fold identical JavaScriptCore functions the safe way (`/OPT:SAFEICF`), about 5 MB more. With `link.exe` it turns folding off, because folding there breaks `BigInt` and `Symbol`. The full override list, image and audio decoders included, is in the `[profile.release.package]` section of Skathi's own `Cargo.toml`.
 
-More levers:
+More levers, measured on a minimal embedder of 101.4 MB:
 
 | Lever              | Saves  | Costs                                                                        |
 | ------------------ | ------ | ---------------------------------------------------------------------------- |
-| `icu-root` feature | ~12 MB | `Intl` formats in the root locale unless `icu.skpk` ships beside the payload |
-| no `webgpu`        | ~6 MB  | WebGPU                                                                       |
-| no `audio`         | some   | Web Audio                                                                    |
-| `no-devtools`      | some   | F12 and the devtools protocol                                                |
+| `icu-root` feature | 9.1 MB | `Intl` formats in the root locale unless `icu.skpk` ships beside the payload |
+| no `webgpu`        | 5.3 MB | WebGPU                                                                       |
+| no `audio`         | 5.1 MB | Web Audio                                                                    |
+| no `lottie`        | 2.9 MB | `<lottie>` and `<sk-sticker>`                                                |
+| `no-devtools`      | 1.6 MB | F12 and the devtools protocol                                                |
+
+Every feature, what the app sees without it, and feature sets for common programs: [Features and size](/embedding/features/).
 
 ## macOS owns the main thread
 

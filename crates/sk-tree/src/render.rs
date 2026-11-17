@@ -243,6 +243,7 @@ pub fn painted_bounds(id: u32) -> Option<Rect> {
     })
 }
 
+#[cfg(any(feature = "lottie", feature = "video"))]
 pub(crate) fn prev_size_of(id: u32) -> Option<(f32, f32)> {
     let k = windows::window_of_node(id);
     windows::peek(k, |w| w.prev_bounds.get(&id).copied())
@@ -2146,6 +2147,7 @@ fn build_node<V: 'static>(
                 build_img(t, id, node, window, cx, now, control_area),
             ),
         ),
+        #[cfg(feature = "lottie")]
         Kind::Element if t.name(node.tag) == "lottie" => stack(
             own.clone(),
             &extras,
@@ -2156,6 +2158,7 @@ fn build_node<V: 'static>(
                 build_lottie(t, id, node, window, cx, now, control_area),
             ),
         ),
+        #[cfg(feature = "video")]
         Kind::Element if t.name(node.tag) == "video" => stack(
             own.clone(),
             &extras,
@@ -2164,6 +2167,17 @@ fn build_node<V: 'static>(
                 sticky,
                 false,
                 build_video(t, id, node, window, cx, now, control_area),
+            ),
+        ),
+        #[cfg(not(all(feature = "lottie", feature = "video")))]
+        Kind::Element if crate::absent::is_absent(t.name(node.tag)) => stack(
+            own.clone(),
+            &extras,
+            placed(
+                id,
+                sticky,
+                false,
+                build_absent(t, id, node, window, cx, now, control_area),
             ),
         ),
         Kind::Element if t.name(node.tag) == "iframe" => stack(
@@ -2176,6 +2190,7 @@ fn build_node<V: 'static>(
                 build_iframe(t, id, node, window, cx, now, control_area),
             ),
         ),
+        #[cfg(feature = "lottie")]
         Kind::Element if t.name(node.tag) == "sk-sticker" => stack(
             own.clone(),
             &extras,
@@ -4990,6 +5005,7 @@ where
     SvgTint { inner: e, inherit }.into_any_element()
 }
 
+#[cfg(feature = "lottie")]
 fn lottie_fit(fit: sk_css::ObjectFit) -> sk_lottie::LottieFit {
     match fit {
         sk_css::ObjectFit::Fill => sk_lottie::LottieFit::Fill,
@@ -5000,6 +5016,7 @@ fn lottie_fit(fit: sk_css::ObjectFit) -> sk_lottie::LottieFit {
     }
 }
 
+#[cfg(any(feature = "lottie", feature = "video"))]
 fn definite_px(len: Option<gpui::Length>, rem: gpui::Pixels) -> Option<f32> {
     match len? {
         gpui::Length::Definite(gpui::DefiniteLength::Absolute(a)) => {
@@ -5009,10 +5026,12 @@ fn definite_px(len: Option<gpui::Length>, rem: gpui::Pixels) -> Option<f32> {
     }
 }
 
+#[cfg(any(feature = "lottie", feature = "video"))]
 fn is_sized(len: Option<gpui::Length>) -> bool {
     matches!(len, Some(gpui::Length::Definite(_)))
 }
 
+#[cfg(feature = "lottie")]
 fn build_lottie<V: 'static>(
     t: &Tree,
     id: u32,
@@ -5131,9 +5150,36 @@ fn build_lottie<V: 'static>(
 #[path = "canvas.rs"]
 pub(crate) mod canvas;
 
+#[cfg(feature = "lottie")]
 #[path = "sticker.rs"]
 pub(crate) mod sticker;
+#[cfg(not(feature = "lottie"))]
+#[path = "absent/sticker.rs"]
+pub(crate) mod sticker;
 
+/// An element whose engine this build left out (`crate::absent`): its CSS box, no content.
+#[cfg(not(all(feature = "lottie", feature = "video")))]
+fn build_absent<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let win = windows::key(window);
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+    let mask = pointer_mask(node);
+    bind_events(d, id, mask, None, false, true, cx).into_any_element()
+}
+
+#[cfg(feature = "video")]
 fn video_fit(fit: sk_css::ObjectFit) -> sk_video::VideoFit {
     match fit {
         sk_css::ObjectFit::Fill => sk_video::VideoFit::Fill,
@@ -5400,6 +5446,7 @@ fn build_surface<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
+#[cfg(feature = "video")]
 /// `<video>`: a replaced element whose content is the frame the pump last pulled from the OS media
 /// pipeline. It stays inside the scene graph (Media Foundation frame-server mode, not a
 /// DirectComposition visual) because a video on a sibling visual cannot be clipped, rounded, faded

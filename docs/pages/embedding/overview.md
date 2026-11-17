@@ -97,6 +97,7 @@ Start with native modules. Most embedders never need more, and the app stays eas
 - [Native frames](/embedding/native-frames/), [GPU frames on Windows](/embedding/gpu-frames/) and [GPU frames on macOS](/embedding/gpu-frames-macos/): `<sk-surface>` and the producer's side of it.
 - [Window, tray and hotkeys](/embedding/desktop/): showing, hiding and closing the app from Rust, the tray, global hotkeys, single instance and deep links.
 - [Dev loop and devtools](/embedding/dev-loop/): hot reload inside your own exe.
+- [Features and size](/embedding/features/): the Cargo features, what each one costs, and feature sets for common programs.
 - [Shipping](/embedding/shipping/): the payload, the profile, binary size, macOS.
 - [Troubleshooting](/embedding/troubleshooting/): the errors and what they mean.
 

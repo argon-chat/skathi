@@ -15,7 +15,10 @@ include = ["src/**/*", "build.rs", "README.md"]
 links = "skathi"
 
 [features]
-default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types"]
+default = [
+    "prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types",
+    "lottie", "video", "hotkeys", "webview",
+]
 # Native module types: `skathi::Type` (derived by `#[skathi::data]`) and `--sk-host-types` (specta).
 types = ["sk-app/types", "skathi-macros/types"]
 # Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
@@ -31,6 +34,14 @@ native-dx12 = ["sk-app/native-dx12"]
 battery = ["sk-app/battery"]
 no-devtools = ["sk-app/no-devtools"]
 runtime-shaders = ["sk-app/runtime-shaders"]
+# `<lottie>` and `<sk-sticker>` (ThorVG, C++).
+lottie = ["sk-app/lottie"]
+# `<video>` (the OS player) and WebM stickers (libvpx, C).
+video = ["sk-app/video"]
+# `appHotkeys` and `skathi::hotkeys`.
+hotkeys = ["sk-app/hotkeys"]
+# `<iframe>` (WebView2).
+webview = ["sk-app/webview"]
 
 [dependencies]
 sk-app = { path = "../sk-app", version = "0.3.0", default-features = false }
