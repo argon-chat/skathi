@@ -1,0 +1,13 @@
+{
+  "$comment": "Svelte 5 features on Skathi's DOM, one section each; the spec reads what each one rendered.",
+
+  "name": "sk-test-svelte-features",
+
+  "window": {
+    "title": "Skathi — Svelte features (fixture)",
+    "width": 640,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

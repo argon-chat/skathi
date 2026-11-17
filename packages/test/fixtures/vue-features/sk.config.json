@@ -1,0 +1,13 @@
+{
+  "$comment": "Vue 3 features on Skathi's renderer, one section each; the spec reads what each one rendered.",
+
+  "name": "sk-test-vue-features",
+
+  "window": {
+    "title": "Skathi — Vue features (fixture)",
+    "width": 640,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
