@@ -43,7 +43,10 @@ async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75
 skathi-taffy = { path = "vendor/taffy" }
 
 [profile.release]
-opt-level = 3
+# "s" takes ~7.5 MB off a host. The crates below stay at 3: at "s", layout, prepaint and paint
+# took 15-30% longer per frame. Under LTO the final crate's level sets the pipeline for every
+# crate, so sk-app is among them.
+opt-level = "s"
 lto = "thin"
 codegen-units = 1
 # MSVC passes /DEBUG to link.exe regardless, so debug info of the vendored static libs
@@ -52,7 +55,44 @@ debug = false
 # No-op on windows-msvc (symbols live in the PDB); kept for other targets.
 strip = "symbols"
 # Not set on purpose: `panic = "abort"` (the JS bridge catches native panics, see
-# sk_runtime::bridge::poisoned) and a size opt-level (the image is dominated by static JSC).
+# sk_runtime::bridge::poisoned).
+
+[profile.release.package]
+sk-app.opt-level = 3
+sk-runtime.opt-level = 3
+sk-tree.opt-level = 3
+sk-css.opt-level = 3
+sk-elements.opt-level = 3
+sk-effects.opt-level = 3
+skathi-gpui.opt-level = 3
+skathi-gpui-windows.opt-level = 3
+skathi-gpui-macos.opt-level = 3
+skathi-gpui-linux.opt-level = 3
+skathi-gpui-wgpu.opt-level = 3
+skathi-gpui-refineable.opt-level = 3
+skathi-gpui-sum-tree.opt-level = 3
+skathi-gpui-collections.opt-level = 3
+skathi-gpui-util.opt-level = 3
+skathi-gpui-scheduler.opt-level = 3
+skathi-taffy.opt-level = 3
+# Pixel and audio kernels: "s" turns off loop vectorisation.
+sk-resample.opt-level = 3
+sk-yuv.opt-level = 3
+image.opt-level = 3
+png.opt-level = 3
+zune-jpeg.opt-level = 3
+zune-inflate.opt-level = 3
+image-webp.opt-level = 3
+fdeflate.opt-level = 3
+miniz_oxide.opt-level = 3
+tiny-skia.opt-level = 3
+tiny-skia-path.opt-level = 3
+rubato.opt-level = 3
+fixed-resample.opt-level = 3
+symphonia-core.opt-level = 3
+symphonia-codec-vorbis.opt-level = 3
+symphonia-bundle-mp3.opt-level = 3
+symphonia-codec-aac.opt-level = 3
 
 # Release plus symbols for crash dumps. `SK_PDB=1` does the same for a plain `release` build.
 [profile.release-symbols]

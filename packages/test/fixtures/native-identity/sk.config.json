@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-native-identity",
+  "version": "0.0.1",
+  "assets": [],
+  "intl": "invariant",
+  "window": {
+    "title": "Skathi — native identity (fixture)",
+    "width": 320,
+    "height": 200
+  }
+}

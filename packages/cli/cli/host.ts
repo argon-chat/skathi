@@ -374,7 +374,10 @@ export function hostCargoArgs(variant: Variant, extra: string[] = []): string[] 
     if (at < 0) args.push("--features", extra.join(","));
     else args[at + 1] = [args[at + 1], ...extra].join(",");
   }
-  return ["build", "--release", "-p", "sk-app", ...hostsFor(currentPlatform()).cargoTarget, ...args];
+  const platform = currentPlatform();
+  // rust-lld ships with rustc; sk-app/build.rs gives it /OPT:SAFEICF, which link.exe lacks (~5 MB).
+  const linker = platform === "windows" ? ["--config", 'target.x86_64-pc-windows-msvc.linker="rust-lld"'] : [];
+  return ["build", "--release", "-p", "sk-app", ...hostsFor(platform).cargoTarget, ...linker, ...args];
 }
 
 export interface CargoExtras {

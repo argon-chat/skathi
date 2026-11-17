@@ -18,7 +18,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SK_DEVTOOLS_BUNDLE");
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         suppress_release_pdb();
-        no_identical_code_folding();
+        identical_code_folding();
         thread_stack_commit();
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
@@ -170,12 +170,25 @@ fn suppress_release_pdb() {
     println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
 }
 
-/// `/OPT:NOICF` on the final link. JSC tells a constructor from a plain function by comparing native
-/// function pointers (`callHostFunctionAsConstructor`), and identical-COMDAT folding made `BigInt`
-/// and `Symbol` non-constructors in `--release --features prod` builds. Scoped to this package's
-/// binaries; it lands after rustc's `/OPT:REF,ICF` and link.exe takes the last `/OPT`. Costs about
-fn no_identical_code_folding() {
-    println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
+/// JSC tells a constructor from a plain function by comparing native function pointers, and
+/// link.exe's identical-COMDAT folding made `BigInt` and `Symbol` non-constructors: link.exe gets
+/// `/OPT:NOICF`. lld-link's `/OPT:SAFEICF` folds only functions whose address is never taken (per
+/// the objects' `.llvm_addrsig`; rustc emits none, so Rust code is left alone), about 5 MB of a
+/// release host; `native-identity.spec.ts` checks it. These land after rustc's `/OPT:REF,ICF`, and
+/// both linkers take the last ICF setting.
+fn identical_code_folding() {
+    let lld = std::env::var("RUSTC_LINKER").is_ok_and(|linker| {
+        let stem = Path::new(&linker)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_ascii_lowercase());
+        matches!(stem.as_deref(), Some("rust-lld" | "lld-link"))
+    });
+    if lld && std::env::var("PROFILE").as_deref() == Ok("release") {
+        println!("cargo:rustc-link-arg-bins=/OPT:SAFEICF");
+        println!("cargo:rustc-link-arg-bins=/OPT:lldtailmerge");
+    } else {
+        println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
+    }
 }
 
 /// `/STACK:8388608,4096`: an 8 MiB reserve (what JSC needs for deep recursion) with one page of commit.
