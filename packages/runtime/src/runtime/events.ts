@@ -326,8 +326,9 @@ export function synthesize(
         break;
       case "surfaceresize":
       case "surfaceready":
-      case "surfacelost": {
-        const detail = surfaceDetail(name, a, b, c, key);
+      case "surfacelost":
+      case "surfacedisplaychange": {
+        const detail = surfaceDetail(name, a, b, c, d, key);
         return withProps(new CustomEvent(name, { ...common, detail }), detail);
       }
       case "complete":
@@ -409,9 +410,20 @@ function mediaDetail(a: number, b: number, c: number, d: number) {
 }
 
 // `<sk-surface>`: `surfaceresize` a × b physical px at scale c, `surfaceready` a × b the first frame, `surfacelost`
-// `key` the reason.
-function surfaceDetail(name: string, a: number, b: number, c: number, key: string | undefined) {
+// `key` the reason, `surfacedisplaychange` the display (tree.rs `EV_SURFACEDISPLAYCHANGE`).
+function surfaceDetail(name: string, a: number, b: number, c: number, d: number, key: string | undefined) {
   if (name === "surfacelost") return { reason: key ?? "" };
+  if (name === "surfacedisplaychange") {
+    const flags = (key ?? "").split(" ");
+    return {
+      headroom: a,
+      potentialHeadroom: b,
+      refreshRate: c > 0 ? c : null,
+      sdrWhiteNits: d > 0 ? d : null,
+      hdr: flags.includes("hdr"),
+      variableRefresh: flags.includes("vrr") ? true : flags.includes("fixed") ? false : null,
+    };
+  }
   if (name === "surfaceready") return { width: a, height: b };
   return { width: a, height: b, devicePixelRatio: c };
 }

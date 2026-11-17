@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use gpui::{App, RenderImage, Window};
 
-use super::{Frame, SurfaceHandle, SurfaceInfo};
+use super::{display, Frame, SurfaceDisplay, SurfaceHandle, SurfaceInfo};
 use crate::live::{self, LiveTile, Shown};
 use crate::tree;
 use crate::windows::{self, WinKey};
@@ -24,6 +24,8 @@ struct Node {
     reported: (u32, u32),
     visible: bool,
     ready: bool,
+    /// The display last reported to JS.
+    display: Option<SurfaceDisplay>,
 }
 
 thread_local! {
@@ -47,6 +49,7 @@ enum Event {
     Resize(u32, u32, f32),
     Ready(u32, u32),
     Lost(&'static str),
+    Display(SurfaceDisplay),
 }
 
 /// Called from the build: binds node `id` to the surface `name` and returns the picture to paint.
@@ -70,6 +73,7 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             reported: (0, 0),
             visible: false,
             ready: false,
+            display: None,
         });
         node.window = win;
         node.tile
@@ -110,6 +114,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 }
 
 pub(crate) fn forget_window(key: WinKey) {
+    display::forget(key);
     NODES.with(|m| {
         for node in m.borrow_mut().values_mut() {
             if node.tile.as_ref().is_some_and(|t| t.window() == key) {
@@ -129,6 +134,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     #[cfg(target_os = "macos")]
     super::metal::watch_device();
     let here = windows::key(window);
+    display::sample(window, here);
     let page_hidden = live::page_hidden();
     let here_shown = window.is_visible();
     let mut events = DEFERRED.with(|d| std::mem::take(&mut *d.borrow_mut()));
@@ -153,6 +159,11 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 ));
             }
             if attached {
+                let on = display::of(node.window);
+                if on.known && node.display.is_none_or(|d| on.differs(&d)) {
+                    node.display = Some(on);
+                    events.push((id, Event::Display(on)));
+                }
                 let info = infos.entry(Arc::as_ptr(node.surface.shared())).or_default();
                 // The largest visible element sets the size; a hidden one's last size only stands in.
                 let rank = |visible: bool, w: u32, h: u32| (visible, u64::from(w) * u64::from(h));
@@ -162,6 +173,9 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                     info.width = node.painted.0;
                     info.height = node.painted.1;
                     info.scale = node.painted.2;
+                    info.display = on;
+                } else if !info.display.known {
+                    info.display = on;
                 }
                 info.visible |= node.visible;
             }
@@ -175,6 +189,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
         }
     });
     live::note(shown);
+    display::note_tick(infos.values().any(|info| info.visible));
     finish(touch, &mut draw);
     for surface in super::all() {
         let info = infos
@@ -193,6 +208,7 @@ pub(crate) fn window_tick(window: &mut Window) {
         return;
     }
     let here = windows::key(window);
+    display::sample(window, here);
     let mut touch = Vec::new();
     NODES.with(|m| {
         for (&id, node) in m.borrow_mut().iter_mut() {
@@ -369,6 +385,19 @@ fn refused(error: &super::SurfaceError) {
     );
 }
 
+/// `surfacedisplaychange`'s `key`: "hdr" when the display is in HDR, then "vrr" or "fixed" when its
+/// refresh is known to be variable or not.
+fn display_flags(on: &SurfaceDisplay) -> &'static str {
+    match (on.hdr, on.variable_refresh) {
+        (false, None) => "",
+        (true, None) => "hdr",
+        (false, Some(false)) => "fixed",
+        (true, Some(false)) => "hdr fixed",
+        (false, Some(true)) => "vrr",
+        (true, Some(true)) => "hdr vrr",
+    }
+}
+
 fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {
     for (id, event) in events {
         let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
@@ -401,6 +430,16 @@ fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {
                     c: 0.0,
                     d: 0.0,
                     key: Some(reason),
+                },
+            ),
+            Event::Display(on) => (
+                tree::EV_SURFACEDISPLAYCHANGE,
+                EventPayload {
+                    a: on.headroom as f64,
+                    b: on.potential_headroom as f64,
+                    c: on.refresh_hz.unwrap_or(0.0) as f64,
+                    d: on.sdr_white_nits.unwrap_or(0.0) as f64,
+                    key: Some(display_flags(&on)),
                 },
             ),
         };

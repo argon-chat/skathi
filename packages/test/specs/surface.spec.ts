@@ -22,7 +22,14 @@ afterAll(() => app.close());
 
 const T = 60_000;
 type Rgb = [number, number, number];
-type Stats = { presented: number; shown: number; width: number; height: number; visible: boolean };
+type Stats = {
+  presented: number;
+  shown: number;
+  width: number;
+  height: number;
+  visible: boolean;
+  display: { known: boolean; headroom: number; refreshHz: number | null };
+};
 
 /** `appHost.call(name, ...args)` in the page; its settled value. */
 async function call(name: string, ...args: unknown[]): Promise<unknown> {
@@ -238,6 +245,26 @@ test.skipIf(!MACOS)(
   "half-float Metal textures, RGhA IOSurfaces and CVPixelBuffers show clamped through the sRGB curve",
   async () => {
     await handOverHalf(["cpu-rgba16f", "metal-rgba16f", "iosurface-rgba16f", "cv-rgha"]);
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS && !MACOS)(
+  "the display an element is on reaches the producer and the element alike",
+  async () => {
+    const s = await until(
+      () => stats("contain"),
+      (s) => s.display.known,
+    );
+    expect(s.display.headroom).toBeGreaterThanOrEqual(1);
+    expect(s.display.refreshHz).toBeGreaterThan(0);
+    const events = await until(
+      () => app.eval("globalThis.surfaceEvents.join('|')") as Promise<string>,
+      (e) => e.includes("contain:display:"),
+    );
+    const [, headroom, refresh] = /contain:display:([\d.]+):([\d.]+):/.exec(events)!;
+    expect(Number(headroom)).toBeCloseTo(s.display.headroom, 2);
+    expect(Number(refresh)).toBeCloseTo(s.display.refreshHz!, 2);
   },
   T,
 );

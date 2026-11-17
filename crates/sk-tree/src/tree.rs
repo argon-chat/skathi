@@ -83,10 +83,13 @@ pub const EV_MESSAGE: u32 = 52;
 pub const EV_POINTERLOCKCHANGE: u32 = 53;
 pub const EV_POINTERLOCKERROR: u32 = 54;
 /// `<sk-surface>` (`crate::surface`): its painted size changed (`a` × `b` physical px, `c` scale),
-/// it showed its first frame (`a` × `b` the frame), or the frame went (`key` = "cleared" | "device").
+/// it showed its first frame (`a` × `b` the frame), the frame went (`key` = "cleared" | "device"),
+/// or its display changed (`a` headroom, `b` potential headroom, `c` refresh Hz, `d` SDR white
+/// nits, 0 unknown; `key` = "hdr"? then "vrr" | "fixed"?, space-separated).
 pub const EV_SURFACERESIZE: u32 = 55;
 pub const EV_SURFACEREADY: u32 = 56;
 pub const EV_SURFACELOST: u32 = 57;
+pub const EV_SURFACEDISPLAYCHANGE: u32 = 58;
 
 /// Every host event code with the name JS knows it by; devtools lists from here.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
@@ -147,6 +150,7 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_SURFACERESIZE, "surfaceresize"),
     (EV_SURFACEREADY, "surfaceready"),
     (EV_SURFACELOST, "surfacelost"),
+    (EV_SURFACEDISPLAYCHANGE, "surfacedisplaychange"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

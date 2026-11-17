@@ -81,10 +81,12 @@ export const EV_CODES = {
   pointerlockchange: 53,
   pointerlockerror: 54,
   // `<sk-surface>`: the painted size (a × b physical px, c the scale), the first frame shown (a × b), the frame gone
-  // (`key` "cleared" or "device").
+  // (`key` "cleared" or "device"), the display (a headroom, b potential headroom, c refresh Hz, d SDR white nits, 0
+  // unknown; `key` "hdr", "vrr" or "fixed", space-separated).
   surfaceresize: 55,
   surfaceready: 56,
   surfacelost: 57,
+  surfacedisplaychange: 58,
 } as const;
 
 /** `InputEvent.inputType` by host code: indexes sk-elements' `text_input::InputType` (lockstep, test/protocol-codes.test.ts). 0: none. */
@@ -197,6 +199,7 @@ export const NO_BUBBLE = new Set<string>([
   "surfaceresize",
   "surfaceready",
   "surfacelost",
+  "surfacedisplaychange",
 ]);
 export const MEDIA_EVENTS = new Set<string>([
   "loadstart",

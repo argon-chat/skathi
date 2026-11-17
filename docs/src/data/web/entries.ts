@@ -736,10 +736,11 @@ const graphics = section("Graphics and media", [
       "On Windows a frame can be a D3D11 or D3D12 texture on the renderer's own device (copied on the GPU, after a GPU wait on the producer's fence for D3D12), or a shared texture from another device, API (D3D11, D3D12, Vulkan) or process, synchronised with a keyed mutex or a shared fence. On macOS it can be a Metal texture on the renderer's device (copied after a GPU wait on the producer's `MTLSharedEvent`), an IOSurface from another device or process, or a CVPixelBuffer (BGRA, or 4:2:0 converted on the GPU). CPU BGRA frames work on every platform.",
       "`object-fit` (default `contain`), `object-position`, `border-radius`, `overflow` clipping, transforms, opacity and z-order apply as on `<video>`. The box is 300 × 150 unless CSS sizes it.",
       "`surfaceresize` reports the painted content box in physical pixels (`width`, `height`, `devicePixelRatio`), so the producer can render at the size shown. `surfaceready` fires when the first frame shows, `surfacelost` when the frame goes (`reason`: `cleared` or `device`).",
+      "`surfacedisplaychange` reports the screen the element is on: `headroom` and `potentialHeadroom` (1 is SDR white), `refreshRate`, `sdrWhiteNits`, `hdr` and `variableRefresh`, `null` where the platform does not say.",
     ],
     limitations: [
-      "On Linux frames are CPU only: its GPU path (dmabuf) is not there yet.",
-      "Alpha is straight, not premultiplied. Frames are BGRA8.",
+      "On Linux frames are CPU only: its GPU path (dmabuf) is not there yet, and `surfacedisplaychange` does not fire.",
+      "Alpha is straight, not premultiplied. Frames are BGRA8, or half-float RGBA on a surface set to `Rgba16Float`, shown clipped at SDR white.",
     ],
     related: ["video", "canvas-2d"],
     aliases: [

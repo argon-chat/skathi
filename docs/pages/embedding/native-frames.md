@@ -39,11 +39,12 @@ New in 0.4.0. On Windows a frame can be a Direct3D 11 or 12 texture, or one shar
 </style>
 ```
 
-| Event           | When                                                 | Carries                                             |
-| --------------- | ---------------------------------------------------- | --------------------------------------------------- |
-| `surfaceresize` | the painted content box changes, and on first layout | `width`, `height` (physical px), `devicePixelRatio` |
-| `surfaceready`  | the first frame shows                                | `width`, `height` of that frame                     |
-| `surfacelost`   | the frame goes                                       | `reason`: `"cleared"` or `"device"`                 |
+| Event                  | When                                                                                 | Carries                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `surfaceresize`        | the painted content box changes, and on first layout                                 | `width`, `height` (physical px), `devicePixelRatio`                                      |
+| `surfaceready`         | the first frame shows                                                                | `width`, `height` of that frame                                                          |
+| `surfacelost`          | the frame goes                                                                       | `reason`: `"cleared"` or `"device"`                                                      |
+| `surfacedisplaychange` | the [display](#the-display) is first known, changes, or the element moves to another | `headroom`, `potentialHeadroom`, `refreshRate`, `sdrWhiteNits`, `hdr`, `variableRefresh` |
 
 The box is 300 × 150 unless CSS sizes it, and `object-fit` defaults to `contain`, as on `<video>`. Until the first frame it paints nothing, so a background or a placeholder under it shows. Several elements may name the same surface; each shows the same frame at its own size.
 
@@ -54,11 +55,12 @@ The Rust side is a `SurfaceHandle`: `skathi::surface(name)` from anywhere, or `H
 ```rust
 let surface = skathi::surface("player");
 
-let info = surface.info();        // width × height in physical px, scale, visible
+let info = surface.info();        // width × height in physical px, scale, visible, display
 let stats = surface.stats();      // frames presented, frames shown
 let _watch = surface.on_change(|surface, event| match event {
     skathi::SurfaceEvent::Changed(info) => resize_render_target(info.width, info.height),
     skathi::SurfaceEvent::DeviceLost => recreate_gpu_resources(),
+    skathi::SurfaceEvent::DisplayChanged(display) => retarget(display),
 });
 ```
 
@@ -151,9 +153,48 @@ The window itself still draws 8-bit sRGB, so the element maps each frame into it
 - **SDR content looks exactly as on the 8-bit path.** Linearise your 8-bit sRGB frames with the sRGB EOTF and they look identical to the BGRA8 path: Skathi's tests put all 256 sRGB code values through half floats and get every one back unchanged, on Direct3D 11, Direct3D 12 and Metal.
 - **Highlights clip.** A producer that has highlights above 1.0 and wants them rolled off rather than clipped tone-maps them itself, to a peak of 1.0.
 
-Clipping is what Windows does with scRGB content and macOS with EDR content on a screen that has no headroom, and it keeps the mapping exact for everything an SDR frame can hold. The window does not yet tag its output as HDR (no FP16 swapchain on Windows, no EDR on macOS), so values above 1.0 are clipped even on an HDR display.
+Clipping is what Windows does with scRGB content and macOS with EDR content on a screen that has no headroom, and it keeps the mapping exact for everything an SDR frame can hold. The window does not yet tag its output as HDR (no FP16 swapchain on Windows, no EDR on macOS), so values above 1.0 are clipped even on an HDR display; [`output_headroom`](#the-display) says so.
 
 GPU frames stay half float in the surface's own textures; an element maps a frame into an 8-bit texture when it first draws it, on the GPU, so a frame replaced before it is shown is never mapped. CPU frames are mapped when presented, on the producer's thread, through a table. A half-float frame takes twice the memory of an 8-bit one, and the mapping costs one small GPU pass per frame shown.
+
+## The display
+
+`info().display` is a `SurfaceDisplay`: the screen the largest element showing the surface is on. `on_change` hears `SurfaceEvent::DisplayChanged` when it is first known, when it changes, and when that element moves to another screen; each element fires `surfacedisplaychange` for its own. While no element shows the surface, the last one known stays.
+
+Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on every platform:
+
+| Field                          | Means                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                         |
+| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`              |
+| `output_headroom`              | the brightest value a frame reaches the screen with: 1.0, because windows draw 8-bit sRGB              |
+| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere      |
+| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                         |
+| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                          |
+| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)               |
+| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows |
+| `known`                        | `false` on Linux, and before the window first draws                                                    |
+
+1.0 as SDR white is what macOS EDR values already are, and how Windows composes SDR content in HDR mode: at the white level the user picked. On Windows, `headroom` is the screen's peak over that white (`MaxLuminance` / SDR white), and a scRGB value, where 1.0 is 80 nits, is a surface value times `sdr_white_nits / 80`. In SDR mode it is 1.0.
+
+macOS sends nothing when the EDR headroom moves with the brightness, and Windows nothing when the SDR slider moves, so Skathi reads the display as it draws: on macOS every frame, on Windows the monitor and DXGI's state every frame and the display configuration once a second (at once on a move to another monitor or a display change). While a surface is visible and nothing else draws, it looks four times a second. A change smaller than 1 % is not reported. Windows does not say whether a screen refreshes at a variable rate, Linux reports nothing yet, and there is no vsync timestamp.
+
+### A video player
+
+A player that tone-maps HDR video itself sizes its output to `output_headroom`. With libmpv, whose linear output has 1.0 at its 203-nit reference white, that is `target-peak`; `display-fps-override` feeds its display-synced playback:
+
+```rust
+fn retarget(player: &mpv::Handle, display: skathi::SurfaceDisplay) {
+    // 1.0 in the surface is SDR white, and mpv's reference white is 203 nits.
+    let peak = 203.0 * display.output_headroom;
+    player.set_property("target-peak", format!("{peak:.0}"));
+    if let Some(hz) = display.refresh_hz {
+        player.set_property("display-fps-override", format!("{hz:.3}"));
+    }
+}
+```
+
+Today `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. Once windows output HDR it follows `headroom`, and the same code gives highlights the room the screen has. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
 
 ## Device loss
 

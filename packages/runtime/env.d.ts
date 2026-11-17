@@ -61,6 +61,7 @@ declare global {
     scrollend: Event;
     select: Event;
     submit: Event;
+    surfacedisplaychange: SkSurfaceDisplayEvent;
     surfacelost: SkSurfaceEvent;
     surfaceready: SkSurfaceEvent;
     surfaceresize: SkSurfaceEvent;
@@ -860,6 +861,23 @@ declare global {
     readonly devicePixelRatio: number;
     /** `surfacelost`: `"cleared"` (the producer withdrew the frame) or `"device"` (the GPU device was recreated). */
     readonly reason: "cleared" | "device";
+  }
+  /**
+   * `<sk-surface>`'s `surfacedisplaychange`: the display the element is on, first known or changed. Values are in the
+   * surface's unit, where 1.0 is SDR white; frames are shown clamped to 1.0 for now. Not web API.
+   */
+  interface SkSurfaceDisplayEvent extends Event {
+    /** The brightest value the display shows now; 1 on an SDR display. */
+    readonly headroom: number;
+    /** The brightest it can show (macOS at full brightness). */
+    readonly potentialHeadroom: number;
+    /** Hz; `null` where unknown (Linux). */
+    readonly refreshRate: number | null;
+    /** SDR white in nits: Windows in HDR mode, `null` elsewhere. */
+    readonly sdrWhiteNits: number | null;
+    readonly hdr: boolean;
+    /** `null` where the platform does not say (Windows, Linux). */
+    readonly variableRefresh: boolean | null;
   }
   /** `<lottie>`'s `loop` event. Not web API. */
   interface SkLottieLoopEvent extends Event {

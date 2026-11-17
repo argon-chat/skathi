@@ -16,6 +16,7 @@ mod color;
 mod d3d11;
 #[cfg(windows)]
 mod d3d12;
+mod display;
 #[cfg(target_os = "macos")]
 mod metal;
 pub(crate) mod node;
@@ -191,14 +192,89 @@ pub struct SurfaceInfo {
     pub scale: f32,
     /// Whether any element showing it can be on screen. A hidden one takes no frames.
     pub visible: bool,
+    /// The display that element is on; the last one known while no element shows the surface.
+    pub display: SurfaceDisplay,
+}
+
+/// A display, in a surface's unit: 1.0 is SDR (paper) white, as in macOS EDR and as Windows
+/// composes SDR content, so scRGB is this scaled by [`Self::sdr_white_nits`] / 80.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceDisplay {
+    /// Whether the platform reported it: not on Linux, and not before the window first drew.
+    pub known: bool,
+    /// The display is in HDR: Windows' HDR (PQ) mode, or a macOS screen with EDR headroom.
+    pub hdr: bool,
+    /// The brightest value it shows now; 1.0 on an SDR display. On macOS it follows the brightness.
+    pub headroom: f32,
+    /// The brightest it can show (macOS at full brightness); `headroom` on Windows.
+    pub potential_headroom: f32,
+    /// The brightest value a surface's frame reaches the display with: 1.0 while windows draw
+    /// 8-bit sRGB, so frames are clamped there whatever the display can do.
+    pub output_headroom: f32,
+    /// SDR white in nits: Windows in HDR mode (its SDR content brightness setting).
+    pub sdr_white_nits: Option<f32>,
+    /// The display's peak and full-frame luminance in nits, where Windows knows them.
+    pub peak_nits: Option<f32>,
+    pub full_frame_nits: Option<f32>,
+    /// The refresh rate in Hz: Windows' current mode, the screen's maximum on macOS.
+    pub refresh_hz: Option<f32>,
+    /// Whether the screen refreshes at a variable rate (macOS: ProMotion, Adaptive-Sync).
+    pub variable_refresh: Option<bool>,
+}
+
+impl Default for SurfaceDisplay {
+    fn default() -> Self {
+        Self {
+            known: false,
+            hdr: false,
+            headroom: 1.0,
+            potential_headroom: 1.0,
+            output_headroom: 1.0,
+            sdr_white_nits: None,
+            peak_nits: None,
+            full_frame_nits: None,
+            refresh_hz: None,
+            variable_refresh: None,
+        }
+    }
+}
+
+impl SurfaceDisplay {
+    /// A surface value in nits, where the SDR white level is known.
+    pub fn nits(&self, value: f32) -> Option<f32> {
+        self.sdr_white_nits.map(|white| value * white)
+    }
+
+    /// Whether `other` differs enough to report: a flag, or a level by more than 1 %.
+    fn differs(&self, other: &SurfaceDisplay) -> bool {
+        let level = |a: f32, b: f32| (a - b).abs() > 0.01 * a.abs().max(b.abs()).max(1.0);
+        let maybe = |a: Option<f32>, b: Option<f32>| match (a, b) {
+            (Some(a), Some(b)) => level(a, b),
+            (a, b) => a.is_some() != b.is_some(),
+        };
+        self.known != other.known
+            || self.hdr != other.hdr
+            || self.variable_refresh != other.variable_refresh
+            || level(self.headroom, other.headroom)
+            || level(self.potential_headroom, other.potential_headroom)
+            || level(self.output_headroom, other.output_headroom)
+            || maybe(self.sdr_white_nits, other.sdr_white_nits)
+            || maybe(self.peak_nits, other.peak_nits)
+            || maybe(self.full_frame_nits, other.full_frame_nits)
+            || maybe(self.refresh_hz, other.refresh_hz)
+    }
 }
 
 /// What [`SurfaceHandle::on_change`] reports.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SurfaceEvent {
+    /// The size, scale or visibility changed.
     Changed(SurfaceInfo),
     /// The renderer recreated its device; the frame is gone and GPU resources must be recreated.
     DeviceLost,
+    /// The display became known, changed (headroom, SDR white, refresh rate), or the largest
+    /// element moved to another one.
+    DisplayChanged(SurfaceDisplay),
 }
 
 /// Frame counters, for a producer that wants to know whether its frames are seen.
@@ -762,14 +838,30 @@ impl SurfaceHandle {
         self.state()
     }
 
-    /// Records what the elements report and tells the watchers when it changed.
-    pub(crate) fn set_info(&self, info: SurfaceInfo) {
-        let changed = {
+    /// Records what the elements report and tells the watchers when it changed. A display that is
+    /// unknown, or within [`SurfaceDisplay::differs`]' margin of the last one, is not taken.
+    pub(crate) fn set_info(&self, mut info: SurfaceInfo) {
+        let (changed, display) = {
             let mut st = self.state();
-            std::mem::replace(&mut st.info, info) != info
+            let old = st.info;
+            let display = info.display.known && info.display.differs(&old.display);
+            if !display {
+                info.display = old.display;
+            }
+            st.info = info;
+            (
+                info != SurfaceInfo {
+                    display: info.display,
+                    ..old
+                },
+                display,
+            )
         };
         if changed {
             self.notify(SurfaceEvent::Changed(info));
+        }
+        if display {
+            self.notify(SurfaceEvent::DisplayChanged(info.display));
         }
     }
 
@@ -1483,6 +1575,7 @@ mod tests {
             height: 360,
             scale: 1.5,
             visible: true,
+            ..Default::default()
         };
         s.set_info(info);
         s.set_info(info);
@@ -1494,6 +1587,46 @@ mod tests {
             vec![SurfaceEvent::Changed(info), SurfaceEvent::DeviceLost]
         );
         assert_eq!(s.info(), SurfaceInfo::default());
+    }
+
+    #[test]
+    fn a_display_is_reported_when_it_moves_past_the_margin_and_kept_when_unknown() {
+        let s = surface("tests:display");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let _watch = s.on_change(move |_, e| lock(&sink).push(e));
+        let hdr = SurfaceDisplay {
+            known: true,
+            hdr: true,
+            headroom: 4.0,
+            potential_headroom: 4.0,
+            refresh_hz: Some(60.0),
+            ..Default::default()
+        };
+        let with = |display| SurfaceInfo {
+            display,
+            ..Default::default()
+        };
+        s.set_info(with(hdr));
+        s.set_info(with(SurfaceDisplay {
+            headroom: 4.02,
+            refresh_hz: Some(59.94),
+            ..hdr
+        }));
+        s.set_info(with(SurfaceDisplay::default()));
+        let faster = SurfaceDisplay {
+            refresh_hz: Some(120.0),
+            ..hdr
+        };
+        s.set_info(with(faster));
+        assert_eq!(
+            *lock(&heard),
+            vec![
+                SurfaceEvent::DisplayChanged(hdr),
+                SurfaceEvent::DisplayChanged(faster)
+            ]
+        );
+        assert_eq!(s.info().display, faster);
     }
 
     #[test]

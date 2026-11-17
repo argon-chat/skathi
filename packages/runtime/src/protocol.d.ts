@@ -128,6 +128,7 @@ type SkDispatcher = (
  * | `surfaceresize`           | width (px)   | height (px) | scale       | —          | —               |
  * | `surfaceready`            | frame width  | frame height | —          | —          | —               |
  * | `surfacelost`             | —            | —           | —           | —          | "cleared"/"device" |
+ * | `surfacedisplaychange`    | headroom     | potential headroom | refresh Hz (0 ?) | SDR white nits (0 ?) | "hdr", "vrr"/"fixed", space-separated |
  * | transitionend             | elapsedTime  | —           | —           | —          | property name   |
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
  * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
@@ -202,7 +203,8 @@ type SkEventCode =
   | 54 // pointerlockerror   (`a` = the request, `key` = "Name: message")
   | 55 // surfaceresize      (<sk-surface>)
   | 56 // surfaceready
-  | 57; // surfacelost
+  | 57 // surfacelost
+  | 58; // surfacedisplaychange
 
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __sk_selection_get(): string;

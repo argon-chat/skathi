@@ -75,6 +75,16 @@ type SurfaceEvent = Event & {
   readonly reason: "cleared" | "device";
 };
 
+/** `SkSurfaceDisplayEvent` in the app's types (env.d.ts). */
+type SurfaceDisplayEvent = Event & {
+  readonly headroom: number;
+  readonly potentialHeadroom: number;
+  readonly refreshRate: number | null;
+  readonly sdrWhiteNits: number | null;
+  readonly hdr: boolean;
+  readonly variableRefresh: boolean | null;
+};
+
 declare module "svelte/elements" {
   interface SvelteHTMLElements {
     /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */
@@ -83,6 +93,7 @@ declare module "svelte/elements" {
       onsurfaceresize?: ((event: SurfaceEvent) => void) | undefined;
       onsurfaceready?: ((event: SurfaceEvent) => void) | undefined;
       onsurfacelost?: ((event: SurfaceEvent) => void) | undefined;
+      onsurfacedisplaychange?: ((event: SurfaceDisplayEvent) => void) | undefined;
     };
   }
 }

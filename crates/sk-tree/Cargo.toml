@@ -33,10 +33,13 @@ usvg = { version = "0.46.0", default-features = false }
 # Pinned to the version sk-css uses.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 futures = "0.3"
+# `<sk-surface>` reads the display a window is on.
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 # WOFF/WOFF2 are unpacked by DirectWrite (`UnpackFontFile`); `<sk-surface>` copies D3D11/D3D12 textures.
 windows = { version = "0.62", features = [
+    "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",
@@ -45,6 +48,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_System_Threading",
 ] }

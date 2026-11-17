@@ -160,6 +160,11 @@ fn main() {
                     "width": info.width,
                     "height": info.height,
                     "visible": info.visible,
+                    "display": {
+                        "known": info.display.known,
+                        "headroom": info.display.headroom,
+                        "refreshHz": info.display.refresh_hz,
+                    },
                 })
                 .to_string(),
             );
