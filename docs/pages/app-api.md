@@ -17,13 +17,14 @@ arrived in, examples, and what throws or prints an advisory.
 
 ## Import
 
-A Vue app imports them from `@skathi-native/runtime`; a Svelte app from `@skathi-native/runtime/svelte`,
-which re-exports the same objects:
+They do not depend on the framework. Import them from `@skathi-native/runtime` in a Vue or a Svelte app:
 
 ```ts
-import { appLaunch, appTray } from "@skathi-native/runtime"; // Vue
-import { appLaunch, appTray } from "@skathi-native/runtime/svelte"; // Svelte
+import { appLaunch, appTray } from "@skathi-native/runtime";
 ```
+
+`@skathi-native/runtime/svelte` re-exports the same objects, so a Svelte app can also take everything
+from that one module.
 
 Unlike `appWindow`, none of them is reactive in Vue or Svelte. Keep what a template shows in a `ref`
 or `$state`, and update it from the API's event or after the call. Register listeners in `onMounted` and

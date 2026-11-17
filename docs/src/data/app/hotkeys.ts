@@ -30,7 +30,7 @@ appHotkeys.restart(): boolean`,
       "Keys are Windows virtual-key codes on every platform, so a binding saved on one OS works on the other. See [HotkeyChord](/app-api/hotkeys-chord/).",
       "Events arrive in a later frame on the JS thread. Every `down` an app received gets its `up`, also when the bindings change, a capture starts, the hooks restart or the page reloads.",
       "A full reload drops the listeners and cancels a capture; the bindings stay with the host.",
-      "`available` is `true` on Windows and macOS. A Svelte app imports `appHotkeys` from `@skathi-native/runtime/svelte`; nothing in it is reactive.",
+      "`available` is `true` on Windows and macOS. Nothing in it is reactive.",
     ],
     examples: [
       {
@@ -225,7 +225,7 @@ onUnmounted(stop);
         title: "The same in Svelte",
         lang: "svelte",
         code: `<script lang="ts">
-  import { appHotkeys } from "@skathi-native/runtime/svelte";
+  import { appHotkeys } from "@skathi-native/runtime";
 
   let talking = $state(false);
   $effect(() =>

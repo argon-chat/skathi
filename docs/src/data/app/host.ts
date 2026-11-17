@@ -24,7 +24,6 @@ appHost.off(event: string, handler: (data: unknown) => void): void`,
       "Arguments and results cross as JSON: functions, `undefined` and class instances do not survive the trip.",
       "A reload rejects the calls still waiting and drops every handler.",
       NOT_EMBEDDED,
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {
@@ -107,7 +106,7 @@ appHost.off(event: string, handler: (data: unknown) => void): void`,
         title: "Follow the host's online state",
         lang: "svelte",
         code: `<script lang="ts">
-  import { appHost } from "@skathi-native/runtime/svelte";
+  import { appHost } from "@skathi-native/runtime";
 
   let online = $state(true);
   $effect(() => appHost.on("network", (data) => (online = (data as { online: boolean }).online)));

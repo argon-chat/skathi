@@ -53,7 +53,7 @@ appPermissions.addEventListener("change", listener)`,
       "On Windows the system never asks a desktop app. For the microphone, Skathi asks itself with an Allow or Block dialog (Block is the default button) and keeps the answer in `permissions.json` in the storage folder. The other permissions read the system's privacy switches: `granted` or `denied`, never `prompt`.",
       "On macOS, the microphone, camera and screen recording use the system's own prompts and settings; Skathi stores no answer of its own.",
       "Group Policy that denies a capability on Windows reads as `denied`.",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`. Nothing in it is reactive: listen for `change`.",
+      "Nothing in it is reactive: listen for `change`.",
     ],
     examples: [
       {

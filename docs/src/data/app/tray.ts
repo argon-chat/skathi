@@ -19,7 +19,7 @@ export const tray = section("Tray", [
       "A callback that throws is logged as an error and does not reach the app.",
       "A full reload removes the icon, so the code that creates it runs again. Quitting removes it.",
       "A window started hidden with no tray icon is shown after 10 s, so the app cannot become unreachable.",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`. The object is the same; it is not reactive in Vue or Svelte.",
+      "It is not reactive in Vue or Svelte.",
     ],
     examples: [
       {

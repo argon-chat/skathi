@@ -23,7 +23,6 @@ appCapture.permissionHint(source: CaptureSource): string`,
       "The building blocks of a screen-share picker: list the sources, show their thumbnails, remember the user's choice.",
       "The permission methods are [appPermissions](/app-api/app-permissions/) under capture names, with a hint text for a denial.",
       "With the environment variable `SK_MEDIA_CAPTURE=fake`, `getSources()` returns one synthetic 1920 × 1080 screen with a test pattern, for tests and machines without a display.",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {

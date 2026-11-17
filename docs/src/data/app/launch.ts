@@ -30,7 +30,6 @@ appLaunch.addEventListener("launch", listener)`,
       'The launch identity, `"singleInstance"`, `"raiseOnSecondInstance"` and `"protocols"` are set in `sk.config.json`. See [singleInstance](/window-api/config-single-instance/).',
       UNTRUSTED,
       "A reload is not a launch: the values stay those of the process, and no event fires.",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {

@@ -39,8 +39,6 @@ export function openDevtools(): void {
 }
 ```
 
-A Svelte app imports it from `@skathi-native/runtime/svelte`.
-
 ## Find your way around
 
 The inspector attaches on its own to the app that opened it. The title bar shows the app's slot (the directory that identifies a running app), its process id and the window it inspects, and on the right **live** while updates are pushed or **polling** while it falls back to asking once a second.

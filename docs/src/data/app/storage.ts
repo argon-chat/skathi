@@ -28,7 +28,6 @@ appStorage.flush(): boolean`,
       "Every call is synchronous and does no waiting on the network.",
       "Writes are coalesced to at most one per frame, and the last one is written when the app quits. A failed write is retried at most once a second.",
       "A program that embeds Skathi can choose the folder and the encryption before the app starts (`sk_app::embed::Builder::data_dir` and `storage_encrypted`).",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {

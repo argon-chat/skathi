@@ -27,7 +27,6 @@ appLocale.t(key: string, args?: MessageArgs): string`,
       "The language follows `navigator.languages` unless `language` overrides it. `navigator.language` itself never changes.",
       "Catalogs and the override live in the host process: they outlast a reload, and are gone at the next launch.",
       NOT_REACTIVE,
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {
@@ -171,7 +170,7 @@ export function unread(count: number): string {
         title: "A language menu in Svelte",
         lang: "svelte",
         code: `<script lang="ts">
-  import { appLocale } from "@skathi-native/runtime/svelte";
+  import { appLocale } from "@skathi-native/runtime";
 
   appLocale.language = localStorage.getItem("language");
   let current = $state(appLocale.resolved);

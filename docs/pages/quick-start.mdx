@@ -92,7 +92,7 @@ Press **F12** in the running app to open the inspector. The [devtools guide](/gu
 
 Skathi renders both frameworks into one element tree with the same renderer, so styling, layout, web APIs and the window API are the same. What differs is how the app plugs into Skathi:
 
-- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount`, `SkWindow`, `appWindow`, `defineWindow`, `getCurrentWindow`, and the other `app*` objects such as `appTray`, `appHotkeys` and `appStorage`. Importing it is what makes `appWindow` reads reactive in runes.
+- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount` and `SkWindow`, and importing it is what makes `appWindow` reads reactive in runes. The `app*` objects (`appWindow`, `appTray`, `appHotkeys`, `appStorage` and the rest) are the same in every framework: import them from `@skathi-native/runtime` or from `/svelte`, whichever you like.
 - **Mount with `mount(App)`.** Pass `props` as in Svelte's own `mount`. The target defaults to the document root. A later `mount(Component, { target })`, for example into a pop-out window, is unmounted together with the app when the dev host reloads the app.
 - **`<SkWindow>` takes callback props and bindings.** Events are `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`. `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale` read its values, and `bind:this` gives `mapFromMain()`. The [pop-out guide](/guides/pop-out-windows/) has both versions of every example.
 - **There is no `<Teleport>`.** Put a pop-out's content in the `<SkWindow>` children, or `mount` a component into the element `bind:el` gives you.

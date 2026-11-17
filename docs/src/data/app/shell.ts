@@ -29,7 +29,6 @@ appShell.trashItem(path: string): Promise<void>`,
       "The OS work runs on a thread of its own, one call after another, so the UI never waits on the shell or the disk.",
       "With the environment variable `SK_SHELL=record`, calls are checked as usual and then resolve without reaching the OS, each logging a `[shell]` line. Use it in tests.",
       "Links in content (`<a href>`, `window.open`) open only `http`, `https` and `mailto`; `appShell.openExternal()` is the way to open another scheme the app trusts.",
-      "A Svelte app imports it from `@skathi-native/runtime/svelte`.",
     ],
     examples: [
       {
