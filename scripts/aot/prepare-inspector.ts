@@ -62,7 +62,6 @@ export async function prepare(): Promise<void> {
       run(["git", "-C", source, "config", "core.autocrlf", "false"]);
       run(["git", "-C", source, "config", "core.longpaths", "true"]);
       run(["git", "-C", source, "sparse-checkout", "init", "--cone"]);
-      run(["git", "-C", source, "sparse-checkout", "set", "src", "scripts", "packages", "docs/lint/rules"]);
       run(["git", "-C", source, "remote", "add", "origin", pin.frontend.sourceRepository]);
       run([
         "git",
@@ -77,6 +76,19 @@ export async function prepare(): Promise<void> {
       ]);
       run(["git", "-C", source, "checkout", "--detach", pin.frontend.revision]);
     }
+    // Bun's build globs these source lists; a cached checkout gets new paths too.
+    run([
+      "git",
+      "-C",
+      source,
+      "sparse-checkout",
+      "set",
+      "src",
+      "scripts",
+      "packages",
+      "docs/lint/rules",
+      "test/aot/native",
+    ]);
     if (run(["git", "-C", source, "rev-parse", "HEAD"]).trim() !== pin.frontend.revision)
       throw Error("AOT source checkout revision mismatch");
     if (run(["git", "-C", source, "status", "--porcelain", "--untracked-files=normal"]).trim())
