@@ -92,7 +92,7 @@ pub enum Fail {
 
 /// A task's work, made in the call from its arguments and run on a worker.
 #[doc(hidden)]
-pub type Work = Box<dyn FnOnce() -> Result<String, Failure> + Send + 'static>;
+pub type Work = Box<dyn FnOnce() -> Result<marshal::Owned, Failure> + Send + 'static>;
 
 /// A Rust closure the app can call: `Fn(A1, ..., An) -> R` for up to eight arguments, each
 /// `Deserialize`, with `R: Serialize`. An `Err(e)` result throws with `e`.
@@ -131,7 +131,7 @@ macro_rules! function {
             #[allow(unused_variables)]
             #[inline]
             fn invoke(&self, context: &Context, args: &HostArgs) -> Result<Value, Fail> {
-                $(let $a = argument::<$A>(context, args.arg($i - 1), $i)?;)*
+                $(let $a = argument::<$A>(context, args, $i)?;)*
                 answer(context, &(self)($($a),*))
             }
 
@@ -152,8 +152,8 @@ macro_rules! function {
 
             #[allow(unused_variables)]
             fn prepare(self: Arc<Self>, context: &Context, args: &HostArgs) -> Result<Work, Fail> {
-                $(let $a = argument::<$A>(context, args.arg($i - 1), $i)?;)*
-                Ok(Box::new(move || answer_json(&(self)($($a),*))))
+                $(let $a = argument::<$A>(context, args, $i)?;)*
+                Ok(Box::new(move || answer_owned(&(self)($($a),*))))
             }
 
             #[cfg(feature = "types")]
@@ -178,10 +178,11 @@ function!(8; A1 a1 1, A2 a2 2, A3 a3 3, A4 a4 4, A5 a5 5, A6 a6 6, A7 a7 7, A8 a
 #[inline]
 fn argument<A: DeserializeOwned>(
     context: &Context,
-    value: Value,
-    position: usize,
+    args: &HostArgs,
+    position: u32,
 ) -> Result<A, Fail> {
-    A::deserialize(marshal::Arg::new(context, value)).map_err(|e| match e {
+    let walk = marshal::Walk::new(context);
+    A::deserialize(walk.arg(position - 1, args.arg(position - 1))).map_err(|e| match e {
         marshal::Error::Message(m) => {
             Fail::Failure(Failure::type_error(format!("argument {position}: {m}")))
         }
@@ -190,159 +191,43 @@ fn argument<A: DeserializeOwned>(
     })
 }
 
+fn outcome<V>(result: Result<V, marshal::OutError>) -> Result<V, Fail> {
+    result.map_err(|e| match e {
+        marshal::OutError::Err(json) => Fail::Failure(Failure::from_err(json)),
+        marshal::OutError::Message(m) => Fail::Failure(Failure::new(format!(
+            "the result cannot be serialized: {m}"
+        ))),
+        marshal::OutError::Thrown(v) => Fail::Thrown(v),
+    })
+}
+
 #[inline]
 fn answer<R: Serialize + ?Sized>(context: &Context, value: &R) -> Result<Value, Fail> {
-    match value.serialize(marshal::Out { context, top: true }) {
-        Ok(v) => Ok(v),
-        Err(marshal::OutError::Err(json)) => Err(Failure::from_err(json).into()),
-        Err(marshal::OutError::Message(m)) => {
-            Err(Failure::new(format!("the result cannot be serialized: {m}")).into())
-        }
-        Err(marshal::OutError::Compound) => {
-            let json = answer_json(value)?;
-            marshal::parse(context, &json).map_err(|e| match e {
-                marshal::Error::Thrown(v) => Fail::Thrown(v),
-                other => Fail::Failure(Failure::new(other.to_string())),
-            })
-        }
-    }
+    outcome(value.serialize(marshal::Out {
+        build: marshal::Engine(context),
+        top: true,
+    }))
 }
 
-fn answer_json<R: Serialize + ?Sized>(value: &R) -> Result<String, Failure> {
-    match value.serialize(ResultProbe) {
-        Ok(Probed::Ok(json)) => Ok(json),
-        Ok(Probed::Err(json)) => Err(Failure::from_err(json)),
-        Err(_) => serde_json::to_string(value)
-            .map_err(|e| Failure::new(format!("the result cannot be serialized: {e}"))),
-    }
+/// A task's result, made on its worker.
+fn answer_owned<R: Serialize + ?Sized>(value: &R) -> Result<marshal::Owned, Failure> {
+    outcome(value.serialize(marshal::Out {
+        build: marshal::Tree,
+        top: true,
+    }))
+    .map_err(|e| match e {
+        Fail::Failure(failure) => failure,
+        Fail::Thrown(_) => Failure::new("the result cannot be serialized"),
+    })
 }
 
-/// Recognizes a top-level `Result` by serde's own encoding of it; anything else fails at once.
-struct ResultProbe;
-enum Probed {
-    Ok(String),
-    Err(String),
-}
-#[derive(Debug)]
-struct NotResult;
-impl std::fmt::Display for NotResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("not a Result")
-    }
-}
-impl std::error::Error for NotResult {}
-impl serde::ser::Error for NotResult {
-    fn custom<T: std::fmt::Display>(_: T) -> Self {
-        NotResult
-    }
-}
-
-macro_rules! not_result {
-    ($($method:ident($($arg:ty),*);)*) => {
-        $(fn $method(self, $(_: $arg),*) -> Result<Probed, NotResult> { Err(NotResult) })*
-    };
-}
-
-impl serde::Serializer for ResultProbe {
-    type Ok = Probed;
-    type Error = NotResult;
-    type SerializeSeq = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeTuple = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeTupleStruct = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeTupleVariant = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeMap = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeStruct = serde::ser::Impossible<Probed, NotResult>;
-    type SerializeStructVariant = serde::ser::Impossible<Probed, NotResult>;
-
-    not_result! {
-        serialize_bool(bool);
-        serialize_i8(i8);
-        serialize_i16(i16);
-        serialize_i32(i32);
-        serialize_i64(i64);
-        serialize_u8(u8);
-        serialize_u16(u16);
-        serialize_u32(u32);
-        serialize_u64(u64);
-        serialize_f32(f32);
-        serialize_f64(f64);
-        serialize_char(char);
-        serialize_str(&str);
-        serialize_bytes(&[u8]);
-        serialize_none();
-        serialize_unit();
-        serialize_unit_struct(&'static str);
-        serialize_unit_variant(&'static str, u32, &'static str);
-    }
-
-    fn serialize_some<T: Serialize + ?Sized>(self, _: &T) -> Result<Probed, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_newtype_struct<T: Serialize + ?Sized>(
-        self,
-        _: &'static str,
-        _: &T,
-    ) -> Result<Probed, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_newtype_variant<T: Serialize + ?Sized>(
-        self,
-        name: &'static str,
-        _: u32,
-        variant: &'static str,
-        value: &T,
-    ) -> Result<Probed, NotResult> {
-        if name != "Result" {
-            return Err(NotResult);
-        }
-        let json = serde_json::to_string(value).map_err(|_| NotResult)?;
-        match variant {
-            "Ok" => Ok(Probed::Ok(json)),
-            "Err" => Ok(Probed::Err(json)),
-            _ => Err(NotResult),
-        }
-    }
-    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_tuple_struct(
-        self,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleStruct, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_tuple_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleVariant, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_struct(
-        self,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStruct, NotResult> {
-        Err(NotResult)
-    }
-    fn serialize_struct_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStructVariant, NotResult> {
-        Err(NotResult)
-    }
+/// An event's data, made on the thread that emits it.
+pub(crate) fn event_data<T: Serialize + ?Sized>(data: &T) -> Option<marshal::Owned> {
+    data.serialize(marshal::Out {
+        build: marshal::Tree,
+        top: false,
+    })
+    .ok()
 }
 
 enum Invoke {
@@ -657,12 +542,12 @@ fn pool_run(job: Job) {
 enum Item {
     Task {
         token: u32,
-        result: Result<String, Failure>,
+        result: Result<marshal::Owned, Failure>,
     },
     Event {
         module: String,
         event: String,
-        json: String,
+        data: marshal::Owned,
     },
 }
 
@@ -686,7 +571,7 @@ struct TaskReply {
 }
 
 impl TaskReply {
-    fn settle(mut self, result: Result<String, Failure>) {
+    fn settle(mut self, result: Result<marshal::Owned, Failure>) {
         self.settled = true;
         push(Item::Task {
             token: self.token,
@@ -706,11 +591,11 @@ impl Drop for TaskReply {
     }
 }
 
-pub(crate) fn emit(module: &str, event: &str, json: String) {
+pub(crate) fn emit(module: &str, event: &str, data: marshal::Owned) {
     push(Item::Event {
         module: module.to_owned(),
         event: event.to_owned(),
-        json,
+        data,
     });
 }
 
@@ -926,13 +811,13 @@ fn build(context: &Context, module: &'static Module) -> js::Result<Value> {
     Ok(object)
 }
 
-fn deliver_event(context: &Context, module: &str, event: &str, json: &str) {
+fn deliver_event(context: &Context, module: &str, event: &str, data: &marshal::Owned) {
     let key = (module.to_owned(), event.to_owned());
     let listeners = STATE.with(|s| s.borrow().listeners.get(&key).cloned().unwrap_or_default());
     if listeners.is_empty() {
         return;
     }
-    let data = match parse(context, json) {
+    let data = match data.to_js(context) {
         Ok(data) => data,
         Err(_) => return,
     };
@@ -954,14 +839,14 @@ fn deliver_event(context: &Context, module: &str, event: &str, json: &str) {
     context.unprotect(data);
 }
 
-fn settle_task(context: &Context, token: u32, result: Result<String, Failure>) {
+fn settle_task(context: &Context, token: u32, result: Result<marshal::Owned, Failure>) {
     TASKS.fetch_sub(1, Ordering::AcqRel);
     let Some(pending) = STATE.with(|s| s.borrow_mut().pending.remove(&token)) else {
         return;
     };
-    let (callback, value) = match result.map(|json| parse(context, &json)) {
+    let (callback, value) = match result.map(|data| data.to_js(context)) {
         Ok(Ok(value)) => (pending.resolve, value),
-        Ok(Err(js::Error::Exception(e))) => (pending.reject, e),
+        Ok(Err(marshal::Error::Thrown(e))) => (pending.reject, e),
         Ok(Err(other)) => (pending.reject, context.error(0, &other.to_string())),
         Err(failure) => (pending.reject, error_value(context, &failure)),
     };
@@ -1002,8 +887,8 @@ fn drain() -> usize {
                 Item::Event {
                     module,
                     event,
-                    json,
-                } => deliver_event(context, &module, &event, &json),
+                    data,
+                } => deliver_event(context, &module, &event, &data),
             }
         });
         n += 1;
@@ -1209,7 +1094,7 @@ mod tests {
                      __nm.halve('x').catch((e) => __settled.bad = e.name + ': ' + e.message);
                      ''",
                 );
-                emit("demo", "moved", r#"{"x":3,"y":4}"#.into());
+                emit("demo", "moved", event_data(&Point { x: 3, y: 4 }).unwrap());
                 settle();
                 assert_eq!(
                     eval("[__settled.ok, __settled.err, __settled.crash].join()"),
@@ -1221,7 +1106,7 @@ mod tests {
                 );
                 assert_eq!(eval("JSON.stringify(__seen)"), "[7]");
                 eval("__off(); ''");
-                emit("demo", "moved", r#"{"x":1,"y":1}"#.into());
+                emit("demo", "moved", event_data(&Point { x: 1, y: 1 }).unwrap());
                 settle();
                 assert_eq!(eval("JSON.stringify(__seen)"), "[7]");
             })

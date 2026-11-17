@@ -744,8 +744,8 @@ impl Handle {
         if !declared {
             return Err(EmitError::NotDeclared);
         }
-        let json = serde_json::to_string(data).map_err(|_| EmitError::NotJson)?;
-        module::emit(module, event, json);
+        let data = module::event_data(data).ok_or(EmitError::NotJson)?;
+        module::emit(module, event, data);
         Ok(())
     }
 

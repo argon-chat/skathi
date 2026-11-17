@@ -107,6 +107,8 @@ specta-typescript = { version = "=0.0.15", optional = true }
 
 [dev-dependencies]
 skathi-macros = { path = "../skathi-macros", features = ["types"] }
+# The marshalling conformance test compares against serde_json reading floats exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 # examples/surface.rs renders D3D11 and D3D12 frames for `<sk-surface>`.
