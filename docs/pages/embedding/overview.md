@@ -95,7 +95,6 @@ Start with functions and events. Most embedders never need more, and the app sta
 - [Functions and events](/embedding/functions-and-events/): `appHost` on one side, `Builder::function` and `Handle::emit` on the other, and keeping the UI responsive.
 - [Native APIs](/embedding/native-api/): the `setup` hook, native namespaces, posting from worker threads, cookies and secrets.
 - [Native frames](/embedding/native-frames/) and [GPU frames on Windows](/embedding/gpu-frames/): `<sk-surface>` and the producer's side of it.
-- [Recipe: libmpv](/embedding/libmpv/): a video player with Vue controls over the picture.
 - [Window, tray and hotkeys](/embedding/desktop/): showing, hiding and closing the app from Rust, the tray, global hotkeys, single instance and deep links.
 - [Dev loop and devtools](/embedding/dev-loop/): hot reload inside your own exe.
 - [Shipping](/embedding/shipping/): the payload, the profile, binary size, macOS.

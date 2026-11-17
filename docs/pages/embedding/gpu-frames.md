@@ -168,4 +168,4 @@ Under the D3D12 renderer a fenced present returns at once and the wait happens o
 - **Vulkan?** Create on D3D12, import into Vulkan, present with a fence.
 - **Not sure yet?** Start with `present_bgra`. It works everywhere, and moving to a GPU path later changes only the producer.
 
-Next: [Recipe: libmpv](/embedding/libmpv/).
+Next: [Window, tray and hotkeys](/embedding/desktop/).

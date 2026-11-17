@@ -144,4 +144,4 @@ When the GPU driver resets, Skathi recreates its device. Every surface drops its
 | macOS    | yes            | yes        | no             | no                  | no                                   |
 | Linux    | yes            | yes        | no             | no                  | no                                   |
 
-Next: [GPU frames on Windows](/embedding/gpu-frames/), or straight to [Recipe: libmpv](/embedding/libmpv/).
+Next: [GPU frames on Windows](/embedding/gpu-frames/).
