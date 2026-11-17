@@ -758,7 +758,7 @@ fn copy_in(
     source_state: D3D12_RESOURCE_STATES,
     wait: Option<(&ID3D12Fence, u64)>,
     signal: Option<(&ID3D12Fence, u64)>,
-) -> Result<u64, SurfaceError> {
+) -> Result<(u64, u64), SurfaceError> {
     let (size, format) = describe(source)?;
     check_format(state.format, format)?;
     let index = state.gpu12.free_slot(gpu, size, format)?;
@@ -842,11 +842,11 @@ fn copy_in(
     state.gpu12.slots[index].written = value;
     state.gpu12.current = Some(index);
     state.gpu12.fence = Some(gpu.clone());
-    state.put(Frame::D3D12 {
+    let frame = state.put(Frame::D3D12 {
         width: size.0,
         height: size.1,
     });
-    Ok(value)
+    Ok((frame, value))
 }
 
 /// # Safety
@@ -856,7 +856,7 @@ pub(super) unsafe fn present(
     raw: *mut c_void,
     resource_state: i32,
     ready: Option<(*mut c_void, u64)>,
-) -> Result<u64, SurfaceError> {
+) -> Result<(u64, u64), SurfaceError> {
     // SAFETY: the caller's.
     let source = unsafe { ID3D12Resource::from_raw_borrowed(&raw) }
         .ok_or_else(|| SurfaceError::Size("a null resource".into()))?;
@@ -940,7 +940,7 @@ pub(super) fn present_shared(
     state: &Mutex<State>,
     opened: &Opened,
     values: Option<(u64, u64)>,
-) -> Result<(), SurfaceError> {
+) -> Result<u64, SurfaceError> {
     let gpu = gpu()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);
@@ -963,7 +963,7 @@ pub(super) fn present_shared(
         wait,
         signal,
     )
-    .map(|_| ())
+    .map(|(frame, _)| frame)
 }
 
 #[cfg(test)]

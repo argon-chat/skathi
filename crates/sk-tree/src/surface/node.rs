@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use gpui::{App, RenderImage, Window};
 
-use super::{display, Frame, SurfaceDisplay, SurfaceHandle, SurfaceInfo};
+use super::{display, feedback, Frame, SurfaceDisplay, SurfaceHandle, SurfaceInfo};
 use crate::live::{self, LiveTile, Shown};
 use crate::tree;
 use crate::windows::{self, WinKey};
@@ -19,6 +19,8 @@ struct Node {
     tile: Option<LiveTile>,
     /// The surface's `seq` the tile holds (or that cleared it).
     seen: u64,
+    /// The id of the frame the tile holds.
+    frame: u64,
     /// The content box, physical px, and the scale, from the last paint.
     painted: (u32, u32, f32),
     reported: (u32, u32),
@@ -32,6 +34,8 @@ thread_local! {
     static NODES: RefCell<HashMap<u32, Node>> = RefCell::new(HashMap::new());
     /// Events a pop-out's draw raised, for the next primary tick to dispatch.
     static DEFERRED: RefCell<Vec<(u32, Event)>> = const { RefCell::new(Vec::new()) };
+    /// Each window's native handle, as present feedback names it.
+    static PRESENT_KEYS: RefCell<HashMap<WinKey, u64>> = RefCell::new(HashMap::new());
 }
 
 #[cfg(windows)]
@@ -69,6 +73,7 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             window: win,
             tile: None,
             seen: 0,
+            frame: 0,
             painted: (0, 0, 1.0),
             reported: (0, 0),
             visible: false,
@@ -115,6 +120,9 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 
 pub(crate) fn forget_window(key: WinKey) {
     display::forget(key);
+    if let Some(window) = PRESENT_KEYS.with(|k| k.borrow_mut().remove(&key)) {
+        feedback::with(|t| t.window_closed(window));
+    }
     NODES.with(|m| {
         for node in m.borrow_mut().values_mut() {
             if node.tile.as_ref().is_some_and(|t| t.window() == key) {
@@ -198,8 +206,37 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             .unwrap_or_default();
         surface.set_info(info);
     }
+    carry(window, here);
     dispatch(events, window, cx);
     draw
+}
+
+/// Tells present feedback which frame of each surface `here`'s next present shows.
+fn carry(window: &Window, here: WinKey) {
+    if !feedback::watching() {
+        return;
+    }
+    let Some(key) = PRESENT_KEYS.with(|k| {
+        let mut keys = k.borrow_mut();
+        if let Some(&key) = keys.get(&here) {
+            return Some(key);
+        }
+        let key = feedback::window_key(window, here)?;
+        keys.insert(here, key);
+        Some(key)
+    }) else {
+        return;
+    };
+    let carrying = NODES.with(|m| {
+        m.borrow()
+            .values()
+            .filter(|n| n.window == here && n.visible && n.ready && n.tile.is_some())
+            .map(|n| (feedback::key(n.surface.shared()), n.frame))
+            .collect()
+    });
+    feedback::with(|t| t.carry(key, carrying));
+    #[cfg(not(any(windows, target_os = "macos")))]
+    feedback::ticked(key, display::of(here).refresh_hz);
 }
 
 /// A pop-out's half of [`tick`], from its own draw: its nodes' tiles live in its atlas.
@@ -221,6 +258,7 @@ pub(crate) fn window_tick(window: &mut Window) {
     });
     let mut draw = false;
     finish(touch, &mut draw);
+    carry(window, here);
 }
 
 fn finish(touch: Vec<u32>, draw: &mut bool) {
@@ -243,7 +281,7 @@ fn write(
     touch: &mut Vec<u32>,
 ) -> (Shown, Option<Event>) {
     // One lock: a present on another thread may resize the surface's texture in between.
-    let (seq, frame, lost, texture) = {
+    let (seq, frame_id, frame, lost, texture) = {
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut st = node.surface.lock_state();
         #[cfg(windows)]
@@ -268,7 +306,7 @@ fn write(
         };
         #[cfg(not(any(windows, target_os = "macos")))]
         let texture = ();
-        (st.seq, st.frame.clone(), st.lost, texture)
+        (st.seq, st.frame_id, st.frame.clone(), st.lost, texture)
     };
     if seq == node.seen {
         return (Shown::Nowhere, None);
@@ -363,6 +401,7 @@ fn write(
         }
     };
     node.seen = seq;
+    node.frame = frame_id;
     node.surface.lock_state().note_shown(seq);
     let first = !std::mem::replace(&mut node.ready, true);
     let shown = if !fits || first || wrote == Shown::Draw {

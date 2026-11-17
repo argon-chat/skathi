@@ -134,7 +134,7 @@ impl Opened {
         state: &Mutex<State>,
         sync: SharedSync,
         timeout_ms: u32,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         if let (Some(opened), false) = (&self.d3d12, matches!(sync, SharedSync::Keyed(..))) {
             let values = match sync {
                 SharedSync::Fence(wait, release) => Some((wait, release)),

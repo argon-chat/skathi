@@ -105,7 +105,7 @@ std::thread::spawn(move || {
 
 ### What a present costs the UI
 
-Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time. `stats().shown` against `stats().presented` tells how many reach the screen.
+Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time. `stats().shown` against `stats().presented` tells how many reach the screen; [`on_frame`](#knowing-when-a-frame-is-on-screen) tells which, and when.
 
 ## GPU frames, Windows and macOS
 
@@ -173,11 +173,15 @@ Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on ev
 | `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                          |
 | `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)               |
 | `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows |
+| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                        |
+| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called        |
 | `known`                        | `false` on Linux, and before the window first draws                                                    |
 
 1.0 as SDR white is what macOS EDR values already are, and how Windows composes SDR content in HDR mode: at the white level the user picked. On Windows, `headroom` is the screen's peak over that white (`MaxLuminance` / SDR white), and a scRGB value, where 1.0 is 80 nits, is a surface value times `sdr_white_nits / 80`. In SDR mode it is 1.0.
 
-macOS sends nothing when the EDR headroom moves with the brightness, and Windows nothing when the SDR slider moves, so Skathi reads the display as it draws: on macOS every frame, on Windows the monitor and DXGI's state every frame and the display configuration once a second (at once on a move to another monitor or a display change). While a surface is visible and nothing else draws, it looks four times a second. A change smaller than 1 % is not reported. Windows does not say whether a screen refreshes at a variable rate, Linux reports nothing yet, and there is no vsync timestamp.
+macOS sends nothing when the EDR headroom moves with the brightness, and Windows nothing when the SDR slider moves, so Skathi reads the display as it draws: on macOS every frame, on Windows the monitor and DXGI's state every frame and the display configuration once a second (at once on a move to another monitor or a display change). While a surface is visible and nothing else draws, it looks four times a second. A change smaller than 1 % is not reported. Windows does not say whether a screen refreshes at a variable rate, and Linux reports nothing yet.
+
+`refresh_period` and `last_vblank` are the display clock, so a player can aim at a vblank without a thread of its own: the next ones are `last_vblank + k × refresh_period`. On Windows both are the compositor's (`DwmGetCompositionTimingInfo`), used while its rate matches the surface's screen. Elsewhere, and on a screen of another rate, `last_vblank` is carried forward from the last frame [`on_frame`](#knowing-when-a-frame-is-on-screen) saw shown, so it is `None` until one was.
 
 ### A video player
 
@@ -195,6 +199,122 @@ fn retarget(player: &mpv::Handle, display: skathi::SurfaceDisplay) {
 ```
 
 Today `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. Once windows output HDR it follows `headroom`, and the same code gives highlights the room the screen has. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
+
+## Knowing when a frame is on screen
+
+A present returning `Ok` means the frame is queued, not that anyone saw it. A player that keeps its own clock against the display (mpv's display-sync, a game engine's frame pacing) needs to know when each frame actually reached the screen, and which never did. Every present returns the frame's id, and `on_frame` reports what became of it:
+
+```rust
+use skathi::{FrameDropReason, FrameEvent, FramePrecision};
+
+let surface = skathi::surface("player");
+let _frames = surface.on_frame(|event| match event {
+    FrameEvent::Presented { frame, shown_at, refresh_interval, precision } => {
+        // `frame` was first on screen on the refresh that began at `shown_at` (ns).
+    }
+    FrameEvent::Dropped { frame, reason } => {
+        // Superseded, Hidden, DeviceLost or Closed: it never reached the screen.
+    }
+});
+let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event carries
+```
+
+`present_bgra`, `present_bgrx`, `present_rgba16f`, `present_d3d11_texture`, `present_shared`, `present_shared_fenced` and `present_cv_pixel_buffer` return the id; `present_d3d12` and `present_metal_texture` return a `FramePresent` with the id and the release value. Ids increase per surface. The callback is `FnMut + Send`; reports go on until the `FrameWatch` it returns is dropped, and a surface nobody listens to costs nothing.
+
+### What is guaranteed
+
+- **One event per frame.** Each frame presented while a `FrameWatch` is held gets exactly one `FrameEvent`, `Presented` or `Dropped`, never none and never two. Frames presented before `on_frame` or after the last watch dropped are not reported.
+- **In frame order.** A surface's events arrive in the order of their ids. A frame that is settled early (superseded at once, say) waits for the ones before it.
+- **`Presented` once, on first display.** `shown_at` is the start of the refresh the frame first showed on; a frame left on screen is not reported again. It stayed until the next frame's `shown_at`, so the difference is how long it was held. `refresh_interval` is that refresh's actual distance from the one before, which is not the nominal period on a variable-refresh screen; `info().display.refresh_period` keeps the nominal one.
+- **`Dropped` says why:**
+
+| `FrameDropReason` | When                                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Superseded`      | a newer frame replaced it before it reached the screen: presented twice within a refresh, or before the window drew it. Reported as soon as that is known                                            |
+| `Hidden`          | nothing showing the surface could be on screen (`info().visible` is false, or the window is minimised, covered or hidden): what was waiting drops then, and every present while hidden drops at once |
+| `DeviceLost`      | the renderer lost its device: everything waiting drops, before `surfacelost`                                                                                                                         |
+| `Closed`          | the window showing it closed, or the app quit                                                                                                                                                        |
+
+- **No timeout is needed.** A frame resolves when the display shows a window present carrying it, or when one of the above makes that impossible. Only a stalled UI thread, which draws no window, can hold a frame unresolved; a newer present still supersedes it at once.
+
+### Precision
+
+`precision` says how `shown_at` was known:
+
+| Platform               | `Exact`                                                                                                     | `Estimated`                                                                                                                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows                | the swap chain's frame statistics named the window present that showed it, and the refresh, at its QPC time | the statistics lagged (DWM refreshes a composed window's only now and then) or a poll was missed: placed on the refresh after the first vblank following its GPU work, ±1 refresh; `refresh_interval` is then the nominal period |
+| Windows, no statistics |                                                                                                             | a swap chain whose statistics stay empty: every frame, the same way                                                                                                                                                              |
+| macOS                  | the drawable's `presentedTime`; `refresh_interval` is the nominal period                                    |                                                                                                                                                                                                                                  |
+| Linux                  |                                                                                                             | about a refresh after the window's tick                                                                                                                                                                                          |
+
+On Windows, gpui presents with `Present(0)` on a flip-model swap chain and paces itself with `DwmFlush`; DWM silently discards a present that a newer one replaced before its vblank. Skathi records which frame of each surface every window present carries, and its vsync thread reads `GetFrameStatistics` (`PresentCount`, `PresentRefreshCount`, `SyncQPCTime`) every refresh while any frame waits, and once more after each present. A frame is `Presented` by the first window present the display showed that carried it; a present the statistics skipped over was discarded, unless a refresh was free for it between its neighbours, in which case it is placed there as `Estimated`. While no frame waits, the vsync thread sleeps as before, so an idle window costs nothing.
+
+### Threading
+
+The callback runs on Skathi's vsync thread on Windows and on a thread of Skathi's own on macOS and Linux, never on the UI thread, and the UI's queue is never in the way: it comes at most a refresh after the frame was shown. The vsync thread paces every window, so keep the callback short: record, signal, return. It may present, or drop its own watch. `Closed` events at quit are delivered on the thread that quits.
+
+### The clock
+
+`shown_at` and `info().display.last_vblank` are in `skathi::monotonic_ns()`'s clock, the one mpv's `mp_raw_time_ns` reads: QPC on Windows and `mach_absolute_time` on macOS, both in nanoseconds, and `CLOCK_MONOTONIC` on Linux. libmpv's own `mpv_get_time_ns` counts from an arbitrary start; take the offset between the two once.
+
+### mpv: display-sync and report_swap
+
+With the render API, libmpv draws each frame when told to and paces playback itself. `video-sync=display-resample` times frames to the display: it needs the refresh rate, and the moments frames actually flipped. `mpv_render_context_report_swap` is how it hears the second: libmpv's VO waits after each frame until the swap is reported, and times the display from when that happens. Called right after a present it would report queueing; called from `on_frame` it reports the flip, within a refresh of it.
+
+```rust
+use std::sync::Arc;
+
+use skathi::{FrameDropReason, FrameEvent, SurfaceEvent};
+
+let surface = skathi::surface("player");
+
+mpv.set_property("video-sync", "display-resample");
+let display = surface.info().display;
+if let Some(hz) = display.refresh_hz {
+    mpv.set_property("display-fps-override", format!("{hz:.3}"));
+}
+let _display = surface.on_change({
+    let mpv = mpv.clone();
+    move |_, event| {
+        if let SurfaceEvent::DisplayChanged(display) = event {
+            if let Some(hz) = display.refresh_hz {
+                mpv.set_property("display-fps-override", format!("{hz:.3}"));
+            }
+        }
+    }
+});
+
+let render: Arc<RenderContext> = render.clone(); // wraps mpv_render_context
+let _frames = surface.on_frame(move |event| {
+    // One report per frame rendered, shown or not, so libmpv's count of flips stays in step.
+    render.report_swap();
+    match event {
+        FrameEvent::Presented { shown_at, refresh_interval, .. } => {
+            stats.shown(shown_at, refresh_interval); // e.g. hold times, for an OSD
+        }
+        FrameEvent::Dropped { reason: FrameDropReason::Superseded, .. } => stats.late(),
+        FrameEvent::Dropped { .. } => {}
+    }
+});
+
+// The render thread: present mid-refresh, as far from either vblank as it gets, so jitter on
+// either side cannot move a frame to another refresh.
+loop {
+    render.wait_for_frame(); // MPV_RENDER_UPDATE_FRAME
+    let display = surface.info().display;
+    if let (Some(vblank), Some(period)) = (display.last_vblank, display.refresh_period) {
+        let p = period.as_nanos() as u64;
+        let now = skathi::monotonic_ns();
+        let mid = vblank + p / 2 + now.saturating_sub(vblank + p / 2).div_ceil(p) * p;
+        std::thread::sleep(std::time::Duration::from_nanos(mid - now));
+    }
+    render.render_into(&texture); // mpv_render_context_render on the shared device
+    unsafe { surface.present_d3d11_texture(texture.as_raw()) }?;
+}
+```
+
+Without `report_swap` libmpv assumes each frame flipped when its render returned, which is when the texture was handed over, not when it was seen; with display-sync that turns the window's draw jitter into resampling error. `display-resample` with flips reported from `on_frame` keeps audio and video against the display's real cadence, and a `Superseded` count that grows says frames are being presented faster than the screen takes them. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` this way and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
 
 ## Device loss
 

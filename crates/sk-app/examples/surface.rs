@@ -15,6 +15,9 @@
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible }`.
+//! - `feedbackStart(name, fps, paced)` and `feedbackStop(name)`: frames at `fps` with
+//!   `on_frame` listening; the stop prints each frame's event and the cadence, and answers a
+//!   summary.
 //!
 //! ```text
 //! cargo build -p sk-app --example surface
@@ -126,12 +129,14 @@ fn main() {
                         let frame = rgba.map(half).repeat((width * height) as usize);
                         surface
                             .present_rgba16f(&frame, width, height, width as usize * 4)
+                            .map(drop)
                             .map_err(|e| e.to_string())
                     }
                     (_, Fill::Bgra(bgra)) => {
                         let frame = bgra.repeat((width * height) as usize);
                         surface
                             .present_bgra(&frame, width, height, width as usize * 4)
+                            .map(drop)
                             .map_err(|e| e.to_string())
                     }
                 };
@@ -145,6 +150,22 @@ fn main() {
             let surface = surface_of(&args_of(&call));
             std::thread::spawn(move || gpu::animate(surface));
             call.resolve("true");
+        })
+        .function("feedbackStart", |call| {
+            let args = args_of(&call);
+            let fps = args.get(1).and_then(Value::as_f64).unwrap_or(24.0);
+            let paced = args.get(2).and_then(Value::as_bool).unwrap_or(false);
+            feedback::start(surface_of(&args), fps, paced);
+            call.resolve("true");
+        })
+        .function("feedbackStop", |call| {
+            let name = args_of(&call)
+                .first()
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let reply = call.into_reply();
+            std::thread::spawn(move || reply.resolve(&feedback::stop(&name).to_string()));
         })
         .function("clear", |call| {
             surface_of(&args_of(&call)).clear();
@@ -183,6 +204,160 @@ fn main() {
         let exit = ui.wait();
         std::thread::sleep(Duration::from_millis(10));
         std::process::exit(if exit.clean { 0 } else { 1 });
+    }
+}
+
+/// `feedbackStart(name, fps)` presents CPU frames at `fps` from a thread of ours and records what
+/// became of each; `feedbackStop(name)` stops it, waits for the last frames to resolve, prints
+/// every event and the cadence (refreshes each frame was held), and answers a summary.
+mod feedback {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
+
+    use serde_json::{json, Value};
+    use sk_app::embed::{
+        monotonic_ns, FrameDropReason, FrameEvent, FramePrecision, FrameWatch, SurfaceHandle,
+    };
+
+    struct Run {
+        stop: Arc<AtomicBool>,
+        producer: JoinHandle<Vec<u64>>,
+        events: Arc<Mutex<Vec<FrameEvent>>>,
+        _watch: FrameWatch,
+    }
+
+    fn runs() -> &'static Mutex<HashMap<String, Run>> {
+        static RUNS: OnceLock<Mutex<HashMap<String, Run>>> = OnceLock::new();
+        RUNS.get_or_init(Default::default)
+    }
+
+    /// With `paced`, each frame is presented a refresh and a half before the vblank its time
+    /// falls on (the display clock in `info().display`), as a display-synced player would, so
+    /// jitter in this thread's wakeups or the window's draw cannot move it to another refresh.
+    pub fn start(surface: SurfaceHandle, fps: f64, paced: bool) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let watch = surface.on_frame(move |e| sink.lock().unwrap().push(e));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let name = surface.name().to_string();
+        let producer = std::thread::spawn(move || {
+            let interval = (1e9 / fps.max(1.0)) as u64;
+            let start = monotonic_ns();
+            let mut ids = Vec::new();
+            for n in 0.. {
+                if stopping.load(Ordering::Acquire) {
+                    break;
+                }
+                let due = start + n * interval;
+                let display = surface.info().display;
+                let at = match (paced, display.last_vblank, display.refresh_period) {
+                    (true, Some(vblank), Some(period)) => {
+                        let p = period.as_nanos() as u64;
+                        let k = due.saturating_sub(vblank).div_ceil(p);
+                        (vblank + k * p).saturating_sub(p + p / 2)
+                    }
+                    _ => due,
+                };
+                std::thread::sleep(Duration::from_nanos(at.saturating_sub(monotonic_ns())));
+                let shade = (ids.len() * 37 % 256) as u8;
+                let frame = [shade, 255 - shade, 128, 255].repeat(64 * 64);
+                if let Ok(id) = surface.present_bgra(&frame, 64, 64, 64 * 4) {
+                    ids.push(id);
+                }
+            }
+            ids
+        });
+        let run = Run {
+            stop,
+            producer,
+            events,
+            _watch: watch,
+        };
+        if let Some(old) = runs().lock().unwrap().insert(name, run) {
+            old.stop.store(true, Ordering::Release);
+        }
+    }
+
+    pub fn stop(name: &str) -> Value {
+        let Some(run) = runs().lock().unwrap().remove(name) else {
+            return Value::Null;
+        };
+        run.stop.store(true, Ordering::Release);
+        let ids = run.producer.join().unwrap_or_default();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while run.events.lock().unwrap().len() < ids.len() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let events = run.events.lock().unwrap().clone();
+        summary(name, &ids, &events)
+    }
+
+    fn summary(name: &str, ids: &[u64], events: &[FrameEvent]) -> Value {
+        let mut count: HashMap<&str, usize> = HashMap::new();
+        let mut shown: Vec<(u64, u64, Duration)> = Vec::new();
+        let mut exact = 0;
+        for event in events {
+            let line = match *event {
+                FrameEvent::Presented {
+                    frame,
+                    shown_at,
+                    refresh_interval,
+                    precision,
+                } => {
+                    exact += usize::from(precision == FramePrecision::Exact);
+                    shown.push((frame, shown_at, refresh_interval));
+                    *count.entry("presented").or_default() += 1;
+                    format!(
+                        "frame {frame}: presented at {:.3} ms, refresh {:.3} ms, {precision:?}",
+                        shown_at as f64 / 1e6,
+                        refresh_interval.as_secs_f64() * 1e3
+                    )
+                }
+                FrameEvent::Dropped { frame, reason } => {
+                    let key = match reason {
+                        FrameDropReason::Superseded => "superseded",
+                        FrameDropReason::Hidden => "hidden",
+                        FrameDropReason::DeviceLost => "deviceLost",
+                        FrameDropReason::Closed => "closed",
+                    };
+                    *count.entry(key).or_default() += 1;
+                    format!("frame {frame}: dropped, {reason:?}")
+                }
+            };
+            println!("[feedback {name}] {line}");
+        }
+        // Refreshes each frame stayed on screen: the next one's shown_at minus its own.
+        let cadence: Vec<u64> = shown
+            .windows(2)
+            .map(|w| {
+                let (_, at, refresh) = w[0];
+                let held = w[1].1.saturating_sub(at) as f64;
+                (held / (refresh.as_nanos().max(1) as f64)).round() as u64
+            })
+            .collect();
+        let line: Vec<String> = cadence.iter().map(u64::to_string).collect();
+        println!("[feedback {name}] cadence: {}", line.join(" "));
+        let frames: Vec<u64> = events.iter().map(FrameEvent::frame).collect();
+        let mut sorted = frames.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        json!({
+            "presents": ids.len(),
+            "events": events.len(),
+            "inOrder": frames.windows(2).all(|w| w[0] < w[1]),
+            "exactlyOnce": sorted == ids && frames.len() == ids.len(),
+            "presented": count.get("presented").copied().unwrap_or(0),
+            "superseded": count.get("superseded").copied().unwrap_or(0),
+            "hidden": count.get("hidden").copied().unwrap_or(0),
+            "deviceLost": count.get("deviceLost").copied().unwrap_or(0),
+            "closed": count.get("closed").copied().unwrap_or(0),
+            "exact": exact,
+            "cadence": cadence,
+        })
     }
 }
 
@@ -274,6 +449,7 @@ mod gpu {
             context.ClearRenderTargetView(&view, &color.clear());
             surface.present_d3d11_texture(texture.as_raw())
         }
+        .map(drop)
         .map_err(err)
     }
 
@@ -618,7 +794,8 @@ mod gpu {
                     Some((producer.fence.as_raw(), 1)),
                 )
             }
-            .map_err(err)?;
+            .map_err(err)?
+            .release;
             let release = surface.release_fence().map_err(err)?;
             if release.wait(released, std::time::Duration::from_secs(2)) {
                 Ok(())
@@ -917,7 +1094,8 @@ mod metal {
                 let released = unsafe {
                     surface.present_metal_texture(raw(&*target), Some((raw(&*event), 1)))
                 }
-                .map_err(err)?;
+                .map_err(err)?
+                .release;
                 let release = surface.release_event().map_err(err)?;
                 if release.wait(released, Duration::from_secs(2)) {
                     Ok(())
@@ -938,7 +1116,10 @@ mod metal {
                     unsafe {
                         mach2::mach_port::mach_port_deallocate(mach2::traps::mach_task_self(), port)
                     };
-                    return surface.present_shared(&shared.map_err(err)?).map_err(err);
+                    return surface
+                        .present_shared(&shared.map_err(err)?)
+                        .map(drop)
+                        .map_err(err);
                 }
                 let event = device.newSharedEvent().ok_or("no event")?;
                 clear(&device, &target, color, Some((&event, 1)))?;
@@ -955,7 +1136,9 @@ mod metal {
                     Fill::Half(rgba) => rgba.iter().flat_map(|c| half(*c).to_ne_bytes()).collect(),
                 };
                 fill(&buffer, 0, &texel);
-                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }.map_err(err)
+                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }
+                    .map(drop)
+                    .map_err(err)
             }
             _ => {
                 let Fill::Bgra(color) = color else {
@@ -965,7 +1148,9 @@ mod metal {
                 let [y, cb, cr] = ycbcr(color);
                 fill(&buffer, 0, &[y]);
                 fill(&buffer, 1, &[cb, cr]);
-                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }.map_err(err)
+                unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }
+                    .map(drop)
+                    .map_err(err)
             }
         }
     }
@@ -1018,7 +1203,7 @@ mod metal {
             match presented {
                 Ok(released) => {
                     if let Ok(release) = surface.release_event() {
-                        release.wait(released, Duration::from_millis(100));
+                        release.wait(released.release, Duration::from_millis(100));
                     }
                 }
                 Err(SurfaceError::DeviceChanged | SurfaceError::WrongDevice) => held = None,

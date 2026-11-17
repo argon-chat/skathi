@@ -20,7 +20,7 @@ The handles are raw pointers (`id<MTLDevice>`, `id<MTLTexture>`, `IOSurfaceRef`,
 
 ## Metal on the renderer's device
 
-`metal_device()` is the `MTLDevice` Skathi composites with, `NoDevice` until a window has drawn. Render on a command queue of your own into a texture made on it, signal an `MTLSharedEvent` of yours, and present the texture with that event and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release event, whose value `present_metal_texture` returns. Render into the texture again once `release_event()` reaches it (`wait` on the CPU, or `encodeWaitForEvent` on your queue), or keep a few textures in rotation.
+`metal_device()` is the `MTLDevice` Skathi composites with, `NoDevice` until a window has drawn. Render on a command queue of your own into a texture made on it, signal an `MTLSharedEvent` of yours, and present the texture with that event and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release event. `present_metal_texture` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Render into the texture again once `release_event()` reaches it (`wait` on the CPU, or `encodeWaitForEvent` on your queue), or keep a few textures in rotation.
 
 This producer, with `objc2` and `objc2-metal` 0.3, clears a texture to a moving colour at the element's size:
 
@@ -87,8 +87,9 @@ fn produce(surface: SurfaceHandle) {
         let texture = Retained::as_ptr(&g.texture).cast_mut().cast();
         let event = Retained::as_ptr(&g.event).cast_mut().cast();
         match unsafe { surface.present_metal_texture(texture, Some((event, frame))) } {
-            Ok(released) => {
+            Ok(presented) => {
                 // The texture is the surface's to read until its release event reaches this value.
+                let released = presented.release;
                 surface.release_event().map(|e| e.wait(released, Duration::from_millis(100))).ok();
             }
             Err(SurfaceError::DeviceChanged | SurfaceError::WrongDevice) => gpu = None,
@@ -172,7 +173,7 @@ A surface set to `SurfaceFormat::Rgba16Float` takes `RGBA16Float` Metal textures
 ```rust
 surface.set_format(skathi::SurfaceFormat::Rgba16Float);
 // … render into an RGBA16Float texture on metal_device(), signal `frame`, then:
-let released = unsafe { surface.present_metal_texture(texture, Some((event, frame)))? };
+let presented = unsafe { surface.present_metal_texture(texture, Some((event, frame)))? };
 ```
 
 The values are linear extended sRGB with 1.0 as SDR white: an `'RGhA'` buffer in `kCGColorSpaceExtendedLinearSRGB`, which is what AVFoundation and Core Image hand out when asked for linear half floats. A buffer's colour-space attachments are not read. The frame stays half float in the surface's textures; when an element draws it, a compute pass on the surface's queue maps it into an 8-bit texture (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)), and the window's copy waits for that pass on the GPU. The window does not ask for EDR yet, so values above 1.0 are clipped on every screen.

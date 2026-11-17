@@ -427,7 +427,7 @@ fn copy_in(
     source: &ID3D11Texture2D,
     (desc, format): &(D3D11_TEXTURE2D_DESC, SurfaceFormat),
     sync: Guard<'_>,
-) -> Result<(), SurfaceError> {
+) -> Result<u64, SurfaceError> {
     check_format(state.format, *format)?;
     let size = (desc.Width, desc.Height);
     let target = state.gpu.ensure(gpu, size, *format)?.texture.clone();
@@ -487,11 +487,10 @@ fn copy_in(
     if let Some(mapped) = state.gpu.slot.as_mut().and_then(|s| s.mapped.as_mut()) {
         mapped.drawn = false;
     }
-    state.put(Frame::Gpu {
+    Ok(state.put(Frame::Gpu {
         width: size.0,
         height: size.1,
-    });
-    Ok(())
+    }))
 }
 
 /// # Safety
@@ -499,7 +498,7 @@ fn copy_in(
 pub(super) unsafe fn present_texture(
     state: &Mutex<State>,
     raw: *mut c_void,
-) -> Result<(), SurfaceError> {
+) -> Result<u64, SurfaceError> {
     // SAFETY: the caller's.
     let source = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }
         .ok_or_else(|| SurfaceError::Size("a null texture".into()))?;
@@ -592,7 +591,7 @@ pub(super) fn present_shared(
     opened: &Opened,
     sync: SharedSync,
     timeout_ms: u32,
-) -> Result<(), SurfaceError> {
+) -> Result<u64, SurfaceError> {
     let gpu = gpu()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);

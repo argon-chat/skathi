@@ -40,7 +40,8 @@ pub mod __private {
 }
 
 pub use sk_tree::surface::{
-    surface, D3D11Device, D3D12Device, D3D12Fence, MetalDevice, MetalEvent, SharedTexture,
+    monotonic_ns, surface, D3D11Device, D3D12Device, D3D12Fence, FrameDropReason, FrameEvent,
+    FramePrecision, FramePresent, FrameWatch, MetalDevice, MetalEvent, SharedTexture,
     SurfaceDisplay, SurfaceError, SurfaceEvent, SurfaceFormat, SurfaceHandle, SurfaceInfo,
     SurfaceStats, SurfaceWatch,
 };

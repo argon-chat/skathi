@@ -269,6 +269,90 @@ test.skipIf(!WINDOWS && !MACOS)(
   T,
 );
 
+type Feedback = {
+  presents: number;
+  events: number;
+  inOrder: boolean;
+  exactlyOnce: boolean;
+  presented: number;
+  superseded: number;
+  hidden: number;
+  exact: number;
+  cadence: number[];
+};
+
+async function feedback(fps: number, ms: number, paced: boolean, during?: () => Promise<void>): Promise<Feedback> {
+  await call("feedbackStart", "feedback", fps, paced);
+  await Bun.sleep(ms);
+  if (during) await during();
+  return (await call("feedbackStop", "feedback")) as Feedback;
+}
+
+test.skipIf(!WINDOWS)(
+  "every presented frame resolves exactly once, in order, on the refresh it was shown",
+  async () => {
+    // Paced to the display clock, as a display-synced player is.
+    const f = await feedback(24, 2_000, true);
+    const { refreshHz } = (await stats("feedback")).display;
+    console.log(`24 fps on ${refreshHz} Hz, ${f.exact}/${f.presented} exact; refreshes held: ${f.cadence.join(" ")}`);
+    expect(f.presents).toBeGreaterThan(30);
+    expect(f.exactlyOnce).toBe(true);
+    expect(f.inOrder).toBe(true);
+    expect(f.presented).toBeGreaterThan(f.presents * 0.9);
+    // Each frame is held for the refreshes 24 fps takes on this display, rounded either way; a
+    // debug build's draw may miss the odd one.
+    const per = refreshHz! / 24;
+    const steady = f.cadence.filter((n) => n === Math.floor(per) || n === Math.ceil(per));
+    expect(steady.length).toBeGreaterThan(f.cadence.length * 0.8);
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "frames presented faster than the display refreshes are superseded",
+  async () => {
+    const f = await feedback(1_000, 1_000, false);
+    expect(f.exactlyOnce).toBe(true);
+    expect(f.inOrder).toBe(true);
+    expect(f.superseded).toBeGreaterThan(f.presents / 2);
+    expect(f.presented).toBeGreaterThan(0);
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "frames presented while the window is minimised are dropped as hidden",
+  async () => {
+    const { dlopen, FFIType } = await import("bun:ffi");
+    const user32 = dlopen("user32.dll", {
+      ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+      IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
+    });
+    const hwnd = await app.hwnd();
+    try {
+      const f = await feedback(60, 300, false, async () => {
+        await app.eval("__sk_window_verb('minimize'); 'ok'");
+        const by = Date.now() + 10_000;
+        while (user32.symbols.IsIconic(hwnd) === 0 && Date.now() < by) await Bun.sleep(50);
+        expect(user32.symbols.IsIconic(hwnd)).not.toBe(0);
+        await Bun.sleep(500);
+      });
+      expect(f.exactlyOnce).toBe(true);
+      expect(f.inOrder).toBe(true);
+      expect(f.presented).toBeGreaterThan(0);
+      expect(f.hidden).toBeGreaterThan(10);
+    } finally {
+      user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+      user32.close();
+    }
+    await until(
+      () => stats("feedback"),
+      (s) => s.visible,
+    );
+  },
+  T,
+);
+
 test(
   "clearing withdraws the frame and tells the element",
   async () => {

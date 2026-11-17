@@ -37,6 +37,7 @@ createApp({
       h("sk-surface", { id: "fill", name: "fill", style: at(20, 20, 160, 100, "object-fit: fill"), ...log("fill") }),
       h("div", { id: "over", style: at(20, 20, 40, 40, "background: #ffffff; z-index: 1") }),
       h("sk-surface", { id: "live", name: "live", style: at(420, 20, 120, 80), ...log("live") }),
+      h("sk-surface", { id: "feedback", name: "feedback", style: at(560, 20, 120, 80), ...log("feedback") }),
       h("sk-surface", { id: "contain", name: "contain", style: at(200, 20, 200, 100), ...log("contain") }),
       h("sk-surface", {
         id: "round",

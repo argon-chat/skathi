@@ -106,14 +106,14 @@ fn render_target(device: &ID3D11Device, (w, h): (u32, u32)) -> ((u32, u32), ID3D
 
 ## Direct3D 12 on the renderer's device
 
-`d3d12_device()` is the renderer's `ID3D12Device` and its direct queue. Render on a queue of your own on that device, signal a fence of yours, and present the resource with that fence and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release fence, whose value `present_d3d12` returns. Write the resource again once `release_fence()` reaches it, or make your queue wait on it (`ID3D12CommandQueue::Wait`), or keep a few resources in rotation.
+`d3d12_device()` is the renderer's `ID3D12Device` and its direct queue. Render on a queue of your own on that device, signal a fence of yours, and present the resource with that fence and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release fence. `present_d3d12` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Write the resource again once `release_fence()` reaches it, or make your queue wait on it (`ID3D12CommandQueue::Wait`), or keep a few resources in rotation.
 
 ```rust
 let gpu = surface.d3d12_device()?; // NotSupported under the D3D11 renderer
 let device = unsafe { ID3D12Device::from_raw_borrowed(&gpu.as_raw()) }.unwrap().clone();
 // … record into `resource` (BGRA8, single-sampled) on your queue, then:
 unsafe { queue.Signal(&fence, frame)? };
-let released = unsafe {
+let presented = unsafe {
     surface.present_d3d12(
         resource.as_raw(),
         D3D12_RESOURCE_STATE_RENDER_TARGET.0, // its state now; it is left in it
@@ -121,7 +121,7 @@ let released = unsafe {
     )?
 };
 let release = surface.release_fence()?;
-release.wait(released, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
+release.wait(presented.release, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
 ```
 
 `d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present returns `SurfaceError::Busy` and the frame can be dropped.

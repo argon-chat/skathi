@@ -156,6 +156,9 @@ pub use sk_app::embed::{
     HostCookie, IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError,
     SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Task, Typed,
 };
+pub use sk_app::embed::{
+    monotonic_ns, FrameDropReason, FrameEvent, FramePrecision, FramePresent, FrameWatch,
+};
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};
 pub use sk_app::embed::{MetalDevice, MetalEvent, SurfaceDisplay, SurfaceFormat};

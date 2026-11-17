@@ -1038,6 +1038,7 @@ fn run_app() {
         // First quit hook (they run in order): a quit no accepted close announced, such as the
         // session ending, hides the windows and arms the deadline; `pagehide` runs before storage flushes.
         std::mem::forget(cx.on_app_quit(|_| {
+            sk_tree::surface_app_closed();
             window::cancel_startup_reveal();
             shutdown::begin("quit");
             window::page_hide();

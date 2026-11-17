@@ -17,6 +17,7 @@ mod d3d11;
 #[cfg(windows)]
 mod d3d12;
 mod display;
+pub(crate) mod feedback;
 #[cfg(target_os = "macos")]
 mod metal;
 pub(crate) mod node;
@@ -25,6 +26,7 @@ mod shared;
 
 #[cfg(windows)]
 pub use d3d12::{D3D12Lease, D3D12Provider};
+pub use feedback::monotonic_ns;
 
 /// Under the D3D12 renderer, how surfaces reach its device and queue. Set once by the host.
 #[cfg(windows)]
@@ -75,11 +77,14 @@ pub fn surface(name: &str) -> SurfaceHandle {
         .entry(name.to_string())
         .or_insert_with(|| {
             ANY.store(true, Ordering::Relaxed);
-            Arc::new(Shared {
+            let shared = Arc::new(Shared {
                 name: name.into(),
                 state: Mutex::new(State::default()),
                 watchers: Mutex::new(Vec::new()),
-            })
+                frames: Mutex::new(Vec::new()),
+            });
+            lock(&shared.state).key = feedback::key(&shared);
+            shared
         })
         .clone();
     SurfaceHandle { shared }
@@ -220,6 +225,11 @@ pub struct SurfaceDisplay {
     pub refresh_hz: Option<f32>,
     /// Whether the screen refreshes at a variable rate (macOS: ProMotion, Adaptive-Sync).
     pub variable_refresh: Option<bool>,
+    /// The display's nominal refresh period: the compositor's on Windows, else from `refresh_hz`.
+    pub refresh_period: Option<Duration>,
+    /// When its last vblank was, in [`monotonic_ns`]'s clock, as `info()` was called. Off Windows
+    /// it is extrapolated from the last frame shown, so it is known once one was.
+    pub last_vblank: Option<u64>,
 }
 
 impl Default for SurfaceDisplay {
@@ -235,6 +245,8 @@ impl Default for SurfaceDisplay {
             full_frame_nits: None,
             refresh_hz: None,
             variable_refresh: None,
+            refresh_period: None,
+            last_vblank: None,
         }
     }
 }
@@ -286,6 +298,69 @@ pub struct SurfaceStats {
     pub shown: u64,
 }
 
+/// What became of a presented frame, reported once per frame in frame order
+/// ([`SurfaceHandle::on_frame`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameEvent {
+    /// The frame reached the screen, on the refresh that began at `shown_at` ([`monotonic_ns`]'s
+    /// clock). `refresh_interval` is that refresh's distance from the one before.
+    Presented {
+        frame: u64,
+        shown_at: u64,
+        refresh_interval: Duration,
+        precision: FramePrecision,
+    },
+    /// The frame never reached the screen.
+    Dropped { frame: u64, reason: FrameDropReason },
+}
+
+impl FrameEvent {
+    /// The frame id its present returned.
+    pub fn frame(&self) -> u64 {
+        match *self {
+            Self::Presented { frame, .. } | Self::Dropped { frame, .. } => frame,
+        }
+    }
+
+    fn dropped(frame: u64, reason: FrameDropReason) -> Self {
+        Self::Dropped { frame, reason }
+    }
+}
+
+/// How [`FrameEvent::Presented`]'s `shown_at` was known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FramePrecision {
+    /// Read from the display's own timing.
+    Exact,
+    /// Inferred, within a refresh either way.
+    Estimated,
+}
+
+/// Why a frame never reached the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameDropReason {
+    /// A newer frame replaced it first.
+    Superseded,
+    /// No element showing the surface could be on screen (`info().visible` false, or the window
+    /// minimised, covered or hidden).
+    Hidden,
+    /// The renderer lost its device.
+    DeviceLost,
+    /// The window showing it closed, or the app quit.
+    Closed,
+}
+
+/// What [`SurfaceHandle::present_d3d12`] and [`SurfaceHandle::present_metal_texture`] return.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FramePresent {
+    /// The frame's id, as [`FrameEvent`] names it.
+    pub frame: u64,
+    /// The value the release fence or event reaches once the producer's texture is free.
+    pub release: u64,
+}
+
+type FrameCallback = Arc<Mutex<Box<dyn FnMut(FrameEvent) + Send>>>;
+
 /// A named surface. Cheap to clone, `Send + Sync`; present from any thread.
 #[derive(Clone)]
 pub struct SurfaceHandle {
@@ -306,12 +381,28 @@ pub(crate) struct Shared {
     name: Arc<str>,
     state: Mutex<State>,
     watchers: Mutex<Vec<(u64, Watcher)>>,
+    frames: Mutex<Vec<(u64, FrameCallback)>>,
+}
+
+impl Shared {
+    fn frame_event(&self, event: FrameEvent) {
+        let callbacks: Vec<FrameCallback> =
+            lock(&self.frames).iter().map(|(_, f)| f.clone()).collect();
+        for callback in callbacks {
+            (lock(&callback))(event);
+        }
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) seq: u64,
     pub(crate) frame: Option<Frame>,
+    /// The id of `frame`, and of the last frame presented.
+    pub(crate) frame_id: u64,
+    key: feedback::Key,
+    /// Whether anything listens to [`SurfaceHandle::on_frame`].
+    watched: bool,
     /// Why the frame went, when it did: the element's `surfacelost` reason.
     pub(crate) lost: &'static str,
     presented: u64,
@@ -359,11 +450,17 @@ impl Frame {
 }
 
 impl State {
-    fn put(&mut self, frame: Frame) {
+    fn put(&mut self, frame: Frame) -> u64 {
         self.seq += 1;
         self.presented += 1;
         self.frame = Some(frame);
         self.lost = "";
+        self.frame_id += 1;
+        if self.watched {
+            let (key, id, visible) = (self.key, self.frame_id, self.info.visible);
+            feedback::with(|t| t.put(key, id, visible));
+        }
+        self.frame_id
     }
 
     pub(crate) fn note_shown(&mut self, seq: u64) {
@@ -411,7 +508,35 @@ impl SurfaceHandle {
     }
 
     pub fn info(&self) -> SurfaceInfo {
-        self.state().info
+        let mut info = self.state().info;
+        info.display = self.with_clock(info.display);
+        info
+    }
+
+    fn with_clock(&self, mut display: SurfaceDisplay) -> SurfaceDisplay {
+        if display.known {
+            (display.last_vblank, display.refresh_period) =
+                feedback::display_clock(feedback::key(&self.shared), display.refresh_hz);
+        }
+        display
+    }
+
+    /// Calls `f` with what became of each frame presented from now on: exactly one
+    /// [`FrameEvent`] per frame id, in frame order, until the returned guard drops. `f` runs on
+    /// Skathi's vsync thread (on macOS a thread of its own), not the UI thread; keep it short.
+    pub fn on_frame(&self, f: impl FnMut(FrameEvent) + Send + 'static) -> FrameWatch {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        lock(&self.shared.frames).push((id, Arc::new(Mutex::new(Box::new(f)))));
+        let mut st = self.state();
+        if !st.watched {
+            st.watched = true;
+            feedback::watch(&self.shared);
+        }
+        FrameWatch {
+            shared: Arc::downgrade(&self.shared),
+            id,
+        }
     }
 
     pub fn stats(&self) -> SurfaceStats {
@@ -447,14 +572,15 @@ impl SurfaceHandle {
         self.state().format
     }
 
-    /// Presents a CPU frame: BGRA with straight alpha, `stride` bytes per row. Works on every platform.
+    /// Presents a CPU frame: BGRA with straight alpha, `stride` bytes per row. Works on every
+    /// platform. Every present returns the frame's id ([`Self::on_frame`]).
     pub fn present_bgra(
         &self,
         pixels: &[u8],
         width: u32,
         height: u32,
         stride: usize,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         self.present_cpu(pixels, width, height, stride, false)
     }
 
@@ -466,7 +592,7 @@ impl SurfaceHandle {
         width: u32,
         height: u32,
         stride: usize,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         check_format(self.format(), SurfaceFormat::Rgba16Float)?;
         check_size(width, height)?;
         let row = width as usize * 4;
@@ -479,13 +605,13 @@ impl SurfaceHandle {
             )));
         }
         let bgra = color::rgba16f_to_bgra8(pixels, width, height, stride);
-        self.state().put(Frame::Cpu {
+        let frame = self.state().put(Frame::Cpu {
             width,
             height,
             bgra: bgra.into(),
         });
         sk_runtime::frames::wake();
-        Ok(())
+        Ok(frame)
     }
 
     /// [`Self::present_bgra`] for BGRX: the fourth byte is ignored and the frame is opaque.
@@ -495,7 +621,7 @@ impl SurfaceHandle {
         width: u32,
         height: u32,
         stride: usize,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         self.present_cpu(pixels, width, height, stride, true)
     }
 
@@ -506,7 +632,7 @@ impl SurfaceHandle {
         height: u32,
         stride: usize,
         opaque: bool,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         check_format(self.format(), SurfaceFormat::Bgra8)?;
         check_size(width, height)?;
         let row = width as usize * 4;
@@ -527,13 +653,13 @@ impl SurfaceHandle {
                 *alpha = 255;
             }
         }
-        self.state().put(Frame::Cpu {
+        let frame = self.state().put(Frame::Cpu {
             width,
             height,
             bgra: packed.into(),
         });
         sk_runtime::frames::wake();
-        Ok(())
+        Ok(frame)
     }
 
     /// Withdraws the frame: elements paint nothing and fire `surfacelost` with reason `"cleared"`.
@@ -542,6 +668,10 @@ impl SurfaceHandle {
         if st.frame.take().is_some() {
             st.seq += 1;
             st.lost = "cleared";
+            if st.watched {
+                let key = st.key;
+                feedback::with(|t| t.cleared(key));
+            }
         }
         drop(st);
         sk_runtime::frames::wake();
@@ -566,13 +696,13 @@ impl SurfaceHandle {
     ///
     /// # Safety
     /// `texture` is a live `ID3D11Texture2D` COM pointer, or null.
-    pub unsafe fn present_d3d11_texture(&self, texture: *mut c_void) -> Result<(), SurfaceError> {
+    pub unsafe fn present_d3d11_texture(&self, texture: *mut c_void) -> Result<u64, SurfaceError> {
         #[cfg(windows)]
         {
             // SAFETY: the caller's.
-            unsafe { d3d11::present_texture(&self.shared.state, texture) }?;
+            let frame = unsafe { d3d11::present_texture(&self.shared.state, texture) }?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(not(windows))]
         {
@@ -611,8 +741,8 @@ impl SurfaceHandle {
     /// texture, single-sampled, straight alpha, in `resource_state` (a
     /// `D3D12_RESOURCE_STATES`, left as it is). The copy runs on a queue of the surface's own after
     /// a GPU wait for `ready` (fence, value); without `ready` the resource must already be written.
-    /// Nothing blocks. Returns the value [`Self::release_fence`] reaches once the resource is free
-    /// to reuse.
+    /// Nothing blocks. Returns the frame's id and the value [`Self::release_fence`] reaches once the
+    /// resource is free to reuse.
     ///
     /// # Safety
     /// `resource` is null or a live `ID3D12Resource`; `ready`'s fence is a live `ID3D12Fence`.
@@ -621,14 +751,14 @@ impl SurfaceHandle {
         resource: *mut c_void,
         resource_state: i32,
         ready: Option<(*mut c_void, u64)>,
-    ) -> Result<u64, SurfaceError> {
+    ) -> Result<FramePresent, SurfaceError> {
         #[cfg(windows)]
         {
             // SAFETY: the caller's.
-            let value =
+            let (frame, release) =
                 unsafe { d3d12::present(&self.shared.state, resource, resource_state, ready) }?;
             sk_runtime::frames::wake();
-            Ok(value)
+            Ok(FramePresent { frame, release })
         }
         #[cfg(not(windows))]
         {
@@ -639,7 +769,7 @@ impl SurfaceHandle {
 
     /// Presents a shared texture from another device or process (see [`SharedTexture`]); one
     /// opened with a fence takes [`Self::present_shared_fenced`] instead.
-    pub fn present_shared(&self, texture: &SharedTexture) -> Result<(), SurfaceError> {
+    pub fn present_shared(&self, texture: &SharedTexture) -> Result<u64, SurfaceError> {
         #[cfg(windows)]
         {
             if texture.inner.fenced {
@@ -651,11 +781,11 @@ impl SurfaceHandle {
                 Some((acquire, release)) => d3d11::SharedSync::Keyed(acquire, release),
                 None => d3d11::SharedSync::None,
             };
-            texture
+            let frame = texture
                 .inner
                 .present(&self.shared.state, sync, texture.timeout_ms)?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(target_os = "macos")]
         {
@@ -671,9 +801,9 @@ impl SurfaceHandle {
                         .into(),
                 ));
             }
-            metal::present_shared(&self.shared.state, &texture.inner, None)?;
+            let frame = metal::present_shared(&self.shared.state, &texture.inner, None)?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
@@ -690,7 +820,7 @@ impl SurfaceHandle {
         texture: &SharedTexture,
         wait: u64,
         release: u64,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<u64, SurfaceError> {
         #[cfg(windows)]
         {
             if !texture.inner.fenced {
@@ -699,13 +829,13 @@ impl SurfaceHandle {
                         .into(),
                 ));
             }
-            texture.inner.present(
+            let frame = texture.inner.present(
                 &self.shared.state,
                 d3d11::SharedSync::Fence(wait, release),
                 texture.timeout_ms,
             )?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(target_os = "macos")]
         {
@@ -716,9 +846,10 @@ impl SurfaceHandle {
                         .into(),
                 ));
             }
-            metal::present_shared(&self.shared.state, &texture.inner, Some((wait, release)))?;
+            let frame =
+                metal::present_shared(&self.shared.state, &texture.inner, Some((wait, release)))?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
@@ -758,8 +889,8 @@ impl SurfaceHandle {
     /// single-sampled, straight alpha. The copy runs on a queue of the
     /// surface's own after a GPU wait for `ready` (an `id<MTLSharedEvent>` and the value the
     /// producer signals after its last write); without `ready` the texture must already be
-    /// written. Nothing blocks. Returns the value [`Self::release_event`] reaches once the texture
-    /// is free to reuse.
+    /// written. Nothing blocks. Returns the frame's id and the value [`Self::release_event`]
+    /// reaches once the texture is free to reuse.
     ///
     /// # Safety
     /// `texture` is null or a live `id<MTLTexture>`; `ready`'s event is a live
@@ -768,13 +899,13 @@ impl SurfaceHandle {
         &self,
         texture: *mut c_void,
         ready: Option<(*mut c_void, u64)>,
-    ) -> Result<u64, SurfaceError> {
+    ) -> Result<FramePresent, SurfaceError> {
         #[cfg(target_os = "macos")]
         {
             // SAFETY: the caller's.
-            let value = unsafe { metal::present(&self.shared.state, texture, ready) }?;
+            let (frame, release) = unsafe { metal::present(&self.shared.state, texture, ready) }?;
             sk_runtime::frames::wake();
-            Ok(value)
+            Ok(FramePresent { frame, release })
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -791,7 +922,7 @@ impl SurfaceHandle {
     ///
     /// # Safety
     /// `buffer` is null or a live `CVPixelBufferRef`.
-    pub unsafe fn present_cv_pixel_buffer(&self, buffer: *mut c_void) -> Result<(), SurfaceError> {
+    pub unsafe fn present_cv_pixel_buffer(&self, buffer: *mut c_void) -> Result<u64, SurfaceError> {
         #[cfg(target_os = "macos")]
         {
             let cpu = |cpu: metal::Cpu<'_>| match cpu.format {
@@ -815,9 +946,9 @@ impl SurfaceHandle {
                 }
             };
             // SAFETY: the caller's.
-            unsafe { metal::present_pixel_buffer(&self.shared.state, buffer, cpu) }?;
+            let frame = unsafe { metal::present_pixel_buffer(&self.shared.state, buffer, cpu) }?;
             sk_runtime::frames::wake();
-            Ok(())
+            Ok(frame)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -849,6 +980,10 @@ impl SurfaceHandle {
                 info.display = old.display;
             }
             st.info = info;
+            if st.watched {
+                let key = st.key;
+                feedback::with(|t| t.visibility(key, info.visible));
+            }
             (
                 info != SurfaceInfo {
                     display: info.display,
@@ -861,7 +996,7 @@ impl SurfaceHandle {
             self.notify(SurfaceEvent::Changed(info));
         }
         if display {
-            self.notify(SurfaceEvent::DisplayChanged(info.display));
+            self.notify(SurfaceEvent::DisplayChanged(self.with_clock(info.display)));
         }
     }
 
@@ -922,6 +1057,29 @@ impl Drop for SurfaceWatch {
     fn drop(&mut self) {
         if let Some(shared) = self.shared.upgrade() {
             lock(&shared.watchers).retain(|(id, _)| *id != self.id);
+        }
+    }
+}
+
+/// Ends an [`SurfaceHandle::on_frame`] subscription when dropped. Frames of a surface nobody
+/// listens to are not tracked.
+#[must_use = "dropping the guard ends the subscription"]
+pub struct FrameWatch {
+    shared: Weak<Shared>,
+    id: u64,
+}
+
+impl Drop for FrameWatch {
+    fn drop(&mut self) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let mut st = lock(&shared.state);
+        let mut frames = lock(&shared.frames);
+        frames.retain(|(id, _)| *id != self.id);
+        if frames.is_empty() && st.watched {
+            st.watched = false;
+            feedback::unwatch(&shared);
         }
     }
 }
@@ -1507,6 +1665,7 @@ pub(crate) fn device_changed() {
     }
     #[cfg(target_os = "macos")]
     metal::forget_device();
+    feedback::with(|t| t.device_lost());
     for surface in all() {
         surface.device_lost();
     }
@@ -1619,14 +1778,30 @@ mod tests {
             ..hdr
         };
         s.set_info(with(faster));
+        // The display clock is read live; a known display always has a period.
+        let unclocked = |d: SurfaceDisplay| {
+            assert!(d.refresh_period.is_some());
+            SurfaceDisplay {
+                refresh_period: None,
+                last_vblank: None,
+                ..d
+            }
+        };
+        let heard: Vec<SurfaceEvent> = lock(&heard)
+            .iter()
+            .map(|e| match *e {
+                SurfaceEvent::DisplayChanged(d) => SurfaceEvent::DisplayChanged(unclocked(d)),
+                other => other,
+            })
+            .collect();
         assert_eq!(
-            *lock(&heard),
+            heard,
             vec![
                 SurfaceEvent::DisplayChanged(hdr),
                 SurfaceEvent::DisplayChanged(faster)
             ]
         );
-        assert_eq!(s.info().display, faster);
+        assert_eq!(unclocked(s.info().display), faster);
     }
 
     #[test]
@@ -1654,6 +1829,27 @@ mod tests {
             Some(Frame::Cpu { bgra, .. }) => assert_eq!(&*bgra, &[0, 188, 255, 255]),
             _ => panic!("a CPU frame"),
         }
+    }
+
+    #[test]
+    fn each_present_returns_its_id_and_a_hidden_surface_drops_it_at_once() {
+        let s = surface("tests:frame-ids");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let watch = s.on_frame(move |e| lock(&sink).push(e));
+        let first = s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        let second = s.present_bgrx(&[0; 4], 1, 1, 4).unwrap();
+        assert!(second > first);
+        feedback::deliver();
+        let hidden = |frame| FrameEvent::Dropped {
+            frame,
+            reason: FrameDropReason::Hidden,
+        };
+        assert_eq!(*lock(&heard), [hidden(first), hidden(second)]);
+        drop(watch);
+        s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        feedback::deliver();
+        assert_eq!(lock(&heard).len(), 2, "nobody listens any more");
     }
 
     #[test]

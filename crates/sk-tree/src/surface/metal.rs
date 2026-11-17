@@ -533,7 +533,7 @@ fn copy_in(
     wait: Option<(&SharedEvent, u64)>,
     signal: Option<(&SharedEvent, u64)>,
     mut held: Vec<Box<dyn Any>>,
-) -> Result<u64, SurfaceError> {
+) -> Result<(u64, u64), SurfaceError> {
     let pipeline = match &source {
         Source::Nv12 { .. } => Some(nv12_pipeline(gpu)?),
         Source::Texture(..) => None,
@@ -631,11 +631,11 @@ fn copy_in(
     state.metal.slots[index].written = value;
     state.metal.current = Some(index);
     state.metal.gpu = Some(gpu.clone());
-    state.put(Frame::Metal {
+    let frame = state.put(Frame::Metal {
         width: size.0,
         height: size.1,
     });
-    Ok(value)
+    Ok((frame, value))
 }
 
 const NV12_KERNEL: &str = r#"
@@ -707,7 +707,7 @@ pub(super) unsafe fn present(
     state: &Mutex<State>,
     raw: *mut c_void,
     ready: Option<(*mut c_void, u64)>,
-) -> Result<u64, SurfaceError> {
+) -> Result<(u64, u64), SurfaceError> {
     // SAFETY: the caller's.
     let texture = unsafe { Retained::retain(raw.cast::<Texture>()) }
         .ok_or_else(|| SurfaceError::Size("a null texture".into()))?;
@@ -863,7 +863,7 @@ pub(super) fn present_shared(
     state: &Mutex<State>,
     opened: &Opened,
     values: Option<(u64, u64)>,
-) -> Result<(), SurfaceError> {
+) -> Result<u64, SurfaceError> {
     let gpu = gpu()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);
@@ -882,7 +882,7 @@ pub(super) fn present_shared(
         signal,
         vec![Box::new(opened.surface.clone())],
     )
-    .map(|_| ())
+    .map(|(frame, _)| frame)
 }
 
 /// `[y offset, y scale, c offset, c scale]` for 8-bit video or full range, then the matrix.
@@ -934,8 +934,8 @@ pub(super) struct Cpu<'a> {
 pub(super) unsafe fn present_pixel_buffer(
     state: &Mutex<State>,
     raw: *mut c_void,
-    cpu: impl FnOnce(Cpu<'_>) -> Result<(), SurfaceError>,
-) -> Result<(), SurfaceError> {
+    cpu: impl FnOnce(Cpu<'_>) -> Result<u64, SurfaceError>,
+) -> Result<u64, SurfaceError> {
     let buffer = NonNull::new(raw.cast::<CVPixelBuffer>())
         .ok_or_else(|| SurfaceError::Size("a null CVPixelBufferRef".into()))?;
     // SAFETY: the caller's; retained until the copy completes.
@@ -1031,7 +1031,7 @@ pub(super) unsafe fn present_pixel_buffer(
             held,
         )
     };
-    value.map(|_| ())
+    value.map(|(frame, _)| frame)
 }
 
 #[cfg(test)]
@@ -1220,8 +1220,9 @@ mod tests {
         let s = surface("tests:metal-wait");
         let source = filled(&device, [10, 20, 30, 255]);
         let event = device.newSharedEvent().unwrap();
-        let released =
-            unsafe { s.present_metal_texture(raw(&*source), Some((raw(&*event), 1))) }.unwrap();
+        let released = unsafe { s.present_metal_texture(raw(&*source), Some((raw(&*event), 1))) }
+            .unwrap()
+            .release;
         let ready = s.lock_state().metal.ready().unwrap();
         std::thread::sleep(Duration::from_millis(50));
         assert!(

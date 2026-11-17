@@ -777,6 +777,12 @@ pub fn forget_window(key: windows::WinKey) {
 /// shows the window again paints the newest one.
 pub fn set_page_hidden(hidden: bool) {
     live::set_hidden(hidden);
+    surface::feedback::set_page_hidden(hidden);
+}
+
+/// The app is quitting: `<sk-surface>` frames still waiting to be shown are dropped as closed.
+pub fn surface_app_closed() {
+    surface::feedback::app_closed();
 }
 
 pub fn set_reduce_motion(on: bool) {
