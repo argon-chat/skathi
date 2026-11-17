@@ -67,14 +67,22 @@ export type {
   TrayPixels,
 } from "@skathi-native/runtime";
 
+/** `SkSurfaceEvent` in the app's types (env.d.ts), which this project does not load. */
+type SurfaceEvent = Event & {
+  readonly width: number;
+  readonly height: number;
+  readonly devicePixelRatio: number;
+  readonly reason: "cleared" | "device";
+};
+
 declare module "svelte/elements" {
   interface SvelteHTMLElements {
     /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */
     "sk-surface": HTMLAttributes<HTMLElement> & {
       name?: string | undefined;
-      onsurfaceresize?: ((event: SkSurfaceEvent) => void) | undefined;
-      onsurfaceready?: ((event: SkSurfaceEvent) => void) | undefined;
-      onsurfacelost?: ((event: SkSurfaceEvent) => void) | undefined;
+      onsurfaceresize?: ((event: SurfaceEvent) => void) | undefined;
+      onsurfaceready?: ((event: SurfaceEvent) => void) | undefined;
+      onsurfacelost?: ((event: SurfaceEvent) => void) | undefined;
     };
   }
 }
