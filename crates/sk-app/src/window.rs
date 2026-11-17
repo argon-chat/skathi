@@ -1145,6 +1145,9 @@ fn publish_visibility(snapshot: &Snapshot) {
         sk_runtime::redjs::ffi::redjs_dom_set_visibility(rt.raw(), hidden as i32)
     });
     sk_tree::set_page_hidden(hidden);
+    if hidden {
+        crate::background::poke();
+    }
 }
 
 /// Whether the host still draws its own titlebar strip; retires once the app paints a `window-drag: move` region.

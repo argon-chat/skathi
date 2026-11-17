@@ -111,6 +111,11 @@ fn step(f: u64, window: &mut Window, cx: &mut App) {
     if state & 1 != 0 {
         PENDING.with(|c| c.set(true));
     }
+    // What the callbacks changed is flushed by the next wave, and an idle frame clock would not
+    // run one on its own.
+    if calls > 0 || state & 1 != 0 {
+        sk_runtime::frames::wake();
+    }
     SEEN.with(|c| c.set(render::layout_count()));
     perf::note_observers(
         rounds,

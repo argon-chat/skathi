@@ -8,7 +8,11 @@
 //! without an active window or [`HIDDEN_AFTER`] hidden; after [`CODE_AFTER`] hidden also compiled code
 //! that is not running (`release_memory_and_code`); and every [`REPEAT`] while it stays that way.
 //!
-//! An active window starts it over. `SK_RECLAIM=0` turns it off.
+//! An active window starts it over.
+//!
+//! Once, it also runs when the app first goes quiet for [`SETTLE_AFTER`]: starting (evaluating the
+//! bundle, the first render) leaves garbage that an idle app would otherwise keep, as a browser's
+//! idle-time collection after a page loads does not. `SK_RECLAIM=0` turns both off.
 
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
@@ -17,6 +21,7 @@ pub const AWAY_AFTER: Duration = Duration::from_secs(60);
 pub const HIDDEN_AFTER: Duration = Duration::from_secs(10);
 pub const CODE_AFTER: Duration = Duration::from_secs(5 * 60);
 pub const REPEAT: Duration = Duration::from_secs(15 * 60);
+pub const SETTLE_AFTER: Duration = Duration::from_secs(2);
 
 /// What to give back. Ordered: `Code` is `Data` and more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -60,10 +65,61 @@ impl Reclaim {
         self.last = Some((now, want));
         Some(want)
     }
+
+    /// When [`decide`](Self::decide) may next release something, so an idle app wakes for it.
+    pub fn next_due(&self, now: Instant) -> Option<Instant> {
+        let away = self.away_since?;
+        let mut due = vec![away + AWAY_AFTER];
+        if let Some(hidden) = self.hidden_since {
+            due.extend([hidden + HIDDEN_AFTER, hidden + CODE_AFTER]);
+        }
+        if let Some((at, _)) = self.last {
+            due.push(at + REPEAT);
+        }
+        due.into_iter().filter(|t| *t > now).min()
+    }
+}
+
+/// The one release after the app first goes quiet.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Settle {
+    quiet_since: Option<Instant>,
+    done: bool,
+}
+
+impl Settle {
+    pub fn note(&mut self, now: Instant, quiet: bool) {
+        if quiet {
+            self.quiet_since.get_or_insert(now);
+        } else {
+            self.quiet_since = None;
+        }
+    }
+
+    pub fn due(&self) -> Option<Instant> {
+        if self.done {
+            return None;
+        }
+        self.quiet_since.map(|since| since + SETTLE_AFTER)
+    }
 }
 
 thread_local! {
     static STATE: RefCell<Reclaim> = RefCell::new(Reclaim::default());
+    static SETTLE: RefCell<Settle> = RefCell::new(Settle::default());
+}
+
+/// From the frame clock: whether it now waits for demand (src/idle.rs). Returns when a frame must
+/// come for the release after start.
+pub fn note_quiet(quiet: bool) -> Option<Instant> {
+    if !enabled() {
+        return None;
+    }
+    SETTLE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.note(Instant::now(), quiet);
+        s.due()
+    })
 }
 
 fn enabled() -> bool {
@@ -75,8 +131,24 @@ pub fn after_wave(rt: &sk_runtime::JsRuntime, focused: bool, hidden: bool) {
     if !enabled() {
         return;
     }
-    let Some(release) = STATE.with(|s| s.borrow_mut().decide(Instant::now(), focused, hidden))
-    else {
+    let now = Instant::now();
+    let settle = SETTLE.with(|s| {
+        let mut s = s.borrow_mut();
+        let due = s.due();
+        if due.is_some_and(|at| at <= now) {
+            s.done = true;
+        }
+        due
+    });
+    let (release, next) = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        (s.decide(now, focused, hidden), s.next_due(now))
+    });
+    for at in next.into_iter().chain(settle).filter(|at| *at > now) {
+        sk_runtime::frames::wake_at(at);
+    }
+    let settled = settle.is_some_and(|at| at <= now);
+    let Some(release) = release.or(settled.then_some(Release::Data)) else {
         return;
     };
     let started = Instant::now();
@@ -93,8 +165,14 @@ pub fn after_wave(rt: &sk_runtime::JsRuntime, focused: bool, hidden: bool) {
     sk_tree::log::record(
         "memory",
         format!(
-            "[memory] unattended ({}) — released the JS engine's {what} in {:.1} ms",
-            if hidden { "hidden" } else { "unfocused" },
+            "[memory] {} — released the JS engine's {what} in {:.1} ms",
+            if settled {
+                "settled after start"
+            } else if hidden {
+                "unattended (hidden)"
+            } else {
+                "unattended (unfocused)"
+            },
             started.elapsed().as_secs_f64() * 1000.0
         ),
     );
@@ -180,5 +258,41 @@ mod tests {
             "hidden again: 10 s from here"
         );
         assert_eq!(r.decide(at(t0, 16), false, true), Some(Release::Data));
+    }
+
+    #[test]
+    fn the_start_is_released_once_after_the_first_quiet_stretch() {
+        let t0 = Instant::now();
+        let mut s = Settle::default();
+        assert_eq!(s.due(), None, "busy");
+        s.note(t0, true);
+        s.note(at(t0, 1), true);
+        assert_eq!(s.due(), Some(t0 + SETTLE_AFTER), "from when it went quiet");
+        s.note(at(t0, 1), false);
+        assert_eq!(s.due(), None, "activity starts it over");
+        s.note(at(t0, 5), true);
+        assert_eq!(s.due(), Some(at(t0, 5) + SETTLE_AFTER));
+        s.done = true;
+        assert_eq!(s.due(), None, "once");
+    }
+
+    #[test]
+    fn an_idle_app_is_told_when_the_next_release_is_due() {
+        let t0 = Instant::now();
+        let mut r = Reclaim::default();
+        r.decide(t0, true, false);
+        assert_eq!(r.next_due(t0), None, "focused: nothing to wake for");
+        r.decide(t0, false, false);
+        assert_eq!(r.next_due(t0), Some(at(t0, 60)));
+        assert_eq!(r.decide(at(t0, 60), false, false), Some(Release::Data));
+        assert_eq!(r.next_due(at(t0, 60)), Some(at(t0, 60 + REPEAT.as_secs())));
+        r.decide(at(t0, 70), false, true);
+        assert_eq!(r.next_due(at(t0, 70)), Some(at(t0, 80)));
+        assert_eq!(r.decide(at(t0, 80), false, true), None, "already released");
+        assert_eq!(
+            r.next_due(at(t0, 80)),
+            Some(at(t0, 70 + CODE_AFTER.as_secs())),
+            "a passed deadline is not asked for again"
+        );
     }
 }

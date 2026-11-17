@@ -274,6 +274,8 @@ impl Shared {
         for outer in done {
             i.settled.push((outer, state));
         }
+        drop(i);
+        sk_runtime::frames::wake();
     }
 }
 

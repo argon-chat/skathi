@@ -499,7 +499,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // A cloaked or occluded window is a hidden page: decline the pump and, by not stamping the
     // frame clock, hand the window to the background tick. Not before the first frame (boot wave).
     if background::pumped_once() && (window::cloaked() || window::occluded()) {
-        idle::rearm_paced(window, pump_frame, idle::CLOAKED_INTERVAL);
+        idle::rearm_paced(window, pump_frame, Some(idle::CLOAKED_INTERVAL));
         return;
     }
     perf::frame();
@@ -572,8 +572,9 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             let stats = rt.pump(flags);
             let elapsed = pumped.elapsed();
             if wave == Wave::Frame {
+                let next_work = sk_runtime::redjs::web::next_work_ms(rt.raw());
                 #[cfg_attr(not(feature = "audio"), allow(unused_mut))]
-                let mut report = idle::Wave::from_stats(&stats, elapsed);
+                let mut report = idle::Wave::from_stats(&stats, next_work, elapsed);
                 #[cfg(feature = "audio")]
                 {
                     report.audio = sk_runtime::redjs::webapi::audio::busy(rt.raw());
@@ -1292,7 +1293,10 @@ fn run_app() {
         .unwrap();
         background::start(cx);
         #[cfg(target_os = "windows")]
-        sk_runtime::frames::set_waker(gpui_windows::wake_frames);
+        sk_runtime::frames::set_waker(|| {
+            gpui_windows::wake_frames();
+            background::poke();
+        });
 
         // Before any JS: the bundle's `onMounted` needs layout reads.
         sk_tree::set_sync_layout(sync_layout);

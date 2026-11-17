@@ -469,6 +469,9 @@ pub fn pump() {
         }
         st.error = Some(e);
     }
+    if let Some(retry) = st.retry_after.filter(|_| st.dirty) {
+        sk_runtime::frames::wake_at(retry);
+    }
 }
 
 pub(crate) fn json_escape(s: &str) -> String {

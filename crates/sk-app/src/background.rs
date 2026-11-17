@@ -5,13 +5,16 @@
 //! `SIZE_MINIMIZED`). Everything the pump drives would stop with it: timers, WebSocket and fetch
 //! delivery, IndexedDB results, the voice and permission queues, the devtools socket.
 //!
-//! A browser throttles a hidden page but never stops it. So a gpui timer runs here every [`TICK`],
-//! and whenever no frame has been pumped for [`STALL`] it runs the same JS wave the frame does
-//! ([`crate::js_wave`] with [`crate::Wave::Background`]) and the same flush after it
-//! ([`crate::after_wave`]), minus the animation frames.
+//! A browser throttles a hidden page but never stops it. So while the page is hidden a gpui timer
+//! runs here, every [`TICK`] at most and only while JS has work scheduled, and whenever no frame
+//! has been pumped for [`STALL`] it runs the same JS wave the frame does ([`crate::js_wave`] with
+//! [`crate::Wave::Background`]) and the same flush after it ([`crate::after_wave`]), minus the
+//! animation frames.
 //!
-//! The trigger is "no frame for `STALL`", not "minimised": one rule covers every way a window stops
-//! getting frames (minimised, `SW_HIDE`, a stalled swap chain, another virtual desktop).
+//! A visible idle window draws no frames either, by design (src/idle.rs), so the tick does not run
+//! then: it waits for a [`poke`] (work queued for JS from another thread, or the page hiding) and
+//! takes over only when no frame follows within `STALL`. That one rule covers every way a window
+//! stops getting frames (minimised, `SW_HIDE`, a stalled swap chain, another virtual desktop).
 //!
 //! **Re-entrancy.** The tick is a gpui foreground task, so it runs from the message loop, never
 //! inside the frame pump. It stands down when it finds itself inside a published phase (a nested
@@ -24,8 +27,11 @@
 //! tick. `requestIdleCallback` waits for the next drawn frame, where a browser still runs it (late).
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
+use futures::task::AtomicWaker;
 use gpui::App;
 
 /// How often the background tick looks. Also the worst-case delivery delay of
@@ -41,6 +47,8 @@ thread_local! {
     static LAST_FRAME: Cell<Option<Instant>> = const { Cell::new(None) };
     static WAVES: Cell<u64> = const { Cell::new(0) };
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// Until the JS context or the host next has work, as of the last background wave.
+    static NEXT_WORK: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
 pub fn note_frame() {
@@ -65,11 +73,67 @@ pub fn due(last_frame: Option<Instant>, now: Instant) -> bool {
     }
 }
 
+static POKED: AtomicBool = AtomicBool::new(false);
+static POKE: AtomicWaker = AtomicWaker::new();
+
+/// Something may need JS while no frame comes: look within [`STALL`]. Callable from any thread.
+pub fn poke() {
+    POKED.store(true, Ordering::Release);
+    POKE.wake();
+}
+
+async fn poked() {
+    std::future::poll_fn(|task| {
+        if POKED.swap(false, Ordering::AcqRel) {
+            return Poll::Ready(());
+        }
+        POKE.register(task.waker());
+        if POKED.swap(false, Ordering::AcqRel) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
 pub fn start(cx: &mut App) {
     cx.spawn(async move |cx| loop {
-        cx.background_executor().timer(TICK).await;
-        if !due(LAST_FRAME.with(|c| c.get()), Instant::now()) {
-            continue;
+        // Only Windows paces an idle window to no frames (src/idle.rs).
+        if !cfg!(target_os = "windows") {
+            cx.background_executor().timer(TICK).await;
+            if !due(LAST_FRAME.with(|c| c.get()), Instant::now()) {
+                continue;
+            }
+        } else {
+            // Once ticking, the tick waits for the work the last wave left, or for a poke.
+            let wait = if ACTIVE.with(Cell::get) {
+                NEXT_WORK.with(Cell::get).map(|d| d.max(TICK))
+            } else if crate::window::page_hidden() {
+                Some(TICK)
+            } else {
+                None
+            };
+            let poke = std::pin::pin!(poked());
+            match wait {
+                Some(wait) => {
+                    let timer = std::pin::pin!(cx.background_executor().timer(wait));
+                    futures::future::select(poke, timer).await;
+                }
+                None => poke.await,
+            }
+            if crate::window::page_hidden() {
+                if !due(LAST_FRAME.with(|c| c.get()), Instant::now()) {
+                    continue;
+                }
+            } else {
+                // A visible idle window draws no frames until asked: give it `STALL` to answer.
+                let asked = Instant::now();
+                cx.background_executor().timer(STALL).await;
+                if LAST_FRAME.with(Cell::get).is_some_and(|t| t >= asked) {
+                    continue;
+                }
+            }
         }
         let Some(handle) = crate::MAIN_WINDOW.with(|w| w.get()) else {
             continue;
@@ -101,4 +165,18 @@ fn wave(window: &mut gpui::Window, cx: &mut App) {
     crate::drain_log_tee();
     crate::js_wave(window, cx, crate::Wave::Background);
     crate::after_wave(window, cx);
+    let now = Instant::now();
+    let js = sk_runtime::JsRuntime::try_with(|rt| {
+        #[cfg(feature = "audio")]
+        if sk_runtime::redjs::webapi::audio::busy(rt.raw()) {
+            return Some(now);
+        }
+        let at = sk_runtime::redjs::web::next_work_ms(rt.raw())?;
+        let ms = at - sk_runtime::redjs::web::now_ms();
+        Some(now + Duration::from_secs_f64(ms.max(0.0) / 1000.0))
+    })
+    .flatten();
+    let host = sk_runtime::frames::take_wake_at();
+    let next = js.into_iter().chain(host).min();
+    NEXT_WORK.with(|n| n.set(next.map(|at| at.saturating_duration_since(now))));
 }

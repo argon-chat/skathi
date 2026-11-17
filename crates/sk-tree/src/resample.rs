@@ -517,6 +517,7 @@ fn submit(job: Job) {
                     let landed = (job.key, Arc::downgrade(&job.source), made);
                     drop(job.source);
                     DONE.lock().unwrap_or_else(|e| e.into_inner()).push(landed);
+                    sk_runtime::frames::wake();
                 }
             })
             .expect("spawn the resampling thread");
@@ -575,6 +576,9 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
                 source,
                 target,
             });
+        }
+        if let Some(since) = c.waiting.values().map(|(_, since)| *since).min() {
+            sk_runtime::frames::wake_at(since + SETTLE);
         }
         let gone: Vec<Key> = c
             .copies
