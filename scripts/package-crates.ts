@@ -11,7 +11,7 @@
 // patch.toml points another project at all of them.
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -60,7 +60,9 @@ function packageAll(): void {
   function writePatch(done: Package[]): void {
     const lines = ["[patch.crates-io]"];
     for (const p of done) {
-      const dir = join(packages, `${p.name}-${p.version}`).replaceAll("\\", "/");
+      // Only a verified package is unpacked.
+      const unpacked = values["no-verify"] ? dirname(p.manifest_path) : join(packages, `${p.name}-${p.version}`);
+      const dir = unpacked.replaceAll("\\", "/");
       lines.push(`${p.name} = { path = ${JSON.stringify(dir)} }`);
     }
     writeFileSync(patch, lines.join("\n") + "\n");
