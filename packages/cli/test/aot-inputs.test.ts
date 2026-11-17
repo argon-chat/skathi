@@ -1,14 +1,17 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 import { AotInputs, aotEngineIdentity } from "../aot-inputs";
 import { NAMES, readSkpk } from "../cli/skpk";
+import { packageDir } from "../runtime-path";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-aot-inputs-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+/** A package as this checkout has it installed, for an app outside it. */
+const sdkModule = (name: string) => packageDir(name, import.meta.dir)!;
 function file(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, text);
@@ -325,6 +328,8 @@ test("real sk build emits typed Vue modules while SKPK keeps the same JavaScript
     '<script setup lang="ts">const count: number = 7;</script><template><div>{{ count }}</div></template>',
   );
   file(join(app, "sk.config.json"), '{"name":"typed-aot-probe","version":"1.0.0"}');
+  mkdirSync(join(app, "node_modules"), { recursive: true });
+  symlinkSync(sdkModule("vue"), join(app, "node_modules/vue"), "junction");
   const cli = resolve(import.meta.dir, "../cli/sk.ts");
   const build = (out: string, inputs: boolean) => {
     const result = Bun.spawnSync(

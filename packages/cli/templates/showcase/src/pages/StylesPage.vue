@@ -9,7 +9,7 @@ const hot = ref(false);
 <template>
   <Page
     title="Styles"
-    lead="Ordinary CSS, mapped onto the GPU renderer. Add a tailwind.config.ts next to sk.config.json and Tailwind 3.4 classes work too."
+    lead="Ordinary CSS, mapped onto the GPU renderer. Install tailwindcss@3, add a tailwind.config.ts next to sk.config.json, and Tailwind classes work too."
   >
     <Card title="Gradients and shadows" api="background · box-shadow">
       <div class="row gap">

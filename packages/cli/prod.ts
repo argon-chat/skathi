@@ -8,12 +8,11 @@
 //   dist/assets.json   [{ key, path }]: every file imported by URL, packed into the payload under key
 //   dist/styles.json   { files, tailwind }: the files whose CSS the bundle includes, for sk build's CSS warnings
 //
-// Unlike build.ts: "vue" and "@skathi-native/runtime" alias to src/runtime.ts, inlineTemplate is true (no HMR),
-// styles go to (globalThis.__SK_CSS__ ??= []) ahead of the bundle, no HMR epilogue.
+// Unlike build.ts: "vue" and "@skathi-native/runtime" alias to src/runtime.ts (src/dom.ts without vue),
+// inlineTemplate is true (no HMR), styles go to (globalThis.__SK_CSS__ ??= []) ahead of the bundle, no HMR epilogue.
 //
 // DEBT: compileVue() and the style pipeline are a ~100-line copy of build.ts; merge into a shared sfc.ts.
 
-import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
 import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
@@ -24,13 +23,19 @@ import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 import {
+  DOM_ENTRY,
+  FRAMEWORK_LIBS,
   RUNTIME_DIR,
   RUNTIME_ENTRY,
-  RUNTIME_MODULES_DIR,
   RUNTIME_SRC_DIR,
+  RUNTIME_VERSION,
   NATIVE_MODULES_ENTRY,
+  VUE_MISSING,
+  appVue,
   isPreseeded,
-  runtimeRequire,
+  packageDir,
+  sfcCompiler,
+  type SfcCompiler,
 } from "./runtime-path";
 import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
 import {
@@ -137,11 +142,28 @@ const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
 const cliRequire = createRequire(join(PKG_DIR, "package.json"));
 const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
+const APP_VUE = appVue(APP_ROOT);
+/** What "@skathi-native/runtime" is for this app: with Vue's renderer only when the app has `vue`. */
+const APP_RUNTIME = APP_VUE ? RUNTIME_ENTRY : DOM_ENTRY;
+/** Bare modules the build maps to a file of its own choosing, for every importer. */
+const buildAliases = (): Record<string, string> => ({
+  ...(APP_VUE ? { vue: RUNTIME_ENTRY, "@vue/runtime-core": APP_VUE.runtimeCore } : {}),
+  "@skathi-native/runtime": APP_RUNTIME,
+  ...Object.fromEntries(APP_ALIASES),
+  ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
+});
 
-try {
-  const ts = appRequire("typescript");
-  registerTS(() => ts);
-} catch {}
+let compiler: SfcCompiler | null = null;
+/** The app's own `vue/compiler-sfc`, loaded with the first .vue file. */
+function vueCompiler(): SfcCompiler {
+  if (compiler) return compiler;
+  compiler = sfcCompiler(APP_ROOT);
+  try {
+    const ts = appRequire("typescript") as typeof import("typescript");
+    compiler.registerTS(() => ts);
+  } catch {}
+  return compiler;
+}
 
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
@@ -218,7 +240,7 @@ const HTML_PRELUDE =
     LIFTED.rootClasses.length ||
     Object.keys(LIFTED.rootAttrs).length ||
     LIFTED.svgDefinitions?.length)
-    ? htmlPreludeModule(LIFTED)
+    ? htmlPreludeModule(LIFTED, APP_ROOT)
     : null;
 if (LIFTED) {
   for (const a of LIFTED.advisories) advise(`index.html: ${a}`);
@@ -272,6 +294,7 @@ async function viteCss(text: string, from: string, label: string): Promise<strin
 
 async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
+  const { parse, compileScript, compileTemplate, compileStyle } = vueCompiler();
   const { descriptor, errors } = parse(source, {
     filename: absPath,
     templateParseOptions: { comments: PROD_TEMPLATE_COMMENTS },
@@ -384,15 +407,9 @@ let appOwnsUtilities = false;
 const ASSETS = new Map<string, string>();
 
 const FRAMEWORK = new Map(
-  ["vue-router", "pinia"].map((name) => {
-    const dep = frameworkDep(
-      name,
-      APP_PKG,
-      (s) => appRequire.resolve(s),
-      (s) => runtimeRequire.resolve(s),
-    );
-    if (dep.warning) advise(dep.warning);
-    return [name, dep] as const;
+  FRAMEWORK_LIBS.flatMap((name) => {
+    const dep = packageDir(name, APP_ROOT) && frameworkDep(name, (s) => appRequire.resolve(s));
+    return dep ? [[name, dep] as const] : [];
   }),
 );
 
@@ -430,13 +447,8 @@ const AOT_INPUTS = aotInputsDir
       appRoot: SK_CONFIG_DIR,
       entry: ENTRY_ABS,
       typescript: cliRequire("typescript"),
-      aliases: {
-        vue: RUNTIME_ENTRY,
-        "@skathi-native/runtime": RUNTIME_ENTRY,
-        ...Object.fromEntries(APP_ALIASES),
-        ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
-      },
-      sourceRoots: { sdk: RUNTIME_DIR, "sdk-modules": RUNTIME_MODULES_DIR },
+      aliases: buildAliases(),
+      sourceRoots: { sdk: RUNTIME_DIR, ...(APP_VUE ? { "sdk-modules": APP_VUE.modulesDir } : {}) },
       declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     })
   : null;
@@ -475,7 +487,15 @@ const vuePlugin = {
       }
       return { contents: "", loader: "js" };
     });
-    build.onResolve({ filter: /^(vue|@skathi-native\/runtime)$/ }, () => ({ path: RUNTIME_ENTRY }));
+    build.onResolve({ filter: /^@skathi-native\/runtime$/ }, () => ({ path: APP_RUNTIME }));
+    build.onResolve({ filter: /^vue$/ }, () => {
+      if (!APP_VUE) throw new Error(VUE_MISSING);
+      return { path: RUNTIME_ENTRY };
+    });
+    if (APP_VUE && !APP_ALIASES.has("@vue/runtime-core")) {
+      const core = APP_VUE.runtimeCore;
+      build.onResolve({ filter: /^@vue\/runtime-core$/ }, () => ({ path: core }));
+    }
     // Provided by the embedding program at run time: the bundle asks the runtime for it by name.
     build.onResolve({ filter: /^native:/ }, (args: Bun.OnResolveArgs) => ({ path: args.path, namespace: "sk-native" }));
     build.onLoad({ filter: /.*/, namespace: "sk-native" }, (args: Bun.OnLoadArgs) => ({
@@ -488,9 +508,10 @@ const vuePlugin = {
         path: APP_ALIASES.get(args.path)!,
       }));
     }
-    build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: Bun.OnResolveArgs) => ({
-      path: FRAMEWORK.get(args.path)!.path,
-    }));
+    build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: Bun.OnResolveArgs) => {
+      const dep = FRAMEWORK.get(args.path);
+      return dep ? { path: dep.path } : undefined;
+    });
     build.onLoad({ filter: /\.vue$/ }, async (args: Bun.OnLoadArgs) => {
       const source = await Bun.file(args.path).text();
       if (graphOut) GRAPH_LOADED.add(args.path);
@@ -614,12 +635,7 @@ async function writeGraph(out: string) {
     version: 1,
     entry: ENTRY_ABS,
     appRoot: SK_CONFIG_DIR,
-    aliases: {
-      vue: RUNTIME_ENTRY,
-      "@skathi-native/runtime": RUNTIME_ENTRY,
-      ...Object.fromEntries(APP_ALIASES),
-      ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
-    },
+    aliases: buildAliases(),
     declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     modules: [...modules].sort(),
     styles: [...STYLE_FILES].sort(),
@@ -741,7 +757,7 @@ async function build() {
       scriptUrl: "sk://app.prod.js",
       defines: DEFINES,
       engine,
-      sdkVersion: runtimeRequire("./package.json").version,
+      sdkVersion: RUNTIME_VERSION,
     });
     console.log(`[prod] typed AOT inputs: ${manifest} (source archive; native AOT compilation not enabled)`);
   }
@@ -752,9 +768,6 @@ async function build() {
       `[prod] index.html: ${LIFTED.headCss.length + LIFTED.bodyCss.length} stylesheet(s), ` +
         `${LIFTED.scripts.length} inline script(s) lifted`,
     );
-  }
-  for (const [name, dep] of FRAMEWORK) {
-    if (dep.from === "app") console.log(`[prod] ${name} ${dep.version}: the app's own copy`);
   }
   for (const a of advisories) console.log(`[prod] advisory: ${a}`);
 

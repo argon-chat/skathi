@@ -1,6 +1,6 @@
-import { parse as parseSfc } from "@vue/compiler-sfc";
+import { sfcCompiler } from "../runtime-path";
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import postcss, { type AtRule, type ChildNode, type Container, type Declaration, type Root, type Rule } from "postcss";
 import { diagnosticsOf, type Finding, type FindingRelated } from "./finding";
 import { Packages } from "./packages";
@@ -134,7 +134,7 @@ export function styleBlocks(path: string, source: string): Block[] {
 const plainCss = (lang: string | undefined) => !lang || lang === "css" || lang === "postcss";
 
 function vueBlocks(path: string, source: string): Block[] {
-  const { descriptor } = parseSfc(source, { filename: path });
+  const { descriptor } = sfcCompiler(dirname(path)).parse(source, { filename: path });
   const blocks: Block[] = descriptor.styles
     .filter((s) => !s.src && plainCss(s.lang))
     .map((s) => ({

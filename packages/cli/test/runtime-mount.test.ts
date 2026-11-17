@@ -10,15 +10,18 @@ const lifecycle = (rt: Rt, hook: "__SK_TEARDOWN__" | "__SK_UNLOAD__") => (rt.glo
 const createDom = (rt: Rt, tag: string) => rt.global.document.createElement(tag) as Dom;
 
 function htmlContainer(rt: Rt) {
-  const source = htmlPreludeModule({
-    headCss: [],
-    bodyCss: [],
-    scripts: [],
-    rootClasses: ["dark"],
-    rootAttrs: {},
-    mountElement: { tag: "div", attrs: { id: "app", class: "application", "vaul-drawer-wrapper": "" } },
-    advisories: [],
-  });
+  const source = htmlPreludeModule(
+    {
+      headCss: [],
+      bodyCss: [],
+      scripts: [],
+      rootClasses: ["dark"],
+      rootAttrs: {},
+      mountElement: { tag: "div", attrs: { id: "app", class: "application", "vaul-drawer-wrapper": "" } },
+      advisories: [],
+    },
+    import.meta.dir,
+  );
   new Function("document", source.replace(/^import .*;$/gm, ""))(rt.global.document);
   const body = rt.global.document.body;
   const container = body.children[0]! as Dom;

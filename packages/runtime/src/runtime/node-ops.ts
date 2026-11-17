@@ -12,12 +12,10 @@ import {
 } from "./nodes";
 import { ElementProto, TextProto } from "./protos";
 import { childList, touchDom } from "./collections";
-import { Teleport } from "@vue/runtime-core";
-import type { RendererOptions } from "@vue/runtime-core";
 import { I } from "./event-names";
 import { WINDOW_ROOT, windowRoots } from "../skwindow";
 import { adoptCanvas } from "../canvas";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { defineOptionMembers, defineSelectMembers, optionsChangedIn } from "./select";
 import { notifyMutation } from "./mutation-observer";
 import { releaseCapturesIn } from "./pointer-capture";
@@ -52,7 +50,27 @@ export function mk(id: SkNodeId, kind: MirrorKind, tag: string): MirrorNode {
   return n as MirrorNode;
 }
 
-export const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
+/** The tree operations a renderer drives the mirror with: Vue's `RendererOptions` without `patchProp`. */
+export interface NodeOps {
+  createElement(
+    type: string,
+    namespace?: "svg" | "mathml",
+    isCustomizedBuiltIn?: string,
+    props?: Record<string | symbol, unknown> | null,
+  ): MirrorElement;
+  createText(text: string): MirrorNode;
+  createComment(text: string): MirrorNode;
+  setText(node: MirrorNode, text: string): void;
+  setElementText(node: MirrorElement, text: string): void;
+  insert(el: MirrorNode, parent: MirrorElement, anchor?: MirrorNode | null): void;
+  remove(el: MirrorNode): void;
+  parentNode(node: MirrorNode): MirrorElement | null;
+  nextSibling(node: MirrorNode): MirrorNode | null;
+  querySelector(selector: string): MirrorElement | null;
+  setScopeId(el: MirrorElement, id: string): void;
+}
+
+export const nodeOps: NodeOps = {
   createElement: (type, namespace, _is, props) => {
     const el = mk(__sk_create_element(I(type)), 1, type);
     // `<SkWindow>`'s root: registered before its content mounts (skwindow.ts).
@@ -175,8 +193,8 @@ type TeleportProcess = ((this: unknown, ...args: unknown[]) => unknown) & { [TEL
 interface TeleportInternals {
   o: { querySelector?: (sel: string) => unknown };
 }
-export function patchTeleport(): void {
-  const impl = Teleport as unknown as { process: TeleportProcess };
+export function patchTeleport(teleport: object): void {
+  const impl = teleport as { process: TeleportProcess };
   // A reload may re-evaluate this module over the same Teleport: wrap Vue's own `process`, never a predecessor's
   // wrapper, whose window registry is the old app's.
   let process = impl.process;

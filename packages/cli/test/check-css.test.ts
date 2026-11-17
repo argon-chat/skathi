@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { appendFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCheck } from "../check";
 import { declarationProblem, selectorProblems } from "../check/css";
 import type { CheckReport } from "../check/schema";
 import { buildApp } from "../cli/build-app";
+import { packageDir } from "../runtime-path";
 import { analyzeCss, CSS_APP } from "./check-fixtures";
 
 const scratch: string[] = [];
@@ -127,6 +128,7 @@ describe("CSS warnings in sk build and sk dev", () => {
     const app = tempDir("sk-css-dev-");
     cpSync(CSS_APP, app, { recursive: true });
     rmSync(join(app, "src/Widget.svelte"));
+    symlinkSync(packageDir("vue", import.meta.dir)!, join(app, "node_modules/vue"), "junction");
     const proc = Bun.spawn(
       [process.execPath, join(import.meta.dir, "../build.ts"), join(app, "src/main.ts"), join(app, "dist"), "--watch"],
       {

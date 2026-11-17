@@ -16,6 +16,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { compileAppEffects, EffectsError, formatProblems, hasAppEffects, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
+import { requireAppDependencies } from "./app-deps";
 import { loadAppConfig } from "./config";
 import { devEffectsWatch, type EffectsWatch } from "./effects";
 import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROOT, CLI_VERSION } from "./host";
@@ -73,6 +74,7 @@ export async function dev(
   options: { exe?: string | undefined; shaderCompiler?: string | undefined; color?: boolean | undefined } = {},
 ): Promise<number> {
   const config = loadAppConfig(target);
+  requireAppDependencies(config.appRoot, dirname(config.entry));
   const c = paint(colorEnabled(process.stdout, options.color));
   const progress = progressFor(process.stderr, colorEnabled(process.stderr, options.color));
   progress.step("dev workload");

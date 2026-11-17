@@ -8,7 +8,7 @@ import { fragments } from "./tree-ops";
 import { looseCreated } from "./nodes";
 import { ElementProto } from "./protos";
 import { defineGlobal } from "./globals";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 
 // IntersectionObserver, from the host's painted bounds. redjs's is inert, which is not harmless: @vueuse/motion's
 // `visible` variants wait for `isIntersecting`, so elements that start at `opacity: 0` stay invisible forever and lazy

@@ -8,7 +8,7 @@ import { bucketsAlive, disposeGlobalListener, globalHandlers, isMirrorNode, sync
 import { handlers } from "./nodes";
 import { isColorInput, isFileInput, isLabel } from "./file-input";
 import { isLink } from "./links";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { theGlobal } from "./interfaces";
 import { isMirrorEl, ownExpando } from "./controls";
 

@@ -344,6 +344,7 @@ defineProps<{ name: string; status: string }>();
       },
     ],
     edgeCases: [
+      "New in 0.4.0: the app installs `tailwindcss` 3 itself (`bun add -d tailwindcss@3`). With a `tailwind.config.*` and no `tailwindcss`, or a Tailwind 4, `sk dev`, `sk build` and `sk check` stop and name that command.",
       "The config is the nearest `tailwind.config.*` at or above the app's source folder, and its relative `content` globs resolve against the config's own folder.",
       "The utilities sheet loads before component `<style>` blocks, so a component rule of equal specificity wins over a utility class.",
     ],
@@ -361,7 +362,7 @@ defineProps<{ name: string; status: string }>();
     },
   },
 };`,
-        note: 'Saved as `tailwind.config.js`, in place of a v4 `@import "tailwindcss"` and `@theme` sheet; `sk dev` and `sk build` run the Tailwind 3.4 they ship with.',
+        note: 'Saved as `tailwind.config.js`, in place of a v4 `@import "tailwindcss"` and `@theme` sheet; install it with `bun add -d tailwindcss@3`.',
       },
     ],
   },

@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "paths": {
+      "@skathi-native/runtime": ["./src/dom.ts"]
+    }
+  }
+}

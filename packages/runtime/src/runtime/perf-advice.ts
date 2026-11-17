@@ -2,8 +2,6 @@
 // this. Vue's dev build reports each component's render and patch to its devtools hook, which is where an update
 // is measured; the host writes it caused are counted at the write sites.
 
-import { Fragment, isRef, setDevtoolsHook, toRaw } from "@vue/runtime-core";
-import type { ComponentInternalInstance, DebuggerEvent, VNode } from "@vue/runtime-core";
 import type { MirrorNode } from "./types";
 import { CODE_TO_NAME } from "./events";
 
@@ -13,7 +11,49 @@ const LIST_MIN_ITEMS = 50;
 const LIST_MAX_IN_VIEW = 0.25;
 const WRITES_PER_FRAME = 1000;
 
-type Instance = ComponentInternalInstance;
+interface DevtoolsHookLike {
+  enabled: boolean;
+  appRecords: never[];
+  on(): void;
+  once(): void;
+  off(): void;
+  emit(event: string, ...payload: unknown[]): void;
+}
+
+/** What the render watcher uses of Vue, handed in by the Vue renderer: the DOM surface imports this module too. */
+export interface VueInternals {
+  Fragment: unknown;
+  isRef(v: unknown): v is { value: unknown };
+  toRaw<T>(v: T): T;
+  setDevtoolsHook(hook: DevtoolsHookLike, target: object): void;
+}
+
+interface DebuggerEvent {
+  target?: unknown;
+  key?: unknown;
+}
+
+interface VNode {
+  type: unknown;
+  patchFlag: number;
+  shapeFlag: number;
+  children: unknown;
+  el: unknown;
+  suspense?: { activeBranch: VNode | null } | null;
+}
+
+interface Instance {
+  type: unknown;
+  isMounted: boolean;
+  subTree: VNode;
+  props: unknown;
+  data: unknown;
+  effect: { onTrigger?: ((e: DebuggerEvent) => void) | undefined };
+}
+
+let vue: VueInternals | null = null;
+const isRef = (v: unknown): v is { value: unknown } => vue?.isRef(v) ?? false;
+const toRaw = (v: unknown): unknown => (vue ? vue.toRaw(v) : v);
 
 interface Trigger {
   target: unknown;
@@ -88,10 +128,14 @@ export function watchDomWrites(): void {
 }
 
 /** Measures every Vue component update. Call after the renderer exists: creating one resets Vue's hook. */
-export function watchVueRenders(): void {
+export function watchVueRenders(internals: VueInternals): void {
   if (!hostReady()) return;
+  vue = internals;
   start().vue = true;
-  setDevtoolsHook({ enabled: true, appRecords: [], on() {}, once() {}, off() {}, emit: onVueEvent }, globalThis);
+  internals.setDevtoolsHook(
+    { enabled: true, appRecords: [], on() {}, once() {}, off() {}, emit: onVueEvent },
+    globalThis,
+  );
 }
 
 /** The host event being dispatched while `dispatch` runs, so a state change can name what caused it. */
@@ -165,10 +209,9 @@ function watchTriggers(s: State, instance: Instance): void {
     let list = s.pending.get(instance);
     if (!list) s.pending.set(instance, (list = []));
     if (list.length >= 8) return;
-    const info = e as Partial<DebuggerEvent>;
     // A computed passes its change on without saying what it was; the computeds the template holds that are dirty
     // right now are the ones that changed, and by the time anything else could look they are clean again.
-    list.push({ target: info.target, key: info.key, cause, computeds: info.target ? [] : dirtyComputeds(instance) });
+    list.push({ target: e.target, key: e.key, cause, computeds: e.target ? [] : dirtyComputeds(instance) });
   };
 }
 
@@ -240,7 +283,7 @@ function countElements(vnode: VNode, walk: Walk): number {
   let inside = 0;
   for (const kid of kids) if (isVNode(kid)) inside += countElements(kid, walk);
   count += inside;
-  const isList = isElement || (vnode.type === Fragment && (vnode.patchFlag & LIST_FRAGMENT) !== 0);
+  const isList = isElement || (vnode.type === vue?.Fragment && (vnode.patchFlag & LIST_FRAGMENT) !== 0);
   if (isList && kids.length >= LIST_MIN_ITEMS && (!walk.list || inside > walk.list.elements)) {
     const el = vnode.el as MirrorNode | null;
     const parent = isElement ? el : (el?.parentNode ?? null);

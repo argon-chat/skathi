@@ -12,7 +12,7 @@ import { interceptedGlobals } from "./state";
 import { EV_CODES, NAMES_BY_CODE, canonicalEvent, hostCode } from "./event-names";
 import { handlers, nodeById } from "./nodes";
 import { warnCompat } from "../compat";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { propagateAtDocument, propagateAtGlobal } from "./events";
 import { RUNTIME_FIRED_EVENTS, blocksImplicitSubmission, isResetButton, isSubmitButton } from "./forms";
 import { adviseJsSourced } from "./labels";

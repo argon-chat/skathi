@@ -23,7 +23,7 @@ export function readTsSource(path: string): string {
 
 /** The modules a harness hands the runtime as parameters, so they stay imports in {@link bundleRuntime}'s output. */
 const INJECTED =
-  /^(@vue\/runtime-core|(?:\.\.?\/)+(apphost|appapi|compat|canvas|iframe|devtools|selection|waapi|skwindow|tray|hotkeys|locale))$/;
+  /^(@vue\/runtime-core|(?:\.\.?\/)+(apphost|appapi|compat|canvas|iframe|devtools|selection|waapi|skwindow|skwindow-vue|tray|hotkeys|locale))$/;
 
 /** src/runtime.ts with its src/runtime/ modules inlined, as one script; {@link INJECTED} imports are left in. */
 export async function bundleRuntime(entry: string): Promise<string> {

@@ -1,4 +1,3 @@
-import { shallowRef } from "@vue/runtime-core";
 import { warnCompat } from "../compat";
 
 // `appWindow` is built in the host's JS prelude, which must evaluate before the app bundle; this
@@ -28,31 +27,33 @@ const inertWindow = new Proxy(
 );
 
 const STATE_METHOD = /^(is|get)[A-Z]/;
-const readHooks = new Map<string, () => void>();
+const hooks = new Map<string, { read: () => void; changed: (() => void) | undefined }>();
 const readHook = () => {
-  for (const hook of readHooks.values()) hook();
+  for (const hook of hooks.values()) hook.read();
+};
+const changedHook = () => {
+  for (const hook of hooks.values()) hook.changed?.();
 };
 
-/** Renderer glue: runs `hook` on every `appWindow` state read, as Vue tracks one; `key` names the renderer, and a reload's call replaces its predecessor's. */
-export function trackWindowReads(key: string, hook: () => void): void {
-  readHooks.set(key, hook);
+/**
+ * Renderer glue: runs `read` on every `appWindow` state read and `changed` when that state changes; `key` names the
+ * renderer, and a reload's call replaces its predecessor's.
+ */
+export function trackWindowReads(key: string, read: () => void, changed?: () => void): void {
+  hooks.set(key, { read, changed });
 }
 // A reload re-evaluates this module but not the prelude: the previous evaluation's wrappers are undone first.
 const UNTRACK = Symbol.for("skathi.appWindow.untrack");
 
-// The prelude's getters read a plain snapshot. Each read also reads one signal, which the host bumps
-// whenever that snapshot changes, so effects track a read and nothing else. In place, not a Proxy:
+// The prelude's getters read a plain snapshot. Each read also runs the renderers' read hooks, whose signal the
+// host's change notice bumps, so effects track a read and nothing else. In place, not a Proxy:
 // `event.target === appWindow` must hold.
 function trackReads(target: SkAppWindow, onChange: (fn: () => void) => () => void): void {
   const slot = target as unknown as Record<symbol, unknown>;
   const previous = slot[UNTRACK];
   if (typeof previous === "function") previous();
   const original = Object.getOwnPropertyDescriptors(target);
-  const version = shallowRef(0);
-  let bumps = 0;
-  const unsubscribe = onChange(() => {
-    version.value = ++bumps;
-  });
+  const unsubscribe = onChange(changedHook);
   Object.defineProperty(target, UNTRACK, {
     configurable: true,
     value: () => {
@@ -68,7 +69,6 @@ function trackReads(target: SkAppWindow, onChange: (fn: () => void) => () => voi
         ...d,
         get(this: unknown) {
           const value: unknown = get.call(this);
-          void version.value;
           readHook();
           return value;
         },
@@ -81,7 +81,6 @@ function trackReads(target: SkAppWindow, onChange: (fn: () => void) => () => voi
       ...d,
       value(this: unknown, ...args: unknown[]): unknown {
         const value: unknown = Reflect.apply(fn, this, args);
-        void version.value;
         readHook();
         return value;
       },

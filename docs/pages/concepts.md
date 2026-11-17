@@ -22,6 +22,8 @@ import App from "./App.vue";
 createApp(App).use(createPinia()).mount();
 ```
 
+`vue` and libraries such as `pinia` and `vue-router` are the app's own dependencies. The CLI builds every import of them from that one install, so the app and its libraries share one instance.
+
 ## JavaScriptCore runs the script
 
 The application’s JavaScript executes in JavaScriptCore through the native runtime. Browser globals and APIs are available only where the SDK implements them.

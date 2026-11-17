@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createRenderer, h, nextTick, ref } from "@vue/runtime-core";
-import { SkWindow } from "../src/skwindow";
+import { SkWindow } from "../src/skwindow-vue";
 
 const globals = globalThis as Record<string, unknown>;
 const original = new Map<string, unknown>();

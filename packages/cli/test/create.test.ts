@@ -111,13 +111,18 @@ test("every template points VS Code at the runtime's CSS custom data", () => {
   }
 });
 
-test("pinia and vue-router are dependencies only of the templates that use them", () => {
+test("vue is a dependency of the Vue templates, pinia and vue-router only of the one that uses them", () => {
   const showcase = fresh();
   create(showcase, { template: "showcase" });
-  expect(Object.keys(pkg(showcase).dependencies).sort()).toEqual(["@skathi-native/runtime", "pinia", "vue-router"]);
+  expect(Object.keys(pkg(showcase).dependencies).sort()).toEqual([
+    "@skathi-native/runtime",
+    "pinia",
+    "vue",
+    "vue-router",
+  ]);
   const minimal = fresh();
   create(minimal, { template: "minimal" });
-  expect(Object.keys(pkg(minimal).dependencies)).toEqual(["@skathi-native/runtime"]);
+  expect(Object.keys(pkg(minimal).dependencies).sort()).toEqual(["@skathi-native/runtime", "vue"]);
   for (const dir of [showcase, minimal]) {
     expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "typescript", "vue-tsc"]);
     expect(pkg(dir).scripts.typecheck).toBe("vue-tsc --noEmit");
@@ -167,7 +172,7 @@ test("the weather template comes from the templates checkout with its own icon, 
     readFileSync(join(import.meta.dir, "../../../templates/weather/icon.png")),
   );
   expect(loadAppConfig(dir).packs).toEqual([{ name: "textures", match: ["assets/textures/**"] }]);
-  expect(Object.keys(pkg(dir).dependencies)).toEqual(["@skathi-native/runtime"]);
+  expect(Object.keys(pkg(dir).dependencies).sort()).toEqual(["@skathi-native/runtime", "vue"]);
   expect(pkg(dir).scripts.typecheck).toBe("vue-tsc --noEmit");
 });
 

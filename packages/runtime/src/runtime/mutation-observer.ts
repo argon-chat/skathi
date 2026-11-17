@@ -3,7 +3,7 @@ import { NO_NODES, NodeListProto, branded, staticList, touchDom } from "./collec
 import { attrChanged, noAttrNodes } from "./attributes";
 import { defineGlobal } from "./globals";
 import { warnCompat } from "../compat";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 
 interface MutationRecordLike {
   type: "childList" | "attributes";

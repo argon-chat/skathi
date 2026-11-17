@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { requireAppDependencies } from "../cli/app-deps";
 import { loadAppConfig } from "../cli/config";
 import { appShadersDir, compileAppEffects, EffectsError, hasAppEffects } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
@@ -67,6 +68,7 @@ export function loadTypeScript(appRoot: string): TypeScript {
 export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const progress = options.progress ?? quietProgress;
   const config = loadAppConfig(options.target, { configPath: options.configPath });
+  requireAppDependencies(config.appRoot, dirname(config.entry));
   const configFile = config.configPath ?? join(config.appRoot, "sk.config.json");
   const checkConfig = parseCheckConfig(config.raw.check);
   const configText = checkConfig.problems.length ? readFileSync(configFile, "utf8").replace(/^﻿/, "") : "";

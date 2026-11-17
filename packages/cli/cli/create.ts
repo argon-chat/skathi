@@ -28,18 +28,32 @@ interface Checker {
   devDependencies: Record<string, string>;
   /** The component files the app's tsconfig.json includes besides its .ts sources. */
   sources: string;
+  /** The runtime's tsconfig the app's extends. */
+  tsconfig: string;
 }
 
-const VUE_TSC: Checker = { script: "vue-tsc --noEmit", devDependencies: { "vue-tsc": "^3" }, sources: "src/**/*.vue" };
+const VUE_TSC: Checker = {
+  script: "vue-tsc --noEmit",
+  devDependencies: { "vue-tsc": "^3" },
+  sources: "src/**/*.vue",
+  tsconfig: "@skathi-native/runtime/tsconfig.app.json",
+};
 const SVELTE_CHECK: Checker = {
   script: "svelte-check",
   devDependencies: { "svelte-check": "^4" },
   sources: "src/**/*.svelte",
+  tsconfig: "@skathi-native/runtime/tsconfig.svelte.json",
+};
+
+/** The versions `sk create` gives a template's framework packages: vue and svelte as the runtime accepts them. */
+const FRAMEWORK_VERSIONS: Record<string, string> = {
+  ...(runtimeRequire("./package.json") as { peerDependencies?: Record<string, string> }).peerDependencies,
+  pinia: "^4.0.3",
+  "vue-router": "^4.6.4",
 };
 
 interface TemplateInfo {
   hint: string;
-  /** Taken at the versions the runtime itself depends on, or accepts as a peer. */
   dependencies: string[];
   window: Record<string, unknown>;
   packs?: { name: string; match?: string[] }[];
@@ -49,14 +63,14 @@ interface TemplateInfo {
 const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   showcase: {
     hint: "every Skathi feature, one page each",
-    dependencies: ["pinia", "vue-router"],
+    dependencies: ["vue", "pinia", "vue-router"],
     window: { width: 1100, height: 720, minWidth: 480, minHeight: 360, titleBarStyle: "hidden", titleBarHeight: 40 },
     packs: [{ name: "media", match: ["assets/media/**"] }],
     checker: VUE_TSC,
   },
   minimal: {
     hint: "one window, one component",
-    dependencies: [],
+    dependencies: ["vue"],
     window: { width: 760, height: 520, titleBarStyle: "default" },
     checker: VUE_TSC,
   },
@@ -75,7 +89,7 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   },
   weather: {
     hint: "a weather app in Vue, its sky and rain drawn by shaders",
-    dependencies: [],
+    dependencies: ["vue"],
     window: { width: 1180, height: 880, minWidth: 980, minHeight: 780, titleBarStyle: "hidden", titleBarHeight: 72 },
     packs: [{ name: "textures", match: ["assets/textures/**"] }],
     checker: VUE_TSC,
@@ -167,11 +181,6 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const template = options.template ?? "showcase";
   const info = TEMPLATE_INFO[template];
   const platforms = options.platforms?.length ? options.platforms : [currentPlatform()];
-  const runtimePkg = runtimeRequire("./package.json") as {
-    dependencies: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-  };
-  const runtimeDeps = { ...runtimePkg.peerDependencies, ...runtimePkg.dependencies };
   const sdk = `^${CLI_VERSION}`;
 
   const files: Record<string, string | Uint8Array> = {
@@ -191,7 +200,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       },
       dependencies: {
         "@skathi-native/runtime": sdk,
-        ...Object.fromEntries(info.dependencies.map((dep) => [dep, runtimeDeps[dep]])),
+        ...Object.fromEntries(info.dependencies.map((dep) => [dep, FRAMEWORK_VERSIONS[dep]])),
       },
       devDependencies: { "@skathi-native/cli": sdk, typescript: "^6", ...info.checker.devDependencies },
     }),
@@ -209,7 +218,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
     }),
     "tsconfig.json": json({
-      extends: "@skathi-native/runtime/tsconfig.app.json",
+      extends: info.checker.tsconfig,
       include: ["src/**/*.ts", info.checker.sources],
     }),
     ".gitignore": "node_modules/\ndist/\n",

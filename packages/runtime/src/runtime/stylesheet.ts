@@ -4,7 +4,7 @@ import { HTMLCollectionProto, NodeListProto, liveCollection, staticList, touchDo
 import { stylesheetText } from "./tree-ops";
 import { hooks } from "./state";
 import { elementsUnder, tagTest } from "./dom-members";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 
 // `document.head` is not a box, so a head `<style>` is a stylesheet, not a tree node: its text joins the app's sheet
 // after the bundle's CSS, in insertion order, and follows later edits. Before mount it rides the first

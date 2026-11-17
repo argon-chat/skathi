@@ -12,6 +12,7 @@
     "src",
     "env.d.ts",
     "tsconfig.app.json",
+    "tsconfig.svelte.json",
     "sk.config.schema.json",
     "css-data.json"
   ],
@@ -21,25 +22,28 @@
     "./svelte": "./src/svelte.ts",
     "./package.json": "./package.json",
     "./tsconfig.app.json": "./tsconfig.app.json",
+    "./tsconfig.svelte.json": "./tsconfig.svelte.json",
     "./sk.config.schema.json": "./sk.config.schema.json",
     "./css-data.json": "./css-data.json"
   },
   "types": "./src/runtime.ts",
-  "dependencies": {
-    "@vue/runtime-core": "^3.5.0",
-    "pinia": "^4.0.3",
-    "vue-router": "4"
-  },
   "peerDependencies": {
+    "vue": "^3.5",
     "svelte": "^5.57.3"
   },
   "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    },
     "svelte": {
       "optional": true
     }
   },
   "devDependencies": {
-    "svelte": "5.57.3"
+    "pinia": "4.0.3",
+    "svelte": "5.57.3",
+    "vue": "3.5.41",
+    "vue-router": "4.6.4"
   },
   "scripts": {
     "test": "bun test"

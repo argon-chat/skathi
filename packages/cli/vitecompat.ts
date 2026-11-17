@@ -4,7 +4,8 @@
 // throwing a named NotSupportedError), .wasm (a stub with an advisory). Unsupported shapes fail by name.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "fs";
-import { parse as parseSfc, type SFCTemplateBlock } from "@vue/compiler-sfc";
+import type { SFCTemplateBlock } from "vue/compiler-sfc";
+import { VUE_RANGE, sfcCompiler } from "./runtime-path";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -998,8 +999,20 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
 
 type StaticSvgNode = NonNullable<SFCTemplateBlock["ast"]>["children"][number];
 
-/** Static SVG definitions become real DOM nodes: the runtime has no innerHTML parser. v-pre makes Vue syntax literal. */
-function staticSvgDom(svg: string): string {
+/**
+ * Static SVG definitions become real DOM nodes: the runtime has no innerHTML parser. They are parsed by the app's Vue
+ * template compiler (`root`'s); v-pre makes Vue syntax literal.
+ */
+function staticSvgDom(svg: string, root: string): string {
+  let parseSfc: ReturnType<typeof sfcCompiler>["parse"];
+  try {
+    parseSfc = sfcCompiler(root).parse;
+  } catch {
+    throw new Error(
+      `index.html: the <svg> definitions are read with Vue's template parser, and "vue" is not installed: ` +
+        `bun add -d vue@${VUE_RANGE}, or move the definitions into a component`,
+    );
+  }
   const { descriptor, errors } = parseSfc(`<template><div v-pre>${svg}</div></template>`, {
     templateParseOptions: { whitespace: "preserve", comments: true },
   });
@@ -1048,7 +1061,8 @@ function staticSvgDom(svg: string): string {
   return lines.join("\n");
 }
 
-export function htmlPreludeModule(lifted: LiftedHtml): string {
+/** `root`: the app root, where the parser for `<svg>` definitions is resolved from. */
+export function htmlPreludeModule(lifted: LiftedHtml, root: string): string {
   const lines: string[] = [
     // The runtime first: it installs `document.documentElement`, which buffers classes until the window root exists.
     `import "@skathi-native/runtime";`,
@@ -1063,7 +1077,7 @@ export function htmlPreludeModule(lifted: LiftedHtml): string {
     for (const [k, v] of Object.entries(mount.attrs)) lines.push(`mount.setAttribute(${J(k)}, ${J(v)});`);
     lines.push(`if (!mount.parentNode) document.body.appendChild(mount); }`);
   }
-  for (const svg of lifted.svgDefinitions ?? []) lines.push(staticSvgDom(svg));
+  for (const svg of lifted.svgDefinitions ?? []) lines.push(staticSvgDom(svg, root));
   for (const s of lifted.scripts) {
     // Global scope, as a classic <script> has (indirect eval); a throw is reported, the next script still runs.
     lines.push(
@@ -1072,11 +1086,6 @@ export function htmlPreludeModule(lifted: LiftedHtml): string {
   }
   return lines.join("\n") + "\n";
 }
-
-const major = (v: string | undefined) => {
-  const m = /(\d+)/.exec(v ?? "");
-  return m ? Number(m[1]) : NaN;
-};
 
 function versionAt(pkgJson: string): string | undefined {
   try {
@@ -1103,44 +1112,18 @@ function pkgJsonOf(entry: string, name: string): string | undefined {
 
 export interface FrameworkDep {
   path: string;
-  from: "app" | "@skathi-native/runtime";
   version?: string | undefined;
-  warning?: string | undefined;
 }
 
-/** Which copy of `name` (pinia / vue-router) the builders use: the app's own when declared and installed, else Skathi's. */
-export function frameworkDep(
-  name: string,
-  appPkg: Record<string, unknown> | null,
-  appResolve: (spec: string) => string,
-  runtimeResolve: (spec: string) => string,
-): FrameworkDep {
-  const runtimePath = runtimeResolve(name);
-  const runtimeVersion = versionAt(pkgJsonOf(runtimePath, name) ?? "");
-  let declared: string | undefined;
-  for (const k of ["dependencies", "devDependencies", "peerDependencies"]) {
-    const deps = appPkg?.[k] as Record<string, string> | undefined;
-    if (deps && typeof deps[name] === "string") {
-      declared = deps[name];
-      break;
-    }
-  }
-  if (declared === undefined) return { path: runtimePath, from: "@skathi-native/runtime", version: runtimeVersion };
-  let appPath: string | undefined;
+/** The app's installed `name` (pinia / vue-router), the one copy the builders give the app and its libraries; null when it is not installed. */
+export function frameworkDep(name: string, appResolve: (spec: string) => string): FrameworkDep | null {
+  let path: string;
   try {
-    appPath = appResolve(name);
+    path = appResolve(name);
   } catch {
-    appPath = undefined;
+    return null;
   }
-  if (!appPath) {
-    const warning =
-      major(declared) !== major(runtimeVersion)
-        ? `the app declares ${name} ${declared} but it is not installed — using Skathi's ${name} ${runtimeVersion} (a different major)`
-        : undefined;
-    return { path: runtimePath, from: "@skathi-native/runtime", version: runtimeVersion, warning };
-  }
-  const appVersion = versionAt(pkgJsonOf(appPath, name) ?? "");
-  return { path: appPath, from: "app", version: appVersion };
+  return { path, version: versionAt(pkgJsonOf(path, name) ?? "") };
 }
 
 export function readPackageJson(dir: string): Record<string, unknown> | null {

@@ -1,4 +1,4 @@
-import { parse as parseSfc } from "@vue/compiler-sfc";
+import { sfcCompiler } from "../runtime-path";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type ts from "typescript";
@@ -31,7 +31,7 @@ const COMPONENT_FILE = /\.(vue|svelte)$/i;
 
 /** The scripts of an SFC at their own offsets, everything else replaced by spaces. */
 export function vueScripts(source: string, path: string): { text: string; typed: boolean } | null {
-  const { descriptor } = parseSfc(source, { filename: path });
+  const { descriptor } = sfcCompiler(dirname(path)).parse(source, { filename: path });
   const blocks = [descriptor.script, descriptor.scriptSetup].filter((b) => b !== null && !b.src);
   if (!blocks.length) return null;
   const chars = source.replace(/[^\r\n]/g, " ").split("");

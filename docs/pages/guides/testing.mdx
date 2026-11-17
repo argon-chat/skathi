@@ -47,7 +47,7 @@ A test file is an ordinary `bun test` file. Inside the checkout's Bun workspace,
 `launch({ app })` takes the app to test:
 
 - the name of a folder under the checkout's `apps/` directory, such as `"hello"`, which means `apps/hello/src/main.ts`;
-- or a path to the app's entry module, relative to the checkout root or absolute. The app can live outside the checkout. A Svelte app needs `svelte` in its own dependencies, as it does for `sk dev`.
+- or a path to the app's entry module, relative to the checkout root or absolute. The app can live outside the checkout. A Vue app needs `vue`, and a Svelte app `svelte`, in its own dependencies, as for `sk dev`.
 
 ## A first test
 

@@ -15,11 +15,12 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parseCheckConfig } from "../check/config";
 import { cssDiagnostics, readStyleSources } from "../check/css";
 import { diagnosticLine } from "../check/finding";
 import type { BuildStyles } from "../check/graph";
+import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
 import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
@@ -413,6 +414,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const t0 = performance.now();
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
+  requireAppDependencies(config.appRoot, dirname(config.entry));
   const warnings = [...config.warnings];
   const variant: Variant =
     options.variant === undefined ? modeVariant(config, options.mode) : parseVariant(options.variant, "--variant");

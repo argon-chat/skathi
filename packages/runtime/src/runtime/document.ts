@@ -34,7 +34,7 @@ import { frameStampers } from "./unload";
 import { defineGlobal } from "./globals";
 import { installSelection } from "../selection";
 import { asDomRect } from "./computed-style";
-import { appRoot, ensureDocumentRoot } from "../runtime";
+import { appRoot, ensureDocumentRoot } from "./root";
 
 const doc = globalThis.document;
 if (doc) {

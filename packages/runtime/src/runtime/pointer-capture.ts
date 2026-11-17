@@ -1,6 +1,6 @@
 import type { MirrorElement, MirrorNode } from "./types";
 import { defineDom } from "./dom-members";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { hasListener, propagate, synthesize } from "./events";
 
 // -- pointer capture: one owner per pointer; the host routes input to it even outside its hitbox.

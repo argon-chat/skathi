@@ -2,11 +2,12 @@
 // one of them.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generate } from "../tailwind";
+import { generate, tailwindProblem } from "../tailwind";
+import { packageDir } from "../runtime-path";
 import {
   GLOB_TRIPWIRE,
   SFC_FS,
@@ -309,7 +310,7 @@ describe("index.html", () => {
     const lifted = liftIndexHtml(join(root, "index.html"), root);
     const rt = createRuntime();
     const document = rt.global.document as unknown as Document;
-    const source = htmlPreludeModule(lifted).replace(/^import "@skathi-native\/runtime";\s*/m, "");
+    const source = htmlPreludeModule(lifted, import.meta.dir).replace(/^import "@skathi-native\/runtime";\s*/m, "");
     new Function("document", source)(document);
     const all = (node: Node): Element[] =>
       Array.from(node.childNodes).flatMap((child) => (child.nodeType === 1 ? [child as Element, ...all(child)] : []));
@@ -364,31 +365,17 @@ describe("index.html", () => {
 });
 
 describe("framework packages", () => {
-  test("both builders use the app's installed copy and warn only about incompatible missing-dependency fallback", () => {
+  test("both builders use the app's installed copy and have none to fall back to", () => {
     const root = scratch({
       "app/node_modules/pinia/package.json": JSON.stringify({ name: "pinia", version: "3.0.4" }),
       "app/node_modules/pinia/index.js": "",
-      "sk/node_modules/pinia/package.json": JSON.stringify({ name: "pinia", version: "4.0.3" }),
-      "sk/node_modules/pinia/index.js": "",
     });
-    const appResolve = () => join(root, "app/node_modules/pinia/index.js");
-    const skResolve = () => join(root, "sk/node_modules/pinia/index.js");
-    const own = frameworkDep("pinia", { dependencies: { pinia: "^3.0.4" } }, appResolve, skResolve);
-    expect(own).toMatchObject({ from: "app", version: "3.0.4" });
-    expect(own.warning).toBeUndefined();
-    const missing = frameworkDep(
-      "pinia",
-      { dependencies: { pinia: "^3.0.4" } },
-      () => {
-        throw new Error("not installed");
-      },
-      skResolve,
-    );
-    expect(missing).toMatchObject({ from: "@skathi-native/runtime", version: "4.0.3" });
-    expect(missing.warning).toBeDefined();
-    const theirs = frameworkDep("pinia", { dependencies: {} }, appResolve, skResolve);
-    expect(theirs).toMatchObject({ from: "@skathi-native/runtime", version: "4.0.3" });
-    expect(theirs.warning).toBeUndefined();
+    const own = frameworkDep("pinia", () => join(root, "app/node_modules/pinia/index.js"));
+    expect(own).toEqual({ path: join(root, "app/node_modules/pinia/index.js"), version: "3.0.4" });
+    const missing = frameworkDep("pinia", () => {
+      throw new Error("not installed");
+    });
+    expect(missing).toBeNull();
   });
 });
 
@@ -398,6 +385,8 @@ describe("Tailwind runs in the config's directory", () => {
       "tailwind.config.ts": `export default { content: ["./src/**/*.vue"], corePlugins: { preflight: false } };`,
       "src/A.vue": `<template><div class="pt-7 text-center"></div></template>`,
     });
+    mkdirSync(join(root, "node_modules"));
+    symlinkSync(packageDir("tailwindcss", import.meta.dir)!, join(root, "node_modules/tailwindcss"), "junction");
     const before = process.cwd();
     const [a, b] = await Promise.all([
       generate(join(root, "tailwind.config.ts")),
@@ -408,6 +397,17 @@ describe("Tailwind runs in the config's directory", () => {
       expect(css).toContain(".pt-7");
       expect(css).toContain(".text-center");
     }
+    expect(tailwindProblem(join(root, "tailwind.config.ts"))).toBeNull();
+  });
+
+  test("an app without tailwindcss, or with Tailwind 4, is refused before a build", () => {
+    const missing = scratch({ "tailwind.config.js": "module.exports = {};" });
+    expect(tailwindProblem(join(missing, "tailwind.config.js"))).not.toBeNull();
+    const v4 = scratch({
+      "tailwind.config.js": "module.exports = {};",
+      "node_modules/tailwindcss/package.json": JSON.stringify({ name: "tailwindcss", version: "4.1.0" }),
+    });
+    expect(tailwindProblem(join(v4, "tailwind.config.js"))).not.toBeNull();
   });
 });
 

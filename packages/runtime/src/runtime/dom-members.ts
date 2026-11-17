@@ -13,7 +13,7 @@ import {
   staticList,
 } from "./collections";
 import { isMirrorNode } from "./listeners";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { ownExpando } from "./controls";
 
 // The DOM surface on mirror nodes: reused browser components call element methods unconditionally, so a missing one

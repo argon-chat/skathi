@@ -4,7 +4,7 @@ import { isLoose, nodeById } from "./nodes";
 import { isDisabledControl } from "./forms";
 import { defineDom } from "./dom-members";
 import { warnCompat } from "../compat";
-import { appRoot } from "../runtime";
+import { appRoot } from "./root";
 import { hasListener, propagate, synthesize } from "./events";
 
 // Focus: the host moves focus (`__sk_focus`); the four events fire here in browser order. A node not yet built is

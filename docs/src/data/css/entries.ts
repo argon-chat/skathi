@@ -377,7 +377,9 @@ const stylesheets = section("Stylesheets", [
     OK,
     "A utility-first CSS framework that generates the classes an app uses from a `tailwind.config.*` file.",
     {
-      notes: ["`sk dev` and `sk build` run it when the app has a `tailwind.config.*` file."],
+      notes: [
+        "`sk dev` and `sk build` run it when the app has a `tailwind.config.*` file, with the app's own `tailwindcss` 3: `bun add -d tailwindcss@3`.",
+      ],
       aliases: ["tailwind", "tailwindcss"],
       related: ["feature-tailwind-4"],
     },

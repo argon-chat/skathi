@@ -3,7 +3,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "paths": {
-      "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime": ["../packages/runtime/src/dom.ts"],
       "@skathi-native/runtime/svelte": ["../packages/runtime/src/svelte.ts"]
     }
   },

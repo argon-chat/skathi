@@ -1,7 +1,7 @@
 // Skathi module registry + HMR client. The JS engine (JSC via redjs) runs classic scripts only
 // (no ESM, import(), import.meta or WebSocket), so:
 //
-//   tier 1  dist/vendor.js      IIFE: @vue/runtime-core + renderer + this file; installs globalThis.__SK__.
+//   tier 1  dist/vendor.js      IIFE: runtime.ts (dom.ts in an app without vue) + this file; installs globalThis.__SK__.
 //   tier 2  dist/modules/*.js   one script per app source file: setCss(id, css),
 //                               setDeps(id, [ids]), define(id, factory, bodyHash).
 //   transport  dist/manifest.json + dist/changes.json, polled by the Rust host, which re-evals
@@ -375,24 +375,26 @@ function flushCss(force?: boolean): void {
 
 // `Record<string, unknown>`: `createApp` is replaced below by a wrapper of a wider shape that a namespace type would refuse.
 const vueExports: Record<string, unknown> = Object.assign({}, runtimeNs);
-const origCreateApp = runtimeNs.createApp;
+// Absent from an app without Vue, whose vendor bundle has dom.ts in place of runtime.ts.
+const origCreateApp = vueExports.createApp as typeof runtimeNs.createApp | undefined;
 
-vueExports.createApp = function (...args: Parameters<typeof origCreateApp>) {
-  const app = origCreateApp(...args);
-  const mount = app.mount.bind(app);
-  app.mount = function (...mountArgs: Parameters<typeof mount>) {
-    const vm = mount(...mountArgs);
-    mountCount++;
-    try {
-      if (!(app._context as VueDevContext).reload) (app._context as VueDevContext).reload = rootReload;
-    } catch (e) {
-      log("could not install appContext.reload: " + e);
-    }
-    log("app mounted (mount #" + mountCount + ")");
-    return vm;
+if (origCreateApp)
+  vueExports.createApp = function (...args: Parameters<typeof runtimeNs.createApp>) {
+    const app = origCreateApp(...args);
+    const mount = app.mount.bind(app);
+    app.mount = function (...mountArgs: Parameters<typeof mount>) {
+      const vm = mount(...mountArgs);
+      mountCount++;
+      try {
+        if (!(app._context as VueDevContext).reload) (app._context as VueDevContext).reload = rootReload;
+      } catch (e) {
+        log("could not install appContext.reload: " + e);
+      }
+      log("app mounted (mount #" + mountCount + ")");
+      return vm;
+    };
+    return app;
   };
-  return app;
-};
 const origMountDocument = runtimeNs.mountDocument;
 vueExports.mountDocument = function (...args: Parameters<typeof origMountDocument>) {
   const root = origMountDocument(...args);
@@ -401,7 +403,7 @@ vueExports.mountDocument = function (...args: Parameters<typeof origMountDocumen
   return root;
 };
 
-for (const alias of ["vue", "@skathi-native/runtime"]) {
+for (const alias of origCreateApp ? ["vue", "@skathi-native/runtime"] : ["@skathi-native/runtime"]) {
   factories.set(alias, () => {});
   cache.set(alias, { id: alias, exports: vueExports });
 }

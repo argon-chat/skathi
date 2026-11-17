@@ -1,7 +1,7 @@
 // Dev builder: two-tier output for Vue HMR.
 // Usage: bun build.ts [app-entry.js] [dist-dir] [--watch]
 //
-//   dist/vendor.js           IIFE: @vue/runtime-core + src/runtime.ts + src/loader.ts.
+//   dist/vendor.js           IIFE: src/runtime.ts (src/dom.ts for an app without vue) + src/loader.ts.
 //   dist/modules/<enc>.js    one classic script per app module; <enc> is the id with "/" -> "__".
 //   dist/manifest.json       { rev, vendorRev, entry, appRoot, modules, deps }
 //   dist/changes.json        { rev, vendorRev, changed: [{ id, kind }] }
@@ -16,8 +16,7 @@
 // module-scope identity such as reka-ui's Symbol() injection keys); vue, @skathi-native/runtime, vue-router
 // and pinia stay external so libraries land on our runtime.
 
-import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
-import type { BindingMetadata, SFCBlock, SFCDescriptor } from "@vue/compiler-sfc";
+import type { BindingMetadata, SFCBlock, SFCDescriptor } from "vue/compiler-sfc";
 import { createRequire } from "module";
 import { resolve, dirname, isAbsolute, join, relative, sep } from "path";
 import {
@@ -34,7 +33,19 @@ import {
 
 import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
 import { pruneVendorPrefixes } from "./css-prefixes";
-import { LOADER_ENTRY, RUNTIME_ENTRY, RUNTIME_SRC_DIR, isPreseeded, runtimeRequire } from "./runtime-path";
+import {
+  DOM_ENTRY,
+  FRAMEWORK_LIBS,
+  LOADER_ENTRY,
+  RUNTIME_ENTRY,
+  RUNTIME_SRC_DIR,
+  VUE_MISSING,
+  appVue,
+  isPreseeded,
+  packageDir,
+  sfcCompiler,
+  type SfcCompiler,
+} from "./runtime-path";
 import {
   GLOB_TRIPWIRE,
   LEAF_IMPORT,
@@ -186,19 +197,12 @@ const ID_ROOT = inside(APP_ROOT, WS_ROOT) ? WS_ROOT : APP_ROOT;
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
 const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
 const FRAMEWORK = new Map(
-  ["vue-router", "pinia"].map(
-    (name) =>
-      [
-        name,
-        frameworkDep(
-          name,
-          APP_PKG,
-          (spec) => appRequire.resolve(spec),
-          (spec) => runtimeRequire.resolve(spec),
-        ),
-      ] as const,
-  ),
+  FRAMEWORK_LIBS.flatMap((name) => {
+    const dep = packageDir(name, APP_ROOT) && frameworkDep(name, (spec) => appRequire.resolve(spec));
+    return dep ? [[name, dep] as const] : [];
+  }),
 );
+const APP_VUE = appVue(APP_ROOT);
 
 /** Resolves a bare specifier from the app root with browser/ESM conditions; createRequire cannot see ESM-only `exports` maps. */
 function resolveFromApp(spec: string): string {
@@ -262,15 +266,22 @@ async function bundlerResolve(spec: string, from: string, kind: "require" | "imp
 // resolution loads typescript from the app's node_modules). SFC_FS answers fileExists for files
 // only: compiler-sfc probes ./types before ./types.ts.
 
-const TS_AVAILABLE = (() => {
+const APP_TS = (() => {
   try {
-    const ts = appRequire("typescript");
-    registerTS(() => ts);
-    return true;
+    return appRequire("typescript") as typeof import("typescript");
   } catch {
-    return false;
+    return null;
   }
 })();
+
+let compiler: SfcCompiler | null = null;
+/** The app's own `vue/compiler-sfc`, loaded with the first .vue file. */
+function vueCompiler(): SfcCompiler {
+  if (compiler) return compiler;
+  compiler = sfcCompiler(APP_ROOT);
+  if (APP_TS) compiler.registerTS(() => APP_TS);
+  return compiler;
+}
 
 {
   const aliases = readSkConfig()?.aliases;
@@ -358,10 +369,19 @@ async function buildVendor() {
     define: DEFINES,
     plugins: [
       {
-        // "vue" is our runtime. Exact-match filter only: bun 1.4 crashes on catch-all onResolve filters.
+        // "vue" is our runtime, built on the app's @vue/runtime-core; without vue the loader gets dom.ts. Exact-match
+        // filters only: bun 1.4 crashes on catch-all onResolve filters.
         name: "vendor-vue-alias",
         setup(b: Bun.PluginBuilder) {
           b.onResolve({ filter: /^vue$/ }, () => ({ path: RUNTIME_ENTRY }));
+          if (APP_VUE) {
+            const core = APP_VUE.runtimeCore;
+            b.onResolve({ filter: /^@vue\/runtime-core$/ }, () => ({ path: core }));
+          } else {
+            b.onResolve({ filter: /^\.\/runtime$/ }, (args: Bun.OnResolveArgs) =>
+              resolve(args.importer) === LOADER_ENTRY ? { path: DOM_ENTRY } : undefined,
+            );
+          }
         },
       },
     ],
@@ -373,7 +393,7 @@ async function buildVendor() {
   const text = await result.outputs[0]!.text();
   // The pre-seeded "vue" namespace must still carry the compiler helpers; if Bun tree-shakes the
   // `export *` re-export, templates die with "not a function".
-  for (const sym of ["openBlock", "createElementBlock", "createElementVNode", "toDisplayString"]) {
+  for (const sym of APP_VUE ? ["openBlock", "createElementBlock", "createElementVNode", "toDisplayString"] : []) {
     if (!text.includes(sym)) throw new Error(`vendor bundle is missing ${sym}`);
   }
   writeAtomic(join(DIST, "vendor.js"), text);
@@ -421,6 +441,7 @@ async function compileVue(
   captureCss = true,
 ): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
+  const { parse, compileScript, compileTemplate, compileStyle } = vueCompiler();
   const { descriptor, errors } = parse(source, { filename: absPath });
   if (errors.length) {
     throw new Error(`${id}: ${errors.map((e) => e.message).join("; ")}`);
@@ -654,7 +675,7 @@ function bareOf(body: string, skip: Set<string>): string[] {
     if (spec === null) continue;
     const c = spec.charCodeAt(0);
     if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
-    if ((isPreseeded(spec) && !FRAMEWORK.has(spec)) || found.includes(spec) || skip.has(spec)) continue;
+    if ((isPreseeded(spec) && !FRAMEWORK_LIBS.includes(spec)) || found.includes(spec) || skip.has(spec)) continue;
     found.push(spec);
   }
   return found;
@@ -794,6 +815,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
   // Bundler ESM semantics rather than Node's (vitecompat.ts devEsmInterop).
   const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0]!.text()).code);
   const body = interop.code;
+  if (!APP_VUE && /\brequire\(\s*["']vue["']\s*\)/.test(body)) throw new Error(`${id}: ${VUE_MISSING}`);
   if (interop.unresolved) {
     warn(
       `${stamp()} ${id}: ${interop.unresolved} import(…) with a computed specifier — the dev loader resolves ` +
@@ -907,7 +929,8 @@ function npmSharePlugin(selfKey: string, selfRoot: string | null, found: Set<str
         if (args.kind === "entry-point-build" || isAbsolute(args.path)) return undefined;
         // Every importer lands on the one copy: the vendor bundle's, or the framework module built on demand.
         if (isPreseeded(args.path)) {
-          if (FRAMEWORK.has(args.path)) found.add(args.path);
+          if (args.path === "vue" && !APP_VUE) throw new Error(VUE_MISSING);
+          if (FRAMEWORK_LIBS.includes(args.path)) found.add(args.path);
           return { path: args.path, external: true };
         }
         const from = importerDir(args, APP_ROOT);
@@ -962,14 +985,9 @@ function writeNpmModule(id: string, what: string, body: string): boolean {
 
 async function buildNpmModule(id: string): Promise<boolean> {
   const { spec, from } = npmEntries.get(id) ?? { spec: id, from: APP_ROOT };
-  // vue-router and pinia: the copy the app declares (else the runtime's), like the production bundle.
+  // vue-router and pinia: the app's own install, one copy for the app and every library, as in the production bundle.
   const framework = FRAMEWORK.get(id);
-  if (framework) {
-    if (framework.warning) devAdvise(framework.warning);
-    say(
-      `${stamp()} ${id} ${framework.version ?? "unknown"}: the ${framework.from === "app" ? "app's" : "runtime's"} copy`,
-    );
-  }
+  if (framework) say(`${stamp()} ${id} ${framework.version ?? "unknown"}: the app's copy`);
   const candidates = framework ? [framework.path] : await entryCandidates(spec, from);
   if (!candidates.length) {
     noteUnresolved(id, spec, from);
@@ -1208,7 +1226,7 @@ function blocksOf(absPath: string, src: string): Blocks {
   }
   let d: SFCDescriptor;
   try {
-    d = parse(src, { filename: absPath }).descriptor;
+    d = vueCompiler().parse(src, { filename: absPath }).descriptor;
   } catch {
     return { src, script: src, template: "", styleShape: "", styleText: "" };
   }
@@ -1333,7 +1351,7 @@ async function fullBuild(reason: string) {
       (npmBuilt.size ? ` + ${npmBuilt.size} npm (${(npmBytes / 1024) | 0} KB)` : "") +
       (TW_CONFIG ? ` + tailwind (${toId(TW_CONFIG)})` : "") +
       // Cross-package `defineProps<T>()` silently depends on this; say so once per build.
-      (TS_AVAILABLE ? " [ts type resolution on]" : "") +
+      (APP_TS && compiler ? " [ts type resolution on]" : "") +
       ` in ${Date.now() - t0} ms`,
   );
   for (const [what, n] of SHAPE_NOTES) say(`${stamp()} ${what}: ${n}`);
