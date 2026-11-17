@@ -64,7 +64,7 @@ let exit = ui.wait();
 
 - The tray exists on Windows and macOS; `Tray::is_available()` says whether this platform has one.
 - `Tray::app()` is **the app's** tray, the same one [`appTray`](/app-api/app-tray/) controls from JavaScript. `set` replaces everything at once, so pick one side to own it. Most apps let the JS side own the menu, since it knows the app's state, and use the Rust side only when the tray must work before the UI loads.
-- Callbacks may run on another thread than yours: keep them short and talk to the app through the `Handle`.
+- Callbacks may run on another thread than yours: keep them short and talk to the app through the `Handle`, with `show`, `close` or a module event sent by `emit_to`.
 - `MenuItem::quit()` runs `on_quit`, which is what quitting means for your program; `set` refuses a quit item without it.
 
 ## Global hotkeys
@@ -73,14 +73,23 @@ let exit = ui.wait();
 
 ```rust
 use std::sync::Arc;
+use serde::Serialize;
 use skathi::hotkeys::{Binding, Button, Chord, Hotkeys};
+use skathi::specta;
 
+#[derive(Serialize, skathi::Type)]
+struct Hotkey {
+    id: String,
+    /// "down" or "up": a binding can be held.
+    phase: String,
+}
+
+// On the builder: .module("voice", |m| { m.event::<Hotkey>("hotkey"); })
 let hotkeys = Hotkeys::new();
 let events = ui.clone();
 hotkeys.set_handler(Arc::new(move |fired| {
-    // "down" or "up"; a binding can be held
-    let data = serde_json::json!({ "id": fired.id, "phase": fired.phase });
-    events.emit("hotkey", &data.to_string()).ok();
+    let hotkey = Hotkey { id: fired.id.clone(), phase: fired.phase.clone() };
+    events.emit_to("voice", "hotkey", &hotkey).ok();
 }));
 hotkeys.start()?;
 hotkeys.set_bindings(vec![Binding {
@@ -91,6 +100,7 @@ hotkeys.set_bindings(vec![Binding {
 }])?;
 ```
 
+- The app hears them as `on("hotkey", (k) => …)` from `"native:voice"`, a [native module](/embedding/native-modules/) event.
 - Keyboard buttons are Windows virtual-key codes on every platform; mouse buttons are device 1 (1 left, 2 right, 3 middle, 4 and 5 the side buttons).
 - On macOS global hotkeys need the Accessibility permission. `status().accessibility_granted` tells whether it is there, and `request_accessibility()` shows the system prompt; call it only from a user action.
 - `capture_once` records the next chord the user presses, for a "press a key" settings field.

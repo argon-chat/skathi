@@ -19,6 +19,10 @@ export const RUNTIME_MODULES_DIR = (() => {
   return at < 0 ? join(RUNTIME_DIR, "node_modules") : dep.slice(0, at + `${sep}node_modules`.length);
 })();
 
-/** Bare specifiers the builders serve from the runtime; an app cannot alias them. */
+/** `native:<name>`: a module the embedding program provides at run time, never a file to bundle. */
+export const isNativeModule = (spec: string) => spec.startsWith("native:");
+
+/** Bare specifiers the builders serve from the runtime (and every `native:` module); an app cannot alias them. */
 export const PRESEEDED: readonly string[] = ["vue", "@skathi-native/runtime", "vue-router", "pinia"];
-export const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
+export const isPreseeded = (spec: string) => PRESEEDED.includes(spec) || isNativeModule(spec);
+export const NATIVE_MODULES_ENTRY = join(RUNTIME_SRC_DIR, "native-modules.ts");

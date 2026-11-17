@@ -19,6 +19,7 @@
 // itself is re-run and handed to its accept callbacks, and is a boundary the importer walk stops at;
 // `accept(deps, cb)` stops the walk at the importer and hands `cb` the dependency's new exports.
 
+import * as nativeNs from "./native-modules";
 import * as runtimeNs from "./runtime";
 
 type ModuleId = string;
@@ -323,6 +324,11 @@ function makeRequire(fromId: ModuleId) {
 function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknown> {
   const hit = cache.get(id);
   if (hit) return hit.exports;
+  if (id.startsWith("native:")) {
+    const exports = nativeNs.nativeModule(id.slice("native:".length));
+    cache.set(id, { id, exports });
+    return exports;
+  }
   const factory = factories.get(id);
   if (!factory) {
     throw new Error("[sk] module not found: " + id + (fromId ? " (required from " + fromId + ")" : ""));

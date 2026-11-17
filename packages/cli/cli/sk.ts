@@ -177,6 +177,19 @@ export function cli(run: Run): Command {
       run.code = await dev(app ?? ".", { exe: o.exe, shaderCompiler: o.shaderCompiler, color: run.color });
     });
 
+  program
+    .command("types")
+    .summary("Types for the native modules of an embedding program")
+    .description(
+      "Writes src/native-modules.d.ts: the `native:*` modules a program built with the skathi crate gives the app, as `<program> --sk-host-types` declares them. `sk dev --exe <program>` writes it too.",
+    )
+    .argument("[app]")
+    .requiredOption("--exe <program>", "The embedding program")
+    .action(async (app, o) => {
+      const { typesCommand } = await import("./types");
+      run.code = typesCommand(app ?? ".", o.exe);
+    });
+
   for (const [mode, text] of Object.entries(BUILD_MODES)) {
     const cmd = program
       .command(mode)

@@ -5,7 +5,7 @@ section: Embedding
 order: 8
 ---
 
-Rebuilding a payload and restarting your exe for every CSS tweak gets old fast. You do not have to: `sk dev` can run **your** exe instead of its own host, and the app hot-reloads inside it while your functions, namespaces and surfaces stay right where they are.
+Rebuilding a payload and restarting your exe for every CSS tweak gets old fast. You do not have to: `sk dev` can run **your** exe instead of its own host, and the app hot-reloads inside it while your native modules, namespaces and surfaces stay right where they are.
 
 ## How it works
 
@@ -17,7 +17,7 @@ Give your crate a feature that turns `prod` on, on by default:
 
 ```toml title="Cargo.toml"
 [dependencies]
-skathi = { version = "0.3", default-features = false, features = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"] }
+skathi = { version = "0.4", default-features = false, features = ["types", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"] }
 
 [features]
 default = ["release"]
@@ -28,7 +28,7 @@ Name the payload only when the feature is on. A dev build given a payload refuse
 
 ```rust
 let mut builder = skathi::Builder::new()
-    .function("notes.get", notes_get)
+    .module("notes", register_notes)
     .setup(install_native_api);
 #[cfg(feature = "release")]
 {
@@ -43,15 +43,17 @@ cargo build --no-default-features          # a dev build of your exe
 cd app && bunx sk dev --exe ../target/debug/notes.exe
 ```
 
-`sk dev` builds the app, starts your exe with the dev output, and watches:
+`sk dev` first asks your exe for its [native modules' types](/embedding/native-modules/#types-for-the-app) (`notes.exe --sk-host-types`, which prints them and exits before any window) and writes `app/src/native-modules.d.ts` when they changed. Then it builds the app, starts your exe with the dev output, and watches:
 
 - Edits to `.vue`, `.svelte`, `.ts` and `.css` apply in place, without a restart; component state survives where the framework allows.
 - An edit to a `shaders/*.slang` effect recompiles it and reloads it in the running app.
-- Your Rust side does not restart. Functions, the `setup` hook's namespaces and surfaces stay registered across reloads.
+- Your Rust side does not restart. Native modules, the `setup` hook's namespaces and surfaces stay registered across reloads; a reload drops the app's `on` handlers and the task promises still waiting.
 
 A full reload of the page (from devtools, or `location.reload()`) runs your `on_reload` hooks: drop any JS callbacks the old page handed you there, as in [Native APIs](/embedding/native-api/#from-worker-threads-into-the-page).
 
-When you change Rust, stop `sk dev`, rebuild, and start it again.
+When you change Rust, stop `sk dev`, rebuild, and start it again: a changed module signature reaches the app's types on that start. `sk types --exe <exe>` refreshes them without running the app, for example in CI before `vue-tsc`.
+
+An exe built against a skathi older than 0.4 has no `--sk-host-types`; `sk dev` sees that and leaves the file alone.
 
 ## Devtools
 

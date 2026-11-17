@@ -1,6 +1,8 @@
-// `appHost`: the app's side of an embedded Skathi (see crates/sk-app/src/embed.rs).
-// Arguments and results cross as JSON. Outside an embedder `available` is false, `call` rejects
-// (and says why once) and `on` never fires.
+// `appHost`: the app's side of an embedded Skathi before native modules (`native:<name>`), which
+// replace `call` and `on`; both still work and advise the move once. Arguments and results cross
+// as JSON. Outside an embedder `available` is false, `call` rejects (and says why once) and `on` never fires.
+
+import { warnCompat } from "./compat";
 
 /** A rejection from the embedder: its message, and which function it was. */
 export interface AppHostError extends Error {
@@ -114,6 +116,11 @@ export const appHost: AppHost = {
     return functionNames();
   },
   call<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
+    warnCompat(
+      "appHost.call",
+      "appHost.call is deprecated: the embedding program gives the app native modules, imported as " +
+        '`import { fn } from "native:<module>"` (Builder::module in Rust), with typed arguments and results.',
+    );
     if (!host) {
       adviseNotEmbedded(name);
       return Promise.reject(hostError(name, "appHost: this app is not embedded in another program"));
@@ -141,6 +148,11 @@ export const appHost: AppHost = {
     });
   },
   on(event: string, handler: (data: unknown) => void): () => void {
+    warnCompat(
+      "appHost.on",
+      'appHost.on is deprecated: subscribe with `on(event, handler)` from `"native:<module>"`; ' +
+        "the embedding program declares the event with Module::event and sends it with Handle::emit_to.",
+    );
     let set = listeners.get(event);
     if (!set) listeners.set(event, (set = new Set()));
     set.add(handler);

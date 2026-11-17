@@ -6,7 +6,7 @@ section: Embedding
 order: 3
 ---
 
-[Functions and events](/embedding/functions-and-events/) carry JSON between two worlds that never touch. That is the right default, and also its limit: every call is a promise, every value a string on the way. When the app calls something a thousand times a second, or Rust has a stream to deliver, or you want a JS object that behaves like a browser API, you build it directly in the engine.
+[Native modules](/embedding/native-modules/) carry serde values between two worlds that never touch. That is the right default, and also its limit: every value goes through JSON on the way, and every event is a separate delivery. When the app calls something a thousand times a second, or Rust has a stream to deliver, or you want a JS object that behaves like a browser API, you build it directly in the engine.
 
 That happens in `Builder::setup`. It runs **once**, on the Skathi thread, after storage is ready and before any app code or window, and gets a `HostContext`:
 

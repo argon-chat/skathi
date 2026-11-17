@@ -96,31 +96,55 @@ order: 10
 
   **Fix:** The error text is in `spawn`'s `Err`. A failed `expose` usually means the global already exists or starts with `__sk`.
 
+- `native:notes: "delete" is not a usable export name`, `… is registered twice`, `event … is declared twice`
+
+  **Cause:** A module function or event name the app could not import: a JS keyword, `available`, `on`, `off`, `default` or `then`, or a name used twice. `spawn` returns it as `Error::Module` before any window.
+
+  **Fix:** Rename it in Rust; the JS side imports it by that name.
+
 ### While it runs
 
-- The window freezes while a function runs
+- The window freezes while a native function runs
 
-  **Cause:** The handler does its work on the Skathi thread.
+  **Cause:** `m.function` runs on the Skathi thread, so the frame waits for it.
 
-  **Fix:** `call.into_reply()`, move the `Reply` to a worker and answer from there. See [Keep the UI thread free](/embedding/functions-and-events/#keep-the-ui-thread-free).
+  **Fix:** Declare it with `m.task`: it runs on a worker and the app gets a promise. See [Tasks](/embedding/native-modules/#tasks-do-the-slow-work).
 
-- An `AppHostError` the handler never sent
+- `native:notes.… is provided by the program that embeds this app, and this app is not embedded`
 
-  **Cause:** The `Reply` was dropped without an answer, the handler answered with text that is not JSON, or a reload rejected the calls still waiting.
+  **Cause:** The app called a module function in Skathi's own host, `sk dev` without `--exe`, or a browser preview.
 
-  **Fix:** Answer every `Reply` on every path, errors included, with `serde_json` output.
+  **Fix:** Check `available` before calling, or run the app in your exe. See [One app, with or without a program](/embedding/native-modules/#one-app-with-or-without-a-program).
 
-- `appHost.call: the embedder has no function "…"`
+- `the program that embeds this app has no native module "…"`
 
-  **Cause:** The name is not registered, often a typo or a function registered after `spawn`.
+  **Cause:** The exe declares no module of that name: a typo, or an exe built before the module was added.
 
-  **Fix:** Register every function on the `Builder`. The message lists the names that exist.
+  **Fix:** Match the name in `import … from "native:…"` with `Builder::module`, and rebuild the exe.
 
-- `emit` returns `the event's data is not JSON`
+- `Cannot find module 'native:notes'` in the type check
 
-  **Cause:** `data` is not one JSON value; a bare string needs its quotes, as `"\"ready\""`.
+  **Cause:** `src/native-modules.d.ts` is missing or older than the exe.
 
-  **Fix:** Serialise with `serde_json`.
+  **Fix:** Run `sk types --exe <your exe>`, or start the app with `sk dev --exe`, and commit the file.
+
+- `sk types` says the exe `does not answer --sk-host-types`
+
+  **Cause:** The exe was built against a skathi older than 0.4. One built without the `types` feature answers, but says so and fails.
+
+  **Fix:** Build it against 0.4 or later, with `types` on.
+
+- A task rejects with `the task was dropped before it ran`
+
+  **Cause:** The executor given to `task_executor` dropped the job instead of running it, often because its runtime shut down.
+
+  **Fix:** Run every job the executor receives, or keep the runtime alive as long as the app.
+
+- `emit_to` returns `no native module declares that event`
+
+  **Cause:** No module of that name declares the event with `m.event`, or one of the two names has a typo.
+
+  **Fix:** Declare the event on the module you emit to.
 
 - `dispatcher.post` returns `Full`
 

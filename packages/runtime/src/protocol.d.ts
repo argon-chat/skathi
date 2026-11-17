@@ -356,6 +356,8 @@ declare function __sk_host_set_dispatcher(fn: (token: number, ok: boolean, text:
 declare function __sk_host_call(name: string, argsJson: string): number;
 declare function __sk_host_functions(): string;
 declare const __SK_HOST__: import("./apphost").AppHost;
+/** A native module the embedder registered, built before app code; `undefined` for a name it did not. */
+declare function __sk_native_module(name: string): Record<string, unknown> | undefined;
 
 /** sk-desktop's half of `<input type=file|color>` and `<a download>`. The pickers resolve `null` when dismissed (or the same files were picked again) and `undefined` when nothing could be shown. */
 declare var __SK_FS__:

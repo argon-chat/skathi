@@ -6,6 +6,7 @@ type Dispatcher = (token: number, ok: boolean, text: string) => void;
 type AppHostModule = typeof import("../src/apphost");
 
 const G = globalThis as Record<string, unknown>;
+G.__sk_advise ??= () => true;
 let fresh = 0;
 
 /** apphost.ts evaluated anew, against whatever `__sk_host_*` are set now. */

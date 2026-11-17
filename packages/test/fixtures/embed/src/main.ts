@@ -1,6 +1,16 @@
 import { appHost, createApp, h, ref } from "@skathi-native/runtime";
+import { available, crash, double, on, point, refuse, report, thread, worker, type Value } from "native:demo";
 
 const status = ref("starting");
+
+function attempt(f: () => unknown): unknown {
+  try {
+    return { ok: f() };
+  } catch (e) {
+    const err = e as Error;
+    return { error: err.name, message: err.message };
+  }
+}
 
 async function settle(p: Promise<unknown>): Promise<unknown> {
   try {
@@ -13,19 +23,24 @@ async function settle(p: Promise<unknown>): Promise<unknown> {
 
 async function run(): Promise<void> {
   const seen = {
-    available: appHost.available,
-    functions: appHost.functions,
-    ping: await settle(appHost.call("ping", "hello")),
-    add: await settle(appHost.call("add", 2, 3)),
-    fail: await settle(appHost.call("fail")),
-    missing: await settle(appHost.call("missing")),
+    available,
+    point: attempt(() => point(2, 3)),
+    refuse: attempt(() => refuse()),
+    badArgument: attempt(() => point("two" as unknown as number, 3)),
+    uiThread: thread(),
+    double: await settle(double(21)),
+    doubleZero: await settle(double(0)),
+    crash: await settle(crash()),
+    worker: await settle(worker()),
+    legacy: await settle(appHost.call("ping", "hello")),
   };
-  appHost.on("tick", (data) => {
+  on("tick", (tick) => {
     status.value = "ticked";
-    void appHost.call("report", { tick: data });
+    report({ tick });
   });
+  appHost.on("legacy", (data) => report({ legacy: data as Value }));
   status.value = "reported";
-  await appHost.call("report", seen);
+  report(seen as unknown as Value);
 }
 
 createApp({

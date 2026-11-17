@@ -2,8 +2,8 @@
 //!
 //! Skathi renders Vue 3 and Svelte 5 apps with gpui and runs their script in JavaScriptCore. The
 //! app's JS half is a payload (`.skpk`) built by the `sk` CLI; this crate is the native half. Your
-//! `main` hands the payload to a [`Builder`], registers the functions the app may call
-//! (`appHost.call(name, ...args)` in JS) and gets a [`Handle`] to send it events.
+//! `main` hands the payload to a [`Builder`], registers native modules the app imports
+//! (`import { greet } from "native:hello"`) and gets a [`Handle`] to send it events.
 //!
 //! # A minimal embedder
 //!
@@ -20,9 +20,9 @@
 //!     let builder = skathi::Builder::new()
 //!         .payload_file("app/dist/release/.sk/app.skpk")
 //!         .inspector_exe(std::env::current_exe().unwrap())
-//!         .function("greet", |call| {
-//!             let who: Vec<String> = serde_json::from_str(call.args()).unwrap_or_default();
-//!             call.resolve(serde_json::json!(format!("hello, {}", who.join(" "))).to_string());
+//!         .module("hello", |m| {
+//!             m.function("greet", |who: String| format!("hello, {who}"));
+//!             m.event::<u32>("ready");
 //!         });
 //!     #[cfg(target_os = "macos")]
 //!     if let Err(e) = builder.run_on_main_thread(|exit| i32::from(!exit.clean)) {
@@ -35,11 +35,16 @@
 //!             eprintln!("{e}");
 //!             std::process::exit(2)
 //!         });
-//!         ui.emit("ready", r#"{"pid":1}"#).ok();
+//!         ui.emit_to("hello", "ready", &std::process::id()).ok();
 //!         std::process::exit(if ui.wait().clean { 0 } else { 1 });
 //!     }
 //! }
 //! ```
+//!
+//! A [`Module`] function runs inside the JS call and returns a value; a task runs on a worker and
+//! returns a promise. Arguments and results are `serde` types; with the `types` feature (on by
+//! default) they also derive [`Type`], and `sk types --exe <program>` writes the app's
+//! `native-modules.d.ts` from them.
 //!
 //! [`Builder::payload_static`] takes `include_bytes!` of the payload instead, for a single-file
 //! executable. [`Builder::setup`] runs before any app JS with a [`HostContext`]: direct
@@ -118,7 +123,7 @@
 //! # Features
 //!
 //! On by default: `prod` (runs a payload; off, the host boots the dev output named by `SK_DIST`),
-//! `audio` (Web Audio), `storages` (localStorage, cookies and secrets on disk), `clipboard`,
+//! `types` (native module declarations, with specta), `audio` (Web Audio), `storages` (localStorage, cookies and secrets on disk), `clipboard`,
 //! `indexeddb`, `webgpu` and `native-dx12`. Off: `battery` (the Battery Status API),
 //! `no-devtools` (compiles out the devtools protocol and the inspector) and `runtime-shaders`
 //! (macOS: compile the Metal shaders at startup).
@@ -131,8 +136,10 @@
 
 pub use sk_app::embed::{
     encrypt_local_storage_at, surface, Builder, Call, D3D11Device, D3D12Device, D3D12Fence,
-    EmitError, Error, Exit, Handle, Handler, HostContext, HostCookie, Reply, SameSite,
-    SharedTexture, SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats,
-    SurfaceWatch,
+    Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext, HostCookie, Job,
+    Module, Reply, SameSite, SharedTexture, SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo,
+    SurfaceStats, SurfaceWatch, Typed,
 };
+#[cfg(feature = "types")]
+pub use sk_app::embed::{specta, Type};
 pub use sk_app::{hotkeys, js, run_exe, tray, HostAllocator};

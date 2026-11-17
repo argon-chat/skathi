@@ -1,18 +1,16 @@
-//! Skathi as a library: another program runs the whole engine on a thread of its own and talks
-//! to the app through async functions and events. On macOS, AppKit owns the process main thread:
-//! use `Builder::run_on_main_thread` with an application cleanup callback instead.
+//! Skathi as a library: another program runs the whole engine on a thread of its own and gives
+//! the app native modules (`import { … } from "native:<name>"`): typed functions, tasks and
+//! events. On macOS, AppKit owns the process main thread: use `Builder::run_on_main_thread` with
+//! an application cleanup callback instead.
 //!
 //! **One per process, once.** The JS realm cannot be torn down and gpui is one `Application`, so
 //! [`Builder::spawn`] works once; after the app closes its thread sleeps for the rest of the process.
 //!
-//! **Handlers run on the Skathi thread**, inside the JS call, so a handler that blocks freezes
-//! the UI. One with work to do moves its [`Reply`] to another thread and answers from there; a
-//! dropped `Reply` rejects.
+//! **A module function runs on the Skathi thread**, inside the JS call, so one that blocks
+//! freezes the UI: slow work is a [`Module::task`], which runs on a worker and returns a promise.
 //!
 //! The exe keeps the host command-line flags, `singleInstance`, protocol handling and ending the
 //! process. F12 opens the inspector only when [`Builder::inspector_exe`] names a sk-app.exe.
-//!
-//! JS side: `appHost` (packages/runtime/src/apphost.ts).
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
@@ -25,11 +23,17 @@ use sk_runtime::redjs::api::Value;
 use sk_runtime::{host_fn, JsRuntime};
 
 mod host_context;
+mod module;
+#[cfg(feature = "types")]
+mod types;
 pub use host_context::{HostContext, HostCookie, SameSite};
+pub use module::{Declared, Function, Job, Module, Typed};
 pub use sk_tree::surface::{
     surface, D3D11Device, D3D12Device, D3D12Fence, SharedTexture, SurfaceError, SurfaceEvent,
     SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
 };
+#[cfg(feature = "types")]
+pub use specta::{self, Type};
 
 type Setup = Box<dyn FnOnce(&HostContext) -> Result<(), String> + Send + 'static>;
 type PrepareDataDir = Box<dyn FnOnce(&Path) -> Result<(), String> + Send + 'static>;
@@ -56,6 +60,21 @@ const STACK: usize = 8 * 1024 * 1024;
 
 const DRAIN_CAP: usize = 16;
 
+pub(crate) const HOST_TYPES_FLAG: &str = "--sk-host-types";
+
+#[cfg(feature = "types")]
+fn host_types(modules: &[Module]) -> Result<String, String> {
+    types::declarations(modules)
+}
+
+#[cfg(not(feature = "types"))]
+fn host_types(modules: &[Module]) -> Result<String, String> {
+    if modules.is_empty() {
+        return Ok(String::new());
+    }
+    Err("this program was built without skathi's types feature: turn it on to type its native modules".into())
+}
+
 /// A host function: called with the [`Call`] on the Skathi thread.
 pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
 
@@ -67,6 +86,8 @@ struct Config {
     desktop_launch: bool,
     setup: SetupHook,
     functions: HashMap<String, Handler>,
+    modules: Vec<Module>,
+    executor: Option<module::Executor>,
     activate: bool,
     #[cfg_attr(not(sk_devtools), allow(dead_code))]
     inspector_exe: Option<PathBuf>,
@@ -219,6 +240,8 @@ pub enum Error {
     LaunchExit(i32),
     /// The configured profile directory could not be prepared.
     DataDirectory(String),
+    /// A native module is misdeclared: a bad or repeated name.
+    Module(String),
     Spawn(std::io::Error),
     /// AppKit needs the process main thread: use `run_on_main_thread`.
     MainThreadRequired,
@@ -239,6 +262,7 @@ impl std::fmt::Display for Error {
             Error::ArgsAlreadyRead => write!(f, "Skathi's arguments were read before spawn"),
             Error::LaunchExit(code) => write!(f, "desktop launch finished with exit code {code}"),
             Error::DataDirectory(e) => write!(f, "data directory: {e}"),
+            Error::Module(e) => write!(f, "{e}"),
             Error::Spawn(e) => write!(f, "the Skathi thread did not start: {e}"),
             Error::MainThreadRequired => write!(f, "AppKit requires the process main thread; call Builder::run_on_main_thread from main"),
         }
@@ -252,12 +276,12 @@ impl std::error::Error for Error {}
 /// ```no_run
 /// let ui = sk_app::embed::Builder::new()
 ///     .payload_file("apps/hello/dist/release/.sk/app.skpk")
-///     .function("db.query", |call| {
-///         let reply = call.into_reply();
-///         std::thread::spawn(move || reply.resolve(r#"{"rows":[]}"#));
+///     .module("db", |m| {
+///         m.task("query", |sql: String| -> Result<Vec<String>, String> { Ok(vec![sql]) });
+///         m.event::<bool>("online");
 ///     })
 ///     .spawn()?;
-/// ui.emit("status", r#"{"online":true}"#)?;
+/// ui.emit_to("db", "online", &true)?;
 /// let exit = ui.wait();
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -271,6 +295,8 @@ pub struct Builder {
     payload: Option<PayloadSource>,
     args: Vec<String>,
     functions: HashMap<String, Handler>,
+    modules: Vec<Module>,
+    executor: Option<module::Executor>,
     activate: bool,
     inspector_exe: Option<PathBuf>,
     desktop_id: Option<String>,
@@ -294,6 +320,8 @@ impl Builder {
             payload: None,
             args: Vec::new(),
             functions: HashMap::new(),
+            modules: Vec::new(),
+            executor: None,
             activate: true,
             inspector_exe: None,
             desktop_id: None,
@@ -370,8 +398,31 @@ impl Builder {
         self
     }
 
+    /// A native module the app imports as `native:<name>`: `build` registers its functions,
+    /// tasks and events.
+    pub fn module(mut self, name: impl Into<String>, build: impl FnOnce(&mut Module)) -> Self {
+        let mut module = Module::new(name.into());
+        build(&mut module);
+        self.modules.push(module);
+        self
+    }
+
+    /// Runs module tasks on the embedder's own executor (a tokio or rayon pool) instead of
+    /// Skathi's four worker threads. A job it drops unrun rejects its promise.
+    pub fn task_executor<F>(mut self, executor: F) -> Self
+    where
+        F: Fn(Job) + Send + Sync + 'static,
+    {
+        self.executor = Some(Arc::new(executor));
+        self
+    }
+
     /// A function the app calls as `appHost.call(name, ...args)`; the handler gets the arguments
     /// as a JSON array and answers through the [`Call`].
+    #[deprecated(
+        since = "0.4.0",
+        note = "use native modules: `Builder::module` and `import { … } from \"native:<name>\"`"
+    )]
     pub fn function<F>(mut self, name: impl Into<String>, handler: F) -> Self
     where
         F: Fn(Call) + Send + Sync + 'static,
@@ -411,6 +462,7 @@ impl Builder {
     /// is ready wait for it. On macOS this returns `Error::MainThreadRequired`: use
     /// `Self::run_on_main_thread` instead.
     pub fn spawn(self) -> Result<Handle, Error> {
+        self.answer_host_types();
         #[cfg(target_os = "macos")]
         {
             Err(Error::MainThreadRequired)
@@ -437,6 +489,7 @@ impl Builder {
     where
         F: FnOnce(Exit) -> i32 + Send + 'static,
     {
+        self.answer_host_types();
         require_main_thread()?;
         let handle = self.prepare()?;
         std::thread::Builder::new()
@@ -455,7 +508,46 @@ impl Builder {
         Ok(())
     }
 
+    /// `<exe> --sk-host-types` (what `sk types` and `sk dev --exe` run): prints the modules'
+    /// declarations and ends the process before anything starts.
+    fn answer_host_types(&self) {
+        if std::env::args_os()
+            .nth(1)
+            .is_none_or(|a| a != HOST_TYPES_FLAG)
+        {
+            return;
+        }
+        let result = self
+            .module_problem()
+            .map_or_else(|| host_types(&self.modules), Err);
+        match result {
+            Ok(text) => {
+                print!("{text}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    fn module_problem(&self) -> Option<String> {
+        for (i, m) in self.modules.iter().enumerate() {
+            if let Some(problem) = m.problem() {
+                return Some(problem.to_owned());
+            }
+            if self.modules[..i].iter().any(|other| other.name == m.name) {
+                return Some(format!("native:{} is registered twice", m.name));
+            }
+        }
+        None
+    }
+
     fn prepare(mut self) -> Result<Handle, Error> {
+        if let Some(problem) = self.module_problem() {
+            return Err(Error::Module(problem));
+        }
         let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("SK_DATA_DIR"))?;
         #[cfg(not(feature = "storages"))]
         if self.storage_encrypted.is_some() {
@@ -504,6 +596,8 @@ impl Builder {
             desktop_launch: self.desktop_launch,
             setup: SetupHook(Mutex::new(self.setup)),
             functions: self.functions,
+            modules: self.modules,
+            executor: self.executor,
             activate: self.activate,
             inspector_exe: self.inspector_exe,
             desktop_id: self.desktop_id,
@@ -588,13 +682,15 @@ pub(crate) fn finished(clean: bool, summary: String) {
     }
 }
 
-/// Why [`Handle::emit`] did not queue an event.
+/// Why [`Handle::emit_to`] did not queue an event.
 #[derive(Debug, PartialEq, Eq)]
 pub enum EmitError {
     /// `data` is not one JSON value.
     NotJson,
     /// The app has closed.
     Closed,
+    /// No module of that name declared that event with `Module::event`.
+    NotDeclared,
 }
 
 impl std::fmt::Display for EmitError {
@@ -602,6 +698,10 @@ impl std::fmt::Display for EmitError {
         match self {
             EmitError::NotJson => write!(f, "the event's data is not JSON"),
             EmitError::Closed => write!(f, "the app has closed"),
+            EmitError::NotDeclared => write!(
+                f,
+                "no native module declares that event: declare it with Module::event"
+            ),
         }
     }
 }
@@ -615,7 +715,35 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// Delivers `data` to the `on(event)` handlers of `native:<module>` in the app's next frame.
+    /// The event must be declared with [`Module::event`].
+    pub fn emit_to<T: serde::Serialize + ?Sized>(
+        &self,
+        module: &str,
+        event: &str,
+        data: &T,
+    ) -> Result<(), EmitError> {
+        if self.is_closed() {
+            return Err(EmitError::Closed);
+        }
+        let declared = CONFIG.get().is_some_and(|c| {
+            c.modules
+                .iter()
+                .any(|m| m.name == module && m.declares(event))
+        });
+        if !declared {
+            return Err(EmitError::NotDeclared);
+        }
+        let json = serde_json::to_string(data).map_err(|_| EmitError::NotJson)?;
+        module::emit(module, event, json);
+        Ok(())
+    }
+
     /// Delivers `data` (one JSON value) to `appHost.on(event)` handlers in the app's next frame.
+    #[deprecated(
+        since = "0.4.0",
+        note = "declare the event on a native module and send it with `Handle::emit_to`"
+    )]
     pub fn emit(&self, event: &str, data: &str) -> Result<(), EmitError> {
         if self.is_closed() {
             return Err(EmitError::Closed);
@@ -939,6 +1067,11 @@ pub(crate) fn install(rt: &JsRuntime) {
         ready: src_ready,
         drain: src_drain,
     });
+    if let Some(config) = CONFIG.get() {
+        if let Err(e) = module::install(rt.ctx(), &config.modules, config.executor.clone()) {
+            eprintln!("[embed] the native modules could not be installed: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1090,6 +1223,7 @@ mod tests {
 
     // One test, because the queue is the process's.
     #[test]
+    #[allow(deprecated)]
     fn replies_settle_once_and_a_dropped_one_rejects() {
         drain_queue();
         Reply {

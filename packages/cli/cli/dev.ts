@@ -3,6 +3,7 @@
 //
 // The dev host, first hit wins: `--exe` or SK_DEV_HOST; in a checkout, its debug sk-app (`cargo build
 // -p sk-app`); the cached dev host of this version; a download of it from the release (host-fetch.ts).
+// An `--exe` built with the skathi crate also writes src/native-modules.d.ts first (types.ts).
 //
 // An app with shaders/*.slang has them compiled into <dist>/effects, which the host reads through
 // SK_EFFECTS_DIR, and recompiled on every change, the first shader of an app that had none too. A
@@ -12,7 +13,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { compileAppEffects, EffectsError, formatProblems, hasAppEffects, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
 import { loadAppConfig } from "./config";
@@ -21,6 +22,7 @@ import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROO
 import { fetchHost, type OnBytes } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
 import { colorEnabled, paint, progressFor } from "./term";
+import { writeNativeTypes } from "./types";
 
 export async function devHost(
   options: { exe?: string | undefined; log?: (line: string) => void; onBytes?: OnBytes } = {},
@@ -106,6 +108,16 @@ export async function dev(
       const text = e instanceof EffectsError ? formatProblems(e.problems) : e instanceof Error ? e.message : String(e);
       console.error(`${c.red("effects")}: ${text}`);
       if (existsSync(join(effectsDir, "effects.json"))) console.error(c.dim("the app starts with the last good build"));
+    }
+  }
+  if (options.exe) {
+    progress.step("native modules");
+    try {
+      const types = writeNativeTypes(exe, dirname(config.entry));
+      if (types.status === "written") progress.detail(`wrote ${types.path}`);
+    } catch (e) {
+      progress.fail();
+      console.error(`${c.red("native modules")}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   progress.end();

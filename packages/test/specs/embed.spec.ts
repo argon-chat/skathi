@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXE_SUFFIX, REPO, TARGET, WINDOWS } from "../src/index";
 
@@ -15,7 +15,7 @@ function run(cmd: string, args: string[], timeout: number) {
 
 // macOS: AppKit refuses the example's app off the main thread; Linux: the example does not find its payload.
 test.skipIf(!WINDOWS)(
-  "an embedded app calls its embedder, hears its events, and closes without ending the process",
+  "an embedded app calls its native module's functions and tasks, hears its events, and closes without ending the process",
   () => {
     run("cargo", ["build", "-p", "sk-app", "--target", TARGET, "--example", "embed", "--features", "prod"], 900_000);
     run("bun", ["packages/cli/cli/sk.ts", "build", "packages/test/fixtures/embed", "--payload-only"], 120_000);
@@ -32,15 +32,22 @@ test.skipIf(!WINDOWS)(
     });
     expect(r.status, r.stderr).toBe(0);
     const out = JSON.parse(r.stdout.trim().split("\n").pop()!);
+    const first = out.first;
 
-    expect(out.first.available).toBe(true);
-    expect(out.first.functions).toEqual(["add", "fail", "ping", "report"]);
-    expect(out.first.ping).toEqual({ ok: { pong: "hello" } });
-    expect(out.first.add).toEqual({ ok: 5 });
-    expect(out.first.fail).toEqual({ error: "AppHostError", message: "no such luck", function: "fail" });
-    expect(out.first.missing.error).toBe("TypeError");
+    expect(first.available).toBe(true);
+    expect(first.point).toEqual({ ok: { x: 2, y: 3 } });
+    expect(first.refuse).toEqual({ error: "Error", message: "no such luck" });
+    expect(first.badArgument.error).toBe("TypeError");
+    // A function runs inside the call; a task on a worker, settling a promise.
+    expect(first.uiThread).toBe("skathi");
+    expect(first.worker.ok).toMatch(/^skathi-task-\d+$/);
+    expect(first.double).toEqual({ ok: 42 });
+    expect(first.doubleZero).toMatchObject({ error: "Error", message: "zero has no double worth computing" });
+    expect(first.crash.error).toBe("Error");
+    expect(first.legacy).toEqual({ ok: { pong: "hello" } });
     expect(out.second).toEqual({ tick: { n: 1 } });
-    expect(out.refusedNotJson).toBe("the event's data is not JSON");
+    expect(out.third).toEqual({ legacy: { n: 2 } });
+    expect(out.undeclared).not.toBeNull();
     expect(out.exit.clean).toBe(true);
     expect(out.exit.summary).toMatch(/^close\(\): hid 1 window\(s\)/);
     expect(out.emitAfterClose).toBe("the app has closed");
@@ -48,3 +55,17 @@ test.skipIf(!WINDOWS)(
   },
   1_100_000,
 );
+
+test.skipIf(!WINDOWS)("sk types writes the declarations the embedding program gives for its native modules", () => {
+  // Built by the test above.
+  expect(existsSync(EXE)).toBe(true);
+  const declared = run(EXE, ["--sk-host-types"], 60_000).stdout.replace(/\r\n/g, "\n");
+  expect(declared).toContain('declare module "native:demo"');
+  expect(declared).toContain("export function point(x: number, y: number): Point;");
+  expect(declared).toContain("export function double(n: number): Promise<number>;");
+  expect(declared).toContain('export function on(event: "tick", handler: (data: Tick) => void): () => void;');
+  run("bun", ["packages/cli/cli/sk.ts", "types", "packages/test/fixtures/embed", "--exe", EXE], 120_000);
+  expect(readFileSync(join(REPO, "packages", "test", "fixtures", "embed", "src", "native-modules.d.ts"), "utf8")).toBe(
+    declared,
+  );
+});

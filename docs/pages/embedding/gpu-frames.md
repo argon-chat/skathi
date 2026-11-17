@@ -128,7 +128,7 @@ release.wait(released, Duration::from_millis(100)); // or queue.Wait on release.
 
 ## Textures from another device, API or process
 
-A renderer on a device of its own (another adapter queue, another API, another process) shares its texture instead and hands the NT handle number and its process id to the embedder, through an `appHost` call, a [native function](/embedding/native-api/) or your own IPC:
+A renderer on a device of its own (another adapter queue, another API, another process) shares its texture instead and hands the NT handle number and its process id to the embedder, through a [native module](/embedding/native-modules/) function, a [native API](/embedding/native-api/) or your own IPC:
 
 - **D3D11:** create the texture with `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` and either `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`, or `D3D11_RESOURCE_MISC_SHARED` with an `ID3D11Fence` (`D3D11_FENCE_FLAG_SHARED`); `IDXGIResource1::CreateSharedHandle`.
 - **D3D12:** a committed resource with `D3D12_HEAP_FLAG_SHARED` and a fence with `D3D12_FENCE_FLAG_SHARED`; `ID3D12Device::CreateSharedHandle` for both. Leave the resource in `D3D12_RESOURCE_STATE_COMMON` when you signal.

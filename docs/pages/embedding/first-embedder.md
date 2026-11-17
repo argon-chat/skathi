@@ -50,8 +50,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-skathi = "0.3"
-serde_json = "1"
+skathi = "0.4"
+serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 embed-resource = "3"
@@ -98,30 +98,43 @@ What it adds:
 ## 5. main
 
 ```rust title="src/main.rs"
+use serde::Serialize;
+use skathi::specta; // the Type derive names it
+
+#[derive(Serialize, skathi::Type)]
+struct Build {
+    version: String,
+}
+
 fn main() {
     let ui = skathi::Builder::new()
         .payload_file("app/dist/release/.sk/app.skpk")
-        .function("greet", |call| {
-            let args: Vec<String> = serde_json::from_str(call.args()).unwrap_or_default();
-            call.resolve(serde_json::json!(format!("hello, {}", args.join(" "))).to_string());
+        .module("notes", |m| {
+            m.function("greet", |first: String, last: String| format!("hello, {first} {last}"))
+                .params(["first", "last"]);
+            m.event::<Build>("ready");
         })
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("{e}");
             std::process::exit(2)
         });
-    ui.emit("ready", r#"{"build":"1.0"}"#).ok();
+    let build = Build { version: env!("CARGO_PKG_VERSION").into() };
+    ui.emit_to("notes", "ready", &build).ok();
     std::process::exit(if ui.wait().clean { 0 } else { 1 });
 }
 ```
 
-And in the app, anywhere:
+`notes` is a [native module](/embedding/native-modules/): a function the app calls and an event it can listen for. In the app, anywhere:
 
 ```ts
-import { appHost } from "@skathi-native/runtime";
+import { greet, on } from "native:notes";
 
-const greeting = await appHost.call<string>("greet", "Ada", "Lovelace"); // "hello, Ada Lovelace"
+const greeting = greet("Ada", "Lovelace"); // "hello, Ada Lovelace"
+on("ready", (build) => console.log(`notes ${build.version}`));
 ```
+
+For TypeScript to know `native:notes`, let your exe describe it once it is built (step 6): `bunx sk types --exe ../target/release/notes.exe` in `app/` writes `src/native-modules.d.ts`.
 
 On macOS, `spawn` is replaced by `run_on_main_thread`; see [Shipping](/embedding/shipping/#macos-owns-the-main-thread).
 
@@ -140,6 +153,7 @@ The window that opens belongs to your process. Close it and `wait` returns; your
 | Feature           | Default | What it adds                                                                     |
 | ----------------- | ------- | -------------------------------------------------------------------------------- |
 | `prod`            | on      | Runs a payload. Off, the exe boots the dev output named by `SK_DIST` (`sk dev`). |
+| `types`           | on      | `#[derive(skathi::Type)]` and the TypeScript for native modules (`sk types`)     |
 | `audio`           | on      | Web Audio                                                                        |
 | `storages`        | on      | localStorage, cookies and secrets on disk                                        |
 | `clipboard`       | on      | `navigator.clipboard`                                                            |
@@ -164,4 +178,4 @@ Skathi's own builds patch `async-task` to a merged but unreleased fix (smol-rs/a
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
 ```
 
-Next: [Functions and events](/embedding/functions-and-events/).
+Next: [Native modules](/embedding/native-modules/).

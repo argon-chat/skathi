@@ -542,20 +542,20 @@ player.addEventListener("error", () => console.warn(player.error?.code, player.e
         title: "Show a native player under Vue controls",
         lang: "vue",
         code: `<script setup lang="ts">
-import { appHost } from "@skathi-native/runtime";
+import { resize, toggle } from "native:player";
 
 function resized(e: SkSurfaceEvent) {
-  void appHost.call("player.resize", e.width, e.height);
+  resize(e.width, e.height);
 }
 </script>
 
 <template>
   <div class="player">
     <sk-surface name="player" class="video" @surfaceresize="resized" />
-    <div class="controls"><button @click="appHost.call('player.toggle')">Play</button></div>
+    <div class="controls"><button @click="toggle()">Play</button></div>
   </div>
 </template>`,
-        note: 'The embedder renders into `skathi::surface("player")`; the controls are ordinary elements over it.',
+        note: 'The embedder renders into `host.surface("player")` and gives the app `resize` and `toggle` in its `"player"` [native module](/embedding/native-modules/); the controls are ordinary elements over it.',
       },
     ],
     edgeCases: [

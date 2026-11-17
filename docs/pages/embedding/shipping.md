@@ -43,6 +43,10 @@ let builder = skathi::Builder::new().payload_static(APP);
 
 `payload_bytes(vec)` takes owned bytes, for a payload you download, decrypt or unpack yourself. With none of the three, a `prod` build reads `SK_PAYLOAD`, and fails with `Error::NoPayload` when that is empty too.
 
+## The native modules' types
+
+A release exe answers `--sk-host-types` like a debug one: it prints the TypeScript of its [native modules](/embedding/native-modules/) and exits, which is how `sk types` reads them. Commit the generated `src/native-modules.d.ts` with the app, so the payload builds on a machine without your Rust build. Anyone can read those declarations out of your exe, as they could read the names in its strings: leave secrets out of module and type names.
+
 ## The profile
 
 localStorage, cookies, IndexedDB, secrets and the HTTP and bytecode caches live in one profile folder per app.

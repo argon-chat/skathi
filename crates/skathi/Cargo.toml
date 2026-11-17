@@ -15,7 +15,9 @@ include = ["src/**/*", "build.rs", "README.md"]
 links = "skathi"
 
 [features]
-default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12"]
+default = ["prod", "audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types"]
+# Native module types: `#[derive(skathi::Type)]` and `--sk-host-types` (specta).
+types = ["sk-app/types"]
 # Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
 prod = ["sk-app/prod"]
 audio = ["sk-app/audio"]

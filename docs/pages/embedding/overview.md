@@ -8,7 +8,7 @@ order: 0
 
 `sk build` gives you a finished exe: Skathi's own host with your app stamped in. That covers most apps. Sometimes the program comes first, though: a sync engine, a game launcher, a player built around libmpv, a tool with years of Rust behind it. It needs a UI, and it should not become a sidecar process that talks to a webview over a socket.
 
-For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gpui, JavaScriptCore, the CSS engine, the runtime) inside **your** executable. Your `main` stays yours. The app is the same Vue or Svelte project you would build with `sk`, packed into a payload, and the two halves talk through async functions and events, with no HTTP, IPC or webview in between.
+For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gpui, JavaScriptCore, the CSS engine, the runtime) inside **your** executable. Your `main` stays yours. The app is the same Vue or Svelte project you would build with `sk`, packed into a payload, and the two halves talk through native modules: Rust functions the app imports like any other module, with no HTTP, IPC or webview in between.
 
 <div class="tradeoffs">
 <div class="tradeoff" data-tone="gain">
@@ -16,11 +16,11 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 **What you get**
 
 - **Your process, your `main`.** Your threads, your allocator, your logging, your crash handling. Skathi runs on a thread of its own and hands back a `Handle`.
-- **Calls without plumbing.** `appHost.call("db.query", sql)` in the app is a Rust closure in yours. The result comes back as a promise.
+- **Calls without plumbing.** `import { query } from "native:db"` in the app is a Rust closure in yours, typed on both sides: `sk types` writes the TypeScript from your Rust types.
 - **Native APIs, not just messages.** In `setup` you build real JS objects backed by Rust functions, and post results from worker threads straight into the page.
 - **Native frames in the page.** A renderer you own (a video player, a game viewport, another process) draws into `<sk-surface>`, and the app's Vue or Svelte controls sit over it.
 - **One file if you want it.** `payload_static(include_bytes!(…))` compiles the app into the binary.
-- **The same app runs both ways.** `appHost.available` tells it whether a host is there, so `sk dev` and `sk build` keep working on their own.
+- **The same app runs both ways.** A native module's `available` tells the app whether a program is there, so `sk dev` and `sk build` keep working on their own.
 
 </div>
 <div class="tradeoff" data-tone="cost">
@@ -30,7 +30,7 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 - **A heavier build.** The first `cargo build` downloads the pinned JavaScriptCore prebuilt (about 1.6 GB unpacked on Windows). On Windows it needs MSVC, `clang-cl` and the static CRT.
 - **A build script.** Your exe must carry linker arguments and, on Windows, a manifest. The crate tells your `build.rs` what to pass.
 - **Once per process.** Skathi starts once and cannot be restarted in the same process.
-- **The UI thread is shared.** Function handlers run on the Skathi thread; one that blocks freezes the UI.
+- **The UI thread is shared.** A module function runs on the Skathi thread; one that blocks freezes the UI. Slow work goes in a task, on a worker.
 - **Versions in lockstep.** The `sk` CLI that builds the payload and the crate must have the same version.
 - **Packaging is yours.** The icon, version resource, installer and signing of your exe are your build's job, not `sk publish`'s.
 
@@ -44,7 +44,7 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 
 1. **The app** `src/**/*.vue`, `*.svelte`, `*.ts`
 
-   An ordinary Skathi project, made with `bun create skathi`. It calls the host through `appHost`.
+   An ordinary Skathi project, made with `bun create skathi`. It imports your program's modules from `native:<name>`.
 
 2. **The payload** `sk publish --payload-only`
 
@@ -58,7 +58,7 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 
 4. **`Builder`**
 
-   Your `main` names the payload, registers the functions the app may call, and optionally a `setup` hook.
+   Your `main` names the payload, registers the native modules the app imports, and optionally a `setup` hook.
 
 5. **`spawn()`** returns a `Handle`
 
@@ -66,7 +66,7 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 
 6. **Both sides talk**
 
-   The app calls your functions with `appHost.call`; you send it events with `Handle::emit`; frames you present show in `<sk-surface>`.
+   The app calls your module's functions and tasks; you send it events with `Handle::emit_to`; frames you present show in `<sk-surface>`.
 
 7. **`wait()`** returns an `Exit`
 
@@ -78,21 +78,21 @@ For that, the [`skathi`](https://docs.rs/skathi) crate puts the whole engine (gp
 
 From the simplest to the most direct:
 
-|               | Functions and events                                     | Native APIs                                         | Native frames                               |
-| ------------- | -------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------- |
-| In the app    | `appHost.call(name, …)`, `appHost.on(…)`                 | a global you install, `nativeClock.now()`           | `<sk-surface name="…">`                     |
-| In Rust       | `Builder::function`, `Handle::emit`                      | `HostContext::expose`, `js::function`, `dispatcher` | `SurfaceHandle::present_*`                  |
-| What crosses  | JSON                                                     | JS values, built on the JS thread                   | pixels or GPU textures                      |
-| Sync or async | async: every call is a promise                           | sync calls; results posted from workers             | the newest frame wins                       |
-| Good for      | requests, commands, notifications                        | hot calls, streams of data, callbacks               | video, viewports, anything a renderer draws |
-| Read          | [Functions and events](/embedding/functions-and-events/) | [Native APIs](/embedding/native-api/)               | [Native frames](/embedding/native-frames/)  |
+|               | Native modules                               | Native APIs                                         | Native frames                               |
+| ------------- | -------------------------------------------- | --------------------------------------------------- | ------------------------------------------- |
+| In the app    | `import { get, on } from "native:notes"`     | a global you install, `nativeClock.now()`           | `<sk-surface name="…">`                     |
+| In Rust       | `Builder::module`, `Handle::emit_to`         | `HostContext::expose`, `js::function`, `dispatcher` | `SurfaceHandle::present_*`                  |
+| What crosses  | serde values, typed on both sides            | JS values, built on the JS thread                   | pixels or GPU textures                      |
+| Sync or async | functions return now; tasks return a promise | sync calls; results posted from workers             | the newest frame wins                       |
+| Good for      | requests, commands, notifications            | hot calls, streams of data, callbacks               | video, viewports, anything a renderer draws |
+| Read          | [Native modules](/embedding/native-modules/) | [Native APIs](/embedding/native-api/)               | [Native frames](/embedding/native-frames/)  |
 
-Start with functions and events. Most embedders never need more, and the app stays easy to run without a host.
+Start with native modules. Most embedders never need more, and the app stays easy to run without a program around it.
 
 ## In this section
 
 - [Your first embedder](/embedding/first-embedder/): a Cargo project that runs an app, from an empty folder.
-- [Functions and events](/embedding/functions-and-events/): `appHost` on one side, `Builder::function` and `Handle::emit` on the other, and keeping the UI responsive.
+- [Native modules](/embedding/native-modules/): typed functions, worker tasks and events the app imports from `native:<name>`, and the TypeScript generated for them.
 - [Native APIs](/embedding/native-api/): the `setup` hook, native namespaces, posting from worker threads, cookies and secrets.
 - [Native frames](/embedding/native-frames/) and [GPU frames on Windows](/embedding/gpu-frames/): `<sk-surface>` and the producer's side of it.
 - [Window, tray and hotkeys](/embedding/desktop/): showing, hiding and closing the app from Rust, the tray, global hotkeys, single instance and deep links.

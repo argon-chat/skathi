@@ -913,6 +913,14 @@ pub fn run_exe() {
         println!("{}", payload::host_info_json());
         return;
     }
+    // A bare host has no native modules: nothing to declare.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == embed::HOST_TYPES_FLAG)
+        && !payload::embedded_present()
+    {
+        return;
+    }
     // `--sk-dist` is `SK_DIST` for a process started for a protocol link (no inherited environment).
     if let Some(dist) = args.host.sk_dist.as_deref().filter(|d| !d.is_empty()) {
         std::env::set_var("SK_DIST", dist);

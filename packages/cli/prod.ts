@@ -28,6 +28,7 @@ import {
   RUNTIME_ENTRY,
   RUNTIME_MODULES_DIR,
   RUNTIME_SRC_DIR,
+  NATIVE_MODULES_ENTRY,
   isPreseeded,
   runtimeRequire,
 } from "./runtime-path";
@@ -475,6 +476,12 @@ const vuePlugin = {
       return { contents: "", loader: "js" };
     });
     build.onResolve({ filter: /^(vue|@skathi-native\/runtime)$/ }, () => ({ path: RUNTIME_ENTRY }));
+    // Provided by the embedding program at run time: the bundle asks the runtime for it by name.
+    build.onResolve({ filter: /^native:/ }, (args: Bun.OnResolveArgs) => ({ path: args.path, namespace: "sk-native" }));
+    build.onLoad({ filter: /.*/, namespace: "sk-native" }, (args: Bun.OnLoadArgs) => ({
+      contents: `module.exports = require(${J(NATIVE_MODULES_ENTRY.split(sep).join("/"))}).nativeModule(${J(args.path.slice("native:".length))});`,
+      loader: "js",
+    }));
     if (APP_ALIASES.size) {
       const names = [...APP_ALIASES.keys()].map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
       build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: Bun.OnResolveArgs) => ({

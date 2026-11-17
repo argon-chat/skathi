@@ -18,6 +18,9 @@
 //!
 //! packages/test/specs/surface.spec.ts drives it.
 
+// The surface spec and its fixture still speak `appHost.call`.
+#![allow(deprecated)]
+
 use std::time::Duration;
 
 use serde_json::{json, Value};
