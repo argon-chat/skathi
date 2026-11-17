@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch } from "../src/index";
+import { launch, LINUX, WINDOWS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/wrap/src/main.ts",
@@ -65,7 +65,7 @@ describe("long tokens in Argon's message bubble", () => {
 });
 
 describe("one property each, in 120px", () => {
-  test(
+  test.skipIf(LINUX)(
     "overflow-wrap: normal lets a long word overflow; break-word and anywhere break it",
     async () => {
       const b = await boxes();
@@ -89,7 +89,8 @@ describe("one property each, in 120px", () => {
     T,
   );
 
-  test(
+  // Linux: break-word and pre-wrap do not break the long word.
+  test.skipIf(LINUX)(
     "nowrap and pre do not break even under anywhere; pre-wrap does",
     async () => {
       const b = await boxes();
@@ -100,7 +101,8 @@ describe("one property each, in 120px", () => {
     T,
   );
 
-  test(
+  // macOS and Linux: a soft hyphen breaks into 3 lines, not 2.
+  test.skipIf(!WINDOWS)(
     "a soft hyphen is a break opportunity unless hyphens: none; so is <wbr>",
     async () => {
       const b = await boxes();

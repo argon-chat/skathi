@@ -3,7 +3,7 @@
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { expect, launch } from "../src/index";
+import { expect, launch, MACOS, WINDOWS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/beforeinput/src/main.ts",
@@ -98,7 +98,8 @@ describe("beforeinput from the keyboard", () => {
     T,
   );
 
-  test(
+  // Editing keys and the IME composition differ off Windows (macOS edits with Cmd; the composition events come in another order).
+  test.skipIf(MACOS)(
     "Backspace, Ctrl+Backspace and Delete: the deletion types, no data; nothing to delete is no event",
     async () => {
       await app.locator("#ta").press("Backspace");
@@ -117,7 +118,7 @@ describe("beforeinput from the keyboard", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "a cancelled deletion keeps the text",
     async () => {
       await app.locator("#ta").type("x");
@@ -132,7 +133,7 @@ describe("beforeinput from the keyboard", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "Ctrl+Z and Ctrl+Y: historyUndo and historyRedo",
     async () => {
       await app.locator("#ta").press("Ctrl+Z");
@@ -149,7 +150,8 @@ describe("beforeinput from the keyboard", () => {
     T,
   );
 
-  test(
+  // The system clipboard is read and set through PowerShell.
+  test.skipIf(process.platform !== "win32")(
     "paste and cut: after the ClipboardEvent, insertFromPaste with the text, deleteByCut",
     async () => {
       const saved = powershell("Get-Clipboard -Raw");
@@ -186,7 +188,7 @@ describe("beforeinput from the keyboard", () => {
 });
 
 describe("the IME", () => {
-  test(
+  test.skipIf(!WINDOWS)(
     "a composition: start, then beforeinput / compositionupdate / input per pre-edit, and the end after the commit's input",
     async () => {
       await fresh();
@@ -210,7 +212,7 @@ describe("the IME", () => {
     T,
   );
 
-  test(
+  test.skipIf(!WINDOWS)(
     "its beforeinput cannot be cancelled",
     async () => {
       await cancel("insertCompositionText");
@@ -226,7 +228,7 @@ describe("the IME", () => {
     T,
   );
 
-  test(
+  test.skipIf(!WINDOWS)(
     "an emptied pre-edit ends the composition with no text",
     async () => {
       await ime("#ta", "n");
@@ -245,7 +247,7 @@ describe("the IME", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "a value assigned in the middle of a composition ends it",
     async () => {
       await ime("#ta", "m");

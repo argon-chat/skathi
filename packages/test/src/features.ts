@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { DEFAULT_EXE, REPO, WORK_DIR, stagedExe } from "./dist";
+import { DEFAULT_EXE, REPO, TARGET, WORK_DIR, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
   /** Cargo features, e.g. */
@@ -120,7 +120,7 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
 
   // No JS step: a `prod` build carries no app any more (it is stamped in afterwards —
   // `packagedExe`), so the host is the same whatever runs on it.
-  const args = ["build", "-p", "sk-app"];
+  const args = ["build", "-p", "sk-app", "--target", TARGET];
   if (options.features.length) args.push("--features", options.features.join(","));
   run("cargo", args, log);
 
@@ -133,7 +133,7 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
 
   // Put the tree back: the next `cargo build` in somebody's editor must not find a prod host where
   // the dev host belongs.
-  if (options.features.length) run("cargo", ["build", "-p", "sk-app"], log);
+  if (options.features.length) run("cargo", ["build", "-p", "sk-app", "--target", TARGET], log);
   return exe;
 }
 
@@ -191,6 +191,8 @@ export async function packagedExe(options: PackagedExeOptions): Promise<Packaged
   const { buildApp } = await import("../../cli/cli/build-app");
   const result = await buildApp({ target, out, host, variant, log });
   if (!result.exe) throw new Error(`sk build ${target} produced no exe`);
+  // A macOS payload is Contents/Resources/app.skpk: the binary only finds it inside its bundle.
+  if (process.platform === "darwin") return { exe: result.exe, built: result.exe, name: result.config.name, result };
   const exe = join(out, `sk-app-sktest-${process.pid}-${label}.exe`);
   rmSync(exe, { force: true });
   try {

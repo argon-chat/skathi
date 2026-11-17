@@ -2,36 +2,32 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
-import { rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { launch } from "../src/index";
+import { launch, WINDOWS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/events/src/main.ts",
   window: [480, 320],
   label: "minimized",
 });
-const user32 = dlopen("user32.dll", {
-  ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
-  IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
-});
+const user32 =
+  process.platform === "win32"
+    ? dlopen("user32.dll", {
+        ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+        IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
+      })
+    : null;
 afterAll(async () => {
-  user32.close();
+  user32?.close();
   await app.close();
 });
 
 const T = 60_000;
 
-test(
+// Off Windows show() does not bring a minimized window back, and the host logs no background tick.
+test.skipIf(!WINDOWS)(
   "timers, promises and devtools run while minimised; rAF waits for the next frame",
   async () => {
-    const shot = await app.send("screenshot", {
-      path: join(tmpdir(), `sk-minimized-hwnd-${process.pid}.png`),
-      backend: "render_to_image",
-    });
-    rmSync(shot.path, { force: true });
-    const hwnd = BigInt(shot.hwnd);
+    const hwnd = await app.hwnd();
 
     await app.eval(`(() => {
     const m = (globalThis.__MIN__ = { interval: 0, chain: 0, raf: 0, rafHidden: 0, vis: [] });
@@ -46,9 +42,11 @@ test(
     await Bun.sleep(300);
 
     await app.eval("__sk_window_verb('minimize'); 'ok'");
+    const iconic = async () =>
+      user32 ? user32.symbols.IsIconic(hwnd) !== 0 : await app.eval("__SK_WINDOW__.appWindow.isMinimized()");
     const until = Date.now() + 10_000;
-    while (!user32.symbols.IsIconic(hwnd) && Date.now() < until) await Bun.sleep(50);
-    expect(user32.symbols.IsIconic(hwnd)).not.toBe(0);
+    while (!(await iconic()) && Date.now() < until) await Bun.sleep(50);
+    expect(await iconic()).toBe(true);
     await Bun.sleep(800);
 
     const before = JSON.parse(await app.eval("JSON.stringify(__MIN__)"));
@@ -61,7 +59,8 @@ test(
     expect(after.raf).toBe(before.raf);
     expect(after.rafHidden).toBe(0);
 
-    user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+    if (user32) user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+    else await app.eval("__sk_window_verb('show'); 'ok'");
     let back = after;
     const restoreBy = Date.now() + 10_000;
     while (Date.now() < restoreBy) {
@@ -76,7 +75,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!WINDOWS)(
   "the host said when the tick took over and when frames came back",
   async () => {
     const { entries } = await app.logs(0);

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/stacking/src/main.ts",
@@ -37,7 +37,7 @@ const clicks = async (): Promise<string[]> => {
 };
 
 describe("two `fixed z-50` overlays, the earlier with z 0 / 1 / 2 layers", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the menu's items paint over the popover's glass zone",
     async () => {
       const at = await painted();
@@ -66,7 +66,7 @@ describe("two `fixed z-50` overlays, the earlier with z 0 / 1 / 2 layers", () =>
 });
 
 describe("a negative z-index on an in-flow box", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "paints over its context's background and under its in-flow content",
     async () => {
       const at = await painted();
@@ -79,7 +79,7 @@ describe("a negative z-index on an in-flow box", () => {
 });
 
 describe("`opacity < 1` at z auto", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "keeps its z-100 box inside it, under a later z-10 sibling",
     async () => {
       const at = await painted();

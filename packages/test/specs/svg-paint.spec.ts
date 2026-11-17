@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 560;
 const app = await launch({
@@ -50,7 +50,7 @@ const white = near([255, 255, 255], 12);
 const said = (s: Shot, x: number, y: number) => `rgb(${s.at(x, y).join(", ")}) at (${x}, ${y})`;
 
 describe("an inline <svg> painted from CSS rules", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "fill from a class rule through var(), stroke colour and width from the rule",
     async () => {
       const b = await box("#outline");
@@ -65,7 +65,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a class toggle repaints the stroke, and toggling back restores it",
     async () => {
       const b = await box("#outline");
@@ -80,7 +80,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a presentation attribute loses to the rule on its own element",
     async () => {
       const b = await box("#attr-loses");
@@ -91,7 +91,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a rule that matches a shape inside the svg beats the shape's attribute",
     async () => {
       const b = await box("#inner-rule");
@@ -101,7 +101,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the inline style beats the rule",
     async () => {
       const b = await box("#inline-wins");
@@ -111,7 +111,7 @@ describe("an inline <svg> painted from CSS rules", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a shape's own attribute beats what it would inherit from the svg's rule",
     async () => {
       const b = await box("#inherit-loses");
@@ -127,7 +127,7 @@ describe("an inline <svg> painted from CSS rules", () => {
 });
 
 describe("filter: drop-shadow() on an inline <svg>", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the shadow follows the circle, not the box, and reaches past the box",
     async () => {
       const b = await box("#shadowed");

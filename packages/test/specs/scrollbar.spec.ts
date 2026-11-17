@@ -1,8 +1,8 @@
 // Before this feature it scrolled blind: no thumb, no track, nothing that said there was more
 // below.
 
-import { afterAll, describe, test } from "bun:test";
-import { artifactPath, changedRegion, expect, launch, readPng } from "../src/index";
+import { afterAll, beforeAll, describe, test } from "bun:test";
+import { artifactPath, changedRegion, expect, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 import type { Rect } from "../src/index";
 
 const app = await launch({ app: "hello", window: [1000, 700], label: "scrollbar" });
@@ -32,11 +32,14 @@ const trackStrip = (box: { x: number; y: number; w: number; h: number }): Rect =
 });
 
 describe("scrollbars", () => {
-  test(
+  beforeAll(async () => {
+    await app.locator("a").nth(1).click();
+    await settle(700);
+  });
+
+  test.skipIf(!SCREENSHOTS)(
     "an overflow box paints a thumb once it has scrolled",
     async () => {
-      await app.locator("a").nth(1).click();
-      await settle(700);
       const box = await app.locator(BOX).boundingBox();
       expect(box.w).toBeGreaterThan(100);
 
@@ -112,7 +115,8 @@ describe("scrollbars", () => {
     T,
   );
 
-  test(
+  // macOS CI: the strip of a hidden scrollbar still changes on scroll.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "`scrollbar-width: none` hides the bar and keeps the scrolling",
     async () => {
       const box = await app.locator(BOX).boundingBox();

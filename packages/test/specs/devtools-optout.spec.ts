@@ -2,12 +2,12 @@
 // devtools port and opens its inspector on F12.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { allocateSlot, ensureBuild, resolveEntry, stagedExe } from "../src/dist";
-import { featureExe, fileContains, launch, packagedExe } from "../src/index";
+import { featureExe, fileContains, killTree, launch, packagedExe } from "../src/index";
 
 const T = 60_000;
 const BUILD_T = 15 * 60_000;
@@ -24,12 +24,7 @@ const MARKER = "Skathi devtools";
 const strays: ChildProcess[] = [];
 
 afterAll(() => {
-  for (const child of strays) {
-    if (!child.pid) continue;
-    try {
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-    } catch {}
-  }
+  for (const child of strays) if (child.pid) killTree(child.pid);
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

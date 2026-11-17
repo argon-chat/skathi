@@ -2,7 +2,7 @@
 // background, on a dark gray page.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
 
 const W = 460;
 const app = await launch({
@@ -68,7 +68,7 @@ const value = (sel: string) => js<string>(`return document.querySelector(${JSON.
 const active = () => js<string>("return document.activeElement && document.activeElement.id");
 
 describe("the closed box", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "Chromium's internal padding, arrow and line height, which appearance: none takes away",
     async () => {
       const m = await box("#model");
@@ -95,7 +95,7 @@ describe("the closed box", () => {
 });
 
 describe("the popup", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a click opens it under the box, and a click on an option picks it — over another select",
     async () => {
       const m = await box("#model");
@@ -121,7 +121,8 @@ describe("the popup", () => {
     T,
   );
 
-  test(
+  // macOS CI: hover, focus and popups do not follow the harness's synthetic input.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a press outside closes it and goes nowhere; the next one does",
     async () => {
       const m = await box("#model");
@@ -144,7 +145,7 @@ describe("the popup", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a cancelled mousedown opens nothing",
     async () => {
       const g = await box("#guarded");
@@ -155,7 +156,7 @@ describe("the popup", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "near the bottom of the window it opens above the box",
     async () => {
       const f = await box("#far");
@@ -168,7 +169,7 @@ describe("the popup", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a list longer than the room is capped to it, scrolls by wheel, and keeps the highlight in view",
     async () => {
       const l = await box("#long");
@@ -234,7 +235,8 @@ describe("the popup", () => {
 });
 
 describe("the keyboard", () => {
-  test(
+  // macOS and Linux: typing picks a different option.
+  test.skipIf(!WINDOWS)(
     "closed, the arrows and typing change the value at once, with input and change",
     async () => {
       await app.locator("#model").focus();
@@ -265,7 +267,8 @@ describe("the keyboard", () => {
     T,
   );
 
-  test(
+  // macOS: Alt+ArrowDown does not open the popup.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "Alt+ArrowDown opens it; the arrows move the highlight, Enter picks, Escape does not",
     async () => {
       const m = await box("#model");

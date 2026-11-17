@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch } from "../src/index";
+import { expect, launch, MACOS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/clipboard/src/main.ts",
@@ -26,7 +26,7 @@ async function fresh(): Promise<string[]> {
 const SHAPE = "event=true,dt=true,bubbles=true,cancelable=true";
 
 describe("ClipboardEvent from the keyboard", () => {
-  test(
+  test.skipIf(MACOS)(
     "Ctrl+V in a field: a read-only paste at the field, then document; cancelling it inserts nothing",
     async () => {
       await expect(app.locator("#field")).toHaveCount(1);
@@ -43,7 +43,7 @@ describe("ClipboardEvent from the keyboard", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "Shift+Insert is a paste too",
     async () => {
       await app.locator("#field").press("Shift+Insert");
@@ -52,7 +52,8 @@ describe("ClipboardEvent from the keyboard", () => {
     T,
   );
 
-  test(
+  // macOS: the clipboard keys are Cmd+C/X/V; Ctrl and Insert are not clipboard keys there.
+  test.skipIf(MACOS)(
     "Ctrl+C and Ctrl+Insert: a writable copy at the field",
     async () => {
       await app.locator("#field").press("Ctrl+C");
@@ -67,7 +68,7 @@ describe("ClipboardEvent from the keyboard", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "a cancelled keydown has no cut; Shift+Delete is a cut",
     async () => {
       await app.locator("#field").press("Ctrl+X");
@@ -78,7 +79,7 @@ describe("ClipboardEvent from the keyboard", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "outside a text field the keys fire at the focused element",
     async () => {
       await app.locator("#pad").press("Ctrl+V");

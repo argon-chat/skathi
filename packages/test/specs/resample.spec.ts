@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 360;
 const app = await launch({
@@ -74,7 +74,7 @@ const flat = (s: Stats, ref: number) => {
 };
 
 describe("a 1080 px checkerboard at 40 px is the reference grey", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "<img>",
     async () => {
       flat(await settle("#img"), await reference());
@@ -82,7 +82,7 @@ describe("a 1080 px checkerboard at 40 px is the reference grey", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "CSS background-image",
     async () => {
       flat(await settle("#bg"), await reference());
@@ -90,7 +90,7 @@ describe("a 1080 px checkerboard at 40 px is the reference grey", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a still <canvas>",
     async () => {
       flat(await settle("#cv"), await reference());
@@ -98,7 +98,7 @@ describe("a 1080 px checkerboard at 40 px is the reference grey", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a 1531 px <img>, whose copy is made off the painting thread",
     async () => {
       flat(await settle("#big"), await reference());

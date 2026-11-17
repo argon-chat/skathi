@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { launch, type SkApp } from "../src/index";
+import { launch, LINUX, type SkApp } from "../src/index";
 
 const T = 90_000;
 const ENTRY = "packages/test/fixtures/mic/src/main.ts";
@@ -90,7 +90,8 @@ async function listed(app: SkApp, kind: string, request = true): Promise<string>
 
 let app: SkApp;
 
-test(
+// Linux gates no capture: the app asks nothing and the platform's state stands.
+test.skipIf(LINUX)(
   "nothing is decided at first: prompt, anonymous inputs, and the question names the app",
   async () => {
     app = await host("fake", "first");
@@ -116,7 +117,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "Allow opens the microphone, is remembered, and later calls do not ask",
   async () => {
     const got = await open(app, (id) => app.chooseDialog(id, 0));
@@ -136,13 +137,15 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "the inputs are listed by name, and the OS device notifications are on",
   async () => {
     // Granted, so the listing has names and asks nothing.
     expect(await listed(app, "audioinput")).toBe("ok:default/Default - Fake Microphone,fake/Fake Microphone");
     expect(await app.questions()).toEqual([]);
     expect(await listed(app, "videoinput")).toBe("ok:");
+    // The device notifications are WASAPI's; no other host has them yet.
+    if (process.platform !== "win32") return;
     await app.eval("navigator.mediaDevices.addEventListener('devicechange', () => {}), 0");
     let log = "";
     for (let i = 0; i < 100 && !log.includes("audio device notifications"); i++) {
@@ -154,7 +157,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "Block refuses, and getUserMedia never asks again until a reset or appPermissions.request",
   async () => {
     const reset = await app.resetPermissions("microphone");
@@ -181,7 +184,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "the answer outlives the process",
   async () => {
     await app.close();
@@ -194,7 +197,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "without an embedder's processing, getSettings reports that none runs",
   async () => {
     const opened = async (constraints: string) => {
@@ -215,7 +218,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(LINUX)(
   "SK_MEDIA_CAPTURE=deny refuses without a prompt, whatever was stored",
   async () => {
     await app.close();

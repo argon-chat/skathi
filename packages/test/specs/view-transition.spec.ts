@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, MACOS, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/view-transition/src/main.ts",
@@ -44,7 +44,7 @@ const start = (options: string) =>
   })()`);
 
 describe("document.startViewTransition", () => {
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "the old state stays on screen while the update runs, then the transition plays out",
     async () => {
       expect(await start(`() => { window.__flip(); return new Promise((r) => (window.__thaw = r)); }`)).toBe(true);
@@ -64,7 +64,8 @@ describe("document.startViewTransition", () => {
     T,
   );
 
-  test(
+  // View transitions need screenshots (none on Linux); on macOS CI the transition's log order differs.
+  test.skipIf(!WINDOWS)(
     "old and new captures cross-fade under the author's timing, and skipTransition ends it",
     async () => {
       expect(await start(`{ update: () => window.__flip(), types: ["hold"] }`)).toBe(true);

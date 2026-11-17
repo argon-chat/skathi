@@ -2,8 +2,21 @@ import { afterAll, beforeAll, describe, expect as bunExpect, test } from "bun:te
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
-import { bareHost, fileContains, launch, packagedSlot, readPng, REPO, WORK_DIR, type SkApp } from "../src/index";
+import { delimiter, dirname, join, sep } from "node:path";
+import {
+  bareHost,
+  fileContains,
+  killTree,
+  launch,
+  MACOS,
+  packagedSlot,
+  readPng,
+  REPO,
+  SCREENSHOTS,
+  type SkApp,
+  WINDOWS,
+  WORK_DIR,
+} from "../src/index";
 import { readPe, RT, shellIconCount, SUBSYSTEM, versionString } from "../../cli/cli/pe";
 import { PAYLOAD_NAME, stamp } from "../../cli/cli/stamp";
 import { readSkpk, writeSkpk, type SkpkInput } from "../../cli/cli/skpk";
@@ -27,7 +40,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 afterAll(async () => {
   for (const app of opened) await app.close();
   for (const child of strays) {
-    if (child.pid) spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    if (child.pid) killTree(child.pid);
   }
   await sleep(300);
   rmSync(OUT, { recursive: true, force: true });
@@ -63,6 +76,8 @@ function cliBuild(app: string, host: string, variant: string, label: string) {
 }
 
 function runnable(exe: string, label: string): string {
+  // A macOS binary finds its payload only inside its .app bundle.
+  if (process.platform === "darwin") return exe;
   const link = join(dirname(exe), `sk-app-sktest-${process.pid}-${label}.exe`);
   rmSync(link, { force: true });
   try {
@@ -105,15 +120,16 @@ describe("sk build", () => {
       built.hello = cliBuild("hello", standardHost, "standard", "hello");
       built.shadcn = cliBuild("shadcn", standardHost, "standard", "shadcn");
       console.log(
-        `[package.spec] sk build: hello ${built.hello.ms} ms (stamp ${built.hello.json.stamp.ms.total} ms), ` +
-          `shadcn ${built.shadcn.ms} ms (stamp ${built.shadcn.json.stamp.ms.total} ms)`,
+        `[package.spec] sk build: hello ${built.hello.ms} ms (stamp ${built.hello.json.stamp?.ms.total} ms), ` +
+          `shadcn ${built.shadcn.ms} ms (stamp ${built.shadcn.json.stamp?.ms.total} ms)`,
       );
 
       const cases = [
         { key: "hello", file: "Hello.exe", product: "Hello", version: "0.1.0.0" },
         { key: "shadcn", file: "ShadcnGallery.exe", product: "shadcn-vue gallery", version: "0.0.1.0" },
       ];
-      for (const c of cases) {
+      // The exe checks read a PE; elsewhere the build succeeding is the check.
+      for (const c of process.platform === "win32" ? cases : []) {
         const exe = built[c.key]!.exe;
         bunExpect(exe.endsWith(c.file)).toBe(true);
         const pe = readPe(exe);
@@ -190,7 +206,8 @@ describe("a packaged hello", () => {
     T,
   );
 
-  test(
+  // macOS CI: the payload's <img> and <video> never paint.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "<img> and <video> resolve relative srcs out of the payload",
     async () => {
       await app.locator(".tab").nth(3).click();
@@ -228,7 +245,7 @@ describe("a packaged hello", () => {
     "localStorage lives under %LOCALAPPDATA%\\<sk.config name>\\storage, not the exe's name",
     async () => {
       const info = JSON.parse(await app.eval("JSON.stringify(__SK_STORAGE__.info())"));
-      bunExpect(info.folder.toLowerCase().endsWith("\\hello\\storage")).toBe(true);
+      bunExpect(info.folder.toLowerCase().endsWith(`${sep}hello${sep}storage`)).toBe(true);
       bunExpect(info.folder.toLowerCase()).not.toContain("sk-app-sktest");
     },
     T,
@@ -265,7 +282,7 @@ describe("two packaged apps side by side", () => {
         bunExpect(hello.slotDir).not.toBe(shadcn.slotDir);
         const hi = JSON.parse(await hello.eval("JSON.stringify(__SK_STORAGE__.info())"));
         const sh = JSON.parse(await shadcn.eval("JSON.stringify(__SK_STORAGE__.info())"));
-        bunExpect(sh.folder.toLowerCase().endsWith("\\shadcn\\storage")).toBe(true);
+        bunExpect(sh.folder.toLowerCase().endsWith(`${sep}shadcn${sep}storage`)).toBe(true);
         bunExpect(hi.folder).not.toBe(sh.folder);
 
         await hello.eval(`localStorage.setItem(${JSON.stringify(PROBE_KEY)}, 'from hello'); __SK_STORAGE__.flush()`);
@@ -290,7 +307,8 @@ describe("two packaged apps side by side", () => {
 });
 
 describe("re-stamping", () => {
-  test(
+  // Re-stamping rewrites a PE's resources.
+  test.skipIf(!WINDOWS)(
     "a stamped exe takes a new payload and keeps its icon and version info",
     async () => {
       const fixture = join(REPO, "packages", "test", "fixtures", "devtools-on");
@@ -354,7 +372,7 @@ describe("the no-devtools host", () => {
         .split(/\r?\n/)
         .filter((l) => /LISTENING/.test(l) && l.trim().split(/\s+/).pop() === String(child.pid));
       bunExpect(listening).toEqual([]);
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      if (child.pid) killTree(child.pid);
     },
     T,
   );

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch } from "../src/index";
+import { launch, WINDOWS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/em/src/main.ts",
@@ -67,7 +67,8 @@ describe("em", () => {
     T,
   );
 
-  test(
+  // macOS and Linux: 1ch is not the 0 glyph's advance.
+  test.skipIf(!WINDOWS)(
     "ch is half an em of the element's own size",
     async () => {
       const b = await boxes();

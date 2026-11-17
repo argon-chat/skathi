@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, LINUX, ON_SCREEN, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
 
 const W = 480;
 const app = await launch({
@@ -36,7 +36,7 @@ async function box(selector: string): Promise<Bounds> {
 }
 
 async function centres(boxes: Bounds[]): Promise<Rgb[]> {
-  const shot = readPng(await app.screenshot(undefined, "print_window"));
+  const shot = readPng(await app.screenshot(undefined, ON_SCREEN));
   const k = shot.width / W;
   return boxes.map((b) => shot.at(Math.round((b.x + b.w / 2) * k), Math.round((b.y + b.h / 2) * k)));
 }
@@ -68,7 +68,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "copies of one source, at any size, show the same frame of one clock",
   async () => {
     const ids = ["#a", "#b", "#small", "#deep"];
@@ -89,7 +89,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "pixels are straight alpha, and play=off / once hold their frame",
   async () => {
     await until("ended:once", async () => (await events()).includes("ended:once"), 10_000);
@@ -103,7 +103,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "tint paints the frame in the element's colour, by the frame's alpha",
   async () => {
     const [tint, tintHalf] = await centres(await Promise.all(["#tint", "#tint-half"].map(box)));
@@ -113,7 +113,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a colour change, as a theme switch makes, re-tints the frame shown",
   async () => {
     await app.eval("document.getElementById('tint').style.color = 'rgb(0, 0, 255)'; 'ok'");
@@ -134,7 +134,8 @@ test(
   T,
 );
 
-test(
+// Presents are counted by the Windows compositor path only.
+test.skipIf(!WINDOWS)(
   "animating stickers are presents, not builds",
   async () => {
     const a = (await app.send("perf")) as { builds: number; presents: number };
@@ -149,7 +150,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a sticker in a cached subtree shows its new size's frames after a resize",
   async () => {
     await app.eval("__SK_TEST_STICKER__.state.deep = 56; 'ok'");
@@ -168,7 +169,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "an http(s) source is fetched once for every copy",
   async () => {
     const src = `http://127.0.0.1:${server.port}/steps.json`;
@@ -188,7 +189,8 @@ test(
   T,
 );
 
-test(
+// Linux: the engine reports no sticker stats.
+test.skipIf(LINUX)(
   "the engine's stats count what is on screen",
   async () => {
     const mem = (await app.send("mem")) as { stickers: Record<string, number> | null };

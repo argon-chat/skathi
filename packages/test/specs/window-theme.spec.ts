@@ -9,6 +9,8 @@ const app = await launch({
 afterAll(() => app.close());
 
 const T = 30_000;
+/** DWM's own dark-mode flag; null off Windows. */
+const DWM = process.platform === "win32";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Seen = { theme: string; dwm: boolean | null; media: boolean; changes: boolean[] };
@@ -43,7 +45,7 @@ describe("appWindow.theme", () => {
     })()`);
       os = await seen();
       expect(os.theme).toBe("system");
-      expect(os.dwm).toBe(os.media);
+      if (DWM) expect(os.dwm).toBe(os.media);
     },
     T,
   );
@@ -55,7 +57,7 @@ describe("appWindow.theme", () => {
       await setTheme(other);
       const s = await seen();
       expect(s.theme).toBe(other);
-      expect(s.dwm).toBe(!os.media);
+      if (DWM) expect(s.dwm).toBe(!os.media);
       expect(s.media).toBe(!os.media);
       expect(s.changes).toEqual([!os.media]);
     },
@@ -68,7 +70,7 @@ describe("appWindow.theme", () => {
       await setTheme("system");
       const s = await seen();
       expect(s.theme).toBe("system");
-      expect(s.dwm).toBe(os.media);
+      if (DWM) expect(s.dwm).toBe(os.media);
       expect(s.media).toBe(os.media);
       expect(s.changes).toEqual([!os.media, os.media]);
     },

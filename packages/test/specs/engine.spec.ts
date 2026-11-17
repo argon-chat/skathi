@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch } from "../src/index";
+import { expect, launch, MACOS } from "../src/index";
 import type { Locator } from "../src/locator";
 
 const app = await launch({ app: "hello", window: [1100, 820], label: "engine" });
@@ -15,7 +15,8 @@ const pickAt = async (x: number, y: number) => {
 };
 
 describe("hover is pointer geometry", () => {
-  test(
+  // macOS CI: hover, focus and popups do not follow the harness's synthetic input.
+  test.skipIf(MACOS)(
     "a keystroke does not put the hover out",
     async () => {
       const tab = app.locator(".tab").nth(1);

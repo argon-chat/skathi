@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, readPng, SCREENSHOTS } from "../src/index";
 
 const WIDTH = 420;
 const app = await launch({
@@ -77,7 +77,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "Latin text is drawn with the latin subset's glyphs",
     async () => {
       await settled();
@@ -87,7 +87,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "bold Latin and digits are the latin subset's 700",
     async () => {
       await settled();
@@ -97,7 +97,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "Cyrillic text is drawn with the cyrillic subset's glyphs",
     async () => {
       await settled();
@@ -107,7 +107,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "one run of Latin, Cyrillic and digits takes each character from its subset",
     async () => {
       await settled();
@@ -118,7 +118,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a PUA-only family that leads the stack draws its own glyphs, and the next family the rest",
     async () => {
       await settled();

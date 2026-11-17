@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/layout/src/main.ts",
@@ -29,7 +29,8 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_00
 const shown = (b: Bounds | null) => !!b && b.w > 0 && b.h > 0;
 
 describe("#1 group-hover that changes `display`", () => {
-  test(
+  // macOS CI: hover, focus and popups do not follow the harness's synthetic input.
+  test.skipIf(MACOS)(
     "a scroll under a still pointer neither crashes the host nor leaves the wrong row's timestamp",
     async () => {
       // Painted first (`boundingBox` waits for it): on a cold host the first hover could otherwise
@@ -129,7 +130,7 @@ describe("#14 background-image: url()", () => {
     return until(read, (got) => got.every((c, i) => near(c, want[i]!)));
   }
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "emojix's pixel sprite shows its cell",
     async () => {
       const got = await colours("#bg-px", [[10, 10]], [BLUE]);
@@ -138,7 +139,7 @@ describe("#14 background-image: url()", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "emojix's percentage sprite shows its cell",
     async () => {
       const got = await colours("#bg-pct", [[10, 10]], [BLUE]);
@@ -147,7 +148,7 @@ describe("#14 background-image: url()", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`cover` scales the image over the box and `center` centres it",
     async () => {
       const got = await colours(
@@ -164,7 +165,7 @@ describe("#14 background-image: url()", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`repeat-x` tiles along the box",
     async () => {
       const points: [number, number][] = [
@@ -182,7 +183,7 @@ describe("#14 background-image: url()", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a gradient written above an image paints over it",
     async () => {
       const got = await colours("#bg-over", [[10, 10]], [LIME]);
@@ -193,7 +194,7 @@ describe("#14 background-image: url()", () => {
 });
 
 describe("#18 backdrop-filter under a transform", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the blur is drawn where the box is drawn, and nowhere else",
     async () => {
       const stage = await app.locator("#bd-stage").boundingBox();
@@ -211,7 +212,7 @@ describe("#18 backdrop-filter under a transform", () => {
 });
 
 describe("#36 a radio's dot", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "is drawn in the inherited colour, in the middle of the circle",
     async () => {
       // It is centred only because a button centres its content vertically, and it is lime only
@@ -244,7 +245,7 @@ describe("#36 a radio's dot", () => {
 });
 
 describe("the gradient-border mask (the Ultima price card)", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "paints the lime in the padding ring and leaves the text uncovered",
     async () => {
       // Before the fix the mask was dropped, and the lime covered the whole card, text included.

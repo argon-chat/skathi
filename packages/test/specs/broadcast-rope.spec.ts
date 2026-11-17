@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 360;
 const app = await launch({
@@ -33,7 +33,7 @@ async function settled(): Promise<Rope> {
 const dark = ([r, g, b]: Rgb) => r < 110 && g < 110 && b < 110;
 
 describe("broadcast connector", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the path is drawn where its coordinates say, in the svg box's pixels",
     async () => {
       const r = await settled();

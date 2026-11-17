@@ -11,6 +11,7 @@ import {
   clipboardSnapshot,
   dibHeader,
   launch,
+  WINDOWS,
 } from "../src/index";
 import { png } from "../fixtures/http-images/server";
 
@@ -95,12 +96,16 @@ async function until<V>(what: string, probe: () => Promise<V>, ms = 8000): Promi
   }
 }
 
-const user32 = dlopen("user32.dll", {
-  GetForegroundWindow: { args: [], returns: FFIType.u64 },
-  GetWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
-});
+const user32 =
+  process.platform === "win32"
+    ? dlopen("user32.dll", {
+        GetForegroundWindow: { args: [], returns: FFIType.u64 },
+        GetWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
+      })
+    : null;
 const GW_HWNDPREV = 3;
-function behindForeground(hwnd: number): boolean {
+function behindForeground(hwnd: number): boolean | null {
+  if (!user32) return null;
   const fg = user32.symbols.GetForegroundWindow();
   if (fg === 0n || fg === BigInt(hwnd)) return false;
   let h = user32.symbols.GetWindow(BigInt(hwnd), GW_HWNDPREV);
@@ -159,7 +164,8 @@ async function closeByEscape() {
 
 const report: Record<string, unknown> = {};
 
-describe("lightbox", () => {
+// The viewer's window facts (`__sk_window_popouts`) and the clipboard checks are Win32.
+describe.skipIf(!WINDOWS)("lightbox", () => {
   // A failed test must not leave a monitor-sized window up for the rest.
   afterEach(async () => {
     if ((await viewer())?.visible) await app.eval(`__SK_TEST_LB__.close("cleanup"); "ok"`);

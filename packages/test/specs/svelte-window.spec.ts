@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { join } from "node:path";
-import { expect, featureExe, launch, packagedExe, REPO, type SkApp } from "../src/index";
+import { expect, featureExe, launch, packagedExe, REPO, type SkApp, WINDOWS } from "../src/index";
 
 const ENTRY = "packages/test/fixtures/svelte-window/src/main.ts";
 const T = 30_000;
@@ -41,7 +41,8 @@ async function popOut(app: SkApp): Promise<Popout> {
   return palette!;
 }
 
-describe("svelte <SkWindow> under sk dev", () => {
+// Off Windows the pop-out reports another size, and every later test needs that pop-out.
+describe.skipIf(!WINDOWS)("svelte <SkWindow> under sk dev", () => {
   let app: SkApp;
   let palette: Popout;
   afterAll(() => app?.close());

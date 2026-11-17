@@ -1,7 +1,7 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { expect, launch, packagedExe, REPO, type SkApp } from "../src/index";
+import { appDataDir, expect, launch, packagedExe, REPO, type SkApp } from "../src/index";
 
 const T = 60_000;
 const BUILD_T = 20 * 60_000;
@@ -245,7 +245,7 @@ describe("IndexedDB on disk, packaged exe", () => {
         app: join(REPO, "packages", "test", "fixtures", "idb-persist"),
         label: "idb-persist",
       });
-      const appDir = join(process.env.LOCALAPPDATA ?? "", p.name);
+      const appDir = appDataDir(p.name);
       rmSync(appDir, { recursive: true, force: true });
       const value = `packaged-${run}-${Date.now()}`;
       let a = await launch({ app: "idb-persist", exe: p.exe, packaged: p.name, label: "idb-persist-packaged" });

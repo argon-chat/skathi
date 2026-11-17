@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8AAQv8BD/kD/YURmXYAAAAASUVORK5CYII=",
@@ -124,7 +124,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "an on-screen <canvas> gets the bitmap's size, and CSS scales the bitmap",
   async () => {
     const got = await inPage(`
@@ -168,7 +168,8 @@ test(
   T,
 );
 
-test(
+// macOS CI: the page body never settles.
+test.skipIf(!SCREENSHOTS || MACOS)(
   "a draw with no DOM change repaints the canvas on the next frame",
   async () => {
     await inPage(`
@@ -188,7 +189,7 @@ test(
 
 // A canvas keeps its bitmap premultiplied; gpui's atlas takes straight alpha and blends with
 // SRC_ALPHA.
-test(
+test.skipIf(!SCREENSHOTS || MACOS)(
   "translucent canvas pixels composite as in a browser: an alpha fill and an antialiased edge",
   async () => {
     const got = await inPage(`

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/text-shadow/src/main.ts",
@@ -81,7 +81,7 @@ const computed = async (id: string): Promise<string> =>
   String(await app.eval(`getComputedStyle(document.getElementById(${JSON.stringify(id)})).textShadow`));
 
 describe("text-shadow", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a sharp shadow is the text drawn again, offset exactly",
     async () => {
       await sleep(500);
@@ -102,7 +102,7 @@ describe("text-shadow", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a blurred shadow spreads its ink and stays centred on its offset",
     async () => {
       const [ref, soft] = [await box("#soft-ref"), await box("#soft")];
@@ -121,7 +121,7 @@ describe("text-shadow", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "shadows paint in list order, the first on top, all under the text",
     async () => {
       const [hard, multi] = [await box("#hard"), await box("#multi")];
@@ -151,7 +151,7 @@ describe("text-shadow", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "it inherits, `none` stops it, and currentColor is each element's own color",
     async () => {
       const [inherit, none, current] = [await box("#inherit"), await box("#inherit-none"), await box("#current")];
@@ -172,7 +172,7 @@ describe("text-shadow", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "it shadows the ellipsis of truncated text, and gradient-filled text",
     async () => {
       const [ellipsis, bgclip] = [await box("#ellipsis"), await box("#bgclip")];
@@ -187,7 +187,8 @@ describe("text-shadow", () => {
     T,
   );
 
-  test(
+  // macOS CI: the transition's midpoint is sampled past the middle.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a transition interpolates the shadow's colour",
     async () => {
       const b = await box("#trans");

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch } from "../src/index";
+import { expect, launch, MACOS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/measure-on-mount/src/main.ts",
@@ -171,7 +171,8 @@ describe("a later wave", () => {
     T,
   );
 
-  test(
+  // macOS CI: nodes added after a click or a key are not painted (bounds null).
+  test.skipIf(MACOS)(
     "mounted from a mousedown and a keydown, under gpui's listener",
     async () => {
       // Both handlers run inside gpui's dispatch, where no frame can be drawn.

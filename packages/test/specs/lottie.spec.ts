@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, ON_SCREEN, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 480;
 const app = await launch({
@@ -34,7 +34,7 @@ async function box(selector: string): Promise<Bounds> {
 }
 
 async function centres(boxes: Bounds[]): Promise<Rgb[]> {
-  const shot = readPng(await app.screenshot(undefined, "print_window"));
+  const shot = readPng(await app.screenshot(undefined, ON_SCREEN));
   const k = shot.width / W;
   return boxes.map((b) => shot.at(Math.round((b.x + b.w / 2) * k), Math.round((b.y + b.h / 2) * k)));
 }
@@ -53,7 +53,7 @@ async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
   }
 }
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a <lottie> paints once its load, off the UI thread, lands",
   async () => {
     await until("#play painted", async () => step((await centres([await box("#play")]))[0]!) !== "?");
@@ -61,7 +61,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a playing <lottie> moves through its loop, by presents and not builds",
   async () => {
     const b = await box("#play");
@@ -92,7 +92,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   'loop="1" plays twice, then completes: one loopComplete, one complete',
   async () => {
     await until("complete:count", async () => (await events()).some((e) => e.startsWith("complete:count")), 10_000);
@@ -104,7 +104,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "no autoplay holds the first frame; a segment plays only its frames; pixels are straight alpha",
   async () => {
     const [still, seg, half] = await centres(await Promise.all(["#still", "#seg", "#half"].map(box)));
@@ -116,7 +116,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "autoplay is edge-triggered: a change plays, a change back pauses where it is",
   async () => {
     const b = await box("#toggle");
@@ -132,7 +132,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "an http(s) src loads, off the UI thread, and plays",
   async () => {
     await app.eval(`__SK_TEST_LOTTIE__.add("net", "http://127.0.0.1:${server.port}/steps.json", 100); 'ok'`);

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/query-state/src/main.ts",
@@ -75,7 +75,7 @@ describe("focus in a query", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "Tab shows the focus, in the query and on screen",
     async () => {
       await app.press("Tab");
@@ -97,7 +97,7 @@ describe("focus in a query", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a click into a text field shows its focus, as in Chromium",
     async () => {
       await app.locator("#field").click({ real: true });
@@ -122,7 +122,8 @@ describe("focus in a query", () => {
 });
 
 describe("the pointer in a query", () => {
-  test(
+  // macOS CI: hover does not follow the harness's synthetic pointer.
+  test.skipIf(MACOS)(
     ":hover is the element under the pointer and its ancestors",
     async () => {
       await app.locator("#pad-inner").hover();

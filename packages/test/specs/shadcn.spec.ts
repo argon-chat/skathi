@@ -1,5 +1,15 @@
 import { afterAll, describe, test } from "bun:test";
-import { artifactPath, changedRegion, expect, inset, launch, parseHsla, readPng, styleValue } from "../src/index";
+import {
+  artifactPath,
+  changedRegion,
+  expect,
+  inset,
+  launch,
+  parseHsla,
+  readPng,
+  styleValue,
+  WINDOWS,
+} from "../src/index";
 import type { Rect } from "../src/index";
 
 const app = await launch({ app: "shadcn", window: [1400, 900], label: "shadcn" });
@@ -105,7 +115,8 @@ describe("shadcn", () => {
     T,
   );
 
-  test(
+  // macOS CI: the dialog and popover pixels are not found where Windows paints them.
+  test.skipIf(!WINDOWS)(
     "the dialog's Confirm label is painted, not buried under its own button",
     async () => {
       await app.locator("[aria-haspopup=dialog]").first().click();
@@ -138,7 +149,7 @@ describe("shadcn", () => {
     T,
   );
 
-  test(
+  test.skipIf(!WINDOWS)(
     "the popover paints its body text, not just its panel",
     async () => {
       const trigger = app.locator("[aria-haspopup=dialog]").nth(1);

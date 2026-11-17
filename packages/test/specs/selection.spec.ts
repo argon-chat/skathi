@@ -1,6 +1,6 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { launch, readPng } from "../src/index";
+import { launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/selection/src/main.ts",
@@ -79,7 +79,7 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the selection is painted: the highlight is behind the selected text only",
     async () => {
       const p1 = await box("#p1");
@@ -97,7 +97,8 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  // The system clipboard is read and set through PowerShell.
+  test.skipIf(process.platform !== "win32")(
     "Ctrl+C copies the selected text, with the copy event seeing it",
     async () => {
       const saved = powershell("Get-Clipboard -Raw");
@@ -127,7 +128,7 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "a double click takes the word, a triple click the paragraph",
     async () => {
       const big = await box("#big");
@@ -144,7 +145,7 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "Shift+click extends the selection",
     async () => {
       const p3 = await box("#p3");
@@ -186,7 +187,8 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  // macOS: word/paragraph clicks, Shift+click, Cmd-less Ctrl+A and drag-scroll select nothing.
+  test.skipIf(MACOS)(
     "Ctrl+A outside a field selects the document; a press into the field clears it",
     async () => {
       await clear();
@@ -204,7 +206,7 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "a drag held below a scroll box scrolls it, and the selection follows",
     async () => {
       await clear();
@@ -228,7 +230,7 @@ describe("text selection by mouse", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a selection set from script paints and reads back",
     async () => {
       await clear();

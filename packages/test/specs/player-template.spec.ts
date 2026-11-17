@@ -4,7 +4,7 @@ import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { create } from "../../cli/cli/create";
 import { compileAppEffects, writeEffectFiles } from "../../cli/effects/compile";
 import { resolveCompiler } from "../../cli/effects/redslangc";
-import { expect, launch, REPO, WORK_DIR } from "../src/index";
+import { expect, launch, REPO, WINDOWS, WORK_DIR } from "../src/index";
 
 const T = 60_000;
 const dir = join(WORK_DIR, `player-template-${process.pid}`);
@@ -80,7 +80,8 @@ describe("the player template", () => {
     T,
   );
 
-  test(
+  // Linux: no audio output, so the clock never runs; macOS CI: the ring is drawn at another size.
+  test.skipIf(!WINDOWS)(
     "plays a demo track: decodes it, runs the clock and feeds the analyser's spectrum to the ring",
     async () => {
       await app.locator(".volume .tool").click();

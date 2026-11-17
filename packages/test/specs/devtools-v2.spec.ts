@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_EXE, launch } from "../src/index";
+import { DEFAULT_EXE, launch, SCREENSHOTS } from "../src/index";
 
 const T = 40_000;
 
@@ -265,7 +265,7 @@ describe("the push channel", () => {
 });
 
 describe("per-window addressing", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a pop-out is a window the protocol can name, and answer about",
     async () => {
       const two = await launch({

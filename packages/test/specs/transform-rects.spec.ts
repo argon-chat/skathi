@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/transform-rects/src/main.ts",
@@ -63,7 +63,7 @@ describe("a popper moved by `translate`, and one anchored inside it", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the menu it opens is placed under the button, not the window's corner",
     async () => {
       await app.locator("#menu-btn").click({ real: true });
@@ -93,7 +93,7 @@ describe("a dialog centred with `translate(-50%, -50%)`, with a select inside", 
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the select's list opens under its trigger",
     async () => {
       await app.locator("#select-trigger").click({ real: true });

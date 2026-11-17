@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { compileAppEffects, writeEffectFiles } from "../../cli/effects/compile";
 import { resolveCompiler } from "../../cli/effects/redslangc";
-import { launch, readPng, type SkApp } from "../src/index";
+import { launch, readPng, SCREENSHOTS, type SkApp } from "../src/index";
 
 const W = 360;
 const T = 30_000;
@@ -50,7 +50,7 @@ async function settle(selector: string, fx: number, want: Rgb): Promise<Rgb> {
   return got;
 }
 
-test.skipIf(!compiler)(
+test.skipIf(!compiler || !SCREENSHOTS)(
   "a colour image samples premultiplied, an [SkLinear] one as stored, a missing one as its default",
   async () => {
     expect(await settle("#colour", 0.1, [128, 0, 0])).toSatisfy((c) => near(c, [128, 0, 0]));

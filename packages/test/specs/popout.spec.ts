@@ -2,7 +2,8 @@
 // window's own `Window::dispatch_event` — the same entry point the Win32 message loop uses.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch, readPng } from "../src/index";
+import { tmpdir } from "node:os";
+import { expect, launch, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({ app: "popout", window: [620, 460], label: "popout" });
 afterAll(() => app.close());
@@ -256,11 +257,11 @@ describe("pop-out", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a screenshot can be taken of the pop-out window by id",
     async () => {
       const shot = await app.send("screenshot", {
-        path: `${process.env.TEMP ?? "."}/sk-popout-palette.png`,
+        path: `${tmpdir()}/sk-popout-palette.png`,
         window: palette.windowId,
       });
       const png = readPng(shot.path);
@@ -268,7 +269,7 @@ describe("pop-out", () => {
       bunExpect([shot.width, shot.height]).toEqual([png.width, png.height]);
 
       const unknown = app.send("screenshot", {
-        path: `${process.env.TEMP ?? "."}/sk-popout-none.png`,
+        path: `${tmpdir()}/sk-popout-none.png`,
         window: palette.windowId + 1000,
       });
       await bunExpect(unknown).rejects.toThrow();

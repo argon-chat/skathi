@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, ON_SCREEN, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
 
 const W = 360;
 const app = await launch({
@@ -24,14 +24,14 @@ async function box(selector: string): Promise<Bounds> {
   return b;
 }
 
-async function centre(b: Bounds, backend: "print_window" | "render_to_image"): Promise<[number, number, number]> {
+async function centre(b: Bounds, backend: typeof ON_SCREEN | "render_to_image"): Promise<[number, number, number]> {
   const shot = readPng(await app.screenshot(undefined, backend));
   const k = shot.width / W;
   return shot.at(Math.round((b.x + b.w / 2) * k), Math.round((b.y + b.h / 2) * k));
 }
 
 async function digest(b: Bounds): Promise<string> {
-  const shot = readPng(await app.screenshot(undefined, "print_window"));
+  const shot = readPng(await app.screenshot(undefined, ON_SCREEN));
   const k = shot.width / W;
   const out: number[] = [];
   for (let y = Math.ceil(b.y * k) + 2; y < Math.floor((b.y + b.h) * k) - 2; y += 3)
@@ -42,7 +42,7 @@ async function digest(b: Bounds): Promise<string> {
 const near = (got: [number, number, number], want: [number, number, number]) =>
   got.every((v, i) => Math.abs(v - want[i]!) <= 8);
 
-test(
+test.skipIf(!SCREENSHOTS || !WINDOWS)(
   "a playing, visible <video> is shown by presents, not builds",
   async () => {
     const deadline = Date.now() + 15_000;
@@ -68,7 +68,8 @@ test(
   T,
 );
 
-test(
+// Presents are counted by the Windows compositor path only.
+test.skipIf(!SCREENSHOTS || !WINDOWS)(
   "a canvas that keeps drawing is shown by presents, with its newest frame",
   async () => {
     await app.eval("document.getElementById('vid').pause(); 'ok'");
@@ -76,7 +77,7 @@ test(
     const cv = await box("#cv");
     await app.eval("__SK_TEST_PAINT__.start('#ff0000'); 'ok'");
     await sleep(500);
-    expect(near(await centre(cv, "print_window"), [255, 0, 0])).toBe(true);
+    expect(near(await centre(cv, ON_SCREEN), [255, 0, 0])).toBe(true);
 
     const before = await counts();
     await app.eval("__SK_TEST_PAINT__.state.color = '#00ff00'; 'ok'");
@@ -91,11 +92,11 @@ test(
     // The colour changed with no build: the scene drawn before it samples the tile the new frames
     // went into, and the window presented it.
     expect(near(await centre(cv, "render_to_image"), [0, 255, 0])).toBe(true);
-    expect(near(await centre(cv, "print_window"), [0, 255, 0])).toBe(true);
+    expect(near(await centre(cv, ON_SCREEN), [0, 255, 0])).toBe(true);
 
     await app.eval("__SK_TEST_PAINT__.stop(); 'ok'");
     await sleep(800);
-    expect(near(await centre(cv, "print_window"), [0, 255, 0])).toBe(true);
+    expect(near(await centre(cv, ON_SCREEN), [0, 255, 0])).toBe(true);
   },
   T,
 );

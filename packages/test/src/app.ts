@@ -208,6 +208,17 @@ export class SkApp {
     return this.send("logs", { since });
   }
 
+  /** The main window's HWND, from a screenshot's metadata; 0 off Windows. */
+  async hwnd(): Promise<bigint> {
+    if (process.platform !== "win32") return 0n;
+    const shot = await this.send("screenshot", {
+      path: join(tmpdir(), `sk-hwnd-${process.pid}-${this.pid}.png`),
+      backend: "render_to_image",
+    });
+    rmSync(shot.path, { force: true });
+    return BigInt(shot.hwnd);
+  }
+
   /** Client-area readback (never raises the window). */
   async screenshot(path?: string, backend?: "auto" | "render_to_image" | "print_window"): Promise<string> {
     const target = path ? resolve(path) : artifactPath(`${this.label}-screenshot`, "png");

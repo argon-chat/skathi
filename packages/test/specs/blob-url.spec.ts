@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { expect, launch, readPng, type SkApp } from "../src/index";
+import { expect, launch, readPng, SCREENSHOTS, type SkApp } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/blob-url/src/main.ts",
@@ -48,7 +48,7 @@ describe("blob: URLs on the host", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "an <img> paints a blob: URL made from bytes in memory",
     async () => {
       let share = 0;
@@ -61,7 +61,7 @@ describe("blob: URLs on the host", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a slice's URL paints the window it names",
     async () => {
       bunExpect(await redShare(app, "#sliced")).toBeGreaterThan(0.8);
@@ -69,7 +69,7 @@ describe("blob: URLs on the host", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a revoked URL is a broken image with one advisory saying why",
     async () => {
       bunExpect(await redShare(app, "#revoked")).toBeLessThan(0.05);

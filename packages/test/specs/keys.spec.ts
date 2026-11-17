@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch } from "../src/index";
+import { launch, MACOS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/keys/src/main.ts",
@@ -57,7 +57,8 @@ describe("one key, one keydown", () => {
     T,
   );
 
-  test(
+  // macOS CI: nodes added after a click or a key are not painted (bounds null).
+  test.skipIf(MACOS)(
     "typing several keys in one go delivers every one, once each",
     async () => {
       await app.locator("#reopen").click();

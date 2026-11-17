@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/clip/src/main.ts",
@@ -60,7 +60,7 @@ const corners = (b: Bounds, inset: number): [Pt, Pt, Pt, Pt] => [
 ];
 
 describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the image is clipped to the circle",
     async () => {
       const b = await box("#avatar");
@@ -81,7 +81,7 @@ describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "an <img> with `border-radius: 50%` is a disc too",
     async () => {
       const b = await box("#round-img");
@@ -93,7 +93,7 @@ describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`50%` on a box that is not square clips to a pill",
     async () => {
       // 120x44: CSS draws 60x22 elliptical corners (area pi*60*22 = 4147). gpui's corners are
@@ -118,7 +118,7 @@ describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
 });
 
 describe("`border-radius: inherit` (the Argon client's avatars and profile card)", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "an inline `inherit` on an <img> takes its round wrapper's radius",
     async () => {
       const b = await box("#inh-img");
@@ -131,7 +131,7 @@ describe("`border-radius: inherit` (the Argon client's avatars and profile card)
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a card's layers round themselves from it, two levels down",
     async () => {
       const b = await box("#pcard");
@@ -149,7 +149,7 @@ describe("`border-radius: inherit` (the Argon client's avatars and profile card)
 describe("a rounded card around a list that scrolls", () => {
   const banded = (rgb: Rgb) => lime(rgb) || blue(rgb);
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the rows clip at the card's curve, before and after scrolling",
     async () => {
       const b = await box("#card-a");
@@ -173,7 +173,7 @@ describe("a rounded card around a list that scrolls", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "a bordered scroller clips its rows to the inner radius",
     async () => {
       const b = await box("#card-b");
@@ -198,7 +198,8 @@ describe("a rounded card around a list that scrolls", () => {
 });
 
 describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
-  test(
+  // macOS CI: the clipped boxes are never painted (no bounds).
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a ring around a transparent box is a ring, and a blurred box stays filled",
     async () => {
       await app.eval(`(() => {
@@ -232,7 +233,7 @@ describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
 describe("clip-path (CSS Masking 1 §5)", () => {
   // A rounded mask around the element's whole painting: background, border, shadow and subtree,
   // and its hit test, inside its transform (gpui `Style::sk_clip_path`).
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "inset() and circle() clip the painting and the hit test, inside the transform",
     async () => {
       await app.eval(`(() => {
@@ -310,7 +311,7 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
   const NOTCH = "M0 0 C11 0 20 9 20 20 V40 Q20 60 40 60 H80 Q100 60 100 40 V20 C100 9 109 0 120 0 Z";
   const HOLE = "M0 0 h60 v60 h-60 z M15 15 h30 v30 h-30 z";
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a polygon, a path with curves, and evenodd clip the painting and the hit test",
     async () => {
       await app.eval(`(() => {
@@ -406,7 +407,7 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "an inline path() rewritten every frame clips to the frame's shape",
     async () => {
       await app.eval(`(() => {
@@ -464,7 +465,7 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "nested clips intersect: a circle inside a polygon, and a polygon inside a polygon",
     async () => {
       await app.eval(`(() => {

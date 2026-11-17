@@ -2,32 +2,39 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { dlopen, FFIType, JSCallback, ptr } from "bun:ffi";
-import { launch } from "../src/index";
+import { launch, MACOS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/fullscreen/src/main.ts",
   window: [480, 320],
   label: "fullscreen",
 });
-const user32 = dlopen("user32.dll", {
-  GetWindowRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-  GetClientRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-  ClientToScreen: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-  MonitorFromWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
-  GetMonitorInfoW: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-  EnumDisplayMonitors: { args: [FFIType.u64, FFIType.ptr, FFIType.function, FFIType.i64], returns: FFIType.i32 },
-  IsZoomed: { args: [FFIType.u64], returns: FFIType.i32 },
-  SetWindowPos: {
-    args: [FFIType.u64, FFIType.u64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
-    returns: FFIType.i32,
-  },
-});
+const user32 =
+  process.platform === "win32"
+    ? dlopen("user32.dll", {
+        GetWindowRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+        GetClientRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+        ClientToScreen: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+        MonitorFromWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
+        GetMonitorInfoW: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+        EnumDisplayMonitors: { args: [FFIType.u64, FFIType.ptr, FFIType.function, FFIType.i64], returns: FFIType.i32 },
+        IsZoomed: { args: [FFIType.u64], returns: FFIType.i32 },
+        SetWindowPos: {
+          args: [FFIType.u64, FFIType.u64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
+          returns: FFIType.i32,
+        },
+      })
+    : null;
 afterAll(async () => {
-  user32.close();
+  user32?.close();
   await app.close();
 });
 
 const T = 60_000;
+const win = () => {
+  if (!user32) throw new Error("Win32 only");
+  return user32.symbols;
+};
 type Rect = { left: number; top: number; right: number; bottom: number };
 type Monitor = { monitor: Rect; work: Rect };
 type Page = {
@@ -49,7 +56,7 @@ const rectOf = (b: Int32Array, at: number): Rect => ({
 const monitorInfo = (handle: bigint | number): Monitor => {
   const mi = new Int32Array(10);
   mi[0] = 40;
-  user32.symbols.GetMonitorInfoW(BigInt(handle), ptr(mi));
+  win().GetMonitorInfoW(BigInt(handle), ptr(mi));
   return { monitor: rectOf(mi, 1), work: rectOf(mi, 5) };
 };
 const monitors = (): Monitor[] => {
@@ -61,26 +68,25 @@ const monitors = (): Monitor[] => {
     },
     { args: [FFIType.u64, FFIType.u64, FFIType.ptr, FFIType.i64], returns: FFIType.i32 },
   );
-  user32.symbols.EnumDisplayMonitors(0n, null, each.ptr, 0n);
+  win().EnumDisplayMonitors(0n, null, each.ptr, 0n);
   each.close();
   return found;
 };
 
-const shot = await app.send("screenshot", { backend: "render_to_image" });
-const hwnd = BigInt(shot.hwnd);
+const hwnd = await app.hwnd();
 
 function native() {
   const w = new Int32Array(4);
-  user32.symbols.GetWindowRect(hwnd, ptr(w));
+  win().GetWindowRect(hwnd, ptr(w));
   const c = new Int32Array(4);
-  user32.symbols.GetClientRect(hwnd, ptr(c));
+  win().GetClientRect(hwnd, ptr(c));
   const o = new Int32Array(2);
-  user32.symbols.ClientToScreen(hwnd, ptr(o));
+  win().ClientToScreen(hwnd, ptr(o));
   return {
     window: rectOf(w, 0),
     client: { left: o[0]!, top: o[1]!, right: o[0]! + c[2]!, bottom: o[1]! + c[3]! },
-    ...monitorInfo(user32.symbols.MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */)),
-    zoomed: user32.symbols.IsZoomed(hwnd) !== 0,
+    ...monitorInfo(win().MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */)),
+    zoomed: win().IsZoomed(hwnd) !== 0,
   };
 }
 
@@ -118,6 +124,15 @@ const sameRect = (a: Rect, b: Rect) =>
 
 async function expectFullscreenCoversTheMonitor(element: string | null) {
   await until(page, (p) => p.fullscreen, "isFullscreen()");
+  if (!user32) {
+    const p = await page();
+    expect(p.media).toBe(true);
+    expect(p.element).toBe(element);
+    expect(p.bar.top).toBeGreaterThanOrEqual(0);
+    expect(p.brandTop).toBeGreaterThanOrEqual(0);
+    expect(p.bar.height).toBe(40);
+    return;
+  }
   const n = await until(native, (n) => sameRect(n.client, n.monitor), "the client rect to reach the monitor");
   expect(n.window).toEqual(n.monitor);
   expect(n.client).toEqual(n.monitor);
@@ -140,18 +155,20 @@ async function leave(how: string) {
   await until(page, (p) => !p.fullscreen, "isFullscreen() to clear");
 }
 
-test(
+test.skipIf(MACOS)(
   "windowed -> fullscreen covers the monitor, and leaving restores the bounds exactly",
   async () => {
-    const before = native();
-    expect(before.zoomed).toBe(false);
+    const before = user32 ? native() : null;
+    expect(before?.zoomed ?? false).toBe(false);
     await app.eval("__SK_WINDOW__.appWindow.setFullscreen(true); 'ok'");
     await expectFullscreenCoversTheMonitor(null);
 
     await leave("__SK_WINDOW__.appWindow.setFullscreen(false); 'ok'");
-    const after = await until(native, (n) => sameRect(n.window, before.window), "the windowed rect to return");
-    expect(after.window).toEqual(before.window);
-    expect(after.zoomed).toBe(false);
+    if (before) {
+      const after = await until(native, (n) => sameRect(n.window, before.window), "the windowed rect to return");
+      expect(after.window).toEqual(before.window);
+      expect(after.zoomed).toBe(false);
+    }
     const p = await page();
     expect(p.media).toBe(false);
     expect(p.bar).toEqual({ top: 0, height: 40 });
@@ -159,15 +176,17 @@ test(
   T,
 );
 
-test(
+test.skipIf(MACOS)(
   "requestFullscreen() on the document reports fullscreenElement and covers the monitor",
   async () => {
-    const before = native();
+    const before = user32 ? native() : null;
     await app.eval("document.documentElement.requestFullscreen(); 'ok'");
     await expectFullscreenCoversTheMonitor("html");
     await leave("document.exitFullscreen(); 'ok'");
-    const after = await until(native, (n) => sameRect(n.window, before.window), "the windowed rect to return");
-    expect(after.window).toEqual(before.window);
+    if (before) {
+      const after = await until(native, (n) => sameRect(n.window, before.window), "the windowed rect to return");
+      expect(after.window).toEqual(before.window);
+    }
     expect((await page()).element).toBe(null);
   },
   T,
@@ -175,6 +194,18 @@ test(
 
 async function maximizedThenFullscreen() {
   await app.eval("__sk_window_verb('maximize'); 'ok'");
+  if (!user32) {
+    const maximized = () => app.eval("__SK_WINDOW__.appWindow.isMaximized()") as Promise<boolean>;
+    await until(maximized, (m) => m, "isMaximized()");
+    expect((await page()).bar.top).toBe(0);
+    await app.eval("__SK_WINDOW__.appWindow.setFullscreen(true); 'ok'");
+    await expectFullscreenCoversTheMonitor(null);
+    await leave("__SK_WINDOW__.appWindow.setFullscreen(false); 'ok'");
+    expect(await until(maximized, (m) => m, "isMaximized() after fullscreen")).toBe(true);
+    await app.eval("__sk_window_verb('unmaximize'); 'ok'");
+    await until(maximized, (m) => !m, "the window to unmaximize");
+    return;
+  }
   const max = await until(native, (n) => n.zoomed && sameRect(n.client, n.work), "the maximized client rect");
   // A frameless maximized window's frame hangs off the monitor; its client area must not.
   expect(max.client).toEqual(max.work);
@@ -193,9 +224,10 @@ async function maximizedThenFullscreen() {
   await until(native, (n) => !n.zoomed, "the window to unmaximize");
 }
 
-test("maximized -> fullscreen -> back to maximized", maximizedThenFullscreen, T);
+// macOS CI: leaving fullscreen never clears isFullscreen().
+test.skipIf(MACOS)("maximized -> fullscreen -> back to maximized", maximizedThenFullscreen, T);
 
-test(
+test.skipIf(!user32)(
   "the same on a non-primary monitor",
   async () => {
     const primary = native().monitor;
@@ -207,7 +239,7 @@ test(
     const SWP_NOSIZE = 0x1;
     const SWP_NOZORDER = 0x4;
     const SWP_NOACTIVATE = 0x10;
-    user32.symbols.SetWindowPos(
+    win().SetWindowPos(
       hwnd,
       0n,
       other.work.left + 40,

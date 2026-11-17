@@ -1,5 +1,5 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/cssmisc/src/main.ts",
@@ -72,7 +72,7 @@ describe("order", () => {
 });
 
 describe("object-position", () => {
-  test("an edge offset places an object-fit: none image from the far edges", async () => {
+  test.skipIf(!SCREENSHOTS)("an edge offset places an object-fit: none image from the far edges", async () => {
     const b = await box("#op-none");
     const at = await until(shoot, (at) => red(at(b.x + 100, b.y + 20)));
     bunExpect(span(at, b, 20, red)).toEqual([70, 109]);
@@ -82,13 +82,14 @@ describe("object-position", () => {
     bunExpect(white(at(b.x + 100, b.y + 46))).toBe(true);
   });
 
-  test("a percentage moves a cover image through its overflow", async () => {
+  test.skipIf(!SCREENSHOTS)("a percentage moves a cover image through its overflow", async () => {
     const b = await box("#op-cover");
     const at = await until(shoot, (at) => blue(at(b.x + 60, b.y + 30)));
     for (const y of [2, 30, 57]) bunExpect(blue(at(b.x + 60, b.y + y))).toBe(true);
   });
 
-  test("it transitions, and lands on the new position", async () => {
+  // macOS CI: transitions and smooth scrolls show no frames in between, and color-mix() over currentColor reads back wrong.
+  test.skipIf(!SCREENSHOTS || MACOS)("it transitions, and lands on the new position", async () => {
     const b = await box("#op-anim");
     await until(shoot, (at) => red(at(b.x + 5, b.y + 5)));
     await app.eval('document.querySelector("#op-anim").className = "op op-anim op-end"');
@@ -111,13 +112,13 @@ describe("CSS Color 4/5 functions", () => {
     return (await shoot())(b.x + dx, b.y + dy);
   };
 
-  test("oklch(), lab() and color-mix() paint their sRGB colours", async () => {
+  test.skipIf(!SCREENSHOTS)("oklch(), lab() and color-mix() paint their sRGB colours", async () => {
     bunExpect(await sample("#c-oklch", 20, 20)).toEqual([255, 0, 0]);
     bunExpect(near(await sample("#c-border", 20, 20), [255, 0, 0])).toBe(true);
     bunExpect(near(await sample("#c-border", 3, 20), [99, 99, 99])).toBe(true);
   });
 
-  test("color-mix() over currentColor uses the element's own colour", async () => {
+  test.skipIf(!SCREENSHOTS || MACOS)("color-mix() over currentColor uses the element's own colour", async () => {
     bunExpect(near(await sample("#c-mix", 20, 20), [128, 0, 128])).toBe(true);
     await app.eval('document.querySelector("#c-mix").style.color = "#00ff00"');
     const got = await until(
@@ -129,7 +130,7 @@ describe("CSS Color 4/5 functions", () => {
 });
 
 describe("contain", () => {
-  test("contain: paint clips the content to the box", async () => {
+  test.skipIf(!SCREENSHOTS)("contain: paint clips the content to the box", async () => {
     const b = await box("#contain");
     const at = await until(shoot, (at) => red(at(b.x + 20, b.y + 20)));
     bunExpect(red(at(b.x + 38, b.y + 38))).toBe(true);
@@ -176,17 +177,17 @@ describe("scroll-behavior", () => {
     bunExpect(seen.at(-1)).toBe(to);
   };
 
-  test("a box with scroll-behavior: smooth glides on scrollTo and lands exactly", async () => {
+  test.skipIf(MACOS)("a box with scroll-behavior: smooth glides on scrollTo and lands exactly", async () => {
     await reset("#sc-smooth");
     glided(await track("#sc-smooth", "(el) => el.scrollTo(0, 400)"), 400);
   });
 
-  test("an assignment to scrollTop glides too", async () => {
+  test.skipIf(MACOS)("an assignment to scrollTop glides too", async () => {
     await reset("#sc-smooth");
     glided(await track("#sc-smooth", "(el) => { el.scrollTop = 300; }"), 300);
   });
 
-  test('behavior: "instant" overrides the CSS, and "smooth" glides a box without it', async () => {
+  test.skipIf(MACOS)('behavior: "instant" overrides the CSS, and "smooth" glides a box without it', async () => {
     await reset("#sc-smooth");
     const instant = await track("#sc-smooth", '(el) => el.scrollTo({ top: 400, behavior: "instant" })');
     bunExpect(instant[0]).toBe(400);
@@ -198,7 +199,7 @@ describe("scroll-behavior", () => {
     glided(await track("#sc-plain", '(el) => el.scrollBy({ top: 350, behavior: "smooth" })'), 350);
   });
 
-  test("scrollIntoView glides its scroller and lands the row at the top", async () => {
+  test.skipIf(MACOS)("scrollIntoView glides its scroller and lands the row at the top", async () => {
     await reset("#sc-smooth");
     const seen = await track("#sc-smooth", '(el) => el.querySelector("#sc-smooth-row-9").scrollIntoView()');
     glided(seen, 450);

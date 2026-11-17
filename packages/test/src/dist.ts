@@ -11,13 +11,22 @@ import { reapOrphans } from "./reap";
 export const REPO = resolve(import.meta.dir, "../../..");
 export const CLI_PKG = join(REPO, "packages/cli");
 const RUNTIME_SRC = join(REPO, "packages/runtime/src");
-export const DEFAULT_EXE = join(
-  REPO,
+/** The cargo target this machine's host is built for (`.cargo/config.toml` defaults to Windows). */
+export const TARGET =
   {
-    win32: "target/x86_64-pc-windows-msvc/debug/sk-app.exe",
-    darwin: `target/${process.arch === "arm64" ? "aarch64" : "x86_64"}-apple-darwin/debug/sk-app`,
-  }[process.platform as string] ?? "target/x86_64-unknown-linux-gnu/debug/sk-app",
-);
+    win32: "x86_64-pc-windows-msvc",
+    darwin: `${process.arch === "arm64" ? "aarch64" : "x86_64"}-apple-darwin`,
+  }[process.platform as string] ?? "x86_64-unknown-linux-gnu";
+export const EXE_SUFFIX = process.platform === "win32" ? ".exe" : "";
+export const DEFAULT_EXE = join(REPO, "target", TARGET, "debug", `sk-app${EXE_SUFFIX}`);
+
+/** Where the host keeps an app's own files (sk-storage's `LOCALAPPDATA` folder). */
+export function appDataDir(app: string): string {
+  if (process.platform === "win32") return join(process.env.LOCALAPPDATA ?? "", app);
+  const home = process.env.HOME ?? "";
+  if (process.platform === "darwin") return join(home, "Library", "Application Support", app);
+  return join(process.env.XDG_DATA_HOME || join(home, ".local", "share"), app);
+}
 
 /** Everything this harness writes that is not a user-facing artifact. */
 export const WORK_DIR = join(REPO, "packages/test/.sk-test");

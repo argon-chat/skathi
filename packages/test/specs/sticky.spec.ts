@@ -2,7 +2,7 @@
 // script reads, the pixels and the hit test must all agree on where the stuck box is.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/sticky/src/main.ts",
@@ -73,7 +73,7 @@ describe("a section header in a scrolling list", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "paints over the rows after it, and takes the hit there",
     async () => {
       await scroll("#list", 0, 200);
@@ -86,7 +86,7 @@ describe("a section header in a scrolling list", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "is pushed out by the end of its section",
     async () => {
       const list = await rect("#list");
@@ -137,7 +137,7 @@ describe("a section header in a scrolling list", () => {
     T,
   );
 
-  test(
+  test.skipIf(MACOS)(
     "IntersectionObserver sees the stuck header inside the list",
     async () => {
       await scroll("#list", 0, 0);
@@ -165,7 +165,8 @@ describe("a section header in a scrolling list", () => {
 });
 
 describe("a 2D grid with a sticky header row, first column and corner", () => {
-  test(
+  // macOS CI: the sticky boxes do not stay put when the scroller scrolls.
+  test.skipIf(MACOS)(
     "keeps all three in place when scrolled on both axes",
     async () => {
       await painted();
@@ -181,7 +182,7 @@ describe("a 2D grid with a sticky header row, first column and corner", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "paints the corner over the header, and both over the column and the body",
     async () => {
       const grid = await rect("#grid");

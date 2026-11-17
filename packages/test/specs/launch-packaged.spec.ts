@@ -4,7 +4,7 @@ import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, launch, packagedExe, REPO, WORK_DIR } from "../src/index";
+import { expect, launch, packagedExe, REPO, WINDOWS, WORK_DIR } from "../src/index";
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
 
 const T = 30_000;
@@ -117,7 +117,8 @@ describe("the packaged exe", () => {
     T,
   );
 
-  test(
+  // Protocol registration is Windows-only so far (HKCU\Software\Classes).
+  test.skipIf(!WINDOWS)(
     "registered its declared protocol at startup: per user, our marker, no dev slot",
     async () => {
       const key = keyOf(scheme);
@@ -153,7 +154,7 @@ describe("a second launch of the packaged exe", () => {
     T,
   );
 
-  test(
+  test.skipIf(!WINDOWS)(
     "a link to its scheme, opened through the SHELL, reaches the running instance",
     async () => {
       const before = (await rec()).events.length;
@@ -173,7 +174,7 @@ describe("a second launch of the packaged exe", () => {
 });
 
 describe("uninstalling", () => {
-  test(
+  test.skipIf(!WINDOWS)(
     "--sk-unregister-protocols removes the exe's keys and exits without a window",
     async () => {
       const r = spawnSync(p.exe, ["--sk-unregister-protocols"], {

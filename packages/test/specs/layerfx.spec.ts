@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, readPng, SCREENSHOTS } from "../src/index";
 
 const REPO = join(import.meta.dir, "../../..");
 const effectsDir = mkdtempSync(join(tmpdir(), "sk-layerfx-"));
@@ -52,7 +52,7 @@ async function until(read: () => Promise<Rgb>, ok: (rgb: Rgb) => boolean, ms = 5
 
 const near = (rgb: Rgb, expected: Rgb, slack = 24) => rgb.every((c, i) => Math.abs(c - expected[i]!) <= slack);
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a content effect draws the element and its children in their place, shaded",
   async () => {
     const b = await box("#swapped");
@@ -70,7 +70,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "absolutely positioned, z-indexed and fixed descendants are part of the shaded content",
   async () => {
     const outside = await box("#outside");
@@ -97,7 +97,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "opacity applies once, to the shaded result",
   async () => {
     const b = await box("#faded");
@@ -114,7 +114,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a content effect transitioned in from no effect blends with the unshaded painting",
   async () => {
     const b = await box("#appear");
@@ -140,7 +140,7 @@ test(
   T,
 );
 
-test(
+test.skipIf(!SCREENSHOTS)(
   "a history carries its state from frame to frame",
   async () => {
     const b = await box("#counter");

@@ -5,7 +5,7 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { featureExe, launch, packagedExe, REPO, WORK_DIR, type SkApp } from "../src/index";
+import { featureExe, launch, MACOS, packagedExe, REPO, WORK_DIR, type SkApp } from "../src/index";
 
 const BUILD_T = 20 * 60_000;
 
@@ -44,7 +44,7 @@ function appWith(intl: string | undefined): string {
   return dir;
 }
 
-const host = await rootHost();
+let host: string | undefined;
 const apps: SkApp[] = [];
 const dirs: string[] = [];
 afterAll(() => {
@@ -56,6 +56,7 @@ async function run(intl: string | undefined) {
   const dir = appWith(intl);
   dirs.push(dir);
   const label = `intl-${intl ?? "default"}`;
+  host ??= await rootHost();
   const packed = await packagedExe({ app: dir, host, label });
   const app = await launch({ app: label, exe: packed.exe, packaged: packed.name, label, launchTimeout: BUILD_T });
   apps.push(app);
@@ -63,7 +64,8 @@ async function run(intl: string | undefined) {
   return { packed, probe };
 }
 
-describe("intl", () => {
+// macOS hosts link every ICU locale; none is root-only.
+describe.skipIf(MACOS)("intl", () => {
   test(
     "the default ships icu.skpk and every locale formats as in a browser",
     async () => {

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng } from "../src/index";
+import { launch, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 720;
 const app = await launch({
@@ -69,7 +69,7 @@ describe("a picture at width/height 100% fills its box", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`cover` crops: red at the centre, no grey at the edges",
     async () => {
       for (const [cell] of covers.filter(([c]) => c !== "c-video")) {
@@ -92,7 +92,7 @@ describe("a picture at width/height 100% fills its box", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`contain` letterboxes, centred, with the grey above and below",
     async () => {
       const [x, y, w, h] = await rect("c-contain");

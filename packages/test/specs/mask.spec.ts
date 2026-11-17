@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng, type Bounds } from "../src/index";
+import { type Bounds, launch, readPng, SCREENSHOTS } from "../src/index";
 
 const W = 560;
 const app = await launch({
@@ -61,7 +61,7 @@ const ramp = (pixels: Rgb[], a: (c: Rgb) => boolean, b: (c: Rgb) => boolean) =>
   pixels.filter((c) => !a(c) && !b(c)).length;
 
 describe("an SVG icon as a mask over `currentColor`", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "paints the icon's shape in the text colour, edges one device pixel wide",
     async () => {
       const b = await box("#icon");
@@ -84,7 +84,7 @@ describe("an SVG icon as a mask over `currentColor`", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "under `transform: scale(2)` it is as sharp",
     async () => {
       // `.zoom` is at (100, 20) and doubles a 24px icon to 48px.
@@ -98,7 +98,7 @@ describe("an SVG icon as a mask over `currentColor`", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "an icon on a `::before` box, the usual icon-font replacement",
     async () => {
       const b = await box("#pseudo");
@@ -109,7 +109,7 @@ describe("an SVG icon as a mask over `currentColor`", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`mask: url() center / 32px 32px no-repeat` from a data: URL",
     async () => {
       const b = await box("#dot");
@@ -130,7 +130,7 @@ describe("an SVG icon as a mask over `currentColor`", () => {
 });
 
 describe("gradient masks and tiling", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`linear-gradient(to bottom, #000 50%, transparent)` fades the bottom half out",
     async () => {
       const b = await box("#fade");
@@ -144,7 +144,7 @@ describe("gradient masks and tiling", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`mask-size: 20px 20px; mask-repeat: repeat-x; mask-position: 10px 0` tiles one row",
     async () => {
       const b = await box("#stripes");
@@ -156,7 +156,7 @@ describe("gradient masks and tiling", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "the mask cuts the element's children too",
     async () => {
       const b = await box("#subtree");
@@ -167,7 +167,7 @@ describe("gradient masks and tiling", () => {
     T,
   );
 
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`luminance` masks by the brightness: white keeps, black hides",
     async () => {
       const b = await box("#luminance");
@@ -180,7 +180,7 @@ describe("gradient masks and tiling", () => {
 });
 
 describe("advisories", () => {
-  test(
+  test.skipIf(!SCREENSHOTS)(
     "`-webkit-mask-image` is ignored with an advisory; the supported masks raise none",
     async () => {
       const b = await box("#webkit");
