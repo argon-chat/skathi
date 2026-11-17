@@ -1691,10 +1691,11 @@ impl Tree {
                     parent_text,
                     parent_radii,
                     here_env,
+                    chain,
                 )) = stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
-                    let (child_vars, child_inert, child_text, child_radii) =
+                    let (child_vars, child_inert, child_text, child_radii, child_chain) =
                         if n.kind == Kind::Element {
                             let (states, radii) = this.cascade_one(
                                 engine,
@@ -1706,6 +1707,7 @@ impl Tree {
                                     parent_radii,
                                 ),
                                 &here_env,
+                                &chain,
                                 &mut diagnostics,
                             );
                             let inert = states.extras.pointer_events_none == Some(true);
@@ -1747,6 +1749,7 @@ impl Tree {
                             child_text.clone(),
                             child_radii,
                             child_env,
+                            child_chain.clone(),
                         ));
                     }
                 }

@@ -226,6 +226,12 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         ObjectPosition => r.vn_object_position.map_or(Slot::Missing, |o| {
             Slot::Value(Animatable::ObjectPosition(o))
         }),
+        // `auto` is 0 and `auto <ratio>` negative (the mapper's encoding); neither interpolates.
+        AspectRatio => match r.aspect_ratio {
+            None => Slot::Missing,
+            Some(ratio) if ratio > 0.0 => Slot::Value(Animatable::Number(ratio.ln())),
+            Some(_) => Slot::Opaque(Opaque::Auto),
+        },
         Shading => r
             .vn_effect
             .map_or(Slot::Missing, |e| Slot::Value(Animatable::Effect(e))),
@@ -362,12 +368,6 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         BorderTopRightRadius => r.corner_radii.top_right = to_absolute(v),
         BorderBottomRightRadius => r.corner_radii.bottom_right = to_absolute(v),
         BorderBottomLeftRadius => r.corner_radii.bottom_left = to_absolute(v),
-        // `auto` is 0 and `auto <ratio>` negative (the mapper's encoding); neither interpolates.
-        AspectRatio => match r.aspect_ratio {
-            None => Slot::Missing,
-            Some(ratio) if ratio > 0.0 => Slot::Value(Animatable::Number(ratio.ln())),
-            Some(_) => Slot::Opaque(Opaque::Auto),
-        },
         BorderTopWidth => r.border_widths.top = to_absolute(v),
         BorderRightWidth => r.border_widths.right = to_absolute(v),
         BorderBottomWidth => r.border_widths.bottom = to_absolute(v),
@@ -387,6 +387,11 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         ObjectPosition => {
             if let Animatable::ObjectPosition(o) = v {
                 r.vn_object_position = Some(o);
+            }
+        }
+        AspectRatio => {
+            if let Animatable::Number(log) = v {
+                r.aspect_ratio = Some(log.exp());
             }
         }
         Shading => match v {
@@ -460,6 +465,7 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         ColumnGap => r.gap.width = None,
         FontSize => r.text.font_size = None,
         ObjectPosition => r.vn_object_position = None,
+        AspectRatio => r.aspect_ratio = None,
         Shading => {
             r.vn_effect = None;
             r.vn_effect_fade = None;
@@ -513,6 +519,7 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         ColumnGap => dst.gap.width = src.gap.width,
         FontSize => dst.text.font_size = src.text.font_size,
         ObjectPosition => dst.vn_object_position = src.vn_object_position,
+        AspectRatio => dst.aspect_ratio = src.aspect_ratio,
         Shading => {
             dst.vn_effect = src.vn_effect;
             dst.vn_effect_fade = src.vn_effect_fade;
@@ -542,11 +549,6 @@ pub fn strip_transitioned(
 }
 
 fn initial(p: &TransitionProperty) -> Option<Animatable> {
-        AspectRatio => {
-            if let Animatable::Number(log) = v {
-                r.aspect_ratio = Some(log.exp());
-            }
-        }
     use TransitionProperty::*;
     match p {
         Opacity => Some(Animatable::Number(1.0)),
@@ -622,7 +624,6 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         (Effect(a), Effect(b)) if a.interpolates_with(&b) => Effect(lerp_effect(a, b, t)),
         (Effect(a), Effect(b)) => EffectFade(a, b, t),
         // Retargeted mid-fade: back to (or on to) one of the two keeps fading from where it was;
-        AspectRatio => r.aspect_ratio = None,
         // a third effect fades in over the one showing more.
         (EffectFade(x, y, s), Effect(c)) if c.interpolates_with(&y) => {
             EffectFade(x, lerp_effect(y, c, t), s + (1.0 - s) * t)
@@ -684,7 +685,6 @@ fn lerp_effect(a: EffectSpec, b: EffectSpec, t: f32) -> EffectSpec {
         *value = f32::interpolate(a.params[slot], b.params[slot], t);
     }
     // Keep repainting for as long as EITHER endpoint wants to, or an animated grain would freeze
-        AspectRatio => dst.aspect_ratio = src.aspect_ratio,
     // the moment a transition starts.
     spec.animated = a.animated || b.animated;
     spec

@@ -222,14 +222,14 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "font-size",
     "color",
     "text-shadow",
-];
-
-/// One computed property of `id` (a [`COMPUTED_PROPERTIES`] name or a custom property); `None` for a node
     "color-scheme",
     "aspect-ratio",
     "flex-direction",
     "flex-wrap",
     "cursor",
+];
+
+/// One computed property of `id` (a [`COMPUTED_PROPERTIES`] name or a custom property); `None` for a node
 /// not in the tree, or a name outside both.
 pub fn computed_value(id: u32, name: &str) -> Option<String> {
     tree::flush_pending_style();
@@ -439,31 +439,6 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             }
             css_rgb(color.unwrap_or_else(gpui::black))
         }
-        "text-shadow" => {
-            let (mut shadows, mut color) = (None, None);
-            let mut at = id;
-            while let Some(n) = t.node(at) {
-                if let Some(c) = n.computed.as_ref() {
-                    shadows = shadows.or_else(|| c.base.text.text_shadow.clone());
-                    color = color.or(c.base.text.color);
-                }
-                if (shadows.is_some() && color.is_some()) || n.parent == 0 || n.parent == at {
-                    break;
-                }
-                at = n.parent;
-            }
-            sk_css::text_shadow_css(
-                shadows.as_deref().unwrap_or_default(),
-                color.unwrap_or_else(gpui::black),
-            )
-        }
-        _ => return None,
-    })
-}
-
-#[derive(Clone, Copy)]
-enum EdgeBox {
-    Padding,
         "color-scheme" => cs
             .vars
             .get(sk_css::COLOR_SCHEME)
@@ -488,41 +463,28 @@ enum EdgeBox {
         }
         .into(),
         "cursor" => cursor_keyword(t, id).into(),
-    Margin,
-    Border,
+        "text-shadow" => {
+            let (mut shadows, mut color) = (None, None);
+            let mut at = id;
+            while let Some(n) = t.node(at) {
+                if let Some(c) = n.computed.as_ref() {
+                    shadows = shadows.or_else(|| c.base.text.text_shadow.clone());
+                    color = color.or(c.base.text.color);
+                }
+                if (shadows.is_some() && color.is_some()) || n.parent == 0 || n.parent == at {
+                    break;
+                }
+                at = n.parent;
+            }
+            sk_css::text_shadow_css(
+                shadows.as_deref().unwrap_or_default(),
+                color.unwrap_or_else(gpui::black),
+            )
+        }
+        _ => return None,
+    })
 }
 
-fn edge_of(name: &str) -> Option<(EdgeBox, &str)> {
-    if let Some(side) = name.strip_prefix("padding-") {
-        return Some((EdgeBox::Padding, side));
-    }
-    if let Some(side) = name.strip_prefix("margin-") {
-        return Some((EdgeBox::Margin, side));
-    }
-    let side = name.strip_prefix("border-")?.strip_suffix("-width")?;
-    Some((EdgeBox::Border, side))
-}
-
-fn side_of<T: Clone + std::fmt::Debug + Default + PartialEq>(
-    edges: &gpui::EdgesRefinement<T>,
-    side: &str,
-) -> Option<T> {
-    match side {
-        "top" => edges.top.clone(),
-        "right" => edges.right.clone(),
-        "bottom" => edges.bottom.clone(),
-        "left" => edges.left.clone(),
-        _ => None,
-    }
-}
-
-/// A padding, margin or border-width longhand as a browser resolves it: px, a percentage of the parent's width
-/// (every side, as CSS has it), `auto` margins as 0.
-fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option<String> {
-    let (which, side) = edge_of(name)?;
-    let rem = gpui::px(sk_css::rem_basis());
-    let parent_width = || {
-        let parent = t.node(id).map(|n| n.parent).unwrap_or(0);
 /// `cursor` inherits; the keyword the nearest declaration mapped to.
 fn cursor_keyword(t: &Tree, id: u32) -> &'static str {
     use gpui::CursorStyle as C;
@@ -571,6 +533,44 @@ fn cursor_keyword(t: &Tree, id: u32) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy)]
+enum EdgeBox {
+    Padding,
+    Margin,
+    Border,
+}
+
+fn edge_of(name: &str) -> Option<(EdgeBox, &str)> {
+    if let Some(side) = name.strip_prefix("padding-") {
+        return Some((EdgeBox::Padding, side));
+    }
+    if let Some(side) = name.strip_prefix("margin-") {
+        return Some((EdgeBox::Margin, side));
+    }
+    let side = name.strip_prefix("border-")?.strip_suffix("-width")?;
+    Some((EdgeBox::Border, side))
+}
+
+fn side_of<T: Clone + std::fmt::Debug + Default + PartialEq>(
+    edges: &gpui::EdgesRefinement<T>,
+    side: &str,
+) -> Option<T> {
+    match side {
+        "top" => edges.top.clone(),
+        "right" => edges.right.clone(),
+        "bottom" => edges.bottom.clone(),
+        "left" => edges.left.clone(),
+        _ => None,
+    }
+}
+
+/// A padding, margin or border-width longhand as a browser resolves it: px, a percentage of the parent's width
+/// (every side, as CSS has it), `auto` margins as 0.
+fn edge_px(t: &Tree, id: u32, cs: &sk_css::ComputedStates, name: &str) -> Option<String> {
+    let (which, side) = edge_of(name)?;
+    let rem = gpui::px(sk_css::rem_basis());
+    let parent_width = || {
+        let parent = t.node(id).map(|n| n.parent).unwrap_or(0);
         let w = crate::render::bounds_of(parent).map_or(0.0, |(_, _, w, _)| w);
         gpui::AbsoluteLength::Pixels(gpui::px(w))
     };

@@ -923,6 +923,18 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
             }
             CustomPropertyName::Unknown(_) => Channel::Static,
         },
+        // Inherited and read per element (`light-dark()`, controls): it travels with the custom
+        // properties, under a name `var()` cannot reach.
+        Property::ColorScheme(_) => match value_text(p) {
+            Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
+            None => Channel::Static,
+        },
+        Property::Unparsed(u) if matches!(u.property_id, PropertyId::ColorScheme) => {
+            match value_text(p) {
+                Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
+                None => Channel::Static,
+            }
+        }
         Property::Unparsed(u)
             if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) =>
         {
@@ -945,18 +957,6 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
     let mut convert = |props: &[Property]| -> Half {
         if props.is_empty() {
             return Half::default();
-        }
-        // Inherited and read per element (`light-dark()`, controls): it travels with the custom
-        // properties, under a name `var()` cannot reach.
-        Property::ColorScheme(_) => match value_text(p) {
-            Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
-            None => Channel::Static,
-        },
-        Property::Unparsed(u) if matches!(u.property_id, PropertyId::ColorScheme) => {
-            match value_text(p) {
-                Some(v) => Channel::Custom(COLOR_SCHEME.to_string(), v),
-                None => Channel::Static,
-            }
         }
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
@@ -1342,6 +1342,7 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
                 || style.animations.is_some()
                 || style.animation_patch.is_some()
                 || style.font.is_some()
+                || !style.custom.is_empty()
         }
     };
     if let Some(first) = diagnostics.into_iter().next() {
@@ -1365,7 +1366,6 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut dynamic: Decls = Vec::new();
     let mut font: Option<Vec<Property<'static>>> = None;
     let mut styled = false;
-                || !style.custom.is_empty()
     let mut priority = None;
     // Without it one bad declaration cost the element its whole inline style.
     let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
@@ -1536,6 +1536,17 @@ impl Drop for ColorSchemeScope {
     }
 }
 
+fn noting_light_dark<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let outer = LIGHT_DARK_SEEN.with(|seen| seen.replace(false));
+    let out = f();
+    let seen = LIGHT_DARK_SEEN.with(|cell| {
+        let seen = cell.get();
+        cell.set(outer || seen);
+        seen
+    });
+    (out, seen)
+}
+
 thread_local! {
     static REM_BASIS: std::cell::Cell<f32> = const { std::cell::Cell::new(INITIAL_REM_BASIS) };
     static VIEWPORT_BASIS: std::cell::Cell<(f32, f32)> =
@@ -1557,17 +1568,6 @@ thread_local! {
 pub fn set_web_font_families(families: impl IntoIterator<Item = String>) {
     let set = families.into_iter().map(|f| f.to_lowercase()).collect();
     WEB_FONTS.with(|w| *w.borrow_mut() = set);
-}
-
-fn noting_light_dark<R>(f: impl FnOnce() -> R) -> (R, bool) {
-    let outer = LIGHT_DARK_SEEN.with(|seen| seen.replace(false));
-    let out = f();
-    let seen = LIGHT_DARK_SEEN.with(|cell| {
-        let seen = cell.get();
-        cell.set(outer || seen);
-        seen
-    });
-    (out, seen)
 }
 
 fn waiting_web_font(families: &[CssFontFamily]) -> Option<Rc<[String]>> {
@@ -4443,6 +4443,41 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
     }
 }
 
+/// gpui's `aspect_ratio` encoding, since a refinement cannot clear a field: `0` is `auto` (no
+/// preferred ratio, or a degenerate one), a negative ratio is `auto && <ratio>` (a replaced
+/// element's natural ratio wins over it), a positive one is the ratio alone.
+fn aspect_ratio(auto: bool, ratio: Option<&lightningcss::values::ratio::Ratio>) -> f32 {
+    match ratio {
+        Some(r) if r.0 > 0.0 && r.1 > 0.0 && (r.0 / r.1).is_finite() => {
+            let value = r.0 / r.1;
+            if auto {
+                -value
+            } else {
+                value
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn flex_direction(d: &CssFlexDirection) -> gpui::FlexDirection {
+    match d {
+        CssFlexDirection::Row => gpui::FlexDirection::Row,
+        CssFlexDirection::RowReverse => gpui::FlexDirection::RowReverse,
+        CssFlexDirection::Column => gpui::FlexDirection::Column,
+        CssFlexDirection::ColumnReverse => gpui::FlexDirection::ColumnReverse,
+    }
+}
+
+fn flex_wrap(w: &lightningcss::properties::flex::FlexWrap) -> gpui::FlexWrap {
+    use lightningcss::properties::flex::FlexWrap as W;
+    match w {
+        W::NoWrap => gpui::FlexWrap::NoWrap,
+        W::Wrap => gpui::FlexWrap::Wrap,
+        W::WrapReverse => gpui::FlexWrap::WrapReverse,
+    }
+}
+
 fn apply_property(
     p: &Property,
     r: &mut StyleRefinement,
@@ -4501,41 +4536,6 @@ fn apply_property(
                 lightningcss::properties::align::AlignItems::BaselinePosition(_) => {
                     Some(G::Baseline)
                 }
-/// gpui's `aspect_ratio` encoding, since a refinement cannot clear a field: `0` is `auto` (no
-/// preferred ratio, or a degenerate one), a negative ratio is `auto && <ratio>` (a replaced
-/// element's natural ratio wins over it), a positive one is the ratio alone.
-fn aspect_ratio(auto: bool, ratio: Option<&lightningcss::values::ratio::Ratio>) -> f32 {
-    match ratio {
-        Some(r) if r.0 > 0.0 && r.1 > 0.0 && (r.0 / r.1).is_finite() => {
-            let value = r.0 / r.1;
-            if auto {
-                -value
-            } else {
-                value
-            }
-        }
-        _ => 0.0,
-    }
-}
-
-fn flex_direction(d: &CssFlexDirection) -> gpui::FlexDirection {
-    match d {
-        CssFlexDirection::Row => gpui::FlexDirection::Row,
-        CssFlexDirection::RowReverse => gpui::FlexDirection::RowReverse,
-        CssFlexDirection::Column => gpui::FlexDirection::Column,
-        CssFlexDirection::ColumnReverse => gpui::FlexDirection::ColumnReverse,
-    }
-}
-
-fn flex_wrap(w: &lightningcss::properties::flex::FlexWrap) -> gpui::FlexWrap {
-    use lightningcss::properties::flex::FlexWrap as W;
-    match w {
-        W::NoWrap => gpui::FlexWrap::NoWrap,
-        W::Wrap => gpui::FlexWrap::Wrap,
-        W::WrapReverse => gpui::FlexWrap::WrapReverse,
-    }
-}
-
                 _ => None,
             };
             match mapped {
@@ -7801,6 +7801,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn flex_flow_sets_both_longhands() {
+        let r = clean("flex-flow: column wrap-reverse");
+        assert_eq!(
+            (r.flex_direction, r.flex_wrap),
+            (
+                Some(gpui::FlexDirection::Column),
+                Some(gpui::FlexWrap::WrapReverse)
+            )
+        );
+        let r = clean("flex-direction: column; flex-flow: wrap");
+        assert_eq!(
+            (r.flex_direction, r.flex_wrap),
+            (Some(gpui::FlexDirection::Row), Some(gpui::FlexWrap::Wrap)),
+            "an omitted half resets to its initial value"
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_auto_overrides_an_earlier_ratio() {
+        assert_eq!(clean("aspect-ratio: 16 / 8").aspect_ratio, Some(2.0));
+        assert_eq!(
+            clean("aspect-ratio: 2; aspect-ratio: auto").aspect_ratio,
+            Some(0.0)
+        );
+        assert_eq!(clean("aspect-ratio: auto 2 / 1").aspect_ratio, Some(-2.0));
+        assert_eq!(clean("aspect-ratio: 0 / 1").aspect_ratio, Some(0.0));
+    }
+
     fn extras(body: &str) -> (Extras, Vec<String>) {
         let mut d = Vec::new();
         let inline = parse_inline_style(body, &mut d);
@@ -7979,35 +8008,6 @@ mod tests {
         };
         let one = |body: &str| {
             let list = layers(body);
-    #[test]
-    fn flex_flow_sets_both_longhands() {
-        let r = clean("flex-flow: column wrap-reverse");
-        assert_eq!(
-            (r.flex_direction, r.flex_wrap),
-            (
-                Some(gpui::FlexDirection::Column),
-                Some(gpui::FlexWrap::WrapReverse)
-            )
-        );
-        let r = clean("flex-direction: column; flex-flow: wrap");
-        assert_eq!(
-            (r.flex_direction, r.flex_wrap),
-            (Some(gpui::FlexDirection::Row), Some(gpui::FlexWrap::Wrap)),
-            "an omitted half resets to its initial value"
-        );
-    }
-
-    #[test]
-    fn aspect_ratio_auto_overrides_an_earlier_ratio() {
-        assert_eq!(clean("aspect-ratio: 16 / 8").aspect_ratio, Some(2.0));
-        assert_eq!(
-            clean("aspect-ratio: 2; aspect-ratio: auto").aspect_ratio,
-            Some(0.0)
-        );
-        assert_eq!(clean("aspect-ratio: auto 2 / 1").aspect_ratio, Some(-2.0));
-        assert_eq!(clean("aspect-ratio: 0 / 1").aspect_ratio, Some(0.0));
-    }
-
             assert_eq!(list.len(), 1, "{body}");
             list[0]
         };

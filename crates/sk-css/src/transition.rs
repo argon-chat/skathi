@@ -47,13 +47,13 @@ pub enum TransitionProperty {
     ColumnGap,
     FontSize,
     ObjectPosition,
+    /// Interpolates the logarithm of the ratio, as browsers do; `auto` and `auto <ratio>` flip.
+    AspectRatio,
     /// Discrete: `Element.animate()` and `@keyframes` flip it halfway; a transition never animates it
     /// (no `transition-behavior: allow-discrete`).
     OverflowX,
     OverflowY,
     /// The whole function list travels as one value: matched lists interpolate componentwise, never
-    /// Interpolates the logarithm of the ratio, as browsers do; `auto` and `auto <ratio>` flip.
-    AspectRatio,
     /// through the matrix, which would shear.
     Transform,
     /// Excluded from `all`: a custom property is not an animatable property without an `@property`
@@ -104,6 +104,7 @@ impl TransitionProperty {
             ColumnGap,
             FontSize,
             ObjectPosition,
+            AspectRatio,
             Transform,
         ]
     }
@@ -113,7 +114,6 @@ impl TransitionProperty {
         Self::animatable().into_iter().chain([
             TransitionProperty::OverflowX,
             TransitionProperty::OverflowY,
-            AspectRatio,
             TransitionProperty::Shading,
         ])
     }
@@ -164,6 +164,7 @@ impl TransitionProperty {
             ColumnGap => "column-gap",
             FontSize => "font-size",
             ObjectPosition => "object-position",
+            AspectRatio => "aspect-ratio",
             Transform => "transform",
             Shading => "--shading",
             All => "all",
@@ -177,7 +178,6 @@ pub enum StepPosition {
     JumpStart,
     JumpEnd,
     JumpNone,
-            AspectRatio => "aspect-ratio",
     JumpBoth,
 }
 
@@ -607,6 +607,7 @@ fn expand(id: &PropertyId) -> Expansion {
         "column-gap" => one(ColumnGap),
         "font-size" => one(FontSize),
         "object-position" => one(ObjectPosition),
+        "aspect-ratio" => one(AspectRatio),
         "transform" => one(Transform),
         // lightningcss parses an unknown property id — including a custom property — into
         // `PropertyId::Custom`, whose `name()` keeps the leading dashes.
@@ -642,7 +643,6 @@ pub fn parse_easing(text: &str) -> Option<Easing> {
 pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     let ms = t.to_ms();
     if !ms.is_finite() {
-        "aspect-ratio" => one(AspectRatio),
         diagnostics.push(format!("non-finite {what} treated as 0s"));
         return Duration::ZERO;
     }
