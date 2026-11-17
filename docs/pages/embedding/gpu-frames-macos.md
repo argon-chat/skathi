@@ -14,7 +14,7 @@ On macOS, a frame for [`<sk-surface>`](/embedding/native-frames/) can stay on th
 | VideoToolbox, AVFoundation, ScreenCaptureKit, Core Image           | `present_cv_pixel_buffer`                                                           |
 | CPU, or anything else                                              | `present_bgra`, `present_bgrx`                                                      |
 
-Every GPU path copies the frame on a command queue of the surface's own into one of up to four textures it owns. A wait on the producer's event happens on the GPU, and the window takes the frame once the copy has finished, so a slow producer never stalls the UI. Textures are `BGRA8Unorm` or `BGRA8Unorm_sRGB` (the bytes are shown as they are), 2D and single-sampled; alpha is straight.
+Every GPU path copies the frame on a command queue of the surface's own into one of up to four textures it owns. A wait on the producer's event happens on the GPU, and the window takes the frame once the copy has finished, so a slow producer never stalls the UI. Textures are `BGRA8Unorm` or `BGRA8Unorm_sRGB` (the bytes are shown as they are), or `RGBA16Float` on a [half-float surface](#half-float-frames), 2D and single-sampled; alpha is straight.
 
 The handles are raw pointers (`id<MTLDevice>`, `id<MTLTexture>`, `IOSurfaceRef`, `CVPixelBufferRef`), so any binding works: `objc2-metal`, the `metal` crate, or C and Swift on the other side of an FFI call.
 
@@ -152,10 +152,11 @@ A video player that renders through OpenGL, such as libmpv's render API, fits th
 
 `present_cv_pixel_buffer(buffer)` takes a `CVPixelBufferRef` as VideoToolbox decodes it and as `AVPlayerItemVideoOutput`, `AVCaptureVideoDataOutput` and ScreenCaptureKit deliver it:
 
-| Pixel format                            | Shown                                                   |
-| --------------------------------------- | ------------------------------------------------------- |
-| `kCVPixelFormatType_32BGRA`             | copied on the GPU (on the CPU when it has no IOSurface) |
-| `420v`, `420f` (bi-planar 4:2:0, 8-bit) | converted to BGRA on the GPU, video or full range       |
+| Pixel format                             | Shown                                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `kCVPixelFormatType_32BGRA`              | copied on the GPU (on the CPU when it has no IOSurface)                          |
+| `420v`, `420f` (bi-planar 4:2:0, 8-bit)  | converted to BGRA on the GPU, video or full range                                |
+| `kCVPixelFormatType_64RGBAHalf` (`RGhA`) | on a half-float surface: copied on the GPU (on the CPU when it has no IOSurface) |
 
 The conversion uses the buffer's YCbCr matrix attachment (BT.601, BT.709 or BT.2020; BT.709 when it names none). The buffer is retained until the GPU has read it, so release yours right after the call. It must be fully written; a decoder's output is. Ask a decoder or a capture output for one of these formats (`kCVPixelBufferPixelFormatTypeKey`), with IOSurface backing (`kCVPixelBufferIOSurfacePropertiesKey`), which VideoToolbox and AVFoundation give by default.
 
@@ -163,6 +164,18 @@ The conversion uses the buffer's YCbCr matrix attachment (BT.601, BT.709 or BT.2
 // In AVPlayerItemVideoOutput's or a VTDecompressionSession's callback:
 unsafe { surface.present_cv_pixel_buffer(pixel_buffer.cast())? };
 ```
+
+## Half-float frames
+
+A surface set to `SurfaceFormat::Rgba16Float` takes `RGBA16Float` Metal textures, IOSurfaces with pixel format `'RGhA'`, and `'RGhA'` CVPixelBuffers (`kCVPixelFormatType_64RGBAHalf`), on the same paths and with the same events as above. A `BGRA8Unorm` texture, a `'BGRA'` IOSurface or a 4:2:0 buffer on it returns `SurfaceError::FormatMismatch`, and so does a half-float one on an 8-bit surface.
+
+```rust
+surface.set_format(skathi::SurfaceFormat::Rgba16Float);
+// … render into an RGBA16Float texture on metal_device(), signal `frame`, then:
+let released = unsafe { surface.present_metal_texture(texture, Some((event, frame)))? };
+```
+
+The values are linear extended sRGB with 1.0 as SDR white: an `'RGhA'` buffer in `kCGColorSpaceExtendedLinearSRGB`, which is what AVFoundation and Core Image hand out when asked for linear half floats. A buffer's colour-space attachments are not read. The frame stays half float in the surface's textures; when an element draws it, a compute pass on the surface's queue maps it into an 8-bit texture (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)), and the window's copy waits for that pass on the GPU. The window does not ask for EDR yet, so values above 1.0 are clipped on every screen.
 
 ## Choosing, in short
 

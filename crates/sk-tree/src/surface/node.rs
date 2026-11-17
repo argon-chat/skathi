@@ -228,11 +228,22 @@ fn write(
 ) -> (Shown, Option<Event>) {
     // One lock: a present on another thread may resize the surface's texture in between.
     let (seq, frame, lost, texture) = {
-        let st = node.surface.lock_state();
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut st = node.surface.lock_state();
         #[cfg(windows)]
         let texture = match st.frame {
             Some(Frame::D3D12 { .. }) => st.gpu12.ready().map(Gpu::D3D12),
-            _ => st.gpu_texture().map(Gpu::D3D11),
+            // Only a visible node's tick may draw a half-float frame's mapping.
+            Some(Frame::Gpu { .. }) if node.visible && st.seq != node.seen => {
+                match st.gpu_texture() {
+                    Ok(texture) => texture.map(Gpu::D3D11),
+                    Err(error) => {
+                        refused(&error);
+                        None
+                    }
+                }
+            }
+            _ => None,
         };
         #[cfg(target_os = "macos")]
         let texture = match st.frame {
@@ -298,15 +309,27 @@ fn write(
                     tile.write_gpu(window, gpui::GpuTextureHandle(texture.as_raw()), true)
                 }
                 #[cfg(windows)]
-                Some(Gpu::D3D12(ready)) => {
-                    let handle = ready.handle();
-                    tile.write_d3d12(window, handle, Arc::new(ready), true)
-                }
+                Some(Gpu::D3D12(ready)) => match ready.for_atlas() {
+                    Ok(ready) => {
+                        let handle = ready.handle();
+                        tile.write_d3d12(window, handle, Arc::new(ready), true)
+                    }
+                    Err(error) => {
+                        refused(&error);
+                        return (Shown::Nowhere, None);
+                    }
+                },
                 #[cfg(target_os = "macos")]
-                Some(Gpu::Metal(ready)) => {
-                    let handle = ready.handle();
-                    tile.write_metal(window, handle, Arc::new(ready), true)
-                }
+                Some(Gpu::Metal(ready)) => match ready.for_atlas() {
+                    Ok(ready) => {
+                        let (handle, wait) = (ready.handle(), ready.ready());
+                        tile.write_metal(window, handle, wait, Arc::new(ready), true)
+                    }
+                    Err(error) => {
+                        refused(&error);
+                        return (Shown::Nowhere, None);
+                    }
+                },
                 None => return (Shown::Nowhere, None),
             };
             match written {
@@ -333,6 +356,17 @@ fn write(
         wrote
     };
     (shown, first.then_some(Event::Ready(size.0, size.1)))
+}
+
+/// A half-float frame whose 8-bit mapping could not be drawn.
+#[cfg(any(windows, target_os = "macos"))]
+fn refused(error: &super::SurfaceError) {
+    crate::log::record("window", format!("<sk-surface>: {error}"));
+    crate::render::warn_compat(
+        "surface-gpu-map",
+        "<sk-surface>: a half-float frame could not be mapped for the window (SK_LOG=info names \
+         the reason); it is not shown",
+    );
 }
 
 fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {

@@ -244,17 +244,19 @@ impl LiveTile {
         }
     }
 
-    /// [`LiveTile::write_gpu`] for a finished Metal texture on the renderer's device; `owner` is
-    /// retained until the atlas copy has run.
+    /// [`LiveTile::write_gpu`] for a Metal texture on the renderer's device, written once the
+    /// `MTLSharedEvent` in `ready` reaches its value; `owner` is retained until the atlas copy
+    /// has run.
     #[cfg(target_os = "macos")]
     pub(crate) fn write_metal(
         &mut self,
         window: &mut Window,
         texture: GpuTextureHandle,
+        ready: (*mut std::ffi::c_void, u64),
         owner: Arc<dyn std::any::Any + Send + Sync>,
         visible: bool,
     ) -> Option<Shown> {
-        match window.write_image_tile_metal(&self.image, 0, texture, owner) {
+        match window.write_image_tile_metal(&self.image, 0, texture, Some(ready), owner) {
             Ok(TileWrite::Refused) => None,
             Err(error) => {
                 crate::log::record("window", format!("Metal atlas copy failed: {error:#}"));

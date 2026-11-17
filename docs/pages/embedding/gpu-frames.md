@@ -19,7 +19,7 @@ Skathi renders with Direct3D 12 (the default build), or with Direct3D 11 in a bu
 
 Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
 
-Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms); mip 0 is shown. Alpha is straight.
+Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms), or `R16G16B16A16_FLOAT` on a [half-float surface](#half-float-textures); mip 0 is shown. Alpha is straight.
 
 ## Direct3D 11 on the renderer's device
 
@@ -159,6 +159,20 @@ surface.present_shared_fenced(&shared, 2 * n + 1, 2 * n + 2)?;
 `open_from_process` duplicates the handle into this process (it needs `PROCESS_DUP_HANDLE` on the producer, which a child process or one of the same user grants). A handle already in this process opens with `SharedTexture::open(handle)` and `with_fence(handle)`; a legacy handle from `IDXGIResource::GetSharedHandle` opens too, without a fence. Without a keyed mutex or a fence the producer must finish its writes before the present.
 
 Under the D3D12 renderer a fenced present returns at once and the wait happens on the GPU. Under the D3D11 renderer the present waits on the CPU for `wait`, up to `with_timeout` (100 ms by default, then `SurfaceError::Timeout`), so a fence that is never signalled cannot stall the window.
+
+## Half-float textures
+
+A surface set to `SurfaceFormat::Rgba16Float` takes `R16G16B16A16_FLOAT` (or `R16G16B16A16_TYPELESS`) on every path above: a D3D11 texture on `d3d11_device()`, a D3D12 resource on `d3d12_device()`, and shared textures with a keyed mutex or a fence. Vulkan renders into a `VK_FORMAT_R16G16B16A16_SFLOAT` image bound to the imported memory of an `R16G16B16A16_FLOAT` D3D12 resource. Nothing else changes: the same fences, the same release values, the same rotation.
+
+```rust
+surface.set_format(skathi::SurfaceFormat::Rgba16Float);
+// … render into an R16G16B16A16_FLOAT texture on d3d11_device(), then:
+unsafe { surface.present_d3d11_texture(texture.as_raw())? };
+```
+
+The values are scRGB, with 1.0 as SDR white: what Windows shows for 1.0 on an SDR display. A B8G8R8A8 texture on a half-float surface, or a half-float one on an 8-bit surface, returns `SurfaceError::FormatMismatch`.
+
+The frame stays half float in the surface's textures. When an element draws it, the surface first renders it into an 8-bit texture of its own (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)): under the D3D12 renderer on the surface's queue, with the window's copy waiting on the GPU; under Direct3D 11 on the renderer's immediate context. A frame that is never shown is never mapped.
 
 ## Choosing, in short
 

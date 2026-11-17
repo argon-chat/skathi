@@ -9,6 +9,10 @@
 //!   D3D12 device of our own, shared resource and fence). On macOS also `"metal"` (a texture on
 //!   the renderer's `MTLDevice`), `"iosurface"`, `"mach-port"` (an IOSurface looked up from a
 //!   mach port), `"cv-bgra"` and `"cv-nv12"` (CVPixelBuffers).
+//!
+//!   A mode ending in `-rgba16f` (and `"cv-rgha"`) sets the surface to `SurfaceFormat::Rgba16Float`
+//!   and presents half floats instead: the colour is then linear `[r, g, b, a]`, and may go
+//!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible }`.
 //!
@@ -26,7 +30,49 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use sk_app::embed::{Builder, Call, SurfaceHandle};
+use sk_app::embed::{Builder, Call, SurfaceFormat, SurfaceHandle};
+
+/// What a present fills its frame with.
+#[derive(Clone, Copy)]
+enum Fill {
+    /// `[b, g, r, a]`, 8-bit sRGB.
+    Bgra([u8; 4]),
+    /// `[r, g, b, a]`, linear half floats on an `Rgba16Float` surface.
+    Half([f32; 4]),
+}
+
+impl Fill {
+    /// The colour as a render-target clear takes it: `[r, g, b, a]`.
+    #[allow(dead_code)]
+    fn clear(self) -> [f32; 4] {
+        match self {
+            Fill::Bgra(c) => {
+                let [b, g, r, a] = c.map(|c| c as f32 / 255.0);
+                [r, g, b, a]
+            }
+            Fill::Half(c) => c,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn half(self) -> bool {
+        matches!(self, Fill::Half(_))
+    }
+}
+
+/// `f32` to IEEE binary16 bits, rounding to nearest; normal values only.
+fn half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32 - 112;
+    if value == 0.0 || exponent <= 0 {
+        return sign;
+    }
+    if exponent >= 31 {
+        return sign | 0x7c00;
+    }
+    (sign | ((exponent as u16) << 10) | ((bits >> 13) & 0x3ff) as u16) + ((bits >> 12) & 1) as u16
+}
 
 fn args_of(call: &Call) -> Vec<Value> {
     serde_json::from_str::<Vec<Value>>(call.args()).unwrap_or_default()
@@ -43,32 +89,47 @@ fn main() {
         .function("present", |call| {
             let args = args_of(&call);
             let surface = surface_of(&args);
-            let mode = args
-                .get(1)
-                .and_then(Value::as_str)
-                .unwrap_or("bgra")
-                .to_string();
-            let color: Vec<u8> = args
-                .get(2)
-                .and_then(Value::as_array)
-                .map(|c| c.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect())
-                .unwrap_or_else(|| vec![0, 0, 0, 255]);
-            let color = [color[0], color[1], color[2], color[3]];
+            let mode = args.get(1).and_then(Value::as_str).unwrap_or("bgra");
+            let halves = mode.ends_with("-rgba16f") || mode == "cv-rgha";
+            let mode = mode.trim_end_matches("-rgba16f").to_string();
+            let channel = |i: usize| {
+                let v = args.get(2).and_then(|c| c.get(i)).and_then(Value::as_f64);
+                v.unwrap_or(if i == 3 { 255.0 } else { 0.0 })
+            };
+            let color = if halves {
+                Fill::Half([0, 1, 2, 3].map(|i| channel(i) as f32))
+            } else {
+                Fill::Bgra([0, 1, 2, 3].map(|i| channel(i) as u8))
+            };
+            surface.set_format(if halves {
+                SurfaceFormat::Rgba16Float
+            } else {
+                SurfaceFormat::Bgra8
+            });
             let width = args.get(3).and_then(Value::as_u64).unwrap_or(64) as u32;
             let height = args.get(4).and_then(Value::as_u64).unwrap_or(64) as u32;
             let reply = call.into_reply();
             std::thread::spawn(move || {
-                let presented = match mode.as_str() {
-                    "texture" => gpu::present_texture(&surface, color, width, height),
-                    "shared" => gpu::present_shared(&surface, color, width, height),
-                    "d3d11-fence" => gpu::present_d3d11_fenced(&surface, color, width, height),
-                    "d3d12" => gpu::d3d12::present(&surface, color, width, height),
-                    "d3d12-shared" => gpu::d3d12::present_shared(&surface, color, width, height),
-                    "metal" | "iosurface" | "mach-port" | "cv-bgra" | "cv-nv12" => {
-                        metal::present(&surface, &mode, color, width, height)
+                let presented = match (mode.as_str(), color) {
+                    ("texture", _) => gpu::present_texture(&surface, color, width, height),
+                    ("shared", _) => gpu::present_shared(&surface, color, width, height),
+                    ("d3d11-fence", _) => gpu::present_d3d11_fenced(&surface, color, width, height),
+                    ("d3d12", _) => gpu::d3d12::present(&surface, color, width, height),
+                    ("d3d12-shared", _) => {
+                        gpu::d3d12::present_shared(&surface, color, width, height)
                     }
-                    _ => {
-                        let frame = color.repeat((width * height) as usize);
+                    (
+                        "metal" | "iosurface" | "mach-port" | "cv-bgra" | "cv-nv12" | "cv-rgha",
+                        _,
+                    ) => metal::present(&surface, &mode, color, width, height),
+                    (_, Fill::Half(rgba)) => {
+                        let frame = rgba.map(half).repeat((width * height) as usize);
+                        surface
+                            .present_rgba16f(&frame, width, height, width as usize * 4)
+                            .map_err(|e| e.to_string())
+                    }
+                    (_, Fill::Bgra(bgra)) => {
+                        let frame = bgra.repeat((width * height) as usize);
                         surface
                             .present_bgra(&frame, width, height, width as usize * 4)
                             .map_err(|e| e.to_string())
@@ -127,6 +188,8 @@ mod gpu {
     use sk_app::embed::{SharedTexture, SurfaceError, SurfaceHandle};
     use windows::core::Interface;
     use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE, WAIT_OBJECT_0};
+
+    use super::Fill;
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
     use windows::Win32::Graphics::Direct3D11::{
         D3D11CreateDevice, ID3D11Device, ID3D11Device5, ID3D11DeviceContext, ID3D11DeviceContext4,
@@ -136,7 +199,9 @@ mod gpu {
         D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
         D3D11_USAGE_DEFAULT,
     };
-    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
+    };
     use windows::Win32::Graphics::Dxgi::{
         IDXGIKeyedMutex, IDXGIResource1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
     };
@@ -148,18 +213,27 @@ mod gpu {
         e.to_string()
     }
 
+    fn format(fill: Fill) -> DXGI_FORMAT {
+        if fill.half() {
+            DXGI_FORMAT_R16G16B16A16_FLOAT
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        }
+    }
+
     fn target(
         device: &ID3D11Device,
         width: u32,
         height: u32,
         misc: u32,
+        format: DXGI_FORMAT,
     ) -> Result<(ID3D11Texture2D, ID3D11RenderTargetView)> {
         let desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format: format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
@@ -177,11 +251,6 @@ mod gpu {
         Ok((texture, view.ok_or("no view")?))
     }
 
-    fn rgba(color: [u8; 4]) -> [f32; 4] {
-        let [b, g, r, a] = color.map(|c| c as f32 / 255.0);
-        [r, g, b, a]
-    }
-
     /// The renderer's device, borrowed as this crate's `windows` version sees it.
     fn renderer(surface: &SurfaceHandle) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
         let device = surface.d3d11_device().map_err(err)?;
@@ -193,26 +262,26 @@ mod gpu {
         Ok((device, context))
     }
 
-    pub fn present_texture(surface: &SurfaceHandle, color: [u8; 4], w: u32, h: u32) -> Result<()> {
+    pub fn present_texture(surface: &SurfaceHandle, color: Fill, w: u32, h: u32) -> Result<()> {
         let (device, context) = renderer(surface)?;
-        let (texture, view) = target(&device, w, h, 0)?;
+        let (texture, view) = target(&device, w, h, 0, format(color))?;
         unsafe {
-            context.ClearRenderTargetView(&view, &rgba(color));
+            context.ClearRenderTargetView(&view, &color.clear());
             surface.present_d3d11_texture(texture.as_raw())
         }
         .map_err(err)
     }
 
     /// What another process would do: its own device, a shared NT handle, a keyed mutex.
-    pub fn present_shared(surface: &SurfaceHandle, color: [u8; 4], w: u32, h: u32) -> Result<()> {
+    pub fn present_shared(surface: &SurfaceHandle, color: Fill, w: u32, h: u32) -> Result<()> {
         let (device, context) = own_device()?;
         let misc = (D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0)
             as u32;
-        let (texture, view) = target(&device, w, h, misc)?;
+        let (texture, view) = target(&device, w, h, misc, format(color))?;
         let mutex: IDXGIKeyedMutex = texture.cast().map_err(err)?;
         unsafe {
             mutex.AcquireSync(0, 1000).map_err(err)?;
-            context.ClearRenderTargetView(&view, &rgba(color));
+            context.ClearRenderTargetView(&view, &color.clear());
             mutex.ReleaseSync(1).map_err(err)?;
         }
         let resource: IDXGIResource1 = texture.cast().map_err(err)?;
@@ -260,7 +329,7 @@ mod gpu {
     /// A D3D11 producer synchronised by a shared `ID3D11Fence` instead of a keyed mutex.
     pub fn present_d3d11_fenced(
         surface: &SurfaceHandle,
-        color: [u8; 4],
+        color: Fill,
         w: u32,
         h: u32,
     ) -> Result<()> {
@@ -271,9 +340,9 @@ mod gpu {
         unsafe { device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence) }.map_err(err)?;
         let fence = fence.ok_or("no fence")?;
         let misc = (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0) as u32;
-        let (texture, view) = target(&device, w, h, misc)?;
+        let (texture, view) = target(&device, w, h, misc, format(color))?;
         unsafe {
-            context.ClearRenderTargetView(&view, &rgba(color));
+            context.ClearRenderTargetView(&view, &color.clear());
             context4.Signal(&fence, 1).map_err(err)?;
             context.Flush();
         }
@@ -328,7 +397,7 @@ mod gpu {
             };
             let size = (info.width, info.height);
             if held.as_ref().is_none_or(|(s, ..)| *s != size) {
-                held = target(device, size.0, size.1, 0)
+                held = target(device, size.0, size.1, 0, DXGI_FORMAT_B8G8R8A8_UNORM)
                     .ok()
                     .map(|(t, v)| (size, t, v));
             }
@@ -374,12 +443,10 @@ mod gpu {
             D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_TRANSITION_BARRIER,
         };
-        use windows::Win32::Graphics::Dxgi::Common::{
-            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
         use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
-        use super::{err, rgba, Result};
+        use super::{err, format, Fill, Result};
 
         struct Producer {
             device: ID3D12Device,
@@ -409,14 +476,20 @@ mod gpu {
                 })
             }
 
-            fn texture(&self, w: u32, h: u32, heap: D3D12_HEAP_FLAGS) -> Result<ID3D12Resource> {
+            fn texture(
+                &self,
+                w: u32,
+                h: u32,
+                heap: D3D12_HEAP_FLAGS,
+                fill: Fill,
+            ) -> Result<ID3D12Resource> {
                 let desc = D3D12_RESOURCE_DESC {
                     Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
                     Width: u64::from(w),
                     Height: h,
                     DepthOrArraySize: 1,
                     MipLevels: 1,
-                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    Format: format(fill),
                     SampleDesc: DXGI_SAMPLE_DESC {
                         Count: 1,
                         Quality: 0,
@@ -447,7 +520,7 @@ mod gpu {
             fn clear(
                 &self,
                 resource: &ID3D12Resource,
-                color: [u8; 4],
+                color: Fill,
                 after: D3D12_RESOURCE_STATES,
                 value: u64,
             ) -> Result<()> {
@@ -476,7 +549,7 @@ mod gpu {
                     )
                 }
                 .map_err(err)?;
-                unsafe { list.ClearRenderTargetView(rtv, &rgba(color), None) };
+                unsafe { list.ClearRenderTargetView(rtv, &color.clear(), None) };
                 if after != D3D12_RESOURCE_STATE_RENDER_TARGET {
                     let mut barrier = D3D12_RESOURCE_BARRIER {
                         Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -524,14 +597,14 @@ mod gpu {
         }
 
         /// A producer on the renderer's device: its own queue, a GPU-side handoff, the release fence.
-        pub fn present(surface: &SurfaceHandle, color: [u8; 4], w: u32, h: u32) -> Result<()> {
+        pub fn present(surface: &SurfaceHandle, color: Fill, w: u32, h: u32) -> Result<()> {
             let renderer = surface.d3d12_device().map_err(err)?;
             let raw = renderer.as_raw();
             let device = unsafe { ID3D12Device::from_raw_borrowed(&raw) }
                 .ok_or("null device")?
                 .clone();
             let producer = Producer::new(device, false)?;
-            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_NONE)?;
+            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_NONE, color)?;
             producer.clear(&resource, color, D3D12_RESOURCE_STATE_RENDER_TARGET, 1)?;
             let released = unsafe {
                 surface.present_d3d12(
@@ -551,16 +624,11 @@ mod gpu {
 
         /// What a producer with its own D3D12 device does (a Vulkan one imports these two objects):
         /// share the resource and a fence.
-        pub fn present_shared(
-            surface: &SurfaceHandle,
-            color: [u8; 4],
-            w: u32,
-            h: u32,
-        ) -> Result<()> {
+        pub fn present_shared(surface: &SurfaceHandle, color: Fill, w: u32, h: u32) -> Result<()> {
             let mut device: Option<ID3D12Device> = None;
             unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.map_err(err)?;
             let producer = Producer::new(device.ok_or("no device")?, true)?;
-            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_SHARED)?;
+            let resource = producer.texture(w, h, D3D12_HEAP_FLAG_SHARED, color)?;
             producer.clear(&resource, color, D3D12_RESOURCE_STATE_COMMON, 1)?;
             let share = |object: &ID3D12DeviceChild| unsafe {
                 producer
@@ -588,21 +656,17 @@ mod gpu {
     use sk_app::embed::SurfaceHandle;
 
     pub use super::metal::animate;
+    use super::Fill;
 
-    pub fn present_texture(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
+    pub fn present_texture(s: &SurfaceHandle, c: Fill, w: u32, h: u32) -> Result<(), String> {
         super::metal::present(s, "metal", c, w, h)
     }
 
-    pub fn present_shared(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
+    pub fn present_shared(s: &SurfaceHandle, c: Fill, w: u32, h: u32) -> Result<(), String> {
         super::metal::present(s, "iosurface", c, w, h)
     }
 
-    pub fn present_d3d11_fenced(
-        s: &SurfaceHandle,
-        _: [u8; 4],
-        _: u32,
-        _: u32,
-    ) -> Result<(), String> {
+    pub fn present_d3d11_fenced(s: &SurfaceHandle, _: Fill, _: u32, _: u32) -> Result<(), String> {
         s.d3d11_device().map(|_| ()).map_err(|e| e.to_string())
     }
 
@@ -618,20 +682,17 @@ mod gpu {
 
     use sk_app::embed::SurfaceHandle;
 
-    pub fn present_texture(s: &SurfaceHandle, _: [u8; 4], _: u32, _: u32) -> Result<(), String> {
+    use super::Fill;
+
+    pub fn present_texture(s: &SurfaceHandle, _: Fill, _: u32, _: u32) -> Result<(), String> {
         s.d3d11_device().map(|_| ()).map_err(|e| e.to_string())
     }
 
-    pub fn present_shared(s: &SurfaceHandle, c: [u8; 4], w: u32, h: u32) -> Result<(), String> {
+    pub fn present_shared(s: &SurfaceHandle, c: Fill, w: u32, h: u32) -> Result<(), String> {
         present_texture(s, c, w, h)
     }
 
-    pub fn present_d3d11_fenced(
-        s: &SurfaceHandle,
-        c: [u8; 4],
-        w: u32,
-        h: u32,
-    ) -> Result<(), String> {
+    pub fn present_d3d11_fenced(s: &SurfaceHandle, c: Fill, w: u32, h: u32) -> Result<(), String> {
         present_texture(s, c, w, h)
     }
 
@@ -660,7 +721,9 @@ mod gpu {
 mod metal {
     use sk_app::embed::SurfaceHandle;
 
-    pub fn present(s: &SurfaceHandle, _: &str, _: [u8; 4], _: u32, _: u32) -> Result<(), String> {
+    use super::Fill;
+
+    pub fn present(s: &SurfaceHandle, _: &str, _: Fill, _: u32, _: u32) -> Result<(), String> {
         s.metal_device().map(|_| ()).map_err(|e| e.to_string())
     }
 }
@@ -676,8 +739,8 @@ mod metal {
     use objc2_core_foundation::{CFDictionary, CFRetained, CFType};
     use objc2_core_video::{
         kCVPixelBufferIOSurfacePropertiesKey, kCVPixelFormatType_32BGRA,
-        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess, CVPixelBuffer,
-        CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
+        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_64RGBAHalf,
+        kCVReturnSuccess, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
         CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeightOfPlane,
         CVPixelBufferGetIOSurface, CVPixelBufferGetWidthOfPlane, CVPixelBufferLockBaseAddress,
         CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
@@ -690,6 +753,8 @@ mod metal {
         MTLTextureDescriptor, MTLTextureUsage,
     };
     use sk_app::embed::{SharedTexture, SurfaceError, SurfaceHandle};
+
+    use super::{half, Fill};
 
     type Result<T> = std::result::Result<T, String>;
     type Device = ProtocolObject<dyn MTLDevice>;
@@ -714,10 +779,15 @@ mod metal {
         device: &Device,
         w: u32,
         h: u32,
+        fill: Fill,
         on: Option<&IOSurfaceRef>,
     ) -> Result<Retained<Texture>> {
         let desc = MTLTextureDescriptor::new();
-        desc.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+        desc.setPixelFormat(if fill.half() {
+            MTLPixelFormat::RGBA16Float
+        } else {
+            MTLPixelFormat::BGRA8Unorm
+        });
         unsafe {
             desc.setWidth(w as usize);
             desc.setHeight(h as usize);
@@ -737,7 +807,7 @@ mod metal {
     fn clear(
         device: &Device,
         target: &Texture,
-        [b, g, r, a]: [u8; 4],
+        fill: Fill,
         signal: Option<(&Event, u64)>,
     ) -> Result<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
         let queue = device.newCommandQueue().ok_or("no queue")?;
@@ -747,12 +817,12 @@ mod metal {
         color.setTexture(Some(target));
         color.setLoadAction(MTLLoadAction::Clear);
         color.setStoreAction(MTLStoreAction::Store);
-        let unit = |c: u8| f64::from(c) / 255.0;
+        let [red, green, blue, alpha] = fill.clear().map(f64::from);
         color.setClearColor(MTLClearColor {
-            red: unit(r),
-            green: unit(g),
-            blue: unit(b),
-            alpha: unit(a),
+            red,
+            green,
+            blue,
+            alpha,
         });
         command
             .renderCommandEncoderWithDescriptor(&pass)
@@ -823,19 +893,21 @@ mod metal {
         [16.0 + 219.0 * y, 128.0 + 224.0 * cb, 128.0 + 224.0 * cr].map(|v| v.round() as u8)
     }
 
-    pub fn present(
-        surface: &SurfaceHandle,
-        mode: &str,
-        color: [u8; 4],
-        w: u32,
-        h: u32,
-    ) -> Result<()> {
+    fn pixel_format(fill: Fill) -> u32 {
+        if fill.half() {
+            kCVPixelFormatType_64RGBAHalf
+        } else {
+            kCVPixelFormatType_32BGRA
+        }
+    }
+
+    pub fn present(surface: &SurfaceHandle, mode: &str, color: Fill, w: u32, h: u32) -> Result<()> {
         match mode {
             "metal" => {
                 // A producer on the renderer's device: its own queue, a GPU-side handoff.
                 let device = renderer(surface)?;
                 let event = device.newSharedEvent().ok_or("no event")?;
-                let target = texture(&device, w, h, None)?;
+                let target = texture(&device, w, h, color, None)?;
                 clear(&device, &target, color, Some((&event, 1)))?;
                 let released = unsafe {
                     surface.present_metal_texture(raw(&*target), Some((raw(&*event), 1)))
@@ -851,9 +923,9 @@ mod metal {
             "iosurface" | "mach-port" => {
                 // What another device or process does: render into an IOSurface of its own.
                 let device = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
-                let buffer = pixel_buffer(w, h, kCVPixelFormatType_32BGRA)?;
+                let buffer = pixel_buffer(w, h, pixel_format(color))?;
                 let iosurface = CVPixelBufferGetIOSurface(Some(&buffer)).ok_or("no IOSurface")?;
-                let target = texture(&device, w, h, Some(&iosurface))?;
+                let target = texture(&device, w, h, color, Some(&iosurface))?;
                 if mode == "mach-port" {
                     clear(&device, &target, color, None)?.waitUntilCompleted();
                     let port = iosurface.create_mach_port();
@@ -871,12 +943,19 @@ mod metal {
                 surface.present_shared_fenced(&shared, 1, 2).map_err(err)?;
                 reached(&event, 2)
             }
-            "cv-bgra" => {
-                let buffer = pixel_buffer(w, h, kCVPixelFormatType_32BGRA)?;
-                fill(&buffer, 0, &color);
+            "cv-bgra" | "cv-rgha" => {
+                let buffer = pixel_buffer(w, h, pixel_format(color))?;
+                let texel: Vec<u8> = match color {
+                    Fill::Bgra(bgra) => bgra.to_vec(),
+                    Fill::Half(rgba) => rgba.iter().flat_map(|c| half(*c).to_ne_bytes()).collect(),
+                };
+                fill(&buffer, 0, &texel);
                 unsafe { surface.present_cv_pixel_buffer(raw(&*buffer)) }.map_err(err)
             }
             _ => {
+                let Fill::Bgra(color) = color else {
+                    return Err("4:2:0 video is 8-bit".into());
+                };
                 let buffer = pixel_buffer(w, h, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)?;
                 let [y, cb, cr] = ycbcr(color);
                 fill(&buffer, 0, &[y]);
@@ -906,7 +985,7 @@ mod metal {
             let size = (info.width, info.height);
             if held.as_ref().is_none_or(|(s, ..)| *s != size) {
                 held = renderer(&surface).ok().and_then(|device| {
-                    let target = texture(&device, size.0, size.1, None).ok()?;
+                    let target = texture(&device, size.0, size.1, Fill::Bgra([0; 4]), None).ok()?;
                     let event = device.newSharedEvent()?;
                     Some((size, device, target, event))
                 });
@@ -921,7 +1000,7 @@ mod metal {
             if clear(
                 device,
                 target,
-                [c(0.7), c(1.3), c(1.0), 255],
+                Fill::Bgra([c(0.7), c(1.3), c(1.0), 255]),
                 Some((event, value)),
             )
             .is_err()

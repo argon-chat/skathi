@@ -7,7 +7,11 @@
 //! readback) or a shared texture from another device, API or process, synchronised by a keyed
 //! mutex or a fence. On macOS it can be a Metal texture on the renderer's device, an IOSurface
 //! (synchronised by an `MTLSharedEvent`) or a CVPixelBuffer. Everywhere it can be CPU BGRA.
+//!
+//! A surface set to [`SurfaceFormat::Rgba16Float`] takes half-float frames instead; they stay
+//! half-float until an element composites them, where they are mapped to the window's 8-bit sRGB.
 
+mod color;
 #[cfg(windows)]
 mod d3d11;
 #[cfg(windows)]
@@ -105,6 +109,41 @@ pub enum SurfaceError {
     Busy,
     /// The platform call failed; the message carries its error.
     Platform(String),
+    /// The frame's format is not the one the surface is set to ([`SurfaceHandle::set_format`]).
+    FormatMismatch {
+        surface: SurfaceFormat,
+        frame: SurfaceFormat,
+    },
+}
+
+/// The pixels a surface takes, set with [`SurfaceHandle::set_format`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SurfaceFormat {
+    /// 8-bit BGRA, sRGB-encoded, straight alpha: `B8G8R8A8_UNORM`, `BGRA8Unorm`, `'BGRA'`, and
+    /// the 4:2:0 CVPixelBuffers.
+    #[default]
+    Bgra8,
+    /// Half-float RGBA in linear extended sRGB (scRGB primaries, 1.0 = SDR white), straight alpha:
+    /// `R16G16B16A16_FLOAT`, `RGBA16Float`, `'RGhA'`. Shown with values above 1.0 clamped.
+    Rgba16Float,
+}
+
+impl fmt::Display for SurfaceFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Bgra8 => "Bgra8",
+            Self::Rgba16Float => "Rgba16Float",
+        })
+    }
+}
+
+fn check_format(surface: SurfaceFormat, frame: SurfaceFormat) -> Result<(), SurfaceError> {
+    if surface == frame {
+        Ok(())
+    } else {
+        Err(SurfaceError::FormatMismatch { surface, frame })
+    }
 }
 
 impl fmt::Display for SurfaceError {
@@ -131,6 +170,11 @@ impl fmt::Display for SurfaceError {
                  window draws, or a fence it waits on is never signalled; drop this frame",
             ),
             Self::Platform(why) => f.write_str(why),
+            Self::FormatMismatch { surface, frame } => write!(
+                f,
+                "a {frame} frame on a surface set to {surface}: present {surface} frames, or call \
+                 set_format(SurfaceFormat::{frame}) first"
+            ),
         }
     }
 }
@@ -198,6 +242,7 @@ pub(crate) struct State {
     shown: u64,
     shown_seq: u64,
     info: SurfaceInfo,
+    pub(crate) format: SurfaceFormat,
     #[cfg(windows)]
     gpu: d3d11::SurfaceGpu,
     #[cfg(windows)]
@@ -252,9 +297,9 @@ impl State {
         }
     }
 
-    /// The texture holding a [`Frame::Gpu`], referenced for the caller.
+    /// The texture the atlas copies for a [`Frame::Gpu`], referenced for the caller.
     #[cfg(windows)]
-    pub(crate) fn gpu_texture(&self) -> Option<d3d11::Texture> {
+    pub(crate) fn gpu_texture(&mut self) -> Result<Option<d3d11::Texture>, SurfaceError> {
         self.gpu.texture()
     }
 }
@@ -316,6 +361,16 @@ impl SurfaceHandle {
         }
     }
 
+    /// Sets the pixel format presents must have; [`SurfaceFormat::Bgra8`] until set. The frame
+    /// already shown stays until the next present.
+    pub fn set_format(&self, format: SurfaceFormat) {
+        self.state().format = format;
+    }
+
+    pub fn format(&self) -> SurfaceFormat {
+        self.state().format
+    }
+
     /// Presents a CPU frame: BGRA with straight alpha, `stride` bytes per row. Works on every platform.
     pub fn present_bgra(
         &self,
@@ -325,6 +380,36 @@ impl SurfaceHandle {
         stride: usize,
     ) -> Result<(), SurfaceError> {
         self.present_cpu(pixels, width, height, stride, false)
+    }
+
+    /// Presents a CPU frame to a [`SurfaceFormat::Rgba16Float`] surface: RGBA half floats (IEEE
+    /// binary16 bits), straight alpha, `stride` values per row. It is mapped to 8-bit sRGB here.
+    pub fn present_rgba16f(
+        &self,
+        pixels: &[u16],
+        width: u32,
+        height: u32,
+        stride: usize,
+    ) -> Result<(), SurfaceError> {
+        check_format(self.format(), SurfaceFormat::Rgba16Float)?;
+        check_size(width, height)?;
+        let row = width as usize * 4;
+        let need = stride * (height as usize - 1) + row;
+        if stride < row || pixels.len() < need {
+            return Err(SurfaceError::Size(format!(
+                "a {width}x{height} half-float frame with stride {stride} needs {need} values and \
+                 a stride of at least {row}; got {}",
+                pixels.len()
+            )));
+        }
+        let bgra = color::rgba16f_to_bgra8(pixels, width, height, stride);
+        self.state().put(Frame::Cpu {
+            width,
+            height,
+            bgra: bgra.into(),
+        });
+        sk_runtime::frames::wake();
+        Ok(())
     }
 
     /// [`Self::present_bgra`] for BGRX: the fourth byte is ignored and the frame is opaque.
@@ -346,6 +431,7 @@ impl SurfaceHandle {
         stride: usize,
         opaque: bool,
     ) -> Result<(), SurfaceError> {
+        check_format(self.format(), SurfaceFormat::Bgra8)?;
         check_size(width, height)?;
         let row = width as usize * 4;
         let need = stride * (height as usize - 1) + row;
@@ -398,8 +484,9 @@ impl SurfaceHandle {
     }
 
     /// Presents an `ID3D11Texture2D` made on [`Self::d3d11_device`]: `B8G8R8A8_UNORM`, `_UNORM_SRGB`
-    /// or `_TYPELESS`, straight alpha, mip 0, any sample count. The texture is copied on the GPU before
-    /// this returns, so the producer may render its next frame into it at once.
+    /// or `_TYPELESS` (`R16G16B16A16_FLOAT` on a [`SurfaceFormat::Rgba16Float`] surface), straight
+    /// alpha, mip 0, any sample count. The texture is copied on the GPU before this returns, so the
+    /// producer may render its next frame into it at once.
     ///
     /// # Safety
     /// `texture` is a live `ID3D11Texture2D` COM pointer, or null.
@@ -444,7 +531,8 @@ impl SurfaceHandle {
     }
 
     /// Presents an `ID3D12Resource` made on [`Self::d3d12_device`]: a 2D `B8G8R8A8_UNORM` (or
-    /// `_UNORM_SRGB`, `_TYPELESS`) texture, single-sampled, straight alpha, in `resource_state` (a
+    /// `_UNORM_SRGB`, `_TYPELESS`; `R16G16B16A16_FLOAT` on a [`SurfaceFormat::Rgba16Float`] surface)
+    /// texture, single-sampled, straight alpha, in `resource_state` (a
     /// `D3D12_RESOURCE_STATES`, left as it is). The copy runs on a queue of the surface's own after
     /// a GPU wait for `ready` (fence, value); without `ready` the resource must already be written.
     /// Nothing blocks. Returns the value [`Self::release_fence`] reaches once the resource is free
@@ -590,7 +678,8 @@ impl SurfaceHandle {
     }
 
     /// Presents an `id<MTLTexture>` made on [`Self::metal_device`]: 2D, `BGRA8Unorm` (or
-    /// `BGRA8Unorm_sRGB`), single-sampled, straight alpha. The copy runs on a queue of the
+    /// `BGRA8Unorm_sRGB`; `RGBA16Float` on a [`SurfaceFormat::Rgba16Float`] surface),
+    /// single-sampled, straight alpha. The copy runs on a queue of the
     /// surface's own after a GPU wait for `ready` (an `id<MTLSharedEvent>` and the value the
     /// producer signals after its last write); without `ready` the texture must already be
     /// written. Nothing blocks. Returns the value [`Self::release_event`] reaches once the texture
@@ -620,20 +709,37 @@ impl SurfaceHandle {
 
     /// Presents a `CVPixelBufferRef` (VideoToolbox, AVFoundation, ScreenCaptureKit): BGRA
     /// (`kCVPixelFormatType_32BGRA`) or 4:2:0 bi-planar (`420v`, `420f`, converted with the
-    /// buffer's YCbCr matrix, BT.709 when it names none). The buffer is retained until the GPU
-    /// copied it; a BGRA one with no IOSurface is copied on the CPU. It must be fully written.
+    /// buffer's YCbCr matrix, BT.709 when it names none); `RGhA` (`kCVPixelFormatType_64RGBAHalf`)
+    /// on a [`SurfaceFormat::Rgba16Float`] surface. The buffer is retained until the GPU copied it;
+    /// a BGRA or RGhA one with no IOSurface is copied on the CPU. It must be fully written.
     ///
     /// # Safety
     /// `buffer` is null or a live `CVPixelBufferRef`.
     pub unsafe fn present_cv_pixel_buffer(&self, buffer: *mut c_void) -> Result<(), SurfaceError> {
         #[cfg(target_os = "macos")]
         {
-            // SAFETY: the caller's.
-            unsafe {
-                metal::present_pixel_buffer(&self.shared.state, buffer, |cpu| {
+            let cpu = |cpu: metal::Cpu<'_>| match cpu.format {
+                SurfaceFormat::Bgra8 => {
                     self.present_cpu(cpu.pixels, cpu.width, cpu.height, cpu.stride, false)
-                })
-            }?;
+                }
+                SurfaceFormat::Rgba16Float => {
+                    if cpu.pixels.as_ptr().align_offset(2) != 0 || cpu.stride % 2 != 0 {
+                        return Err(SurfaceError::Platform(
+                            "a misaligned RGhA CVPixelBuffer".into(),
+                        ));
+                    }
+                    // SAFETY: aligned above; the buffer stays locked while this runs.
+                    let halves = unsafe {
+                        std::slice::from_raw_parts(
+                            cpu.pixels.as_ptr().cast::<u16>(),
+                            cpu.pixels.len() / 2,
+                        )
+                    };
+                    self.present_rgba16f(halves, cpu.width, cpu.height, cpu.stride / 2)
+                }
+            };
+            // SAFETY: the caller's.
+            unsafe { metal::present_pixel_buffer(&self.shared.state, buffer, cpu) }?;
             sk_runtime::frames::wake();
             Ok(())
         }
@@ -1023,7 +1129,8 @@ impl fmt::Debug for MetalEvent {
     }
 }
 
-/// A shared BGRA8 texture opened on the renderer's device, from another device, API or process.
+/// A shared BGRA8 or half-float texture opened on the renderer's device, from another device, API
+/// or process.
 /// On Windows: D3D11, D3D12, or Vulkan rendering into D3D12 memory it imports. On macOS: an
 /// IOSurface from another `MTLDevice`, process or framework. Reopen it after
 /// [`SurfaceError::DeviceChanged`].
@@ -1102,8 +1209,8 @@ impl SharedTexture {
         }
     }
 
-    /// Opens an `IOSurfaceRef` this process holds (macOS): pixel format `'BGRA'`, made by any
-    /// `MTLDevice` or framework. It is retained while this lives.
+    /// Opens an `IOSurfaceRef` this process holds (macOS): pixel format `'BGRA'` (or `'RGhA'`), made
+    /// by any `MTLDevice` or framework. It is retained while this lives.
     ///
     /// # Safety
     /// `surface` is null or a live `IOSurfaceRef`.
@@ -1277,6 +1384,18 @@ impl SharedTexture {
             match self.never {}
         }
     }
+
+    /// The texture's pixels, which the surface it is presented to must be set to.
+    pub fn format(&self) -> SurfaceFormat {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            self.inner.format
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            match self.never {}
+        }
+    }
 }
 
 impl fmt::Debug for SharedTexture {
@@ -1375,6 +1494,33 @@ mod tests {
             vec![SurfaceEvent::Changed(info), SurfaceEvent::DeviceLost]
         );
         assert_eq!(s.info(), SurfaceInfo::default());
+    }
+
+    #[test]
+    fn a_frame_of_the_other_format_is_refused_and_half_floats_are_mapped() {
+        let s = surface("tests:format");
+        assert_eq!(s.format(), SurfaceFormat::Bgra8);
+        assert_eq!(
+            s.present_rgba16f(&[0; 4], 1, 1, 4),
+            Err(SurfaceError::FormatMismatch {
+                surface: SurfaceFormat::Bgra8,
+                frame: SurfaceFormat::Rgba16Float
+            })
+        );
+        s.set_format(SurfaceFormat::Rgba16Float);
+        assert!(matches!(
+            s.present_bgra(&[0; 4], 1, 1, 4),
+            Err(SurfaceError::FormatMismatch { .. })
+        ));
+        assert_eq!(s.stats().presented, 0);
+        let h = color::tests::f32_to_half;
+        s.present_rgba16f(&[h(2.0), h(0.5), h(0.0), h(1.0)], 1, 1, 4)
+            .unwrap();
+        let frame = s.state().frame.clone();
+        match frame {
+            Some(Frame::Cpu { bgra, .. }) => assert_eq!(&*bgra, &[0, 188, 255, 255]),
+            _ => panic!("a CPU frame"),
+        }
     }
 
     #[test]

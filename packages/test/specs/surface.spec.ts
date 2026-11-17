@@ -15,7 +15,7 @@ if (build.status !== 0) throw new Error(`building the surface example failed:\n$
 const app = await launch({
   app: "packages/test/fixtures/surface/src/main.ts",
   exe: EXE,
-  window: [720, 480],
+  window: [720, 540],
   label: "surface",
 });
 afterAll(() => app.close());
@@ -192,6 +192,52 @@ test.skipIf(!MACOS)(
     });
     // 4:2:0 video range rounds each channel a little.
     await handOver({ "cv-nv12": [40, 160, 220, 255] }, 6);
+  },
+  T,
+);
+
+/**
+ * Presents linear half-float frames in the mode each element is named after, alternating two colours: values above
+ * 1.0 clamp and the rest go through the exact sRGB curve, so they show as these 8-bit colours.
+ */
+async function handOverHalf(names: string[]) {
+  const colors: [[number, number, number, number], Rgb][] = [
+    [
+      [4.0, 0.2159, 0.0, 1.0],
+      [255, 128, 0],
+    ],
+    [
+      [0.05, 0.5, 1.5, 1.0],
+      [63, 188, 255],
+    ],
+  ];
+  for (const [i, name] of names.entries()) await call("present", name, name, colors[i % 2]![0], 48, 32);
+  for (const name of names)
+    await until(
+      () => stats(name),
+      (s) => s.shown === 1,
+    );
+  const px = await shoot();
+  for (const [i, name] of names.entries()) {
+    const at = await box(`#${name}`);
+    expect(px(at.x + at.w / 2, at.y + at.h / 2), name).toEqual(colors[i % 2]![1]);
+  }
+  const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
+  for (const name of names) expect(events).toContain(`${name}:ready:48x32`);
+}
+
+test.skipIf(!WINDOWS)(
+  "half-float frames from the CPU, D3D11, keyed-mutex, D3D12 and shared D3D12 paths show clamped through the sRGB curve",
+  async () => {
+    await handOverHalf(["cpu-rgba16f", "texture-rgba16f", "shared-rgba16f", "d3d12-rgba16f", "d3d12-shared-rgba16f"]);
+  },
+  T,
+);
+
+test.skipIf(!MACOS)(
+  "half-float Metal textures, RGhA IOSurfaces and CVPixelBuffers show clamped through the sRGB curve",
+  async () => {
+    await handOverHalf(["cpu-rgba16f", "metal-rgba16f", "iosurface-rgba16f", "cv-rgha"]);
   },
   T,
 );

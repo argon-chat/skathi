@@ -122,29 +122,63 @@ On Windows and macOS the frame can stay on the GPU. Pick the path by what the pr
 
 [GPU frames on Windows](/embedding/gpu-frames/) and [GPU frames on macOS](/embedding/gpu-frames-macos/) walk through each, with code. Every GPU present copies the frame into a texture the surface owns, so the producer gets its texture back as soon as that copy has run.
 
+## Half-float frames
+
+A surface takes 8-bit BGRA unless it is told otherwise. A producer that renders in linear light, such as a video player tone-mapping HDR video or a renderer with an FP16 framebuffer, can hand over half floats instead. Set the surface's format once, from native code, before presenting:
+
+```rust
+use skathi::SurfaceFormat;
+
+let surface = skathi::surface("player");
+surface.set_format(SurfaceFormat::Rgba16Float);
+```
+
+From then on the surface takes half-float RGBA and refuses 8-bit frames, and the other way round for a `Bgra8` surface: a present of the wrong kind returns `SurfaceError::FormatMismatch` and shows nothing. Every path that makes sense takes them:
+
+| Path                         | Half-float frame                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| CPU                          | `present_rgba16f(halves, w, h, stride)`: `&[u16]` of IEEE half bits, `stride` in values |
+| D3D11, D3D12, shared, Vulkan | `R16G16B16A16_FLOAT` (or `_TYPELESS`) textures, resources and shared handles            |
+| Metal, IOSurface             | `RGBA16Float` textures; IOSurfaces with pixel format `'RGhA'`                           |
+| CVPixelBuffer                | `kCVPixelFormatType_64RGBAHalf` (`'RGhA'`)                                              |
+
+The values are linear extended sRGB: sRGB (BT.709) primaries, no transfer curve, 1.0 is SDR white, and values may go below 0 and above 1. That is what CoreVideo's `'RGhA'` holds in `kCGColorSpaceExtendedLinearSRGB`, and Windows' scRGB. Alpha is straight, as in the 8-bit paths.
+
+### What shows today
+
+The window itself still draws 8-bit sRGB, so the element maps each frame into it: every channel is clamped to 0…1 and then encoded with the exact sRGB curve, the one gradients and video already go through. Values from 0 to 1 are never touched; there is no tone-curve shoulder below 1.0, and anything brighter than SDR white is clipped to it. Two things follow:
+
+- **SDR content looks exactly as on the 8-bit path.** Linearise your 8-bit sRGB frames with the sRGB EOTF and they look identical to the BGRA8 path: Skathi's tests put all 256 sRGB code values through half floats and get every one back unchanged, on Direct3D 11, Direct3D 12 and Metal.
+- **Highlights clip.** A producer that has highlights above 1.0 and wants them rolled off rather than clipped tone-maps them itself, to a peak of 1.0.
+
+Clipping is what Windows does with scRGB content and macOS with EDR content on a screen that has no headroom, and it keeps the mapping exact for everything an SDR frame can hold. The window does not yet tag its output as HDR (no FP16 swapchain on Windows, no EDR on macOS), so values above 1.0 are clipped even on an HDR display.
+
+GPU frames stay half float in the surface's own textures; an element maps a frame into an 8-bit texture when it first draws it, on the GPU, so a frame replaced before it is shown is never mapped. CPU frames are mapped when presented, on the producer's thread, through a table. A half-float frame takes twice the memory of an 8-bit one, and the mapping costs one small GPU pass per frame shown.
+
 ## Device loss
 
 When the GPU driver resets on Windows, Skathi recreates its device; on macOS the same happens if a window comes up on another GPU. Every surface drops its GPU frame, the elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and a present with an old texture returns `SurfaceError::DeviceChanged`. Get the device again, recreate your textures (or reopen shared ones), and present. CPU frames are not affected.
 
 ## Errors
 
-| `SurfaceError`   | Means                                                                               |
-| ---------------- | ----------------------------------------------------------------------------------- |
-| `NotSupported`   | This platform or renderer has no such path; the message says which one to use       |
-| `NoDevice`       | No window has drawn yet, so there is no GPU device; try again after the first frame |
-| `DeviceChanged`  | The device was recreated; recreate your GPU resources                               |
-| `WrongDevice`    | The texture is from another device; share it instead                                |
-| `Format`, `Size` | The frame is not BGRA8, is zero or oversized, or the buffer is too short            |
-| `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented              |
-| `Busy`           | Every surface texture is still in flight; drop the frame or wait                    |
-| `Platform`       | A system call failed; the message carries its error                                 |
+| `SurfaceError`   | Means                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `NotSupported`   | This platform or renderer has no such path; the message says which one to use                      |
+| `NoDevice`       | No window has drawn yet, so there is no GPU device; try again after the first frame                |
+| `DeviceChanged`  | The device was recreated; recreate your GPU resources                                              |
+| `WrongDevice`    | The texture is from another device; share it instead                                               |
+| `Format`, `Size` | The frame's format is not one a surface takes, it is zero or oversized, or the buffer is too short |
+| `FormatMismatch` | The frame is BGRA8 and the surface is set to `Rgba16Float`, or the other way round                 |
+| `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented                             |
+| `Busy`           | Every surface texture is still in flight; drop the frame or wait                                   |
+| `Platform`       | A system call failed; the message carries its error                                                |
 
 ## Platform support
 
-| Platform | `<sk-surface>` | CPU frames | GPU textures on Skathi's device       | Shared textures                           | Video frames               |
-| -------- | -------------- | ---------- | ------------------------------------- | ----------------------------------------- | -------------------------- |
-| Windows  | yes            | yes        | D3D11; D3D12 under the D3D12 renderer | NT handles, with a keyed mutex or a fence | no                         |
-| macOS    | yes            | yes        | Metal, with an `MTLSharedEvent`       | IOSurfaces, with an `MTLSharedEvent`      | CVPixelBuffer: BGRA, 4:2:0 |
-| Linux    | yes            | yes        | no                                    | no                                        | no                         |
+| Platform | `<sk-surface>` | CPU frames | GPU textures on Skathi's device       | Shared textures                           | Video frames                     | Half-float frames                |
+| -------- | -------------- | ---------- | ------------------------------------- | ----------------------------------------- | -------------------------------- | -------------------------------- |
+| Windows  | yes            | yes        | D3D11; D3D12 under the D3D12 renderer | NT handles, with a keyed mutex or a fence | no                               | CPU, every GPU path              |
+| macOS    | yes            | yes        | Metal, with an `MTLSharedEvent`       | IOSurfaces, with an `MTLSharedEvent`      | CVPixelBuffer: BGRA, 4:2:0, RGhA | CPU, every GPU path except 4:2:0 |
+| Linux    | yes            | yes        | no                                    | no                                        | no                               | CPU                              |
 
 Next: [GPU frames on Windows](/embedding/gpu-frames/), [GPU frames on macOS](/embedding/gpu-frames-macos/).

@@ -31,7 +31,8 @@ pub use module::{Declared, Function, IntoModule, Job, Module, Typed};
 pub use serde;
 pub use sk_tree::surface::{
     surface, D3D11Device, D3D12Device, D3D12Fence, MetalDevice, MetalEvent, SharedTexture,
-    SurfaceError, SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch,
+    SurfaceError, SurfaceEvent, SurfaceFormat, SurfaceHandle, SurfaceInfo, SurfaceStats,
+    SurfaceWatch,
 };
 #[cfg(feature = "types")]
 pub use specta::{self, Type};

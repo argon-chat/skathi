@@ -8,6 +8,18 @@ Object.assign(globalThis, {
   hostCall: (name: string, ...args: unknown[]) => appHost.call(name, ...args),
 });
 
+// Half-float surfaces: the CPU path, then the Windows and the macOS GPU paths.
+const HALF = [
+  "cpu-rgba16f",
+  "texture-rgba16f",
+  "shared-rgba16f",
+  "d3d12-rgba16f",
+  "d3d12-shared-rgba16f",
+  "metal-rgba16f",
+  "iosurface-rgba16f",
+  "cv-rgha",
+];
+
 const at = (left: number, top: number, width: number, height: number, extra = "") =>
   `position: absolute; left: ${left}px; top: ${top}px; width: ${width}px; height: ${height}px; ${extra}`;
 
@@ -41,6 +53,9 @@ createApp({
       ),
       ...["metal", "iosurface", "mach-port", "cv-bgra", "cv-nv12"].map((name, i) =>
         h("sk-surface", { id: name, name, style: at(20 + i * 120, 360, 100, 80, "object-fit: fill"), ...log(name) }),
+      ),
+      ...HALF.map((name, i) =>
+        h("sk-surface", { id: name, name, style: at(20 + i * 86, 460, 80, 60, "object-fit: fill"), ...log(name) }),
       ),
     ]),
 }).mount();

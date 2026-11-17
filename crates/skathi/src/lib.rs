@@ -158,7 +158,7 @@ pub use sk_app::embed::{
 };
 #[cfg(feature = "types")]
 pub use sk_app::embed::{specta, Type};
-pub use sk_app::embed::{MetalDevice, MetalEvent};
+pub use sk_app::embed::{MetalDevice, MetalEvent, SurfaceFormat};
 #[cfg(feature = "hotkeys")]
 pub use sk_app::hotkeys;
 pub use sk_app::{js, run_exe, tray, HostAllocator};

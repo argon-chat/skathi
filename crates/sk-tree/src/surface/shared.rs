@@ -8,7 +8,7 @@ use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_AC
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE};
 
 use super::d3d11::{self, SharedSync};
-use super::{d3d12, State, SurfaceError};
+use super::{d3d12, State, SurfaceError, SurfaceFormat};
 
 struct Owned(HANDLE);
 
@@ -62,6 +62,7 @@ pub(crate) struct Opened {
     /// Ours, for the D3D11 open a keyed mutex needs after a D3D12 one.
     handle: Option<Owned>,
     pub(super) size: (u32, u32),
+    pub(super) format: SurfaceFormat,
     pub(super) fenced: bool,
 }
 
@@ -71,6 +72,7 @@ pub(super) fn open(handle: u64) -> Result<Opened, SurfaceError> {
         if let Ok(opened) = d3d12::open(handle) {
             return Ok(Opened {
                 size: opened.size,
+                format: opened.format,
                 d3d12: Some(opened),
                 d3d11: None,
                 handle: duplicate(unsafe { GetCurrentProcess() }, handle).ok(),
@@ -81,6 +83,7 @@ pub(super) fn open(handle: u64) -> Result<Opened, SurfaceError> {
     let opened = d3d11::open(handle)?;
     Ok(Opened {
         size: opened.size(),
+        format: opened.format(),
         d3d12: None,
         d3d11: Some(Ok(opened)),
         handle: None,

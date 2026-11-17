@@ -1,13 +1,14 @@
 //! The Metal half of a surface on macOS: frames are copied on a command queue of the surface's own
 //! on the renderer's device, after a GPU wait on the producer's shared event, into one of a few
 //! surface textures. The element's tick hands a finished one to the atlas
-//! (`write_image_tile_metal`), so the renderer's queue never waits on a producer.
+//! (`write_image_tile_metal`), so the renderer's queue never waits on a producer. A half-float
+//! texture is first mapped into an 8-bit one of its own, on the same queue, when the tick asks.
 
 use std::any::Any;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use block2::RcBlock;
@@ -17,10 +18,11 @@ use objc2::Message;
 use objc2_core_foundation::{CFRetained, CFString};
 use objc2_core_video::{
     kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess, CVPixelBuffer,
-    CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
-    CVPixelBufferGetIOSurface, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
-    CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_64RGBAHalf,
+    kCVReturnSuccess, CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+    CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetPixelFormatType,
+    CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+    CVPixelBufferUnlockBaseAddress,
 };
 use objc2_foundation::NSString;
 use objc2_io_surface::IOSurfaceRef;
@@ -31,7 +33,7 @@ use objc2_metal::{
     MTLSize, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
 };
 
-use super::{check_size, lock, Frame, State, SurfaceError};
+use super::{check_format, check_size, lock, Frame, State, SurfaceError, SurfaceFormat};
 
 /// More in flight than this means the atlas is not keeping up; the present is refused.
 const MAX_SLOTS: usize = 4;
@@ -39,6 +41,7 @@ const MAX_SLOTS: usize = 4;
 const BGRA: u32 = kCVPixelFormatType_32BGRA;
 const NV12_VIDEO: u32 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
 const NV12_FULL: u32 = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+const RGHA: u32 = kCVPixelFormatType_64RGBAHalf;
 
 type Texture = ProtocolObject<dyn MTLTexture>;
 type SharedEvent = ProtocolObject<dyn MTLSharedEvent>;
@@ -52,7 +55,8 @@ struct Gpu {
     generation: u64,
     /// The last value signalled on `event`; held across each commit so values rise in queue order.
     next: Mutex<u64>,
-    nv12: OnceLock<Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, String>>,
+    nv12: OnceLock<Result<Pipeline, String>>,
+    rgba16f: OnceLock<Result<Pipeline, String>>,
     _lease: Arc<dyn Any + Send + Sync>,
 }
 
@@ -95,6 +99,7 @@ fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
         generation: lease.generation,
         next: Mutex::new(0),
         nv12: OnceLock::new(),
+        rgba16f: OnceLock::new(),
         _lease: lease.keep_alive,
     });
     *cached = Some(gpu.clone());
@@ -180,15 +185,42 @@ pub(super) fn release_event() -> Result<Event, SurfaceError> {
     gpu().map(Event)
 }
 
-pub(crate) struct SlotTexture(Retained<Texture>);
+pub(crate) struct SlotTexture {
+    texture: Retained<Texture>,
+    /// A half-float slot's 8-bit picture and the release value its last mapping signals (0 until
+    /// mapped for the frame in the slot).
+    mapped: Option<(Retained<Texture>, Mutex<u64>)>,
+}
 
-// SAFETY: a Metal texture is thread-safe.
+// SAFETY: a Metal texture is thread-safe; the value is a mutex.
 unsafe impl Send for SlotTexture {}
 unsafe impl Sync for SlotTexture {}
+
+impl SlotTexture {
+    fn new(gpu: &Gpu, size: (u32, u32), format: SurfaceFormat) -> Result<Self, SurfaceError> {
+        let texture = create_texture(gpu, size, pixel_format(format))?;
+        let mapped = match format {
+            SurfaceFormat::Bgra8 => None,
+            SurfaceFormat::Rgba16Float => {
+                rgba16f_pipeline(gpu)?;
+                Some((
+                    create_texture(gpu, size, MTLPixelFormat::BGRA8Unorm)?,
+                    Mutex::new(0),
+                ))
+            }
+        };
+        Ok(Self { texture, mapped })
+    }
+
+    fn mapped(&self) -> Option<MutexGuard<'_, u64>> {
+        self.mapped.as_ref().map(|(_, value)| lock(value))
+    }
+}
 
 struct Slot {
     texture: Arc<SlotTexture>,
     size: (u32, u32),
+    format: SurfaceFormat,
     generation: u64,
     written: u64,
 }
@@ -206,11 +238,14 @@ pub(crate) struct SurfaceGpu {
 // SAFETY: see `Gpu`.
 unsafe impl Send for SurfaceGpu {}
 
-/// A frame for the atlas: the texture, and the release value its copy signals.
+/// A frame for the atlas: the texture, and the release value its copy (or its mapping, once
+/// [`Ready::for_atlas`] made it) signals.
 pub(crate) struct Ready {
     texture: Arc<SlotTexture>,
     gpu: Arc<Gpu>,
     value: u64,
+    size: (u32, u32),
+    mapped: bool,
 }
 
 // SAFETY: see `Gpu`.
@@ -223,8 +258,38 @@ impl Ready {
         self.gpu.event.signaledValue() >= self.value
     }
 
+    /// What the atlas copies: the texture, or for a half-float frame its 8-bit mapping, encoded on
+    /// the surface's queue the first time it is asked for. The atlas copy waits on [`Self::ready`].
+    pub(crate) fn for_atlas(self) -> Result<Ready, SurfaceError> {
+        let Some(mut mapped) = self.texture.mapped() else {
+            return Ok(self);
+        };
+        if *mapped == 0 {
+            *mapped = map(&self.gpu, &self.texture, self.size)?;
+        }
+        let value = *mapped;
+        drop(mapped);
+        Ok(Ready {
+            value,
+            mapped: true,
+            ..self
+        })
+    }
+
     pub(crate) fn handle(&self) -> gpui::GpuTextureHandle {
-        gpui::GpuTextureHandle(Retained::as_ptr(&self.texture.0).cast_mut().cast())
+        let texture = match (&self.texture.mapped, self.mapped) {
+            (Some((mapped, _)), true) => mapped,
+            _ => &self.texture.texture,
+        };
+        gpui::GpuTextureHandle(Retained::as_ptr(texture).cast_mut().cast())
+    }
+
+    /// The release event and the value the atlas copy waits for.
+    pub(crate) fn ready(&self) -> (*mut c_void, u64) {
+        (
+            Retained::as_ptr(&self.gpu.event).cast_mut().cast(),
+            self.value,
+        )
     }
 }
 
@@ -235,6 +300,8 @@ impl SurfaceGpu {
             texture: slot.texture.clone(),
             gpu: self.gpu.clone()?,
             value: slot.written,
+            size: slot.size,
+            mapped: false,
         })
     }
 
@@ -246,38 +313,54 @@ impl SurfaceGpu {
 
     /// A slot neither shown as the frame nor still copied into or read by the atlas (both hold
     /// its `Arc` until their command buffer completes).
-    fn free_slot(&mut self, gpu: &Gpu, size: (u32, u32)) -> Result<usize, SurfaceError> {
+    fn free_slot(
+        &mut self,
+        gpu: &Gpu,
+        size: (u32, u32),
+        format: SurfaceFormat,
+    ) -> Result<usize, SurfaceError> {
         if self.slots.iter().any(|s| s.generation != gpu.generation) {
             self.forget();
         }
         let free = |(i, s): &(usize, &Slot)| {
             Some(*i) != self.current && Arc::strong_count(&s.texture) == 1
         };
+        let fits = |s: &Slot| s.size == size && s.format == format;
         let pick = self
             .slots
             .iter()
             .enumerate()
             .filter(free)
-            .min_by_key(|(_, s)| s.size != size)
+            .min_by_key(|(_, s)| !fits(s))
             .map(|(i, _)| i);
-        let slot = |texture| Slot {
-            texture: Arc::new(SlotTexture(texture)),
-            size,
-            generation: gpu.generation,
-            written: 0,
+        let slot = || -> Result<Slot, SurfaceError> {
+            Ok(Slot {
+                texture: Arc::new(SlotTexture::new(gpu, size, format)?),
+                size,
+                format,
+                generation: gpu.generation,
+                written: 0,
+            })
         };
         match pick {
-            Some(i) if self.slots[i].size == size => Ok(i),
+            Some(i) if fits(&self.slots[i]) => Ok(i),
             Some(i) => {
-                self.slots[i] = slot(create_texture(gpu, size)?);
+                self.slots[i] = slot()?;
                 Ok(i)
             }
             None if self.slots.len() < MAX_SLOTS => {
-                self.slots.push(slot(create_texture(gpu, size)?));
+                self.slots.push(slot()?);
                 Ok(self.slots.len() - 1)
             }
             None => Err(SurfaceError::Busy),
         }
+    }
+}
+
+fn pixel_format(format: SurfaceFormat) -> MTLPixelFormat {
+    match format {
+        SurfaceFormat::Bgra8 => MTLPixelFormat::BGRA8Unorm,
+        SurfaceFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
     }
 }
 
@@ -297,8 +380,12 @@ fn descriptor(
     desc
 }
 
-fn create_texture(gpu: &Gpu, size: (u32, u32)) -> Result<Retained<Texture>, SurfaceError> {
-    let desc = descriptor(MTLPixelFormat::BGRA8Unorm, size);
+fn create_texture(
+    gpu: &Gpu,
+    size: (u32, u32),
+    format: MTLPixelFormat,
+) -> Result<Retained<Texture>, SurfaceError> {
+    let desc = descriptor(format, size);
     desc.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite);
     desc.setStorageMode(MTLStorageMode::Private);
     gpu.device
@@ -306,18 +393,27 @@ fn create_texture(gpu: &Gpu, size: (u32, u32)) -> Result<Retained<Texture>, Surf
         .ok_or_else(|| platform("creating the surface texture"))
 }
 
-/// The texture's size, and the texture itself or a `BGRA8Unorm` view of an `_sRGB` one (a copy
-/// keeps the format).
-fn describe(texture: &Texture) -> Result<(Retained<Texture>, (u32, u32)), SurfaceError> {
+/// The texture's size and format, and the texture itself or a `BGRA8Unorm` view of an `_sRGB` one
+/// (a copy keeps the format).
+fn describe(
+    texture: &Texture,
+) -> Result<(Retained<Texture>, (u32, u32), SurfaceFormat), SurfaceError> {
     let format = texture.pixelFormat();
-    if texture.textureType() != MTLTextureType::Type2D
-        || ![MTLPixelFormat::BGRA8Unorm, MTLPixelFormat::BGRA8Unorm_sRGB].contains(&format)
-    {
-        return Err(SurfaceError::Format(format!(
-            "a texture in MTLPixelFormat {}: a surface takes a 2D BGRA8Unorm (or BGRA8Unorm_sRGB) \
-             texture",
-            format.0
-        )));
+    let surface_format = match format {
+        MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA8Unorm_sRGB => SurfaceFormat::Bgra8,
+        MTLPixelFormat::RGBA16Float => SurfaceFormat::Rgba16Float,
+        _ => {
+            return Err(SurfaceError::Format(format!(
+                "a texture in MTLPixelFormat {}: a surface takes a 2D BGRA8Unorm (or \
+                 BGRA8Unorm_sRGB) texture, or RGBA16Float on a surface set to Rgba16Float",
+                format.0
+            )))
+        }
+    };
+    if texture.textureType() != MTLTextureType::Type2D {
+        return Err(SurfaceError::Format(
+            "a texture that is not 2D: a surface takes a 2D texture".into(),
+        ));
     }
     if texture.sampleCount() != 1 {
         return Err(SurfaceError::Format(
@@ -329,7 +425,7 @@ fn describe(texture: &Texture) -> Result<(Retained<Texture>, (u32, u32)), Surfac
         u32::try_from(texture.height()).unwrap_or(u32::MAX),
     );
     check_size(size.0, size.1)?;
-    let texture = if format == MTLPixelFormat::BGRA8Unorm {
+    let texture = if format != MTLPixelFormat::BGRA8Unorm_sRGB {
         texture.retain()
     } else {
         texture
@@ -342,12 +438,79 @@ fn describe(texture: &Texture) -> Result<(Retained<Texture>, (u32, u32)), Surfac
                 )
             })?
     };
-    Ok((texture, size))
+    Ok((texture, size, surface_format))
 }
 
+const RGBA16F_KERNEL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void rgba16f_to_bgra(texture2d<float, access::read> frame [[texture(0)]],
+                            texture2d<float, access::write> out [[texture(1)]],
+                            uint2 at [[thread_position_in_grid]]) {
+    if (at.x >= out.get_width() || at.y >= out.get_height()) return;
+    float4 texel = frame.read(at);
+    float3 c = saturate(texel.rgb);
+    float3 srgb = select(1.055 * precise::pow(c, float3(1.0 / 2.4)) - 0.055, c * 12.92,
+                         c < 0.0031308);
+    out.write(float4(srgb, saturate(texel.a)), at);
+}
+"#;
+
+fn rgba16f_pipeline(gpu: &Gpu) -> Result<Pipeline, SurfaceError> {
+    kernel(&gpu.rgba16f, &gpu.device, RGBA16F_KERNEL, "rgba16f_to_bgra")
+}
+
+/// Maps a half-float slot into its 8-bit texture on the surface's queue, after the copy into it.
+/// Returns the release value the mapping signals.
+fn map(gpu: &Arc<Gpu>, slot: &Arc<SlotTexture>, size: (u32, u32)) -> Result<u64, SurfaceError> {
+    let (mapped, _) = slot.mapped.as_ref().expect("a half-float slot");
+    let pipeline = rgba16f_pipeline(gpu)?;
+    let mut next = lock(&gpu.next);
+    let command = gpu
+        .queue
+        .commandBuffer()
+        .ok_or_else(|| platform("creating a surface command buffer"))?;
+    let encoder = command
+        .computeCommandEncoder()
+        .ok_or_else(|| platform("creating a compute encoder"))?;
+    encoder.setComputePipelineState(&pipeline);
+    let width = pipeline.threadExecutionWidth().max(1);
+    let height = (pipeline.maxTotalThreadsPerThreadgroup() / width).clamp(1, 16);
+    // SAFETY: the kernel reads texture 0 and writes texture 1, both `size`; the grid is `size`.
+    unsafe {
+        encoder.setTexture_atIndex(Some(&slot.texture), 0);
+        encoder.setTexture_atIndex(Some(mapped), 1);
+        encoder.dispatchThreads_threadsPerThreadgroup(
+            MTLSize {
+                width: size.0 as usize,
+                height: size.1 as usize,
+                depth: 1,
+            },
+            MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+        );
+    }
+    encoder.endEncoding();
+    let value = *next + 1;
+    command.encodeSignalEvent_value(ProtocolObject::from_ref(&*gpu.event), value);
+    let held = Mutex::new(Some(slot.clone()));
+    let done = RcBlock::new(move |_: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+        lock(&held).take();
+    });
+    // SAFETY: Metal retains the block until it has run.
+    unsafe { command.addCompletedHandler(RcBlock::as_ptr(&done)) };
+    command.commit();
+    *next = value;
+    Ok(value)
+}
 /// What a present copies into a surface texture.
 enum Source<'a> {
-    Bgra(&'a Texture),
+    /// Copied as it is: BGRA8 or half-float.
+    Texture(&'a Texture, SurfaceFormat),
     /// Bi-planar 4:2:0 luma and chroma planes, converted with `[y offset, y scale, c offset,
     /// c scale, r←cr, g←cb, g←cr, b←cb]`.
     Nv12 {
@@ -373,11 +536,19 @@ fn copy_in(
 ) -> Result<u64, SurfaceError> {
     let pipeline = match &source {
         Source::Nv12 { .. } => Some(nv12_pipeline(gpu)?),
-        Source::Bgra(_) => None,
+        Source::Texture(..) => None,
     };
-    let mut next = lock(&gpu.next);
-    let index = state.metal.free_slot(gpu, size)?;
+    let format = match &source {
+        Source::Texture(_, format) => *format,
+        Source::Nv12 { .. } => SurfaceFormat::Bgra8,
+    };
+    check_format(state.format, format)?;
+    let index = state.metal.free_slot(gpu, size, format)?;
     let target = state.metal.slots[index].texture.clone();
+    if let Some(mut mapped) = target.mapped() {
+        *mapped = 0;
+    }
+    let mut next = lock(&gpu.next);
     let command = gpu
         .queue
         .commandBuffer()
@@ -391,15 +562,15 @@ fn copy_in(
         depth: 1,
     };
     match source {
-        Source::Bgra(texture) => {
+        Source::Texture(texture, _) => {
             let encoder = command
                 .blitCommandEncoder()
                 .ok_or_else(|| platform("creating a blit encoder"))?;
             let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-            // SAFETY: both textures are BGRA8Unorm, 2D and at least `size`.
+            // SAFETY: both textures have the same pixel format, are 2D and at least `size`.
             unsafe {
                 encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
-                    texture, 0, 0, origin, whole, &target.0, 0, 0, origin,
+                    texture, 0, 0, origin, whole, &target.texture, 0, 0, origin,
                 );
             }
             encoder.endEncoding();
@@ -421,7 +592,7 @@ fn copy_in(
             unsafe {
                 encoder.setTexture_atIndex(Some(luma), 0);
                 encoder.setTexture_atIndex(Some(chroma), 1);
-                encoder.setTexture_atIndex(Some(&target.0), 2);
+                encoder.setTexture_atIndex(Some(&target.texture), 2);
                 encoder.setBytes_length_atIndex(
                     NonNull::from(&coefficients).cast(),
                     std::mem::size_of_val(&coefficients),
@@ -486,24 +657,32 @@ kernel void nv12_to_bgra(texture2d<float, access::read> luma [[texture(0)]],
 }
 "#;
 
-fn nv12_pipeline(
-    gpu: &Gpu,
-) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>, SurfaceError> {
-    gpu.nv12
-        .get_or_init(|| {
-            let library = gpu
-                .device
-                .newLibraryWithSource_options_error(&NSString::from_str(NV12_KERNEL), None)
-                .map_err(|e| format!("compiling the NV12 kernel: {e}"))?;
-            let function = library
-                .newFunctionWithName(&NSString::from_str("nv12_to_bgra"))
-                .ok_or("the NV12 kernel has no entry point")?;
-            gpu.device
-                .newComputePipelineStateWithFunction_error(&function)
-                .map_err(|e| format!("building the NV12 pipeline: {e}"))
-        })
-        .clone()
-        .map_err(SurfaceError::Platform)
+type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
+
+/// Compiles a kernel on first use; a failure is kept and returned each time.
+fn kernel(
+    cell: &OnceLock<Result<Pipeline, String>>,
+    device: &ProtocolObject<dyn MTLDevice>,
+    source: &str,
+    entry: &str,
+) -> Result<Pipeline, SurfaceError> {
+    cell.get_or_init(|| {
+        let library = device
+            .newLibraryWithSource_options_error(&NSString::from_str(source), None)
+            .map_err(|e| format!("compiling the {entry} kernel: {e}"))?;
+        let function = library
+            .newFunctionWithName(&NSString::from_str(entry))
+            .ok_or_else(|| format!("the {entry} kernel has no entry point"))?;
+        device
+            .newComputePipelineStateWithFunction_error(&function)
+            .map_err(|e| format!("building the {entry} pipeline: {e}"))
+    })
+    .clone()
+    .map_err(SurfaceError::Platform)
+}
+
+fn nv12_pipeline(gpu: &Gpu) -> Result<Pipeline, SurfaceError> {
+    kernel(&gpu.nv12, &gpu.device, NV12_KERNEL, "nv12_to_bgra")
 }
 
 /// The device a texture was made on is the renderer's, or the producer has a stale one.
@@ -543,12 +722,12 @@ pub(super) unsafe fn present(
     };
     let gpu = gpu()?;
     check_device(state, &gpu, &texture)?;
-    let (view, size) = describe(&texture)?;
+    let (view, size, format) = describe(&texture)?;
     let mut state = lock(state);
     copy_in(
         &gpu,
         &mut state,
-        Source::Bgra(&view),
+        Source::Texture(&view, format),
         size,
         wait.as_ref().map(|(e, v)| (&**e, *v)),
         None,
@@ -569,21 +748,26 @@ fn iosurface_texture(
         .ok_or_else(|| platform("making a Metal texture of the IOSurface"))
 }
 
-fn bgra_size(surface: &IOSurfaceRef) -> Result<(u32, u32), SurfaceError> {
-    let format = surface.pixel_format();
-    if format != BGRA {
-        return Err(SurfaceError::Format(format!(
-            "an IOSurface of pixel format {}: a surface takes 'BGRA' \
-             (kCVPixelFormatType_32BGRA); present 420v/420f video as a CVPixelBuffer",
-            fourcc(format)
-        )));
-    }
+/// An IOSurface's size and format: 'BGRA' or 'RGhA'.
+fn iosurface_format(surface: &IOSurfaceRef) -> Result<((u32, u32), SurfaceFormat), SurfaceError> {
+    let format = match surface.pixel_format() {
+        BGRA => SurfaceFormat::Bgra8,
+        RGHA => SurfaceFormat::Rgba16Float,
+        other => {
+            return Err(SurfaceError::Format(format!(
+                "an IOSurface of pixel format {}: a surface takes 'BGRA' \
+                 (kCVPixelFormatType_32BGRA), or 'RGhA' (kCVPixelFormatType_64RGBAHalf) on a \
+                 surface set to Rgba16Float; present 420v/420f video as a CVPixelBuffer",
+                fourcc(other)
+            )))
+        }
+    };
     let size = (
         u32::try_from(surface.width()).unwrap_or(u32::MAX),
         u32::try_from(surface.height()).unwrap_or(u32::MAX),
     );
     check_size(size.0, size.1)?;
-    Ok(size)
+    Ok((size, format))
 }
 
 fn fourcc(code: u32) -> String {
@@ -601,6 +785,7 @@ pub(crate) struct Opened {
     event: Option<Retained<SharedEvent>>,
     generation: u64,
     pub(super) size: (u32, u32),
+    pub(super) format: SurfaceFormat,
 }
 
 // SAFETY: IOSurfaces and Metal objects are thread-safe.
@@ -642,15 +827,16 @@ impl Opened {
 }
 
 pub(super) fn open(surface: CFRetained<IOSurfaceRef>) -> Result<Opened, SurfaceError> {
-    let size = bgra_size(&surface)?;
+    let (size, format) = iosurface_format(&surface)?;
     let gpu = gpu()?;
-    let texture = iosurface_texture(&gpu, &surface, MTLPixelFormat::BGRA8Unorm, 0, size)?;
+    let texture = iosurface_texture(&gpu, &surface, pixel_format(format), 0, size)?;
     Ok(Opened {
         surface,
         texture,
         event: None,
         generation: gpu.generation,
         size,
+        format,
     })
 }
 
@@ -690,7 +876,7 @@ pub(super) fn present_shared(
     copy_in(
         &gpu,
         &mut state,
-        Source::Bgra(&opened.texture),
+        Source::Texture(&opened.texture, opened.format),
         opened.size,
         wait,
         signal,
@@ -733,9 +919,11 @@ fn ycbcr_matrix(buffer: &CVPixelBuffer) -> Option<String> {
     Some(value.downcast_ref::<CFString>()?.to_string())
 }
 
-/// A CPU-only BGRA buffer, for the caller to present as a CPU frame.
+/// A CPU-only buffer, for the caller to present as a CPU frame: BGRA bytes, or for
+/// [`SurfaceFormat::Rgba16Float`] native-endian halves.
 pub(super) struct Cpu<'a> {
     pub(super) pixels: &'a [u8],
+    pub(super) format: SurfaceFormat,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) stride: usize,
@@ -754,16 +942,20 @@ pub(super) unsafe fn present_pixel_buffer(
     let buffer: CFRetained<CVPixelBuffer> = unsafe { CFRetained::retain(buffer) };
     let format = CVPixelBufferGetPixelFormatType(&buffer);
     let full_range = match format {
-        BGRA => false,
-        NV12_VIDEO => false,
+        BGRA | RGHA | NV12_VIDEO => false,
         NV12_FULL => true,
         _ => {
             return Err(SurfaceError::Format(format!(
-                "a CVPixelBuffer of pixel format {}: a surface takes BGRA (32BGRA) or 4:2:0 \
-                 bi-planar (420v, 420f)",
+                "a CVPixelBuffer of pixel format {}: a surface takes BGRA (32BGRA), 4:2:0 \
+                 bi-planar (420v, 420f), or RGhA (64RGBAHalf) on a surface set to Rgba16Float",
                 fourcc(format)
             )))
         }
+    };
+    let surface_format = if format == RGHA {
+        SurfaceFormat::Rgba16Float
+    } else {
+        SurfaceFormat::Bgra8
     };
     let size = (
         u32::try_from(CVPixelBufferGetWidth(&buffer)).unwrap_or(u32::MAX),
@@ -771,7 +963,7 @@ pub(super) unsafe fn present_pixel_buffer(
     );
     check_size(size.0, size.1)?;
     let Some(surface) = CVPixelBufferGetIOSurface(Some(&buffer)) else {
-        if format != BGRA {
+        if format != BGRA && format != RGHA {
             return Err(SurfaceError::Format(
                 "a 4:2:0 CVPixelBuffer without an IOSurface: create it with \
                  kCVPixelBufferIOSurfacePropertiesKey (VideoToolbox and AVFoundation do)"
@@ -792,6 +984,7 @@ pub(super) unsafe fn present_pixel_buffer(
             } else {
                 cpu(Cpu {
                     pixels: std::slice::from_raw_parts(base.cast::<u8>(), stride * size.1 as usize),
+                    format: surface_format,
                     width: size.0,
                     height: size.1,
                     stride,
@@ -803,14 +996,15 @@ pub(super) unsafe fn present_pixel_buffer(
     };
     let gpu = gpu()?;
     let mut held: Vec<Box<dyn Any>> = Vec::new();
-    let value = if format == BGRA {
-        let texture = iosurface_texture(&gpu, &surface, MTLPixelFormat::BGRA8Unorm, 0, size)?;
+    let value = if format == BGRA || format == RGHA {
+        let pixels = pixel_format(surface_format);
+        let texture = iosurface_texture(&gpu, &surface, pixels, 0, size)?;
         held.push(Box::new(buffer.clone()));
         let mut state = lock(state);
         copy_in(
             &gpu,
             &mut state,
-            Source::Bgra(&texture),
+            Source::Texture(&texture, surface_format),
             size,
             None,
             None,
@@ -855,6 +1049,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::surface::color::tests::{f32_to_half, ramp};
     use crate::surface::{surface, SharedTexture, SurfaceHandle};
 
     const W: u32 = 64;
@@ -886,19 +1081,29 @@ mod tests {
     }
 
     fn filled(device: &ProtocolObject<dyn MTLDevice>, bgra: [u8; 4]) -> Retained<Texture> {
-        let desc = descriptor(MTLPixelFormat::BGRA8Unorm, (W, H));
+        let bytes = bgra.repeat((W * H) as usize);
+        written(device, MTLPixelFormat::BGRA8Unorm, (W, H), &bytes)
+    }
+
+    /// A texture holding `bytes`, rows packed.
+    fn written(
+        device: &ProtocolObject<dyn MTLDevice>,
+        format: MTLPixelFormat,
+        (width, height): (u32, u32),
+        bytes: &[u8],
+    ) -> Retained<Texture> {
+        let desc = descriptor(format, (width, height));
         desc.setStorageMode(if device.hasUnifiedMemory() {
             MTLStorageMode::Shared
         } else {
             MTLStorageMode::Managed
         });
         let texture = device.newTextureWithDescriptor(&desc).unwrap();
-        let bytes = bgra.repeat((W * H) as usize);
         let region = MTLRegion {
             origin: MTLOrigin { x: 0, y: 0, z: 0 },
             size: MTLSize {
-                width: W as usize,
-                height: H as usize,
+                width: width as usize,
+                height: height as usize,
                 depth: 1,
             },
         };
@@ -906,11 +1111,15 @@ mod tests {
             texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
                 0,
-                NonNull::from(bytes.as_slice()).cast(),
-                W as usize * 4,
+                NonNull::from(bytes).cast(),
+                bytes.len() / height as usize,
             );
         }
         texture
+    }
+
+    fn halves(values: &[u16]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_ne_bytes()).collect()
     }
 
     fn pixel_buffer(format: u32, iosurface: bool) -> CFRetained<CVPixelBuffer> {
@@ -956,11 +1165,17 @@ mod tests {
         }
     }
 
-    /// The surface's frame, read back once its copy ran.
+    /// What the atlas would copy for the surface's frame, read back once it is written.
     fn shown(surface: &SurfaceHandle) -> Vec<[u8; 4]> {
         let ready = surface.lock_state().metal.ready().expect("a Metal frame");
         eventually("the copy", || ready.done());
-        let texture = &ready.texture.0;
+        let ready = ready.for_atlas().unwrap();
+        eventually("the mapping", || ready.done());
+        let texture = match (&ready.texture.mapped, ready.mapped) {
+            (Some((mapped, _)), true) => mapped,
+            _ => &ready.texture.texture,
+        };
+        assert_eq!(texture.pixelFormat(), MTLPixelFormat::BGRA8Unorm);
         let (w, h) = (texture.width(), texture.height());
         let device = &ready.gpu.device;
         let buffer = device
@@ -1087,5 +1302,80 @@ mod tests {
             Some(Frame::Cpu { bgra, .. }) => assert!(bgra.chunks(4).all(|p| p == [4, 5, 6, 128])),
             _ => panic!("a buffer with no IOSurface is a CPU frame"),
         }
+    }
+
+    #[test]
+    fn a_half_float_texture_shows_every_srgb_code_unchanged_and_clamps_above_one() {
+        let Some(device) = renderer() else { return };
+        let s = surface("tests:metal-rgba16f");
+        s.set_format(SurfaceFormat::Rgba16Float);
+        let h = f32_to_half;
+        let mut texels = ramp();
+        texels.extend([h(8.0), h(1.5), h(-0.25), h(2.0)]);
+        let source = written(
+            &device,
+            MTLPixelFormat::RGBA16Float,
+            (257, 1),
+            &halves(&texels),
+        );
+        unsafe { s.present_metal_texture(raw(&*source), None) }.unwrap();
+        let pixels = shown(&s);
+        for (code, px) in pixels[..256].iter().enumerate() {
+            assert_eq!(px, &[code as u8; 4], "code {code}");
+        }
+        assert_eq!(pixels[256], [0, 255, 255, 255]);
+    }
+
+    #[test]
+    fn rgha_pixel_buffers_and_iosurfaces_are_mapped() {
+        if renderer().is_none() {
+            return;
+        }
+        let s = surface("tests:metal-rgha");
+        s.set_format(SurfaceFormat::Rgba16Float);
+        let h = f32_to_half;
+        let texel = halves(&[h(0.2159), h(1.0), h(4.0), h(1.0)]);
+        let want = [255, 255, 128, 255];
+
+        let buffer = pixel_buffer(RGHA, true);
+        fill(&buffer, 0, &texel);
+        unsafe { s.present_cv_pixel_buffer(raw(&*buffer)) }.unwrap();
+        assert!(all_near(&shown(&s), want, 0));
+
+        let iosurface = CVPixelBufferGetIOSurface(Some(&buffer)).unwrap();
+        let shared = unsafe { SharedTexture::from_iosurface(raw(&*iosurface)) }.unwrap();
+        assert_eq!(shared.format(), SurfaceFormat::Rgba16Float);
+        s.present_shared(&shared).unwrap();
+        assert!(all_near(&shown(&s), want, 0));
+
+        let cpu_only = pixel_buffer(RGHA, false);
+        fill(&cpu_only, 0, &texel);
+        unsafe { s.present_cv_pixel_buffer(raw(&*cpu_only)) }.unwrap();
+        let frame = s.lock_state().frame.clone();
+        match frame {
+            Some(Frame::Cpu { bgra, .. }) => assert!(bgra.chunks(4).all(|p| p == want)),
+            _ => panic!("an RGhA buffer with no IOSurface is a CPU frame"),
+        }
+    }
+
+    #[test]
+    fn a_texture_of_the_other_format_is_refused() {
+        let Some(device) = renderer() else { return };
+        let half = surface("tests:metal-mismatch");
+        half.set_format(SurfaceFormat::Rgba16Float);
+        let bgra = filled(&device, [1, 2, 3, 255]);
+        assert_eq!(
+            unsafe { half.present_metal_texture(raw(&*bgra), None) },
+            Err(SurfaceError::FormatMismatch {
+                surface: SurfaceFormat::Rgba16Float,
+                frame: SurfaceFormat::Bgra8
+            })
+        );
+        let buffer = pixel_buffer(BGRA, true);
+        assert!(matches!(
+            unsafe { half.present_cv_pixel_buffer(raw(&*buffer)) },
+            Err(SurfaceError::FormatMismatch { .. })
+        ));
+        assert_eq!(half.stats().presented, 0);
     }
 }
