@@ -5,8 +5,9 @@
 //! bottom of the z-order, the startup `cx.activate(true)` is skipped, and `window.focus()` and the
 //! devtools `raise` command do nothing.
 //!
-//! The window still draws every frame behind other windows (DirectComposition does not throttle an
-//! occluded window), and the devtools screenshot reads gpui's last scene rather than the screen.
+//! The window still draws every frame behind other windows (`Window::set_draws_while_occluded`;
+//! macOS would stop it otherwise), and the devtools screenshot reads gpui's last scene rather than
+//! the screen.
 //!
 //! The window is never active at the OS level, and gpui runs focus only in an active window (an
 //! inactive one's focus events carry empty paths, so `on_focus` never fires). So every quiet window
@@ -30,6 +31,7 @@ pub fn send_to_back(window: &mut Window) {
         return;
     }
     window.set_assume_active(true);
+    window.set_draws_while_occluded(true);
     if let Some(h) = crate::window::capture_hwnd(window) {
         send_hwnd_to_back(h);
     }
