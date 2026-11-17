@@ -388,23 +388,21 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             params,
             ret,
         } = e;
-        let kind = if *task {
-            quote!(task)
-        } else {
-            quote!(function)
-        };
         let names = params.iter().map(|(name, _)| name);
         let args: Vec<_> = (0..params.len())
             .map(|i| format_ident!("arg{}", i, span = Span::mixed_site()))
             .collect();
-        let types = params.iter().map(|(_, param)| match param {
-            Param::Owned(ty) => quote!(#ty),
-            Param::Bytes(Bytes::Option) => quote!(::core::option::Option<#krate::Bytes>),
-            Param::Bytes(_) => quote!(#krate::Bytes),
-            Param::Borrowed(Borrowed::Str) => quote!(#krate::__private::Str),
-            Param::Borrowed(Borrowed::Slice(t)) => quote!(#krate::__private::Slice<#t>),
-        });
-        let values = params
+        let types: Vec<_> = params
+            .iter()
+            .map(|(_, param)| match param {
+                Param::Owned(ty) => quote!(#ty),
+                Param::Bytes(Bytes::Option) => quote!(::core::option::Option<#krate::Bytes>),
+                Param::Bytes(_) => quote!(#krate::Bytes),
+                Param::Borrowed(Borrowed::Str) => quote!(#krate::__private::Str),
+                Param::Borrowed(Borrowed::Slice(t)) => quote!(#krate::__private::Slice<#t>),
+            })
+            .collect();
+        let values: Vec<_> = params
             .iter()
             .zip(&args)
             .map(|((_, param), arg)| match param {
@@ -413,7 +411,9 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                 Param::Bytes(_) => quote!(#arg.0),
                 // SAFETY: read in this call, used only inside it.
                 Param::Borrowed(_) => quote!(unsafe { #arg.get() }),
-            });
+            })
+            .collect();
+        let positions = (1..=params.len() as u32).map(|p| quote!(#p));
         let names = (!params.is_empty()).then(|| quote!(.params([#(#names),*])));
         let call = quote!(<#ty>::#method(&*#this, #(#values),*));
         let call = match ret {
@@ -421,12 +421,47 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             Bytes::Plain => quote!(#krate::Bytes(#call)),
             Bytes::Option | Bytes::Result => quote!(#call.map(#krate::Bytes)),
         };
+        let cx = Ident::new("cx", Span::mixed_site());
+        let argv = Ident::new("argv", Span::mixed_site());
+        let out = Ident::new("out", Span::mixed_site());
+        let signature = Ident::new("signature", Span::mixed_site());
+        let read = quote! {
+            #[allow(unused_imports)]
+            use #krate::__private::{ReadDirect as _, ReadSerde as _, WriteDirect as _, WriteSerde as _};
+            #(let #args: #types = #krate::__private::argument(#cx, #argv, #positions, |js| {
+                (&&#krate::__private::Pick::<#types>::new()).read(js)
+            })?;)*
+        };
+        let body = if *task {
+            quote! {
+                #module.__task(#js, #signature, move |#cx: &#krate::__private::Context, #argv: &#krate::__private::HostArgs| {
+                    #read
+                    let #this = ::std::sync::Arc::clone(&#this);
+                    ::core::result::Result::Ok(#krate::__private::work(move || {
+                        let #out = #call;
+                        (&&#krate::__private::Pick::of(&#out)).answer_owned(&#out)
+                    }))
+                })
+            }
+        } else {
+            quote! {
+                #module.__function(#js, #signature, move |#cx: &#krate::__private::Context, #argv: &#krate::__private::HostArgs| {
+                    #read
+                    let #out = #call;
+                    (&&#krate::__private::Pick::of(&#out))
+                        .answer(&#out, #cx)
+                        .map_err(#krate::__private::fail)
+                })
+            }
+        };
         quote! {
             {
                 let #this = ::std::sync::Arc::clone(&#this);
-                #module
-                    .#kind(#js, move |#(#args: #types),*| #call)
-                    #names;
+                let #signature = {
+                    let #this = ::std::sync::Arc::clone(&#this);
+                    move |#(#args: #types),*| #call
+                };
+                #body #names;
             }
         }
     });

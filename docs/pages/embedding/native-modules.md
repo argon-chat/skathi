@@ -92,7 +92,7 @@ The module object exists before any app code runs, so a top-level `import` sees 
 
 ## #[skathi::data]
 
-The attribute goes on every struct and enum that crosses: parameters, results and events. It derives serde's `Serialize` and `Deserialize` and, with the `types` feature, `skathi::Type`, all through `skathi`'s own paths, so your `Cargo.toml` needs no serde or specta.
+The attribute goes on every struct and enum that crosses: parameters, results and events. It derives serde's `Serialize` and `Deserialize` and, with the `types` feature, `skathi::Type`, all through `skathi`'s own paths, so your `Cargo.toml` needs no serde or specta. It also gives the type a direct conversion to and from JS values, which is faster than serde's (see [How values cross](#how-values-cross)).
 
 - Your serde attributes stay in force: `#[serde(rename_all = "camelCase")]` renames the fields in the app and in the generated types alike.
 - A `Vec<u8>` or `Option<Vec<u8>>` field is a `Uint8Array` in the app, not an array of numbers. A field with its own `#[serde(with = …)]` keeps it.
@@ -102,7 +102,7 @@ Deriving the type information yourself works too: `#[derive(serde::Serialize, sk
 
 ## Functions return a value now
 
-A function's parameters are its JavaScript arguments, each read with `serde` into the type you declared; its result is whatever `Serialize` makes of it, handed to the app as an ordinary object, array, string or number. Both are read and built straight from the engine's own values: no JSON text is written or parsed, and a call with a few numbers costs about what a [native function](/embedding/native-api/) does.
+A function's parameters are its JavaScript arguments, each read into the type you declared; its result is handed to the app as an ordinary object, array, string or number, the one JSON would give. Both are read and built straight from the engine's own values: no JSON text is written or parsed, and a call with a few numbers costs about what a [native function](/embedding/native-api/) does.
 
 ```rust
 #[skathi::module]
@@ -129,6 +129,31 @@ A value means what it would in JSON, so the app sees the same thing whether it c
 - **Extra arguments** are not read at all.
 
 A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task.
+
+## How values cross
+
+No JSON text is written or parsed on either side. There are two ways a value crosses, and the macros pick the faster one for each type on their own:
+
+- **A `#[skathi::data]` type converts directly.** An argument object has its fields looked up by name, all in one call into the engine, with the names made into engine strings once and reused; each field is then read by its own type's conversion, so nested data types, `Vec`, `Option`, `Box` and maps with string keys compose. A result is written into one flat buffer that the engine turns into objects and arrays in a single call, and objects of the same fields share their engine layout. Numbers, strings, `bool` and `Vec<u8>` (as a `Uint8Array`) convert directly too.
+- **Anything else goes through serde**, still over the engine's values rather than text: a type with only `#[derive(Serialize, Deserialize)]`, tuples, maps with keys other than strings, `serde_json::Value`. It means the same, a little slower.
+
+The direct conversion honors the serde attributes that shape the value: `rename`, `rename_all`, `skip`, `skip_serializing`, `skip_deserializing`, `default`, `skip_serializing_if`, and an enum's representation (`tag`, `content`, `untagged`). A type with any other serde attribute (`flatten`, `deny_unknown_fields`, `with`, `alias`, a `default` on the type, …) gets no direct conversion and keeps serde's meaning exactly. An enum argument other than a plain variant name is read through serde.
+
+A direct read differs from serde's in two ways, both about values that are not JSON anyway. A struct reads only its own fields, so an object whose other properties hold a `BigInt` or a cycle is accepted. When several fields are wrong, the first one in the struct is reported rather than the first one in the object.
+
+What a call costs, measured with a release build on Windows (a Ryzen 9 9950X, medians of five runs), against the same calls when values crossed as JSON text. The struct is `{ id: u32, name: String, tags: Vec<String>, score: Option<f64> }` with `#[skathi::data]`; a bare [native function](/embedding/native-api/) that adds two numbers takes 0.04 µs.
+
+| Call                                               | As JSON text | Now      |
+| -------------------------------------------------- | ------------ | -------- |
+| `add(a: f64, b: f64) -> f64`                       | 0.51 µs      | 0.06 µs  |
+| a 32-character `String` argument                   | 0.62 µs      | 0.08 µs  |
+| a 1 MiB `Uint8Array` as a `Vec<u8>` argument       | 36 ms        | 0.015 ms |
+| a 1 MiB `Vec<u8>` result                           | 13.5 ms      | 0.13 ms  |
+| `flip(p: Point) -> Point`                          | 0.90 µs      | 0.27 µs  |
+| 1000 structs as a result                           | 0.37 ms      | 0.24 ms  |
+| 1000 structs as an argument                        | 0.72 ms      | 0.31 ms  |
+| an event, from `emit_to` to the handler, in bursts | 1.2 µs       | 0.6 µs   |
+| `emit_to` itself, on the sending thread            | 0.81 µs      | 0.42 µs  |
 
 ## Tasks do the slow work
 

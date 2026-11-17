@@ -55,13 +55,13 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             return quote!(#error #item);
         }
     };
+    let krate = crate::crate_path(krate);
+    let direct = crate::direct::expand(&item, &krate);
     let attrs = match &mut item {
         Item::Struct(s) => &mut s.attrs,
         Item::Enum(e) => &mut e.attrs,
         _ => unreachable!(),
     };
-
-    let krate = crate::crate_path(krate);
     let has = derived(attrs);
     let has = |name: &str| has.iter().any(|h| h == name);
     let mut derives = Vec::new();
@@ -100,7 +100,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
             .for_each(|f| bytes(f, &krate, types)),
         _ => {}
     }
-    quote!(#item)
+    quote!(#item #direct)
 }
 
 /// Whether some `#[tool(...)]` on a field already says one of `words`.
@@ -148,6 +148,14 @@ fn bytes(field: &mut syn::Field, krate: &TokenStream, types: bool) {
 mod tests {
     use super::*;
 
+    fn first_struct(out: TokenStream) -> syn::ItemStruct {
+        let file: syn::File = syn::parse2(out).unwrap();
+        match file.items.into_iter().next() {
+            Some(Item::Struct(s)) => s,
+            _ => panic!("no struct"),
+        }
+    }
+
     #[test]
     fn only_missing_derives_are_added() {
         let out = expand(
@@ -158,7 +166,7 @@ mod tests {
                 struct S { a_b: u8 }
             },
         );
-        let s: syn::ItemStruct = syn::parse2(out).unwrap();
+        let s = first_struct(out);
         let derives = derived(&s.attrs);
         assert_eq!(derives.iter().filter(|d| *d == "Serialize").count(), 1);
         assert!(derives.iter().any(|d| d == "Deserialize"));
@@ -180,7 +188,7 @@ mod tests {
                 }
             },
         );
-        let s: syn::ItemStruct = syn::parse2(out).unwrap();
+        let s = first_struct(out);
         let attrs: Vec<String> = s
             .fields
             .iter()

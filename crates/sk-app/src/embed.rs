@@ -36,7 +36,7 @@ pub use serde;
 /// What `#[skathi::module]` and `#[skathi::data]` expand to; not an API.
 #[doc(hidden)]
 pub mod __private {
-    pub use super::marshal::{Element, Slice, Str};
+    pub use super::module::private::*;
 }
 
 pub use sk_tree::surface::{
@@ -739,14 +739,12 @@ impl Handle {
         if self.is_closed() {
             return Err(EmitError::Closed);
         }
-        let declared = CONFIG.get().is_some_and(|c| {
-            c.modules
-                .iter()
-                .any(|m| m.name == module && m.declares(event))
-        });
-        if !declared {
+        let Some((module, event)) = CONFIG.get().and_then(|c| {
+            let m = c.modules.iter().find(|m| m.name == module)?;
+            Some((m.name.as_str(), m.declared(event)?))
+        }) else {
             return Err(EmitError::NotDeclared);
-        }
+        };
         let data = module::event_data(data).ok_or(EmitError::NotJson)?;
         module::emit(module, event, data);
         Ok(())

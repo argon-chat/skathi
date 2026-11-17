@@ -181,40 +181,74 @@ fn argument<A: DeserializeOwned>(
     args: &HostArgs,
     position: u32,
 ) -> Result<A, Fail> {
-    let walk = marshal::Walk::new(context);
-    A::deserialize(walk.arg(position - 1, args.arg(position - 1))).map_err(|e| match e {
-        marshal::Error::Message(m) => {
-            Fail::Failure(Failure::type_error(format!("argument {position}: {m}")))
-        }
-        marshal::Error::Thrown(v) => Fail::Thrown(v),
-        marshal::Error::NotJson(m) => Fail::Thrown(context.error(1, &m)),
-    })
+    private::argument(context, args, position, |js| A::deserialize(js))
 }
 
 fn outcome<V>(result: Result<V, marshal::OutError>) -> Result<V, Fail> {
-    result.map_err(|e| match e {
-        marshal::OutError::Err(json) => Fail::Failure(Failure::from_err(json)),
-        marshal::OutError::Message(m) => Fail::Failure(Failure::new(format!(
-            "the result cannot be serialized: {m}"
-        ))),
-        marshal::OutError::Thrown(v) => Fail::Thrown(v),
-    })
+    result.map_err(private::fail)
 }
 
 #[inline]
 fn answer<R: Serialize + ?Sized>(context: &Context, value: &R) -> Result<Value, Fail> {
-    outcome(value.serialize(marshal::Out {
-        build: marshal::Engine(context),
-        top: true,
-    }))
+    outcome(marshal::to_js(context, value, true))
 }
 
 /// A task's result, made on its worker.
 fn answer_owned<R: Serialize + ?Sized>(value: &R) -> Result<marshal::Owned, Failure> {
-    outcome(marshal::owned(value, true)).map_err(|e| match e {
+    worker_outcome(marshal::owned(value, true))
+}
+
+fn worker_outcome(
+    result: Result<marshal::Owned, marshal::OutError>,
+) -> Result<marshal::Owned, Failure> {
+    outcome(result).map_err(|e| match e {
         Fail::Failure(failure) => failure,
         Fail::Thrown(_) => Failure::new("the result cannot be serialized"),
     })
+}
+
+/// What `#[skathi::module]` expands to; not an API.
+pub mod private {
+    pub use super::super::marshal::{
+        answer_compound, encode_bytes, encode_serde, missing, owned_compound, read_struct,
+        unit_variant, Element, Error, Fields, FromJs, IntoJs, Js, Keys, Open, OutError, Owned,
+        Pick, ReadDirect, ReadSerde, Slice, Str, Tree, WriteDirect, WriteSerde,
+    };
+    pub use super::{Fail, Work};
+    pub use crate::js::{Context, HostArgs, Value};
+
+    use super::{marshal, Failure};
+
+    /// Argument `position` (from 1), read by `read`; a wrong one is a TypeError that names it.
+    #[inline]
+    pub fn argument<T>(
+        context: &Context,
+        args: &HostArgs,
+        position: u32,
+        read: impl FnOnce(Js<'_, '_>) -> Result<T, Error>,
+    ) -> Result<T, Fail> {
+        let walk = marshal::Walk::new(context);
+        read(walk.arg(position - 1, args.arg(position - 1))).map_err(|e| match e {
+            Error::Thrown(v) => Fail::Thrown(v),
+            Error::NotJson(m) => Fail::Thrown(context.error(1, &m)),
+            e => Fail::Failure(Failure::type_error(format!("argument {position}: {e}"))),
+        })
+    }
+
+    pub fn fail(e: OutError) -> Fail {
+        match e {
+            OutError::Err(json) => Fail::Failure(Failure::from_err(json)),
+            OutError::Thrown(v) => Fail::Thrown(v),
+            e => Fail::Failure(Failure::new(format!(
+                "the result cannot be serialized: {e}"
+            ))),
+        }
+    }
+
+    /// A task's work: the call on a worker, its result encoded there.
+    pub fn work(run: impl FnOnce() -> Result<Owned, OutError> + Send + 'static) -> Work {
+        Box::new(move || super::worker_outcome(run()))
+    }
 }
 
 /// An event's data, made on the thread that emits it.
@@ -406,6 +440,54 @@ impl Module {
         )
     }
 
+    /// A function `#[skathi::module]` generated: `types` gives the signature, `invoke` runs it.
+    #[doc(hidden)]
+    pub fn __function<Args, H: Function<Args>>(
+        &mut self,
+        name: &str,
+        types: H,
+        invoke: impl Fn(&Context, &HostArgs) -> Result<Value, Fail> + Send + Sync + 'static,
+    ) -> Declared<'_> {
+        drop(types);
+        let signature: Signature;
+        #[cfg(feature = "types")]
+        {
+            signature = H::signature;
+        }
+        #[cfg(not(feature = "types"))]
+        {
+            signature = ();
+        }
+        self.add(
+            name,
+            H::ARITY,
+            Invoke::Function(Box::new(invoke)),
+            signature,
+        )
+    }
+
+    /// A task `#[skathi::module]` generated: `types` gives the signature, `prepare` reads the
+    /// arguments and returns the work.
+    #[doc(hidden)]
+    pub fn __task<Args, H: Task<Args>>(
+        &mut self,
+        name: &str,
+        types: H,
+        prepare: impl Fn(&Context, &HostArgs) -> Result<Work, Fail> + Send + Sync + 'static,
+    ) -> Declared<'_> {
+        drop(types);
+        let signature: Signature;
+        #[cfg(feature = "types")]
+        {
+            signature = H::signature;
+        }
+        #[cfg(not(feature = "types"))]
+        {
+            signature = ();
+        }
+        self.add(name, H::ARITY, Invoke::Task(Box::new(prepare)), signature)
+    }
+
     /// Declares an event `Handle::emit_to` may send with a `T` payload; the app subscribes with `on`.
     pub fn event<T: Serialize + Typed + 'static>(&mut self, name: &str) -> &mut Self {
         if self.problem.is_none() && self.events.iter().any(|e| e.name == name) {
@@ -425,8 +507,12 @@ impl Module {
         self
     }
 
-    pub(crate) fn declares(&self, event: &str) -> bool {
-        self.events.iter().any(|e| e.name == event)
+    /// The declared event called `event`, as the module keeps it.
+    pub(crate) fn declared(&'static self, event: &str) -> Option<&'static str> {
+        self.events
+            .iter()
+            .find(|e| e.name == event)
+            .map(|e| e.name.as_str())
     }
 }
 
@@ -537,8 +623,8 @@ enum Item {
         result: Result<marshal::Owned, Failure>,
     },
     Event {
-        module: String,
-        event: String,
+        module: &'static str,
+        event: &'static str,
         data: marshal::Owned,
     },
 }
@@ -548,12 +634,19 @@ static QUEUED: AtomicUsize = AtomicUsize::new(0);
 static TASKS: AtomicUsize = AtomicUsize::new(0);
 static NEXT_TOKEN: AtomicU32 = AtomicU32::new(1);
 
+// Only the first item wakes the JS thread: it drains until the queue is empty, and wakes itself
+// again when it stops early.
 fn push(item: Item) {
-    if let Ok(mut queue) = QUEUE.lock() {
-        queue.push_back(item);
-        QUEUED.fetch_add(1, Ordering::AcqRel);
+    let first = match QUEUE.lock() {
+        Ok(mut queue) => {
+            queue.push_back(item);
+            QUEUED.fetch_add(1, Ordering::AcqRel) == 0
+        }
+        Err(_) => false,
+    };
+    if first {
+        super::wake();
     }
-    super::wake();
 }
 
 /// Settles one task's promise; dropped without settling (an executor that discards the job), it rejects.
@@ -583,10 +676,10 @@ impl Drop for TaskReply {
     }
 }
 
-pub(crate) fn emit(module: &str, event: &str, data: marshal::Owned) {
+pub(crate) fn emit(module: &'static str, event: &'static str, data: marshal::Owned) {
     push(Item::Event {
-        module: module.to_owned(),
-        event: event.to_owned(),
+        module,
+        event,
         data,
     });
 }
@@ -600,7 +693,7 @@ struct Pending {
 struct State {
     executor: Option<Executor>,
     modules: HashMap<String, Value>,
-    listeners: HashMap<(String, String), Vec<Value>>,
+    listeners: HashMap<(&'static str, &'static str), Vec<Value>>,
     pending: HashMap<u32, Pending>,
 }
 
@@ -712,12 +805,16 @@ fn task_function(
     )
 }
 
-fn event_name(context: &Context, module: &Module, value: Value) -> js::Result<String> {
+fn event_name(
+    context: &Context,
+    module: &'static Module,
+    value: Value,
+) -> js::Result<&'static str> {
     let name = (context.kind(value) == 5)
         .then(|| context.read_string(value).ok())
         .flatten();
-    match name {
-        Some(name) if module.declares(&name) => Ok(name),
+    match name.and_then(|name| module.declared(&name)) {
+        Some(name) => Ok(name),
         _ => {
             let declared: Vec<String> = module
                 .events
@@ -756,7 +853,7 @@ fn subscribe(
     }
     STATE.with(|s| {
         let mut s = s.borrow_mut();
-        let list = s.listeners.entry((module.name.clone(), event)).or_default();
+        let list = s.listeners.entry((&module.name, event)).or_default();
         if !list.contains(&callback) {
             context.protect(callback);
             list.push(callback);
@@ -771,7 +868,7 @@ fn unsubscribe(context: &Context, module: &'static Module, args: HostArgs) -> js
     let callback = args.arg(1);
     let removed = STATE.with(|s| {
         let mut s = s.borrow_mut();
-        let list = s.listeners.get_mut(&(module.name.clone(), event))?;
+        let list = s.listeners.get_mut(&(module.name.as_str(), event))?;
         let at = list.iter().position(|c| *c == callback)?;
         Some(list.remove(at))
     });
@@ -803,20 +900,36 @@ fn build(context: &Context, module: &'static Module) -> js::Result<Value> {
     Ok(object)
 }
 
-fn deliver_event(context: &Context, module: &str, event: &str, data: marshal::Owned) {
-    let key = (module.to_owned(), event.to_owned());
-    let listeners = STATE.with(|s| s.borrow().listeners.get(&key).cloned().unwrap_or_default());
-    if listeners.is_empty() {
+fn deliver_event(context: &Context, module: &str, event: &'static str, data: marshal::Owned) {
+    // The listeners are copied, since one may unsubscribe itself or another while it runs, and
+    // kept alive: on this stack, which the collector scans, or protected when there are more.
+    let mut few = [Value::undefined(); 4];
+    let mut more = Vec::new();
+    let count = STATE.with(|s| {
+        let s = s.borrow();
+        let list = s
+            .listeners
+            .get(&(module, event))
+            .map_or(&[][..], |l| &l[..]);
+        match list.len() {
+            n @ ..=4 => few[..n].copy_from_slice(list),
+            _ => more.extend_from_slice(list),
+        }
+        list.len()
+    });
+    if count == 0 {
         return;
     }
-    let data = match data.to_js(context) {
-        Ok(data) => data,
-        Err(_) => return,
+    let Ok(data) = data.to_js(context) else {
+        return;
     };
-    context.protect(data);
-    for callback in listeners {
-        // A listener may unsubscribe itself, or another, while it runs.
-        context.protect(callback);
+    let listeners = if more.is_empty() {
+        &few[..count]
+    } else {
+        more.iter().for_each(|&c| context.protect(c));
+        &more[..]
+    };
+    for &callback in listeners {
         if let Err(js::Error::Exception(e)) = context.call(callback, Value::undefined(), &[data]) {
             JsRuntime::with(|rt| {
                 let err = rt.describe(e);
@@ -826,9 +939,8 @@ fn deliver_event(context: &Context, module: &str, event: &str, data: marshal::Ow
                 );
             });
         }
-        context.unprotect(callback);
     }
-    context.unprotect(data);
+    more.iter().for_each(|&c| context.unprotect(c));
 }
 
 fn settle_task(context: &Context, token: u32, result: Result<marshal::Owned, Failure>) {
@@ -847,8 +959,10 @@ fn settle_task(context: &Context, token: u32, result: Result<marshal::Owned, Fai
     context.unprotect(pending.reject);
 }
 
+// Queued items count as in flight: the pump keeps draining them within its budget instead of
+// leaving the rest for a wake that already came.
 unsafe fn src_inflight(g: *mut c_void) -> bool {
-    super::is_ours(g) && TASKS.load(Ordering::Acquire) != 0
+    super::is_ours(g) && (TASKS.load(Ordering::Acquire) != 0 || QUEUED.load(Ordering::Acquire) != 0)
 }
 
 unsafe fn src_ready(g: *mut c_void) -> bool {
@@ -868,25 +982,36 @@ fn drain() -> usize {
     let budget = Duration::from_micros(sk_runtime::redjs::web::pump_budget_us() as u64);
     let start = std::time::Instant::now();
     let mut n = 0;
+    let mut batch = Vec::with_capacity(DRAIN_CAP);
     while n < DRAIN_CAP {
-        let item = QUEUE.lock().ok().and_then(|mut q| q.pop_front());
-        let Some(item) = item else { break };
-        QUEUED.fetch_sub(1, Ordering::AcqRel);
+        if let Ok(mut queue) = QUEUE.lock() {
+            let take = queue.len().min(DRAIN_CAP - n);
+            batch.extend(queue.drain(..take));
+        }
+        if batch.is_empty() {
+            break;
+        }
+        QUEUED.fetch_sub(batch.len(), Ordering::AcqRel);
+        n += batch.len();
         JsRuntime::with(|rt| {
             let context = rt.ctx();
-            match item {
-                Item::Task { token, result } => settle_task(context, token, result),
-                Item::Event {
-                    module,
-                    event,
-                    data,
-                } => deliver_event(context, &module, &event, data),
+            for item in batch.drain(..) {
+                match item {
+                    Item::Task { token, result } => settle_task(context, token, result),
+                    Item::Event {
+                        module,
+                        event,
+                        data,
+                    } => deliver_event(context, module, event, data),
+                }
             }
         });
-        n += 1;
         if start.elapsed() >= budget {
             break;
         }
+    }
+    if QUEUED.load(Ordering::Acquire) != 0 {
+        super::wake();
     }
     n
 }

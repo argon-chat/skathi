@@ -4,25 +4,30 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::ffi::c_void;
 use std::fmt;
 
-use redjs::api::Atom;
-use redjs::glue;
+use redjs::glue::{self, json};
 use serde::de::{self, DeserializeSeed, IntoDeserializer, Unexpected, Visitor};
 use serde::ser::{self, Serialize};
 use serde_json::Value as Json;
 
 use crate::js::{Context, TaKind, Value};
 
+mod direct;
+pub use direct::*;
+
 #[derive(Debug)]
-pub(crate) enum Error {
+#[doc(hidden)]
+pub enum Error {
     /// What serde reports; the caller prefixes the argument.
     Message(String),
     /// A JS exception (a getter, `toJSON`, a BigInt, a cycle), rethrown as it is.
     Thrown(Value),
     /// What serde_json refused to parse in the JSON round trip.
     NotJson(String),
+    /// An object or an array, which a result builds in one engine call instead.
+    Compound,
 }
 
 impl fmt::Display for Error {
@@ -30,6 +35,7 @@ impl fmt::Display for Error {
         match self {
             Error::Message(m) | Error::NotJson(m) => f.write_str(m),
             Error::Thrown(_) => f.write_str("a JS exception"),
+            Error::Compound => f.write_str("an object or an array"),
         }
     }
 }
@@ -73,25 +79,22 @@ fn engine(e: crate::js::Error) -> Error {
 struct Intrinsics {
     parse: Value,
     stringify: Value,
-    is_array: Value,
 }
 
 thread_local! {
     static INTRINSICS: std::cell::Cell<Option<Intrinsics>> = const { std::cell::Cell::new(None) };
-    static ATOMS: RefCell<HashMap<(usize, usize), Atom>> = RefCell::new(HashMap::new());
+    static TO_JSON: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static SCRATCH: std::cell::Cell<Vec<u8>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
 pub(crate) fn install(context: &Context) -> crate::js::Result<()> {
     let json = context.global_get("JSON")?;
-    let array = context.global_get("Array")?;
     let intrinsics = Intrinsics {
         parse: context.get(json, &context.atom("parse"))?,
         stringify: context.get(json, &context.atom("stringify"))?,
-        is_array: context.get(array, &context.atom("isArray"))?,
     };
     context.protect(intrinsics.parse);
     context.protect(intrinsics.stringify);
-    context.protect(intrinsics.is_array);
     INTRINSICS.with(|i| i.set(Some(intrinsics)));
     Ok(())
 }
@@ -102,14 +105,21 @@ fn intrinsics() -> Result<Intrinsics, Error> {
         .ok_or_else(|| Error::Message("native modules are not installed".into()))
 }
 
-/// A property name made once per field name and kept.
-fn with_atom<T>(context: &Context, name: &'static str, f: impl FnOnce(&Atom) -> T) -> T {
-    ATOMS.with(|atoms| {
-        let mut atoms = atoms.borrow_mut();
-        let atom = atoms
-            .entry((name.as_ptr() as usize, name.len()))
-            .or_insert_with(|| context.atom(name));
-        f(atom)
+/// An atom made once per realm and kept: freeing one needs the engine's lock.
+fn atom(context: &Context, name: &str) -> *mut c_void {
+    // SAFETY: plain FFI; the name is read during the call.
+    unsafe { glue::rjs_atom8(context.raw(), name.as_ptr(), name.len()) }
+}
+
+fn to_json(context: &Context) -> *mut c_void {
+    TO_JSON.with(|cell| {
+        let (realm, a) = cell.get();
+        if realm == context.raw() as usize && a != 0 {
+            return a as *mut c_void;
+        }
+        let a = atom(context, "toJSON");
+        cell.set((context.raw() as usize, a as usize));
+        a
     })
 }
 
@@ -170,12 +180,20 @@ unsafe fn read_str<'s>(context: &Context, value: Value) -> Option<Result<Cow<'s,
     if unsafe { glue::rjs_string_info(context.raw(), value.0, &mut info) } != glue::OK {
         return None;
     }
-    if info.len == 0 {
-        return Some(Ok(Cow::Borrowed("")));
+    Some(unsafe { text(info.ptr, info.len, info.is8bit != 0) })
+}
+
+/// A string's characters, Latin-1 or UTF-16; ASCII is borrowed.
+///
+/// # Safety
+/// `ptr` holds `len` units of a string cell that stays alive while the result is used.
+unsafe fn text<'s>(ptr: *const c_void, len: u32, latin1: bool) -> Result<Cow<'s, str>, Error> {
+    if len == 0 {
+        return Ok(Cow::Borrowed(""));
     }
-    let len = info.len as usize;
-    Some(if info.is8bit != 0 {
-        let bytes = unsafe { std::slice::from_raw_parts(info.ptr as *const u8, len) };
+    let len = len as usize;
+    if latin1 {
+        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
         if bytes.is_ascii() {
             Ok(Cow::Borrowed(unsafe {
                 std::str::from_utf8_unchecked(bytes)
@@ -184,9 +202,9 @@ unsafe fn read_str<'s>(context: &Context, value: Value) -> Option<Result<Cow<'s,
             Ok(Cow::Owned(bytes.iter().map(|&b| b as char).collect()))
         }
     } else {
-        let units = unsafe { std::slice::from_raw_parts(info.ptr as *const u16, len) };
+        let units = unsafe { std::slice::from_raw_parts(ptr as *const u16, len) };
         from_utf16(units).map(Cow::Owned)
-    })
+    }
 }
 
 /// Lone surrogates fail as serde_json fails on the `\uXXXX` escapes JSON.stringify writes for them.
@@ -584,16 +602,12 @@ impl Drop for Entered<'_, '_> {
     }
 }
 
-/// `rjs_brand`'s answers that JSON.stringify treats apart from a plain object.
-const BRAND_PROXY: u32 = 4;
-const BRAND_BOOLEAN_OBJECT: u32 = 10;
-const BRAND_BIGINT_OBJECT: u32 = 13;
-
 /// The key `toJSON` is called with.
 #[derive(Clone, Copy)]
 enum Key {
     Index(u32),
     Name(Value),
+    Atom(*mut c_void),
 }
 
 /// A value as JSON.stringify sees it, after `toJSON` and unboxing.
@@ -607,7 +621,8 @@ enum Node<'s> {
 }
 
 /// One value of an argument, read the way `JSON.stringify` then serde_json would.
-pub(crate) struct Js<'w, 'a> {
+#[doc(hidden)]
+pub struct Js<'w, 'a> {
     walk: &'w Walk<'a>,
     key: Key,
     value: Value,
@@ -625,89 +640,37 @@ impl<'w, 'a> Js<'w, 'a> {
         if let Some(node) = self.pre.take() {
             return Ok(Some(node));
         }
-        let context = self.context();
-        let mut v = self.value;
+        let v = self.value;
         if let Some(node) = scalar(v) {
             return Ok(node);
         }
-        // SAFETY: `v` is an argument or a property value held by this frame.
-        if let Some(s) = unsafe { read_str(context, v) } {
-            return s.map(|s| Some(Node::Str(s)));
-        }
-        let mut kind = context.kind(v);
-        if kind == 6 {
-            return Ok(None);
-        }
-        let to_json = with_atom(context, "toJSON", |atom| context.get(v, atom)).map_err(engine)?;
-        if !to_json.is_undefined() && context.kind(to_json) == 9 {
-            let key = match self.key {
-                Key::Index(i) => string(context, &i.to_string()),
-                Key::Name(name) => name,
-            };
-            v = context.call(to_json, v, &[key]).map_err(engine)?;
-            if let Some(node) = scalar(v) {
-                return Ok(node);
-            }
-            // SAFETY: as above; `v` stays on this frame.
-            if let Some(s) = unsafe { read_str(context, v) } {
-                return s.map(|s| Some(Node::Str(s)));
-            }
-            kind = context.kind(v);
-            if kind == 6 {
-                return Ok(None);
-            }
-        }
-        match kind {
-            7 => Err(stringify_error(context, v)),
-            9 => Ok(None),
-            10 => Ok(Some(Node::Array(v))),
-            8 => self.object(v),
-            _ => Ok(Some(Node::Object(v))),
-        }
-    }
-
-    /// An object that may be a boxed primitive or an array behind a Proxy.
-    fn object<'s>(&self, v: Value) -> Result<Option<Node<'s>>, Error> {
         let context = self.context();
-        let mut brand = glue::RjsBrandInfo::default();
-        // SAFETY: plain FFI on a live value.
-        match unsafe { glue::rjs_brand(context.raw(), v.0, &mut brand) } {
-            BRAND_PROXY => {}
-            BRAND_BOOLEAN_OBJECT..=BRAND_BIGINT_OBJECT => {}
-            _ => return Ok(Some(Node::Object(v))),
+        let (key, atom, index) = match self.key {
+            Key::Index(i) => (0, std::ptr::null_mut(), i),
+            Key::Name(name) => (name.0, std::ptr::null_mut(), 0),
+            Key::Atom(atom) => (0, atom, 0),
+        };
+        let mut out = glue::RjsJsonNode::default();
+        // SAFETY: plain FFI on a live value; the atoms are kept for the realm's life.
+        let status = unsafe {
+            glue::rjs_json_node(
+                context.raw(),
+                v.0,
+                to_json(context),
+                key,
+                atom,
+                index,
+                &mut out,
+            )
+        };
+        match status {
+            glue::OK => {}
+            glue::EXCEPTION => return Err(Error::Thrown(Value(out.value))),
+            _ => return Err(Error::Message("a value cannot be read".into())),
         }
-        let mut inner = 0u64;
-        // SAFETY: plain FFI on a live value.
-        if unsafe { glue::rjs_wrapper_value(context.raw(), v.0, &mut inner) } == glue::OK {
-            let inner = Value(inner);
-            if let Some(b) = inner.as_bool() {
-                return Ok(Some(Node::Bool(b)));
-            }
-            if inner.is_number() {
-                let n = context.to_number(v).map_err(engine)?;
-                return Ok(Some(if n.is_finite() {
-                    Node::Number(n)
-                } else {
-                    Node::Null
-                }));
-            }
-            match context.kind(inner) {
-                5 => {
-                    let s = context.to_rust_string(v).map_err(engine)?;
-                    return Ok(Some(Node::Str(Cow::Owned(s))));
-                }
-                7 => return Err(stringify_error(context, inner)),
-                _ => {}
-            }
-        }
-        let is_array = context
-            .call(intrinsics()?.is_array, Value::undefined(), &[v])
-            .map_err(engine)?;
-        Ok(Some(if is_array.as_bool() == Some(true) {
-            Node::Array(v)
-        } else {
-            Node::Object(v)
-        }))
+        // SAFETY: a string's characters are `out.value`'s. That is `v`, held by the caller, or a
+        // string toJSON or a String object made, copied before it can be collected.
+        unsafe { made(context, &out, out.value != v.0) }
     }
 
     fn require<'s>(&self) -> Result<Node<'s>, Error> {
@@ -752,6 +715,82 @@ impl<'w, 'a> Js<'w, 'a> {
         Ok(value)
     }
 
+    /// An array's elements, each read by `read`.
+    fn items<T>(
+        &self,
+        array: Value,
+        mut read: impl FnMut(Js<'w, 'a>) -> Result<T, Error>,
+    ) -> Result<Vec<T>, Error> {
+        const CHUNK: usize = 32;
+        let _entered = self.walk.enter(array)?;
+        let context = self.context();
+        let len = context.array_length(array).map_err(engine)?;
+        let mut out = Vec::with_capacity(len.min(1 << 16) as usize);
+        // On this stack, which the collector scans: the values stay alive while they are read.
+        let mut nodes = [glue::RjsJsonNode::default(); CHUNK];
+        let mut at = 0;
+        while at < len {
+            let mut count = 0u32;
+            // SAFETY: plain FFI on a live array; `nodes` has room for CHUNK.
+            let status = unsafe {
+                glue::rjs_json_items(
+                    context.raw(),
+                    array.0,
+                    at,
+                    len,
+                    to_json(context),
+                    nodes.as_mut_ptr(),
+                    CHUNK as u32,
+                    &mut count,
+                )
+            };
+            match status {
+                glue::OK => {}
+                glue::EXCEPTION => return Err(Error::Thrown(Value(nodes[0].value))),
+                _ => return Err(Error::Message("a value cannot be read".into())),
+            }
+            for raw in &nodes[..count as usize] {
+                // SAFETY: a string's characters belong to `raw.value`, alive in `nodes`; they
+                // are copied, since a later element's toJSON may drop the array's hold on it.
+                let node = unsafe { made(context, raw, true) }?.unwrap_or(Node::Null);
+                out.push(read(self.child_node(
+                    Key::Index(at),
+                    Value(raw.value),
+                    node,
+                ))?);
+                at += 1;
+            }
+        }
+        Ok(out)
+    }
+
+    /// An object's entries as JSON.stringify writes them; `false` for anything else.
+    fn entries(
+        &self,
+        mut each: impl FnMut(String, Js<'w, 'a>) -> Result<(), Error>,
+    ) -> Result<bool, Error> {
+        let node: Node<'static> = self.require()?;
+        let Node::Object(object) = node else {
+            self.pre.set(Some(node));
+            return Ok(false);
+        };
+        let _entered = self.walk.enter(object)?;
+        let mut map = Map::new(self, object)?;
+        while map.advance()? {
+            let context = self.context();
+            // SAFETY: the key string is held by `map.keys` for the whole walk.
+            let key = match unsafe { read_str(context, map.key) } {
+                Some(key) => key?.into_owned(),
+                None => return Err(Error::Message("a key is not a string".into())),
+            };
+            let Some((value, node)) = map.value.take() else {
+                return Err(de::Error::custom("value is missing"));
+            };
+            each(key, self.child_node(Key::Name(map.key), value, node))?;
+        }
+        Ok(true)
+    }
+
     fn map<'de, V: Visitor<'de>>(&self, object: Value, visitor: V) -> Result<V::Value, Error> {
         let _entered = self.walk.enter(object)?;
         let mut map = Map::new(self, object)?;
@@ -766,6 +805,36 @@ impl<'w, 'a> Js<'w, 'a> {
         }
         Ok(value)
     }
+}
+
+/// The node `rjs_json_node` described; `copy` copies a string's characters.
+///
+/// # Safety
+/// A string's characters must stay alive while a borrowed node is used.
+unsafe fn made<'s>(
+    context: &Context,
+    out: &glue::RjsJsonNode,
+    copy: bool,
+) -> Result<Option<Node<'s>>, Error> {
+    Ok(Some(match out.kind {
+        json::ABSENT => return Ok(None),
+        json::NULL => Node::Null,
+        json::FALSE => Node::Bool(false),
+        json::TRUE => Node::Bool(true),
+        json::NUMBER => Node::Number(out.number),
+        json::STRING8 | json::STRING16 => {
+            // SAFETY: the caller's.
+            let text = unsafe { text(out.ptr, out.len, out.kind == json::STRING8) }?;
+            Node::Str(if copy {
+                Cow::Owned(text.into_owned())
+            } else {
+                text
+            })
+        }
+        json::ARRAY => Node::Array(Value(out.value)),
+        json::BIGINT => return Err(stringify_error(context, Value(out.value))),
+        _ => Node::Object(Value(out.value)),
+    }))
 }
 
 fn scalar<'s>(v: Value) -> Option<Option<Node<'s>>> {
@@ -1487,8 +1556,9 @@ pub(crate) fn f32_number(v: f32) -> f64 {
         .unwrap_or(v as f64)
 }
 
-/// Where a result is built: engine values on the JS thread, or an [`Owned`] encoding anywhere.
-/// An object's key comes before its value, so an encoding can be written in one pass.
+/// Where a result is built: a scalar straight into an engine value, or anything into an
+/// [`Owned`] encoding, which the engine builds in one call. An object's key comes before its
+/// value, so an encoding is written in one pass.
 pub(crate) trait Build: Copy {
     type Value;
     type Array;
@@ -1509,40 +1579,6 @@ pub(crate) trait Build: Copy {
     fn end_object(self, object: Self::Object) -> Self::Value;
 }
 
-/// Whether CreateDataProperty treats `key` as an array index.
-fn is_index(key: &str) -> bool {
-    let b = key.as_bytes();
-    !b.is_empty()
-        && b.len() <= 10
-        && b.iter().all(u8::is_ascii_digit)
-        && (b[0] != b'0' || b.len() == 1)
-        && key.parse::<u64>().is_ok_and(|n| n < u32::MAX as u64)
-}
-
-fn define(context: &Context, object: Value, key: Value, v: Value) -> Result<(), Error> {
-    // SAFETY: plain FFI on live values.
-    match unsafe { glue::rjs_define_v(context.raw(), object.0, key.0, v.0) } {
-        glue::OK => Ok(()),
-        _ => Err(Error::Message("the result cannot be built".into())),
-    }
-}
-
-fn define_field(
-    context: &Context,
-    object: Value,
-    key: &'static str,
-    v: Value,
-) -> Result<(), Error> {
-    if is_index(key) {
-        return define(context, object, string(context, key), v);
-    }
-    with_atom(context, key, |atom| context.define(object, atom, v, 0)).map_err(engine)
-}
-
-fn define_entry(context: &Context, object: Value, key: &str, v: Value) -> Result<(), Error> {
-    define(context, object, string(context, key), v)
-}
-
 fn push_index(context: &Context, array: &mut (Value, u32), v: Value) -> Result<(), Error> {
     // SAFETY: plain FFI on live values.
     match unsafe { glue::rjs_define_index(context.raw(), array.0 .0, array.1, v.0) } {
@@ -1554,19 +1590,15 @@ fn push_index(context: &Context, array: &mut (Value, u32), v: Value) -> Result<(
     }
 }
 
+/// Scalars straight into engine values. An object or an array is [`Error::Compound`]: the
+/// caller encodes it and has the engine build it in one call.
 #[derive(Clone, Copy)]
 pub(crate) struct Engine<'a>(pub(crate) &'a Context);
 
-pub(crate) enum PendingKey {
-    None,
-    Field(&'static str),
-    Entry(String),
-}
-
-impl<'a> Build for Engine<'a> {
+impl Build for Engine<'_> {
     type Value = Value;
-    type Array = (Value, u32);
-    type Object = (Value, PendingKey);
+    type Array = ();
+    type Object = ();
 
     fn null(self) -> Value {
         Value::null()
@@ -1596,42 +1628,30 @@ impl<'a> Build for Engine<'a> {
         }
         Ok(array)
     }
-    fn array(self, len: usize) -> Result<(Value, u32), Error> {
-        let array = self
-            .0
-            .array(u32::try_from(len).unwrap_or(0))
-            .map_err(engine)?;
-        Ok((array, 0))
+    fn array(self, _: usize) -> Result<(), Error> {
+        Err(Error::Compound)
     }
-    fn push(self, array: &mut (Value, u32), v: Value) -> Result<(), Error> {
-        push_index(self.0, array, v)
+    fn push(self, _: &mut (), _: Value) -> Result<(), Error> {
+        Err(Error::Compound)
     }
-    fn end_array(self, array: (Value, u32)) -> Value {
-        array.0
+    fn end_array(self, _: ()) -> Value {
+        Value::undefined()
     }
-    fn object(self) -> Result<(Value, PendingKey), Error> {
-        Ok((self.0.object(), PendingKey::None))
+    fn object(self) -> Result<(), Error> {
+        Err(Error::Compound)
     }
-    fn field(self, object: &mut (Value, PendingKey), key: &'static str) {
-        object.1 = PendingKey::Field(key);
+    fn field(self, _: &mut (), _: &'static str) {}
+    fn entry(self, _: &mut (), _: String) {}
+    fn put(self, _: &mut (), _: Value) -> Result<(), Error> {
+        Err(Error::Compound)
     }
-    fn entry(self, object: &mut (Value, PendingKey), key: String) {
-        object.1 = PendingKey::Entry(key);
-    }
-    fn put(self, object: &mut (Value, PendingKey), v: Value) -> Result<(), Error> {
-        match std::mem::replace(&mut object.1, PendingKey::None) {
-            PendingKey::Field(key) => define_field(self.0, object.0, key, v),
-            PendingKey::Entry(key) => define_entry(self.0, object.0, &key, v),
-            PendingKey::None => Err(Error::Message("a value without a key".into())),
-        }
-    }
-    fn end_object(self, object: (Value, PendingKey)) -> Value {
-        object.0
+    fn end_object(self, _: ()) -> Value {
+        Value::undefined()
     }
 }
 
-/// A result or an event made off the JS thread, encoded in one buffer (and byte arrays in their
-/// own) for the JS thread to build engine values from.
+/// A value encoded in one buffer (and byte arrays in their own), for the engine to build in one
+/// call on the JS thread: `rjs_json_build` reads the tags below.
 #[derive(Debug, Default)]
 #[doc(hidden)]
 pub struct Owned {
@@ -1651,7 +1671,7 @@ const OBJECT: u8 = 8;
 const FIELD: u8 = 9;
 const ENTRY: u8 = 10;
 
-unsafe extern "C" fn free_bytes(bytes: *mut std::ffi::c_void, capacity: *mut std::ffi::c_void) {
+unsafe extern "C" fn free_bytes(bytes: *mut c_void, capacity: *mut c_void) {
     // SAFETY: `bytes` and `capacity` are a `Vec<u8>`'s, handed over by `uint8_array`.
     drop(unsafe { Vec::from_raw_parts(bytes as *mut u8, 0, capacity as usize) });
 }
@@ -1667,10 +1687,10 @@ fn uint8_array(context: &Context, v: Vec<u8>) -> Result<Value, Error> {
     unsafe {
         context.typedarray_external(
             TaKind::U8,
-            v.as_mut_ptr() as *mut std::ffi::c_void,
+            v.as_mut_ptr() as *mut c_void,
             v.len(),
             Some(free_bytes),
-            v.capacity() as *mut std::ffi::c_void,
+            v.capacity() as *mut c_void,
         )
     }
     .map_err(engine)
@@ -1678,7 +1698,8 @@ fn uint8_array(context: &Context, v: Vec<u8>) -> Result<Value, Error> {
 
 /// Writes an [`Owned`].
 #[derive(Clone, Copy)]
-pub(crate) struct Tree<'a>(pub(crate) &'a RefCell<Owned>);
+#[doc(hidden)]
+pub struct Tree<'a>(&'a RefCell<Owned>);
 
 impl Tree<'_> {
     fn tag(self, tag: u8) {
@@ -1771,124 +1792,98 @@ impl Build for Tree<'_> {
     }
 }
 
-struct Reader<'c> {
-    context: &'c Context,
-    code: &'c [u8],
-    at: usize,
-    blobs: Vec<Vec<u8>>,
-}
-
-impl Reader<'_> {
-    fn take<const N: usize>(&mut self) -> [u8; N] {
-        let bytes = self.code[self.at..self.at + N].try_into().unwrap_or([0; N]);
-        self.at += N;
-        bytes
-    }
-
-    fn u32(&mut self) -> u32 {
-        u32::from_le_bytes(self.take())
-    }
-
-    fn usize(&mut self) -> usize {
-        usize::from_le_bytes(self.take())
-    }
-
-    fn text(&mut self) -> &str {
-        let len = self.u32() as usize;
-        let bytes = &self.code[self.at..self.at + len];
-        self.at += len;
-        // SAFETY: `Tree` wrote these bytes from a `&str`.
-        unsafe { std::str::from_utf8_unchecked(bytes) }
-    }
-
-    fn value(&mut self) -> Result<Value, Error> {
-        let context = self.context;
-        let tag = self.code[self.at];
-        self.at += 1;
-        Ok(match tag {
-            NULL => Value::null(),
-            FALSE => Value::boolean(false),
-            TRUE => Value::boolean(true),
-            NUMBER => Value::number(f64::from_le_bytes(self.take())),
-            STRING => string(context, self.text()),
-            JSON => {
-                let json = self.text();
-                parse(context, json)?
-            }
-            BYTES => {
-                let index = self.u32() as usize;
-                uint8_array(context, std::mem::take(&mut self.blobs[index]))?
-            }
-            ARRAY => {
-                let count = self.u32();
-                let mut array = (context.array(count).map_err(engine)?, 0);
-                for _ in 0..count {
-                    let v = self.value()?;
-                    push_index(context, &mut array, v)?;
-                }
-                array.0
-            }
-            OBJECT => {
-                let count = self.u32();
-                let object = context.object();
-                for _ in 0..count {
-                    match self.code[self.at] {
-                        FIELD => {
-                            self.at += 1;
-                            let (ptr, len) = (self.usize(), self.usize());
-                            // SAFETY: `Tree::field` wrote a `&'static str`'s address and length.
-                            let key: &'static str = unsafe {
-                                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                                    ptr as *const u8,
-                                    len,
-                                ))
-                            };
-                            let v = self.value()?;
-                            define_field(context, object, key, v)?;
-                        }
-                        _ => {
-                            self.at += 1;
-                            let key = string(context, self.text());
-                            let v = self.value()?;
-                            define(context, object, key, v)?;
-                        }
-                    }
-                }
-                object
-            }
-            _ => return Err(Error::Message("the result cannot be built".into())),
-        })
+fn build(context: &Context, code: &[u8], blobs: Vec<Vec<u8>>) -> Result<Value, Error> {
+    let list = if blobs.is_empty() {
+        Value::undefined()
+    } else {
+        let list = context.array(blobs.len() as u32).map_err(engine)?;
+        let mut at = (list, 0);
+        for b in blobs {
+            let v = uint8_array(context, b)?;
+            push_index(context, &mut at, v)?;
+        }
+        list
+    };
+    let mut out = 0u64;
+    // SAFETY: plain FFI; `code` is read during the call and `list` is held by this frame.
+    match unsafe {
+        glue::rjs_json_build(context.raw(), code.as_ptr(), code.len(), list.0, &mut out)
+    } {
+        glue::OK => Ok(Value(out)),
+        glue::EXCEPTION => Err(Error::Thrown(Value(out))),
+        _ => Err(Error::Message("the result cannot be built".into())),
     }
 }
 
 impl Owned {
     pub(crate) fn to_js(self, context: &Context) -> Result<Value, Error> {
-        let mut reader = Reader {
-            context,
-            code: &self.code,
-            at: 0,
-            blobs: self.blobs,
-        };
-        reader.value()
+        build(context, &self.code, self.blobs)
     }
 }
 
 /// Serializes `value` off the JS thread.
 pub(crate) fn owned<T: Serialize + ?Sized>(value: &T, top: bool) -> Result<Owned, OutError> {
-    let owned = RefCell::new(Owned::default());
-    value.serialize(Out {
-        build: Tree(&owned),
-        top,
-    })?;
+    encode(|tree| value.serialize(Out { build: tree, top }))
+}
+
+/// What `write` puts in a new [`Owned`].
+pub(crate) fn encode(
+    write: impl FnOnce(Tree<'_>) -> Result<(), OutError>,
+) -> Result<Owned, OutError> {
+    let owned = RefCell::new(Owned {
+        code: Vec::with_capacity(256),
+        blobs: Vec::new(),
+    });
+    write(Tree(&owned))?;
     Ok(owned.into_inner())
 }
 
+/// `value` as a JS value: a scalar made directly, anything else encoded and built in one call.
+pub(crate) fn to_js<T: Serialize + ?Sized>(
+    context: &Context,
+    value: &T,
+    top: bool,
+) -> Result<Value, OutError> {
+    match value.serialize(Out {
+        build: Engine(context),
+        top,
+    }) {
+        Err(OutError::Compound) => {
+            build_with(context, |tree| value.serialize(Out { build: tree, top }))
+        }
+        other => other,
+    }
+}
+
+/// What `write` encodes, built into a JS value; the buffer is this thread's, kept between calls.
+pub(crate) fn build_with(
+    context: &Context,
+    write: impl FnOnce(Tree<'_>) -> Result<(), OutError>,
+) -> Result<Value, OutError> {
+    let mut code = SCRATCH.take();
+    code.clear();
+    let owned = RefCell::new(Owned {
+        code,
+        blobs: Vec::new(),
+    });
+    let written = write(Tree(&owned));
+    let Owned { code, blobs } = owned.into_inner();
+    let value = written.and_then(|()| build(context, &code, blobs).map_err(OutError::from));
+    if code.capacity() <= 1 << 20 {
+        SCRATCH.set(code);
+    }
+    value
+}
+
 #[derive(Debug)]
-pub(crate) enum OutError {
+#[doc(hidden)]
+pub enum OutError {
     Message(String),
     /// The top-level `Err(e)`, as serde_json writes `e`.
     Err(String),
     Thrown(Value),
+    /// See [`Error::Compound`].
+    Compound,
 }
 
 impl fmt::Display for OutError {
@@ -1896,6 +1891,7 @@ impl fmt::Display for OutError {
         match self {
             OutError::Message(m) | OutError::Err(m) => f.write_str(m),
             OutError::Thrown(_) => f.write_str("a JS exception"),
+            OutError::Compound => f.write_str("an object or an array"),
         }
     }
 }
@@ -1913,6 +1909,7 @@ impl From<Error> for OutError {
         match e {
             Error::Thrown(v) => OutError::Thrown(v),
             Error::Message(m) | Error::NotJson(m) => OutError::Message(m),
+            Error::Compound => OutError::Compound,
         }
     }
 }
@@ -2478,11 +2475,19 @@ mod tests {
     }
 
     fn direct<T: DeserializeOwned>(context: &Context, value: Value) -> Result<T, String> {
+        read_with(context, value, |js| T::deserialize(js))
+    }
+
+    fn read_with<T>(
+        context: &Context,
+        value: Value,
+        read: impl FnOnce(Js<'_, '_>) -> Result<T, Error>,
+    ) -> Result<T, String> {
         let walk = Walk::new(context);
-        T::deserialize(walk.arg(0, value)).map_err(|e| match e {
-            Error::Message(m) => format!("argument 1: {m}"),
+        read(walk.arg(0, value)).map_err(|e| match e {
             Error::Thrown(e) => thrown(context, e),
             Error::NotJson(m) => format!("TypeError: {m}"),
+            e => format!("argument 1: {e}"),
         })
     }
 
@@ -2606,6 +2611,18 @@ mod tests {
         "({ some_field: 1, someField: 2 })",
         "({ x: 1, y: 2, extra: { deep: [1, { z: 10n }] } })",
         "({ x: 1, y: 2, extra: '\\ud800' })",
+        "({ Type: 1, given: 'a', More: ['one', { two: { aB: 1 } }, { 'three!': 3 }] })",
+        "({ Type: 1, given: 'a', More: [], Inner: { four: { x: 1, y: 2 } }, When: [1, 2] })",
+        "({ Type: 1, given: 'a', More: [{ two: { a_b: 1 } }] })",
+        "({ kind: 'A', x: 1 })",
+        "({ kind: 'C', x: 1, y: 2 })",
+        "({ data: new Uint8Array([1]), mask: null })",
+        "({ data: [1, 2], mask: new Uint8Array([3]).buffer })",
+        "({ data: 'x' })",
+        "[{ x: 1, y: 2 }, { x: 3 }]",
+        "[{ x: 1, y: 2 }, 'Unit', { Wrap: 1 }]",
+        "(() => { const a = [1, { toJSON() { a[2] = 'x'; return 2; } }, 3]; return a; })()",
+        "(() => { const a = [1, 2]; Object.defineProperty(a, 0, { get() { a[1] = 'y'; return 0; }, enumerable: true }); return a; })()",
         "new Date(0)",
         "new Number(5)",
         "new String('s')",
@@ -2746,29 +2763,37 @@ mod tests {
         context.eval(&format!("(() => ({src}))()")).unwrap()
     }
 
+    /// Every value of the corpus read as `T` through serde over values and through `picked`,
+    /// which is `FromJs` where `T` has it.
     fn arguments<T: DeserializeOwned + Debug + PartialEq>(
         context: &Context,
         name: &str,
+        picked: impl Fn(Js<'_, '_>) -> Result<T, Error>,
         mismatches: &mut Vec<String>,
     ) {
         for src in VALUES {
             let before = through_json_then::<T>(context, eval(context, src));
             let now = direct::<T>(context, eval(context, src));
+            let from_js = read_with(context, eval(context, src), &picked);
             // A value that is not JSON as a whole still fails, but reading stops at the first
             // problem, so a wrong type met before it is what gets reported.
             let whole = |e: &String| !e.starts_with("argument 1: ");
             // Sequences and bytes read typed arrays and buffers as their elements, which JSON
             // turned into objects with index keys.
             let memory = buffer(context, eval(context, src)).is_some();
-            let agree = match (&before, &now) {
-                (Err(old), Err(_)) if whole(old) => true,
-                (Err(_), _) if memory => true,
-                _ => before == now,
-            };
-            if !agree {
-                mismatches.push(format!(
-                    "{name} from {src}:\n  JSON:   {before:?}\n  direct: {now:?}"
-                ));
+            for (way, now, by_fields) in [("direct", &now, false), ("FromJs", &from_js, true)] {
+                let agree = match (&before, now) {
+                    (Err(old), Err(_)) if whole(old) => true,
+                    // A struct read by its fields does not look at the others.
+                    (Err(old), Ok(_)) if by_fields && whole(old) => true,
+                    (Err(_), _) if memory => true,
+                    _ => before == *now,
+                };
+                if !agree {
+                    mismatches.push(format!(
+                        "{name} from {src}:\n  JSON:   {before:?}\n  {way}: {now:?}"
+                    ));
+                }
             }
         }
     }
@@ -2782,7 +2807,12 @@ mod tests {
                 let mut m = Vec::new();
                 macro_rules! check {
                     ($($t:ty),* $(,)?) => {
-                        $(arguments::<$t>(context, stringify!($t), &mut m);)*
+                        $(arguments::<$t>(
+                            context,
+                            stringify!($t),
+                            |js| (&&Pick::<$t>::new()).read(js),
+                            &mut m,
+                        );)*
                     };
                 }
                 check!(
@@ -2795,6 +2825,15 @@ mod tests {
                     Tagged, Adjacent, Either, Newtype, Pair, Unit, Json, Raw,
                     Option<Shape>, Vec<Shape>,
                 );
+                #[cfg(feature = "types")]
+                {
+                    use derived::*;
+                    check!(
+                        Point, Option<Point>, Vec<Point>, BTreeMap<String, Point>, Defaults,
+                        Camel, Strict, Flat, Nested, Shape, Option<Shape>, Vec<Shape>, Tagged,
+                        Adjacent, Either, Newtype, Pair, Unit, Renamed, Internal,
+                    );
+                }
                 m
             })
         });
@@ -2841,21 +2880,32 @@ mod tests {
         }
     }
 
-    fn result<T: Serialize>(context: &Context, name: &str, value: T, mismatches: &mut Vec<String>) {
+    /// `value` built through serde and through `picked`, which is `IntoJs` where `T` has it.
+    fn result<T: Serialize>(
+        context: &Context,
+        name: &str,
+        value: T,
+        picked: impl Fn(&T, Tree<'_>) -> Result<(), OutError>,
+        mismatches: &mut Vec<String>,
+    ) {
         let before = serde_json::to_string(&value)
             .map_err(|e| e.to_string())
             .map(|json| parse(context, &json).unwrap());
-        let now = value
-            .serialize(Out {
-                build: Engine(context),
-                top: false,
-            })
-            .map_err(|e| e.to_string());
+        let now = to_js(context, &value, false).map_err(|e| e.to_string());
         let owned = owned(&value, false)
             .map_err(|e| e.to_string())
             .map(|tree| tree.to_js(context).unwrap());
+        let into_js = build_with(context, |tree| picked(&value, tree)).map_err(|e| e.to_string());
+        let into_js_owned = encode(|tree| picked(&value, tree))
+            .map_err(|e| e.to_string())
+            .map(|tree| tree.to_js(context).unwrap());
         let same = intrinsics_same(context);
-        for (way, got) in [("direct", now), ("owned", owned)] {
+        for (way, got) in [
+            ("direct", now),
+            ("owned", owned),
+            ("IntoJs", into_js),
+            ("IntoJs owned", into_js_owned),
+        ] {
             let equal = match (&before, &got) {
                 (Ok(a), Ok(b)) => context
                     .call(same, Value::undefined(), &[*a, *b])
@@ -2921,7 +2971,17 @@ mod tests {
                 let mut m = Vec::new();
                 macro_rules! check {
                     ($($v:expr),* $(,)?) => {
-                        $(result(context, stringify!($v), $v, &mut m);)*
+                        $({
+                            let value = $v;
+                            let pick = Pick::of(&value);
+                            result(
+                                context,
+                                stringify!($v),
+                                value,
+                                |v, tree| (&&pick).encode(v, tree),
+                                &mut m,
+                            );
+                        })*
                     };
                 }
                 check!(
@@ -3000,6 +3060,68 @@ mod tests {
                     serde_json::json!({ "b": [1, 2.5, null], "a": { "c": "d" } }),
                     RawValue::from_string(r#"{ "x": [1, 2.50] }"#.into()).unwrap(),
                 );
+                #[cfg(feature = "types")]
+                {
+                    use derived::*;
+                    check!(
+                        Point { x: 1, y: -2 },
+                        vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }],
+                        BTreeMap::from([("a", Point { x: 1, y: 2 })]),
+                        Some(Point { x: 5, y: 6 }),
+                        Defaults { x: None, y: 3 },
+                        Camel { some_field: 4 },
+                        Nested {
+                            x: 1,
+                            y: 2,
+                            n: Some(Box::new(Nested {
+                                x: 3,
+                                y: 4,
+                                n: None
+                            }))
+                        },
+                        Shape::Unit,
+                        Shape::Wrap(5),
+                        Shape::Pair(1, "a".into()),
+                        Shape::Named { x: 1, y: 2 },
+                        vec![Shape::Unit, Shape::Wrap(1)],
+                        Tagged::A { x: 1 },
+                        Tagged::B,
+                        Adjacent::A(1),
+                        Adjacent::B,
+                        Either::L(vec![Either::N(1), Either::S("s".into())]),
+                        Either::P(Point { x: 1, y: 2 }),
+                        Newtype(3),
+                        Pair(1, 2),
+                        Unit,
+                        Renamed {
+                            r#type: 1,
+                            first_name: "a".into(),
+                            skipped: 2,
+                            empty: None,
+                            when: vec![],
+                            inner: Inner::Two { a_b: 1 },
+                            more: vec![
+                                Inner::One,
+                                Inner::Three(3),
+                                Inner::Four(Point { x: 0, y: 0 })
+                            ],
+                        },
+                        Renamed {
+                            r#type: 1,
+                            first_name: "a".into(),
+                            skipped: 2,
+                            empty: Some(4),
+                            when: vec![1],
+                            inner: Inner::One,
+                            more: vec![],
+                        },
+                        Internal::A { x: 1, y: None },
+                        Internal::B,
+                        Internal::C(Point { x: 1, y: 2 }),
+                        Ok::<Point, String>(Point { x: 1, y: 2 }),
+                        Err::<Point, String>("e".into()),
+                    );
+                }
                 m
             })
         });
@@ -3009,6 +3131,177 @@ mod tests {
             mismatches.len(),
             mismatches.join("\n")
         );
+    }
+
+    /// The corpus types again, with `#[skathi::data]`'s `FromJs`/`IntoJs` where it gives them.
+    #[cfg(feature = "types")]
+    mod derived {
+        use std::collections::BTreeMap;
+
+        use serde_json::Value as Json;
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Point {
+            pub x: i32,
+            pub y: i32,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Defaults {
+            pub x: Option<i32>,
+            #[serde(default)]
+            pub y: u8,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(rename_all = "camelCase")]
+        pub struct Camel {
+            pub some_field: i32,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(deny_unknown_fields)]
+        pub struct Strict {
+            pub x: i32,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Flat {
+            pub x: i32,
+            #[serde(flatten)]
+            pub rest: BTreeMap<String, Json>,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Nested {
+            pub x: i32,
+            pub y: i32,
+            pub n: Option<Box<Nested>>,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub enum Shape {
+            Unit,
+            Wrap(i32),
+            Pair(i32, String),
+            Named { x: i32, y: i32 },
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(tag = "tag")]
+        pub enum Tagged {
+            A { x: i32 },
+            B,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(tag = "t", content = "c")]
+        pub enum Adjacent {
+            A(i32),
+            B,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(untagged)]
+        pub enum Either {
+            N(i32),
+            S(String),
+            P(Point),
+            L(Vec<Either>),
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Newtype(pub i32);
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Pair(pub i32, pub i32);
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Unit;
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(rename_all = "PascalCase")]
+        pub struct Renamed {
+            pub r#type: i32,
+            #[serde(rename = "given")]
+            pub first_name: String,
+            #[serde(skip)]
+            pub skipped: i32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub empty: Option<i32>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            pub when: Vec<u32>,
+            #[serde(default = "Inner::fallback")]
+            pub inner: Inner,
+            pub more: Vec<Inner>,
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(rename_all = "kebab-case")]
+        pub enum Inner {
+            One,
+            #[serde(rename_all = "camelCase")]
+            Two {
+                a_b: i32,
+            },
+            #[serde(rename = "three!")]
+            Three(i32),
+            Four(Point),
+        }
+
+        impl Inner {
+            fn fallback() -> Self {
+                Inner::Three(9)
+            }
+        }
+
+        const _: fn() = || {
+            fn derived<T: super::FromJs + super::IntoJs>() {}
+            derived::<Point>();
+            derived::<Defaults>();
+            derived::<Camel>();
+            derived::<Nested>();
+            derived::<Shape>();
+            derived::<Tagged>();
+            derived::<Adjacent>();
+            derived::<Either>();
+            derived::<Newtype>();
+            derived::<Renamed>();
+            derived::<Inner>();
+            derived::<Internal>();
+            derived::<Frame>();
+        };
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+        pub enum Internal {
+            A { x: i32, y: Option<i32> },
+            B,
+            C(Point),
+        }
+
+        #[skathi_macros::data(crate = crate::embed)]
+        #[derive(Debug, PartialEq)]
+        pub struct Frame {
+            pub data: Vec<u8>,
+            pub mask: Option<Vec<u8>>,
+        }
     }
 
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -3123,14 +3416,44 @@ mod tests {
                     data: vec![4],
                     mask: None,
                 };
-                let frame = frame
-                    .serialize(Out {
-                        build: Engine(context),
-                        top: false,
-                    })
-                    .unwrap();
+                let frame = to_js(context, &frame, false).unwrap();
                 let data = context.get(frame, &context.atom("data")).unwrap();
                 assert_eq!(shown(data), "Uint8Array:4");
+
+                #[cfg(feature = "types")]
+                {
+                    let read = |src: &str| {
+                        read_with(context, eval(context, src), |js| {
+                            (&&Pick::<derived::Frame>::new()).read(js)
+                        })
+                    };
+                    assert_eq!(
+                        read("({ data: new Uint8Array([3]), mask: new Uint8Array([4]).buffer })"),
+                        Ok(derived::Frame {
+                            data: vec![3],
+                            mask: Some(vec![4])
+                        })
+                    );
+                    assert_eq!(
+                        read("({ data: [1, 2], mask: null })"),
+                        Ok(derived::Frame {
+                            data: vec![1, 2],
+                            mask: None
+                        })
+                    );
+                    assert_eq!(
+                        read("({ mask: null })"),
+                        Err("argument 1: missing field `data`".into())
+                    );
+                    let frame = derived::Frame {
+                        data: vec![5, 6],
+                        mask: Some(vec![]),
+                    };
+                    let built = (&&Pick::of(&frame)).answer(&frame, context).unwrap();
+                    let field = |name: &str| context.get(built, &context.atom(name)).unwrap();
+                    assert_eq!(shown(field("data")), "Uint8Array:5,6");
+                    assert_eq!(shown(field("mask")), "Uint8Array:");
+                }
             })
         });
     }

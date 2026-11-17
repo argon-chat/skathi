@@ -3,6 +3,7 @@
 use proc_macro::TokenStream;
 
 mod data;
+mod direct;
 mod module;
 
 /// Makes an `impl` block a native module: `skathi::Builder::new().module("notes", Notes { … })`.
