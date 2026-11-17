@@ -16,4 +16,8 @@ pub(crate) fn tick(_window: &mut Window, _cx: &mut App) -> bool {
     false
 }
 
+pub(crate) fn polls() -> bool {
+    false
+}
+
 pub(crate) fn window_tick(_window: &mut Window) {}

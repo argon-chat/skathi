@@ -530,6 +530,22 @@ fn fetch(src: &Arc<str>, cx: &mut App) {
         .remove(src);
 }
 
+/// Whether a sticker on screen is loading or animating, so [`tick`] must keep running.
+pub(crate) fn polls() -> bool {
+    NODES.with(|m| {
+        m.borrow().values().any(|e| {
+            e.visible
+                && !e.failed
+                && !e.ended
+                && match &e.info {
+                    _ if e.props.image => !e.loaded,
+                    None => true,
+                    Some(info) => info.frames > 1,
+                }
+        })
+    })
+}
+
 /// Every `<sk-sticker>`, once a frame from the pump before the draw.
 pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     if NODES.with(|m| m.borrow().is_empty()) && TILES.with(|m| m.borrow().is_empty()) {

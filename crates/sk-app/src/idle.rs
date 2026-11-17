@@ -22,6 +22,8 @@ pub const QUIET_FRAMES: u32 = 30;
 pub const IDLE_INTERVAL: Duration = Duration::from_millis(33);
 
 pub const CLOAKED_INTERVAL: Duration = Duration::from_millis(100);
+/// How often a frame looks again while media plays or loads (`sk_tree::media_polls`).
+pub const MEDIA_POLL: Duration = Duration::from_millis(16);
 
 pub const BUSY_WAVE: Duration = Duration::from_micros(500);
 
@@ -165,6 +167,13 @@ fn enabled() -> bool {
 
 pub fn note_wave(wave: Wave) {
     WAVE.with(|w| w.set(Some(wave)));
+}
+
+/// The context's next work as of the end of the wave, which supersedes the pump's report.
+pub fn note_later_work(next_work: Option<Duration>) {
+    WAVE.with(|w| {
+        w.set(w.get().map(|wave| Wave { next_work, ..wave }));
+    });
 }
 
 pub fn note_moved() {

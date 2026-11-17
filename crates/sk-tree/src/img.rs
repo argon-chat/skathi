@@ -602,6 +602,10 @@ thread_local! {
     static LOADS: RefCell<std::collections::HashSet<u32>> = RefCell::new(std::collections::HashSet::new());
 }
 
+pub(crate) fn loads_pending() -> bool {
+    LOADS.with(|l| !l.borrow().is_empty())
+}
+
 pub(crate) fn note_src(id: u32) {
     LOADS.with(|l| l.borrow_mut().insert(id));
 }

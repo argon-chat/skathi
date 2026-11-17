@@ -609,6 +609,15 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
         #[cfg(feature = "storages")]
         sk_storage::pump();
     });
+    // A devtools command or a host hook above may have scheduled JS after the pump's report.
+    if wave == Wave::Frame {
+        let later = JsRuntime::try_with(|rt| {
+            let at = sk_runtime::redjs::web::next_work_ms(rt.raw())?;
+            let ms = at - sk_runtime::redjs::web::now_ms();
+            Some(std::time::Duration::from_secs_f64(ms.max(0.0) / 1000.0))
+        });
+        idle::note_later_work(later.flatten());
+    }
 }
 
 /// What follows a JS wave on both clocks. On the background tick the repaint only marks the window dirty.
@@ -617,6 +626,9 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // check comes first: after a renderer device loss every `<video>` must rebuild before it ticks.
     publish_video_device();
     let media_moved = sk_tree::frame_tick(window, cx);
+    if sk_tree::media_polls() {
+        sk_runtime::frames::wake_at(std::time::Instant::now() + idle::MEDIA_POLL);
+    }
     let flush = sk_tree::flush_changes_kind();
     let tree_moved = flush != sk_tree::Flush::Unchanged;
     #[cfg(sk_devtools)]

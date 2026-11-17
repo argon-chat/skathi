@@ -651,6 +651,15 @@ pub fn videos_playing() -> bool {
     video::any_playing()
 }
 
+/// Whether [`frame_tick`] polls something that is loading or playing (video, Lottie, stickers,
+/// image loads), which tells nobody when it has a new frame.
+pub fn media_polls() -> bool {
+    video::any_playing()
+        || lottie::any_playing()
+        || img::loads_pending()
+        || render::sticker::polls()
+}
+
 /// Publishes the renderer's D3D11 device so Media Foundation decodes onto gpui's texture pool.
 ///
 /// # Safety
