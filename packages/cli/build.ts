@@ -67,6 +67,7 @@ import {
 import { colorEnabled, paint } from "./cli/term";
 import { parseCheckConfig } from "./check/config";
 import { CssWarnings } from "./check/css";
+import { FrameworkWarnings } from "./check/frameworks";
 import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 
@@ -1420,10 +1421,16 @@ const cssWarnings = new CssWarnings({
   tailwind: TW_CONFIG !== null,
 });
 
-/** CSS the engine does not apply, in the styles that changed; each warning once per session. */
+const frameworkWarnings = new FrameworkWarnings({
+  root: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
+  allow: parseCheckConfig(readSkConfig()?.check).allow,
+});
+
+/** CSS the engine does not apply and Vue or Svelte features that do not work, in the files that changed; each once per session. */
 function reportCss() {
   const components = [...prevBlocks.keys()].filter((f) => /\.(vue|svelte)$/i.test(f));
   for (const d of cssWarnings.update([...components, ...styleSheets])) warn(`${stamp()} ${diagnosticLine(d)}`);
+  for (const d of frameworkWarnings.update(prevBlocks.keys())) warn(`${stamp()} ${diagnosticLine(d)}`);
 }
 
 await fullBuild("startup").then(reportCss, (e) => {

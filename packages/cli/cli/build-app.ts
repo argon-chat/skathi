@@ -19,6 +19,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parseCheckConfig } from "../check/config";
 import { cssDiagnostics, readStyleSources } from "../check/css";
 import { diagnosticLine } from "../check/finding";
+import { frameworkBuildLines } from "../check/frameworks";
 import type { BuildStyles } from "../check/graph";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
@@ -497,7 +498,11 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const windowJson = readFileSync(join(work, "window.json"));
   const msBundle = performance.now() - tb;
   if (aot) await aotCheck(options.target, options.configPath, progress, options.color ?? false);
-  else for (const line of cssWarnings(config, stylesJson)) progress.warn(line);
+  else {
+    const allow = parseCheckConfig(config.raw.check).allow;
+    const framework = frameworkBuildLines({ appRoot: config.appRoot, entry: config.entry, stylesJson, allow });
+    for (const line of [...cssWarnings(config, stylesJson), ...framework]) progress.warn(line);
+  }
 
   progress.step("assets");
   const ta = performance.now();

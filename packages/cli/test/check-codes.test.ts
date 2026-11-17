@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectFindings, runCheck } from "../check";
 import { ALL_CODES, REGISTRY } from "../check/codes";
-import { analyzeCss, analyzeRules, analyzeUnit, FIXTURES } from "./check-fixtures";
+import { analyzeCss, analyzeFrameworks, analyzeRules, analyzeUnit, FIXTURES } from "./check-fixtures";
 
 const CHECK_DIR = join(import.meta.dir, "..", "check");
 
@@ -27,6 +27,7 @@ describe("the code registry", () => {
     const add = (codes: { code: string }[]) => codes.forEach((d) => seen.add(d.code));
     add(analyzeRules().diagnostics);
     add(analyzeCss().diagnostics);
+    add(analyzeFrameworks().diagnostics);
     add(analyzeUnit(["broken.ts", "missing.ts"]).diagnostics);
     for (const app of ["check-badconfig", "check-unresolved"]) {
       add((await runCheck({ target: join(FIXTURES, app), toolVersion: "test" })).diagnostics);

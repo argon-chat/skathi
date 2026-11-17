@@ -11,6 +11,7 @@ import { REGISTRY } from "./codes";
 import { parseCheckConfig } from "./config";
 import { cssFindings, readStyleSources } from "./css";
 import { diagnosticsOf, PLATFORM, posix, rangeOf, ZERO_RANGE, type Finding } from "./finding";
+import { frameworkFindings, readFrameworkSources } from "./frameworks";
 import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
 import { Packages } from "./packages";
@@ -208,6 +209,10 @@ export function analyze(input: AnalyzeInput): CheckReport {
     findings.push(
       ...cssFindings({ sources: readStyleSources(styled), packages, deps, tailwind: input.tailwind ?? false }),
     );
+  }
+  if (input.modules.length) {
+    progress.step("Vue and Svelte features");
+    findings.push(...frameworkFindings({ sources: readFrameworkSources(input.modules), packages, deps, typescript }));
   }
   if (units.length) {
     progress.step("TypeScript program", units.length);

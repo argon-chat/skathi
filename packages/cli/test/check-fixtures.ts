@@ -74,6 +74,32 @@ export function analyzeCss(options: Partial<AnalyzeInput> = {}): CheckReport {
   });
 }
 
+export const FRAMEWORKS_APP = join(FIXTURES, "check-frameworks");
+
+export function analyzeFrameworks(options: Partial<AnalyzeInput> = {}): CheckReport {
+  const config = JSON.parse(readFileSync(join(FRAMEWORKS_APP, "sk.config.json"), "utf8")) as { check: unknown };
+  return analyze({
+    typescript: ts,
+    root: FRAMEWORKS_APP,
+    entry: join(FRAMEWORKS_APP, "src/main.ts"),
+    modules: [
+      "src/main.ts",
+      "src/vapor.ts",
+      "src/legacy/ssr.ts",
+      "src/Panel.tsx",
+      "src/App.vue",
+      "src/Fine.vue",
+      "src/Widget.svelte",
+      "src/Element.svelte",
+      "src/Fine.svelte",
+      "node_modules/toggle-kit/Toggle.vue",
+    ].map((m) => join(FRAMEWORKS_APP, m)),
+    allow: parseCheckConfig(config.check).allow,
+    toolVersion: "test",
+    ...options,
+  });
+}
+
 /** Diagnostics of one file as `line:code` (one-based lines). */
 export const lines = (report: CheckReport, file: string) =>
   report.diagnostics.filter((d) => d.file === file).map((d) => `${d.range.start.line + 1}:${d.code}`);

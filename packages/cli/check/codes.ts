@@ -17,6 +17,7 @@ export const RANGES = [
   { from: 2000, to: 2999, what: "works under AOT, but slower" },
   { from: 3000, to: 3999, what: "typing quality: compiles, but AOT gets no type information" },
   { from: 4000, to: 4999, what: "CSS the native renderer does not apply" },
+  { from: 5000, to: 5999, what: "Vue and Svelte features that do not work, or work differently, in Skathi" },
 ] as const;
 
 const CODES: CodeInfo[] = [
@@ -229,6 +230,136 @@ const CODES: CodeInfo[] = [
       "Stylesheets the app imports from this package use properties, values, selectors or at-rules the engine does not apply (the SK4001–SK4004 cases). One diagnostic per package; the places are listed as related locations.",
     example: 'import "some-ui-kit/dist/style.css";',
     fix: "Check that the package's components the app uses look right; allow SK4005 for the package once they do.",
+  },
+  {
+    code: "SK5001",
+    severity: "error",
+    title: "Vue Vapor mode",
+    explanation:
+      "Skathi renders Vue through runtime-core's virtual-DOM renderer and has no Vapor runtime. With Vue 3.5 the `vapor` attribute is ignored and the component is compiled as a regular one; with Vue 3.6 the compiled component imports Vapor's runtime, which Skathi's `vue` does not export, and the build fails. `createVaporApp`, `defineVaporComponent` and `vaporInteropPlugin` fail the build in either version.",
+    example: '<script setup vapor lang="ts">\nconst count = ref(0);\n</script>',
+    fix: "Drop `vapor` from the `<script>` tag and mount with `createApp()`: the same component runs on the virtual-DOM renderer.",
+  },
+  {
+    code: "SK5002",
+    severity: "error",
+    title: "custom elements (web components)",
+    explanation:
+      "Skathi has no `customElements` registry and no shadow DOM. Vue's `defineCustomElement()` returns a class that throws NotSupportedError when constructed, and `useHost()`/`useShadowRoot()` answer null. A Svelte component with `<svelte:options customElement>` compiles to a `customElements.define()` call, which throws a ReferenceError when the module loads; `$host()` only compiles in such a component.",
+    example:
+      'import { defineCustomElement } from "vue";\nimport Counter from "./Counter.vue";\n\ncustomElements.define("my-counter", defineCustomElement(Counter));',
+    fix: "Use the component directly (`<Counter />`), and pass what a host element would carry as props or with provide/inject (Vue) or context (Svelte).",
+  },
+  {
+    code: "SK5003",
+    severity: "error",
+    title: "HTML strings: `v-html`, `innerHTML`, `{@html}`",
+    explanation:
+      "Skathi's DOM has no HTML parser. `v-html` and a bound `innerHTML` set an attribute instead of building elements, and Svelte's `{@html}` inserts nothing, so the element stays empty.",
+    example: '<div v-html="article.body"></div>',
+    fix: "Render the content as elements: a component per block, `h()` calls built from parsed data, or text with `{{ }}` / `{expression}` when it is plain text.",
+  },
+  {
+    code: "SK5004",
+    severity: "error",
+    title: "CSS modules: `<style module>`, `useCssModule()`",
+    explanation:
+      "The builders do not compile `<style module>`: its rules are added unscoped, under their own class names, and `$style` is undefined, so a template that reads `$style.x` throws while rendering and the component renders nothing. `useCssModule()` answers `{}`.",
+    example:
+      '<template>\n  <p :class="$style.red">alert</p>\n</template>\n\n<style module>\n.red { color: red; }\n</style>',
+    fix: 'Use `<style scoped>` and plain class names (`class="red"`); `v-bind()` in the styles covers values that come from script.',
+  },
+  {
+    code: "SK5005",
+    severity: "error",
+    title: "checkbox and radio inputs",
+    explanation:
+      '`<input type="checkbox">` and `<input type="radio">` render as text fields: Skathi has no native toggle controls. A click does not check them, `checked` does not change, and `v-model`, `bind:checked` and `bind:group` never update.',
+    example: '<input type="checkbox" v-model="agreed" />',
+    fix: 'Make the control from a button, for example `<button role="checkbox" :aria-checked="agreed" @click="agreed = !agreed">`, or use a UI library\'s checkbox and radio group components built that way (reka-ui, bits-ui).',
+  },
+  {
+    code: "SK5006",
+    severity: "error",
+    title: "Svelte `bind:value` on a `<select>`",
+    explanation:
+      'Svelte reads the picked option with `select.querySelector(":checked")`, and in Skathi `:checked` does not match the selected option, so `bind:value` always reads the first option. Setting the value from the state works.',
+    example: '<select bind:value={size}>\n  <option value="s">S</option>\n  <option value="m">M</option>\n</select>',
+    fix: "Set the value and listen for `change`: `<select value={size} onchange={(e) => (size = e.currentTarget.value)}>`.",
+  },
+  {
+    code: "SK5007",
+    severity: "warning",
+    title: "list move animations: `<TransitionGroup>` moves, `animate:`",
+    explanation:
+      "Enter and leave transitions play, but items that stay in the list jump to their new place: `getBoundingClientRect()` reports the old layout until the next frame, so a FLIP animation sees no movement. Vue ignores the `-move` class and `moveClass`; Svelte's `animate:flip` does nothing.",
+    example:
+      '<TransitionGroup name="list" tag="ul">…</TransitionGroup>\n\n<style>\n.list-move { transition: transform 0.3s; }\n</style>',
+    fix: "Keep the enter and leave transitions and drop the move animation, or animate positions you compute yourself with `element.animate()`.",
+  },
+  {
+    code: "SK5008",
+    severity: "warning",
+    title: "vue-router web and hash history",
+    explanation:
+      "A Skathi window has one document and no address bar: `history.pushState()` keeps the state but not the URL, and `history.back()`, `forward()` and `go()` do nothing. With `createWebHistory()` or `createWebHashHistory()`, `router.push()` works but `router.back()` and `router.go()` do not, and the app always starts at `/`.",
+    example: "const router = createRouter({ history: createWebHistory(), routes });",
+    fix: "Use `createMemoryHistory()`: it keeps its own stack, so back and forward work.",
+  },
+  {
+    code: "SK5009",
+    severity: "warning",
+    title: "server-side rendering and hydration APIs",
+    explanation:
+      "There is no server-rendered markup in a Skathi window. Vue's `createSSRApp()` behaves as `createApp()`, and `hydrate()` (Vue's or Svelte's) renders the component from scratch, as `render()`/`mount()` do.",
+    example: 'createSSRApp(App).mount("#app");',
+    fix: "Call `createApp()` (Vue) or `mount()` from `@skathi-native/runtime/svelte` (Svelte).",
+  },
+  {
+    code: "SK5010",
+    severity: "warning",
+    title: "`v-model.lazy`",
+    explanation:
+      "`.lazy` syncs on `change`, which text fields do not fire in Skathi. The model updates on every keystroke instead, as plain `v-model` does.",
+    example: '<input v-model.lazy="name" />',
+    fix: "Drop `.lazy`, or keep a draft value and commit it on `blur` or Enter (`@keydown.enter`).",
+  },
+  {
+    code: "SK5011",
+    severity: "warning",
+    title: "`<style lang>` preprocessors",
+    explanation:
+      'The builders do not run Sass, Less or Stylus: a `<style lang="scss">` block is compiled as plain CSS, so variables, mixins and functions reach the engine as written and the declarations that use them are dropped.',
+    example: '<style lang="scss">\n$accent: #0af;\n.title { color: $accent; }\n</style>',
+    fix: "Write the block as plain CSS (custom properties and nesting cover most of what variables and nesting did), or compile the preprocessor's output to a .css file and import that.",
+  },
+  {
+    code: "SK5012",
+    severity: "warning",
+    title: "JSX and TSX files in development",
+    explanation:
+      'sk build and sk publish compile .tsx and .jsx files (with `/** @jsxImportSource vue */` or `"jsxImportSource": "vue"`), but the development builder does not load the app\'s own .tsx and .jsx files, so importing one fails under sk dev.',
+    example: 'import Panel from "./Panel.tsx";',
+    fix: "Write the component as an SFC, or with `h()` in a .ts file.",
+  },
+  {
+    code: "SK5013",
+    severity: "warning",
+    title: "a dependency uses Vue or Svelte features Skathi does not support",
+    explanation:
+      "Components or modules the app imports from this package use what the other SK5 codes report. One diagnostic per package; the places are listed as related locations. The app may not reach them in the parts of the package it uses.",
+    example: 'a UI kit whose checkbox is a native `<input type="checkbox">`',
+    fix: "Check that the parts of the package the app uses work; allow SK5013 for the package when they do.",
+  },
+  {
+    code: "SK5014",
+    severity: "warning",
+    title: "a Vue `<Transition>` driven by a CSS animation",
+    explanation:
+      "Skathi's `<Transition>` waits for the CSS transitions of the `-enter-active` and `-leave-active` classes, not for a CSS `animation` in them: with only an animation, the element enters at once and is removed at once when it leaves, so the animation is cut short or never shows. Reported when the component's own styles give the transition's classes an `animation`.",
+    example:
+      '<Transition name="bounce"><p v-if="show">hi</p></Transition>\n\n<style>\n.bounce-enter-active { animation: bounce-in 0.5s; }\n</style>',
+    fix: 'Animate with `transition` on the `-enter-from`/`-leave-to` classes, or play the keyframes from the JavaScript hooks: `@enter="(el, done) => el.animate(keyframes, 500).finished.then(done)"`.',
   },
 ];
 

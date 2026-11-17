@@ -1,0 +1,9 @@
+{
+  "name": "check-frameworks",
+  "version": "1.0.0",
+  "check": {
+    "allow": {
+      "SK5009": ["src/legacy/**"]
+    }
+  }
+}
