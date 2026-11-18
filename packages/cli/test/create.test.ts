@@ -182,6 +182,15 @@ test("a template without its own icon gets the Skathi one", () => {
   expect(readFileSync(join(dir, "icon.png"))).toEqual(readFileSync(join(TEMPLATES_DIR, "icon.png")));
 });
 
+test("draw scaffolds the gallery template, and its window keeps the template's own backdrop", () => {
+  const dir = fresh();
+  create(dir, { template: "draw" });
+  const source = join(import.meta.dir, "../../../templates/draw");
+  expect(read(dir, "src/App.vue")).toBe(read(source, "src/App.vue"));
+  expect(readFileSync(join(dir, "icon.png"))).toEqual(readFileSync(join(source, "icon.png")));
+  expect(loadAppConfig(dir).raw.window).toMatchObject({ titleBarStyle: "hidden", backdrop: "none" });
+});
+
 test("an unknown template is refused before anything is written", async () => {
   expect(parseTemplate(" Minimal ")).toBe("minimal");
   expect(() => parseTemplate("react")).toThrow(ConfigError);

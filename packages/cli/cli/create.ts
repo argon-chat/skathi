@@ -20,7 +20,7 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 export const FRAMEWORKS = ["vue", "svelte"] as const;
@@ -106,12 +106,27 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     packs: [{ name: "textures", match: ["assets/textures/**"] }],
     checker: VUE_TSC,
   },
+  draw: {
+    hint: "an infinite canvas for pens in Vue, drawn with WebGPU",
+    framework: "vue",
+    dependencies: ["vue"],
+    window: {
+      width: 1280,
+      height: 820,
+      minWidth: 480,
+      minHeight: 420,
+      titleBarStyle: "hidden",
+      titleBarHeight: 40,
+      backdrop: "none",
+    },
+    checker: VUE_TSC,
+  },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player", "weather"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);
@@ -223,7 +238,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       version: "0.1.0",
       platforms,
       publishDevtools: options.keepDevtools === true,
-      window: { title: productName, ...info.window, backdrop: "mica" },
+      window: { title: productName, backdrop: "mica", ...info.window },
       assets: ["assets"],
       ...(info.packs ? { packs: info.packs } : {}),
       windows: { exeName, icon: "icon.png" },

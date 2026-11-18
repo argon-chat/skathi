@@ -142,7 +142,7 @@ export function cli(run: Run): Command {
     .option("--name <name>", "The app's name (default: the directory's)")
     .option(
       "--template <name>",
-      "showcase (every feature), minimal (Vue or Svelte), player (a Svelte music player) or weather (a Vue weather app)",
+      "showcase (every feature), minimal (Vue or Svelte), player (Svelte music player), weather (Vue weather app) or draw (Vue pen canvas on WebGPU)",
     )
     .option("--framework <name>", "vue or svelte, for minimal (default: vue)")
     .option("--os <list>", "What to package for: windows, macos, linux")
