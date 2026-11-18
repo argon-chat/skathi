@@ -14,9 +14,10 @@ interface Props {
   structuredData: Record<string, unknown>;
   blog: "index" | "post";
   noindex?: boolean;
+  image?: string | undefined;
 }
 
-const { title, description, path, type, structuredData, blog, noindex = false } = Astro.props;
+const { title, description, path, type, structuredData, blog, noindex = false, image } = Astro.props;
 ---
 
 <!doctype html>
@@ -29,6 +30,7 @@ const { title, description, path, type, structuredData, blog, noindex = false } 
       type={type}
       structuredData={structuredData}
       noindex={noindex}
+      image={image}
     />
   </head>
   <body class="blog" transition:animate="none">

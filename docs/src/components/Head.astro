@@ -14,11 +14,13 @@ interface Props {
   structuredData: Thing | Thing[];
   markdownUrl?: string | undefined;
   noindex?: boolean;
+  /** The 1200×630 link-preview image, a path on the site; the site's own card by default. */
+  image?: string | undefined;
 }
 
 const { title, description, canonical, type, structuredData, markdownUrl, noindex = false } = Astro.props;
 const site = Astro.site ?? new URL("https://skathi.land/");
-const image = new URL("/social.png", site);
+const image = new URL(Astro.props.image ?? "/social.png", site);
 const graph = {
   "@context": "https://schema.org",
   "@graph": [...siteGraph(site), ...[structuredData].flat()].map(({ "@context": _, ...node }) => node),
@@ -50,7 +52,10 @@ const graph = {
 <meta property="og:image" content={image} />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="Skathi: desktop apps from Vue and Svelte, without a browser" />
+<meta
+  property="og:image:alt"
+  content={Astro.props.image ? title : "Skathi: desktop apps from Vue and Svelte, without a browser"}
+/>
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content={title} />
 <meta name="twitter:description" content={description} />
