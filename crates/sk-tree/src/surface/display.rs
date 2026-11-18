@@ -51,6 +51,19 @@ impl Probe {
     fn capable(&self) -> bool {
         self.display.known && self.display.hdr && !self.output.refused
     }
+
+    fn take(&mut self, read: Option<SurfaceDisplay>, now: Instant) {
+        if let Some(display) = read {
+            self.display = display;
+        }
+        self.display.output_headroom = if self.capable() {
+            self.display.headroom
+        } else {
+            1.0
+        };
+        self.display.output_hdr = self.output.sdr_white.is_some();
+        self.reported.offer(self.display, now);
+    }
 }
 
 impl Output {
@@ -145,17 +158,18 @@ pub(super) fn sample(window: &Window, key: WinKey) {
     PROBES.with(|p| {
         let mut probes = p.borrow_mut();
         let probe = probes.entry(key).or_default();
-        if let Some(display) = platform::read(window, &mut probe.platform) {
-            probe.display = display;
-        }
-        probe.display.output_headroom = if probe.capable() {
-            probe.display.headroom
-        } else {
-            1.0
-        };
-        probe.display.output_hdr = probe.output.sdr_white.is_some();
-        probe.reported.offer(probe.display, Instant::now());
+        let read = platform::read(window, &mut probe.platform);
+        probe.take(read, Instant::now());
         ANY_CAPABLE.store(probes.values().any(Probe::capable), Ordering::Relaxed);
+    });
+}
+
+/// A macOS screen read at `current` EDR headroom, as [`sample`] takes it.
+#[cfg(test)]
+pub(super) fn sample_edr(key: WinKey, current: f64, now: Instant) {
+    PROBES.with(|p| {
+        let read = macos_display(current, 16.0, 120, 1.0 / 120.0, 1.0 / 24.0);
+        p.borrow_mut().entry(key).or_default().take(Some(read), now);
     });
 }
 
@@ -225,6 +239,11 @@ pub(super) fn of(key: WinKey) -> SurfaceDisplay {
             .map(|p| p.reported.display)
             .unwrap_or_default()
     })
+}
+
+/// What `key`'s display reads now, for painting: reports are spaced, a picture is not.
+pub(super) fn live(key: WinKey) -> SurfaceDisplay {
+    PROBES.with(|p| p.borrow().get(&key).map(|p| p.display).unwrap_or_default())
 }
 
 pub(super) fn forget(key: WinKey) {

@@ -243,9 +243,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 ));
             }
             if attached {
-                let limit = crate::inherit::dynamic_range_limit(id);
-                let output = display::of(node.window).output_headroom;
-                note_headroom(id, node, limit.headroom(output), &mut touch);
+                follow_headroom(id, node, &mut touch);
             }
             node.attached = attached;
             if node.window != here {
@@ -335,7 +333,14 @@ pub(crate) fn sample_display(window: &Window) {
     display::sample(window, windows::key(window));
 }
 
-/// Moves a node to the headroom it may now be painted with; a picture shown in HDR is repainted.
+/// Moves a node to the headroom it may be painted with now, from the display's live reading.
+fn follow_headroom(id: u32, node: &mut Node, touch: &mut Vec<u32>) {
+    let limit = crate::inherit::dynamic_range_limit(id);
+    let output = display::live(node.window).output_headroom;
+    note_headroom(id, node, limit.headroom(output), touch);
+}
+
+/// A picture shown in HDR is repainted when its headroom moves.
 fn note_headroom(id: u32, node: &mut Node, headroom: f32, touch: &mut Vec<u32>) {
     if (headroom - node.headroom).abs() > 1e-3 * headroom {
         node.headroom = headroom;
@@ -729,6 +734,40 @@ mod tests {
         });
         assert!(attached(inside));
         assert!(!attached(outside));
+    }
+
+    #[test]
+    fn an_hdr_picture_follows_a_headroom_ramp_every_frame_while_reports_stay_spaced() {
+        let (id, win) = (0x7ffe_0003, 0x7ffe);
+        note_build(id, win, "tests:ramp");
+        NODES.with(|m| {
+            let mut m = m.borrow_mut();
+            let node = m.get_mut(&id).expect("built");
+            (node.hdr, node.ready) = (true, true);
+        });
+        let start = std::time::Instant::now();
+        let frames = 192;
+        let mut reports = Vec::new();
+        for f in 0..=frames {
+            let headroom = 1.0 + 5.11 * f as f64 / frames as f64;
+            let at = start + std::time::Duration::from_micros(f * 1_000_000 / 120);
+            display::sample_edr(win, headroom, at);
+            let mut touch = Vec::new();
+            NODES.with(|m| follow_headroom(id, m.borrow_mut().get_mut(&id).unwrap(), &mut touch));
+            let painted = paint_headroom(id);
+            assert!(
+                (painted - headroom as f32).abs() <= 1e-3 * painted,
+                "frame {f}: painted at {painted}, the screen allows {headroom}"
+            );
+            assert!(f == 0 || touch == [id], "frame {f} is not repainted");
+            let reported = display::of(win).output_headroom;
+            if reports.last() != Some(&reported) {
+                reports.push(reported);
+            }
+        }
+        assert!(reports.len() <= 10, "{reports:?}");
+        display::forget(win);
+        note_build(id, win, "");
     }
 
     fn count_of(id: u32) -> usize {
