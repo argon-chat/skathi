@@ -19,7 +19,7 @@ declare module "native:demo" {
   export function double(n: number): Promise<number>;
   export function worker(): Promise<string>;
   export function crash(): Promise<number>;
-  export function report(value: Value): null;
+  export function report(value: Value): void;
   export function on(event: "tick", handler: (data: Tick) => void): () => void;
   export function off(event: "tick", handler: (data: Tick) => void): void;
 }
