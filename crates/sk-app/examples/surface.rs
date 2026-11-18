@@ -20,6 +20,9 @@
 //!   cadence, and answers a summary. `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
 //!   `"d3d12-rgba16f"` (a ring of `ring` textures on the renderer's D3D12 device, each presented
 //!   behind its fence).
+//! - `phaseStart(name)` and `phaseStop(name)`: where in the refresh the window's tick writes the
+//!   surface's frames, from a thread that watches `stats().shown` against the display clock; the
+//!   stop answers `{ count, p05, p50, p95 }` in refreshes.
 //!
 //! ```text
 //! cargo build -p sk-app --example surface
@@ -166,6 +169,19 @@ fn main() {
             feedback::start(surface_of(&args), fps, paced, source, ring);
             call.resolve("true");
         })
+        .function("phaseStart", |call| {
+            phase::start(surface_of(&args_of(&call)));
+            call.resolve("true");
+        })
+        .function("phaseStop", |call| {
+            let name = args_of(&call)
+                .first()
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let reply = call.into_reply();
+            std::thread::spawn(move || reply.resolve(&phase::stop(&name).to_string()));
+        })
         .function("feedbackStop", |call| {
             let name = args_of(&call)
                 .first()
@@ -218,6 +234,79 @@ fn main() {
         let exit = ui.wait();
         std::thread::sleep(Duration::from_millis(10));
         std::process::exit(if exit.clean { 0 } else { 1 });
+    }
+}
+
+mod phase {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::thread::JoinHandle;
+
+    use serde_json::{json, Value};
+    use sk_app::embed::{monotonic_ns, SurfaceHandle};
+
+    struct Probe {
+        stop: Arc<AtomicBool>,
+        thread: JoinHandle<Vec<f64>>,
+    }
+
+    fn probes() -> &'static Mutex<HashMap<String, Probe>> {
+        static PROBES: OnceLock<Mutex<HashMap<String, Probe>>> = OnceLock::new();
+        PROBES.get_or_init(Default::default)
+    }
+
+    pub fn start(surface: SurfaceHandle) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let name = surface.name().to_string();
+        let thread = std::thread::spawn(move || {
+            let mut phases = Vec::new();
+            let mut last = surface.stats().shown;
+            while !stopping.load(Ordering::Relaxed) {
+                let shown = surface.stats().shown;
+                if shown != last {
+                    let at = monotonic_ns();
+                    let display = surface.info().display;
+                    if let (Some(vblank), Some(period)) =
+                        (display.last_vblank, display.refresh_period)
+                    {
+                        let since = at.saturating_sub(vblank) as f64;
+                        phases.push((since / period.as_nanos() as f64).fract());
+                    }
+                    last = shown;
+                }
+                std::thread::yield_now();
+            }
+            phases
+        });
+        probes()
+            .lock()
+            .unwrap()
+            .insert(name, Probe { stop, thread });
+    }
+
+    pub fn stop(name: &str) -> Value {
+        let Some(probe) = probes().lock().unwrap().remove(name) else {
+            return Value::Null;
+        };
+        probe.stop.store(true, Ordering::Relaxed);
+        let mut phases = probe.thread.join().unwrap_or_default();
+        // Phases wrap at the vblank: centre them on their circular mean before taking quantiles.
+        let tau = std::f64::consts::TAU;
+        let (sin, cos) = phases.iter().fold((0.0, 0.0), |(s, c), p| {
+            (s + (p * tau).sin(), c + (p * tau).cos())
+        });
+        let mean = f64::atan2(sin, cos) / tau;
+        for p in &mut phases {
+            *p = mean + (*p - mean + 0.5).rem_euclid(1.0) - 0.5;
+        }
+        phases.sort_by(f64::total_cmp);
+        let at = |q: f64| {
+            let i = ((phases.len() as f64 - 1.0) * q).round() as usize;
+            phases.get(i).copied().unwrap_or(f64::NAN)
+        };
+        json!({ "count": phases.len(), "p05": at(0.05), "p50": at(0.5), "p95": at(0.95) })
     }
 }
 

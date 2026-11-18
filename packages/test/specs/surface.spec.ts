@@ -362,6 +362,26 @@ test.skipIf(!WINDOWS)(
   T,
 );
 
+type Phase = { count: number; p05: number; p50: number; p95: number };
+
+test.skipIf(!WINDOWS)(
+  "at 24 presents a second the tick stays on the vblank",
+  async () => {
+    await call("phaseStart", "feedback");
+    const f = await feedback(24, 4_000, true);
+    const phase = (await call("phaseStop", "feedback")) as Phase;
+    const { refreshHz } = (await stats("feedback")).display;
+    console.log(
+      `24 fps on ${refreshHz} Hz: ${phase.count} ticks wrote a frame, at ${phase.p05.toFixed(2)}-` +
+        `${phase.p95.toFixed(2)} of the refresh after its vblank (p05-p95), median ${phase.p50.toFixed(2)}`,
+    );
+    expect(f.exactlyOnce).toBe(true);
+    expect(phase.count).toBeGreaterThan(60);
+    expect(phase.p95 - phase.p05).toBeLessThan(0.3);
+  },
+  T,
+);
+
 test.skipIf(!WINDOWS)(
   "frames presented faster than the display refreshes are superseded",
   async () => {
