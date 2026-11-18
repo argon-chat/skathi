@@ -173,7 +173,7 @@ unsafe { surface.present_d3d11_texture(texture.as_raw())? };
 
 The values are scRGB, with 1.0 as SDR white: what Windows shows for 1.0 on an SDR display. A B8G8R8A8 texture on a half-float surface, or a half-float one on an 8-bit surface, returns `SurfaceError::FormatMismatch`.
 
-The frame stays half float in the surface's textures. When an element draws it, the surface first renders it into an 8-bit texture of its own (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)): under the D3D12 renderer on the surface's queue, with the window's copy waiting on the GPU; under Direct3D 11 on the renderer's immediate context. A frame that is never shown is never mapped.
+The frame stays half float in the surface's textures. A window on a display in HDR mode draws HDR while it shows a visible half-float surface whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 (see [HDR windows](/embedding/native-frames/#hdr-windows)): the element then shows the frame's own values, up to that limit and the display's headroom. In a standard window, when an element draws the frame, the surface first renders it into an 8-bit texture of its own (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)): under the D3D12 renderer on the surface's queue, with the window's copy waiting on the GPU; under Direct3D 11 on the renderer's immediate context. A frame that is never shown is never mapped.
 
 ## Choosing, in short
 

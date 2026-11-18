@@ -928,7 +928,7 @@ const graphics = section("Graphics and media", [
     ],
     limitations: [
       "On Linux frames are CPU only: its GPU path (dmabuf) is not there yet, and `surfacedisplaychange` does not fire.",
-      "Alpha is straight, not premultiplied. Frames are BGRA8, or half-float RGBA on a surface set to `Rgba16Float`, shown clipped at SDR white.",
+      "Alpha is straight, not premultiplied. Frames are BGRA8, or half-float RGBA on a surface set to `Rgba16Float`: clipped at SDR white in a standard window, and up to the element's `dynamic-range-limit` in a window drawing HDR (Windows and macOS).",
     ],
     related: ["video", "canvas-2d"],
     aliases: [
