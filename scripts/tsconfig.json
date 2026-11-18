@@ -5,5 +5,5 @@
     "useDefineForClassFields": false,
     "types": ["bun"]
   },
-  "include": ["**/*.ts", "../crates/*/tools/**/*.ts", "../benches/*/*.ts"]
+  "include": ["**/*.ts", "../crates/*/tools/**/*.ts", "../apps/*/tools/**/*.ts", "../benches/*/*.ts"]
 }

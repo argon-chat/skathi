@@ -1,0 +1,18 @@
+{
+  "$comment": "The demo clips of docs/pages/elements: one page per element, driven from devtools (`__demo`, src/demo.ts). tools/gen-assets.ts writes assets/.",
+
+  "name": "elements",
+  "id": "land.skathi.samples.elements",
+  "productName": "Elements",
+  "version": "0.1.0",
+
+  "window": {
+    "title": "Elements",
+    "width": 1280,
+    "height": 800,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 40,
+    "titleBarFallback": false,
+    "backdrop": "acrylic"
+  }
+}

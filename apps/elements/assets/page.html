@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Field notes</title>
+    <style>
+      :root {
+        --accent: #f7a8d0;
+        --accent-2: #c9a7f5;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #1c1a24;
+        color: #e3dcec;
+        font:
+          16px/1.6 "Segoe UI Variable Text",
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+      }
+      header {
+        position: relative;
+        padding: 46px 48px 38px;
+        overflow: hidden;
+        background: linear-gradient(
+          135deg,
+          color-mix(in oklab, var(--accent) 34%, #1c1a24),
+          color-mix(in oklab, var(--accent-2) 26%, #1c1a24)
+        );
+        transition: background 600ms ease;
+      }
+      header::after {
+        content: "";
+        position: absolute;
+        right: -60px;
+        top: -80px;
+        width: 280px;
+        height: 280px;
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in oklab, var(--accent) 70%, transparent), transparent 70%);
+        opacity: 0.55;
+        transition: background 600ms ease;
+      }
+      .kicker {
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        font-weight: 600;
+        transition: color 600ms ease;
+      }
+      h1 {
+        margin: 8px 0 6px;
+        font:
+          600 38px/1.15 "Segoe UI Variable Display",
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+        color: #fff;
+      }
+      .meta {
+        font-size: 14px;
+        color: #b9b1c6;
+      }
+      main {
+        padding: 30px 48px 40px;
+        max-width: 760px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: #c9c1d6;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin: 24px 0;
+      }
+      .card {
+        border-radius: 12px;
+        padding: 14px 16px;
+        background: #24212e;
+        border: 1px solid #332e3f;
+      }
+      .card b {
+        display: block;
+        font-size: 22px;
+        color: #fff;
+      }
+      .card span {
+        font-size: 13px;
+        color: #a69eb4;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 3px;
+        background: #332e3f;
+        margin-top: 10px;
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        border-radius: 3px;
+        background: var(--accent);
+        transition:
+          background 600ms ease,
+          width 600ms ease;
+      }
+      a {
+        color: var(--accent);
+        transition: color 600ms ease;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="kicker">Field notes · WebView2</div>
+      <h1>The lilac hour</h1>
+      <div class="meta">An HTML page from the app's files, running in the system webview.</div>
+    </header>
+    <main>
+      <p>
+        Just after sunset the valley turns violet. The fog settles between the ridges, the first stars come out over the
+        far peaks, and the heather on the slope keeps the last of the light.
+      </p>
+      <div class="cards">
+        <div class="card">
+          <b>19:42</b><span>Sunset</span>
+          <div class="bar"><i style="width: 72%"></i></div>
+        </div>
+        <div class="card">
+          <b>8°C</b><span>Clear, light wind</span>
+          <div class="bar"><i style="width: 38%"></i></div>
+        </div>
+        <div class="card">
+          <b>2.4 km</b><span>To the ridge</span>
+          <div class="bar"><i style="width: 56%"></i></div>
+        </div>
+      </div>
+      <p>
+        This document is plain <a href="#">HTML and CSS</a>. The app above it is drawn by Skathi, and the two talk
+        through <code>postMessage</code>: the accent you pick in the app's panel arrives here, and the page answers.
+      </p>
+      <p>
+        Bring a warm layer; the path along the ridge is easy but long, and the light goes quickly once the sun is down.
+      </p>
+    </main>
+    <script>
+      const names = { "#f7a8d0": "pink", "#c9a7f5": "lilac", "#9fcdf5": "blue" };
+      window.addEventListener("message", (e) => {
+        const accent = e.data && e.data.accent;
+        if (!accent) return;
+        document.documentElement.style.setProperty("--accent", accent);
+        document.documentElement.style.setProperty("--accent-2", e.data.second || accent);
+        window.parent.postMessage({ applied: names[accent] || accent }, "*");
+      });
+    </script>
+  </body>
+</html>
