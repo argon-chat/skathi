@@ -285,18 +285,20 @@ The callback runs on Skathi's vsync thread on Windows and on a thread of Skathi'
 
 ### mpv: display-sync and report_swap
 
-With the render API, libmpv draws each frame when told to and paces playback itself. `video-sync=display-resample` times frames to the display: it needs the refresh rate, and the moments frames actually flipped. `mpv_render_context_report_swap` is how it hears the second: libmpv's VO waits after each frame until the swap is reported, and times the display from when that happens. Called right after a present it would report queueing; called from `on_frame` it reports the flip, within a refresh of it.
+With the render API, libmpv draws each frame when told to and paces playback itself. `video-sync=display-resample` times frames to the display: it needs the refresh rate, and one iteration of its loop per refresh. After each frame it waits until `mpv_render_context_report_swap` is called, and it measures the display from when those calls come. So call it from the render thread, right after each render, and drive that thread from the display clock:
+
+1. Set `display-fps-override` to `info().display.refresh_hz`, and again on `DisplayChanged`.
+2. Once per refresh, wait for `MPV_RENDER_UPDATE_FRAME`, then sleep until shortly after the vblank, computed from `info().display.last_vblank`. About 5% into the refresh leaves the render most of the refresh before the window's next tick, which runs just after the vblank.
+3. Ask libmpv what comes next with `MPV_RENDER_PARAM_NEXT_FRAME_INFO`. A repeat (`MPV_RENDER_FRAME_INFO_REPEAT` without `MPV_RENDER_FRAME_INFO_REDRAW`) is the frame already on screen: render with `MPV_RENDER_PARAM_SKIP_RENDERING` and present nothing. Anything else is rendered into the next texture and presented.
+4. Call `report_swap` right after each render call, skipped or not. Use `on_frame` for statistics only.
 
 ```rust
-use std::sync::Arc;
-
 use skathi::{FrameDropReason, FrameEvent, SurfaceEvent};
 
 let surface = skathi::surface("player");
 
 mpv.set_property("video-sync", "display-resample");
-let display = surface.info().display;
-if let Some(hz) = display.refresh_hz {
+if let Some(hz) = surface.info().display.refresh_hz {
     mpv.set_property("display-fps-override", format!("{hz:.3}"));
 }
 let _display = surface.on_change({
@@ -310,36 +312,44 @@ let _display = surface.on_change({
     }
 });
 
-let render: Arc<RenderContext> = render.clone(); // wraps mpv_render_context
-let _frames = surface.on_frame(move |event| {
-    // One report per frame rendered, shown or not, so libmpv's count of flips stays in step.
-    render.report_swap();
-    match event {
-        FrameEvent::Presented { shown_at, refresh_interval, .. } => {
-            stats.shown(shown_at, refresh_interval); // e.g. hold times, for an OSD
-        }
-        FrameEvent::Dropped { reason: FrameDropReason::Superseded, .. } => stats.late(),
-        FrameEvent::Dropped { .. } => {}
+// Statistics only: what reached the screen, and when.
+let _frames = surface.on_frame(move |event| match event {
+    FrameEvent::Presented { shown_at, refresh_interval, .. } => {
+        stats.shown(shown_at, refresh_interval)
     }
+    FrameEvent::Dropped { reason: FrameDropReason::Superseded, .. } => stats.late(),
+    FrameEvent::Dropped { .. } => {}
 });
 
-// The render thread: present mid-refresh, as far from either vblank as it gets, so jitter on
-// either side cannot move a frame to another refresh.
+// The render thread (`render` wraps mpv_render_context).
+const START: f64 = 0.05; // into the refresh
 loop {
     render.wait_for_frame(); // MPV_RENDER_UPDATE_FRAME
     let display = surface.info().display;
     if let (Some(vblank), Some(period)) = (display.last_vblank, display.refresh_period) {
         let p = period.as_nanos() as u64;
+        let first = vblank + (p as f64 * START) as u64;
         let now = skathi::monotonic_ns();
-        let mid = vblank + p / 2 + now.saturating_sub(vblank + p / 2).div_ceil(p) * p;
-        std::thread::sleep(std::time::Duration::from_nanos(mid - now));
+        let at = first + now.saturating_sub(first).div_ceil(p) * p;
+        std::thread::sleep(std::time::Duration::from_nanos(at - now));
     }
-    render.render_into(&texture); // mpv_render_context_render on the shared device
-    unsafe { surface.present_d3d11_texture(texture.as_raw()) }?;
+    let next = render.next_frame_info(); // MPV_RENDER_PARAM_NEXT_FRAME_INFO
+    if next.repeat && !next.redraw {
+        render.skip(); // mpv_render_context_render with MPV_RENDER_PARAM_SKIP_RENDERING = 1
+    } else {
+        let texture = ring.next();
+        render.render_into(texture); // mpv_render_context_render on the shared device
+        unsafe { surface.present_d3d11_texture(texture.as_raw()) }?;
+    }
+    render.report_swap();
 }
 ```
 
-Without `report_swap` libmpv assumes each frame flipped when its render returned, which is when the texture was handed over, not when it was seen; with display-sync that turns the window's draw jitter into resampling error. `display-resample` with flips reported from `on_frame` keeps audio and video against the display's real cadence, and a `Superseded` count that grows says frames are being presented faster than the screen takes them. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` this way and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
+Calling `report_swap` from `on_frame`, as this page used to, does not work: libmpv waits for each report before its next iteration, and a frame's event comes when it is on screen, about 3 refreshes after its present on Windows and about 5 on macOS. libmpv's loop then runs at a fraction of the refresh rate, it estimates a display of 30 to 170 Hz, and plays slowly or keeps delaying frames. A report from `on_frame` only works where a present reaches the screen within a refresh. Presenting the repeats costs a copy and a window draw each refresh for nothing new on screen.
+
+`last_vblank` is the latest vblank already past since 0.5; on Windows in 0.4 it was usually the coming one. The `saturating_sub` above lands on a refresh either way.
+
+Reported this way, libmpv takes a frame to flip when its render returns, a constant few refreshes before it is seen. `shown_at` minus the time of the report says how much on a given machine; `audio-delay` can make up for it. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
 
 ## Device loss
 
