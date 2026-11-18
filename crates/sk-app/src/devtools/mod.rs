@@ -57,8 +57,8 @@ static TOKEN: Mutex<String> = Mutex::new(String::new());
 // Disabled means the listener is gone, not just that F12 is refused: the port carries `eval`.
 // `enable()` binds a fresh port and token; `disable()` closes the listener, drops every push
 // socket, blanks the token and deletes the handshake file. Precedence: default on, then
-// `"devtools": false` in sk.config.json, then `appDevtools.enable()/disable()`;
-// `SK_DEVTOOLS=1` overrides all three and locks (see `resolve_initial`).
+// `"devtools": false` in sk.config.json or a payload published without devtools, then
+// `appDevtools.enable()/disable()`; `SK_DEVTOOLS=1` overrides them all and locks (see `resolve_initial`).
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 static LOCKED: AtomicBool = AtomicBool::new(false);
@@ -81,15 +81,17 @@ pub fn arm() {
 }
 
 /// Resolves the initial state and starts the listener if on. Call after `window::load_config`
-/// and before the app bundle evaluates.
-pub fn boot(config_enabled: bool) {
-    let (on, locked) = resolve_initial(config_enabled);
+/// and before the app bundle evaluates. `published` is false for a payload published without devtools.
+pub fn boot(config_enabled: bool, published: bool) {
+    let (on, locked) = resolve_initial(config_enabled && published);
     LOCKED.store(locked, Ordering::SeqCst);
     ENABLED.store(on, Ordering::SeqCst);
     if on {
         start_listener();
     } else {
-        let why = if config_enabled {
+        let why = if !published {
+            "the app was published without them (`\"publishDevtools\"` in sk.config.json)"
+        } else if config_enabled {
             "SK_DEVTOOLS=0"
         } else {
             "`\"devtools\": false` in sk.config.json"

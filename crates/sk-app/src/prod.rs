@@ -35,18 +35,16 @@ pub fn boot(rt: &JsRuntime) {
         loaded.payload.len() / 1024,
         loaded.asset_count()
     );
-    let variant = if cfg!(sk_devtools) {
-        "standard"
-    } else {
-        "no-devtools"
-    };
-    if !meta.host_variant.is_empty() && meta.host_variant != variant {
-        // `sk build` picks the host from this field, so a mismatch means a
-        // hand-made stamp. Harmless, but the app asked for the other build.
-        eprintln!(
-            "[skathi compat] this app was packaged for the {} host and is running on the {variant} one",
-            meta.host_variant
-        );
+    if !meta.host_variant.is_empty() && wants_no_devtools(&meta.host_variant) == cfg!(sk_devtools) {
+        let line = if cfg!(sk_devtools) {
+            "[skathi compat] this app was published without devtools and runs on a host built with \
+             them: they start off, but SK_DEVTOOLS=1 or appDevtools.enable() can turn them on. \
+             Build the host with the no-devtools feature to leave them out."
+        } else {
+            "[skathi compat] this app was published with devtools (\"publishDevtools\": true) and \
+             runs on a host built without them: it has none."
+        };
+        eprintln!("{line}");
     }
     // `fetch("assets/x")` and `new Image()`: redjs hands us its own cleaned key
     // (query cut, `./` and `/` trimmed) and we run it through the SAME
@@ -121,6 +119,16 @@ pub fn window_config() -> Option<String> {
 
 pub fn launch_config() -> Option<String> {
     payload::get()?.meta.launch.clone()
+}
+
+/// False for a payload published for the no-devtools host (`"publishDevtools"` unset or false).
+#[cfg(sk_devtools)]
+pub fn devtools_published() -> bool {
+    payload::get().is_none_or(|l| !wants_no_devtools(&l.meta.host_variant))
+}
+
+fn wants_no_devtools(variant: &str) -> bool {
+    variant.split('+').any(|part| part == "no-devtools")
 }
 
 /// The payload's `name`, resolved by `sk build` with dev's own chain (`sk.config.json` `"name"`, else

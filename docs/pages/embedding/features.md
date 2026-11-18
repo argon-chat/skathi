@@ -55,7 +55,7 @@ With every default feature on, the exe is **101.5 MB** and the graph **460 crate
 | `hotkeys`         | on      | [`appHotkeys`](/app-api/app-hotkeys/) and `skathi::hotkeys`                                 | `appHotkeys.available` is `false`; `skathi::hotkeys` does not exist                     | −0.3 MB | −1     | none                                                                                  |
 | `webview`         | on      | `<iframe>`, a document in WebView2 under the app                                            | `<iframe>` is an empty box, fires `error` and warns once                                | −0.1 MB | −4     | webview2-com                                                                          |
 | `icu-root`        | off     | Links only ICU's root locale; the rest can ship as `icu.skpk`                               | Every locale is in the exe                                                              | −9.1 MB | 0      | writes `icudt<NN>l.dat` (12 MB) beside the exe, for `sk build` to cut `icu.skpk` from |
-| `no-devtools`     | off     | Compiles out the devtools protocol, the inspector and F12                                   |                                                                                         | −1.6 MB | 0      | none                                                                                  |
+| `no-devtools`     | off     | Compiles out the devtools protocol, the inspector and F12                                   | Present; they start off for a payload published without devtools                        | −1.6 MB | 0      | none                                                                                  |
 | `battery`         | off     | The Battery Status API                                                                      | `navigator.getBattery` is absent                                                        |         |        | none                                                                                  |
 | `runtime-shaders` | off     | macOS: Metal shaders compiled at start, for a machine without Xcode's Metal toolchain       | Shaders are compiled at build time                                                      |         |        | none                                                                                  |
 
@@ -97,6 +97,8 @@ skathi = { version = "0.4", default-features = false, features = ["prod", "types
 ```
 
 For the release build, also `icu-root` (if the app formats in one language, or ships `icu.skpk`) and `no-devtools`. Measured: 86.0 MB and 361 crates as listed, 75.2 MB with those two.
+
+`no-devtools` and `"publishDevtools"` in the app's `sk.config.json` are separate switches. A payload published without devtools (the default) starts a host that has them with the devtools off and no port open, but `SK_DEVTOOLS=1` or `appDevtools.enable()` can still turn them on. Only a host built with `no-devtools` has none to turn on. See [release builds](/devtools/release-builds/#release-builds).
 
 ### A media-heavy app
 

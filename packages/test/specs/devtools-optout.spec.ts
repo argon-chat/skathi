@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { allocateSlot, ensureBuild, resolveEntry, stagedExe } from "../src/dist";
-import { featureExe, fileContains, killTree, launch, packagedExe } from "../src/index";
+import { featureExe, fileContains, killTree, launch, packagedExe, REPO, WORK_DIR } from "../src/index";
 
 const T = 60_000;
 const BUILD_T = 15 * 60_000;
@@ -172,6 +172,25 @@ describe("a shipped build carries its own devtools", () => {
       // thing that would actually ship.
       const packed = await packagedExe({ app: "hello", host: without, variant: "no-devtools", label: "dt-nodev" });
       const { slot, child } = await spawnHost("hello", "dt-nodev", {}, packed.exe);
+      await sleep(8000);
+      bunExpect(child.exitCode).toBeNull();
+      bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
+    },
+    BUILD_T,
+  );
+
+  test(
+    "a payload published without devtools opens no port on a host that has them",
+    async () => {
+      const host = await featureExe({ features: ["prod"] });
+      const { buildApp } = await import("../../cli/cli/build-app");
+      const { skpk } = await buildApp({
+        target: join(REPO, "apps", "hello"),
+        out: join(WORK_DIR, "packaged", "dt-published-off"),
+        variant: "no-devtools",
+        payloadOnly: true,
+      });
+      const { slot, child } = await spawnHost("hello", "dt-published-off", { SK_PAYLOAD: skpk }, host);
       await sleep(8000);
       bunExpect(child.exitCode).toBeNull();
       bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);

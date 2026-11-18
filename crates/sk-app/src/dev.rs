@@ -155,6 +155,11 @@ pub fn window_config() -> Option<String> {
     Some(v.get("window")?.to_json())
 }
 
+#[cfg(sk_devtools)]
+pub fn devtools_published() -> bool {
+    true
+}
+
 pub fn launch_config() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;

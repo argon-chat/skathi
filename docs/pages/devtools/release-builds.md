@@ -22,11 +22,13 @@ F12 in an app with devtools off prints why nothing opened, once, to the terminal
 
 ## Release builds
 
-`sk publish` without `"publishDevtools": true` uses a host built without devtools. The inspector, F12 and the local port are not in the executable, and nothing can turn them on: `SK_DEVTOOLS=1` and `appDevtools.enable()` have no effect.
+Two switches decide whether a shipped app has devtools: `"publishDevtools"` in `sk.config.json`, which `sk publish` writes into the app's payload, and the host the payload runs on, which either has the devtools compiled in or does not.
+
+`sk publish` without `"publishDevtools": true` marks the payload as published without devtools and stamps it into a host built without them. The inspector, F12 and the local port are not in the executable, and nothing can turn them on: `SK_DEVTOOLS=1` and `appDevtools.enable()` have no effect.
 
 `appDevtools` still exists in that build, so code that calls it does not need a check. `appDevtools.available` is `false`, `isEnabled()` returns `false`, and `open()` returns `false` and prints an advisory.
 
-An app [embedded in your own executable](/embedding/dev-loop/#devtools) leaves the inspector out with the `no-devtools` feature of the `skathi` crate.
+An app [embedded in your own executable](/embedding/dev-loop/#devtools) runs on whatever host you build. Its devtools are compiled in unless you turn on the `no-devtools` feature of the `skathi` crate. Such a host still honours a payload published without devtools: they start off, as with `"devtools": false`, and no port is opened. The code is still in the executable, though, so `SK_DEVTOOLS=1` or a call to `appDevtools.enable()` turns them on. Build the release exe with `no-devtools` to leave them out entirely.
 
 ## Why to keep it off for users
 

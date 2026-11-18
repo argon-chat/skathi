@@ -1111,7 +1111,7 @@ fn run_app() {
 
         // Before `JsRuntime::init` so the bundle's first line sees the settled state.
         #[cfg(sk_devtools)]
-        devtools::boot(window::devtools_config_enabled());
+        devtools::boot(window::devtools_config_enabled(), boot_mode::devtools_published());
 
         // Seeded before `JsRuntime::init` so the first `navigator.onLine` read queues no event.
         sk_desktop::network::install();
