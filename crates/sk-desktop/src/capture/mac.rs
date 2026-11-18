@@ -13,6 +13,8 @@ use objc2::encode::{Encoding, RefEncode};
 use objc2::msg_send;
 use objc2::rc::{autoreleasepool, Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, Bool};
+use objc2::MainThreadMarker;
+use objc2_app_kit::NSView;
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::NSString;
 use serde_json::Value;
@@ -43,6 +45,8 @@ unsafe extern "C" {
     fn CGDisplayModeRelease(mode: *mut c_void);
     fn CGImageRetain(image: *mut CGImage) -> *mut CGImage;
     fn CGImageRelease(image: *mut CGImage);
+    fn CGImageGetWidth(image: *mut CGImage) -> usize;
+    fn CGImageGetHeight(image: *mut CGImage) -> usize;
     fn CGColorSpaceCreateWithName(name: *const c_void) -> *mut c_void;
     fn CGColorSpaceRelease(space: *mut c_void);
     fn CGBitmapContextCreate(
@@ -70,6 +74,7 @@ const INTERPOLATION_HIGH: i32 = 3;
 const LIST_ON_SCREEN_ONLY: u32 = 1 << 0;
 const LIST_INCLUDING_WINDOW: u32 = 1 << 3;
 const IMAGE_IGNORE_FRAMING: u32 = 1 << 0;
+const IMAGE_BEST_RESOLUTION: u32 = 1 << 3;
 const IMAGE_NOMINAL_RESOLUTION: u32 = 1 << 4;
 const USER_DECLINED: isize = -3801;
 const PREVIEW_DEADLINE: Duration = Duration::from_secs(2);
@@ -478,8 +483,8 @@ unsafe fn screenshot(
 
 type WindowListCreateImage = unsafe extern "C" fn(CGRect, u32, u32, u32) -> *mut CGImage;
 
-/// macOS 13: `CGWindowListCreateImage`, looked up rather than linked (the macOS 15 SDK marks it obsoleted).
-unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
+/// `CGWindowListCreateImage`, looked up rather than linked (the macOS 15 SDK marks it obsoleted).
+fn window_list_create_image() -> Result<WindowListCreateImage, Fail> {
     let symbol = unsafe { dlsym(RTLD_DEFAULT, c"CGWindowListCreateImage".as_ptr()) };
     if symbol.is_null() {
         return Err(Fail::new(
@@ -489,7 +494,69 @@ unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
     }
     // SAFETY: the C prototype is `CGImageRef (CGRect, CGWindowListOption,
     // CGWindowID, CGWindowImageOption)`, both options `uint32_t`.
-    let create: WindowListCreateImage = unsafe { std::mem::transmute(symbol) };
+    Ok(unsafe { std::mem::transmute::<*mut c_void, WindowListCreateImage>(symbol) })
+}
+
+fn null_rect() -> CGRect {
+    CGRect::new(
+        CGPoint::new(f64::INFINITY, f64::INFINITY),
+        CGSize::new(0.0, 0.0),
+    )
+}
+
+/// This process's own window as the window server composes it, at backing resolution. A process
+/// may read its own windows without screen recording consent.
+pub(super) fn own_window(ns_view: *mut c_void) -> Result<super::WindowShot, Fail> {
+    let fail = |message: &str| Fail::new("OperationError", message.to_string());
+    MainThreadMarker::new().ok_or_else(|| fail("a window is read on the main thread"))?;
+    // SAFETY: gpui's raw handle is its live `NSView`, read on the main thread.
+    let view = unsafe { (ns_view as *const NSView).as_ref() }.ok_or_else(|| fail("no view"))?;
+    let window = view
+        .window()
+        .ok_or_else(|| fail("the view is in no window"))?;
+    let number = window.windowNumber();
+    if number <= 0 {
+        return Err(fail("the window has no window server number"));
+    }
+    let create = window_list_create_image()?;
+    let image = unsafe {
+        CgImage::adopt(create(
+            null_rect(),
+            LIST_INCLUDING_WINDOW,
+            number as u32,
+            IMAGE_IGNORE_FRAMING | IMAGE_BEST_RESOLUTION,
+        ))
+    }
+    .ok_or_else(|| fail("the window server returned no image of the window"))?;
+    let (width, height) = unsafe {
+        (
+            CGImageGetWidth(image.0.as_ptr()) as u32,
+            CGImageGetHeight(image.0.as_ptr()) as u32,
+        )
+    };
+    let frame = window.frame();
+    if width == 0 || height == 0 || frame.size.width <= 0.0 {
+        return Err(fail("the window server returned an empty image"));
+    }
+    let mut rgba = render(&image, width, height)?;
+    listing::opaque(&mut rgba);
+    let scale = f64::from(width) / frame.size.width;
+    let content = view.convertRect_toView(view.bounds(), None);
+    let top = frame.size.height - (content.origin.y + content.size.height);
+    Ok(super::WindowShot {
+        width,
+        height,
+        rgba,
+        client_origin: (
+            (content.origin.x * scale).round() as i32,
+            (top * scale).round() as i32,
+        ),
+        window: number as isize,
+    })
+}
+
+unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
+    let create = window_list_create_image()?;
     let image = match target {
         Target::Display(_, frame) => unsafe {
             create(
@@ -499,20 +566,14 @@ unsafe fn window_list_image(target: &Target<'_>) -> Result<CgImage, Fail> {
                 IMAGE_NOMINAL_RESOLUTION,
             )
         },
-        Target::Window(_, id) => {
-            let null = CGRect::new(
-                CGPoint::new(f64::INFINITY, f64::INFINITY),
-                CGSize::new(0.0, 0.0),
-            );
-            unsafe {
-                create(
-                    null,
-                    LIST_INCLUDING_WINDOW,
-                    *id,
-                    IMAGE_IGNORE_FRAMING | IMAGE_NOMINAL_RESOLUTION,
-                )
-            }
-        }
+        Target::Window(_, id) => unsafe {
+            create(
+                null_rect(),
+                LIST_INCLUDING_WINDOW,
+                *id,
+                IMAGE_IGNORE_FRAMING | IMAGE_NOMINAL_RESOLUTION,
+            )
+        },
     };
     unsafe { CgImage::adopt(image) }
         .ok_or_else(|| Fail::new("OperationError", "the window server returned no image"))

@@ -8,7 +8,7 @@
 //! `PrintWindow(PW_RENDERFULLCONTENT)`: asks DWM for the composed content, backdrop included, but
 //! captures the whole window rect with its invisible resize border (hence `client_origin`).
 //! `BitBlt` would return the GDI layer, not gpui's swapchain. Also the fallback if
-//! `render_to_image` breaks upstream.
+//! `render_to_image` breaks upstream. On macOS it is the window server's image of the window.
 //!
 //! `backend` picks explicitly; `auto` tries the readback and falls back, recording why in the reply.
 //!
@@ -160,9 +160,48 @@ fn hwnd_of_window() -> Option<isize> {
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn capture_print_window(_path: &Path) -> Result<Shot, String> {
-    Err("print_window is Windows-only; use render_to_image".into())
+    Err("print_window is not available on this platform; use render_to_image".into())
+}
+
+/// The window server's composed image of the window: webviews under the app's surface included.
+#[cfg(target_os = "macos")]
+fn capture_print_window(path: &Path) -> Result<Shot, String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let (view, scale) = super::with_target(|window, _| {
+        let handle = <gpui::Window as HasWindowHandle>::window_handle(window).ok()?;
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+            return None;
+        };
+        Some((h.ns_view.as_ptr(), window.scale_factor()))
+    })
+    .flatten()
+    .ok_or_else(|| "no live gpui window (not inside a committed frame)".to_string())?;
+    let shot = sk_desktop::capture::own_window(view).map_err(|e| e.message)?;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    image::save_buffer(
+        path,
+        &shot.rgba,
+        shot.width,
+        shot.height,
+        image::ColorType::Rgba8,
+    )
+    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+    Ok(Shot {
+        path: path.to_path_buf(),
+        width: shot.width,
+        height: shot.height,
+        hwnd: shot.window,
+        iconic: false,
+        client_origin: shot.client_origin,
+        scale,
+        backend: "print_window",
+        fallback: None,
+        has_alpha: false,
+    })
 }
 
 pub fn capture(path: &Path, backend: Backend) -> Result<Shot, String> {

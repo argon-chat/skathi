@@ -77,6 +77,23 @@ impl Options {
     }
 }
 
+/// An opaque RGBA image of a whole window, title bar included.
+#[cfg(target_os = "macos")]
+pub struct WindowShot {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    /// Where the given view starts inside the image, in image pixels.
+    pub client_origin: (i32, i32),
+    pub window: isize,
+}
+
+/// The window holding `ns_view`, as the window server composes it. Main thread only.
+#[cfg(target_os = "macos")]
+pub fn own_window(ns_view: *mut std::ffi::c_void) -> Result<WindowShot, Fail> {
+    mac::own_window(ns_view)
+}
+
 pub fn start_sources(types: &str, options: &str) -> Result<u32, Fail> {
     let options = Options::parse(types, options)?;
     let token = crate::next_token();
