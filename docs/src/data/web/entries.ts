@@ -795,7 +795,10 @@ const graphics = section("Graphics and media", [
     aliases: ["CanvasRenderingContext2D", "getContext('2d')", "<canvas>"],
   }),
   iface("OffscreenCanvas", OK, "A canvas that is not attached to the document.", {
-    related: ["canvas-2d"],
+    notes: [
+      '`getContext("2d")` and `getContext("webgpu")`; `convertToBlob` and `transferToImageBitmap` work with either.',
+    ],
+    related: ["canvas-2d", "webgpu"],
   }),
   iface("Path2D", OK, "A reusable path for a 2D canvas context.", {
     slug: "path2d",
@@ -823,8 +826,21 @@ const graphics = section("Graphics and media", [
   iface("DOMPoint", OK, "A 2D or 3D point.", {
     related: ["dom-matrix"],
   }),
-  api("webgpu", "WebGPU", OK, "Renders and computes on the GPU.", {
-    related: ["webgl", "webgl-2"],
+  api("webgpu", "WebGPU", PART, "Renders and computes on the GPU.", {
+    notes: [
+      "Typed by the official `@webgpu/types`, which `@skathi-native/runtime` depends on: an app needs no install or `tsconfig.json` change. What they declare that Skathi lacks is under Limitations.",
+    ],
+    limitations: [
+      "No render bundles (`createRenderBundleEncoder`, `executeBundles`), query sets (`createQuerySet`, `beginOcclusionQuery`, `endOcclusionQuery`, `resolveQuerySet`) or external textures (`importExternalTexture`).",
+      "No `createComputePipelineAsync` or `createRenderPipelineAsync`: create pipelines with the synchronous calls.",
+      "Render passes have no `drawIndirect` or `drawIndexedIndirect`. Compute passes have `dispatchWorkgroupsIndirect`.",
+      "Encoders have no `pushDebugGroup`, `popDebugGroup`, `insertDebugMarker` or `setImmediates`.",
+      "Objects have no `label` property: a descriptor's `label` names the object in validation messages only.",
+      "`navigator.gpu.wgslLanguageFeatures`, `device.adapterInfo`, `texture.textureBindingViewDimension`, `GPUTextureUsage.TRANSIENT_ATTACHMENT` and the adapter info's `subgroupMinSize` and `subgroupMaxSize` are absent.",
+      '`device.onuncapturederror` is absent; listen with `addEventListener("uncapturederror", …)`.',
+      "`limits` has no `maxBindGroupsPlusVertexBuffers`, `maxStorageBuffersInVertexStage`, `maxStorageBuffersInFragmentStage`, `maxStorageTexturesInVertexStage`, `maxStorageTexturesInFragmentStage` or `maxImmediateSize`.",
+    ],
+    related: ["offscreen-canvas", "webgl", "webgl-2"],
     aliases: ["navigator.gpu", "GPU", "GPUDevice", "getContext('webgpu')"],
   }),
   api("webgl", "WebGL", GONE, "Renders 3D graphics on a canvas with an OpenGL ES 2.0 API.", {

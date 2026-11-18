@@ -77,15 +77,23 @@ interface AddEventListenerOptions extends EventListenerOptions {
   signal?: AbortSignal;
 }
 
+interface EventListener {
+  (evt: Event): void;
+}
+interface EventListenerObject {
+  handleEvent(object: Event): void;
+}
+type EventListenerOrEventListenerObject = EventListener | EventListenerObject;
+
 interface EventTarget {
   addEventListener(
     type: string,
-    listener: ((ev: Event) => unknown) | null,
+    listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ): void;
   removeEventListener(
     type: string,
-    listener: ((ev: Event) => unknown) | null,
+    listener: EventListenerOrEventListenerObject | null,
     options?: boolean | EventListenerOptions,
   ): void;
   dispatchEvent(event: Event): boolean;

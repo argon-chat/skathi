@@ -240,6 +240,8 @@ Before its first frame, an opaque WebGPU canvas paints a black box, and a `premu
 
 WebGPU needs the host's `webgpu` Cargo feature, on by default. Without it `navigator.gpu` is undefined and `getContext("webgpu")` returns `null`; see [Features and size](/embedding/features/).
 
+The WebGPU API is typed by the official `@webgpu/types`, a dependency of `@skathi-native/runtime`, so an app type-checks `navigator.gpu`, `getContext("webgpu")` and every descriptor without installing anything. The types declare a few calls Skathi does not implement; the [WebGPU reference](/web-platform/webgpu/#limitations) lists them.
+
 ## Size and device pixels
 
 The bitmap size and the box size are separate, as in browsers. Without CSS, the box is the bitmap's size in CSS pixels. With CSS, the bitmap is scaled into the box. For a sharp canvas, make the bitmap `devicePixelRatio` times the CSS size and scale the context by the same factor.

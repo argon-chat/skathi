@@ -31,6 +31,9 @@
     "./css-data.json": "./css-data.json"
   },
   "types": "./src/runtime.ts",
+  "dependencies": {
+    "@webgpu/types": "0.1.74"
+  },
   "peerDependencies": {
     "vue": "^3.5",
     "svelte": "^5.57.3"

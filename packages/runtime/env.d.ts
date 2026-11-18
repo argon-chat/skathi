@@ -1,7 +1,13 @@
 // The web surface a Skathi app sees, under the web's names, on top of src/engine.d.ts. NOTHING IS
 // DECLARED THAT THE HOST DOES NOT PROVIDE: lib.dom stays out because it declares far more.
+// WebGPU is the exception: @webgpu/types declares a few calls the host lacks (the web-platform
+// reference's WebGPU limitations), and VideoFrame below exists only so those types resolve.
+
+/// <reference types="@webgpu/types" />
 
 export {};
+
+declare const noVideoFrame: unique symbol;
 
 // The window: the prelude installs these on `globalThis` before the app bundle evaluates.
 
@@ -212,7 +218,6 @@ declare global {
     readonly onLine: boolean;
     readonly platform: string;
     readonly maxTouchPoints: number;
-    readonly gpu: GPU;
     readonly mediaDevices: MediaDevices;
     /** The taskbar button's badge on Windows, the Dock icon's on macOS. No argument shows a dot. */
     setAppBadge(contents?: number): Promise<void>;
@@ -966,12 +971,70 @@ declare global {
     createImageData(sw: number, sh: number): ImageData;
     getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
     putImageData(imageData: ImageData, dx: number, dy: number): void;
+    drawImage(image: CanvasImageSource, dx: number, dy: number): void;
+    drawImage(image: CanvasImageSource, dx: number, dy: number, dw: number, dh: number): void;
+    drawImage(
+      image: CanvasImageSource,
+      sx: number,
+      sy: number,
+      sw: number,
+      sh: number,
+      dx: number,
+      dy: number,
+      dw: number,
+      dh: number,
+    ): void;
+  }
+  interface CanvasRenderingContext2DSettings {
+    alpha?: boolean;
+    willReadFrequently?: boolean;
   }
   interface HTMLCanvasElement extends HTMLElement {
     width: number;
     height: number;
     getContext(contextId: "2d"): CanvasRenderingContext2D | null;
-    getContext(contextId: "webgpu"): GPUCanvasContext | null;
+  }
+
+  type PredefinedColorSpace = "display-p3" | "srgb";
+  type CanvasImageSource = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas;
+  type ImageBitmapSource = HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas | ImageData | Blob;
+
+  interface ImageBitmap {
+    readonly width: number;
+    readonly height: number;
+    close(): void;
+  }
+  var ImageBitmap: { new (): ImageBitmap; prototype: ImageBitmap };
+  function createImageBitmap(image: ImageBitmapSource): Promise<ImageBitmap>;
+  function createImageBitmap(
+    image: ImageBitmapSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+  ): Promise<ImageBitmap>;
+
+  interface ImageEncodeOptions {
+    type?: string;
+    quality?: number;
+  }
+  interface OffscreenCanvasRenderingContext2D extends CanvasRenderingContext2D {
+    readonly canvas: OffscreenCanvas;
+  }
+  /** On the JavaScript thread only: there are no workers to transfer it to. */
+  interface OffscreenCanvas extends EventTarget {
+    width: number;
+    height: number;
+    getContext(contextId: "2d", options?: CanvasRenderingContext2DSettings): OffscreenCanvasRenderingContext2D | null;
+    getContext(contextId: "webgl" | "webgl2" | "bitmaprenderer"): null;
+    convertToBlob(options?: ImageEncodeOptions): Promise<Blob>;
+    transferToImageBitmap(): ImageBitmap;
+  }
+  var OffscreenCanvas: { new (width: number, height: number): OffscreenCanvas; prototype: OffscreenCanvas };
+
+  /** Not provided: WebCodecs is not in Skathi. Declared so the WebGPU types resolve; no value has this type. */
+  interface VideoFrame {
+    readonly [noVideoFrame]: never;
   }
 
   interface WindowProxy {
@@ -1579,96 +1642,6 @@ declare global {
     readonly EMPTY: 0;
     readonly LOADING: 1;
     readonly DONE: 2;
-  };
-}
-
-// WebGPU at the depth a render-to-canvas app calls it.
-
-declare global {
-  interface GPU {
-    requestAdapter(options?: { powerPreference?: "low-power" | "high-performance" }): Promise<GPUAdapter | null>;
-    getPreferredCanvasFormat(): string;
-  }
-  interface GPUAdapterInfo {
-    readonly vendor: string;
-    readonly architecture: string;
-    readonly device: string;
-    readonly description: string;
-  }
-  interface GPUAdapter {
-    readonly info: GPUAdapterInfo;
-    requestDevice(): Promise<GPUDevice>;
-  }
-  interface GPUBuffer {
-    destroy(): void;
-  }
-  type GPUBindGroupLayout = object;
-  type GPUBindGroup = object;
-  type GPUShaderModule = object;
-  type GPUTextureView = object;
-  type GPUCommandBuffer = object;
-  interface GPUTexture {
-    readonly width: number;
-    readonly height: number;
-    createView(): GPUTextureView;
-  }
-  interface GPURenderPipeline {
-    getBindGroupLayout(index: number): GPUBindGroupLayout;
-  }
-  interface GPURenderPipelineDescriptor {
-    layout: "auto";
-    vertex: { module: GPUShaderModule; entryPoint?: string };
-    fragment: { module: GPUShaderModule; entryPoint?: string; targets: { format: string }[] };
-    primitive?: { topology?: "point-list" | "line-list" | "line-strip" | "triangle-list" | "triangle-strip" };
-  }
-  interface GPURenderPassDescriptor {
-    colorAttachments: {
-      view: GPUTextureView;
-      clearValue?: { r: number; g: number; b: number; a: number };
-      loadOp: "load" | "clear";
-      storeOp: "store" | "discard";
-    }[];
-  }
-  interface GPURenderPassEncoder {
-    setPipeline(pipeline: GPURenderPipeline): void;
-    setBindGroup(index: number, bindGroup: GPUBindGroup): void;
-    draw(vertexCount: number, instanceCount?: number, firstVertex?: number, firstInstance?: number): void;
-    end(): void;
-  }
-  interface GPUCommandEncoder {
-    beginRenderPass(descriptor: GPURenderPassDescriptor): GPURenderPassEncoder;
-    finish(): GPUCommandBuffer;
-  }
-  interface GPUQueue {
-    submit(commandBuffers: GPUCommandBuffer[]): void;
-    writeBuffer(buffer: GPUBuffer, bufferOffset: number, data: ArrayBuffer | ArrayBufferView): void;
-  }
-  interface GPUDevice {
-    readonly queue: GPUQueue;
-    createShaderModule(descriptor: { code: string }): GPUShaderModule;
-    createRenderPipeline(descriptor: GPURenderPipelineDescriptor): GPURenderPipeline;
-    createBuffer(descriptor: { size: number; usage: number }): GPUBuffer;
-    createBindGroup(descriptor: {
-      layout: GPUBindGroupLayout;
-      entries: { binding: number; resource: { buffer: GPUBuffer } }[];
-    }): GPUBindGroup;
-    createCommandEncoder(): GPUCommandEncoder;
-    destroy(): void;
-  }
-  interface GPUCanvasContext {
-    configure(configuration: { device: GPUDevice; format: string; alphaMode?: "opaque" | "premultiplied" }): void;
-    unconfigure(): void;
-    getCurrentTexture(): GPUTexture;
-  }
-  var GPUBufferUsage: {
-    readonly MAP_READ: number;
-    readonly MAP_WRITE: number;
-    readonly COPY_SRC: number;
-    readonly COPY_DST: number;
-    readonly INDEX: number;
-    readonly VERTEX: number;
-    readonly UNIFORM: number;
-    readonly STORAGE: number;
   };
 }
 
