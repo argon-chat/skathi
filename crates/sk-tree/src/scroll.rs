@@ -167,22 +167,43 @@ pub(crate) fn gc(live: &dyn Fn(u32) -> bool) {
     crate::snap::gc(live);
 }
 
+/// `id`'s border widths in px: top, right, bottom, left.
+pub(crate) fn border_px(id: u32) -> [f32; 4] {
+    let rem = px(sk_css::rem_basis());
+    tree::read_tree(|t| {
+        let b = &t.node(id)?.computed.as_ref()?.base.border_widths;
+        Some(
+            [b.top, b.right, b.bottom, b.left]
+                .map(|w| w.map_or(0.0, |w| f32::from(w.to_pixels(rem)))),
+        )
+    })
+    .unwrap_or([0.0; 4])
+}
+
+/// `id`'s scrollport: its padding box, the rectangle scroll positions are measured from.
+pub(crate) fn scrollport(id: u32) -> Option<crate::windows::Rect> {
+    let (x, y, w, h) = render::bounds_of(id)?;
+    let [t, r, b, l] = border_px(id);
+    Some((x + l, y + t, (w - l - r).max(0.0), (h - t - b).max(0.0)))
+}
+
 pub(crate) fn info(id: u32) -> Option<Info> {
     let stale = crate::dom::layout_if_stale(id);
     let handle = render::scroll_handle_of(id)?;
-    Some(info_of(&handle, stale))
+    Some(info_of(id, &handle, stale))
 }
 
-fn info_of(handle: &ScrollHandle, stale: bool) -> Info {
+fn info_of(id: u32, handle: &ScrollHandle, stale: bool) -> Info {
     // gpui's offsets are <= 0 (the content is shifted up/left); CSS counts down/right as positive.
     let offset = handle.offset();
     let max = handle.max_offset();
-    let viewport = handle.bounds().size;
+    let size = handle.bounds().size;
+    let [bt, br, bb, bl] = border_px(id);
     Info {
         left: -f32::from(offset.x),
         top: -f32::from(offset.y),
-        scroll_width: f32::from(viewport.width + max.x),
-        scroll_height: f32::from(viewport.height + max.y),
+        scroll_width: (f32::from(size.width) - bl - br).max(0.0) + f32::from(max.x),
+        scroll_height: (f32::from(size.height) - bt - bb).max(0.0) + f32::from(max.y),
         stale,
     }
 }
@@ -312,7 +333,7 @@ fn apply(
         handle.set_offset(clamped);
         note_moved(id);
     }
-    (info_of(handle, stale), clamped)
+    (info_of(id, handle, stale), clamped)
 }
 
 /// Advances every glide one frame; true while any is still moving.
@@ -417,26 +438,19 @@ pub(crate) fn into_view(
         if viewport.size.width <= px(0.) && viewport.size.height <= px(0.) {
             continue;
         }
+        let [bt, br, bb, bl] = border_px(ancestor);
+        let (vx, vy) = (
+            f32::from(viewport.origin.x) + bl,
+            f32::from(viewport.origin.y) + bt,
+        );
         let (vw, vh) = (
-            f32::from(viewport.size.width),
-            f32::from(viewport.size.height),
+            (f32::from(viewport.size.width) - bl - br).max(0.0),
+            (f32::from(viewport.size.height) - bt - bb).max(0.0),
         );
         // `scroll-padding` shrinks the viewport it aligns to.
         let pad = snap.padding_px(vw, vh);
-        let dx = align_delta(
-            inline,
-            x,
-            w,
-            f32::from(viewport.origin.x) + pad[3],
-            (vw - pad[3] - pad[1]).max(0.0),
-        );
-        let dy = align_delta(
-            block,
-            y,
-            h,
-            f32::from(viewport.origin.y) + pad[0],
-            (vh - pad[0] - pad[2]).max(0.0),
-        );
+        let dx = align_delta(inline, x, w, vx + pad[3], (vw - pad[3] - pad[1]).max(0.0));
+        let dy = align_delta(block, y, h, vy + pad[0], (vh - pad[0] - pad[2]).max(0.0));
         let before = handle.offset();
         let want = Point {
             x: before.x - px(dx),

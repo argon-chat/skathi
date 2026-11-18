@@ -11,5 +11,7 @@ createApp({
       h("div", { id: "near" }, items(12, "row", "n")),
       h("div", { id: "pages", tabindex: 0 }, items(10, "page", "p")),
       h("div", { id: "padded" }, items(20, "line", "l")),
+      h("div", { id: "framed" }, items(3, "frame", "f")),
+      h("div", { id: "ledger" }, items(6, "entry", "e")),
     ]),
 }).mount();

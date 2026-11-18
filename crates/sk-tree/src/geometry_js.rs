@@ -163,8 +163,32 @@ macro_rules! layout_size {
 }
 layout_size!(offset_width, "offsetWidth", |r: Rect| r.2);
 layout_size!(offset_height, "offsetHeight", |r: Rect| r.3);
-layout_size!(client_width, "clientWidth", |r: Rect| r.2);
-layout_size!(client_height, "clientHeight", |r: Rect| r.3);
+
+/// The padding box (`clientWidth`/`Height`) or a border width (`clientTop`/`Left`); 0 when never painted.
+macro_rules! client_size {
+    ($name:ident, $kind:literal, $pick:expr) => {
+        host_fn!(fn $name(g, args) {
+            let this = args.this().0;
+            let Some(r) = (unsafe { rect(g, this, $kind, false) }) else {
+                return enc_f64(0.0);
+            };
+            let border = unsafe { node_id(g, this) }.map_or([0.0; 4], scroll::border_px);
+            enc_f64(round($pick(r, border)))
+        });
+    };
+}
+client_size!(
+    client_width,
+    "clientWidth",
+    |r: Rect, [_, br, _, bl]: [f32; 4]| (r.2 - bl - br).max(0.0)
+);
+client_size!(
+    client_height,
+    "clientHeight",
+    |r: Rect, [bt, _, bb, _]: [f32; 4]| (r.3 - bt - bb).max(0.0)
+);
+client_size!(client_top, "clientTop", |_: Rect, b: [f32; 4]| b[0]);
+client_size!(client_left, "clientLeft", |_: Rect, b: [f32; 4]| b[3]);
 
 macro_rules! window_offset {
     ($name:ident, $kind:literal, $pick:expr) => {
@@ -184,10 +208,6 @@ macro_rules! window_offset {
 }
 window_offset!(offset_top, "offsetTop", |r: Rect| r.1);
 window_offset!(offset_left, "offsetLeft", |r: Rect| r.0);
-
-host_fn!(fn zero(_g, _args) {
-    enc_f64(0.0)
-});
 
 host_fn!(fn no_offset_parent(_g, _args) {
     NULL
@@ -404,10 +424,8 @@ pub(crate) fn install(rt: &JsRuntime) {
             ("offsetTop", offset_top),
             ("offsetLeft", offset_left),
             ("offsetParent", no_offset_parent),
-            // Border widths are not published (the painted rect is the border box); @floating-ui adds these to
-            // every clipping rect, so they must be numbers.
-            ("clientTop", zero),
-            ("clientLeft", zero),
+            ("clientTop", client_top),
+            ("clientLeft", client_left),
         ] {
             accessor(g, el, name, f, None);
         }

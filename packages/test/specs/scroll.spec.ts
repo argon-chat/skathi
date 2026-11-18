@@ -194,7 +194,7 @@ describe("el.scrollIntoView()", () => {
       // The off-screen half matters: row 900 is ~22 500 px down and has never been painted, but the
       // whole document is laid out, so it has an exact rectangle to aim at.
       await reset();
-      const listTop = (await onList("Math.round(l.getBoundingClientRect().top)")) as number;
+      const listTop = (await onList("Math.round(l.getBoundingClientRect().top + l.clientTop)")) as number;
 
       await app.eval(`document.querySelector('[data-row="900"]').scrollIntoView()`);
       expect(await topOf(900)).toBe(listTop);

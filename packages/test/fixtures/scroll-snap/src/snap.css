@@ -111,3 +111,43 @@ body {
 #l12 {
   scroll-margin-top: 10px;
 }
+
+#framed {
+  position: absolute;
+  left: 20px;
+  top: 500px;
+  width: 310px;
+  height: 80px;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  border-left: 10px solid #888;
+}
+
+.frame {
+  flex: 0 0 300px;
+  scroll-snap-align: start;
+  background: #fed;
+}
+
+#ledger {
+  position: absolute;
+  left: 340px;
+  top: 500px;
+  width: 100px;
+  height: 130px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-padding-top: 20px;
+  border-top: 10px solid #888;
+}
+
+.entry {
+  flex: 0 0 80px;
+  scroll-snap-align: start;
+  scroll-margin-top: 5px;
+  background: #def;
+}

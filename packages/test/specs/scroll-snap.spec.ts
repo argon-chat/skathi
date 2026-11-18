@@ -182,6 +182,21 @@ describe("a mandatory list (y) and the keyboard", () => {
   );
 });
 
+describe("a bordered scroll container", () => {
+  test(
+    "snap positions are measured from the padding box, not the border box",
+    async () => {
+      expect(await js("#framed", "(el.scrollTo({ left: 0 }), el.scrollLeft)")).toBe(0);
+      expect(await js("#framed", "(el.scrollTo({ left: 300 }), el.scrollLeft)")).toBe(300);
+      expect(await js("#framed", "(el.scrollTo({ left: 600 }), el.scrollLeft)")).toBe(600);
+      // Entries start at 80k; 5 px of scroll-margin and 20 of scroll-padding put them at 80k - 25.
+      expect(await js("#ledger", "(el.scrollTo({ top: 80 }), el.scrollTop)")).toBe(55);
+      expect(await js("#ledger", "(el.scrollTo({ top: 140 }), el.scrollTop)")).toBe(135);
+    },
+    T,
+  );
+});
+
 describe("scroll-padding and scroll-margin", () => {
   test(
     "scrollIntoView() aligns the margin box to the padded edge: 40 px of padding, 10 of margin",

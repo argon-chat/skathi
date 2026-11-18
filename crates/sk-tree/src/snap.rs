@@ -424,9 +424,10 @@ fn geometry(id: u32, handle: &ScrollHandle) -> Option<[Axis; 2]> {
 }
 
 /// `node`'s rectangle in container `id`'s content coordinates (where it sits with the container
-/// scrolled to 0, 0), corrected for scrolls since the last paint as `getBoundingClientRect()` is.
+/// scrolled to 0, 0, from the padding box's corner), corrected for scrolls since the last paint as
+/// `getBoundingClientRect()` is. For `id` itself, its scrollport.
 fn content_rect(id: u32, node: u32, handle: &ScrollHandle) -> Option<(f32, f32, f32, f32)> {
-    let (cx, cy, cw, ch) = render::bounds_of(id)?;
+    let (cx, cy, cw, ch) = scroll::scrollport(id)?;
     if node == id {
         return Some((0.0, 0.0, cw, ch));
     }
