@@ -242,7 +242,8 @@ pub struct SurfaceDisplay {
     pub refresh_hz: Option<f32>,
     /// Whether the screen refreshes at a variable rate (macOS: ProMotion, Adaptive-Sync).
     pub variable_refresh: Option<bool>,
-    /// The display's nominal refresh period: the compositor's on Windows, else from `refresh_hz`.
+    /// The refresh period: on Windows measured from the vsync thread's vblank waits (since 0.5),
+    /// else from `refresh_hz`.
     pub refresh_period: Option<Duration>,
     /// When its latest vblank was, in [`monotonic_ns`]'s clock, as `info()` was called: never after
     /// that, and at most `refresh_period` before. Off Windows it is extrapolated from the last

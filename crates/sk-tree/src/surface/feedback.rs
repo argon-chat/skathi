@@ -533,30 +533,39 @@ pub fn monotonic_ns() -> u64 {
     platform::now_ns()
 }
 
-/// The display's last vblank and nominal period, for `info().display`.
+/// The display's last vblank and its period, for `info().display`.
 pub(crate) fn display_clock(s: Key, refresh_hz: Option<f32>) -> (Option<u64>, Option<Duration>) {
     let nominal = refresh_hz
         .filter(|hz| *hz > 0.0)
         .map(|hz| Duration::from_secs_f64(1.0 / f64::from(hz)));
-    // DWM's vblank is usually the coming one, and is not updated every refresh while little is
-    // composed; it is exact as a point on the grid.
-    if let Some((vblank, period)) = platform::compositor_clock() {
-        let agrees = nominal.is_none_or(|n| {
+    let agrees = |period: Duration| {
+        nominal.is_none_or(|n| {
             (n.as_secs_f64() - period.as_secs_f64()).abs() <= 0.01 * n.as_secs_f64()
-        });
-        if agrees {
-            return (
-                Some(latest_on_grid(vblank, period, monotonic_ns())),
-                Some(period),
-            );
-        }
-    }
-    let Some(period) = nominal else {
-        return (None, None);
+        })
     };
-    let last = lock(&global().tracker).last_shown(s);
-    let vblank = last.map(|last| latest_on_grid(last, period, monotonic_ns()));
-    (vblank, Some(period))
+    // The vsync thread's vblank waits; else DWM's clock, which follows one display only and drifts
+    // while little is composed, but is exact as a point on the grid; else the last frame shown.
+    let measured = gpui::present_feedback::vblank_clock()
+        .map(|c| (c.vblank_ns, Duration::from_nanos(c.period_ns)))
+        .filter(|&(_, period)| agrees(period))
+        .or_else(|| platform::compositor_clock().filter(|&(_, period)| agrees(period)))
+        .or_else(|| Some((lock(&global().tracker).last_shown(s)?, nominal?)));
+    static LAST: Mutex<Option<(u64, Duration)>> = Mutex::new(None);
+    let mut last = lock(&LAST);
+    let clock = match measured {
+        Some(clock) => *last.insert(clock),
+        // A refresh-rate change takes a moment to reach the sources above: until then, the last
+        // vblank known carried forward at the new rate.
+        None => match *last {
+            Some((vblank, period)) => (vblank, nominal.unwrap_or(period)),
+            None => return (None, nominal),
+        },
+    };
+    let (vblank, period) = clock;
+    (
+        Some(latest_on_grid(vblank, period, monotonic_ns())),
+        Some(period),
+    )
 }
 
 /// The latest point of the grid through `point` spaced `period` apart that is not after `now`.
@@ -793,6 +802,31 @@ mod tests {
             6_500,
             "ten refreshes ahead"
         );
+    }
+
+    // One test: the vsync thread's clock and the last one known are process-global.
+    #[test]
+    fn last_vblank_follows_the_vsync_thread_and_outlasts_a_refresh_rate_change() {
+        use gpui::present_feedback::{set_vblank_clock, VBlankClock};
+        let period = Duration::from_secs_f64(1.0 / 165.0);
+        let vblank = monotonic_ns() - 3 * period.as_nanos() as u64 - 1_234;
+        set_vblank_clock(Some(VBlankClock {
+            vblank_ns: vblank,
+            period_ns: period.as_nanos() as u64,
+        }));
+        let (got, p) = display_clock(A, Some(165.0));
+        let (got, p) = (got.unwrap(), p.unwrap());
+        assert_eq!(p, period);
+        assert_eq!((got - vblank) % period.as_nanos() as u64, 0);
+        assert!(monotonic_ns() - got <= period.as_nanos() as u64);
+
+        // The display went to 60 Hz: nothing has measured it yet.
+        set_vblank_clock(None);
+        let (got, p) = display_clock(A, Some(60.0));
+        let p = p.unwrap();
+        assert!((p.as_secs_f64() - 1.0 / 60.0).abs() < 1e-3);
+        let got = got.expect("still known");
+        assert!(got <= monotonic_ns() && monotonic_ns() - got <= p.as_nanos() as u64);
     }
 
     #[cfg(windows)]
