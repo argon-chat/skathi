@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use gpui::{PenSample, Window};
 
-use crate::predict::KalmanPredictor;
+use crate::predict::ink::KalmanPredictor;
+use crate::predict::Predictor;
 use crate::tree;
 use crate::windows;
 

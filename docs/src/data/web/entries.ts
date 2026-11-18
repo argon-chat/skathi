@@ -391,8 +391,9 @@ const domAndEvents = section("DOM and events", [
   method("PointerEvent.getPredictedEvents()", OK, "Returns positions the pointer is expected to reach next.", {
     since: "0.5.0",
     notes: [
-      "A `pointermove` from a pen or the mouse lists where the pointer is expected over the 25 ms after its last reading, one prediction per reading interval (at least 2.5 ms apart). Each has the predicted position, `movementX`/`movementY` from the one before and the predicted time as `timeStamp`; pressure, tilt and the buttons are the event's own.",
-      "The predictor is Chromium's Kalman filter, the one Chrome uses for these events. It starts once a stroke has four readings and starts over on a press, a release, leaving the window or a pause of more than 20 ms; until then the list is empty.",
+      "A `pointermove` from a pen or the mouse lists where the pointer is expected after its last reading: up to three predictions, 1/180 s apart, so at most about 17 ms ahead. Each has the predicted position, `movementX`/`movementY` from the one before and the predicted time as `timeStamp`; pressure, tilt and the buttons are the event's own.",
+      "The predictor is the Kalman predictor of Google's ink stroke modeler, with the parameters of its tests. How many predictions a move gets depends on its confidence: it grows over a stroke's first 20 readings and falls when the pointer moves slower than about 3 cm/s, when the filter's estimate strays from the latest reading, and when the predicted path curves away from a straight line, so the list shortens or empties on slow movement, sharp turns and braking instead of overshooting.",
+      "It starts once a stroke has four readings and starts over on a press, a release, leaving the window or a pause of more than 20 ms; until then the list is empty.",
       "A constructed event returns the `predictedEvents` it was given.",
     ],
     related: ["pointer-event-get-coalesced-events"],

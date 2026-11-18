@@ -19,7 +19,7 @@ Capture the pointer on `pointerdown`, then draw each of the move's [coalesced ev
 
 Each coalesced event's `timeStamp` is when the pen took that reading, on the `performance.now()` clock, so a stroke's speed comes from the readings themselves rather than from frame times.
 
-A move also carries [predicted events](/web-platform/pointer-event-get-predicted-events/): where the pen is expected over the next 25 ms, from the predictor Chrome uses. Drawn as a provisional tail that the next move replaces, they keep the line up with the tip instead of a frame behind it. They never go on the committed stroke.
+A move also carries [predicted events](/web-platform/pointer-event-get-predicted-events/): where the pen is expected over the next 17 ms at most, from the Kalman predictor of Google's ink stroke modeler. It predicts less, or nothing, when it is unsure: early in a stroke, when the pen moves slowly, turns sharply or brakes. So the tail does not hook past a corner or past where the stroke stops. Drawn as a provisional tail that the next move replaces, they keep the line up with the tip instead of a frame behind it. They never go on the committed stroke.
 
 `preventDefault()` on `pointerdown` keeps the `mousedown`, `mousemove` and `mouseup` that follow a pen's pointer events from firing, so the stroke selects no text and starts no drag. `touch-action: none` and a cancelled `contextmenu` keep the barrel button and the system's pen gestures out of the way, as in a browser.
 

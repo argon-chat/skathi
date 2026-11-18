@@ -43,7 +43,8 @@ mod pen;
 pub mod perf;
 mod pointer;
 mod pointer_lock;
-mod predict;
+#[doc(hidden)]
+pub mod predict;
 mod range;
 mod render;
 mod resample;

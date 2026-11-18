@@ -46,11 +46,9 @@ describe("pen input", () => {
       await pen("down", 60, 60, { pressure: 0.3 });
       await pen("move", 100, 60, { pressure: 0.8, fromX: 60, fromY: 60, fromPressure: 0.4, steps: 4, interval: 4 });
       await pen("up", 100, 60);
-      // The readings' own times, 4 ms apart on the page's clock; Chromium's predictor carries the
-      // stroke on at that interval for 25 ms.
-      expect(await moves()).toEqual([
-        { steps: [4, 4, 4], beforeEvent: true, recent: true, ahead: [4, 8, 12, 16, 20, 24], forward: true },
-      ]);
+      // The readings' own times, 4 ms apart on the page's clock; four readings into a stroke the
+      // predictor is unsure yet, so it carries the stroke on by one 1/180 s step.
+      expect(await moves()).toEqual([{ steps: [4, 4, 4], beforeEvent: true, recent: true, ahead: [6], forward: true }]);
       expect(await log()).toEqual([
         "pointerdown:pen:2:b0/1:p0.30:t0,0",
         "got:2",

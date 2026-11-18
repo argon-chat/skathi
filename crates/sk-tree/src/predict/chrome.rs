@@ -1,7 +1,7 @@
-//! `PointerEvent.getPredictedEvents()`: Chromium's default pointer predictor, ported from
-//! `ui/base/prediction/kalman_filter.cc`, `ui/base/prediction/kalman_predictor.cc` and the
-//! predicted-event loop of `third_party/blink/renderer/platform/widget/input/input_event_prediction.cc`.
-//! Times are milliseconds, positions CSS px.
+//! Chromium's default pointer predictor, ported from `ui/base/prediction/kalman_filter.cc`,
+//! `ui/base/prediction/kalman_predictor.cc` and the predicted-event loop of
+//! `third_party/blink/renderer/platform/widget/input/input_event_prediction.cc`: a fixed 25 ms
+//! horizon. Pointer events use [`super::ink`]; this one is kept to compare against.
 //!
 //! Copyright 2018 The Chromium Authors
 //!
@@ -25,36 +25,12 @@
 //! WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
 //! WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use super::{add, mul, mul_vec, outer, transpose, Mat, Predictor};
+
 type Vec3 = [f64; 3];
-type Mat3 = [[f64; 3]; 3];
+type Mat3 = Mat<3>;
 
-const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-
-fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
-    let mut out = [[0.0; 3]; 3];
-    for (i, row) in out.iter_mut().enumerate() {
-        for (j, cell) in row.iter_mut().enumerate() {
-            *cell = (0..3).map(|k| a[i][k] * b[k][j]).sum();
-        }
-    }
-    out
-}
-
-fn mul_vec(a: &Mat3, v: &Vec3) -> Vec3 {
-    [0, 1, 2].map(|i| (0..3).map(|k| a[i][k] * v[k]).sum::<f64>())
-}
-
-fn transpose(a: &Mat3) -> Mat3 {
-    [0, 1, 2].map(|i| [0, 1, 2].map(|j| a[j][i]))
-}
-
-fn outer(a: &Vec3, b: &Vec3) -> Mat3 {
-    [0, 1, 2].map(|i| [0, 1, 2].map(|j| a[i] * b[j]))
-}
-
-fn add(a: &Mat3, b: &Mat3) -> Mat3 {
-    [0, 1, 2].map(|i| [0, 1, 2].map(|j| a[i][j] + b[i][j]))
-}
+const IDENTITY: Mat3 = super::identity();
 
 const STABLE_ITER_NUM: u32 = 4;
 const SIGMA_PROCESS: f64 = 0.01;
@@ -139,12 +115,12 @@ pub struct KalmanPredictor {
     last: Option<(f64, f64, f64)>,
 }
 
-impl KalmanPredictor {
-    pub fn reset(&mut self) {
+impl Predictor for KalmanPredictor {
+    fn reset(&mut self) {
         *self = Self::default();
     }
 
-    pub fn update(&mut self, x: f64, y: f64, time: f64) {
+    fn update(&mut self, x: f64, y: f64, time: f64) {
         if let Some((.., last)) = self.last {
             let dt = time - last;
             if dt > MAX_TIME_DELTA {
@@ -159,6 +135,27 @@ impl KalmanPredictor {
         self.y.update(y, dt);
     }
 
+    /// The predicted readings after the latest one, a reading interval apart up to
+    /// [`MAX_PREDICTION_TIME`] past it.
+    fn predictions(&self) -> Vec<(f64, f64, f64)> {
+        let Some((.., last)) = self.last else {
+            return Vec::new();
+        };
+        let step = self.time_interval();
+        let mut out = Vec::new();
+        let mut time = last + step;
+        while time <= last + MAX_PREDICTION_TIME {
+            let Some((x, y)) = self.predict(time) else {
+                break;
+            };
+            out.push((x, y, time));
+            time += step;
+        }
+        out
+    }
+}
+
+impl KalmanPredictor {
     pub fn has_prediction(&self) -> bool {
         self.x.stable() && self.y.stable()
     }
@@ -184,25 +181,6 @@ impl KalmanPredictor {
         } else {
             DEFAULT_TIME_INTERVAL
         }
-    }
-
-    /// The predicted readings after the latest one, a reading interval apart up to
-    /// [`MAX_PREDICTION_TIME`] past it: x, y, time.
-    pub fn predictions(&self) -> Vec<(f64, f64, f64)> {
-        let Some((.., last)) = self.last else {
-            return Vec::new();
-        };
-        let step = self.time_interval();
-        let mut out = Vec::new();
-        let mut time = last + step;
-        while time <= last + MAX_PREDICTION_TIME {
-            let Some((x, y)) = self.predict(time) else {
-                break;
-            };
-            out.push((x, y, time));
-            time += step;
-        }
-        out
     }
 }
 
