@@ -190,8 +190,8 @@ order: 10
 
 - `<sk-surface>` stays empty
 
-  **Cause:** Nothing presented to that name yet, the producer skipped frames because `info().visible` is false, or a present returned an error you ignored.
+  **Cause:** Nothing presented to that name yet, the producer skipped frames because `info().visible` is false, or a present returned an error you ignored. In 0.4.0 a host built without the `video` feature also left every `<sk-surface>` at 0×0 without a word; later versions do not need it.
 
-  **Fix:** Check the names match, log the `SurfaceError`, and compare `stats().presented` with `stats().shown`.
+  **Fix:** Check the names match, log the `SurfaceError`, and compare `stats().presented` with `stats().shown`. On 0.4.0 without `video`, enable it or upgrade.
 
 </div>

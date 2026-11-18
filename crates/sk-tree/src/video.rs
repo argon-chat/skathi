@@ -457,7 +457,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         let mut map = m.borrow_mut();
         let mut out = Vec::new();
         for (&id, entry) in map.iter_mut() {
-            let attached = attached(id);
+            let attached = tree::read_tree(|t| t.connected(id));
             let Some(state) = entry.state.as_mut() else {
                 continue;
             };
@@ -566,27 +566,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         dispatch_events(id, &events, window, cx);
     }
     moved
-}
-
-pub(crate) fn attached(id: u32) -> bool {
-    tree::read_tree(|t| {
-        let root = t.root;
-        let mut cursor = id;
-        // Bounded, so a corrupt parent chain cannot hang the pump.
-        for _ in 0..4096 {
-            if cursor == 0 {
-                return false;
-            }
-            if cursor == root {
-                return true;
-            }
-            match t.node(cursor) {
-                Some(n) => cursor = n.parent,
-                None => return false,
-            }
-        }
-        false
-    })
 }
 
 pub(crate) fn drain_pending_uploads(window: &mut Window) {

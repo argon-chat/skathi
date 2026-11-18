@@ -25,10 +25,6 @@ pub fn tick(_window: &mut Window, _cx: &mut App) -> bool {
     false
 }
 
-pub(crate) fn attached(_id: u32) -> bool {
-    false
-}
-
 pub(crate) fn drain_pending_uploads(_window: &mut Window) {}
 
 pub(crate) fn drain_pending_drops_for(window: &mut Window, cx: &mut App) {

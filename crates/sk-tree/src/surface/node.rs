@@ -168,6 +168,10 @@ pub(crate) fn note_painted(id: u32, width: f32, height: f32, scale: f32) {
     });
 }
 
+fn attached(id: u32) -> bool {
+    tree::read_tree(|t| t.connected(id))
+}
+
 fn forget(node: Node) {
     if let Some(tile) = node.tile {
         tile.retire();
@@ -218,7 +222,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     let mut shown = Shown::Nowhere;
     NODES.with(|m| {
         for (&id, node) in m.borrow_mut().iter_mut() {
-            let attached = crate::video::attached(id);
+            let attached = attached(id);
             node.visible = attached
                 && !page_hidden
                 && (node.window != here || here_shown)
@@ -636,6 +640,19 @@ mod tests {
         assert_eq!(painted, (0, 0, 1.0), "a new surface starts unmeasured");
         note_build(id, 7, "");
         assert_eq!(count_of(id), 0, "no name, no node");
+    }
+
+    #[test]
+    fn a_surface_in_the_document_is_attached_in_every_feature_set() {
+        let (inside, outside) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("sk-surface");
+            let inside = t.create_element(tag);
+            t.insert(inside, root, 0);
+            (inside, t.create_element(tag))
+        });
+        assert!(attached(inside));
+        assert!(!attached(outside));
     }
 
     fn count_of(id: u32) -> usize {

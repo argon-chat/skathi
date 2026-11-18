@@ -512,6 +512,25 @@ impl Tree {
         self.nodes.get(id as usize).and_then(Option::as_ref)
     }
 
+    /// Whether `id` is in the document: its parent chain reaches the root.
+    pub(crate) fn connected(&self, id: u32) -> bool {
+        let mut cursor = id;
+        // Bounded, so a corrupt parent chain cannot hang a frame.
+        for _ in 0..4096 {
+            if cursor == 0 {
+                return false;
+            }
+            if cursor == self.root {
+                return true;
+            }
+            match self.node(cursor) {
+                Some(n) => cursor = n.parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
     pub(crate) fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
         self.nodes.get_mut(id as usize).and_then(Option::as_mut)
     }
