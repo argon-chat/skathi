@@ -20,6 +20,9 @@
 //!   cadence, and answers a summary. `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
 //!   `"d3d12-rgba16f"` (a ring of `ring` textures on the renderer's D3D12 device, each presented
 //!   behind its fence).
+//!   `"shared"` is a player with a device of its own: a shared texture and fence, as libmpv's.
+//! - `removeDevice(name)` removes the renderer's D3D12 device, as a driver reset does, and answers
+//!   when (`monotonic_ns`).
 //! - `phaseStart(name)` and `phaseStop(name)`: where in the refresh the window's tick writes the
 //!   surface's frames, from a thread that watches `stats().shown` against the display clock; the
 //!   stop answers `{ count, p05, p50, p95 }` in refreshes.
@@ -195,6 +198,14 @@ fn main() {
             surface_of(&args_of(&call)).clear();
             call.resolve("true");
         })
+        .function("removeDevice", |call| {
+            let surface = surface_of(&args_of(&call));
+            let reply = call.into_reply();
+            std::thread::spawn(move || match gpu::d3d12::remove_device(&surface) {
+                Ok(at) => reply.resolve(&at.to_string()),
+                Err(e) => reply.reject(e),
+            });
+        })
         .function("stats", |call| {
             let surface = surface_of(&args_of(&call));
             let (stats, info) = (surface.stats(), surface.info());
@@ -323,7 +334,7 @@ mod feedback {
     use serde_json::{json, Value};
     use sk_app::embed::{
         monotonic_ns, FrameDropReason, FrameEvent, FramePrecision, FrameWatch, SurfaceError,
-        SurfaceFormat, SurfaceHandle,
+        SurfaceEvent, SurfaceFormat, SurfaceHandle, SurfaceWatch,
     };
 
     /// What the producer thread answers.
@@ -332,6 +343,8 @@ mod feedback {
         ids: Vec<u64>,
         /// `info().visible` as each of them was presented, and when.
         visible: Vec<(bool, u64)>,
+        /// When each present began, and whether it was taken.
+        attempts: Vec<(u64, bool)>,
         /// Presents refused `Busy`.
         busy: usize,
         /// Why it could not start.
@@ -353,7 +366,10 @@ mod feedback {
         hidden_at: Arc<AtomicU64>,
         surface: SurfaceHandle,
         shown: u64,
+        /// When each `SurfaceEvent::DeviceLost` arrived.
+        lost: Arc<Mutex<Vec<u64>>>,
         _watch: FrameWatch,
+        _changes: SurfaceWatch,
     }
 
     fn runs() -> &'static Mutex<HashMap<String, Run>> {
@@ -390,6 +406,13 @@ mod feedback {
             }
             sink.lock().unwrap().push(e)
         });
+        let lost = Arc::new(Mutex::new(Vec::new()));
+        let losing = lost.clone();
+        let changes = surface.on_change(move |_, e| {
+            if matches!(e, SurfaceEvent::DeviceLost) {
+                losing.lock().unwrap().push(monotonic_ns());
+            }
+        });
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let name = surface.name().to_string();
@@ -409,6 +432,17 @@ mod feedback {
                     }
                     #[cfg(not(windows))]
                     return failed(format!("{ring} D3D12 textures off Windows"));
+                } else if source == "shared" {
+                    #[cfg(windows)]
+                    match super::gpu::Shared::new() {
+                        Ok(mut shared) => {
+                            let surface = surface.clone();
+                            Box::new(move |n| shared.present(&surface, n))
+                        }
+                        Err(e) => return failed(e),
+                    }
+                    #[cfg(not(windows))]
+                    return failed("shared D3D11 textures off Windows".into());
                 } else {
                     let surface = surface.clone();
                     Box::new(move |n| {
@@ -439,7 +473,10 @@ mod feedback {
                 if wait > 0 {
                     std::thread::sleep(Duration::from_nanos(wait));
                 }
-                match present(n as usize) {
+                let began = monotonic_ns();
+                let presented = present(n as usize);
+                produced.attempts.push((began, presented.is_ok()));
+                match presented {
                     Ok(id) => {
                         produced.ids.push(id);
                         produced.visible.push((info.visible, monotonic_ns()));
@@ -457,7 +494,9 @@ mod feedback {
             hidden_at,
             surface,
             shown,
+            lost,
             _watch: watch,
+            _changes: changes,
         };
         if let Some(old) = runs().lock().unwrap().insert(name, run) {
             old.stop.store(true, Ordering::Release);
@@ -490,6 +529,8 @@ mod feedback {
         summary["shown"] = shown.into();
         summary["error"] = produced.error.into();
         summary["visibleLate"] = visible_late.into();
+        summary["lostAt"] = json!(*run.lost.lock().unwrap());
+        summary["attempts"] = json!(produced.attempts);
         summary
     }
 
@@ -564,7 +605,7 @@ mod gpu {
 
     use sk_app::embed::{SharedTexture, SurfaceError, SurfaceHandle};
     use windows::core::Interface;
-    use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE, WAIT_OBJECT_0};
+    use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, HMODULE, WAIT_OBJECT_0};
 
     use super::Fill;
     use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
@@ -756,6 +797,112 @@ mod gpu {
         }
     }
 
+    /// A player with a device of its own, as libmpv is: one shared texture and a shared fence, the
+    /// texture opened again after the renderer's device went.
+    pub struct Shared {
+        context: ID3D11DeviceContext,
+        context4: ID3D11DeviceContext4,
+        fence: ID3D11Fence,
+        view: ID3D11RenderTargetView,
+        _texture: ID3D11Texture2D,
+        handles: (HANDLE, HANDLE),
+        opened: Option<SharedTexture>,
+        value: u64,
+    }
+
+    // SAFETY: D3D11 objects of a device used from this one thread only.
+    unsafe impl Send for Shared {}
+
+    impl Drop for Shared {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.handles.0);
+                let _ = CloseHandle(self.handles.1);
+            }
+        }
+    }
+
+    impl Shared {
+        pub fn new() -> Result<Self> {
+            let (device, context) = own_device()?;
+            let device5: ID3D11Device5 = device.cast().map_err(err)?;
+            let context4: ID3D11DeviceContext4 = context.cast().map_err(err)?;
+            let mut fence: Option<ID3D11Fence> = None;
+            unsafe { device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence) }.map_err(err)?;
+            let fence = fence.ok_or("no fence")?;
+            let misc =
+                (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0) as u32;
+            let (texture, view) = target(&device, 64, 64, misc, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+            let resource: IDXGIResource1 = texture.cast().map_err(err)?;
+            let access = (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0;
+            let texture_handle =
+                unsafe { resource.CreateSharedHandle(None, access, None) }.map_err(err)?;
+            let fence_handle =
+                unsafe { fence.CreateSharedHandle(None, GENERIC_ALL.0, None) }.map_err(err)?;
+            Ok(Shared {
+                context,
+                context4,
+                fence,
+                view,
+                _texture: texture,
+                handles: (texture_handle, fence_handle),
+                opened: None,
+                value: 0,
+            })
+        }
+
+        pub fn present(
+            &mut self,
+            surface: &SurfaceHandle,
+            n: usize,
+        ) -> std::result::Result<u64, SurfaceError> {
+            let shade = (n * 37 % 256) as f32 / 255.0;
+            let platform = |e: windows::core::Error| SurfaceError::Platform(e.to_string());
+            unsafe {
+                self.context
+                    .ClearRenderTargetView(&self.view, &[shade, 1.0 - shade, 0.5, 1.0]);
+                self.context4
+                    .Signal(&self.fence, self.value + 1)
+                    .map_err(platform)?;
+                self.context.Flush();
+            }
+            if self.opened.is_none() {
+                let (texture, fence) = self.handles;
+                self.opened = Some(
+                    SharedTexture::open(texture.0 as usize as u64)
+                        .and_then(|t| t.with_fence(fence.0 as usize as u64))?,
+                );
+            }
+            let opened = self.opened.as_ref().expect("just opened");
+            let presented = surface.present_shared_fenced(opened, self.value + 1, self.value + 2);
+            self.value += 2;
+            match presented {
+                Err(SurfaceError::DeviceChanged | SurfaceError::NoDevice(_)) => self.opened = None,
+                // A removed renderer never signals the release value: a player times out and goes on.
+                Ok(_) => {
+                    self.reached(self.value, 100);
+                }
+                Err(_) => {}
+            }
+            presented
+        }
+
+        fn reached(&self, value: u64, ms: u32) -> bool {
+            if unsafe { self.fence.GetCompletedValue() } >= value {
+                return true;
+            }
+            let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+                return false;
+            };
+            let reached = unsafe { self.fence.SetEventOnCompletion(value, event) }.is_ok()
+                && unsafe { WaitForSingleObject(event, ms) } == WAIT_OBJECT_0;
+            unsafe {
+                let _ = CloseHandle(event);
+            }
+            reached
+        }
+    }
+
     /// Renders at the element's painted size, recreating its texture after a resize or a device loss.
     pub fn animate(surface: SurfaceHandle) {
         let start = Instant::now();
@@ -809,7 +956,7 @@ mod gpu {
         use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
         use windows::Win32::Graphics::Direct3D12::{
             D3D12CreateDevice, ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue,
-            ID3D12DescriptorHeap, ID3D12Device, ID3D12DeviceChild, ID3D12Fence,
+            ID3D12DescriptorHeap, ID3D12Device, ID3D12Device5, ID3D12DeviceChild, ID3D12Fence,
             ID3D12GraphicsCommandList, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_DIRECT,
             D3D12_COMMAND_QUEUE_DESC, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
             D3D12_FENCE_FLAG_NONE, D3D12_FENCE_FLAG_SHARED, D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_NONE,
@@ -972,6 +1119,19 @@ mod gpu {
             } else {
                 Err(format!("fence value {value} was not reached"))
             }
+        }
+
+        /// Removes the renderer's D3D12 device, as a driver reset (TDR) does; answers when.
+        pub fn remove_device(surface: &SurfaceHandle) -> Result<u64> {
+            let renderer = surface.d3d12_device().map_err(err)?;
+            let raw = renderer.as_raw();
+            let device: ID3D12Device5 = unsafe { ID3D12Device::from_raw_borrowed(&raw) }
+                .ok_or("null device")?
+                .cast()
+                .map_err(err)?;
+            let at = sk_app::embed::monotonic_ns();
+            unsafe { device.RemoveDevice() };
+            Ok(at)
         }
 
         /// A producer on the renderer's device: its own queue, a GPU-side handoff, the release fence.
@@ -1188,6 +1348,10 @@ mod gpu {
     pub mod d3d12 {
         pub use super::present_d3d11_fenced as present;
         pub use super::present_d3d11_fenced as present_shared;
+
+        pub fn remove_device(_: &sk_app::embed::SurfaceHandle) -> Result<u64, String> {
+            Err("no D3D12 device here".into())
+        }
     }
 }
 
@@ -1213,6 +1377,10 @@ mod gpu {
 
     pub mod d3d12 {
         pub use super::{present_shared, present_texture as present};
+
+        pub fn remove_device(_: &sk_app::embed::SurfaceHandle) -> Result<u64, String> {
+            Err("no D3D12 device here".into())
+        }
     }
 
     /// CPU frames at the painted size: no GPU path here.

@@ -257,7 +257,7 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Superseded`      | a newer frame replaced it before it reached the screen: presented twice within a refresh, or before the window drew it. Reported as soon as that is known; since 0.5 a GPU frame counts as replaced once a newer one has finished copying, since until then the window may still show it                                                                                                                                                               |
 | `Hidden`          | nothing showing the surface could be on screen (`info().visible` is false, or the window is minimised, covered or hidden): what was waiting drops then, and every present while hidden drops at once. Since 0.5 on Windows this includes a covered window that has the focus, and every window while the system has turned the display off, where a present would otherwise come back as shown; `info().visible` turns false with the first such frame |
-| `DeviceLost`      | the renderer lost its device: everything waiting drops, before `surfacelost`                                                                                                                                                                                                                                                                                                                                                                           |
+| `DeviceLost`      | the renderer lost its device: everything waiting drops, before `surfacelost`. Since 0.5 on Windows a removed device drops them as soon as the removal is seen, before a new device exists                                                                                                                                                                                                                                                              |
 | `Closed`          | the window showing it closed, or the app quit                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 - **No timeout is needed.** A frame resolves when the display shows a window present carrying it, or when one of the above makes that impossible. Only a stalled UI thread, which draws no window, can hold a frame unresolved; a newer present still supersedes it at once.
@@ -355,19 +355,32 @@ Reported this way, libmpv takes a frame to flip when its render returns, a const
 
 When the GPU driver resets on Windows, Skathi recreates its device; on macOS the same happens if a window comes up on another GPU. Every surface drops its GPU frame, the elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and a present with an old texture returns `SurfaceError::DeviceChanged`. Get the device again, recreate your textures (or reopen shared ones), and present. CPU frames are not affected.
 
+### A removed device on Windows (since 0.5)
+
+A driver reset (TDR), a driver update or a GPU that goes away removes the renderer's device. D3D12 makes no new device for that GPU while anything still references the removed one, so Skathi has everything let go of it before it makes the next:
+
+1. At the next refresh, or the next GPU present if the app is idle, every frame still waiting drops as `DeviceLost`, the elements fire `surfacelost`, and `on_change` hears `SurfaceEvent::DeviceLost`.
+2. Until there is a new device, a GPU present returns `SurfaceError::DeviceChanged`, and `d3d11_device()`, `d3d12_device()`, `release_fence()` and opening a `SharedTexture` return `SurfaceError::NoDevice`. CPU frames still present.
+3. Drop everything you have from the old device: `D3D11Device`, `D3D12Device`, `D3D12Fence`, and the textures and fences you made on it. Each `SharedTexture` already let go of what Skathi opened, so a present with it returns `DeviceChanged`; open it again later.
+4. When the new device is ready, `on_change` hears `SurfaceEvent::DeviceLost` a second time. Get the device again and present as after any device loss.
+
+A producer with a device of its own (libmpv, another process) keeps its device; only the `SharedTexture` is opened again. A release fence value returned for a frame that dropped is never signalled: wait on it with a timeout.
+
+Skathi keeps trying for about a minute. If no device can be made by then, the app says so (a message box when it runs on its own) and quits: the exe with exit code 1, and an embedded app's `Exit` has `clean: false`.
+
 ## Errors
 
-| `SurfaceError`   | Means                                                                                              |
-| ---------------- | -------------------------------------------------------------------------------------------------- |
-| `NotSupported`   | This platform or renderer has no such path; the message says which one to use                      |
-| `NoDevice`       | No window has drawn yet, so there is no GPU device; try again after the first frame                |
-| `DeviceChanged`  | The device was recreated; recreate your GPU resources                                              |
-| `WrongDevice`    | The texture is from another device; share it instead                                               |
-| `Format`, `Size` | The frame's format is not one a surface takes, it is zero or oversized, or the buffer is too short |
-| `FormatMismatch` | The frame is BGRA8 and the surface is set to `Rgba16Float`, or the other way round                 |
-| `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented                             |
-| `Busy`           | Every texture of this surface is still in flight; drop the frame or wait                           |
-| `Platform`       | A system call failed; the message carries its error                                                |
+| `SurfaceError`   | Means                                                                                                                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NotSupported`   | This platform or renderer has no such path; the message says which one to use                                                                                                            |
+| `NoDevice`       | No window has drawn yet, so there is no GPU device; try again after the first frame. Since 0.5 also while a removed device is being replaced; try again after `SurfaceEvent::DeviceLost` |
+| `DeviceChanged`  | The device was recreated; recreate your GPU resources. Since 0.5 also for a GPU present while the device is removed                                                                      |
+| `WrongDevice`    | The texture is from another device; share it instead                                                                                                                                     |
+| `Format`, `Size` | The frame's format is not one a surface takes, it is zero or oversized, or the buffer is too short                                                                                       |
+| `FormatMismatch` | The frame is BGRA8 and the surface is set to `Rgba16Float`, or the other way round                                                                                                       |
+| `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented                                                                                                                   |
+| `Busy`           | Every texture of this surface is still in flight; drop the frame or wait                                                                                                                 |
+| `Platform`       | A system call failed; the message carries its error                                                                                                                                      |
 
 ## Platform support
 

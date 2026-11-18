@@ -302,7 +302,8 @@ impl SurfaceDisplay {
 pub enum SurfaceEvent {
     /// The size, scale or visibility changed.
     Changed(SurfaceInfo),
-    /// The renderer recreated its device; the frame is gone and GPU resources must be recreated.
+    /// The renderer's device was removed or recreated; the frame is gone and GPU resources must be
+    /// dropped, and made again once there is a device.
     DeviceLost,
     /// The display became known, changed (headroom, SDR white, refresh rate), the window switched
     /// to or from HDR output, or the largest element moved to another one.
@@ -1745,8 +1746,39 @@ impl fmt::Debug for SharedTexture {
     }
 }
 
+/// Set while the renderer's device is removed, until it has a new one.
+#[cfg(windows)]
+static REMOVED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+const REMOVED_DEVICE: &str = "the renderer's GPU device was removed; it makes a new one once \
+                              nothing references the old one, so drop every texture, fence and \
+                              device you have from it, and get them again on the next \
+                              SurfaceEvent::DeviceLost";
+
+#[cfg(windows)]
+fn removed() -> bool {
+    REMOVED.load(Ordering::Acquire)
+}
+
+/// The renderer's device was removed: every surface lets go of everything it holds on it, frames
+/// still waiting drop, and producers hear [`SurfaceEvent::DeviceLost`]. GPU presents are refused
+/// until [`device_changed`] reports the new device.
+#[cfg(windows)]
+pub(crate) fn device_removed() {
+    REMOVED.store(true, Ordering::Release);
+    shared::release_all();
+    forget_gpu();
+}
+
 /// The renderer recreated its device: every surface drops its GPU frame and texture.
 pub(crate) fn device_changed() {
+    #[cfg(windows)]
+    REMOVED.store(false, Ordering::Release);
+    forget_gpu();
+}
+
+fn forget_gpu() {
     #[cfg(windows)]
     {
         d3d11::forget_device();

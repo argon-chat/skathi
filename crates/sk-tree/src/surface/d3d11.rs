@@ -25,7 +25,9 @@ use windows::Win32::Graphics::Dxgi::IDXGIKeyedMutex;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use super::color::{self, Shader};
-use super::{check_format, check_size, lock, Frame, State, SurfaceError, SurfaceFormat};
+use super::{
+    check_format, check_size, lock, Frame, State, SurfaceError, SurfaceFormat, REMOVED_DEVICE,
+};
 
 const WAIT_TIMEOUT: i32 = 0x102;
 
@@ -100,12 +102,21 @@ fn platform(what: &str, e: windows::core::Error) -> SurfaceError {
     SurfaceError::Platform(format!("{what}: {e}"))
 }
 
-fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
+/// The renderer's device; `Err(None)` while it is removed.
+fn current() -> Result<Arc<Gpu>, Option<SurfaceError>> {
+    if super::removed() {
+        return Err(None);
+    }
     let lease = crate::video_device::renderer_device()
         .map_err(SurfaceError::NoDevice)?
         .ok_or_else(|| SurfaceError::NoDevice("no window has drawn yet".into()))?;
     let mut cached = lock(&GPU);
     if let Some(gpu) = cached.as_ref().filter(|g| g.generation == lease.generation) {
+        if unsafe { gpu.device.GetDeviceRemovedReason() }.is_err() {
+            // The host notices within a refresh, and has every surface let go of it.
+            sk_runtime::frames::wake();
+            return Err(None);
+        }
         return Ok(gpu.clone());
     }
     // SAFETY: the lease keeps the device alive.
@@ -127,6 +138,15 @@ fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
     });
     *cached = Some(gpu.clone());
     Ok(gpu)
+}
+
+fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
+    current().map_err(|e| e.unwrap_or_else(|| SurfaceError::NoDevice(REMOVED_DEVICE.into())))
+}
+
+/// For a present: a frame made while the device is removed was made on the old one.
+fn gpu_for_frame() -> Result<Arc<Gpu>, SurfaceError> {
+    current().map_err(|e| e.unwrap_or(SurfaceError::DeviceChanged))
 }
 
 pub(super) fn forget_device() {
@@ -429,6 +449,10 @@ fn copy_in(
     (desc, format): &(D3D11_TEXTURE2D_DESC, SurfaceFormat),
     sync: Guard<'_>,
 ) -> Result<u64, SurfaceError> {
+    // Removed since `gpu()`: the surface has let go of its texture, and must not make another.
+    if super::removed() {
+        return Err(SurfaceError::DeviceChanged);
+    }
     check_format(state.format, *format)?;
     let size = (desc.Width, desc.Height);
     let target = state.gpu.ensure(gpu, size, *format)?.texture.clone();
@@ -504,7 +528,7 @@ pub(super) unsafe fn present_texture(
     let source = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }
         .ok_or_else(|| SurfaceError::Size("a null texture".into()))?;
     let desc = describe(source)?;
-    let gpu = gpu()?;
+    let gpu = gpu_for_frame()?;
     let producer = unsafe { source.GetDevice() }.map_err(|e| platform("GetDevice", e))?;
     let mut state = lock(state);
     if !same(&producer, &gpu.device) {
@@ -593,7 +617,7 @@ pub(super) fn present_shared(
     sync: SharedSync,
     timeout_ms: u32,
 ) -> Result<u64, SurfaceError> {
-    let gpu = gpu()?;
+    let gpu = gpu_for_frame()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);
     }

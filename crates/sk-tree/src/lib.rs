@@ -733,6 +733,14 @@ pub fn surface_device_changed() {
     surface::device_changed();
 }
 
+/// The renderer's GPU device was removed: every `<sk-surface>` lets go of everything on it, frames
+/// still waiting drop, producers hear [`surface::SurfaceEvent::DeviceLost`], and GPU presents are
+/// refused until [`surface_device_changed`].
+#[cfg(windows)]
+pub fn surface_device_removed() {
+    surface::device_removed();
+}
+
 /// The renderer recreated its D3D11 device; rebuild every `<video>` on the new one, keeping
 /// position and transport state.
 pub fn video_device_changed() -> usize {

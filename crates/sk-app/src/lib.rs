@@ -922,7 +922,6 @@ fn publish_video_device() {
     if first {
         return;
     }
-    sk_tree::surface_device_changed();
     let rebuilt = sk_tree::video_device_changed();
     let msg = format!(
         "[video] the renderer recreated its D3D11 device (generation {generation}) — rebuilt \
@@ -934,6 +933,43 @@ fn publish_video_device() {
 
 #[cfg(not(target_os = "windows"))]
 fn publish_video_device() {}
+
+/// On the UI thread, from the platform window's message.
+#[cfg(target_os = "windows")]
+fn on_device_loss(event: gpui_windows::DeviceLoss<'_>) {
+    use gpui_windows::DeviceLoss;
+    match event {
+        DeviceLoss::Removed { reason } => {
+            let msg = format!(
+                "[gpu] the renderer's GPU device was removed ({reason}); releasing everything on \
+                 it before making a new one"
+            );
+            log::warn!("{msg}");
+            sk_tree::log::record("window", msg);
+            sk_tree::surface_device_removed();
+            // SAFETY: a null device is "none".
+            unsafe { sk_tree::set_video_device(std::ptr::null_mut(), 0) };
+            sk_tree::video_device_changed();
+            #[cfg(all(feature = "webgpu", feature = "native-dx12"))]
+            shared_gpu::device_removed();
+        }
+        DeviceLoss::Recovered => {
+            log::info!("[gpu] the renderer made a new GPU device");
+            sk_tree::log::record("window", "[gpu] the renderer made a new GPU device");
+            sk_tree::surface_device_changed();
+        }
+        DeviceLoss::Failed { error } => {
+            let msg = format!(
+                "The GPU stopped working and no new graphics device could be made ({error}). \
+                 The app has to close; update or reinstall the graphics driver if this repeats."
+            );
+            log::error!("{msg}");
+            eprintln!("[gpu] {msg}");
+            shutdown::failed(msg.clone());
+            payload::message_box(&msg);
+        }
+    }
+}
 
 /// gpui's `Resource::Uri` client is redjs's network stack ([`http_client`]); without one gpui's
 /// `NullHttpClient` fails every request.
@@ -1023,6 +1059,10 @@ pub(crate) fn run_embedded() {
 fn run_app() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
+    #[cfg(target_os = "windows")]
+    if let Err(error) = gpui_windows::install_device_loss_observer(on_device_loss) {
+        log::warn!("[gpu] {error:#}");
+    }
     #[cfg(all(feature = "webgpu", target_os = "windows"))]
     shared_gpu::install().expect("installing shared graphics device provider");
     perf::boot();

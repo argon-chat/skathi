@@ -239,6 +239,10 @@ fn generation_changed(number: u64) {
     }
 }
 
+pub(crate) fn device_removed() {
+    generation_changed(u64::MAX);
+}
+
 pub fn install() -> Result<()> {
     if !super::shared_device_enabled(std::env::var("SK_GPU_SHARED").ok().as_deref()) {
         // Explicit diagnostic mode leaves redjs's independent lazy backend and

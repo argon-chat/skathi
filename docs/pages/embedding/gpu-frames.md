@@ -59,7 +59,7 @@ fn produce(surface: SurfaceHandle) {
             continue;
         }
         if gpu.is_none() {
-            // `NoDevice` until the window has drawn once.
+            // `NoDevice` until the window has drawn once, and since 0.5 while a removed device is replaced.
             let Ok(device) = surface.d3d11_device() else { continue };
             let raw = device.as_raw();
             let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap().clone();

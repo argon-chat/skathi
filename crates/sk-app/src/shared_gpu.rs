@@ -8,6 +8,8 @@ mod implementation;
 #[path = "shared_gpu/native.rs"]
 mod implementation;
 
+#[cfg(feature = "native-dx12")]
+pub(crate) use implementation::device_removed;
 pub use implementation::install;
 
 pub(crate) struct Stats {

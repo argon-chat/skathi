@@ -44,7 +44,9 @@ use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use super::color::{self, Shader};
 use super::d3d11::{dxgi_format, surface_format};
-use super::{check_format, check_size, lock, Frame, State, SurfaceError, SurfaceFormat};
+use super::{
+    check_format, check_size, lock, Frame, State, SurfaceError, SurfaceFormat, REMOVED_DEVICE,
+};
 
 /// The renderer's D3D12 device and direct queue, retained by `keep_alive`.
 pub struct D3D12Lease {
@@ -302,18 +304,27 @@ fn platform(what: &str, e: windows::core::Error) -> SurfaceError {
     SurfaceError::Platform(format!("{what}: {e}"))
 }
 
-fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
+/// The renderer's device and queue; `Err(None)` while the device is removed.
+fn current() -> Result<Arc<Gpu>, Option<SurfaceError>> {
+    if super::removed() {
+        return Err(None);
+    }
     let Some(provider) = PROVIDER.get() else {
         // The host installs the provider on its first frame.
-        return Err(match crate::video_device::renderer_device() {
+        return Err(Some(match crate::video_device::renderer_device() {
             Ok(Some(_)) => SurfaceError::NotSupported(D3D11_RENDERER),
             _ => SurfaceError::NoDevice("no window has drawn yet".into()),
-        });
+        }));
     };
     let lease =
         provider().ok_or_else(|| SurfaceError::NoDevice("no window has drawn yet".into()))?;
     let mut cached = lock(&GPU);
     if let Some(gpu) = cached.as_ref().filter(|g| g.generation == lease.generation) {
+        if unsafe { gpu.device.GetDeviceRemovedReason() }.is_err() {
+            // The host notices within a refresh, and has every surface let go of it.
+            sk_runtime::frames::wake();
+            return Err(None);
+        }
         return Ok(gpu.clone());
     }
     let borrowed = |raw: &*mut c_void| {
@@ -337,6 +348,15 @@ fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
     });
     *cached = Some(gpu.clone());
     Ok(gpu)
+}
+
+fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
+    current().map_err(|e| e.unwrap_or_else(|| SurfaceError::NoDevice(REMOVED_DEVICE.into())))
+}
+
+/// For a present: a frame made while the device is removed was made on the old one.
+fn gpu_for_frame() -> Result<Arc<Gpu>, SurfaceError> {
+    current().map_err(|e| e.unwrap_or(SurfaceError::DeviceChanged))
 }
 
 pub(super) fn forget_device() {
@@ -403,7 +423,12 @@ impl Fence {
 
 pub(super) fn release_fence(state: &Mutex<State>) -> Result<Fence, SurfaceError> {
     let gpu = gpu()?;
-    lock(state).gpu12.queue(&gpu).map(Fence)
+    let mut state = lock(state);
+    // Removed since `gpu()`: the surface has let go of its queue, and must not make another.
+    if super::removed() {
+        return Err(SurfaceError::NoDevice(REMOVED_DEVICE.into()));
+    }
+    state.gpu12.queue(&gpu).map(Fence)
 }
 
 pub(crate) struct SlotTexture {
@@ -856,6 +881,10 @@ fn copy_in(
     wait: Option<(&ID3D12Fence, u64)>,
     signal: Option<(&ID3D12Fence, u64)>,
 ) -> Result<(u64, u64), SurfaceError> {
+    // Removed since `gpu()`: the surface has let go of its textures, and must not make more.
+    if super::removed() {
+        return Err(SurfaceError::DeviceChanged);
+    }
     let (size, format) = describe(source)?;
     check_format(state.format, format)?;
     let queue = state.gpu12.queue(gpu)?;
@@ -978,7 +1007,7 @@ pub(super) unsafe fn present(
         )),
         _ => None,
     };
-    let gpu = gpu()?;
+    let gpu = gpu_for_frame()?;
     let mut owner: Option<ID3D12Device> = None;
     unsafe { source.GetDevice(&mut owner) }.map_err(|e| platform("GetDevice", e))?;
     let same = owner
@@ -1049,7 +1078,7 @@ pub(super) fn present_shared(
     opened: &Opened,
     values: Option<(u64, u64)>,
 ) -> Result<u64, SurfaceError> {
-    let gpu = gpu()?;
+    let gpu = gpu_for_frame()?;
     if gpu.generation != opened.generation {
         return Err(SurfaceError::DeviceChanged);
     }

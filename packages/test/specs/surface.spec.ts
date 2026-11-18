@@ -323,9 +323,19 @@ type Feedback = {
   shown: number;
   error: string | null;
   visibleLate: number;
+  deviceLost: number;
+  /** When each `SurfaceEvent::DeviceLost` arrived, `monotonic_ns`. */
+  lostAt: number[];
+  /** When each present began, and whether it was taken. */
+  attempts: [number, boolean][];
 };
 
-type Producer = { name: string; source: "bgra" | "d3d12" | "d3d12-rgba16f"; ring: number; on?: SkApp };
+type Producer = {
+  name: string;
+  source: "bgra" | "d3d12" | "d3d12-rgba16f" | "shared";
+  ring: number;
+  on?: SkApp;
+};
 
 async function feedback(
   fps: number,
@@ -559,6 +569,66 @@ test.skipIf(!WINDOWS)(
       if (cover) user32.symbols.DestroyWindow(cover);
       user32.close();
       await watched.close();
+    }
+  },
+  T,
+);
+
+const privateBytes = (pid: number) =>
+  Number(
+    spawnSync("powershell", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`], {
+      encoding: "utf8",
+      windowsHide: true,
+    }).stdout.trim(),
+  );
+
+test.skipIf(!WINDOWS)(
+  "a removed renderer device is reported at once, refuses presents, and is replaced",
+  async () => {
+    const removed = await open("surface-device-removed");
+    try {
+      const shared: Producer = { name: "feedback", source: "shared", ring: 1, on: removed };
+      await until(
+        () => callOn(removed, "stats", "feedback") as Promise<Stats>,
+        (s) => s.visible,
+      );
+      let at = 0;
+      const bytes = [0, 0, 0];
+      // As fast as it goes, so a frame is usually waiting for the window when the device goes.
+      const f = await feedback(
+        0,
+        500,
+        false,
+        async () => {
+          bytes[0] = privateBytes(removed.pid);
+          at = Number(await callOn(removed, "removeDevice", "feedback"));
+          await Bun.sleep(2_000);
+          bytes[1] = privateBytes(removed.pid);
+          await Bun.sleep(6_000);
+          bytes[2] = privateBytes(removed.pid);
+        },
+        shared,
+      );
+      const [lost, recovered = Infinity] = f.lostAt;
+      const taken = (from: number, to: number) => f.attempts.filter(([t, ok]) => ok && t >= from && t < to).length;
+      console.log(
+        `device lost ${lost === undefined ? "never" : `${((lost - at) / 1e6).toFixed(0)} ms`} after the removal, ` +
+          `a new one ${((recovered - at) / 1e6).toFixed(0)} ms after it; ${f.deviceLost} frames dropped as deviceLost; ` +
+          `${taken(lost ?? at, recovered)} presents taken in between, ${taken(recovered, Infinity)} after; ` +
+          `private bytes ${bytes.map((b) => (b / 2 ** 20).toFixed(0)).join(" -> ")} MiB`,
+      );
+      expect(lost! - at).toBeLessThan(2e9);
+      expect(f.exactlyOnce).toBe(true);
+      // The new device is taken just before its DeviceLost is heard.
+      expect(taken(lost!, recovered - 1e6)).toBe(0);
+      expect(f.lostAt.length).toBe(2);
+      expect(taken(recovered, Infinity)).toBeGreaterThan(0);
+      expect(bytes[2]! - bytes[1]!).toBeLessThan(32 * 2 ** 20);
+      const again = await feedback(60, 1_000, false, undefined, shared);
+      expect(again.exactlyOnce).toBe(true);
+      expect(again.presented).toBeGreaterThan(0);
+    } finally {
+      await removed.close();
     }
   },
   T,

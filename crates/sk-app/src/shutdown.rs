@@ -31,6 +31,16 @@ static BEGAN: OnceLock<(Instant, &'static str)> = OnceLock::new();
 static STEPS: Mutex<Vec<(&'static str, Instant, Option<Duration>)>> = Mutex::new(Vec::new());
 static HIDDEN: Mutex<usize> = Mutex::new(0);
 static ENDING: AtomicBool = AtomicBool::new(false);
+static FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The app cannot go on: the coming quit ends the process with exit code 1, or tells the embedder
+/// it ended unclean.
+pub(crate) fn failed(why: String) {
+    FAILED.store(true, Ordering::SeqCst);
+    if crate::embed::active() {
+        crate::embed::finished(false, why);
+    }
+}
 
 pub(crate) fn is_closing() -> bool {
     BEGAN.get().is_some()
@@ -188,10 +198,11 @@ fn hide_windows() -> usize {
 }
 
 fn terminate() -> ! {
+    let code = FAILED.load(Ordering::SeqCst) as u32;
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-        let _ = TerminateProcess(GetCurrentProcess(), 0);
+        let _ = TerminateProcess(GetCurrentProcess(), code);
     }
-    std::process::exit(0)
+    std::process::exit(code as i32)
 }
