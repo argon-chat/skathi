@@ -18,6 +18,7 @@ import {
   readingMinutes,
   type Post,
 } from "../../lib/blog";
+import { organizationId } from "../../lib/schema";
 
 export const getStaticPaths = (async () => {
   const posts = await getPosts();
@@ -38,22 +39,27 @@ const { title, description, date, author, tags, draft, release, hero } = post.da
 const { Content, headings } = await render(post);
 const toc = headings.filter((heading) => heading.depth === 2);
 const path = postUrl(post.id);
+const site = Astro.site ?? new URL("https://skathi.land/");
+const url = new URL(path, site).href;
 const structuredData = {
-  "@context": "https://schema.org",
   "@type": "BlogPosting",
   headline: title,
   description,
   datePublished: isoDate(date),
-  author: { "@type": "Organization", name: author },
-  url: new URL(path, Astro.site).href,
+  dateModified: isoDate(date),
+  author: { "@type": "Organization", name: author, url: site.href },
+  publisher: { "@id": organizationId(site) },
+  url,
+  mainEntityOfPage: url,
+  image: new URL(hero?.image?.src ?? "/social.png", site).href,
   inLanguage: "en",
   keywords: tags.join(", "),
-  isPartOf: { "@type": "Blog", name: blogTitle, url: new URL(blogHome, Astro.site).href },
+  isPartOf: { "@type": "Blog", name: blogTitle, url: new URL(blogHome, site).href },
 };
 ---
 
 <BlogLayout
-  title={`${title} · Skathi`}
+  title={`${post.data.metaTitle ?? title} · Skathi`}
   description={description}
   path={path}
   type="article"

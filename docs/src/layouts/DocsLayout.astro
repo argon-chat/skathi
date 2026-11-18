@@ -10,6 +10,7 @@ import Pup from "../components/Pup.astro";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { blogHome } from "../lib/blog";
+import { organizationId, websiteId } from "../lib/schema";
 import {
   docsHome,
   getDocs,
@@ -87,22 +88,39 @@ const sectionIcons = {
 } as const;
 const status = page?.data.status;
 const fresh = isNew(page?.data.since);
-const structuredData = {
-  "@context": "https://schema.org",
-  "@type": "TechArticle",
-  headline: title,
-  description,
-  url: canonical.href,
-  inLanguage: "en",
-  isPartOf: { "@type": "WebSite", name: "Skathi documentation", url: Astro.site?.href },
-};
+const site = Astro.site ?? canonical;
+const crumbs = [{ label: "Docs", href: docsHome }, ...trail];
+const structuredData = [
+  {
+    "@type": "TechArticle",
+    headline: title,
+    description,
+    url: canonical.href,
+    mainEntityOfPage: canonical.href,
+    inLanguage: "en",
+    image: new URL("/social.png", site).href,
+    articleSection: section,
+    isPartOf: { "@id": websiteId(site) },
+    author: { "@id": organizationId(site) },
+    publisher: { "@id": organizationId(site) },
+  },
+  {
+    "@type": "BreadcrumbList",
+    itemListElement: crumbs.map((link, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: link.label,
+      item: new URL(link.href, site).href,
+    })),
+  },
+];
 ---
 
 <!doctype html>
 <html lang="en" data-theme="dark">
   <head>
     <Head
-      title={`${title} · Skathi`}
+      title={`${page?.data.metaTitle ?? title} · Skathi`}
       description={description}
       canonical={canonical}
       type="article"

@@ -64,10 +64,7 @@ const style = (item: Item, top = item.top) =>
             <div class="parallax-layer" style={`--depth: ${layer.depth}; opacity: ${layer.opacity}`}>
               {index === 0 &&
                 [0, 50].map((offset) => (
-                  <span
-                    class="parallax-glow"
-                    style={`top: ${offset + 4 + zone * 11}%; background: var(--candy-${glow})`}
-                  />
+                  <span class="parallax-glow" style={`top: ${offset + 4 + zone * 11}%; --glow: var(--candy-${glow})`} />
                 ))}
               {[0, 50].map((offset) =>
                 layer.items
@@ -95,7 +92,7 @@ const style = (item: Item, top = item.top) =>
             glows.map((glow) => (
               <span
                 class="parallax-glow"
-                style={`${glow.left ? `left: ${glow.left}` : `right: ${glow.right}`}; top: ${glow.top}; background: ${glow.color}`}
+                style={`${glow.left ? `left: ${glow.left}` : `right: ${glow.right}`}; top: ${glow.top}; --glow: ${glow.color}`}
               />
             ))}
           {layer.items.map((item) => (

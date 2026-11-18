@@ -1,7 +1,8 @@
 ---
 title: Vue, naturally native.
 label: Introduction
-description: Build native desktop apps with Vue and TypeScript. A GPU renderer, JavaScriptCore, and the components you already know.
+description: Build native desktop apps with Vue or Svelte and TypeScript, without Electron or a webview. A GPU renderer, JavaScriptCore, and the components you already know.
+metaTitle: What is Skathi? Native desktop apps in Vue and Svelte
 section: Getting started
 order: 0
 ---

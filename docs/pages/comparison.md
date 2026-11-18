@@ -1,7 +1,7 @@
 ---
-title: Skathi, Electron and Tauri
+title: Skathi vs Electron vs Tauri
 label: Comparison
-description: Skathi next to Electron and Tauri 2. Size, memory, processes, start time and the cost of a native call, measured with the same app on one machine, then rendering, platforms, native code, tooling and licensing.
+description: Skathi vs Electron vs Tauri 2. App size, memory, processes, start time and the cost of a native call, measured with the same app on one machine.
 section: Getting started
 order: 0.5
 since: "0.4"

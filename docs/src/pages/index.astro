@@ -7,6 +7,8 @@ import wordmark from "../../../logos/full_side_text_logo.svg?url";
 import wolf from "../../../logos/logo_single.svg?url";
 import shadingGlass from "../assets/shading-glass.png";
 import shadingNebula from "../assets/shading-nebula.png";
+import playerPoster from "../assets/media/player-poster.webp";
+import weatherPoster from "../assets/media/weather-poster.webp";
 import slang from "../lib/slang";
 import Command from "../components/Command.astro";
 import Head from "../components/Head.astro";
@@ -15,10 +17,14 @@ import Parallax from "../components/Parallax.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import SiteNav from "../components/SiteNav.astro";
 import { repository, version } from "../lib/docs";
+import { organizationId } from "../lib/schema";
 import { fetchStats } from "../lib/stats";
 
 const command = "bun create skathi my-blazing-fast-app";
-const title = "Skathi · Desktop apps from Vue, without a browser";
+const posterSizes = "(max-width: 900px) calc(100vw - 48px), 604px";
+const title = "Skathi · Vue and Svelte desktop apps without Electron";
+const metaDescription =
+  "Native desktop apps from Vue 3 or Svelte 5 and TypeScript, with no Electron and no webview: a GPU renderer and JavaScriptCore, for Windows, macOS and Linux.";
 const description =
   "Write Vue 3 or Svelte 5 components in TypeScript. Skathi renders them on the GPU, runs the script in JavaScriptCore or compiles it ahead of time to machine code, and ships one app for Windows, macOS and Linux.";
 const canonical = new URL("/", Astro.site);
@@ -252,15 +258,28 @@ const steps = [
   { label: "Ship", command: "bun run publish", text: "A release build for this OS, ready to hand out." },
 ] as const;
 
+const site = Astro.site ?? canonical;
 const structuredData = {
-  "@context": "https://schema.org",
   "@type": "SoftwareApplication",
+  "@id": new URL("/#software", site).href,
   name: "Skathi",
   applicationCategory: "DeveloperApplication",
+  applicationSubCategory: "Desktop application framework",
   operatingSystem: "Windows, macOS, Linux",
   softwareVersion: version,
-  description,
+  softwareRequirements: "Bun 1.4 or later",
+  description: metaDescription,
   url: canonical.href,
+  image: new URL("/social.png", site).href,
+  installUrl: new URL("/quick-start/", site).href,
+  downloadUrl: `${repository}/releases`,
+  releaseNotes: new URL("/blog/", site).href,
+  license: `${repository}/blob/master/LICENSE-MIT`,
+  isAccessibleForFree: true,
+  keywords: "Electron alternative, Tauri alternative, Vue desktop app, Svelte desktop app, native desktop framework",
+  sameAs: [repository, "https://www.npmjs.com/package/@skathi-native/cli", "https://crates.io/crates/skathi"],
+  author: { "@id": organizationId(site) },
+  publisher: { "@id": organizationId(site) },
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 };
 ---
@@ -270,7 +289,7 @@ const structuredData = {
   <head>
     <Head
       title={title}
-      description={description}
+      description={metaDescription}
       canonical={canonical}
       type="website"
       structuredData={structuredData}
@@ -287,7 +306,7 @@ const structuredData = {
           <span class="glow glow-pink"></span>
           <span class="glow glow-blue"></span>
         </div>
-        <img class="hero-logo" src={wordmark} width="1902" height="827" alt="Skathi" />
+        <img class="hero-logo" src={wordmark} width="1902" height="827" alt="Skathi" fetchpriority="high" />
         <p class="hero-meta">
           <span class="status-dot"></span>v{version}<span aria-hidden="true">·</span>Windows, macOS and Linux
         </p>
@@ -320,6 +339,7 @@ const structuredData = {
           <div class="fan">
             <figure class="fan-card" style="--side: -1">
               <div class="window">
+                <Image class="window-poster" src={playerPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
                   muted
                   loop
@@ -327,7 +347,6 @@ const structuredData = {
                   preload="none"
                   width="1280"
                   height="820"
-                  poster="/media/player-poster.webp"
                   aria-label="The player template: a radial spectrum round the cover, recolouring with each track, and hearts when a song is liked"
                 >
                   <source data-src="/media/player.webm" type='video/webm; codecs="av01.0.05M.08"' />
@@ -341,6 +360,7 @@ const structuredData = {
             </figure>
             <figure class="fan-card" style="--side: 1">
               <div class="window">
+                <Image class="window-poster" src={weatherPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
                   muted
                   loop
@@ -348,7 +368,6 @@ const structuredData = {
                   preload="none"
                   width="1280"
                   height="820"
-                  poster="/media/weather-poster.webp"
                   aria-label="The weather template: rain over a painted valley, a thunderstorm with lightning, then snow, with drops and frost on the glass panels"
                 >
                   <source data-src="/media/weather.webm" type='video/webm; codecs="av01.0.05M.08"' />

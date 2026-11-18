@@ -14,6 +14,8 @@ const docs = defineCollection({
     section: z.enum(["Getting started", "Guides", "Devtools", "Embedding", "Reference", "Contributing"]),
     order: z.number().default(0),
     label: z.string().optional(),
+    /** The <title> for search results when the heading alone says little, without the " · Skathi" suffix. */
+    metaTitle: z.string().optional(),
     status: z.enum(["experimental"]).optional(),
     /** The minor release the page arrived in, such as "0.4"; it is marked New while that release is current. */
     since: z
@@ -30,6 +32,8 @@ const blog = defineCollection({
       title: z.string(),
       /** The summary on the index, in the feed and under the title. */
       description: z.string(),
+      /** The <title> for search results, without the " · Skathi" suffix. */
+      metaTitle: z.string().optional(),
       date: z.coerce.date(),
       author: z.string().default("The Skathi team"),
       tags: z.array(z.string()).default([]),

@@ -42,26 +42,34 @@
     height: 420px;
     pointer-events: none;
   }
+  /* A soft ellipse drawn as a gradient, not a blur filter, which is costly to paint. The padding is
+     the spread a blur would add. */
   .glow {
     position: absolute;
-    border-radius: 50%;
-    filter: blur(70px);
+    margin: -70px;
+    padding: 70px;
+    background: radial-gradient(
+      closest-side,
+      var(--glow) 25%,
+      color-mix(in srgb, var(--glow) 45%, transparent) 62%,
+      transparent
+    );
     opacity: 0.35;
     animation: drift 14s ease-in-out infinite alternate;
   }
   .glow-pink {
+    --glow: var(--candy-pink);
     width: 360px;
     height: 260px;
     left: 18%;
     top: 40px;
-    background: var(--candy-pink);
   }
   .glow-blue {
+    --glow: var(--candy-blue);
     width: 320px;
     height: 240px;
     right: 16%;
     top: 90px;
-    background: var(--candy-blue);
     animation-delay: -7s;
   }
   .hero-logo {
@@ -207,13 +215,26 @@
       0 48px 120px -20px color-mix(in srgb, var(--candy-pink) 55%, transparent),
       var(--shadow);
   }
+  .window {
+    position: relative;
+  }
+  /* Under the video until its frames cover it: a <video> poster cannot be responsive. */
+  .window-poster {
+    position: absolute;
+    inset: 1px;
+    width: calc(100% - 2px);
+    height: calc(100% - 2px);
+    object-fit: cover;
+    border-radius: 11px;
+    background: #17161e;
+  }
   .window video {
+    position: relative;
     display: block;
     width: 100%;
     height: auto;
     aspect-ratio: 1280 / 820;
     border-radius: 11px;
-    background: #17161e;
   }
   .fan-card figcaption {
     display: flex;
