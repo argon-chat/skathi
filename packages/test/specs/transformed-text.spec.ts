@@ -41,7 +41,10 @@ const rotated = async (id: string, deg: number): Promise<Line> => {
   return { box: await layoutBox(id), matrix: [cos, sin, -sin, cos, 0, 0] };
 };
 
-/** Pen positions along the line, after "S", "Save", "Saved", "Saved ", "Saved draw" and "Saved draw-". */
+/**
+ * Pen positions along the line, after "S", "Save", "Saved", "Saved ", "Saved draw" and "Saved draw-". They are
+ * box widths, which layout rounds up to a whole px: each pen lies up to 1px before its value.
+ */
 const pens = () =>
   app.eval(`Object.fromEntries(
     ["s", "save", "saved", "space", "draw", "hyphen"].map((key) => [
@@ -99,7 +102,8 @@ describe("transformed text", () => {
           id,
           inked: xHeight < line.box[3],
           space: darkest(pen.saved + 0.5, pen.space + 2),
-          hyphen: darkest(pen.draw + 0.5, pen.hyphen + 0.25),
+          // The "f" stem can start within 1px of its pen: stop at the lowest the pen can be.
+          hyphen: darkest(pen.draw + 0.5, pen.hyphen - 1 + 0.25),
         };
       });
       expect(report.filter((r) => !r.inked || r.space < 240 || r.hyphen < 240)).toEqual([]);
