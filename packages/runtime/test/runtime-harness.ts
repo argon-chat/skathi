@@ -123,6 +123,8 @@ type EventName =
   | "mousemove"
   | "mouseenter"
   | "mouseleave"
+  | "mouseover"
+  | "mouseout"
   | "loadstart"
   | "loadedmetadata"
   | "loadeddata"
@@ -258,6 +260,7 @@ type Dispatcher = (
   data?: unknown,
   x?: number,
   y?: number,
+  pen?: number[],
 ) => unknown;
 type Json = Record<string, unknown>;
 

@@ -16,7 +16,7 @@ import {
 } from "./events";
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
-import { pointer, pointerCaptures, releaseCapturedPointer } from "./pointer-capture";
+import { pointer, pointerCaptures, pointerSource, releaseCapturedPointer } from "./pointer-capture";
 import { nodeById } from "./nodes";
 import { deliverFrameMessage, isFrameEl } from "./media";
 import { DERIVED, DERIVED_OF } from "./event-names";
@@ -137,10 +137,15 @@ function dndFinish(swallowClick: boolean): void {
 
 function dndStart(g: DndGesture, x: number, y: number, d: number): boolean {
   // A browser cancels the pointer a drag takes over (Pointer Events §4.1.3.3).
-  const captured = pointerCaptures.get(1);
+  const id = pointer.source.id;
+  const captured = pointerCaptures.get(id);
   if (captured) {
-    propagate(captured, "pointercancel", synthesize("pointercancel", x, y, -1, d, undefined));
-    releaseCapturedPointer(1);
+    propagate(
+      captured,
+      "pointercancel",
+      synthesize("pointercancel", x, y, -1, d, undefined, undefined, undefined, pointer.source),
+    );
+    releaseCapturedPointer(id);
   }
   const DT = theGlobal("DataTransfer") as (new () => DataTransferLike) | undefined;
   const dt: DataTransferLike = typeof DT === "function" ? new DT() : { dropEffect: "none", effectAllowed: "none" };
@@ -257,30 +262,39 @@ function dndDispatch(
   return undefined;
 }
 
-const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y) => {
+const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y, pen) => {
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
   if (name === "pointerlockchange" || name === "pointerlockerror")
     return propagateAtDocument(name, new Event(name, { bubbles: true }));
+  const src = pointerSource(pen);
   if (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel") {
+    // The pointer that was pressed is done with when another one reports.
+    if (src.id !== pointer.source.id) {
+      releaseCapturedPointer(pointer.source.id);
+      pointer.compatSuppressed = false;
+    }
     pointer.position = { x: a, y: b, button: c, modifiers: d };
     pointer.buttons = buttonsFor(name, c);
+    pointer.source = src;
     // A lost native release (capture stolen by another window, for example)
     // must terminate the old gesture before an unpressed move is delivered.
     if (name === "mousemove" && !pointer.buttons) {
-      const captured = pointerCaptures.get(1);
+      const captured = pointerCaptures.get(src.id);
       if (captured) {
-        propagate(captured, "pointercancel", synthesize("pointercancel", a, b, -1, d, key));
-        releaseCapturedPointer(1);
+        propagate(captured, "pointercancel", synthesize("pointercancel", a, b, -1, d, key, undefined, undefined, src));
+        releaseCapturedPointer(src.id);
       }
     }
+  } else if (name === "mouseenter" || name === "mouseleave" || name === "mouseover" || name === "mouseout") {
+    pointer.source = src;
   }
   if (dndState.gesture || dndState.swallowClick || (name === "selectstart" && dndState.seen)) {
     const answer = dndDispatch(name, nodeId, a, b, d, key);
     if (answer !== undefined) return answer;
   }
   const retarget = name === "mousemove" || name === "mouseup" || name === "pointercancel";
-  const target = (retarget && pointerCaptures.get(1)) || nodeById(nodeId);
+  const target = (retarget && pointerCaptures.get(src.id)) || nodeById(nodeId);
   if (!target) return true;
   if (name === "keydown" && key === "Escape" && globalThis.__SK_WINDOW__?.escapeFullscreen?.()) return false;
   if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
@@ -327,6 +341,10 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
     if (key == null || key !== img.attrs.src) return true;
     img._img = { src: key, ok: name === "load", w: name === "load" ? a : 0, h: name === "load" ? b : 0 };
   }
+  // `mouseover`/`mouseout` name the element on the other side of the boundary in `key`.
+  const boundary = name === "mouseover" || name === "mouseout";
+  const related = boundary ? (key ? (nodeById(Number(key)) ?? null) : null) : undefined;
+  const relate = (ev: Event) => (related === undefined ? ev : withRelatedTarget(ev, related));
   // `preventDefault()` on a derived pointer event cancels its source.
   const derived = DERIVED_OF[name];
   let proceed = true;
@@ -334,16 +352,22 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
     for (const dn of derived) {
       if (!DERIVED[dn as DerivedEventName].pre) continue;
       if (!hasListener(target, dn)) continue;
-      if (!propagate(target, dn, synthesize(dn, a, b, c, d, key, name === "mousemove" ? data : undefined)))
-        proceed = false;
+      const ev = synthesize(dn, a, b, c, d, key, name === "mousemove" ? data : undefined, undefined, src);
+      if (!propagate(target, dn, relate(ev))) proceed = false;
     }
   }
+  // A pen whose `pointerdown` was cancelled fires no mouse events until it lifts (Pointer Events §"Mapping for
+  // devices that do not support hover"); `click` still follows.
+  if (src.type === "pen" && name === "mousedown") pointer.compatSuppressed = !proceed;
+  const compat = name === "mousedown" || name === "mousemove" || name === "mouseup";
+  const suppressed = compat && src.type === "pen" && pointer.compatSuppressed;
+  if (name === "mouseup" || name === "pointercancel") pointer.compatSuppressed = false;
   // Skipping the source event when nothing listens is safe: the only `preventDefault()` that could set the flag
   // is the one below, which already made `proceed` false. A click whose path holds a link, label or file input
   // must be built regardless: a `preventDefault()` on the path cancels the activation.
   const link = name === "click" && activatableOnPath(target);
-  if (link || hasListener(target, name)) {
-    const ev = synthesize(name, a, b, c, d, key, data, isImg || isFrameEl(target) ? "img" : undefined);
+  if (!suppressed && (link || hasListener(target, name))) {
+    const ev = relate(synthesize(name, a, b, c, d, key, data, isImg || isFrameEl(target) ? "img" : undefined, src));
     if (focusChange) withRelatedTarget(ev, focusRelated);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = (name === "click" ? propagateClick(target, ev) : propagate(target, name, ev)) && proceed;
@@ -395,7 +419,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
         "already scrolled its own content (the boxes around it stay put)",
     );
   }
-  if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(1);
+  if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(src.id);
   if (name === "mousedown" && dndState.seen && !dndState.gesture) dndPress(target, a, b, c, proceed);
   return proceed;
 };

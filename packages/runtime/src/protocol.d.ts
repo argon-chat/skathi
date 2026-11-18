@@ -92,7 +92,7 @@ declare function __sk_set_layout_hook(fn: (op: number) => number): void;
 /** `true`: the next frame runs the layout step even if nothing lays out. `false`: every observation was released. */
 declare function __sk_layout_watch(observing: boolean): void;
 
-/** `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`. */
+/** `(nodeId, code, a, b, c, d, key, data, x, y, pen) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`; `pen` is `[flags, ...readings]` for an event a pen caused, or a mouse move's positions since the last one (`pointerSource`). */
 type SkDispatcher = (
   node: SkNodeId,
   code: SkEventCode,
@@ -104,6 +104,7 @@ type SkDispatcher = (
   data: unknown,
   x?: number,
   y?: number,
+  pen?: number[],
 ) => boolean;
 
 /**
@@ -205,7 +206,9 @@ type SkEventCode =
   | 55 // surfaceresize      (<sk-surface>)
   | 56 // surfaceready
   | 57 // surfacelost
-  | 58; // surfacedisplaychange
+  | 58 // surfacedisplaychange
+  | 59 // mouseover
+  | 60; // mouseout
 
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __sk_selection_get(): string;

@@ -1,0 +1,50 @@
+---
+title: Drawing with a pen
+label: Pen input
+description: Read pressure, tilt, the eraser and the barrel button from a stylus with ordinary Pointer Events, and draw every reading of a stroke.
+section: Guides
+order: 11
+since: "0.5"
+---
+
+import Sample from "../../src/components/Sample.astro";
+
+A stylus reaches the page as [Pointer Events](/web-platform/pointer-event/), the same ones a browser fires, so a canvas drawing app written for the web runs unchanged. The pen has `pointerType: "pen"` and `pointerId` `2`; the mouse keeps `"mouse"` and `1`.
+
+## A stroke
+
+Capture the pointer on `pointerdown`, then draw each of the move's [coalesced events](/web-platform/pointer-event-get-coalesced-events/). Skathi delivers one `pointermove` a frame, and a pen reports far more often than that: without the coalesced events, a quick stroke turns into a polyline.
+
+<Sample src="pen-input/Sketch" focus="stroke" />
+
+`preventDefault()` on `pointerdown` keeps the `mousedown`, `mousemove` and `mouseup` that follow a pen's pointer events from firing, so the stroke selects no text and starts no drag. `touch-action: none` and a cancelled `contextmenu` keep the barrel button and the system's pen gestures out of the way, as in a browser.
+
+## What the pen reports
+
+| Member                                                                         | Pen                                                | Mouse                           |
+| ------------------------------------------------------------------------------ | -------------------------------------------------- | ------------------------------- |
+| [`pressure`](/web-platform/pointer-event-pressure/)                            | 0 to 1 while touching, `0` while hovering          | `0.5` while a button is down    |
+| [`tiltX`, `tiltY`](/web-platform/pointer-event-tilt-x/)                        | Degrees, -90 to 90                                 | `0`                             |
+| [`altitudeAngle`, `azimuthAngle`](/web-platform/pointer-event-altitude-angle/) | Radians, from the tilt                             | π/2 and `0`                     |
+| [`twist`](/web-platform/pointer-event-twist/)                                  | Degrees, 0 to 359, where the pen reports it        | `0`                             |
+| [`tangentialPressure`](/web-platform/pointer-event-tangential-pressure/)       | -1 to 1 on airbrush pens (macOS, Wayland)          | `0`                             |
+| `button` / `buttons`                                                           | Tip `0` / `1`, barrel `2` / `2`, eraser `5` / `32` | Left `0` / `1`, right `2` / `2` |
+
+A pen in range but off the surface fires `pointerover`, `pointerenter` and `pointermove` with `buttons` `0`, and `pointerout` and `pointerleave` when it leaves range.
+
+## Platforms
+
+- **Windows**: pens arrive through `WM_POINTER` messages, with every reading Windows batched into one message. Press-and-hold right-click, flicks and the Windows Ink feedback ripples are off for Skathi windows. Windows reports no barrel pressure.
+- **macOS**: AppKit's tablet events, including the eraser end and leaving proximity.
+- **Linux**: Wayland compositors with the tablet protocol (`zwp_tablet_v2`). Under X11 a pen moves the core pointer and arrives as the mouse.
+
+## Try it
+
+`apps/pen-draw` in the repository is a small drawing app: pressure strokes, a highlighter on the barrel button, the eraser, and a switch to draw without the coalesced events. From a checkout, build the host and run it:
+
+```sh
+cargo build --target x86_64-pc-windows-msvc -p sk-app
+bun sk dev apps/pen-draw
+```
+
+The devtools [`pen`](/devtools/scripting/) command sends pen events through the host's input path without a pen, which is how the end-to-end tests check them.

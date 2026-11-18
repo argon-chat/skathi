@@ -52,6 +52,8 @@ pub struct WindowState {
     pub pending_mouse_move: Option<PendingMouseMove>,
     /// The moves since the last delivered `mousemove`: its `movementX`/`movementY`.
     pub mouse_movement: gpui::Point<gpui::Pixels>,
+    /// The pen readings since the last delivered `mousemove` (`crate::pen`).
+    pub pen_trail: Vec<gpui::PenSample>,
     pub pointer_capture: Option<u32>,
     /// Has a node already taken THIS mouse-down? gpui runs `on_any_mouse_down` on every listening box
     /// under the pointer; the browser has one target, so without the claim an outer listener ran twice.

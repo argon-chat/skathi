@@ -1161,6 +1161,29 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
             },
         ),
+        "pen" => {
+            let tilt = |name: &str| num(name).unwrap_or(0.0) as f32;
+            cmd_pen(
+                arg("selector").as_deref(),
+                num("index"),
+                num("x"),
+                num("y"),
+                arg("kind").as_deref(),
+                PenExtras {
+                    pressure: num("pressure").map_or(0.5, |p| p.clamp(0.0, 1.0)) as f32,
+                    tilt_x: tilt("tiltX"),
+                    tilt_y: tilt("tiltY"),
+                    twist: tilt("twist"),
+                    eraser: flag("eraser"),
+                    barrel: flag("barrel"),
+                    from: num("fromX")
+                        .zip(num("fromY"))
+                        .map(|(x, y)| (x as f32, y as f32)),
+                    from_pressure: num("fromPressure").map(|p| p.clamp(0.0, 1.0) as f32),
+                    steps: num("steps").map_or(1, |n| n.clamp(1.0, 64.0) as usize),
+                },
+            )
+        }
         "eval" => match arg("js") {
             None => err("eval needs `js`"),
             Some(js) => cmd_eval(&js),
@@ -1988,32 +2011,24 @@ fn mouse_inputs(
     events
 }
 
-/// Unlike `click` (synthesized into JS from a node id), content masks, paint order,
-/// `pointer-events` and hover all apply. No OS cursor moves.
-fn cmd_mouse(
+/// One window for aim and dispatch: a selector names the window that paints the node, bare x/y
+/// use the command's window.
+fn in_window<R>(node: Option<u32>, f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
+    match node {
+        Some(id) => with_node_window(id, f),
+        None => with_target(f),
+    }
+}
+
+/// The node a gesture is aimed at, if a selector named one, and the window point it lands on.
+fn aim(
     selector: Option<&str>,
     index: Option<f64>,
     x: Option<f64>,
     y: Option<f64>,
-    kind: Option<&str>,
-    button: Option<f64>,
-    extras: MouseExtras,
-) -> String {
-    // One window for aim and dispatch: a selector names the window that paints the node, bare
-    // x/y use the command's window.
-    fn in_window<R>(node: Option<u32>, f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
-        match node {
-            Some(id) => with_node_window(id, f),
-            None => with_target(f),
-        }
-    }
-    let node = match selector {
-        Some(sel) => match resolve_one(sel, index) {
-            Ok(id) => Some(id),
-            Err(e) => return err(e),
-        },
-        None => None,
-    };
+    cmd: &str,
+) -> Result<(Option<u32>, (f32, f32)), String> {
+    let node = selector.map(|sel| resolve_one(sel, index)).transpose()?;
     let point = match (node, x, y) {
         (Some(id), _, _) => {
             // Not the centre of `bounds` (untransformed): gpui's matrix maps it, and gpui's hit
@@ -2021,10 +2036,10 @@ fn cmd_mouse(
             match in_window(Some(id), |window, _| {
                 sk_tree::devtools::aim_point(id, window)
             }) {
-                None => return err("not in a commit phase"),
+                None => return Err("not in a commit phase".into()),
                 Some(Some(p)) => p,
                 Some(None) => {
-                    return err(format!(
+                    return Err(format!(
                         "node {id} is not reachable at its own centre — either it was not painted \
                          in the last frame (detached, or parked in a <KeepAlive> cache), or gpui's \
                          hit test says something else is there: an overlay above it, a clipping \
@@ -2036,8 +2051,158 @@ fn cmd_mouse(
         }
         (None, Some(x), Some(y)) => (x as f32, y as f32),
         _ => {
-            return err("mouse needs either a `selector` or both `x` and `y` (window coordinates)")
+            return Err(format!(
+                "{cmd} needs either a `selector` or both `x` and `y` (window coordinates)"
+            ))
         }
+    };
+    Ok((node, point))
+}
+
+/// What a `pen` gesture carries besides its kind and position.
+struct PenExtras {
+    pressure: f32,
+    tilt_x: f32,
+    tilt_y: f32,
+    twist: f32,
+    eraser: bool,
+    barrel: bool,
+    /// Readings before this one, from `from` to the position, each its own sample: the move's
+    /// coalesced events.
+    from: Option<(f32, f32)>,
+    /// The pressure at `from`; the readings ramp from it. Defaults to `pressure`.
+    from_pressure: Option<f32>,
+    steps: usize,
+}
+
+fn pen_input(
+    kind: &str,
+    position: gpui::Point<gpui::Pixels>,
+    extras: &PenExtras,
+) -> gpui::PlatformInput {
+    let contact = matches!(kind, "down" | "move");
+    let button = if extras.barrel {
+        gpui::MouseButton::Right
+    } else {
+        gpui::MouseButton::Left
+    };
+    let reading = |position, pressure| gpui::PenSample {
+        position,
+        pressure,
+        tilt_x: extras.tilt_x,
+        tilt_y: extras.tilt_y,
+        twist: extras.twist,
+        ..Default::default()
+    };
+    let pressure = if contact { extras.pressure } else { 0.0 };
+    let history = match extras.from {
+        Some((fx, fy)) if extras.steps > 1 => {
+            let n = extras.steps;
+            (1..n)
+                .map(|i| {
+                    let t = i as f32 / n as f32;
+                    let at = gpui::point(
+                        gpui::px(fx + (f32::from(position.x) - fx) * t),
+                        gpui::px(fy + (f32::from(position.y) - fy) * t),
+                    );
+                    let start = if contact {
+                        extras.from_pressure.unwrap_or(pressure)
+                    } else {
+                        0.0
+                    };
+                    reading(at, start + (pressure - start) * t)
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let modifiers = gpui::Modifiers::default();
+    let action = match kind {
+        "down" => gpui::PenAction::Down(gpui::MouseDownEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }),
+        "up" => gpui::PenAction::Up(gpui::MouseUpEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+        }),
+        "leave" => gpui::PenAction::Exited(gpui::MouseExitEvent {
+            position,
+            pressed_button: None,
+            modifiers,
+        }),
+        _ => gpui::PenAction::Move(gpui::MouseMoveEvent {
+            position,
+            pressed_button: contact.then_some(button),
+            modifiers,
+        }),
+    };
+    gpui::PlatformInput::Pen(gpui::PenEvent {
+        action,
+        pen: gpui::PenInput {
+            pointer_id: 1,
+            eraser: extras.eraser,
+            barrel: extras.barrel,
+            in_contact: contact,
+            sample: reading(position, pressure),
+            history,
+        },
+    })
+}
+
+/// A pen gesture through gpui's dispatch, the way a platform reports a stylus. No OS input.
+fn cmd_pen(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    kind: Option<&str>,
+    extras: PenExtras,
+) -> String {
+    let (node, point) = match aim(selector, index, x, y, "pen") {
+        Ok(aimed) => aimed,
+        Err(e) => return err(e),
+    };
+    let kind = kind.unwrap_or("hover");
+    if !matches!(kind, "hover" | "down" | "move" | "up" | "leave") {
+        return err(format!(
+            "unknown pen kind `{kind}` — hover | down | move | up | leave"
+        ));
+    }
+    let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
+    let done = in_window(node, |window, app| {
+        window.dispatch_event(pen_input(kind, position, &extras), app);
+        window.refresh();
+    });
+    match done {
+        None => err("not in a commit phase"),
+        Some(()) => ok(Json::obj(vec![
+            ("x", Json::n(f64::from(point.0))),
+            ("y", Json::n(f64::from(point.1))),
+            ("kind", Json::s(kind.to_string())),
+        ])),
+    }
+}
+
+/// Unlike `click` (synthesized into JS from a node id), content masks, paint order,
+/// `pointer-events` and hover all apply. No OS cursor moves.
+fn cmd_mouse(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    kind: Option<&str>,
+    button: Option<f64>,
+    extras: MouseExtras,
+) -> String {
+    let (node, point) = match aim(selector, index, x, y, "mouse") {
+        Ok(aimed) => aimed,
+        Err(e) => return err(e),
     };
     let kind = kind.unwrap_or("move");
     if !matches!(kind, "move" | "down" | "up" | "click") {

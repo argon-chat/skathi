@@ -87,6 +87,9 @@ export const EV_CODES = {
   surfaceready: 56,
   surfacelost: 57,
   surfacedisplaychange: 58,
+  // The deepest element under the pointer changed; both bubble. `key` is the other element's node id (`relatedTarget`).
+  mouseover: 59,
+  mouseout: 60,
 } as const;
 
 /** `InputEvent.inputType` by host code: indexes sk-elements' `text_input::InputType` (lockstep, test/protocol-codes.test.ts). 0: none. */
@@ -117,6 +120,8 @@ export const DERIVED = {
   pointermove: { from: "mousemove", pre: true },
   pointerenter: { from: "mouseenter", pre: true },
   pointerleave: { from: "mouseleave", pre: true },
+  pointerover: { from: "mouseover", pre: true },
+  pointerout: { from: "mouseout", pre: true },
   focusin: { from: "focus", pre: false },
   focusout: { from: "blur", pre: false },
   // After the click with `detail` 2 and the primary button: only the second click of a pair makes one.
@@ -148,6 +153,8 @@ export const POINTER_EVENTS = new Set<string>([
   "pointermove",
   "pointerenter",
   "pointerleave",
+  "pointerover",
+  "pointerout",
   "pointercancel",
   "gotpointercapture",
   "lostpointercapture",

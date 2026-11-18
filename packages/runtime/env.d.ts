@@ -962,6 +962,7 @@ declare global {
     measureText(text: string): TextMetrics;
     setLineDash(segments: number[]): void;
     createImageData(sw: number, sh: number): ImageData;
+    getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
     putImageData(imageData: ImageData, dx: number, dy: number): void;
   }
   interface HTMLCanvasElement extends HTMLElement {

@@ -1,6 +1,7 @@
 import { defineDomGet } from "./dom-members";
 import type { Buckets, MirrorElement, MirrorNode, PropagationTarget } from "./types";
-import { pointer } from "./pointer-capture";
+import { MOUSE_SOURCE, pointer } from "./pointer-capture";
+import type { PointerReading, PointerSource } from "./pointer-capture";
 import { EDIT_TYPES, EV_CODES, MEDIA_EVENTS, NOT_CANCELABLE, NO_BUBBLE, POINTER_EVENTS } from "./event-names";
 import { ClipboardEventClass, isResetButton, isSubmitButton } from "./forms";
 import { traceCallbackBegin, traceCallbackEnd } from "./realm";
@@ -144,6 +145,89 @@ const POINTER_INIT = {
   height: 1,
 };
 
+// Pointer Events §"The button property": a pen's eraser is button 5, buttons bit 32.
+const ERASER_BUTTON = 5;
+const ERASER_BUTTONS = 32;
+
+/** `button` and `buttons` of a pointer event from `src`: the eraser in place of the tip. */
+function penButtons(src: PointerSource, button: number, buttons: number): { button: number; buttons: number } {
+  if (!src.eraser) return { button, buttons };
+  return {
+    button: button === 0 ? ERASER_BUTTON : button,
+    buttons: buttons & 1 ? (buttons & ~1) | ERASER_BUTTONS : buttons,
+  };
+}
+
+/** The members a reading sets; a pen's pressure is 0 with no button down, as the spec has it. */
+function readingInit(src: PointerSource, r: PointerReading | undefined, buttons: number) {
+  if (src.type !== "pen" || !r)
+    return {
+      pointerId: src.id,
+      pointerType: "mouse",
+      isPrimary: true,
+      width: 1,
+      height: 1,
+      pressure: buttons ? 0.5 : 0,
+    };
+  return {
+    pointerId: src.id,
+    pointerType: "pen",
+    isPrimary: true,
+    width: r.width > 0 ? r.width : 1,
+    height: r.height > 0 ? r.height : 1,
+    pressure: buttons ? r.pressure : 0,
+    tangentialPressure: r.tangentialPressure,
+    tiltX: r.tiltX,
+    tiltY: r.tiltY,
+    twist: r.twist,
+  };
+}
+
+/** A `pointermove`'s coalesced events: one per reading since the last move, or the event alone. */
+function coalescedMoves(
+  init: Record<string, unknown> & { clientX: number; clientY: number; movementX?: number; movementY?: number },
+  src: PointerSource,
+  buttons: number,
+): PointerEvent[] {
+  const readings = src.readings;
+  const base = { ...init, bubbles: false, cancelable: false };
+  if (readings.length < 2) return [new PointerEvent("pointermove", base)];
+  const first = readings[0]!;
+  const last = readings[readings.length - 1]!;
+  let px = first.x - ((init.movementX ?? 0) - (last.x - first.x));
+  let py = first.y - ((init.movementY ?? 0) - (last.y - first.y));
+  return readings.map((r) => {
+    const ev = new PointerEvent("pointermove", {
+      ...base,
+      ...readingInit(src, r, buttons),
+      clientX: r.x,
+      clientY: r.y,
+      movementX: r.x - px,
+      movementY: r.y - py,
+    });
+    px = r.x;
+    py = r.y;
+    return ev;
+  });
+}
+
+/**
+ * `offsetX` / `offsetY`: from the target's padding edge, measured when first read. Coalesced events
+ * measure from the event's target.
+ */
+function withOffsets(ev: Event, x: number, y: number, of: () => unknown = () => ev.target): Event {
+  const edge = (): { left: number; top: number } => {
+    const t = of() as Partial<MirrorElement> | null | undefined;
+    if (!t || typeof t.getBoundingClientRect !== "function") return { left: 0, top: 0 };
+    const r = t.getBoundingClientRect();
+    return { left: r.left + (t.clientLeft ?? 0), top: r.top + (t.clientTop ?? 0) };
+  };
+  let at: { left: number; top: number } | undefined;
+  Object.defineProperty(ev, "offsetX", { get: () => x - (at ??= edge()).left, configurable: true });
+  Object.defineProperty(ev, "offsetY", { get: () => y - (at ??= edge()).top, configurable: true });
+  return ev;
+}
+
 const BUTTON_BITS = [1, 4, 2, 8, 16];
 /** `buttons`: which buttons are DOWN as the event fires (already up by `mouseup`, `click`, `dblclick`, `auxclick`, `contextmenu`). */
 export function buttonsFor(name: string, c: number): number {
@@ -159,6 +243,10 @@ export function buttonsFor(name: string, c: number): number {
     case "mouseleave":
     case "pointerenter":
     case "pointerleave":
+    case "mouseover":
+    case "mouseout":
+    case "pointerover":
+    case "pointerout":
       return c >= 0 && c < BUTTON_BITS.length ? BUTTON_BITS[c]! : 0;
     default:
       return 0;
@@ -170,10 +258,14 @@ function buttonFor(name: string, c: number): number {
     case "mousemove":
     case "mouseenter":
     case "mouseleave":
+    case "mouseover":
+    case "mouseout":
       return 0;
     case "pointermove":
     case "pointerenter":
     case "pointerleave":
+    case "pointerover":
+    case "pointerout":
     case "pointercancel":
       return -1;
     case "dblclick":
@@ -228,6 +320,7 @@ export function synthesize(
   key: string | undefined,
   data?: unknown,
   tag?: string,
+  src: PointerSource = MOUSE_SOURCE,
 ): Event {
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) && !NOT_CANCELABLE.has(name) };
   const M = mods(d);
@@ -237,21 +330,17 @@ export function synthesize(
       return new ClipboardEventClass(name, { ...common, composed: true, clipboardData: data ?? null });
     if (tag === "img" && (name === "load" || name === "error")) return new Event(name, common);
     if (POINTER_EVENTS.has(name)) {
-      const buttons = buttonsFor(name, c);
-      const init = {
-        ...common,
-        ...M,
-        ...POINTER_INIT,
-        clientX: a,
-        clientY: b,
-        ...moved,
-        button: buttonFor(name, c),
-        buttons,
-        pressure: buttons ? 0.5 : 0,
-      };
-      if (typeof PointerEvent === "function") return new PointerEvent(name, init);
+      const { button, buttons } = penButtons(src, buttonFor(name, c), buttonsFor(name, c));
+      const fields = readingInit(src, src.readings[src.readings.length - 1], buttons);
+      const init = { ...common, ...M, clientX: a, clientY: b, ...moved, button, buttons, ...fields };
+      if (typeof PointerEvent === "function") {
+        const coalescedEvents = name === "pointermove" ? coalescedMoves(init, src, buttons) : [];
+        const ev = withOffsets(new PointerEvent(name, { ...init, coalescedEvents }), a, b);
+        for (const e of coalescedEvents) withOffsets(e, e.clientX, e.clientY, () => ev.target);
+        return ev;
+      }
       // No PointerEvent class: a MouseEvent carrying the pointer fields reads the same.
-      return withProps(new MouseEvent(name, init), { ...POINTER_INIT, pressure: init.pressure });
+      return withProps(new MouseEvent(name, init), fields);
     }
     switch (name) {
       case "click":
@@ -263,16 +352,22 @@ export function synthesize(
       case "mousemove":
       case "mouseenter":
       case "mouseleave":
-        return new MouseEvent(name, {
-          ...common,
-          ...M,
-          clientX: a,
-          clientY: b,
-          ...moved,
-          button: buttonFor(name, c),
-          buttons: buttonsFor(name, c),
-          detail: detailFor(name, d),
-        });
+      case "mouseover":
+      case "mouseout":
+        return withOffsets(
+          new MouseEvent(name, {
+            ...common,
+            ...M,
+            clientX: a,
+            clientY: b,
+            ...moved,
+            button: buttonFor(name, c),
+            buttons: buttonsFor(name, c),
+            detail: detailFor(name, d),
+          }),
+          a,
+          b,
+        );
       case "load":
       case "selectstart":
       case "selectionchange":

@@ -56,7 +56,7 @@ bun $ctl net                            # the requests, as in the Network tab
 | Area        | Commands                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------ |
 | Elements    | `tree`, `query`, `text`, `styles`, `rules`, `highlight`, `pick`                                  |
-| Input       | `click`, `focus`, `type`, `ime`, `key`, `mouse`, `scroll`, `wheel`                               |
+| Input       | `click`, `focus`, `type`, `ime`, `key`, `mouse`, `pen`, `scroll`, `wheel`                        |
 | JavaScript  | `eval`, `logs`                                                                                   |
 | Network     | `net`, `net_detail`, `net_cache`                                                                 |
 | Storage     | `storage`, `indexeddb`                                                                           |

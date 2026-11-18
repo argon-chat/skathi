@@ -18,18 +18,18 @@ describe("patchProp: on* props", () => {
 
   test("an event the host does not deliver warns instead of vanishing", () => {
     const rt = createRuntime();
-    rt.patchProp(stub(rt), "onMouseover", null, () => {});
+    rt.patchProp(stub(rt), "onTouchend", null, () => {});
     expect(rt.advisories().length).toBe(1);
     expect(rt.host.listeners).toEqual([]);
   });
 
   test("the advisory is one per event name per session, not one per patch", () => {
     const rt = createRuntime();
-    for (let i = 0; i < 5; i++) rt.patchProp(stub(rt, i), "onMouseover", null, () => {});
+    for (let i = 0; i < 5; i++) rt.patchProp(stub(rt, i), "onTouchend", null, () => {});
     rt.patchProp(stub(rt), "onTouchstart", null, () => {});
     expect(rt.advisories().length).toBe(2);
     const other = createRuntime();
-    other.patchProp(stub(other), "onMouseover", null, () => {});
+    other.patchProp(stub(other), "onTouchend", null, () => {});
     expect(other.advisories().length).toBe(1);
   });
 

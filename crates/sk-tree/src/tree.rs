@@ -90,6 +90,10 @@ pub const EV_SURFACERESIZE: u32 = 55;
 pub const EV_SURFACEREADY: u32 = 56;
 pub const EV_SURFACELOST: u32 = 57;
 pub const EV_SURFACEDISPLAYCHANGE: u32 = 58;
+/// The pointer moved onto (`over`) or off (`out`) the deepest element under it; they bubble. `key` is
+/// the other element's node id (`relatedTarget`), empty for none.
+pub const EV_MOUSEOVER: u32 = 59;
+pub const EV_MOUSEOUT: u32 = 60;
 
 /// Every host event code with the name JS knows it by; devtools lists from here.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
@@ -151,6 +155,8 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_SURFACEREADY, "surfaceready"),
     (EV_SURFACELOST, "surfacelost"),
     (EV_SURFACEDISPLAYCHANGE, "surfacedisplaychange"),
+    (EV_MOUSEOVER, "mouseover"),
+    (EV_MOUSEOUT, "mouseout"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

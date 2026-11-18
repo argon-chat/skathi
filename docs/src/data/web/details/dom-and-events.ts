@@ -309,7 +309,7 @@ const onAuxClick = (e: MouseEvent) => e.button === 1 && emit("close");
       },
     ],
     edgeCases: [
-      "On events from the host, `offsetX` and `offsetY` are `0`, and `pageX` and `pageY` equal `clientX` and `clientY`.",
+      "On events from the host, `pageX` and `pageY` equal `clientX` and `clientY`. `offsetX` and `offsetY` are measured from the target's padding edge when first read (since 0.5).",
       "`buttons` is already `0` on `mouseup`, `click`, `dblclick`, `auxclick` and `contextmenu`.",
       "At most one `mousemove` is delivered per frame; that frame's `mouseleave` and `mouseenter` come before it.",
       "When the pointer moves from one element to another, `mouseleave` and `mouseenter` can come in either order.",
@@ -341,8 +341,69 @@ const move = (e: PointerEvent) => dragging.value && (sidebarWidth.value = Math.m
       },
     ],
     edgeCases: [
-      "`setPointerCapture` with an id other than `1` throws a `NotFoundError`; called while no button is down, it does nothing.",
+      "`setPointerCapture` takes `1`, the mouse, or `2` while a pen is the pointer; any other id throws a `NotFoundError`. Called while no button is down, it does nothing.",
+      "A pen and the mouse share one capture: when the other device takes over, the old capture is released with `lostpointercapture`.",
       "Removing the element that holds the capture releases it and fires `lostpointercapture`.",
+    ],
+  },
+  "pointer-event-pointer-type": {
+    examples: [
+      {
+        title: "Tell the pen's tip, barrel button and eraser apart",
+        lang: "ts",
+        code: `export function toolFor(e: PointerEvent): "ink" | "select" | "erase" {
+  if (e.pointerType !== "pen") return "ink";
+  if (e.buttons & 32) return "erase"; // the eraser end: button 5
+  if (e.buttons & 2) return "select"; // the barrel button: button 2
+  return "ink"; // the tip: button 0
+}`,
+      },
+    ],
+    edgeCases: [
+      "The eraser end presses `button` `5` (`buttons` `32`) and the barrel button `button` `2` (`buttons` `2`), as in browsers. A barrel press fires `contextmenu` as a right click does; cancel it on the drawing surface.",
+      "A pen's hover moves have `buttons` `0` and `pressure` `0`, so a drawing handler can test `buttons` to tell hovering from drawing.",
+    ],
+  },
+  "pointer-event-pressure": {
+    examples: [
+      {
+        title: "Vary the line width with pressure",
+        lang: "ts",
+        code: `export function strokeWidth(e: PointerEvent): number {
+  // The mouse reports 0.5 while pressed, so it draws at the middle width.
+  return 1 + 10 * e.pressure * e.pressure;
+}`,
+      },
+    ],
+  },
+  "pointer-event-get-coalesced-events": {
+    examples: [
+      {
+        title: "Draw every reading of a fast stroke",
+        lang: "ts",
+        code: `export function drawOn(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext("2d")!;
+  let last: PointerEvent | null = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    last = e;
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!last) return;
+    for (const r of e.getCoalescedEvents()) {
+      ctx.lineWidth = 1 + 10 * r.pressure;
+      ctx.beginPath();
+      ctx.moveTo(last.offsetX, last.offsetY);
+      ctx.lineTo(r.offsetX, r.offsetY);
+      ctx.stroke();
+      last = r;
+    }
+  });
+  canvas.addEventListener("pointerup", () => (last = null));
+}`,
+        note: "Without the coalesced events, a quick stroke is drawn from one frame's position to the next, as a polyline with visible corners.",
+      },
     ],
   },
   "keyboard-event": {

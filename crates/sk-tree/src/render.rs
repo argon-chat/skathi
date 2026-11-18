@@ -647,6 +647,7 @@ pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     crate::live_state::note_modality(window);
     crate::pointer::resolve_hover(window, cx);
     let Some((p, target)) = take_pending_move(window, cx) else {
+        crate::pen::clear_trail(window);
         return;
     };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
@@ -993,6 +994,7 @@ pub(crate) fn js_dispatch_app(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
+    crate::pen::arm(window, event);
     js_wave_app(window, cx, || crate::dispatch_event(id, event, payload))
 }
 
@@ -1046,6 +1048,7 @@ fn js_dispatch<V: 'static>(
 ) -> bool {
     let _input = crate::InputDispatch::enter();
     crate::live_state::note_modality(window);
+    crate::pen::arm(window, event);
     let proceed = with_published(window, &mut **cx, Phase::Commit, || {
         crate::dispatch_event(id, event, payload)
     });
@@ -3593,6 +3596,8 @@ const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEMOVE)
     | (1 << tree::EV_MOUSEENTER)
     | (1 << tree::EV_MOUSELEAVE)
+    | (1 << tree::EV_MOUSEOVER)
+    | (1 << tree::EV_MOUSEOUT)
     | (1 << tree::EV_WHEEL);
 
 /// The listener mask of a build root (main window's or a pop-out's). A pop-out's root is deep in

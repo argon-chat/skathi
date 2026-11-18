@@ -176,6 +176,7 @@ pub(crate) fn capture_listeners(window: &mut Window) {
         }
         let moved = window.vn_mouse_movement();
         windows::here(window, |w| w.mouse_movement = w.mouse_movement + moved);
+        crate::pen::note_move(window);
         let Some(id) = routed_target(window) else {
             return;
         };
@@ -376,13 +377,17 @@ host_fn!(fn sk_hit_at(_g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&s).0)
 });
 
+/// The runtime's `pointerId`s: the mouse, and any pen.
+const MOUSE_ID: f64 = 1.0;
+const PEN_ID: f64 = 2.0;
+
 // `(node, pointerId, capture)` — the JS mirror validates the active pointer; ownership is per
 // native window and is cleared even outside a commit wave (unmount and app teardown do not
 // necessarily run in an input callback).
 host_fn!(fn sk_pointer_capture(_g, args) {
     let id = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let pointer = args.arg(1).as_number().unwrap_or(0.0);
-    if pointer != 1.0 {
+    if pointer != MOUSE_ID && pointer != PEN_ID {
         return Value::boolean(false).0;
     }
     let capture = args.arg(2).as_bool().unwrap_or(false);
@@ -551,32 +556,58 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     // for them, `pointer-events` notwithstanding: it decides what is hit, not who hears about it.
     let has =
         |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
-    let (leaves, enters): (Vec<u32>, Vec<u32>) = tree::read_tree(|t| {
+    // `mouseover`/`mouseout` bubble, so anything on the path may be the one listening.
+    let (from, to) = (old.first().copied(), new.first().copied());
+    let (leaves, enters, out_at, over_at) = tree::read_tree(|t| {
         let root = window_root(t, window);
-        (
-            left.iter()
-                .copied()
-                .filter(|&id| has(t, id, tree::EV_MOUSELEAVE) && path_to(t, id, root))
-                .collect(),
-            entered
-                .iter()
-                .copied()
-                .filter(|&id| has(t, id, tree::EV_MOUSEENTER))
-                .collect(),
-        )
+        let heard = |path: &[u32], ev: u32| path.iter().any(|&id| has(t, id, ev));
+        let leaves: Vec<u32> = left
+            .iter()
+            .copied()
+            .filter(|&id| has(t, id, tree::EV_MOUSELEAVE) && path_to(t, id, root))
+            .collect();
+        let enters: Vec<u32> = entered
+            .iter()
+            .copied()
+            .filter(|&id| has(t, id, tree::EV_MOUSEENTER))
+            .collect();
+        let moved = from != to;
+        let out_at =
+            from.filter(|&id| moved && heard(old, tree::EV_MOUSEOUT) && path_to(t, id, root));
+        let over_at = to.filter(|_| moved && heard(new, tree::EV_MOUSEOVER));
+        (leaves, enters, out_at, over_at)
     });
-    if leaves.is_empty() && enters.is_empty() {
+    if leaves.is_empty() && enters.is_empty() && out_at.is_none() && over_at.is_none() {
         return;
     }
-    let payload = crate::render::mouse_payload(pos, -1.0, &window.modifiers());
-    let events = leaves
+    let mods = window.modifiers();
+    let payload = crate::render::mouse_payload(pos, -1.0, &mods);
+    let related = |id: Option<u32>| id.map(|id| id.to_string()).unwrap_or_default();
+    let (to_key, from_key) = (related(to), related(from));
+    let with_key = |key| crate::EventPayload {
+        key: Some(key),
+        ..crate::render::mouse_payload(pos, -1.0, &mods)
+    };
+    let (out_payload, over_payload) = (with_key(to_key.as_str()), with_key(from_key.as_str()));
+    // Pointer Events order: out, leaves, over, enters.
+    let events = out_at
+        .map(|id| (id, tree::EV_MOUSEOUT, &out_payload))
         .into_iter()
-        .map(|id| (id, tree::EV_MOUSELEAVE))
-        .chain(enters.into_iter().map(|id| (id, tree::EV_MOUSEENTER)));
+        .chain(
+            leaves
+                .into_iter()
+                .map(|id| (id, tree::EV_MOUSELEAVE, &payload)),
+        )
+        .chain(over_at.map(|id| (id, tree::EV_MOUSEOVER, &over_payload)))
+        .chain(
+            enters
+                .into_iter()
+                .map(|id| (id, tree::EV_MOUSEENTER, &payload)),
+        );
     crate::off_input(|| {
-        for (id, ev) in events {
+        for (id, ev, payload) in events {
             if tree::read_tree(|t| t.node(id).is_some()) {
-                crate::render::js_dispatch_app(id, ev, &payload, window, cx);
+                crate::render::js_dispatch_app(id, ev, payload, window, cx);
             }
         }
     });

@@ -39,6 +39,7 @@ mod lottie;
 mod mask;
 mod native_dom;
 mod observe;
+mod pen;
 pub mod perf;
 mod pointer;
 mod pointer_lock;
@@ -92,9 +93,10 @@ pub use tree::{
     EV_COMPOSITIONUPDATE, EV_CONTEXTMENU, EV_COPY, EV_CUT, EV_DURATIONCHANGE, EV_EMPTIED, EV_ENDED,
     EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_LOAD, EV_LOADEDDATA,
     EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MESSAGE, EV_MOUSEDOWN, EV_MOUSEENTER,
-    EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PASTE, EV_PAUSE, EV_PLAY, EV_PLAYING,
-    EV_POINTERCANCEL, EV_POINTERLOCKCHANGE, EV_POINTERLOCKERROR, EV_RATECHANGE, EV_SCROLL,
-    EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
+    EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEOUT, EV_MOUSEOVER, EV_MOUSEUP, EV_PASTE, EV_PAUSE,
+    EV_PLAY, EV_PLAYING, EV_POINTERCANCEL, EV_POINTERLOCKCHANGE, EV_POINTERLOCKERROR,
+    EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING,
+    EV_WHEEL,
 };
 pub use view_transition::build_overlay as build_view_transition;
 pub use windows::WinKey;
@@ -1751,12 +1753,13 @@ pub fn dispatch_event_with(
 ) -> bool {
     // Taken first, so a position set for a dispatch that goes nowhere never reaches the next one.
     let at = POINTER_AT.with(|c| c.take());
+    let pen = pen::take();
     let f = tree::dispatcher();
     if f == 0 {
         return true;
     }
     let span = perf::Span::start();
-    let proceed = dispatch_event_inner(f, node, event, payload, data, at);
+    let proceed = dispatch_event_inner(f, node, event, payload, data, at, pen);
     perf::note_js(span.ms());
     proceed
 }
@@ -1768,6 +1771,7 @@ fn dispatch_event_inner(
     payload: &EventPayload,
     data: Option<Value>,
     at: Option<(f64, f64)>,
+    pen: Option<Vec<f64>>,
 ) -> bool {
     sk_runtime::bridge::settle_owed_drain();
     // Under a gpui listener, owe the checkpoint before the call (owing holds the engine lock, or JSC
@@ -1781,6 +1785,16 @@ fn dispatch_event_inner(
         let (x, y) = at.map_or((Value::undefined(), Value::undefined()), |(x, y)| {
             (Value::double(x), Value::double(y))
         });
+        let pen = pen
+            .and_then(|nums| {
+                let ctx = rt.ctx();
+                let arr = ctx.array(nums.len() as u32).ok()?;
+                for (i, n) in nums.into_iter().enumerate() {
+                    ctx.set_index(arr, i as u32, Value::double(n)).ok()?;
+                }
+                Some(arr)
+            })
+            .unwrap_or_else(Value::undefined);
         let args = [
             Value::int32(node as i32),
             Value::int32(event as i32),
@@ -1792,6 +1806,7 @@ fn dispatch_event_inner(
             data.unwrap_or_else(Value::undefined),
             x,
             y,
+            pen,
         ];
         let proceed = match rt.ctx().call(Value(f), Value::undefined(), &args) {
             Ok(v) => v.as_bool().unwrap_or(true),

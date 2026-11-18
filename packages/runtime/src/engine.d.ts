@@ -180,6 +180,10 @@ interface PointerEventInit extends MouseEventInit {
   tiltX?: number;
   tiltY?: number;
   twist?: number;
+  altitudeAngle?: number;
+  azimuthAngle?: number;
+  coalescedEvents?: PointerEvent[];
+  predictedEvents?: PointerEvent[];
 }
 interface PointerEvent extends MouseEvent {
   readonly pointerId: number;
@@ -192,6 +196,8 @@ interface PointerEvent extends MouseEvent {
   readonly tiltX: number;
   readonly tiltY: number;
   readonly twist: number;
+  readonly altitudeAngle: number;
+  readonly azimuthAngle: number;
   getCoalescedEvents(): PointerEvent[];
   getPredictedEvents(): PointerEvent[];
 }

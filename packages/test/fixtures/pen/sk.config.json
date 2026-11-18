@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-pen",
+
+  "window": {
+    "title": "Skathi — pen (fixture)",
+    "width": 420,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

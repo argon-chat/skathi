@@ -323,6 +323,56 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "pen",
+    description:
+      "A stylus event at a window coordinate, dispatched the way a platform reports a pen: the page gets " +
+      '`pointerType: "pen"` pointer events with pressure and tilt, then the mouse events. A move with ' +
+      "--from-x/--from-y and --steps N carries N readings, its getCoalescedEvents(). No OS input.",
+    usage: [
+      "  pen      [selector] [--x N --y N] [--kind hover|down|move|up|leave] [--pressure P]",
+      "           [--tilt-x D] [--tilt-y D] [--twist D] [--eraser] [--barrel]",
+      "           [--from-x N --from-y N --from-pressure P --steps N]",
+      "                                     a pen event through gpui's dispatch",
+    ],
+    args: {
+      selector: SELECTOR,
+      index: INDEX,
+      x: int("window x, when no selector is given"),
+      y: int("window y, when no selector is given"),
+      kind: str("hover (default) | down | move | up | leave"),
+      pressure: int("tip pressure 0..1 while touching (default 0.5)"),
+      tiltX: int("tilt toward +x, degrees"),
+      tiltY: int("tilt toward +y, degrees"),
+      twist: int("rotation about the pen's axis, degrees"),
+      eraser: bool("the eraser end"),
+      barrel: bool("the barrel button is held"),
+      fromX: int("where the readings of a move start"),
+      fromY: int("where the readings of a move start"),
+      fromPressure: int("the pressure the readings ramp from (default: --pressure)"),
+      steps: int("how many readings the move carries"),
+    },
+    cli: (rest, flags) => {
+      const base = compact({
+        kind: flags.kind ? String(flags.kind) : "hover",
+        pressure: num(flags.pressure),
+        tiltX: num(flags["tilt-x"]),
+        tiltY: num(flags["tilt-y"]),
+        twist: num(flags.twist),
+        eraser: flags.eraser ? true : undefined,
+        barrel: flags.barrel ? true : undefined,
+        fromX: num(flags["from-x"]),
+        fromY: num(flags["from-y"]),
+        fromPressure: num(flags["from-pressure"]),
+        steps: num(flags.steps),
+      });
+      if (rest[0]) return withIndex({ ...base, selector: rest[0] }, flags);
+      const x = num(flags.x);
+      const y = num(flags.y);
+      if (x === undefined || y === undefined) die("pen needs a selector, or both --x and --y");
+      return { ...base, x, y };
+    },
+  },
+  {
     cmd: "scroll",
     description:
       "Scroll a container by (dx, dy) CSS pixels through its own gpui ScrollHandle and fire the " +

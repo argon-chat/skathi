@@ -119,6 +119,42 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.PointerEvent",
     mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent",
   },
+  "pointer-event-pointer-type": {
+    key: "api.PointerEvent.pointerType",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/pointerType",
+  },
+  "pointer-event-pressure": {
+    key: "api.PointerEvent.pressure",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/pressure",
+  },
+  "pointer-event-tangential-pressure": {
+    key: "api.PointerEvent.tangentialPressure",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/tangentialPressure",
+  },
+  "pointer-event-tilt-x": {
+    key: "api.PointerEvent.tiltX",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/tiltX",
+  },
+  "pointer-event-altitude-angle": {
+    key: "api.PointerEvent.altitudeAngle",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/altitudeAngle",
+  },
+  "pointer-event-twist": {
+    key: "api.PointerEvent.twist",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/twist",
+  },
+  "pointer-event-get-coalesced-events": {
+    key: "api.PointerEvent.getCoalescedEvents",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/getCoalescedEvents",
+  },
+  "pointer-event-get-predicted-events": {
+    key: "api.PointerEvent.getPredictedEvents",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PointerEvent/getPredictedEvents",
+  },
+  pointerrawupdate: {
+    key: "api.Element.pointerrawupdate_event",
+    mdn: "https://developer.mozilla.org/docs/Web/API/Element/pointerrawupdate_event",
+  },
   "keyboard-event": {
     key: "api.KeyboardEvent",
     mdn: "https://developer.mozilla.org/docs/Web/API/KeyboardEvent",

@@ -140,11 +140,11 @@ export function watchVueRenders(internals: VueInternals): void {
 
 /** The host event being dispatched while `dispatch` runs, so a state change can name what caused it. */
 export function withCause(dispatch: SkDispatcher): SkDispatcher {
-  return (node, code, a, b, c, d, key, data, x, y) => {
+  return (node, code, a, b, c, d, key, data, x, y, pen) => {
     const outer = cause;
     cause = CODE_TO_NAME[code] ?? "";
     try {
-      return dispatch(node, code, a, b, c, d, key, data, x, y);
+      return dispatch(node, code, a, b, c, d, key, data, x, y, pen);
     } finally {
       cause = outer;
     }
