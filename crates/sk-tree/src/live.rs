@@ -217,25 +217,22 @@ impl LiveTile {
         }
     }
 
-    /// `None` when the renderer refused the texture: fall back to [`LiveTile::write_bgra`].
+    /// `Err` names why the renderer refused the texture.
     pub(crate) fn write_gpu(
         &mut self,
         window: &mut Window,
         texture: GpuTextureHandle,
         visible: bool,
-    ) -> Option<Shown> {
+    ) -> Result<Shown, String> {
         debug_assert_eq!(
             windows::key(window),
             self.win,
             "a tile is written with its own window"
         );
-        match window
-            .write_image_tile(&self.image, 0, TileSource::Gpu(texture))
-            .unwrap_or(TileWrite::Refused)
-        {
-            TileWrite::Refused => None,
-            write => Some(shown(write, visible)),
-        }
+        tile_written(
+            window.write_image_tile(&self.image, 0, TileSource::Gpu(texture)),
+            visible,
+        )
     }
 
     /// [`LiveTile::write_gpu`] for a D3D12 resource on the renderer's device; `owner` is retained
@@ -247,15 +244,11 @@ impl LiveTile {
         texture: gpui::D3D12TextureHandle,
         owner: Arc<dyn std::any::Any + Send + Sync>,
         visible: bool,
-    ) -> Option<Shown> {
-        match window.write_image_tile_d3d12(&self.image, 0, texture, owner) {
-            Ok(TileWrite::Refused) => None,
-            Err(error) => {
-                crate::log::record("window", format!("D3D12 atlas copy failed: {error:#}"));
-                None
-            }
-            Ok(write) => Some(shown(write, visible)),
-        }
+    ) -> Result<Shown, String> {
+        tile_written(
+            window.write_image_tile_d3d12(&self.image, 0, texture, owner),
+            visible,
+        )
     }
 
     /// [`LiveTile::write_gpu`] for a Metal texture on the renderer's device, written once the
@@ -269,21 +262,31 @@ impl LiveTile {
         ready: (*mut std::ffi::c_void, u64),
         owner: Arc<dyn std::any::Any + Send + Sync>,
         visible: bool,
-    ) -> Option<Shown> {
-        match window.write_image_tile_metal(&self.image, 0, texture, Some(ready), owner) {
-            Ok(TileWrite::Refused) => None,
-            Err(error) => {
-                crate::log::record("window", format!("Metal atlas copy failed: {error:#}"));
-                None
-            }
-            Ok(write) => Some(shown(write, visible)),
-        }
+    ) -> Result<Shown, String> {
+        tile_written(
+            window.write_image_tile_metal(&self.image, 0, texture, Some(ready), owner),
+            visible,
+        )
     }
 
     /// Hands the tile back to its window's atlas on that window's next frame, when no scene samples
     /// it any more. The frame that stops painting it must be a draw (see the module docs).
     pub(crate) fn retire(self) {
         windows::queue_drops(self.win, [self.image]);
+    }
+}
+
+fn tile_written<E: std::fmt::Display>(
+    write: Result<TileWrite, E>,
+    visible: bool,
+) -> Result<Shown, String> {
+    match write {
+        Ok(TileWrite::Refused) => Err(
+            "the renderer's atlas takes no texture of this kind, format or size, or from this device"
+                .into(),
+        ),
+        Ok(write) => Ok(shown(write, visible)),
+        Err(error) => Err(format!("{error:#}")),
     }
 }
 

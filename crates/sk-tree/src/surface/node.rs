@@ -33,6 +33,9 @@ struct Node {
     /// The tile holds the frame's half-float values, painted up to `headroom`.
     hdr: bool,
     attached: bool,
+    /// Why the last GPU frame was not shown, once logged.
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    refused: Option<String>,
 }
 
 thread_local! {
@@ -87,6 +90,7 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             headroom: 1.0,
             hdr: false,
             attached: false,
+            refused: None,
         });
         node.window = win;
         node.tile
@@ -406,6 +410,8 @@ fn write(
         node.hdr = hdr;
         node.seen = 0;
     }
+    #[cfg(windows)]
+    let mut unmapped = None;
     // One lock: a present on another thread may resize the surface's texture in between.
     let locked = {
         let mut st = node.surface.lock_state();
@@ -417,7 +423,7 @@ fn write(
                 match st.gpu_texture(hdr) {
                     Ok(texture) => texture.map(Gpu::D3D11),
                     Err(error) => {
-                        refused(&error);
+                        unmapped = Some(error);
                         None
                     }
                 }
@@ -452,6 +458,13 @@ fn write(
         )
     };
     let (mut seq, mut frame_id, frame, lost, texture, copied) = locked;
+    #[cfg(windows)]
+    if let Some(error) = unmapped {
+        refused(
+            node,
+            format!("its half-float frame could not be mapped for the window: {error}"),
+        );
+    }
     if seq == node.seen {
         return (Shown::Nowhere, None);
     }
@@ -528,10 +541,9 @@ fn write(
                         let handle = ready.handle();
                         tile.write_d3d12(window, handle, Arc::new(ready), true)
                     }
-                    Err(error) => {
-                        refused(&error);
-                        return (Shown::Nowhere, None);
-                    }
+                    Err(error) => Err(format!(
+                        "its half-float frame could not be mapped for the window: {error}"
+                    )),
                 },
                 #[cfg(target_os = "macos")]
                 Some(Gpu::Metal(ready)) if hdr && ready.is_half_float() => {
@@ -544,22 +556,20 @@ fn write(
                         let (handle, wait) = (ready.handle(), ready.ready());
                         tile.write_metal(window, handle, wait, Arc::new(ready), true)
                     }
-                    Err(error) => {
-                        refused(&error);
-                        return (Shown::Nowhere, None);
-                    }
+                    Err(error) => Err(format!(
+                        "its half-float frame could not be mapped for the window: {error}"
+                    )),
                 },
                 None => return (Shown::Nowhere, None),
             };
             match written {
-                Some(shown) => shown,
-                None => {
+                Ok(shown) => {
+                    node.refused = None;
+                    shown
+                }
+                Err(why) => {
                     node.seen = seq;
-                    crate::render::warn_compat(
-                        "surface-gpu-upload",
-                        "<sk-surface>: the renderer refused the surface's texture (SK_LOG=info \
-                         names the reason); the frame is not shown",
-                    );
+                    refused(node, why);
                     return (Shown::Nowhere, None);
                 }
             }
@@ -596,15 +606,20 @@ fn copied(_: &()) -> Option<(bool, (u64, u64, (u32, u32)))> {
     None
 }
 
-/// A half-float frame whose 8-bit mapping could not be drawn.
+/// Logged once per surface node and reason.
 #[cfg(any(windows, target_os = "macos"))]
-fn refused(error: &super::SurfaceError) {
-    crate::log::record("window", format!("<sk-surface>: {error}"));
-    crate::render::warn_compat(
-        "surface-gpu-map",
-        "<sk-surface>: a half-float frame could not be mapped for the window (SK_LOG=info names \
-         the reason); it is not shown",
+fn refused(node: &mut Node, why: String) {
+    if node.refused.as_deref() == Some(why.as_str()) {
+        return;
+    }
+    let msg = format!(
+        "<sk-surface> \"{}\": a GPU frame is not shown: {why}",
+        node.surface.name()
     );
+    log::warn!("{msg}");
+    crate::log::record("window", msg.clone());
+    crate::render::warn_compat("surface-gpu-upload", &msg);
+    node.refused = Some(why);
 }
 
 /// `surfacedisplaychange`'s `key`: "hdr" when the display is in HDR, "output-hdr" when the window
