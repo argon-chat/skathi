@@ -125,27 +125,25 @@ const show = (i: number | null) =>
     </Card>
 
     <Card title="Animating to auto" api="interpolate-size · calc-size()">
-      <div class="auto">
-        <div class="faq">
-          <div v-for="(item, i) in faq" :key="item.q" class="qa" :class="{ open: asked === i }">
-            <div class="question" @click="asked = asked === i ? null : i">
-              <span>{{ item.q }}</span>
-              <span class="plus">+</span>
-            </div>
-            <div class="answer">
-              <p class="muted">{{ item.a }}</p>
-            </div>
+      <div class="faq">
+        <div v-for="(item, i) in faq" :key="item.q" class="qa" :class="{ open: asked === i }">
+          <div class="question" @click="asked = asked === i ? null : i">
+            <span>{{ item.q }}</span>
+            <span class="plus">+</span>
+          </div>
+          <div class="answer">
+            <p class="muted">{{ item.a }}</p>
           </div>
         </div>
-        <div class="excerpt" :class="{ more }">
-          <p class="muted">
-            Analytical Engine, 1843. The engine might act upon other things besides number, were objects found whose
-            mutual fundamental relations could be expressed by those of the abstract science of operations. Supposing,
-            for instance, that the fundamental relations of pitched sounds in the science of harmony and of musical
-            composition were susceptible of such expression and adaptations, the engine might compose elaborate and
-            scientific pieces of music of any degree of complexity or extent.
-          </p>
-        </div>
+      </div>
+      <div class="excerpt" :class="{ more }">
+        <p class="muted">
+          Analytical Engine, 1843. The engine might act upon other things besides number, were objects found whose
+          mutual fundamental relations could be expressed by those of the abstract science of operations. Supposing,
+          for instance, that the fundamental relations of pitched sounds in the science of harmony and of musical
+          composition were susceptible of such expression and adaptations, the engine might compose elaborate and
+          scientific pieces of music of any degree of complexity or extent.
+        </p>
       </div>
       <div class="row">
         <button class="btn" @click="more = !more">{{ more ? "Show less" : "Read more" }}</button>
@@ -337,19 +335,19 @@ const show = (i: number | null) =>
     transform: translateY(16px) rotate(12deg) scale(0.8);
   }
 }
+.list-move {
+  transition: transform 450ms cubic-bezier(0.2, 0, 0, 1);
+}
 .list-enter-active {
   animation: deal 380ms ease-out;
 }
 .list-leave-active {
   animation: discard 260ms ease-in forwards;
 }
-.auto {
-  interpolate-size: allow-keywords;
-}
 .faq {
   display: flex;
   flex-direction: column;
-  margin-bottom: 12px;
+  interpolate-size: allow-keywords;
   border-radius: 10px;
   border: 1px solid var(--line);
 }
@@ -433,11 +431,5 @@ const show = (i: number | null) =>
   font-size: 28px;
   font-weight: 700;
   color: #ffffff;
-}
-</style>
-
-<style>
-.deck > .list-move {
-  transition: transform 450ms cubic-bezier(0.2, 0, 0, 1);
 }
 </style>

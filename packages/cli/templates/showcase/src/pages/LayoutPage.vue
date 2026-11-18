@@ -277,10 +277,11 @@ const ratioLabel = computed(() => ratio.value.replace(" / ", ":"));
   overflow-x: auto;
   scroll-snap-type: x mandatory;
   scroll-padding: 0 24px;
+  border: 1px solid transparent;
   border-radius: 12px;
 }
 .strip:focus {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--accent);
 }
 .slide {
   flex: 0 0 72%;
