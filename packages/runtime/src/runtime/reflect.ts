@@ -109,6 +109,17 @@ defineDomGet(
     else writeReflected(this, "hidden", REFLECTED.hidden!, v);
   } as (value: never) => void,
 );
+defineDomGet(
+  "colorSpace",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this) || this.tag !== "input") return undefined;
+    return this.attrs.colorspace?.toLowerCase() === "display-p3" ? "display-p3" : "limited-srgb";
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this) || this.tag !== "input") return ownExpando(this, "colorSpace", v);
+    this.setAttribute("colorspace", String(v));
+  } as (value: never) => void,
+);
 const INPUT_TYPES = new Set(
   (
     "hidden text search tel url email password date month week time datetime-local number range color " +

@@ -47,6 +47,14 @@ type MediaAttributes = ElementAttributes<SkMediaEventMap> &
   };
 
 interface SkElements {
+  input: ElementAttributes & {
+    /** `type="color"`: the value carries alpha, and the picker shows an alpha slider. */
+    alpha?: Booleanish | undefined;
+    /** `type="color"`: the value's color space. */
+    colorspace?: "limited-srgb" | "display-p3" | undefined;
+    /** Skathi, `type="color"`: an HDR value in linear light, with an intensity in stops in the picker. */
+    hdr?: Booleanish | undefined;
+  };
   audio: MediaAttributes;
   video: MediaAttributes & { poster?: string | undefined; playsinline?: Booleanish | undefined };
   /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */

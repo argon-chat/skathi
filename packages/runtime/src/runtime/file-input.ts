@@ -43,11 +43,11 @@ export function isColorInput(n: unknown): boolean {
   );
 }
 
-export const hasAlpha = (el: MirrorElement): boolean => el.attrs.alpha != null && el.attrs.alpha !== "false";
+const flag = (el: MirrorElement, name: string): boolean => el.attrs[name] != null && el.attrs[name] !== "false";
 
-/** HTML's value sanitization for a color input, in the host: any CSS color, else black. */
+/** HTML's value sanitization for a color input, in the host: any CSS color in its `colorspace` (and Skathi's `hdr`), else black. */
 export function colorValue(el: MirrorElement, value: unknown): string {
-  return __sk_color_value(String(value ?? ""), hasAlpha(el));
+  return __sk_color_value(String(value ?? ""), flag(el, "alpha"), el.attrs.colorspace ?? "", flag(el, "hdr"));
 }
 
 // The OS dialog (`"colorPicker": "system"`) is asynchronous: an open one cannot be replaced by a

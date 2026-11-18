@@ -28,6 +28,16 @@ const App = {
           { id: "pick", onClick: () => (document.getElementById("plain") as HTMLInputElement).showPicker() },
           "showPicker()",
         ),
+        h("input", { id: "p3", type: "color", colorspace: "display-p3", value: "#ff0000", onInput: note }),
+        h("input", {
+          id: "hdr",
+          type: "color",
+          hdr: "",
+          alpha: "",
+          value: "color(srgb-linear 4 2 0.5)",
+          onInput: note,
+          onChange: note,
+        }),
       ]);
   },
 };

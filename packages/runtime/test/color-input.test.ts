@@ -55,6 +55,40 @@ describe("color inputs", () => {
     expect(input.value).toBe("#112233");
   });
 
+  test("colorspace and hdr re-sanitize the value through the host, whichever way they are set", () => {
+    const { rt, input } = world();
+    const el = input as unknown as { colorSpace: string; hdr: boolean; alpha: boolean };
+    const asked = () => rt.host.colorValueCalls.at(-1);
+    const pushed = () => rt.host.props.filter((p: any) => p.key === "value").at(-1)?.value;
+    input.value = "#123456";
+    rt.patchProp(input, "colorspace", null, "display-p3");
+    expect(asked()).toEqual({ text: "#123456", alpha: false, colorspace: "display-p3", hdr: false });
+    expect(input.value).toBe("display-p3:false:false:#123456");
+    expect(pushed()).toBe(input.value);
+    rt.patchProp(input, "colorspace", "display-p3", null);
+    rt.patchProp(input, "hdr", null, true);
+    expect(input.getAttribute("hdr")).toBe("");
+    expect(asked()?.hdr).toBe(true);
+    rt.patchProp(input, "hdr", true, false);
+    expect(input.hasAttribute("hdr")).toBe(false);
+    el.alpha = true;
+    expect(asked()?.alpha).toBe(true);
+    el.hdr = true;
+    expect(asked()).toMatchObject({ alpha: true, hdr: true });
+  });
+
+  test("colorSpace reflects colorspace, limited to its two keywords", () => {
+    const { rt, input } = world();
+    const el = input as unknown as { colorSpace: string };
+    expect(el.colorSpace).toBe("limited-srgb");
+    el.colorSpace = "Display-P3";
+    expect(input.getAttribute("colorspace")).toBe("Display-P3");
+    expect(el.colorSpace).toBe("display-p3");
+    expect(rt.host.colorValueCalls.at(-1)?.colorspace).toBe("Display-P3");
+    input.setAttribute("colorspace", "rec2020");
+    expect(el.colorSpace).toBe("limited-srgb");
+  });
+
   test("a click fires a cancelable showpicker, then opens the in-window picker with the gesture", () => {
     const { rt, input, seen, opened, dialogs, click } = world();
     input.value = "#123456";

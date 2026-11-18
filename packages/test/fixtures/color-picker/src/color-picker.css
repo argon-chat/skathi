@@ -22,6 +22,13 @@ input {
 #custom {
   left: 180px;
 }
+#p3 {
+  left: 380px;
+}
+#hdr {
+  top: 60px;
+  left: 20px;
+}
 #pick {
   position: absolute;
   left: 260px;

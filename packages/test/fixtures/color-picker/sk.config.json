@@ -4,7 +4,7 @@
   "window": {
     "title": "Skathi — color picker (fixture)",
     "width": 460,
-    "height": 520,
+    "height": 720,
     "titleBarStyle": "hidden",
     "titleBarFallback": false
   }

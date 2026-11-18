@@ -29,6 +29,7 @@ use lightningcss::values::length::{
 use lightningcss::values::percentage::DimensionPercentage;
 
 use crate::keyframes::{AnimationCollector, AnimationPatch, AnimationSpec};
+use crate::rgb_space::RgbSpace;
 use crate::transition::{Collector, TransitionSpec};
 use crate::vars::{self, Vars};
 
@@ -1173,6 +1174,7 @@ pub(crate) fn apply_dynamic(
             return;
         }
     };
+    let value = crate::rgb_space::rewrite(&value).unwrap_or(value);
     use lightningcss::traits::IntoOwned as _;
     let parse = |value: &str| {
         Property::parse_string(PropertyId::from(name), value, ParserOptions::default())
@@ -1336,6 +1338,7 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
         };
     }
     let body = format!("{name}: {value}");
+    let body = crate::rgb_space::rewrite(&body).unwrap_or(body);
     let Ok(block) = DeclarationBlock::parse_string(&body, ParserOptions::default()) else {
         return Verdict::Invalid;
     };
@@ -1388,6 +1391,8 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
 }
 
 pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
+    let rewritten = crate::rgb_space::rewrite(body);
+    let body = rewritten.as_deref().unwrap_or(body);
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
     let mut normal_transitions = Collector::default();
@@ -1518,8 +1523,50 @@ fn color(c: &CssColor) -> Option<Hsla> {
 
 /// A CSS `<color>` as sRGB channels, `None` for anything else, `currentColor` and system colours.
 pub fn parse_color(text: &str) -> Option<[f32; 4]> {
+    parse_color_in(text, RgbSpace::Srgb).map(|c| c.map(|v| v.clamp(0.0, 1.0)))
+}
+
+/// A CSS `<color>` in `space`, unclipped: out-of-gamut and HDR components survive.
+pub fn parse_color_in(text: &str, space: RgbSpace) -> Option<[f32; 4]> {
     use lightningcss::traits::Parse as _;
-    srgb(&CssColor::parse_string(text.trim()).ok()?)
+    let text = text.trim();
+    if let Some([r, g, b, a]) = crate::rgb_space::display_p3_linear(text) {
+        let [r, g, b] = crate::rgb_space::convert_rgb([r, g, b], RgbSpace::DisplayP3Linear, space);
+        return Some([r, g, b, a]);
+    }
+    in_space(&CssColor::parse_string(text).ok()?, space)
+}
+
+fn in_space(c: &CssColor, space: RgbSpace) -> Option<[f32; 4]> {
+    use lightningcss::values::color::{ColorSpace as _, SRGBLinear, P3, SRGB};
+    let [r, g, b, a] = match c {
+        CssColor::LightDark(light, dark) => {
+            LIGHT_DARK_SEEN.with(|seen| seen.set(true));
+            let dark_scheme = COLOR_SCHEME_DARK.with(std::cell::Cell::get);
+            return in_space(if dark_scheme { dark } else { light }, space);
+        }
+        CssColor::CurrentColor | CssColor::System(_) => return None,
+        _ => match space {
+            RgbSpace::Srgb => {
+                let c = SRGB::try_from(c).ok()?.resolve_missing();
+                [c.r, c.g, c.b, c.alpha]
+            }
+            RgbSpace::SrgbLinear => {
+                let c = SRGBLinear::try_from(c).ok()?.resolve_missing();
+                [c.r, c.g, c.b, c.alpha]
+            }
+            RgbSpace::DisplayP3 | RgbSpace::DisplayP3Linear => {
+                let c = P3::try_from(c).ok()?.resolve_missing();
+                [c.r, c.g, c.b, c.alpha]
+            }
+        },
+    };
+    Some(if space == RgbSpace::DisplayP3Linear {
+        let [r, g, b] = [r, g, b].map(crate::rgb_space::to_linear);
+        [r, g, b, a]
+    } else {
+        [r, g, b, a]
+    })
 }
 
 /// A concrete colour in sRGB channels. `lab()`, `oklch()`, `color()` and the rest are converted

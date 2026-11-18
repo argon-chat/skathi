@@ -29,6 +29,7 @@ reflect("bool", "isMap", "img");
 reflect("bool", "autoplay controls loop", "audio video"); // `loop`'s getter is the media state's (`defineMediaGet`)
 reflect("bool", "playsInline", "video");
 reflect("bool", "webkitdirectory", "input");
+reflect("bool", "alpha hdr", "input");
 reflect("bool", "defaultSelected=selected", "option");
 reflect("string", "title lang accessKey", null);
 reflect("string", "placeholder", "input textarea");
@@ -37,6 +38,7 @@ reflect("string", "alt", "area img input");
 reflect("string", "allow srcdoc", "iframe");
 reflect("string", "referrerPolicy loading", "iframe img");
 reflect("string", "accept min max step pattern", "input");
+reflect("string", "colorSpace=colorspace", "input"); // its getter is limited to known values (reflect.ts)
 reflect("string", "href download rel target", "a area");
 reflect("string", "htmlFor=for", "label output");
 reflect("long", "tabIndex", null);

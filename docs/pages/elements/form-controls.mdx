@@ -9,7 +9,7 @@ order: 12
 
 import Demo from "../../src/components/Demo.astro";
 
-A settings panel, a filter sidebar, an export dialog: checkboxes, radio buttons, sliders, color swatches, drop-downs and file pickers are the parts of an app users reach for every day. In Skathi they are drawn natively by the renderer, styled after Chromium on Windows. A file input opens the operating system's file dialog; a color input opens a color picker Skathi draws inside the window. Each one works with `v-model` in Vue and `bind:value`, `bind:checked` or `bind:group` in Svelte, keyboard included.
+A settings panel, a filter sidebar, an export dialog: checkboxes, radio buttons, sliders, color swatches, drop-downs and file pickers are the parts of an app users reach for every day. In Skathi they are drawn natively by the renderer, styled after Chromium on Windows. A file input opens the operating system's file dialog; a color input opens a color picker Skathi draws. Each one works with `v-model` in Vue and `bind:value`, `bind:checked` or `bind:group` in Svelte, keyboard included.
 
 [`accent-color`](/css/accent-color/) tints checkboxes, radios and sliders to match your brand, and [`appearance: none`](/css/appearance/) removes a control's default look when you want to draw your own. Text fields are on their own page: [`<input>` and `<textarea>`](/elements/text-fields/).
 
@@ -110,8 +110,8 @@ function save() {
 
 - Clicking a `<label>` checks its checkbox or radio, and the arrow keys move through the radio group.
 - The slider fires `input` while it moves, so the size label follows the thumb. `change` fires when a drag or a key press commits, if you only want the final value.
-- The color swatch opens the system's color picker. Picking sets a lowercase `#rrggbb` and fires `input` and `change`; cancelling fires nothing.
-- The `<select>` list opens inside the window, drawn by Skathi, and typing a letter while it is closed jumps to the first matching option.
+- The color swatch opens Skathi's color picker. Picking sets a lowercase `#rrggbb` and fires `input`, and `change` when the picker closes; Escape puts the old color back.
+- The `<select>` list is drawn by Skathi, and typing a letter while it is closed jumps to the first matching option.
 - Enter in a text field and the submit button both fire `submit`.
 
 ## Your own file button
@@ -188,32 +188,96 @@ The dialog needs a user gesture, so call `showPicker()` from a click, not from a
 
 `<input type="color">` is a swatch, 50 × 27 pixels by default. `::-webkit-color-swatch` and `::-webkit-color-swatch-wrapper` style it.
 
-`value` is a lowercase `#rrggbb`. Any CSS color can be assigned, such as `#f05`, `rgb()`, `hsl()` or a name, and is converted to that form; anything that is not a color becomes `#000000`.
+`value` is a lowercase `#rrggbb`. Any CSS color can be assigned, such as `#f05`, `rgb()`, `hsl()` or a name, and is converted to that form; anything that is not a color becomes `#000000`. Since 0.5 the `alpha`, `colorspace` and `hdr` attributes change that form, as described below.
 
 ### The picker (since 0.5)
 
-A click, Enter or Space on the input opens a picker under it, drawn by Skathi inside the window, on every platform. It opens above the input when there is no room below and stays inside the window. It follows the input's [`color-scheme`](/css/color-scheme/), light or dark, and the focused hex field takes the input's [`accent-color`](/css/accent-color/).
+A click, Enter or Space on the input opens a picker under it, drawn by Skathi on every platform. On Windows the picker is a popup window of its own, so it may extend past the app's window, as a browser's does: it opens above the input when there is no room below on the screen, and stays on the input's monitor. The app's window keeps the keyboard and stays active meanwhile. On macOS and Linux, X11 and Wayland alike, the picker is drawn inside the window, opens above the input when there is no room below, and stays inside the window. It follows the input's [`color-scheme`](/css/color-scheme/), light or dark, and the focused hex field takes the input's [`accent-color`](/css/accent-color/).
 
-It has a saturation and brightness square, a hue slider, an alpha slider when the input has the `alpha` attribute, a hex field, and up to eight recent colors. The recent colors are kept per app, in its storage folder.
+From the top it has:
 
-- Dragging in the square or a slider, typing in the hex field, or picking a recent color sets `value` and fires `input` at once.
-- Enter, a click outside the picker, or the window losing focus closes it and fires `change` if the value changed. The click outside does nothing else.
+- tabs for the shape of the color area: a saturation and brightness square with a hue slider, a hue wheel around a square, or a hue wheel around a triangle;
+- an alpha slider when the input has the `alpha` attribute, and an intensity when it has `hdr`;
+- a switch between hex, RGB, HSL, HSV and OKLCH, with a field per channel;
+- up to eight recent colors.
+
+The shape, the format and the recent colors are kept per app, in its storage folder. A recent color keeps its alpha and intensity; one with an intensity other than 0 has a dot in its corner.
+
+- Dragging in the color area or a slider, typing in a field, or picking a recent color sets `value` and fires `input` at once.
+- Enter, a click outside the picker, or the window losing focus closes it and fires `change` if the value changed. The click outside does nothing else. On Windows, moving or resizing the window closes it the same way.
 - Escape closes it and puts back the value it opened with, with an `input` event if the value had changed. No `change` fires.
 
 | Key                           | In the picker                                                                                                                       |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Tab, Shift+Tab                | Move between the square, the sliders, the hex field and the recent colors.                                                          |
+| Tab, Shift+Tab                | Move between the shape tabs, the color area, the sliders, the format switch, the fields and the recent colors.                      |
 | Arrow keys                    | In the square: saturation left and right, brightness up and down. On a slider: move it. Among the recent colors: pick the next one. |
+| Arrow keys on tabs            | Pick the next shape or format. The ring of the wheel and the triangle is the hue slider.                                            |
 | Shift+arrow keys              | Ten times the step.                                                                                                                 |
 | Page Up, Page Down, Home, End | Large steps and the ends of a slider.                                                                                               |
 | `0`–`9`, `a`–`f`, Backspace   | Edit the hex field. Three or six digits (four or eight with `alpha`) apply.                                                         |
-| Ctrl+A, Ctrl+C, Ctrl+V        | Select, copy and paste in the hex field. A pasted CSS color such as `rgb(…)` is converted.                                          |
+| `0`–`9`, `.`, Up, Down        | Edit an RGB, HSL, HSV or OKLCH field. Each number applies as it is typed; Up and Down step it.                                      |
+| Ctrl+A, Ctrl+C, Ctrl+V        | Select, copy and paste in a field. A pasted CSS color such as `rgb(…)` is converted.                                                |
+
+The hex field shows the color as sRGB. The RGB fields are 0 to 255 in the input's color space, HSL, HSV and A are in degrees and percent, and OKLCH is lightness in percent, chroma and hue.
 
 There is no eyedropper.
 
 ### Alpha (since 0.5)
 
 With the `alpha` attribute the picker shows an alpha slider and the swatch shows transparency over a checkerboard. `value` then follows the HTML standard: `color(srgb r g b / a)`, with each channel rounded to 8 bits, such as `color(srgb 1 0.501961 0 / 0.5)`. An opaque color leaves out the `/ a`. Any CSS color can be assigned, `#ff800080` included. Put `alpha` before a static `value` in the markup, or bind the value with `v-model` or `bind:value`: a `value` set before the attribute is converted without its alpha.
+
+### Display P3 (since 0.5)
+
+`colorspace="display-p3"` keeps the color in Display P3, the wider gamut of most current displays, as the HTML standard specifies. `value` is `color(display-p3 r g b)`, with `/ a` under `alpha`, and its channels are not rounded to 8 bits. An assigned color in any space, `#ff0000` included, is converted: `#ff0000` becomes `color(display-p3 0.917488 0.200287 0.138561)`. The picker's square, wheel and fields work in P3 coordinates; its swatches are painted as the window shows them. `input.colorSpace` reads `"limited-srgb"` (the default) or `"display-p3"`.
+
+```vue title="Brand.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const brand = ref("color(display-p3 0 0.6 1)");
+</script>
+
+<template>
+  <input v-model="brand" type="color" colorspace="display-p3" />
+</template>
+```
+
+```svelte title="Brand.svelte" framework="svelte"
+<script lang="ts">
+  let brand = $state("color(display-p3 0 0.6 1)");
+</script>
+
+<input bind:value={brand} type="color" colorspace="display-p3" />
+```
+
+### HDR colors (since 0.5)
+
+The `hdr` attribute is Skathi's own. It adds an intensity to the picker: an exposure from −10 to +10 stops that multiplies the color by 2 to that power, with a slider, buttons for common stops and a preview of the color before and after. The preview glows when the result is brighter than white.
+
+`value` stays a CSS color, in linear light with channels past 1: `color(srgb-linear 4 2 0.5)`, or `color(display-p3-linear …)` with `colorspace="display-p3"`, and `/ a` with `alpha`. Both work in a `style` binding, as below; `display-p3-linear` is not read in stylesheets. Reading a value back, the picker takes the intensity as the brightest channel's power of two, rounded, and the rest as the color: `color(srgb-linear 4 2 0.5)` opens at +2 stops.
+
+```vue title="Glow.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const glow = ref("color(srgb-linear 4 2 0.5)");
+</script>
+
+<template>
+  <input v-model="glow" type="color" hdr alpha />
+  <div class="orb" :style="{ background: glow }" />
+</template>
+```
+
+```svelte title="Glow.svelte" framework="svelte"
+<script lang="ts">
+  let glow = $state("color(srgb-linear 4 2 0.5)");
+</script>
+
+<input bind:value={glow} type="color" hdr alpha /><div class="orb" style:background={glow}></div>
+```
+
+Browsers ignore `hdr`, so the same markup in a web build gets a plain sRGB input.
 
 ### Show your own picker (since 0.5)
 
@@ -275,7 +339,7 @@ function pick(next: string) {
 
 Dispatching `input` keeps `v-model` and `bind:value` in step, as with any input whose value you set from script.
 
-To use the operating system's color dialog instead, set [`"colorPicker": "system"`](/sk-config/#colorPicker) in `sk.config.json`: `ChooseColor` on Windows, `NSColorPanel` on macOS, and zenity or kdialog on Linux. A pick there sets `value` and fires `input` and `change`; cancelling fires nothing. `showpicker` fires before it too.
+To use the operating system's color dialog instead, set [`"colorPicker": "system"`](/sk-config/#colorPicker) in `sk.config.json`: `ChooseColor` on Windows, `NSColorPanel` on macOS, and zenity or kdialog on Linux. A pick there sets `value` and fires `input` and `change`; cancelling fires nothing. `showpicker` fires before it too. The OS dialog has no alpha, Display P3 or intensity: it ignores `alpha`, `colorspace` and `hdr`, and its sRGB pick is converted to the input's space.
 
 ### `showPicker()` (since 0.5)
 
@@ -311,7 +375,12 @@ An input that paints nothing, as here, has the picker open at the pointer.
 
 `<select>` draws a closed box like Chromium's on Windows: the selected option's label, a chevron, and the width of its widest option. `appearance: none` removes the chevron and the padding.
 
-The list opens **inside the window**, drawn by Skathi, not as an OS menu. It opens under the box, or above it when there is no room, stays inside the window, shows up to 20 rows before it scrolls, and closes when the window loses focus. Its colors are a fixed light or dark palette; only the select's own solid background carries over.
+The list is drawn by Skathi, not as an OS menu. It opens under the box, or above it when there is no room, shows up to 20 rows before it scrolls, and closes when the window loses focus.
+
+- On Windows (since 0.5) the list is a popup window of its own and may extend past the app's window. The room it measures is the screen's, on the box's monitor. Moving or resizing the window closes it.
+- On macOS and Linux, X11 and Wayland alike, it opens inside the window and stays inside it.
+
+The list's colors are a fixed light or dark palette; only the select's own solid background carries over.
 
 - Alt+Up, Alt+Down, F4, Enter or Space opens the list.
 - While it is closed, the arrow keys change the value, and typing selects the first option that starts with what was typed (the search restarts after a one-second pause).

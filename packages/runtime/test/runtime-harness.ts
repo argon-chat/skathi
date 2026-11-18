@@ -324,6 +324,7 @@ interface RuntimeHost {
   /** `__sk_color_picker`: the ids asked for, and whether the in-window picker took them (false: the OS dialog). */
   colorPickerCalls: number[];
   colorPickerAnswer: boolean;
+  colorValueCalls: { text: string; alpha: boolean; colorspace: string; hdr: boolean }[];
   focus: { calls: { id: number; op: number }[]; answer: (id: number, op: number) => string };
   reloads: number;
   mediaById: Map<number, string>;
@@ -527,6 +528,7 @@ export function createRuntime(
     inputSelectAnswer: true,
     colorPickerCalls: [],
     colorPickerAnswer: true,
+    colorValueCalls: [],
     focus: {
       calls: [],
       answer: (_id, op) => (op === 1 ? "" : "refused"),
@@ -934,8 +936,12 @@ export function createRuntime(
       return host.colorPickerAnswer;
     },
     // The host's sanitization (sk-tree `color::sanitize`) for hex input; anything else is black.
-    (text: string, alpha: boolean) => {
+    // The other spaces are tagged with what the host was asked for.
+    (text: string, alpha: boolean, colorspace: string, hdr: boolean) => {
+      host.colorValueCalls.push({ text, alpha, colorspace, hdr });
       const t = text.trim().toLowerCase();
+      if (hdr || colorspace.toLowerCase() === "display-p3")
+        return `${colorspace}:${hdr}:${alpha}:${t.slice(t.lastIndexOf(":") + 1)}`;
       const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(t)
         ? t.length <= 5
           ? "#" + [...t.slice(1)].map((c) => c + c).join("")

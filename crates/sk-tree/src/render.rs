@@ -2544,7 +2544,9 @@ fn build_node<V: 'static>(
                     } else if is_select {
                         let skin = extras.appearance_none != Some(true);
                         kids.extend(crate::select::closed_children(t, id, skin, case));
-                        if let Some(popup) = crate::select::popup_child(t, id, node, case, window) {
+                        if let Some(popup) =
+                            crate::select::popup_child(t, id, node, case, window, cx)
+                        {
                             kids.push(popup);
                         }
                     } else if !node.text.is_empty() {

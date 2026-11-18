@@ -30,6 +30,7 @@ mod path_data;
 pub mod perf;
 mod prefix;
 mod registered;
+mod rgb_space;
 mod share;
 pub mod snap;
 mod transition;
@@ -73,11 +74,13 @@ pub use mapper::{
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
-    parse_color, set_composed_font_families, take_unreached_fonts, text_shadow_css, transform_css,
+    parse_color, parse_color_in, set_composed_font_families, take_unreached_fonts, text_shadow_css,
+    transform_css,
 };
 pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;
+pub use rgb_space::{convert_rgb, from_linear, to_linear, RgbSpace};
 pub use transition::{
     covered, parse_easing, spec_for, Delay, Easing, StepPosition, TransitionProperty,
     TransitionSpec, ANIMATABLE_COUNT,

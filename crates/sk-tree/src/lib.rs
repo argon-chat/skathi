@@ -85,6 +85,7 @@ pub use observe::update_layout_observers;
 pub use pointer_lock::{
     intercept_escape as pointer_lock_intercept_escape, navigated as pointer_lock_navigated,
 };
+pub use popup::popup_windows;
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
@@ -392,10 +393,16 @@ host_fn!(fn sk_color_picker(_g, args) {
     Value::boolean(color_picker::request(arg_id(args.arg(0)))).0
 });
 
-// `__sk_color_value(text, alpha)`: a color input's sanitized value.
+// `__sk_color_value(text, alpha, colorspace, hdr)`: a color input's sanitized value.
 host_fn!(fn sk_color_value(g, args) {
     let text = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    ret_string(&color::sanitize(&text, args.arg(1).as_bool().unwrap_or(false)))
+    let colorspace = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
+    let mode = color::Mode::new(
+        args.arg(1).as_bool().unwrap_or(false),
+        &colorspace,
+        args.arg(3).as_bool().unwrap_or(false),
+    );
+    ret_string(&color::sanitize(&text, mode))
 });
 
 // `name=value` lines, empty for a node that is not a loaded `<video>`.
@@ -495,7 +502,7 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_focus", 2, sk_focus as *const _),
         ("__sk_input_select", 1, sk_input_select as *const _),
         ("__sk_color_picker", 1, sk_color_picker as *const _),
-        ("__sk_color_value", 2, sk_color_value as *const _),
+        ("__sk_color_value", 4, sk_color_value as *const _),
         ("__sk_media_state", 1, sk_media_state as *const _),
         ("__sk_media_prop", 2, sk_media_prop as *const _),
         ("__sk_media_call", 3, sk_media_call as *const _),

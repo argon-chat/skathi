@@ -247,8 +247,8 @@ declare function __sk_focus(id: SkNodeId, op: 0 | 1): string;
 declare function __sk_input_select(id: SkNodeId): boolean;
 /** Opens the in-window color picker for a color input; `false` when the app configured the OS dialog. */
 declare function __sk_color_picker(id: SkNodeId): boolean;
-/** A color input's sanitized value: `#rrggbb`, or `color(srgb r g b / a)` with `alpha`. */
-declare function __sk_color_value(text: string, alpha: boolean): string;
+/** A color input's sanitized value for its `alpha`, `colorspace` and `hdr` attributes. */
+declare function __sk_color_value(text: string, alpha: boolean, colorspace: string, hdr: boolean): string;
 
 declare function __sk_reload(): void;
 

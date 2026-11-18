@@ -96,6 +96,10 @@ declare module "svelte/elements" {
   interface HTMLInputAttributes {
     /** `type="color"`: the value carries alpha, and the picker shows an alpha slider. */
     alpha?: boolean | undefined | null;
+    /** `type="color"`: the value's color space. */
+    colorspace?: "limited-srgb" | "display-p3" | undefined | null;
+    /** Skathi, `type="color"`: an HDR value in linear light, with an intensity in stops in the picker. */
+    hdr?: boolean | undefined | null;
     /** Before `type="color"` shows its picker; `preventDefault()` keeps it closed. */
     onshowpicker?: ((event: Event) => void) | undefined | null;
   }

@@ -1333,6 +1333,16 @@ fn with_window_id<R>(id: u64, f: impl FnOnce(&mut Window, &mut App) -> R) -> Opt
     if crate::main_window_id() == Some(id) {
         return with_commit(f);
     }
+    if sk_tree::popup_windows().iter().any(|p| p.0 == id) {
+        return with_commit(|_, cx| {
+            let handle = cx
+                .windows()
+                .into_iter()
+                .find(|h| h.window_id().as_u64() == id)?;
+            handle.update(cx, |_, window, cx| f(window, cx)).ok()
+        })
+        .flatten();
+    }
     with_commit(|_, cx| crate::popout::with_window(id, cx, f)).flatten()
 }
 
@@ -1351,6 +1361,7 @@ fn window_root(id: u64) -> u32 {
 fn window_ids() -> Vec<u64> {
     let mut ids: Vec<u64> = crate::main_window_id().into_iter().collect();
     ids.extend(crate::popout::list().into_iter().map(|(id, _, _)| id));
+    ids.extend(sk_tree::popup_windows().into_iter().map(|(id, _, _)| id));
     ids
 }
 
@@ -2560,15 +2571,20 @@ fn cmd_windows() -> String {
                 window.is_window_active(),
                 window.is_window_hovered(),
                 window.scale_factor(),
+                window.bounds(),
             )
         });
-        let (w, h, active, hovered, scale) = facts.unwrap_or((0.0, 0.0, false, false, 1.0));
-        out.push(Json::obj(vec![
+        let (w, h, active, hovered, scale, bounds) =
+            facts.unwrap_or((0.0, 0.0, false, false, 1.0, gpui::Bounds::default()));
+        let popup = sk_tree::popup_windows().into_iter().find(|p| p.0 == id);
+        let kind = match (Some(id) == main, popup) {
+            (true, _) => "main",
+            (false, Some(_)) => "popup",
+            (false, None) => "popout",
+        };
+        let mut entry = vec![
             ("id", Json::n(id as f64)),
-            (
-                "kind",
-                Json::s(if Some(id) == main { "main" } else { "popout" }),
-            ),
+            ("kind", Json::s(kind)),
             ("title", Json::s(title)),
             ("root", Json::n(f64::from(root))),
             (
@@ -2578,7 +2594,21 @@ fn cmd_windows() -> String {
             ("scale", Json::n(scale)),
             ("focused", Json::Bool(active)),
             ("hovered", Json::Bool(hovered)),
-        ]));
+            (
+                "screen",
+                Json::obj(vec![
+                    ("x", Json::n(f64::from(f32::from(bounds.origin.x)))),
+                    ("y", Json::n(f64::from(f32::from(bounds.origin.y)))),
+                    ("w", Json::n(f64::from(f32::from(bounds.size.width)))),
+                    ("h", Json::n(f64::from(f32::from(bounds.size.height)))),
+                ]),
+            ),
+        ];
+        if let Some((_, owner, margin)) = popup {
+            entry.push(("owner", Json::n(owner as f64)));
+            entry.push(("margin", Json::n(f64::from(margin))));
+        }
+        out.push(Json::obj(entry));
     }
     ok(Json::obj(vec![
         ("windows", Json::arr(out)),

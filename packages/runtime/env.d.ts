@@ -675,6 +675,12 @@ declare global {
     minLength: number;
     formNoValidate: boolean;
     files: FileList | null;
+    /** `type="color"`: the value carries alpha, and the picker shows an alpha slider. */
+    alpha: boolean;
+    /** `type="color"`: the `colorspace` attribute, read as `"limited-srgb"` or `"display-p3"`. */
+    colorSpace: string;
+    /** Skathi, `type="color"`: the value is linear light past 1, and the picker has an intensity in stops. */
+    hdr: boolean;
     select(): void;
     stepUp(n?: number): void;
     stepDown(n?: number): void;

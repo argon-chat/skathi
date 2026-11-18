@@ -158,6 +158,8 @@ const SPECIAL_BOOLEAN_ATTRS = new Set([
   "readonly",
 ]);
 
+const COLOR_VALUE_ATTRS = new Set(["value", "type", "alpha", "colorspace", "hdr"]);
+
 export function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
   if (__DEV__) noteWrite(el);
   if (next == null) __sk_set_prop(el.__skId, I(key), undefined);
@@ -183,7 +185,7 @@ export function patchAttribute(el: MirrorElement, key: string, next: unknown): v
   }
   if (key === "value" && !(isRangeInput(el) && el._rangeDirty)) el._value = next == null ? "" : String(next);
   if (isRangeInput(el) && ["value", "type", "min", "max", "step"].includes(key)) syncRangeValue(el);
-  if (isColorInput(el) && (key === "value" || key === "type" || key === "alpha")) writeControlValue(el, el._value);
+  if (isColorInput(el) && COLOR_VALUE_ATTRS.has(key)) writeControlValue(el, el._value);
   if (key === "selected" && isOptionEl(el) && !el._dirty) {
     el._selected = next != null;
     selectednessChanged(el);

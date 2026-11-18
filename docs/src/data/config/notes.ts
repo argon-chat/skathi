@@ -164,6 +164,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     default: '`"builtin"`',
     notes: [
       "An app can also show its own picker per input by cancelling the input's `showpicker` event ([Form controls](/elements/form-controls/#show-your-own-picker)).",
+      "With `\"system\"` the input's `alpha`, `colorspace` and `hdr` do not reach the OS dialog; its sRGB pick is converted to the input's space.",
     ],
     example: "system",
     since: "0.5.0",

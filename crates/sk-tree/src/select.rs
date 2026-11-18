@@ -7,6 +7,7 @@
 //! the select's `input` host event with the option's index in `a`.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
@@ -15,6 +16,7 @@ use gpui::{
     Pixels, Point, ScrollHandle, VnHitKind, Window,
 };
 
+use crate::popup::Slot;
 use crate::tree::{self, Kind, Tree};
 use crate::windows::{self, WinKey};
 use crate::EventPayload;
@@ -277,7 +279,7 @@ fn open_in(k: WinKey) -> Option<u32> {
 }
 
 /// The open select if it still paints; otherwise it closes, without a repaint (the caller is mid-event, or mid-build).
-fn still_open(k: WinKey) -> Option<u32> {
+fn still_open(k: WinKey, cx: &mut App) -> Option<u32> {
     let select = open_in(k)?;
     let painted = windows::peek(k, |w| {
         w.bounds.contains_key(&select) || w.prev_bounds.contains_key(&select)
@@ -288,8 +290,15 @@ fn still_open(k: WinKey) -> Option<u32> {
     if ok {
         return Some(select);
     }
-    OPEN.with(|o| o.borrow_mut().take());
+    forget(cx);
     None
+}
+
+/// Closes without a repaint.
+fn forget(cx: &mut App) {
+    if let Some(o) = OPEN.with(|o| o.borrow_mut().take()) {
+        crate::popup::close(Slot::Select, o.select, cx);
+    }
 }
 
 fn changed(select: u32, window: &mut Window, cx: &mut App) {
@@ -320,6 +329,7 @@ fn open(select: u32, window: &mut Window, cx: &mut App) {
 
 fn close(window: &mut Window, cx: &mut App) {
     if let Some(o) = OPEN.with(|o| o.borrow_mut().take()) {
+        crate::popup::close(Slot::Select, o.select, cx);
         changed(o.select, window, cx);
     }
 }
@@ -376,7 +386,7 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
         hit_nothing(kind, window);
         return true;
     }
-    if still_open(k).is_none() {
+    if still_open(k, cx).is_none() {
         return false;
     }
     let inside = OPEN.with(|o| {
@@ -448,7 +458,7 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E) -> E {
 
 fn popup_key(ev: &KeyDownEvent, window: &mut Window, cx: &mut App) -> bool {
     let k = windows::key(window);
-    let Some(select) = still_open(k) else {
+    let Some(select) = still_open(k, cx) else {
         return false;
     };
     let rows = tree::read_tree(|t| rows(t, select));
@@ -597,6 +607,7 @@ fn arrow() -> AnyElement {
     c.into_any_element()
 }
 
+#[derive(Clone, Copy)]
 struct Palette {
     background: Hsla,
     border: Hsla,
@@ -632,13 +643,18 @@ pub(crate) fn popup_child(
     node: &crate::tree::Node,
     case: Option<sk_css::TextTransform>,
     window: &mut Window,
+    cx: &mut App,
 ) -> Option<AnyElement> {
     let k = windows::key(window);
     if open_in(k) != Some(id) {
         return None;
     }
-    if !window.is_window_active() || windows::focused_node(k) != id || !usable(t, id) {
-        OPEN.with(|o| o.borrow_mut().take());
+    if !window.is_window_active()
+        || windows::focused_node(k) != id
+        || !usable(t, id)
+        || crate::popup::owner_moved(Slot::Select, window)
+    {
+        forget(cx);
         return None;
     }
     let (current, scroll, reveal) = OPEN.with(|o| {
@@ -665,16 +681,82 @@ pub(crate) fn popup_child(
     })
     .flatten();
     let (width, room) = match rect {
+        Some(r) if crate::popup::native() => (r.2, crate::popup::room(window, r, 0.0)),
         Some((_, y, w, h)) => {
             let viewport = f32::from(window.viewport_size().height);
-            (w, (viewport - (y + h)).max(y).max(0.0))
+            (w, Some((viewport - (y + h)).max(y).max(0.0)))
         }
-        None => (0.0, f32::INFINITY),
+        None => (0.0, None),
     };
-    let font = window.text_style().font_size.to_pixels(window.rem_size());
+    // Built before layout, so the window's text style is not the select's yet.
+    let font = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.base.text.font_size)
+        .unwrap_or(window.text_style().font_size)
+        .to_pixels(window.rem_size());
     let row_height = f32::from(font) * 1.2 + 2.0 * PAD_BLOCK;
-    let max_height = (MAX_ROWS as f32 * row_height + 2.0).min(room);
+    let max_height = (MAX_ROWS as f32 * row_height + 2.0).min(room.unwrap_or(f32::INFINITY));
+    let reveal = Rc::new(Cell::new(reveal));
+    let build = move || {
+        list(
+            &rows,
+            Shown {
+                select: id,
+                owner: k,
+                current,
+                scroll: &scroll,
+                reveal: reveal.take(),
+                max_height,
+                row_height,
+                case,
+                pal,
+            },
+        )
+        .min_w(px(width))
+        .bg(own_background.unwrap_or(pal.background))
+        .into_any_element()
+    };
+    Some(
+        crate::popup::Popup {
+            slot: Slot::Select,
+            anchor: id,
+            fallback: Default::default(),
+            gap: 0.0,
+            margin: 0.0,
+            inherit_text: true,
+            build: Rc::new(build),
+            placed: note_placed,
+        }
+        .into_element(),
+    )
+}
 
+struct Shown<'a> {
+    select: u32,
+    owner: WinKey,
+    current: Option<usize>,
+    scroll: &'a ScrollHandle,
+    /// Scroll the highlighted row into view.
+    reveal: bool,
+    max_height: f32,
+    row_height: f32,
+    case: Option<sk_css::TextTransform>,
+    pal: Palette,
+}
+
+fn list(rows: &[Row], s: Shown) -> gpui::Stateful<gpui::Div> {
+    let Shown {
+        select: id,
+        owner,
+        current,
+        scroll,
+        reveal,
+        max_height,
+        row_height,
+        case,
+        pal,
+    } = s;
     let mut list = div()
         .id(("sk-select-list", id as usize))
         .flex()
@@ -736,10 +818,14 @@ pub(crate) fn popup_child(
                     }
                     row = row
                         .on_mouse_move(move |_, window, cx| {
-                            highlight(Some(index), false, window, cx)
+                            crate::popup::in_window(owner, window, cx, move |window, cx| {
+                                highlight(Some(index), false, window, cx)
+                            })
                         })
                         .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                            pick(id, index, window, cx)
+                            crate::popup::in_window(owner, window, cx, move |window, cx| {
+                                pick(id, index, window, cx)
+                            })
                         });
                 }
                 list = list.child(row);
@@ -755,27 +841,16 @@ pub(crate) fn popup_child(
             scroll.scroll_to_item(shown_before);
         }
     }
-    let frame = div()
+    div()
         .id(("sk-select-popup", id as usize))
         .occlude()
+        .flex_none()
         .flex()
         .flex_col()
-        .min_w(px(width))
-        .bg(own_background.unwrap_or(pal.background))
         .border_1()
         .border_color(pal.border)
         .line_height(relative(1.2))
-        .child(list);
-    Some(
-        crate::popup::Placed {
-            anchor: id,
-            fallback: Default::default(),
-            gap: 0.0,
-            child: frame.into_any_element(),
-            placed: note_placed,
-        }
-        .deferred(),
-    )
+        .child(list)
 }
 
 fn note_placed(k: WinKey, select: u32, placed: Bounds<Pixels>) {

@@ -251,13 +251,35 @@ const domAndEvents = section("DOM and events", [
   el("input-type-color", "<input type=color>", OK, "A form control that lets the user pick a color.", {
     since: "0.5.0",
     notes: [
-      "A click, Enter, Space or `showPicker()` opens a picker Skathi draws inside the window, under the input: a saturation and brightness square, a hue slider, a hex field and the app's recent colors, in the input's light or dark `color-scheme`.",
+      "A click, Enter, Space or `showPicker()` opens a picker Skathi draws under the input: a saturation and brightness square, a hue wheel or a triangle, a hue slider, fields in hex, RGB, HSL, HSV or OKLCH, and the app's recent colors, in the input's light or dark `color-scheme`. On Windows it is a popup window of its own and may extend past the app's window; on macOS and Linux it is drawn inside the window.",
       "Dragging, the arrow keys and typing fire `input` as the color moves; Enter or a click outside commits with `change`; Escape restores the value the picker opened with.",
-      "The `alpha` attribute adds an alpha slider; `value` is then `color(srgb r g b / a)`, as in the HTML standard. Without it `value` is `#rrggbb`. Any CSS color can be assigned.",
+      '`value` follows the HTML standard: `#rrggbb` by default, `color(srgb r g b / a)` with `alpha`, and `color(display-p3 r g b)` with `colorspace="display-p3"`. Any CSS color can be assigned and is converted to the input\'s space.',
       "The input fires a cancelable `showpicker` event before any picker opens: `preventDefault()` keeps it closed so the app can show its own.",
-      '`"colorPicker": "system"` in `sk.config.json` opens the OS color dialog instead.',
+      '`"colorPicker": "system"` in `sk.config.json` opens the OS color dialog instead. It ignores `alpha`, `colorspace` and `hdr`; its pick is converted to the input\'s space.',
     ],
-    limitations: ["No eyedropper.", "The `colorspace` attribute is ignored: colors are sRGB."],
+    values: [
+      {
+        value: "alpha",
+        status: OK,
+        note: "An alpha slider; `value` is `color(srgb r g b / a)` with 8-bit channels, or the `display-p3` form with `/ a`.",
+      },
+      {
+        value: 'colorspace="limited-srgb"',
+        status: OK,
+        note: "The default: sRGB with 8-bit channels.",
+      },
+      {
+        value: 'colorspace="display-p3"',
+        status: OK,
+        note: "The picker works in Display P3 coordinates and `value` is `color(display-p3 r g b)`, unrounded. Swatches are painted as the window shows them.",
+      },
+      {
+        value: "hdr",
+        status: OK,
+        note: "Skathi only. An intensity in stops, −10 to +10, multiplies the color; `value` is linear light that can pass 1: `color(srgb-linear r g b)`, or `color(display-p3-linear r g b)` with `display-p3`.",
+      },
+    ],
+    limitations: ["No eyedropper."],
     related: ["html-input-element-show-picker", "showpicker"],
     aliases: ["color input", "color picker", "color well"],
   }),
