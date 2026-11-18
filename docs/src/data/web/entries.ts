@@ -402,10 +402,14 @@ const domAndEvents = section("DOM and events", [
   ev(
     "pointerrawupdate",
     "pointerrawupdate",
-    PLAN,
+    NO,
     "Fires for every pointer reading, ahead of the frame's `pointermove`.",
     {
-      workaround: "Read the frame's readings from `getCoalescedEvents()` on `pointermove`.",
+      notes: [
+        "Skathi delivers pointer input once per frame and draws once per frame, so handling each reading as it arrives would not show it any sooner.",
+      ],
+      workaround:
+        "Read every reading since the last frame, each with its own `timeStamp`, from `getCoalescedEvents()` on `pointermove`.",
       related: ["pointer-event-get-coalesced-events"],
     },
   ),
