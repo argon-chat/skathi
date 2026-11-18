@@ -100,7 +100,7 @@ export const pages: PageEntry[] = [
     title: "Audio",
     icon: "audio",
     section: "Media",
-    blurb: "A Web Audio synth with a live spectrum",
+    blurb: "A Web Audio synth, a live spectrum and spatial audio",
     component: AudioPage,
   },
   {
