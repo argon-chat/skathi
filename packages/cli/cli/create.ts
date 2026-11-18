@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve } from "node:path";
-import * as p from "@clack/prompts";
+import * as p from "./prompt";
 import { runtimeRequire } from "../runtime-path";
 import { ConfigError, sanitizeExeName } from "./config";
 import { fetchGallery, galleryDir } from "./gallery";
@@ -260,12 +260,12 @@ export function parseTemplate(v: string): Template {
   return template;
 }
 
-function answered<T>(value: T): Exclude<T, symbol> {
-  if (p.isCancel(value) || typeof value === "symbol") {
+function answered<T>(value: p.Answer<T>): T {
+  if (value === p.CANCEL) {
     p.cancel("Nothing was created.");
     process.exit(130);
   }
-  return value as Exclude<T, symbol>;
+  return value;
 }
 
 /** `sk create`: the questions the flags leave open, then {@link create}. */
@@ -289,23 +289,22 @@ export async function createCommand(target: string | undefined, flags: CreateFla
       await p.text({
         message: "Where should the app go?",
         placeholder: "my-app",
-        defaultValue: "my-app",
-        validate: (v) =>
-          v && existsSync(join(resolve(v), "package.json")) ? `${v} already has a package.json` : undefined,
+        fallback: "my-app",
+        validate: (v) => (existsSync(join(resolve(v), "package.json")) ? `${v} already has a package.json` : undefined),
       }),
     );
     options.name ??= answered(
       await p.text({
         message: "App name",
-        initialValue: basename(resolve(dir)),
-        validate: (v) => (v?.trim() ? undefined : "it needs a name"),
+        initial: basename(resolve(dir)),
+        validate: (v) => (v ? undefined : "it needs a name"),
       }),
     );
     options.template ??= answered(
       await p.select<Template>({
         message: "Template",
         options: TEMPLATES.map((t) => ({ value: t, label: t, hint: TEMPLATE_INFO[t].hint })),
-        initialValue: "showcase",
+        initial: "showcase",
       }),
     );
     options.platforms ??= answered(
@@ -316,21 +315,21 @@ export async function createCommand(target: string | undefined, flags: CreateFla
           { value: "macos", label: "macOS" },
           { value: "linux", label: "Linux" },
         ],
-        initialValues: [currentPlatform()],
+        initial: [currentPlatform()],
         required: true,
       }),
     );
     options.keepDevtools ??= answered(
       await p.confirm({
         message: "Keep devtools (F12) in published builds? sk build always has them",
-        initialValue: false,
+        initial: false,
       }),
     );
     options.packageManager ??= answered(
       await p.select<PackageManager>({
         message: "Package manager",
         options: PACKAGE_MANAGERS.map((pm) => ({ value: pm, label: pm })),
-        initialValue: detectPackageManager(),
+        initial: detectPackageManager(),
       }),
     );
   }

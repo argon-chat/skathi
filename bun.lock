@@ -48,7 +48,6 @@
         "sk": "./cli/sk.ts",
       },
       "dependencies": {
-        "@clack/prompts": "^1.9.0",
         "@commander-js/extra-typings": "~15.1.0",
         "@skathi-native/runtime": "workspace:*",
         "commander": "~15.1.0",
