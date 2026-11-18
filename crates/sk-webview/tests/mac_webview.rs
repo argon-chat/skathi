@@ -269,7 +269,9 @@ say({ type: "hello", secure: isSecureContext, origin: location.origin, w: innerW
         let mut frame = h.frame();
         frame.navigate(&src("/page.html"));
         frame.place(Some(placement()));
-        let ok = h.wait("load and hello", |l| loaded(l)) && !h.messages("hello").is_empty();
+        let ok = h.wait("load and hello", |l| {
+            loaded(l) && !h.messages("hello").is_empty()
+        });
         h.check(
             "an app file loads and says hello",
             ok && !failed(&h.log.borrow()),
