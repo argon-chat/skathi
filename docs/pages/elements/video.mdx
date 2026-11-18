@@ -1,0 +1,379 @@
+---
+title: "<video>"
+label: "<video>"
+metaTitle: "<video>: play video through the OS player"
+description: How <video> plays through Media Foundation, AVFoundation or GStreamer, which attributes, properties and events it supports, how frames reach the screen, sizing and CSS, and why <audio> plays nothing.
+section: Elements
+order: 6
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+A looping clip behind a welcome screen, a product tour, a tutorial with your own player, a preview of a recording the user just made: `<video>` covers them with the attributes and events you know from the web.
+
+Skathi ships no codecs. Each `<video>` is played by the operating system's own player: Media Foundation on Windows, AVFoundation on macOS, GStreamer on Linux. The OS reads the file, decodes it on its own threads (on the GPU where it can), plays the sound and keeps audio and video in sync. Skathi takes the newest frame at the size it is shown and draws it into the element's box like any other picture. Because it is drawn in the page and not in a native window on top, CSS rounds it, clips it, fades it, and your controls can sit over it.
+
+<Demo id="elements/video" caption="A video in a rounded frame with custom controls drawn over it." />
+
+## A muted background loop
+
+`autoplay`, `muted` and `loop` together give a silent clip that starts on its own. `object-fit: cover` fills the box and crops the edges, and the content sits over the video in the same box.
+
+```vue title="Hero.vue" framework="vue"
+<template>
+  <section class="hero">
+    <video class="backdrop" src="assets/hero.mp4" autoplay muted loop />
+    <h1>Welcome back</h1>
+  </section>
+</template>
+
+<style scoped>
+.hero {
+  position: relative;
+  height: 320px;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+h1 {
+  position: relative;
+  color: white;
+}
+</style>
+```
+
+```svelte title="Hero.svelte" framework="svelte"
+<section class="hero">
+  <video class="backdrop" src="assets/hero.mp4" autoplay muted loop></video>
+  <h1>Welcome back</h1>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    height: 320px;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  h1 {
+    position: relative;
+    color: white;
+  }
+</style>
+```
+
+There is no autoplay policy, so a video plays without a user gesture, with sound or without. A video also keeps playing while it is hidden, scrolled away or in a minimized window. For a loop that is only decoration, pause it while the window is minimized:
+
+```ts
+import { appWindow } from "@skathi-native/runtime";
+
+export function pauseWhileMinimized(video: HTMLVideoElement) {
+  appWindow.addEventListener("minimize", () => video.pause());
+  appWindow.addEventListener("restore", () => video.play());
+}
+```
+
+## Custom controls
+
+There is no built-in transport bar: `controls` prints an advisory and draws nothing. That is less of a loss than it sounds, because your own controls can match the app. Media events carry `currentTime` and `duration`, so the UI needs no polling.
+
+```vue title="Player.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const video = ref<HTMLVideoElement | null>(null);
+const playing = ref(false);
+const time = ref(0);
+const duration = ref(0);
+
+function sync(e: Event) {
+  const v = e.target as HTMLVideoElement;
+  time.value = v.currentTime;
+  duration.value = v.duration;
+}
+
+function toggle() {
+  const v = video.value!;
+  if (v.paused) v.play();
+  else v.pause();
+}
+
+function seek(e: Event) {
+  video.value!.currentTime = Number((e.target as HTMLInputElement).value);
+}
+</script>
+
+<template>
+  <div class="player">
+    <video
+      ref="video"
+      class="clip"
+      src="assets/intro.mp4"
+      poster="assets/intro.png"
+      @loadedmetadata="sync"
+      @timeupdate="sync"
+      @playing="playing = true"
+      @pause="playing = false"
+    />
+    <div class="bar">
+      <button @click="toggle">{{ playing ? "Pause" : "Play" }}</button>
+      <input type="range" min="0" :max="duration || 0" step="0.1" :value="time" @input="seek" />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.player {
+  position: relative;
+}
+.clip {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+}
+.bar {
+  position: absolute;
+  inset: auto 12px 12px 12px;
+  display: flex;
+  gap: 8px;
+}
+.bar input {
+  flex: 1;
+}
+</style>
+```
+
+```svelte title="Player.svelte" framework="svelte"
+<script lang="ts">
+  let video = $state<HTMLVideoElement>();
+  let playing = $state(false);
+  let time = $state(0);
+  let duration = $state(0);
+
+  function sync(e: Event) {
+    const v = e.target as HTMLVideoElement;
+    time = v.currentTime;
+    duration = v.duration;
+  }
+
+  function toggle() {
+    if (!video) return;
+    if (video.paused) video.play();
+    else video.pause();
+  }
+
+  function seek(e: Event) {
+    if (video) video.currentTime = Number((e.target as HTMLInputElement).value);
+  }
+</script>
+
+<div class="player">
+  <video
+    bind:this={video}
+    class="clip"
+    src="assets/intro.mp4"
+    poster="assets/intro.png"
+    onloadedmetadata={sync}
+    ontimeupdate={sync}
+    onplaying={() => (playing = true)}
+    onpause={() => (playing = false)}
+  ></video>
+  <div class="bar">
+    <button onclick={toggle}>{playing ? "Pause" : "Play"}</button>
+    <input type="range" min="0" max={duration || 0} step="0.1" value={time} oninput={seek} />
+  </div>
+</div>
+
+<style>
+  .player {
+    position: relative;
+  }
+  .clip {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+  }
+  .bar {
+    position: absolute;
+    inset: auto 12px 12px 12px;
+    display: flex;
+    gap: 8px;
+  }
+  .bar input {
+    flex: 1;
+  }
+</style>
+```
+
+- `play()` resolves at once and never rejects. The button label follows `playing` and `pause`, which report what the player actually did.
+- `timeupdate` fires every 250 ms while the position moves, and once after a seek, so the slider follows playback without a timer.
+- A `currentTime` set before `loadedmetadata` is dropped. Seek after it.
+
+## Drive it from the template
+
+Skathi keeps `autoplay`, `muted` and `loop` live, and adds three attributes of its own: `volume`, `playbackrate` and `currenttime`. A template can then drive playback from state without a ref, which suits a settings-style UI:
+
+```vue title="Preview.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const playing = ref(true);
+const muted = ref(true);
+const rate = ref(1);
+</script>
+
+<template>
+  <video class="clip" src="assets/demo.mp4" loop :autoplay="playing" :muted="muted" :playbackrate="rate" />
+  <label><input v-model="playing" type="checkbox" /> Play</label>
+  <label><input v-model="muted" type="checkbox" /> Mute</label>
+  <select v-model.number="rate">
+    <option :value="0.5">0.5×</option>
+    <option :value="1">1×</option>
+    <option :value="2">2×</option>
+  </select>
+</template>
+```
+
+```svelte title="Preview.svelte" framework="svelte"
+<script lang="ts">
+  let playing = $state(true);
+  let muted = $state(true);
+  let rate = $state(1);
+</script>
+
+<video class="clip" src="assets/demo.mp4" loop autoplay={playing} {muted} playbackrate={rate}></video>
+<label><input bind:checked={playing} type="checkbox" /> Play</label>
+<label><input bind:checked={muted} type="checkbox" /> Mute</label>
+<select bind:value={rate}>
+  <option value={0.5}>0.5×</option>
+  <option value={1}>1×</option>
+  <option value={2}>2×</option>
+</select>
+```
+
+Turning `autoplay` off pauses. `currenttime` seeks on every write, even of the same value, so bind it only to a value that changes when you mean to seek.
+
+## Things to watch for
+
+- **Keep an H.264 fallback on Windows.** H.264 is the only codec present on every install; HEVC, AV1 and VP9 come from Store extensions. The `error` for a missing decoder names the extension to install.
+- **Give it a size up front.** The element has no default size. A width and an `aspect-ratio` keep the layout from shifting when the video loads.
+- **Hidden is not paused.** Pause it yourself when the user cannot see it.
+- **`<source>` children are ignored.** Only the `src` attribute is read.
+
+## Attributes
+
+| Attribute         | What it does                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `src`             | The video to play; see [Sources](#sources). A changed value loads a new video. An empty one loads nothing.    |
+| `poster`          | An image shown until the first frame, and after a failed load. It follows `object-fit` and the corner radius. |
+| `autoplay`        | Plays when loaded. It stays live: turning it off pauses.                                                      |
+| `loop`, `muted`   | Booleans, live: changing the attribute changes playback.                                                      |
+| `volume`          | Skathi only: 0 to 1, clamped.                                                                                 |
+| `playbackrate`    | Skathi only: the rate. Also spelled `playback-rate`. A value of 0 or below is ignored.                        |
+| `currenttime`     | Skathi only: each write seeks there, even to the same value. Also spelled `current-time`.                     |
+| `width`, `height` | Size hints in CSS pixels, unitless. CSS wins.                                                                 |
+| `playsinline`     | Accepted and ignored.                                                                                         |
+
+A boolean attribute counts as on when present, unless its value is `"false"`.
+
+These print an advisory and do nothing: `controls` (no controls are drawn), `crossorigin`, `preload` (the OS decides how far to read ahead), `disablepictureinpicture`, `disableremoteplayback`, `autopictureinpicture` and `srcobject` as an attribute. `<source>` and `<track>` children are ignored.
+
+## Properties and methods
+
+`currentTime`, `duration`, `paused`, `ended`, `seeking`, `readyState`, `networkState`, `volume`, `muted`, `playbackRate`, `loop`, `videoWidth` and `videoHeight` read the player's state. `volume`, `muted`, `playbackRate` and `loop` report the last value set, not one read back from the OS. Before a video is loaded they read the HTML defaults: `duration` is `NaN`, `paused` is `true`.
+
+- `play()` returns a promise that resolves at once and never rejects. Wait for `playing` to know playback started.
+- `pause()` pauses.
+- `load()` does nothing and prints an advisory. To reload, clear `src` and set it again.
+- `canPlayType()` asks the system's decoders, so the answer differs between machines.
+- `error` is a plain `{ code, message }` object. The codes are the HTML ones; the message says what is missing, such as the decoder this machine lacks.
+- `buffered` and `seekable` are plain objects with `length`, `start(i)` and `end(i)`.
+- `requestFullscreen()` works as on any element.
+
+Settings made before the video loads, such as `muted`, `volume`, `playbackRate`, `loop`, `play()` and `pause()`, are kept and applied when it loads. A `currentTime` set before then is dropped; set it after `loadedmetadata`.
+
+Not available: `requestVideoFrameCallback`, `requestPictureInPicture`, `captureStream`, `setSinkId`, `fastSeek`, `textTracks`, `defaultMuted`, `defaultPlaybackRate` and the `poster`, `preload` and `crossOrigin` properties. `src` reads the attribute as written, not a resolved URL. Drawing a video on a canvas with `drawImage` draws nothing yet.
+
+## Events
+
+`loadstart`, `loadedmetadata`, `loadeddata`, `canplay`, `canplaythrough`, `play`, `playing`, `pause`, `seeking`, `seeked`, `timeupdate`, `durationchange`, `ratechange`, `volumechange`, `waiting`, `ended`, `error` and `emptied` fire. `progress`, `suspend`, `abort`, `stalled` and `resize` do not.
+
+Every media event carries `currentTime`, `duration`, `readyState` and `playbackRate` on the event and on `detail`, typed as `SkMediaEvent`. Media events do not bubble. `timeupdate` fires every 250 ms while the position moves, and once at `seeked`, `ended` and `loadeddata`. Events are collected from the player and dispatched once per frame.
+
+## Sources
+
+| `src`                            | Plays                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| A relative or root-relative path | The app's file. In a packaged app it is read from the package, in process.                        |
+| `https:`, `http:`                | Streamed by the OS player. macOS refuses cleartext `http:`.                                       |
+| `blob:`                          | A picked file plays from its path; an in-memory Blob plays from memory.                           |
+| `data:`                          | Plays from memory on macOS and Linux. On Windows the bytes are written to a temporary file first. |
+| `file:`, an absolute path        | The file on disk.                                                                                 |
+
+There is no Media Source Extensions API and no Encrypted Media Extensions. Whether a playlist URL such as HLS plays is up to the OS player.
+
+## How it is drawn
+
+The OS player decodes on its own threads. Once per frame, on the UI thread, Skathi takes the newest decoded frame at the size it is shown and draws it into the element's box. Frames are decoded at the painted size and never upscaled.
+
+- **Windows.** Media Foundation decodes on Skathi's own Direct3D 11 device and the frame is copied into the renderer's texture atlas on the GPU, so it never comes back to the CPU. If the atlas refuses the copy, Skathi falls back to a CPU readback once, with a warning.
+- **macOS.** VideoToolbox decodes and scales on the GPU; each frame is then copied into a texture on the CPU.
+- **Linux.** GStreamer's `playbin3` decodes into BGRA at the painted size, uploaded each frame. GStreamer is loaded at run time, so the app starts on a machine without it; a missing plugin produces an error that names the package to install.
+
+Frames are 8-bit BGRA: video is shown in SDR, and [`dynamic-range-limit`](/css/dynamic-range-limit/) has no effect on it. After a GPU device loss, every player is rebuilt and resumes at the same position.
+
+A video keeps playing while it is hidden, scrolled out of view or in a minimized window. A video removed from the document, including one kept alive by `<KeepAlive>`, fires `timeupdate` and `pause` and stays paused when it comes back.
+
+A `<video>` in a [pop-out window](/elements/sk-window/) plays there: its frames are uploaded in the window that paints it.
+
+## Size and CSS
+
+The element has no default size. Until the video's dimensions are known it is sized by CSS and the `width` and `height` attributes alone; once they are known, they fill whichever side CSS left unset, keeping the video's ratio or a CSS [`aspect-ratio`](/css/aspect-ratio/).
+
+- [`object-fit`](/css/object-fit/) defaults to `contain`, as in browsers; `object-position` applies.
+- [`border-radius`](/css/border-radius/) and [`corner-shape`](/css/corner-shape/) clip the picture.
+- `transform`, `opacity` and `z-index` apply, and elements can sit over the video: it is drawn in the page, not in a separate native layer.
+
+## Codecs and platforms
+
+| Platform | Player                                       | `canPlayType` asks                                                        |
+| -------- | -------------------------------------------- | ------------------------------------------------------------------------- |
+| Windows  | Media Foundation                             | the installed decoders, for H.264, HEVC, AV1, VP8, VP9, MPEG-2 and Theora |
+| macOS    | AVFoundation (`AVPlayer`)                    | `AVURLAsset.isPlayableExtendedMIMEType`                                   |
+| Linux    | GStreamer `playbin3` (`playbin` before 1.22) | the GStreamer registry for a demuxer, parser and decoder                  |
+
+Sound goes to the system's default output device.
+
+`<video>` needs the host's `video` Cargo feature, on by default. Without it the element is an empty box, `canPlayType()` returns `""` and the first one prints a warning; see [Features and size](/embedding/features/).
+
+## Audio
+
+`<audio>` plays nothing. It has the media element's JavaScript API, but no player behind it: `play()` resolves, no sound comes out and no events fire. To play sound, decode it with [Web Audio](/web-platform/web-audio/): `fetch` the file, `decodeAudioData`, and play an `AudioBufferSourceNode`. [`navigator.mediaSession`](/web-platform/navigator-media-session/) shows what the app plays in the system's media controls; it is not tied to any element, so set it yourself.
+
+## Compared with the browser
+
+- No native controls, picture-in-picture, `<source>` or `<track>` children, MSE, EME or `requestVideoFrameCallback`.
+- `play()` never rejects, `load()` does nothing, and there is no autoplay policy.
+- `autoplay`, `muted` and `loop` stay live, and `volume`, `playbackrate` and `currenttime` are extra attributes.
+- `error`, `buffered` and `seekable` are plain objects.
+- A hidden video keeps playing; a detached one pauses.
+- `<audio>` plays nothing.
+
+## See also
+
+- [`<video>` in the web-platform reference](/web-platform/video/): examples and edge cases.
+- [`<sk-surface>`](/elements/sk-surface/): video from your own native player, such as libmpv.
+- [Features and size](/embedding/features/): the `video` feature.

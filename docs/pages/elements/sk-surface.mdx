@@ -8,16 +8,25 @@ order: 2
 since: "0.4"
 ---
 
-`<sk-surface>` shows frames that native code renders: a video player built on libmpv, a game engine's viewport, a renderer in another process. The program that embeds Skathi presents frames to a surface by name, and every `<sk-surface>` with that `name` shows the newest one. In the page it is an ordinary box: CSS sizes it, clips it and moves it, and the app's own controls sit over it.
+import Demo from "../../src/components/Demo.astro";
 
-This page is the element. [Native frames](/embedding/native-frames/) is the producer: the Rust `SurfaceHandle`, CPU and GPU frames, half floats, frame feedback and device loss.
+Some pictures are not made in JavaScript: a video player built on libmpv, a game engine's viewport, a CAD or map renderer, a camera feed, the output of another process. `<sk-surface>` puts them inside your page. The program that embeds Skathi presents frames to a surface by name, from whatever thread renders them, and every `<sk-surface>` with that `name` shows the newest one.
 
-## A minimal example
+In the page it is an ordinary box. CSS sizes it, rounds its corners and moves it, an ancestor's `overflow` clips it, and your own controls sit over it. There is no second native window glued on top of the app, so nothing floats out of place when the user scrolls or a menu opens over the picture. A present never waits for the UI thread: the producer hands over a frame and goes on, and the element picks up the newest one on its next paint. On Windows and macOS the frame can be a GPU texture that is never copied through the CPU.
 
-```vue
+<Demo id="elements/sk-surface" caption="Frames from native code inside the page, clipped and with UI over them." />
+
+This page is the element, the part an app author writes. [Native frames](/embedding/native-frames/) is the producer side: the Rust `SurfaceHandle`, CPU and GPU frames, half floats, frame feedback and device loss.
+
+## A player with your own controls
+
+The usual layout is a positioned wrapper, the surface filling it, and the controls absolutely positioned over it. Until the producer's first frame arrives the element paints nothing over its own background, so a placeholder behind it covers the gap. `surfaceready` and `surfacelost` tell you when a frame is showing.
+
+```vue title="Viewport.vue" framework="vue"
 <script setup lang="ts">
 import { ref } from "vue";
 
+const live = ref(false);
 const size = ref("");
 
 function resized(e: SkSurfaceEvent) {
@@ -27,40 +36,170 @@ function resized(e: SkSurfaceEvent) {
 
 <template>
   <div class="player">
-    <sk-surface name="player" class="video" @surfaceresize="resized" />
-    <div class="overlay">{{ size }}</div>
+    <p v-if="!live" class="placeholder">Waiting for the renderer…</p>
+    <sk-surface
+      name="player"
+      class="video"
+      @surfaceresize="resized"
+      @surfaceready="live = true"
+      @surfacelost="live = false"
+    />
+    <div class="overlay">
+      <span>{{ size }}</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .player {
   position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
 }
 .video {
   width: 100%;
   aspect-ratio: 16 / 9;
-  border-radius: 12px;
-  background: #000;
 }
+.placeholder,
 .overlay {
   position: absolute;
+  color: white;
+}
+.overlay {
   inset: auto 0 0 0;
+  padding: 8px 12px;
 }
 </style>
 ```
 
-```svelte
+```svelte title="Viewport.svelte" framework="svelte"
 <script lang="ts">
+  let live = $state(false);
   let size = $state("");
 </script>
 
 <div class="player">
-  <sk-surface name="player" class="video" onsurfaceresize={(e) => (size = `${e.width} × ${e.height}`)} />
-  <div class="overlay">{size}</div>
+  {#if !live}
+    <p class="placeholder">Waiting for the renderer…</p>
+  {/if}
+  <sk-surface
+    name="player"
+    class="video"
+    onsurfaceresize={(e) => (size = `${e.width} × ${e.height}`)}
+    onsurfaceready={() => (live = true)}
+    onsurfacelost={() => (live = false)}
+  ></sk-surface>
+  <div class="overlay">
+    <span>{size}</span>
+  </div>
 </div>
+
+<style>
+  .player {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #000;
+  }
+  .video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+  .placeholder,
+  .overlay {
+    position: absolute;
+    color: white;
+  }
+  .overlay {
+    inset: auto 0 0 0;
+    padding: 8px 12px;
+  }
+</style>
 ```
 
-Vue compiles every `sk-*` tag as a custom element, so no component registration is needed. In Svelte, `@skathi-native/runtime/svelte` types the element's `name` and its four events. In Vue, the events are typed as the global `SkSurfaceEvent` and `SkSurfaceDisplayEvent`.
+- `surfaceresize` reports the painted size in physical pixels. The producer sees the same size from Rust, in `info()`, so it can render 1:1 with the screen without the app passing anything.
+- Clicks on the surface go to the element and your listeners, never to the producer. Buttons that play, pause or seek call your program through a [native module](/embedding/native-modules/).
+- Vue compiles every `sk-*` tag as a custom element, so there is nothing to register. In Vue the events are typed as the global `SkSurfaceEvent` and `SkSurfaceDisplayEvent`; in Svelte, `@skathi-native/runtime/svelte` types the element's `name` and its four events.
+
+## One stream, two sizes
+
+Any number of elements can name the same surface, and each shows the newest frame at its own size: a thumbnail strip and a main view, say. The producer still renders each frame once: the size it sees in `info()` is the largest visible element's.
+
+```vue title="Monitor.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const cameras = ["front", "back", "side"];
+const selected = ref("front");
+</script>
+
+<template>
+  <sk-surface class="main" :name="selected" />
+  <div class="strip">
+    <button v-for="cam in cameras" :key="cam" :class="{ on: cam === selected }" @click="selected = cam">
+      <sk-surface class="thumb" :name="cam" />
+    </button>
+  </div>
+</template>
+
+<style scoped>
+.main {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+.strip {
+  display: flex;
+  gap: 8px;
+}
+.thumb {
+  width: 120px;
+  height: 68px;
+  pointer-events: none;
+}
+</style>
+```
+
+```svelte title="Monitor.svelte" framework="svelte"
+<script lang="ts">
+  const cameras = ["front", "back", "side"];
+  let selected = $state("front");
+</script>
+
+<sk-surface class="main" name={selected}></sk-surface>
+<div class="strip">
+  {#each cameras as cam (cam)}
+    <button class:on={cam === selected} onclick={() => (selected = cam)}>
+      <sk-surface class="thumb" name={cam}></sk-surface>
+    </button>
+  {/each}
+</div>
+
+<style>
+  .main {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+  .strip {
+    display: flex;
+    gap: 8px;
+  }
+  .thumb {
+    width: 120px;
+    height: 68px;
+    pointer-events: none;
+  }
+</style>
+```
+
+Changing `name` binds the element to the other surface at once. A CPU frame is uploaded once for each visible element that shows it, so many large copies of a CPU surface cost more than many copies of a GPU one.
+
+## Things to watch for
+
+- **Only visible elements take frames.** A frame presented while no element is visible is not uploaded; the newest one shows when an element becomes visible again. `display: none` counts as hidden, `opacity: 0` does not.
+- **No `name` property.** From plain JavaScript use `setAttribute("name", …)`. Vue's `:name` and Svelte's `name={…}` set the attribute.
+- **Children are not drawn.** Put overlays next to the element, positioned over it.
+- **Linux shows CPU frames only**, and its windows stay SDR.
 
 ## Attributes
 
@@ -69,9 +208,7 @@ Vue compiles every `sk-*` tag as a custom element, so no component registration 
 | `name`            | The surface to show, trimmed. Changing it binds the element to the other surface. An empty name shows nothing. |
 | `width`, `height` | Size hints in CSS pixels, unitless, as on `<img>`. CSS wins.                                                   |
 
-That is all the element reads. The pixel format, the color space and the frames themselves are set from Rust. There is no `name` property on the element object: from plain JavaScript, use `setAttribute("name", …)`. Vue's `:name` and Svelte's `name={…}` set the attribute.
-
-The element draws no children. Put controls and overlays next to it, positioned over it, as in the example.
+That is all the element reads. The pixel format, the color space and the frames themselves are set from Rust.
 
 ## Events
 
@@ -84,7 +221,7 @@ The element draws no children. Put controls and overlays next to it, positioned 
 
 The values are on the event itself and on `detail`. The events do not bubble and cannot be cancelled, and they are only dispatched to an element that has a listener for them.
 
-- `surfaceresize` reports the size in physical pixels: the CSS size times the window's scale, rounded. A producer that renders at that size is 1:1 with the screen. It fires while the element is in the document with a non-zero width, visible or not.
+- `surfaceresize` reports the size in physical pixels: the CSS size times the window's scale, rounded. It fires while the element is in the document with a non-zero width, visible or not.
 - `surfaceready` carries the frame's size, not the box's, and no `devicePixelRatio`.
 - `surfacelost` fires only for an element that has shown a frame. `"cleared"` means the producer called `clear()`; `"device"` means the GPU device was lost and the frame with it. A CPU frame survives a device loss.
 - `surfacedisplaychange` fires on Windows and macOS, on a change above 1 %. `refreshRate`, `sdrWhiteNits` and `variableRefresh` are `null` where the platform does not say. [The display](/embedding/native-frames/#the-display) explains the values.
@@ -107,11 +244,9 @@ Until the first frame arrives the element paints nothing over its own background
 
 The element takes a frame on its next paint, and only while it is visible: in the document, in a shown window, not in a hidden page, with a non-zero painted size, and with its painted rectangle inside the viewport and every clipping ancestor. `display: none` counts as hidden. `opacity: 0` and an element covered by another one count as visible.
 
-A frame presented while no element is visible is not uploaded. The newest one shows when an element becomes visible again.
-
 ## Several elements, one surface
 
-Any number of elements can name the same surface. Each shows the same newest frame at its own size, a thumbnail and a full view of one stream, for example. The size the producer sees in `info()` is the largest visible element's. A CPU frame is uploaded once for each visible element that shows it.
+Each element that names a surface shows the same newest frame at its own size. The size the producer sees in `info()` is the largest visible element's. A CPU frame is uploaded once for each visible element that shows it.
 
 ## Input and focus
 

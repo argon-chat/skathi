@@ -7,13 +7,15 @@ section: Elements
 order: 8
 ---
 
-An `<svg>` written in a template is drawn by [resvg](https://github.com/linebender/resvg), not laid out as elements. Skathi serializes the `<svg>` and its children into an SVG document, rasterizes it at the size of the `<svg>`'s box in device pixels, and paints the result. To layout and to input, the whole `<svg>` is one box: its children are not boxes of their own.
+Icons are the everyday use of inline `<svg>`: the close button, the toolbar, the chevron in a menu, a logo, a small chart or progress ring. Paste the SVG into a template and it draws, sharp at any scale and on any display.
 
-That makes icons cheap and sharp at any scale. It also means the children do not behave like DOM elements in a browser: there is no hit testing on a single shape, and state selectors do not restyle them.
+Skathi does not lay the SVG out as elements. It serializes the `<svg>` and its children into an SVG document, rasterizes it with [resvg](https://github.com/linebender/resvg) at the size of the `<svg>`'s box in device pixels, and paints the result. An icon drawn only in `currentColor` is rasterized once as a shape and tinted with the CSS `color`, so a hover color change costs no new rasterization. To layout and to input, the whole `<svg>` is one box, and that is the one thing to keep in mind: there is no hit testing on a single shape, and state selectors do not restyle the children.
 
-## A minimal example
+## An icon that follows the text color
 
-```vue
+Write the icon's paint as `currentColor` and put the state rules on the button, not on the paths. The icon then takes the button's color, in every state and theme.
+
+```vue title="CloseButton.vue" framework="vue"
 <template>
   <button class="icon-button" aria-label="Close">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -23,20 +25,101 @@ That makes icons cheap and sharp at any scale. It also means the children do not
 </template>
 
 <style scoped>
-.icon-button svg {
-  width: 16px;
-  height: 16px;
-}
 .icon-button {
   color: #888;
 }
 .icon-button:hover {
   color: white;
 }
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+}
 </style>
 ```
 
-Everything the icon paints is `currentColor`, so the button's `:hover` color recolors it without drawing it again.
+```svelte title="CloseButton.svelte" framework="svelte"
+<button class="icon-button" aria-label="Close">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <path d="M6 6l12 12M18 6 6 18" />
+  </svg>
+</button>
+
+<style>
+  .icon-button {
+    color: #888;
+  }
+  .icon-button:hover {
+    color: white;
+  }
+  .icon-button svg {
+    width: 16px;
+    height: 16px;
+  }
+</style>
+```
+
+SVG's default fill is black, which is a concrete color: a `<path>` with no `fill` takes the full-color path described [below](#two-ways-to-paint). Write `fill="currentColor"`, or `fill="none"` with `stroke="currentColor"` as here, for an icon that follows the text color. A `color` transition on the button animates the icon too.
+
+## A progress ring bound to state
+
+An attribute bound to reactive state works: change it and the SVG is drawn again. A ring that shows upload progress is two circles and a `stroke-dashoffset`:
+
+```vue title="ProgressRing.vue" framework="vue"
+<script setup lang="ts">
+import { computed } from "vue";
+
+const props = defineProps<{ progress: number }>();
+const length = 2 * Math.PI * 16;
+const offset = computed(() => length * (1 - props.progress));
+</script>
+
+<template>
+  <svg class="ring" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="4">
+    <circle cx="20" cy="20" r="16" opacity="0.2" />
+    <circle cx="20" cy="20" r="16" :stroke-dasharray="length" :stroke-dashoffset="offset" />
+  </svg>
+</template>
+
+<style scoped>
+.ring {
+  width: 40px;
+  height: 40px;
+  color: #30a46c;
+}
+</style>
+```
+
+```svelte title="ProgressRing.svelte" framework="svelte"
+<script lang="ts">
+  let { progress }: { progress: number } = $props();
+  const length = 2 * Math.PI * 16;
+  const offset = $derived(length * (1 - progress));
+</script>
+
+<svg class="ring" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="4">
+  <circle cx="20" cy="20" r="16" opacity="0.2" />
+  <circle cx="20" cy="20" r="16" stroke-dasharray={length} stroke-dashoffset={offset} />
+</svg>
+
+<style>
+  .ring {
+    width: 40px;
+    height: 40px;
+    color: #30a46c;
+  }
+</style>
+```
+
+Each change rasterizes the whole SVG again. For a value that moves a few times a second that is fine. For something that changes every frame, draw it on a [`<canvas>`](/elements/canvas/), or animate the `<svg>` element itself with CSS, as a spinner that rotates, instead of its attributes.
+
+## Things to watch for
+
+- **Clicks land on the `<svg>`, not on a shape.** A listener on a `<path>` or `<circle>` does not see itself as the target. Put a separate element over each part that needs its own handler, or compute the part from the pointer's position.
+- **`:hover` on a child does not recolor it.** Put the state rule on the `<svg>` or an ancestor and set `color`.
+- **Give it a size.** An unsized `<svg>` has no size of its own, not the browser's 300 × 150.
+- **SMIL does not run.** `<animate>` and friends are kept but the SVG shows its first state.
+- **App fonts do not reach `<text>`**, which is drawn with system fonts.
 
 ## Two ways to paint
 
@@ -44,8 +127,6 @@ Skathi picks one of two paths for each `<svg>`:
 
 - **One color.** When everything the SVG paints is `currentColor`, Skathi rasterizes it once as a shape and tints it with the element's CSS `color`. A color change, such as a `:hover` rule on the `<svg>` or an ancestor, costs no new rasterization.
 - **Full color.** Anything else is rasterized in full color and cached by its source, its size in device pixels and its `currentColor`. These force it: a concrete fill or stroke color, more than one color, a gradient or pattern (`url(#…)`), an `<image>`, a filter, a `<style>` element, or a missing `viewBox`.
-
-SVG's default fill is black, which is a concrete color: a `<path>` with no `fill` takes the full-color path. Write `fill="currentColor"`, or `fill="none"` with `stroke="currentColor"`, for an icon that follows the text color.
 
 Without a `viewBox`, the SVG's user units are the CSS pixels of its box.
 
@@ -61,25 +142,21 @@ Only a simple one-color icon, made of `<g>`, `<path>`, `<rect>`, `<circle>`, `<e
 
 CSS rules match the children, and the computed `fill`, `stroke`, `fill-opacity`, `fill-rule`, `stroke-opacity`, `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`, `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` are written into the document, along with the children's `opacity` and `display: none`. The `style` attribute is kept.
 
-Rules with `:hover`, `:focus`, `:active` or a group selector do not set [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above on the children; an advisory says so. Recolor through `currentColor` instead: put the state rule on the `<svg>` or an ancestor and set `color`. A transition or animation of `fill` or `stroke` interpolates when the paint is `currentColor`, because it animates `color`; between two concrete colors it jumps.
+Rules with `:hover`, `:focus`, `:active` or a group selector do not set [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above on the children; an advisory says so. Recolor through `currentColor` instead. A transition or animation of `fill` or `stroke` interpolates when the paint is `currentColor`, because it animates `color`; between two concrete colors it jumps.
 
 A paint server from CSS, such as `fill: url(#gradient)`, or `context-fill`, is drawn in `currentColor` with an advisory. Write `fill="url(#gradient)"` as an attribute instead; that works.
 
-SMIL (`<animate>`, `<set>`, `<animateTransform>`) is serialized but never runs, so the SVG shows its first state. Animate with CSS on the `<svg>` element itself, or rebuild the attribute from state.
+SMIL (`<animate>`, `<set>`, `<animateTransform>`) is serialized but never runs. Animate with CSS on the `<svg>` element itself, or rebuild the attribute from state.
 
 ## Size
 
-An `<svg>` has no natural size. Give it a width and a height in CSS, or unitless `width` and `height` attributes, which CSS overrides. A browser makes an unsized `<svg>` 300 × 150; Skathi gives it no size of its own. On the full-color path the root's own `width` and `height` are replaced by the laid-out size, so the `viewBox` and `preserveAspectRatio` fit the box.
+An `<svg>` has no natural size. Give it a width and a height in CSS, or unitless `width` and `height` attributes, which CSS overrides. On the full-color path the root's own `width` and `height` are replaced by the laid-out size, so the `viewBox` and `preserveAspectRatio` fit the box.
 
 `filter: drop-shadow()` on an `<svg>` follows its shapes, not its box.
 
 ## Events
 
-Listeners and focus work on the `<svg>` element. There is no hit testing inside it: a click anywhere in the box reaches the `<svg>`, and a listener on a `<path>` or `<circle>` does not see it as the target. Put a separate element over each part that needs its own handler, or compute the part from the pointer's position. `getBBox()`, `getTotalLength()` and `getScreenCTM()` do not exist.
-
-## Text and fonts
-
-`<text>` is drawn with system fonts. The app's `@font-face` fonts are not available inside an SVG.
+Listeners and focus work on the `<svg>` element. There is no hit testing inside it: a click anywhere in the box reaches the `<svg>`. `getBBox()`, `getTotalLength()` and `getScreenCTM()` do not exist.
 
 ## Compared with the browser
 

@@ -1,0 +1,235 @@
+---
+title: Form controls
+label: Form controls
+metaTitle: "Form controls in Skathi: checkbox, radio, range, color, select and file"
+description: How Skathi draws checkboxes, radios, range sliders, color inputs, <select> and file inputs natively, which keys and events each has, how to style them, and how forms submit.
+section: Elements
+order: 12
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+A settings panel, a filter sidebar, an export dialog: checkboxes, radio buttons, sliders, color swatches, drop-downs and file pickers are the parts of an app users reach for every day. In Skathi they are drawn natively by the renderer, styled after Chromium on Windows, and they open the operating system's own dialogs where a browser would: the system file picker and the system color picker. Each one works with `v-model` in Vue and `bind:value`, `bind:checked` or `bind:group` in Svelte, keyboard included.
+
+[`accent-color`](/css/accent-color/) tints checkboxes, radios and sliders to match your brand, and [`appearance: none`](/css/appearance/) removes a control's default look when you want to draw your own. Text fields are on their own page: [`<input>` and `<textarea>`](/elements/text-fields/).
+
+<Demo id="elements/form-controls" caption="Checkbox, radio, range, color and select being used." />
+
+## A settings panel
+
+Every control in one form, bound to one object. A form has no page to navigate to, so handle `submit` with `preventDefault()` (`@submit.prevent` in Vue) and save the data yourself.
+
+```vue title="Settings.vue" framework="vue"
+<script setup lang="ts">
+import { reactive } from "vue";
+
+const settings = reactive({
+  notifications: true,
+  theme: "system",
+  fontSize: 14,
+  accent: "#0090ff",
+  language: "en",
+});
+
+function save() {
+  localStorage.setItem("settings", JSON.stringify(settings));
+}
+</script>
+
+<template>
+  <form class="settings" :style="{ accentColor: settings.accent }" @submit.prevent="save">
+    <label><input v-model="settings.notifications" type="checkbox" /> Notifications</label>
+    <fieldset>
+      <label><input v-model="settings.theme" type="radio" name="theme" value="light" /> Light</label>
+      <label><input v-model="settings.theme" type="radio" name="theme" value="dark" /> Dark</label>
+      <label><input v-model="settings.theme" type="radio" name="theme" value="system" /> System</label>
+    </fieldset>
+    <label
+      >Size {{ settings.fontSize }}px <input v-model.number="settings.fontSize" type="range" min="12" max="20"
+    /></label>
+    <label>Accent <input v-model="settings.accent" type="color" /></label>
+    <select v-model="settings.language">
+      <option value="en">English</option>
+      <option value="de">Deutsch</option>
+      <option value="ja">日本語</option>
+    </select>
+    <button type="submit">Save</button>
+  </form>
+</template>
+
+<style scoped>
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+</style>
+```
+
+```svelte title="Settings.svelte" framework="svelte"
+<script lang="ts">
+  let settings = $state({
+    notifications: true,
+    theme: "system",
+    fontSize: 14,
+    accent: "#0090ff",
+    language: "en",
+  });
+
+  function save(e: SubmitEvent) {
+    e.preventDefault();
+    localStorage.setItem("settings", JSON.stringify(settings));
+  }
+</script>
+
+<form class="settings" style:accent-color={settings.accent} onsubmit={save}>
+  <label><input bind:checked={settings.notifications} type="checkbox" /> Notifications</label>
+  <fieldset>
+    <label><input bind:group={settings.theme} type="radio" name="theme" value="light" /> Light</label>
+    <label><input bind:group={settings.theme} type="radio" name="theme" value="dark" /> Dark</label>
+    <label><input bind:group={settings.theme} type="radio" name="theme" value="system" /> System</label>
+  </fieldset>
+  <label>Size {settings.fontSize}px <input bind:value={settings.fontSize} type="range" min="12" max="20" /></label>
+  <label>Accent <input bind:value={settings.accent} type="color" /></label>
+  <select bind:value={settings.language}>
+    <option value="en">English</option>
+    <option value="de">Deutsch</option>
+    <option value="ja">日本語</option>
+  </select>
+  <button type="submit">Save</button>
+</form>
+
+<style>
+  .settings {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+</style>
+```
+
+- Clicking a `<label>` checks its checkbox or radio, and the arrow keys move through the radio group.
+- The slider fires `input` while it moves, so the size label follows the thumb. `change` fires when a drag or a key press commits, if you only want the final value.
+- The color swatch opens the system's color picker. Picking sets a lowercase `#rrggbb` and fires `input` and `change`; cancelling fires nothing.
+- The `<select>` list opens inside the window, drawn by Skathi, and typing a letter while it is closed jumps to the first matching option.
+- Enter in a text field and the submit button both fire `submit`.
+
+## Your own file button
+
+The file input's own button copies Chromium's English strings, so most apps hide the input and open the dialog from a button of their own. `showPicker()` does that from the button's click. The dialog is the operating system's.
+
+```vue title="AttachFiles.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const picker = ref<HTMLInputElement | null>(null);
+const names = ref<string[]>([]);
+
+function picked(e: Event) {
+  const files = (e.target as HTMLInputElement).files;
+  names.value = files ? Array.from(files, (f) => f.name) : [];
+}
+</script>
+
+<template>
+  <input ref="picker" type="file" accept="image/*" multiple hidden @change="picked" />
+  <button @click="picker?.showPicker()">Attach images</button>
+  <ul>
+    <li v-for="n in names" :key="n">{{ n }}</li>
+  </ul>
+</template>
+```
+
+```svelte title="AttachFiles.svelte" framework="svelte"
+<script lang="ts">
+  let picker = $state<HTMLInputElement>();
+  let names = $state<string[]>([]);
+
+  function picked(e: Event) {
+    const files = (e.target as HTMLInputElement).files;
+    names = files ? Array.from(files, (f) => f.name) : [];
+  }
+</script>
+
+<input bind:this={picker} type="file" accept="image/*" multiple hidden onchange={picked} />
+<button onclick={() => picker?.showPicker()}>Attach images</button>
+<ul>
+  {#each names as n (n)}
+    <li>{n}</li>
+  {/each}
+</ul>
+```
+
+The dialog needs a user gesture, so call `showPicker()` from a click, not from a timer or a mount hook. Dismissing the dialog, or choosing the same files again, fires `cancel` instead of `change`. To show a picked image, pass `URL.createObjectURL(file)` to an [`<img>`](/elements/img/).
+
+## Things to watch for
+
+- **No validation.** `required`, `min` and `max` are not checked, and a form's `submit` fires whatever the fields hold. Validate in the handler.
+- **An uncancelled `submit` does nothing** but print an advisory. Always handle it.
+- **`reset` does not restore values**, and `form.submit()` fires no event. Reset your state instead.
+- **`<select multiple>` still drops down.** Each pick selects one option, with an advisory; a `v-model` bound to an array works.
+- **There is no vertical slider.** The range track always runs along the width.
+
+## Checkboxes and radios
+
+`<input type="checkbox">` and `<input type="radio">` are native. A click, Space or a click on their `<label>` checks them. Radio buttons with the same `name` in the same form are a group, and the arrow keys move through it. They fire `click`, then `input` and `change`, and `preventDefault()` on the click undoes the change. `checked`, `defaultChecked`, `indeterminate` and `disabled` work, and so do `:checked`, `:indeterminate`, `:disabled` and `:focus-visible`.
+
+## Range
+
+`<input type="range">` is a native horizontal slider, 129 × 16 pixels unless CSS sizes it.
+
+- `min`, `max` and `step`, including `step="any"`, apply.
+- The arrow keys, Page Up, Page Down, Home and End move it, and so does dragging.
+- `input` fires while it moves, `change` when a drag or a key press commits.
+- `stepUp()` and `stepDown()` work.
+- Style it with `::-webkit-slider-thumb` and `::-webkit-slider-runnable-track` (or the `-moz-range-` spellings), `accent-color`, and `appearance: none`.
+
+## Color
+
+`<input type="color">` is a swatch, 50 × 27 pixels by default. A click opens the system's color picker: `ChooseColor` on Windows, `NSColorPanel` on macOS, and zenity or kdialog on Linux. A pick sets `value` and fires `input` and `change`; cancelling fires nothing. As in browsers, the picker needs a user gesture, and `showPicker()` opens it from your own button's click.
+
+`value` is a lowercase `#rrggbb`. Other hex forms are normalized to it; any other CSS color, such as `rgb()` or a name, becomes `#000000` with an advisory. `::-webkit-color-swatch` and `::-webkit-color-swatch-wrapper` style the swatch.
+
+## Select
+
+`<select>` draws a closed box like Chromium's on Windows: the selected option's label, a chevron, and the width of its widest option. `appearance: none` removes the chevron and the padding.
+
+The list opens **inside the window**, drawn by Skathi, not as an OS menu. It opens under the box, or above it when there is no room, stays inside the window, shows up to 20 rows before it scrolls, and closes when the window loses focus. Its colors are a fixed light or dark palette; only the select's own solid background carries over.
+
+- Alt+Up, Alt+Down, F4, Enter or Space opens the list.
+- While it is closed, the arrow keys change the value, and typing selects the first option that starts with what was typed (the search restarts after a one-second pause).
+- `<optgroup>` labels are bold and their options indented. Disabled and `hidden` options are honored.
+- A pick fires `input`, then `change`.
+
+`multiple` and `size` keep the drop-down: the box opens the list and each pick selects one option, with an advisory. The selection model behind it works, so `selectedOptions` and a `v-model` bound to an array do. `appearance: base-select` is not supported.
+
+## File
+
+`<input type="file">` opens the operating system's file dialog: `IFileOpenDialog` on Windows, `NSOpenPanel` on macOS, and the XDG desktop portal on Linux. `accept`, `multiple` and `webkitdirectory` are passed to it.
+
+- A choice sets `files`, then fires `input` and `change`. Dismissing the dialog, or choosing the same files again, fires `cancel`.
+- The dialog needs a user gesture. A `<label for>` pointing at the input opens it, and `showPicker()` opens it from your own button's click.
+- `value` reads `C:\fakepath\` and the first file's name, as in browsers. Only `""` can be assigned.
+- The button and its text copy Chromium's English strings. [`::file-selector-button`](/css/pseudo-file-selector-button/) styles the button.
+
+[`<input type=file>` in the web-platform reference](/web-platform/input-type-file/) has examples, and [File System Access](/web-platform/file-system-access/) opens files and folders with handles you can write to.
+
+## Labels
+
+A `<label>` finds its control by `for`, or as its first labelable descendant. A click on it focuses a text field, or clicks the control: it checks a checkbox, opens a file dialog.
+
+## Forms
+
+A `<button type="submit">` and Enter in a text field fire the form's `submit` event; a reset button fires `reset`. `requestSubmit()` fires `submit` too. That is all a form does: there is no page to navigate to, so a `submit` you do not cancel only prints an advisory.
+
+No constraint validation runs, and a reset does not restore the fields' values. `form.submit()` fires no event.
+
+## Not implemented
+
+`<progress>` and `<meter>` draw nothing, `<dialog>` has no `showModal()`, and `<details>` does not toggle. See [What is not here](/elements/overview/#what-is-not-here).
+
+## See also
+
+- [`<input>` and `<textarea>`](/elements/text-fields/).
+- [`appearance`](/css/appearance/) and [`accent-color`](/css/accent-color/) in the CSS reference.
+- [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/).

@@ -1,7 +1,7 @@
 ---
-title: "<SkWindow>"
-label: "<SkWindow>"
-metaTitle: "<SkWindow>: paint part of the tree in its own window"
+title: "SkWindow"
+label: "SkWindow"
+metaTitle: "SkWindow: paint part of the tree in its own window"
 description: The component that opens a second OS window painting part of your component tree, with the same state and no message passing. What it renders, its props, events and exposed values, and where the full guide is.
 section: Elements
 order: 5
@@ -9,23 +9,31 @@ order: 5
 
 import Sample from "../../src/components/Sample.astro";
 
-`<SkWindow>` opens a second OS window that paints part of your component tree: a palette, an inspector, a tooltip that leaves the main window, a click-through overlay. It is a component from `@skathi-native/runtime` (Vue) and `@skathi-native/runtime/svelte` (Svelte), not a custom element, and it is the only way to get a second window: `window.open()` returns `null`.
+A floating color palette, an inspector the user drags to a second monitor, a find bar, a tooltip that hangs outside the main window, a countdown drawn over the desktop: each is a second window. In Skathi you get one by wrapping part of your template in `SkWindow`.
 
-[Pop-out windows](/guides/pop-out-windows/) is the full guide: palettes, tooltips that follow the main window, click-through overlays, owned windows, focus, screen-capture protection, multiple monitors and the platform table. This page is the summary.
+There is no second app behind it, no message passing and no serialization. `SkWindow` is a component, imported from `@skathi-native/runtime` in Vue and `@skathi-native/runtime/svelte` in Svelte, not a custom element. It renders an ordinary `div`, and Skathi paints that `div` and everything inside it in a window of its own. The components inside keep running in the same app, on the same reactive state, so a click in the pop-out updates the main window in the same frame. It is also the only way to get a second window: `window.open()` returns `null`.
 
-## A minimal example
+[Pop-out windows](/guides/pop-out-windows/) is the full guide: tooltips that follow the main window, click-through overlays, owned windows, focus, screen-capture protection, multiple monitors and the platform table. This page is the summary.
 
-Mount it to open the window, unmount it to close the window:
+## Open and close a window
+
+Mount it to open the window, unmount it to close the window. Handle `close` by unmounting, so a close from the title bar's button ends the same way as one from your code:
 
 <Sample src="pop-out-windows/NotesPopout" focus="window" />
 
+## A palette beside the main window
+
+A palette edits what the main window shows. Leave `activate` off so it appears without taking the keyboard, and `:taskbar="false"` makes it an owned window on Windows: no taskbar button, and always above the main window.
+
+<Sample src="pop-out-windows/Palette" />
+
 ## What it renders
 
-`<SkWindow>` renders a `div.sk-window-root` that fills the window. Attributes and classes you put on `<SkWindow>` land on that root. Its children are its content.
+`SkWindow` renders a `div.sk-window-root` that fills the window. Attributes and classes you put on `SkWindow` land on that root. Its children are its content.
 
-Skathi runs one JavaScript realm, one app and one element tree. `<SkWindow>` marks its root node as popped out: the node stops painting in the main window, and a second window paints it and its subtree. Nothing is remounted. The components inside keep their instances, local state and watchers, and a click in the pop-out runs the same handler on the same state, so the main window updates in the same frame.
+Skathi runs one JavaScript realm, one app and one element tree. `SkWindow` marks its root node as popped out: the node stops painting in the main window, and a second window paints it and its subtree. Nothing is remounted. The components inside keep their instances, local state and watchers.
 
-The window opens on the next effect cycle after the mount, not inside it. When it closes from outside your code, the subtree is painted inline in the main window again unless you unmount it, which is why the example sets `notesOpen = false` in `@close`.
+The window opens on the next effect cycle after the mount, not inside it. When it closes from outside your code, the subtree is painted inline in the main window again unless you unmount it, which is why the first example sets `notesOpen = false` in `@close`.
 
 ## Props, events and exposed values
 

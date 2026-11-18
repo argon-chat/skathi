@@ -7,11 +7,29 @@ section: Elements
 order: 7
 ---
 
-`<img>` works as on the web: give it a `src`, size it with CSS, listen for `load` and `error`. What differs is underneath. Images are decoded off the UI thread, one decode is shared by every element that shows the same source, and an image drawn much smaller than its pixels is drawn from a filtered, smaller copy.
+Avatars in a member list, thumbnails in a file browser, screenshots in a changelog, a photo the user just picked: `<img>` works as on the web. Give it a `src`, size it with CSS, listen for `load` and `error`.
 
-```vue
+What Skathi adds is underneath, and it matters most when there are many images. Decoding runs on a background thread, so a page of photos does not stall typing or scrolling. One decode is shared by every element that shows the same source, so the same avatar in a hundred messages is decoded once. An image drawn much smaller than its pixels, such as a camera photo shown as a thumbnail, is drawn from a filtered, smaller copy, and after a while the full decode can be dropped to save memory.
+
+## An avatar with a fallback
+
+A user's avatar URL can be missing or broken. `error` fires once per `src`, so swap in initials when it does. Size and round the image in CSS; `object-fit: cover` crops a non-square picture to the circle.
+
+```vue title="Avatar.vue" framework="vue"
+<script setup lang="ts">
+import { ref, watch } from "vue";
+
+const props = defineProps<{ src: string; name: string }>();
+const broken = ref(false);
+watch(
+  () => props.src,
+  () => (broken.value = false),
+);
+</script>
+
 <template>
-  <img class="avatar" src="assets/avatar.png" alt="" />
+  <img v-if="!broken" class="avatar" :src="src" alt="" @error="broken = true" />
+  <span v-else class="avatar initials">{{ name.slice(0, 1) }}</span>
 </template>
 
 <style scoped>
@@ -21,8 +39,123 @@ order: 7
   border-radius: 50%;
   object-fit: cover;
 }
+.initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #8e4ec6;
+  color: white;
+}
 </style>
 ```
+
+```svelte title="Avatar.svelte" framework="svelte"
+<script lang="ts">
+  let { src, name }: { src: string; name: string } = $props();
+  let broken = $state(false);
+  $effect(() => {
+    void src;
+    broken = false;
+  });
+</script>
+
+{#if !broken}
+  <img class="avatar" {src} alt="" onerror={() => (broken = true)} />
+{:else}
+  <span class="avatar initials">{name.slice(0, 1)}</span>
+{/if}
+
+<style>
+  .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .initials {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #8e4ec6;
+    color: white;
+  }
+</style>
+```
+
+An empty `src` fires `error` too, while no `src` attribute at all fires nothing. A result for a `src` that has since changed is dropped, so a quick change of user never shows the old picture's error.
+
+## Preview a picked image
+
+A picked file becomes an image through a `blob:` URL. Skathi reads a picked file from its path rather than copying it into memory first. Revoke the old URL when a new file replaces it.
+
+```vue title="PhotoPreview.vue" framework="vue"
+<script setup lang="ts">
+import { onUnmounted, ref } from "vue";
+
+const url = ref("");
+
+function picked(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (url.value) URL.revokeObjectURL(url.value);
+  url.value = file ? URL.createObjectURL(file) : "";
+}
+onUnmounted(() => url.value && URL.revokeObjectURL(url.value));
+</script>
+
+<template>
+  <input type="file" accept="image/*" @change="picked" />
+  <img v-if="url" class="preview" :src="url" alt="Selected photo" />
+</template>
+
+<style scoped>
+.preview {
+  width: 240px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+</style>
+```
+
+```svelte title="PhotoPreview.svelte" framework="svelte"
+<script lang="ts">
+  let url = $state("");
+
+  function picked(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (url) URL.revokeObjectURL(url);
+    url = file ? URL.createObjectURL(file) : "";
+  }
+
+  $effect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  });
+</script>
+
+<input type="file" accept="image/*" onchange={picked} />
+{#if url}
+  <img class="preview" src={url} alt="Selected photo" />
+{/if}
+
+<style>
+  .preview {
+    width: 240px;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border-radius: 8px;
+  }
+</style>
+```
+
+A picked file that changes on disk after it was picked fails to load and fires `error`. A 24-megapixel photo in a 240-pixel box is drawn from a shrunk copy, made on a resampling thread for an image that large.
+
+## Things to watch for
+
+- **No responsive images.** `srcset`, `sizes` and `<picture>` are ignored; there is one `src`.
+- **No lazy loading.** Every image loads as soon as its `src` is set. For a long gallery, render only the rows in view.
+- **Local `load` fires early.** For an app file, a packaged file, `data:` or `blob:`, `load` fires when the size is known, before the pixels are decoded.
+- **SVG in `<img>` is a fixed raster** at twice its own size. For an icon that scales, use [inline `<svg>`](/elements/svg/).
+- **No AVIF**, and no color management.
 
 ## Attributes and properties
 
@@ -32,7 +165,7 @@ order: 7
 | `alt`             | Drawn in place of the image when the source cannot be resolved, loaded or decoded. |
 | `width`, `height` | Size hints in CSS pixels, unitless. CSS wins.                                      |
 
-`srcset`, `sizes`, `loading`, `decoding` and `fetchpriority` are ignored without an advisory: there is one `src`, and it loads at once. `<picture>` and its `<source>` children choose nothing.
+`srcset`, `sizes`, `loading`, `decoding` and `fetchpriority` are ignored without an advisory. `<picture>` and its `<source>` children choose nothing.
 
 The element object has `complete`, `currentSrc` (the `src` once loaded), `naturalWidth` and `naturalHeight` (0 until loaded), and `decode()`, which resolves on `load` and rejects with `EncodingError` on `error`. `new Image()` is a different object: an image for canvas use, with its own fetch and decode, not an element in the tree.
 
@@ -61,7 +194,7 @@ PNG, JPEG, GIF, WebP, BMP, ICO, TIFF and PNM are decoded, and SVG is drawn with 
 
 For `data:` and `blob:` sources the format comes from the MIME type, or from the first bytes when there is none; ICO and TIFF need the MIME type.
 
-An SVG in `<img>` is rasterized once, at twice its own size, whatever size it is shown at, so it blurs when shown larger than that. For an icon that scales, use [inline `<svg>`](/elements/svg/). SVG text uses system fonts, not the app's `@font-face` fonts.
+An SVG in `<img>` is rasterized once, at twice its own size, whatever size it is shown at, so it blurs when shown larger than that. SVG text uses system fonts, not the app's `@font-face` fonts.
 
 ## Decoding, sharing and memory
 

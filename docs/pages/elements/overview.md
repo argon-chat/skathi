@@ -6,7 +6,15 @@ section: Elements
 order: 1
 ---
 
-Most of a Skathi page is boxes: a `<div>`, a `<span>`, a `<p>`, a `<button>` is laid out and painted by Skathi's own engine and behaves as CSS says. The elements on these pages are different. Each is implemented natively, in Rust, or adds behavior a web developer would not expect from the browser element of the same name. Their pages say what each one is for, what it reads and fires, how it is drawn, and where it differs from a browser.
+Most of a Skathi page is boxes: a `<div>`, a `<span>`, a `<p>`, a `<button>` is laid out and painted by Skathi's own engine and behaves as CSS says. The elements in this section are where an app gets its richer content: animation, video, images, drawing, frames from native code, web pages, text input. Each is implemented natively, in Rust, rather than by a script you bundle, and that shapes what it can do:
+
+- **Decoding happens off the UI thread.** Images, Lottie animations and stickers are read and decoded on threads of their own, so a page full of them does not stall scrolling or typing. Decodes are shared: the same avatar in a hundred rows, or the same sticker in fifty messages, is decoded once.
+- **Animation frames go straight to the GPU.** A `<lottie>` or `<sk-sticker>` frame is rasterized on a worker and written into the element's GPU tile, and a busy 2D canvas is updated in place, so a new frame costs a repaint, not a rebuild of the page.
+- **Media uses the operating system.** `<video>` plays through Media Foundation, AVFoundation or GStreamer, so the app ships no codecs, and on Windows decoded frames stay on the GPU. File and color pickers and the Save As dialog are the system's own.
+- **Native frames are part of the page.** `<sk-surface>` shows what your own native code renders, a libmpv player or a game engine's viewport, as an ordinary box that CSS clips and rounds and your UI draws over. There is no second window glued on top.
+- **They are still the elements you know.** `src`, `load`, `v-model`, `bind:value`, `object-fit` and `border-radius` work as on the web. Each page says plainly where Skathi differs from a browser.
+
+Each page opens with what you would build with the element and short recipes in Vue and Svelte, and ends with the reference: attributes, events, how it is drawn and what differs from a browser.
 
 ## Skathi's own elements
 
@@ -15,7 +23,6 @@ Most of a Skathi page is boxes: a `<div>`, a `<span>`, a `<p>`, a `<button>` is 
 | [`<sk-surface>`](/elements/sk-surface/) | Shows frames that native code renders (a video player, a game engine), composited like any other element.  |
 | [`<lottie>`](/elements/lottie/)         | Plays a Lottie animation from JSON or `.tgs`, rasterized off the UI thread.                                |
 | [`<sk-sticker>`](/elements/sk-sticker/) | Plays many small animated stickers at once from Lottie or WebM, sharing decodes and frames between copies. |
-| [`<SkWindow>`](/elements/sk-window/)    | A component that paints part of the component tree in its own OS window.                                   |
 
 ## HTML elements with a native implementation
 
@@ -28,7 +35,15 @@ Most of a Skathi page is boxes: a `<div>`, a `<span>`, a `<p>`, a `<button>` is 
 | [`<iframe>`](/elements/iframe/)                      | A web document in WebView2, composited under the app. Windows only.                                        |
 | [`<input>` and `<textarea>`](/elements/text-fields/) | Native text editing with IME, undo and the clipboard; no selection API, no constraint validation.          |
 | [Form controls](/elements/form-controls/)            | Checkboxes, radios, range, color, `<select>` and file inputs, each drawn or picked natively.               |
-| [Links](/elements/links/)                            | `<a href>` opens web and mail links in the system, and `<a download>` saves through a Save As dialog.      |
+| [`<a>`](/elements/links/)                            | `<a href>` opens web and mail links in the system, and `<a download>` saves through a Save As dialog.      |
+
+## Components
+
+| Component                          | What it does                                            |
+| ---------------------------------- | ------------------------------------------------------- |
+| [`SkWindow`](/elements/sk-window/) | Paints part of the component tree in its own OS window. |
+
+`SkWindow` is a component, not a tag: you import it from `@skathi-native/runtime` (or `@skathi-native/runtime/svelte`). There is no new element behind it. It renders an ordinary `div`, and its props and events open, configure and close the window that paints that `div` and its subtree.
 
 ## What is not here
 

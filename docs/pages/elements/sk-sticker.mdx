@@ -1,0 +1,274 @@
+---
+title: "<sk-sticker>"
+label: "<sk-sticker>"
+metaTitle: "<sk-sticker>: many animated stickers at once"
+description: Play animated stickers and emoji from Lottie (.json, .tgs) or WebM with alpha, many at once. Copies of one source share a decode, a clock and their frames. Attributes, events, caching, sizing and reduced motion.
+section: Elements
+order: 4
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+A chat where people send animated stickers, a reaction bar under each message, a picker with a hundred animated emoji: that is what `<sk-sticker>` is for. The same sticker can sit in fifty messages, and a full-screen picker can animate every cell at once.
+
+It stays cheap because copies are not independent. Every `<sk-sticker>` showing one source shares one download, one decoder and one clock, and copies shown at the same size share the same frames. Small stickers have their whole loop cached, compressed, after the first pass, and the decoder is freed. Sources are Lottie (`.json` or `.tgs`) or WebM video with an alpha channel.
+
+<Demo id="elements/sk-sticker" caption="A grid of animated stickers playing at once." />
+
+For a single animation with full playback control (segments, speed, direction, per-frame events), use [`<lottie>`](/elements/lottie/).
+
+## A reaction bar
+
+Size stickers in CSS and give them a `src`. Nothing else is needed: they play, loop, and pause on their own while scrolled out of view. Here every message repeats the same three reactions, and each source is still decoded once.
+
+```vue title="Reactions.vue" framework="vue"
+<script setup lang="ts">
+const reactions = ["thumbs-up", "laugh", "heart"];
+const messages = ["Shipped!", "Looks great", "Merged"];
+</script>
+
+<template>
+  <div v-for="text in messages" :key="text" class="message">
+    <p>{{ text }}</p>
+    <div class="reactions">
+      <sk-sticker v-for="r in reactions" :key="r" class="reaction" :src="`assets/stickers/${r}.tgs`" />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.reactions {
+  display: flex;
+  gap: 4px;
+}
+.reaction {
+  width: 24px;
+  height: 24px;
+}
+</style>
+```
+
+```svelte title="Reactions.svelte" framework="svelte"
+<script lang="ts">
+  const reactions = ["thumbs-up", "laugh", "heart"];
+  const messages = ["Shipped!", "Looks great", "Merged"];
+</script>
+
+{#each messages as text (text)}
+  <div class="message">
+    <p>{text}</p>
+    <div class="reactions">
+      {#each reactions as r (r)}
+        <sk-sticker class="reaction" src="assets/stickers/{r}.tgs"></sk-sticker>
+      {/each}
+    </div>
+  </div>
+{/each}
+
+<style>
+  .reactions {
+    display: flex;
+    gap: 4px;
+  }
+  .reaction {
+    width: 24px;
+    height: 24px;
+  }
+</style>
+```
+
+An `<sk-sticker src>` in a Vue template is not turned into an import, so keep sticker files under `assets/`, which `sk build` packs by default.
+
+## A picker that plays on hover
+
+A large grid is easier on the eye when only the sticker under the pointer moves. `play="off"` shows the first frame and `play="on"` plays, so bind it to the hovered cell. `tint` paints a monochrome sticker in the element's CSS `color`, which lets one file follow your theme.
+
+```vue title="StickerPicker.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const stickers = ["wave", "party", "cool", "sleep", "fire", "check"];
+const hovered = ref<string | null>(null);
+const emit = defineEmits<{ pick: [name: string] }>();
+</script>
+
+<template>
+  <div class="grid">
+    <button
+      v-for="s in stickers"
+      :key="s"
+      class="cell"
+      @mouseenter="hovered = s"
+      @mouseleave="hovered = null"
+      @click="emit('pick', s)"
+    >
+      <sk-sticker class="sticker" :src="`assets/stickers/${s}.tgs`" :play="hovered === s ? 'on' : 'off'" tint />
+    </button>
+  </div>
+</template>
+
+<style scoped>
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, 48px);
+  gap: 8px;
+}
+.sticker {
+  width: 40px;
+  height: 40px;
+  color: var(--accent);
+}
+</style>
+```
+
+```svelte title="StickerPicker.svelte" framework="svelte"
+<script lang="ts">
+  let { onpick }: { onpick: (name: string) => void } = $props();
+
+  const stickers = ["wave", "party", "cool", "sleep", "fire", "check"];
+  let hovered = $state<string | null>(null);
+</script>
+
+<div class="grid">
+  {#each stickers as s (s)}
+    <button
+      class="cell"
+      onmouseenter={() => (hovered = s)}
+      onmouseleave={() => (hovered = null)}
+      onclick={() => onpick(s)}
+    >
+      <sk-sticker class="sticker" src="assets/stickers/{s}.tgs" play={hovered === s ? "on" : "off"} tint></sk-sticker>
+    </button>
+  {/each}
+</div>
+
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(6, 48px);
+    gap: 8px;
+  }
+  .sticker {
+    width: 40px;
+    height: 40px;
+    color: var(--accent);
+  }
+</style>
+```
+
+A sticker that starts playing joins its source's shared clock, so it picks up where that clock is rather than at its first frame.
+
+## Play once when a reaction arrives
+
+A reaction that bursts once and settles uses `once`, spelled `play-once` in Svelte: the sticker gets its own clock, plays one loop from the moment it first becomes visible, and holds its last frame. `ended` tells you when it is done, for example to swap in a static badge.
+
+```vue title="Burst.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const settled = ref(false);
+</script>
+
+<template>
+  <span class="badge">
+    <sk-sticker v-if="!settled" class="burst" src="assets/stickers/confetti.tgs" once @ended="settled = true" />
+    <span v-else>+3</span>
+  </span>
+</template>
+```
+
+```svelte title="Burst.svelte" framework="svelte"
+<script lang="ts">
+  let settled = $state(false);
+</script>
+
+<span class="badge">
+  {#if !settled}
+    <sk-sticker class="burst" src="assets/stickers/confetti.tgs" play-once onended={() => (settled = true)}
+    ></sk-sticker>
+  {:else}
+    <span>+3</span>
+  {/if}
+</span>
+```
+
+`ended` does not fire for a still sticker, so with reduced motion on keep the static state reachable some other way, or use `play="on"` for a sticker the user just sent.
+
+## Things to watch for
+
+- **Reduced motion is on by default.** With `play="auto"`, a sticker shows a still frame while the system asks for reduced motion. `play="on"` overrides that, for a sticker the user asked to play.
+- **`src` is an attribute, not a property.** Set it with `:src`, `src={…}` or `setAttribute`.
+- **`load` waits for visibility.** It fires when the first frame is shown, so a sticker that is never visible never fires it.
+- **WebM needs the `video` feature** as well as `lottie`. Without it a WebM sticker fires `error`.
+
+## Attributes
+
+| Attribute         | Values                                                                                                                                                                                          | Default |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `src`             | The sticker's URL or path; see [Sources](#sources).                                                                                                                                             | none    |
+| `play`            | `auto`: plays, or shows a still frame when the system asks for reduced motion. `on`: always plays. `off`: shows the first frame.                                                                | `auto`  |
+| `once`            | Boolean. Plays one loop on its own clock, starting when it first becomes visible, then holds the last frame. In Svelte write `play-once`: Svelte reads any `on…` attribute as an event handler. | off     |
+| `tint`            | Boolean. Paints the sticker in the element's CSS `color`, keeping its shape and transparency.                                                                                                   | off     |
+| `max-fps`         | A frame-rate cap, 1 to 1000. Also spelled `maxFps` or `maxfps`.                                                                                                                                 | none    |
+| `kind`            | `auto`, `lottie`, `video` or `image`. Only `image` changes anything; the format is otherwise detected.                                                                                          | `auto`  |
+| `width`, `height` | Size hints in CSS pixels, unitless. CSS wins.                                                                                                                                                   | none    |
+
+A boolean attribute counts as on when present, unless its value is `"false"`. An unknown `play` or `kind` value prints an advisory and counts as `auto`. The element has no JavaScript properties or methods beyond those of any element.
+
+## Events
+
+| Event   | When                                                                                                        |
+| ------- | ----------------------------------------------------------------------------------------------------------- |
+| `load`  | once, when the sticker's first frame is shown. A sticker that is never visible never fires it.              |
+| `error` | once per element, when the source cannot be fetched, read or decoded. The reason is printed to the console. |
+| `ended` | with `once`, after its single loop. Not fired for a still sticker.                                          |
+
+None of them bubbles.
+
+## Sources
+
+`src` accepts the same URLs as [`<lottie>`](/elements/lottie/#sources): app paths, `https:` and `http:`, `data:`, `blob:`, `file:` and absolute paths. The format is recognized by the first bytes:
+
+- WebM: VP9 with an alpha channel, decoded by libvpx, the same on every platform. It needs the host's `video` Cargo feature as well as `lottie`.
+- gzip: a `.tgs` file.
+- JSON: a Lottie animation.
+
+Anything else is rejected, including dotLottie files and images, unless `kind="image"` sends the source through the [`<img>`](/elements/img/) pipeline. An image sticker reports no natural size, so give it one in CSS.
+
+A source is fetched once, however many elements show it. Outside `assets/`, reference a sticker file with `new URL("./wave.tgs", import.meta.url)` so the build packs it.
+
+## How it is drawn
+
+All copies of a source share one engine and one clock, so they move together. The clock stops while no copy is visible and playing, and resumes where it stopped. Frames change on a 1/60 s grid, so stickers never make a window present more than 60 times a second. A sticker with `once` has its own clock instead.
+
+Each source and size is a target with its own frames, shared by every copy shown at that size. The size is the picture under `object-fit` in device pixels, with the long side rounded up to steps of 4, 8 or 16 pixels so near sizes share frames, and capped at 1024 pixels for Lottie and at the video's own size for WebM.
+
+Small targets, no more than 64 device pixels on either side, play at up to 30 fps. Their whole loop is cached, compressed, under a shared 24 MB budget; once a loop is cached the source's decoder is freed.
+
+Parsing and drawing run on one `sk-sticker` thread. Local files and packaged files are read on the UI thread when the element first needs them; `http:` and `https:` sources are fetched in the background.
+
+Resources go when they are not used:
+
+- a target no visible copy uses is dropped after 3 seconds;
+- a source's decoder and bytes after 15 seconds;
+- a sticker's GPU tile after 3 seconds without a visible copy painting it.
+
+At most four WebM decoders larger than 256 × 256 run at once.
+
+## Size and CSS
+
+Before the source loads the element has no natural size; after it loads, an unsized sticker takes the source's size in CSS pixels, and [`aspect-ratio`](/css/aspect-ratio/) applies as on `<img>`. Stickers are usually sized in CSS.
+
+- [`object-fit`](/css/object-fit/): `contain` (the default), `cover` and `fill`. `none` and `scale-down` draw as `contain` with an advisory: a sticker is drawn at the size it is shown, so it has no pixel size to keep.
+- `object-position` is not applied.
+- [`border-radius`](/css/border-radius/) clips the picture.
+- `color` is used with `tint`.
+
+## Platforms
+
+`<sk-sticker>` behaves the same on Windows, macOS and Linux. It needs the host's `lottie` Cargo feature, on by default; without it the element is an empty box and the first one prints a warning. See [Features and size](/embedding/features/).
+
+## See also
+
+- [`<lottie>`](/elements/lottie/): one animation, with segments, speed, direction and per-frame events.
+- [Features and size](/embedding/features/): the `lottie` and `video` features.

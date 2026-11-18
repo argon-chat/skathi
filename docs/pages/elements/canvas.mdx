@@ -1,0 +1,274 @@
+---
+title: "<canvas>"
+label: "<canvas>"
+metaTitle: "<canvas>: 2D and WebGPU drawing in Skathi"
+description: How <canvas> draws, with a 2D context rasterized on the CPU or a WebGPU context on Direct3D 12, Metal or Vulkan, how its bitmap reaches the screen, sizing and device pixels, CSS, limits and what differs from a browser.
+section: Elements
+order: 9
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+Reach for `<canvas>` when the picture is data: a live chart of CPU load or network traffic, a waveform, a drawing surface, an image the user edits pixel by pixel, a game or a 3D view. It is a bitmap your script draws into, with the `"2d"` context or the `"webgpu"` one, and the element shows that bitmap like an image that CSS sizes, clips and transforms.
+
+The 2D context is the browser's API, rasterized by Skathi on the CPU with vello_cpu, the same on every platform. Calls are recorded, not drawn one by one, and turned into pixels when the screen or your script needs them. WebGPU runs on Direct3D 12, Metal or Vulkan; on Windows it shares the renderer's device, so its frames reach the screen without leaving the GPU. WebGL is not available.
+
+<Demo id="elements/canvas" caption="A 2D chart redrawn live." />
+
+The APIs themselves are in the web-platform reference: [Canvas 2D](/web-platform/canvas-2d/), [OffscreenCanvas](/web-platform/offscreen-canvas/) and [WebGPU](/web-platform/webgpu/), with examples and edge cases. This page is the element: how to use it in a component, how its pixels get to the screen, and what that means for size and CSS.
+
+## A live chart
+
+A chart that updates several times a second is the canvas's home ground. Keep the data in a plain array, redraw the whole chart when it changes, and make the bitmap `devicePixelRatio` times the CSS size so the lines stay sharp on high-density displays.
+
+```vue title="LiveChart.vue" framework="vue"
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
+
+const W = 320;
+const H = 80;
+const dpr = devicePixelRatio;
+const canvas = ref<HTMLCanvasElement | null>(null);
+const samples: number[] = [];
+let timer = 0;
+
+function draw(ctx: CanvasRenderingContext2D) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.beginPath();
+  samples.forEach((v, i) => ctx.lineTo((i / 59) * W, H - v * H));
+  ctx.strokeStyle = "#4f8cff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+onMounted(() => {
+  const ctx = canvas.value!.getContext("2d")!;
+  ctx.scale(dpr, dpr);
+  timer = setInterval(() => {
+    samples.push(0.5 + 0.4 * Math.sin(Date.now() / 600) * Math.random());
+    if (samples.length > 60) samples.shift();
+    draw(ctx);
+  }, 100);
+});
+onUnmounted(() => clearInterval(timer));
+</script>
+
+<template>
+  <canvas ref="canvas" class="chart" :width="W * dpr" :height="H * dpr" />
+</template>
+
+<style scoped>
+.chart {
+  width: 320px;
+  height: 80px;
+}
+</style>
+```
+
+```svelte title="LiveChart.svelte" framework="svelte"
+<script lang="ts">
+  const W = 320;
+  const H = 80;
+  const dpr = devicePixelRatio;
+  let canvas = $state<HTMLCanvasElement>();
+  const samples: number[] = [];
+
+  function draw(ctx: CanvasRenderingContext2D) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.beginPath();
+    samples.forEach((v, i) => ctx.lineTo((i / 59) * W, H - v * H));
+    ctx.strokeStyle = "#4f8cff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  $effect(() => {
+    const ctx = canvas?.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    const timer = setInterval(() => {
+      samples.push(0.5 + 0.4 * Math.sin(Date.now() / 600) * Math.random());
+      if (samples.length > 60) samples.shift();
+      draw(ctx);
+    }, 100);
+    return () => clearInterval(timer);
+  });
+</script>
+
+<canvas bind:this={canvas} class="chart" width={W * dpr} height={H * dpr}></canvas>
+
+<style>
+  .chart {
+    width: 320px;
+    height: 80px;
+  }
+</style>
+```
+
+Why this is cheap: the `clearRect` over the whole canvas drops every command recorded before it, so the queue never grows, and a canvas that changes again within 250 ms counts as animating and is written into its GPU tile in place, without rebuilding the page. The data stays out of reactive state on purpose: the canvas is redrawn by your code, not by the framework.
+
+## Read the pixels under the pointer
+
+Pixel access works as in a browser. This eyedropper draws an image, then reads one pixel where the user clicks. A canvas is never tainted, so the read works for any image the canvas could draw.
+
+```vue title="Eyedropper.vue" framework="vue"
+<script setup lang="ts">
+import { onMounted, ref } from "vue";
+
+const canvas = ref<HTMLCanvasElement | null>(null);
+const picked = ref("#000000");
+
+onMounted(() => {
+  const img = new Image();
+  img.onload = () => {
+    const c = canvas.value!;
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext("2d")!.drawImage(img, 0, 0);
+  };
+  img.src = "assets/photo.jpg";
+});
+
+function pick(e: MouseEvent) {
+  const c = canvas.value!;
+  const box = c.getBoundingClientRect();
+  const x = Math.floor(((e.clientX - box.left) / box.width) * c.width);
+  const y = Math.floor(((e.clientY - box.top) / box.height) * c.height);
+  const [r = 0, g = 0, b = 0] = c.getContext("2d")!.getImageData(x, y, 1, 1).data;
+  picked.value = "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+</script>
+
+<template>
+  <canvas ref="canvas" class="photo" @click="pick" />
+  <p :style="{ color: picked }">{{ picked }}</p>
+</template>
+
+<style scoped>
+.photo {
+  width: 100%;
+  cursor: crosshair;
+}
+</style>
+```
+
+```svelte title="Eyedropper.svelte" framework="svelte"
+<script lang="ts">
+  let canvas = $state<HTMLCanvasElement>();
+  let picked = $state("#000000");
+
+  $effect(() => {
+    const c = canvas;
+    if (!c) return;
+    const img = new Image();
+    img.onload = () => {
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext("2d")!.drawImage(img, 0, 0);
+    };
+    img.src = "assets/photo.jpg";
+  });
+
+  function pick(e: MouseEvent) {
+    if (!canvas) return;
+    const box = canvas.getBoundingClientRect();
+    const x = Math.floor(((e.clientX - box.left) / box.width) * canvas.width);
+    const y = Math.floor(((e.clientY - box.top) / box.height) * canvas.height);
+    const [r = 0, g = 0, b = 0] = canvas.getContext("2d")!.getImageData(x, y, 1, 1).data;
+    picked = "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+  }
+</script>
+
+<canvas bind:this={canvas} class="photo" onclick={pick}></canvas>
+<p style:color={picked}>{picked}</p>
+
+<style>
+  .photo {
+    width: 100%;
+    cursor: crosshair;
+  }
+</style>
+```
+
+A read-back such as `getImageData` rasterizes every command queued so far, on the JavaScript thread. Reading one pixel per click is nothing; reading the whole bitmap every frame is real work, so batch your edits and write them back with one `putImageData`.
+
+## Things to watch for
+
+- **Blurry on a 2× display?** One bitmap pixel is one CSS pixel unless you scale, as the chart does.
+- **Setting `width` or `height` clears the bitmap**, even to the same value, and resets the context. Bind them to values that only change on resize.
+- **Pixel art blurs when scaled up.** `image-rendering` is not supported; the bitmap is always scaled with linear filtering.
+- **Off-screen canvases still cost.** A canvas is never skipped when it is out of view. In a long list, render only the rows in view, as in [Virtualize long lists](/guides/best-practices/#virtualize-long-lists).
+- **`drawImage(video)` draws nothing yet.**
+
+## The element
+
+| Attribute or property     | What it does                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `width`, `height`         | The bitmap's size in pixels, 300 × 150 by default. Setting either, even to the same value, clears the bitmap and resets the context.                            |
+| `getContext(id)`          | `"2d"` or `"webgpu"`. A canvas keeps the first kind it was given: asking for the other returns `null`. Any other id returns `null` and prints an advisory once. |
+| `toDataURL()`, `toBlob()` | Encode the bitmap as an image.                                                                                                                                  |
+
+That is the element's whole API. `transferControlToOffscreen()` and `captureStream()` do not exist. An `OffscreenCanvas` works, on the JavaScript thread: there are no workers to send it to. `getContext("webgl")` and `getContext("webgl2")` return `null` with an advisory.
+
+The element's children, the fallback content a browser shows when canvas is unsupported, are never drawn. The canvas takes events, `pointer-events`, `tabindex` and `:focus` styles like any element.
+
+## 2D: how a frame gets drawn
+
+The 2D context records each call as a command; nothing is drawn at the call. The commands are rasterized on the CPU, by vello_cpu, when the screen needs the bitmap, when script reads pixels back (`getImageData`, `toDataURL`, `toBlob`), when the canvas is drawn into another one, or when 2048 commands are queued. A `clearRect` or `putImageData` over the whole canvas drops the commands before it, and clearing a canvas that is already blank changes nothing.
+
+Rasterizing for the screen runs on the UI thread, in the frame. A frame with no changed canvas costs one check. A changed canvas is copied whole to the GPU: the bitmap is converted to the renderer's format on the CPU and uploaded, not patched.
+
+A canvas that changes again within 250 ms counts as animating and is written into its GPU tile in place, without rebuilding the page. Once it has been still for 300 ms, a canvas shown smaller than its bitmap is drawn from a filtered copy.
+
+Text uses the app's `@font-face` fonts.
+
+## WebGPU: how a frame gets drawn
+
+| Platform | Device                          | To the screen                       |
+| -------- | ------------------------------- | ----------------------------------- |
+| Windows  | Direct3D 12, the renderer's own | Copied on the GPU                   |
+| macOS    | Metal, its own                  | Read back to the CPU, then uploaded |
+| Linux    | Vulkan, its own                 | Read back to the CPU, then uploaded |
+
+On Windows, WebGPU shares the renderer's Direct3D 12 device, and each frame is converted and copied into the renderer's texture without leaving the GPU. On macOS and Linux, WebGPU has a device of its own; each frame is read back to the CPU asynchronously and uploaded like a 2D bitmap.
+
+The texture from `getCurrentTexture()` is presented after the frame's `requestAnimationFrame` callbacks and their microtasks have run. On Windows, if the GPU copy is refused, Skathi falls back to the readback with a warning. During a readback, when every staging buffer is busy, the screen keeps the previous frame.
+
+Before its first frame, an opaque WebGPU canvas paints a black box, and a `premultiplied` one paints nothing.
+
+`toDataURL()` and `toBlob()` on a WebGPU canvas read the texture back synchronously on the JavaScript thread.
+
+WebGPU needs the host's `webgpu` Cargo feature, on by default. Without it `navigator.gpu` is undefined and `getContext("webgpu")` returns `null`; see [Features and size](/embedding/features/).
+
+## Size and device pixels
+
+The bitmap size and the box size are separate, as in browsers. Without CSS, the box is the bitmap's size in CSS pixels. With CSS, the bitmap is scaled into the box. For a sharp canvas, make the bitmap `devicePixelRatio` times the CSS size and scale the context by the same factor.
+
+[`aspect-ratio`](/css/aspect-ratio/) in CSS wins over the bitmap's ratio.
+
+A side above 32767 pixels, or an area above 2²⁸ pixels, makes the bitmap 0 × 0 with an advisory. A side above 16384 is drawn and can be read back, but is not shown, with a warning.
+
+## CSS
+
+- [`object-fit`](/css/object-fit/) defaults to `fill`, as in browsers; [`object-position`](/css/object-position/) applies.
+- [`border-radius`](/css/border-radius/) and [`corner-shape`](/css/corner-shape/) clip the canvas.
+- `transform`, `opacity` and `z-index` apply as to any element.
+- [`image-rendering`](/css/image-rendering/) is not supported.
+- The canvas is sRGB only. A `colorSpace` option is ignored, and there is no HDR.
+
+A canvas is never skipped when it is off screen, and a subtree that contains one is not replayed from the render cache.
+
+## Compared with the browser
+
+- No WebGL; use WebGPU.
+- No `transferControlToOffscreen()`, `captureStream()` or workers.
+- `drawImage(video)` draws nothing yet.
+- A canvas is never tainted: pixels from cross-origin images can be read back.
+- 2D `filter` supports `blur()` only.
+- No `image-rendering`, no wide gamut or HDR.
+
+## See also
+
+- [Canvas 2D](/web-platform/canvas-2d/), [OffscreenCanvas](/web-platform/offscreen-canvas/) and [WebGPU](/web-platform/webgpu/) in the web-platform reference.
+- [`<sk-surface>`](/elements/sk-surface/): frames from native code.
+- [`<img>`](/elements/img/): what `drawImage(img)` can draw.

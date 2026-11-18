@@ -7,15 +7,21 @@ section: Elements
 order: 10
 ---
 
-An `<iframe>` shows a web document: an HTML page from the app's files, from `srcdoc` or from the web. Skathi has no browser engine of its own, so the document runs in the system's webview, WebView2, in a separate browser process, and is composited into the element's box under the app's own drawing. It is the one place in a Skathi app where HTML and its JavaScript run in a browser.
+import Demo from "../../src/components/Demo.astro";
 
-It works on **Windows only**. On macOS and Linux an `<iframe>` is an empty box that fires `error`; check `skFeatures.iframe` before relying on it.
+Sometimes part of the app already exists as a web page: a help center, your service's account or billing page, a report a server renders as HTML, a third-party widget. `<iframe>` shows it inside the app, under your own UI, without rewriting it.
 
-The document is not a Skathi app or component. It cannot import your Vue or Svelte code or reach your state; the two sides talk through `postMessage`.
+Skathi has no browser engine of its own, so the document runs in the system's webview, WebView2, in a separate browser process, and is composited into the element's box. It is the one place in a Skathi app where HTML and its JavaScript run in a real browser, with its own network stack, cookies and sandbox. The document is not a Skathi component: it cannot import your Vue or Svelte code or reach your state, and the two sides talk through `postMessage`.
 
-## A minimal example
+It works on **Windows only**. On macOS and Linux an `<iframe>` is an empty box that fires `error`, so check `skFeatures.iframe` and offer a fallback.
 
-```vue
+<Demo id="elements/iframe" caption="A web page in an iframe under the app's own UI." />
+
+## Help pages from the app's files
+
+HTML that ships with the app loads from a relative path, served by Skathi from the package. Messages go both ways: the app calls `postMessage` on the iframe's `contentWindow`, and the document answers with `window.parent.postMessage`, which arrives as a `message` event on `window`.
+
+```vue title="Help.vue" framework="vue"
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 
@@ -50,7 +56,121 @@ function ping() {
 </style>
 ```
 
-Inside `help/index.html`, the document answers with `window.parent.postMessage("pong", "*")`.
+```svelte title="Help.svelte" framework="svelte"
+<script lang="ts">
+  let frame = $state<HTMLIFrameElement>();
+  let reply = $state("");
+  const webView = skFeatures.iframe;
+
+  function onMessage(e: MessageEvent) {
+    if (e.source === frame?.contentWindow) reply = String(e.data);
+  }
+
+  function ping() {
+    frame?.contentWindow?.postMessage({ type: "ping" });
+  }
+</script>
+
+<svelte:window onmessage={onMessage} />
+
+{#if webView}
+  <iframe bind:this={frame} class="doc" src="help/index.html" title="Help"></iframe>
+{:else}
+  <p>Help needs Windows.</p>
+{/if}
+<button onclick={ping}>Ping</button>
+<p>{reply}</p>
+
+<style>
+  .doc {
+    width: 100%;
+    height: 480px;
+    border: 0;
+  }
+</style>
+```
+
+Inside `help/index.html`, the document answers with `window.parent.postMessage("pong", "*")`. Compare `e.source` with the iframe's `contentWindow`, as the sample does, so a message from somewhere else is not taken for the document's.
+
+## A page from the web, with a fallback
+
+A page from your web service loads from its `https:` URL. Show a loading state until `load`, and treat `error` as real: unlike a browser, Skathi fires it when the page fails to load, when there is no webview, or when too many documents are open. Where there is no webview at all, a plain link opens the page in the system browser instead.
+
+```vue title="Account.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const url = "https://example.com/account";
+const webView = skFeatures.iframe;
+const state = ref<"loading" | "ready" | "failed">("loading");
+</script>
+
+<template>
+  <div v-if="webView && state !== 'failed'" class="frame">
+    <p v-if="state === 'loading'">Loading…</p>
+    <iframe
+      class="page"
+      :src="url"
+      sandbox="allow-scripts allow-forms allow-same-origin"
+      @load="state = 'ready'"
+      @error="state = 'failed'"
+    />
+  </div>
+  <a v-else :href="url">Open your account in the browser</a>
+</template>
+
+<style scoped>
+.page {
+  width: 100%;
+  height: 600px;
+  border: 0;
+}
+</style>
+```
+
+```svelte title="Account.svelte" framework="svelte"
+<script lang="ts">
+  const url = "https://example.com/account";
+  const webView = skFeatures.iframe;
+  let state = $state<"loading" | "ready" | "failed">("loading");
+</script>
+
+{#if webView && state !== "failed"}
+  <div class="frame">
+    {#if state === "loading"}
+      <p>Loading…</p>
+    {/if}
+    <iframe
+      class="page"
+      src={url}
+      title="Account"
+      sandbox="allow-scripts allow-forms allow-same-origin"
+      onload={() => (state = "ready")}
+      onerror={() => (state = "failed")}
+    ></iframe>
+  </div>
+{:else}
+  <a href={url}>Open your account in the browser</a>
+{/if}
+
+<style>
+  .page {
+    width: 100%;
+    height: 600px;
+    border: 0;
+  }
+</style>
+```
+
+`sandbox` is the browser's real sandbox; without it the document is not sandboxed. `load` and `error` fire once per navigation of the element, not for links the user follows inside the page. A `postMessage` to a document from the web needs its origin, or `"*"`, as the target origin.
+
+## Things to watch for
+
+- **Windows only.** Check `skFeatures.iframe`; it is also `false` on Windows without the WebView2 runtime and in a host built without the `webview` feature.
+- **Your UI draws over it, its background does not show under it.** The document is drawn under the app through a hole cut in the app's drawing, so a menu over the iframe draws on top, but `opacity` on the iframe does not reach the document.
+- **No permissions.** Skathi denies every permission request from the webview: no camera, microphone, location or notifications, whatever `allow` says.
+- **Eight at most.** At most 8 documents are open at once across the app; the ninth `<iframe>` fires `error`.
+- **Changing an attribute reloads.** A changed `src`, `sandbox` or other attribute rebuilds the document from scratch and drops messages queued for the old one.
 
 ## What it can load
 
@@ -64,9 +184,9 @@ Inside the webview, the app's files are served from the origin `https://app.vn.i
 
 ## Attributes
 
-`src`, `srcdoc`, `sandbox`, `allow`, `referrerpolicy`, `name` and `allowfullscreen` are passed to the document as a browser would apply them. `sandbox` is the browser's real sandbox, and without it the document is not sandboxed. Changing any of them navigates again: the document is rebuilt from scratch, and messages queued for the old one are dropped. `width` and `height` are size hints in CSS pixels, unitless; CSS wins.
+`src`, `srcdoc`, `sandbox`, `allow`, `referrerpolicy`, `name` and `allowfullscreen` are passed to the document as a browser would apply them. Changing any of them navigates again: the document is rebuilt from scratch, and messages queued for the old one are dropped. `width` and `height` are size hints in CSS pixels, unitless; CSS wins.
 
-`loading` is reflected but ignored: the document is created as soon as the element is in the document, on screen or not. `allow` grants nothing in practice, because Skathi denies every permission request from the webview: no camera, microphone, location or notifications.
+`loading` is reflected but ignored: the document is created as soon as the element is in the document, on screen or not. `allow` grants nothing in practice, because every permission request from the webview is denied.
 
 ## Messaging
 
@@ -116,4 +236,4 @@ When the iframe is not painted (`display: none`, scrolled out of view), its docu
 ## See also
 
 - [Features and size](/embedding/features/): the `webview` feature.
-- [Links](/elements/links/): opening a URL in the system browser instead.
+- [`<a>`](/elements/links/): opening a URL in the system browser instead.

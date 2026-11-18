@@ -7,23 +7,170 @@ section: Elements
 order: 11
 ---
 
-Every `<input>` that is not a checkbox, radio, range, color or file input, and every `<textarea>`, is Skathi's own text editor. It is written in Rust on gpui's text input: it lays out and draws the text, the caret and the selection itself, and takes keyboard and IME input from the operating system directly. `v-model` and `bind:value` work as in a browser.
+import Demo from "../../src/components/Demo.astro";
+
+Search boxes, chat composers, rename fields, settings, notes: most apps are full of text fields, and users notice at once when one behaves oddly. In Skathi every `<input>` that is not a checkbox, radio, range, color or file input, and every `<textarea>`, is a native text editor written in Rust on gpui's text input. It lays out and draws the text, the caret and the selection itself, and takes keyboard and IME input from the operating system directly, so Japanese, Chinese and Korean input, undo, the clipboard and the platform's shortcuts work the way the user expects.
+
+From your code it is the element you know: `v-model` and `bind:value` work as in a browser, and so do `input`, `keydown` and `focus`. The differences are few but worth knowing, and the recipes below work around the ones you are most likely to hit.
+
+<Demo id="elements/text-fields" caption="Typing, selecting and undoing in an input and a textarea." />
 
 The other input types are on [Form controls](/elements/form-controls/).
 
-```vue
-<script setup lang="ts">
-import { ref } from "vue";
+## A search box with Enter and Escape
 
-const name = ref("");
-const notes = ref("");
+A search field should take the keyboard when its view opens, search on Enter and clear on Escape. `autofocus` does nothing in Skathi, so focus the field once it is mounted. `keydown` runs before the editor acts on the key, so the handler sees Enter and Escape first.
+
+```vue title="SearchBox.vue" framework="vue"
+<script setup lang="ts">
+import { onMounted, ref } from "vue";
+
+const notes = ["Groceries", "Gym plan", "Gift ideas", "Travel checklist"];
+const box = ref<HTMLInputElement | null>(null);
+const query = ref("");
+const results = ref<string[]>([]);
+
+onMounted(() => box.value?.focus());
+
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Enter") {
+    const q = query.value.toLowerCase();
+    results.value = notes.filter((n) => n.toLowerCase().includes(q));
+  } else if (e.key === "Escape") {
+    query.value = "";
+    results.value = [];
+  }
+}
 </script>
 
 <template>
-  <input v-model="name" placeholder="Name" />
-  <textarea v-model="notes" rows="4" placeholder="Notes" />
+  <input ref="box" v-model="query" type="search" placeholder="Search notes" @keydown="onKey" />
+  <ul>
+    <li v-for="r in results" :key="r">{{ r }}</li>
+  </ul>
 </template>
 ```
+
+```svelte title="SearchBox.svelte" framework="svelte"
+<script lang="ts">
+  const notes = ["Groceries", "Gym plan", "Gift ideas", "Travel checklist"];
+  let box = $state<HTMLInputElement>();
+  let query = $state("");
+  let results = $state<string[]>([]);
+
+  $effect(() => box?.focus());
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      const q = query.toLowerCase();
+      results = notes.filter((n) => n.toLowerCase().includes(q));
+    } else if (e.key === "Escape") {
+      query = "";
+      results = [];
+    }
+  }
+</script>
+
+<input bind:this={box} bind:value={query} type="search" placeholder="Search notes" onkeydown={onKey} />
+<ul>
+  {#each results as r (r)}
+    <li>{r}</li>
+  {/each}
+</ul>
+```
+
+`type="search"` is a plain single-line field here: there is no clear button, so Escape is your user's way to clear it. Escape that your handler does not stop collapses the selection, and with no selection it goes on to the app, where a dialog's own Escape handler can close it.
+
+## Save when the user is done
+
+`change` never fires on a text field, and `v-model.lazy` updates on every keystroke with an advisory. For a field that saves only when the user has finished, such as renaming a file, keep a draft and commit it on `blur` and on Enter:
+
+```vue title="RenameField.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const name = ref("Untitled");
+const draft = ref(name.value);
+
+function commit() {
+  const value = draft.value.trim();
+  if (value) name.value = value;
+  else draft.value = name.value;
+}
+</script>
+
+<template>
+  <input v-model="draft" @blur="commit" @keydown.enter="commit" />
+  <p>Saved as {{ name }}</p>
+</template>
+```
+
+```svelte title="RenameField.svelte" framework="svelte"
+<script lang="ts">
+  let name = $state("Untitled");
+  let draft = $state("Untitled");
+
+  function commit() {
+    const value = draft.trim();
+    if (value) name = value;
+    else draft = name;
+  }
+</script>
+
+<input bind:value={draft} onblur={commit} onkeydown={(e) => e.key === "Enter" && commit()} /><p>Saved as {name}</p>
+```
+
+An empty name falls back to the last saved one. [Vue support](/guides/vue-support/) has more on `v-model` without `change`.
+
+## A field that accepts only digits
+
+No constraint validation runs, and `maxlength`, `pattern` and `type="number"` do not filter what is typed. Clean the value in the `input` handler instead. This verification-code field keeps digits only, at most six, and enables the button when it is complete:
+
+```vue title="CodeField.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const code = ref("");
+
+function clean(e: Event) {
+  const el = e.target as HTMLInputElement;
+  const digits = el.value.replace(/\D/g, "").slice(0, 6);
+  if (digits !== el.value) el.value = digits;
+  code.value = digits;
+}
+</script>
+
+<template>
+  <input :value="code" placeholder="6-digit code" @input="clean" />
+  <button :disabled="code.length !== 6">Verify</button>
+</template>
+```
+
+```svelte title="CodeField.svelte" framework="svelte"
+<script lang="ts">
+  let code = $state("");
+
+  function clean(e: Event) {
+    const el = e.target as HTMLInputElement;
+    const digits = el.value.replace(/\D/g, "").slice(0, 6);
+    if (digits !== el.value) el.value = digits;
+    code = digits;
+  }
+</script>
+
+<input value={code} placeholder="6-digit code" oninput={clean} />
+<button disabled={code.length !== 6}>Verify</button>
+```
+
+Setting `value` from script replaces the text and clears the undo history, which is why the handler writes only when something was removed. `beforeinput` is cancelable too, if you would rather refuse an edit than repair it.
+
+## Things to watch for
+
+- **No `change` event** on text fields. Use `blur` or Enter.
+- **No caret API.** `selectionStart`, `selectionEnd`, `setSelectionRange()` and `setRangeText()` do not exist; `select()` selects everything.
+- **No context menu.** Right-click does nothing unless you handle `contextmenu` and draw a menu yourself.
+- **Disabled fields stay focusable**, and their text can still be selected and copied.
+- **A `disabled` `<fieldset>` does not disable the fields inside it.** Disable each one.
 
 ## Types
 
@@ -43,9 +190,9 @@ A `<textarea>` is the same editor with several lines. Its initial value comes fr
 | `rows`                 | A `<textarea>`'s minimum height in lines, 2 by default. CSS `height` wins.                                                               |
 | `tabindex`             | As on any element.                                                                                                                       |
 
-`maxlength`, `minlength`, `pattern`, `min`, `max`, `step` and `required` are reflected as properties but not enforced, and no constraint validation runs: there is no `checkValidity()` or `validity`, and a form's `submit` fires whatever the fields hold. Validate in your own code.
+`maxlength`, `minlength`, `pattern`, `min`, `max`, `step` and `required` are reflected as properties but not enforced, and no constraint validation runs: there is no `checkValidity()` or `validity`, and a form's `submit` fires whatever the fields hold.
 
-`autofocus` does nothing; focus the field with `el.focus()` once it is mounted. `cols` and `wrap` are ignored: a textarea always wraps lines to its width. `spellcheck`, `autocorrect`, `autocapitalize`, `enterkeyhint` and `inputmode` are passed to the platform's text input, which ignores them on desktop: there is no spell-check underline. A `disabled` `<fieldset>` does not disable the text fields inside it.
+`autofocus` does nothing. `cols` and `wrap` are ignored: a textarea always wraps lines to its width. `spellcheck`, `autocorrect`, `autocapitalize`, `enterkeyhint` and `inputmode` are passed to the platform's text input, which ignores them on desktop: there is no spell-check underline.
 
 ## Keys
 
@@ -63,7 +210,7 @@ A `<textarea>` is the same editor with several lines. Its initial value comes fr
 
 Undo keeps 256 steps. Each edit is its own step; a whole IME composition is one.
 
-With the mouse, a double-click selects a word, a triple-click selects everything, Shift+click extends the selection, and a drag that leaves the field keeps selecting. There is no context menu: right-click does nothing unless you handle `contextmenu` and draw a menu yourself.
+With the mouse, a double-click selects a word, a triple-click selects everything, Shift+click extends the selection, and a drag that leaves the field keeps selecting.
 
 The clipboard carries plain text. Pasting into a single-line field turns line breaks into spaces.
 
@@ -91,11 +238,7 @@ Composition input works on every platform, with the candidate window placed at t
 | `focus`, `blur`                                           |                                                                                      |
 | `select`                                                  | After `select()`.                                                                    |
 
-**`change` never fires on a text field.** `v-model.lazy` updates on every keystroke instead and prints an advisory. To act when the user is done, use `blur` or Enter; [Vue support](/guides/vue-support/) shows the pattern.
-
-## Selection from script
-
-`select()` focuses the field and selects all of its text. `selectionStart`, `selectionEnd`, `selectionDirection`, `setSelectionRange()` and `setRangeText()` do not exist: a script cannot read or place the caret.
+`change` never fires on a text field.
 
 ## Styling
 
