@@ -25,6 +25,9 @@ Clips come from a demo app in `apps/` driven by a plan in `scripts/record/plans/
   Windows are placed there before they first show and are never activated. Input is synthetic
   (`driver.ts`) and the cursor is drawn by the app; never move the real mouse or type on the real
   keyboard.
+- **Nothing that dates.** Text in a demo page names no platform, backend or version ("Windows only",
+  "WebView2"): support changes and the clip would have to be re-recorded. Platform notes belong on the
+  docs page.
 - **Loops.** A plan returns `{ start, end }`: two moments with the same picture. Continuous animations
   on the page need periods that divide that window, so the clip loops without a jump.
 

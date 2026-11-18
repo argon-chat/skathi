@@ -33,7 +33,7 @@ onUnmounted(() => window.removeEventListener("message", onMessage));
   <div class="page">
     <div class="head">
       <span class="tag">&lt;iframe&gt;</span>
-      <p>A page from the app's files in WebView2, under the app's own UI. Windows only.</p>
+      <p>A page from the app's files in the system webview, under the app's own UI.</p>
     </div>
     <div class="stage">
       <div class="shell card">
