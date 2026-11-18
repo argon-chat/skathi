@@ -528,7 +528,9 @@ impl Builder {
     fn answer_host_types(&self) {
         if std::env::args_os()
             .nth(1)
-            .is_none_or(|a| a != HOST_TYPES_FLAG)
+            // `sk types` looks for the flag's bytes in the exe before it runs it; without
+            // black_box an optimised build compares immediates and the bytes are gone.
+            .is_none_or(|a| a != std::hint::black_box(HOST_TYPES_FLAG))
         {
             return;
         }

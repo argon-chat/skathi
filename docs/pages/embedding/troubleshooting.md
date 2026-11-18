@@ -148,9 +148,9 @@ order: 10
 
 - `sk types` says the exe `does not answer --sk-host-types`
 
-  **Cause:** The exe was built against a skathi older than 0.4. One built without the `types` feature answers, but says so and fails.
+  **Cause:** `sk types` looks for the flag's text in the exe before it runs it, so that it never starts the app of a program that cannot answer. The exe was built against a skathi older than 0.4, or it is an optimised build against 0.4.0, from which the compiler could drop that text. One built without the `types` feature answers, but says so and fails.
 
-  **Fix:** Build it against 0.4 or later, with `types` on.
+  **Fix:** Build it against a skathi later than 0.4.0, with `types` on.
 
 - `sk types` opens a log, starts crash reporting or registers the app with the OS
 
