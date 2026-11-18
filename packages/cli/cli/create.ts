@@ -23,6 +23,12 @@ export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
+export const FRAMEWORKS = ["vue", "svelte"] as const;
+export type Framework = (typeof FRAMEWORKS)[number];
+
+/** The templates `sk create` offers: `svelte` is `minimal` with the Svelte answer. */
+const OFFERED: readonly Template[] = TEMPLATES.filter((t) => t !== "svelte");
+
 interface Checker {
   script: string;
   devDependencies: Record<string, string>;
@@ -54,6 +60,7 @@ const FRAMEWORK_VERSIONS: Record<string, string> = {
 
 interface TemplateInfo {
   hint: string;
+  framework: Framework;
   dependencies: string[];
   window: Record<string, unknown>;
   packs?: { name: string; match?: string[] }[];
@@ -63,25 +70,29 @@ interface TemplateInfo {
 const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   showcase: {
     hint: "every Skathi feature, one page each",
+    framework: "vue",
     dependencies: ["vue", "pinia", "vue-router"],
     window: { width: 1100, height: 720, minWidth: 480, minHeight: 360, titleBarStyle: "hidden", titleBarHeight: 40 },
     packs: [{ name: "media", match: ["assets/media/**"] }],
     checker: VUE_TSC,
   },
   minimal: {
-    hint: "one window, one component",
+    hint: "one window, one component, in Vue or Svelte",
+    framework: "vue",
     dependencies: ["vue"],
     window: { width: 760, height: 520, titleBarStyle: "default" },
     checker: VUE_TSC,
   },
   svelte: {
     hint: "the minimal app in Svelte 5",
+    framework: "svelte",
     dependencies: ["svelte"],
     window: { width: 760, height: 520, titleBarStyle: "default" },
     checker: SVELTE_CHECK,
   },
   player: {
     hint: "a music player in Svelte 5, dressed in shaders",
+    framework: "svelte",
     dependencies: ["svelte"],
     window: { width: 1240, height: 800, minWidth: 480, minHeight: 600, titleBarStyle: "hidden", titleBarHeight: 44 },
     packs: [{ name: "media", match: ["assets/music/**", "assets/covers/**"] }],
@@ -89,6 +100,7 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
   },
   weather: {
     hint: "a weather app in Vue, its sky and rain drawn by shaders",
+    framework: "vue",
     dependencies: ["vue"],
     window: { width: 1180, height: 880, minWidth: 980, minHeight: 780, titleBarStyle: "hidden", titleBarHeight: 72 },
     packs: [{ name: "textures", match: ["assets/textures/**"] }],
@@ -241,6 +253,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
 export interface CreateFlags {
   name?: string | undefined;
   template?: string | undefined;
+  framework?: string | undefined;
   os?: string | undefined;
   devtools?: boolean | undefined;
   pm?: string | undefined;
@@ -260,6 +273,22 @@ export function parseTemplate(v: string): Template {
   return template;
 }
 
+function parseFramework(v: string): Framework {
+  const framework = FRAMEWORKS.find((f) => f === v.trim().toLowerCase());
+  if (!framework) throw new ConfigError(`--framework ${JSON.stringify(v)}: expected vue or svelte`);
+  return framework;
+}
+
+/** The template in `framework`: minimal comes in both, the others in one. Without a template, the first offered in it. */
+export function templateFor(template: Template | undefined, framework: Framework): Template {
+  if (template === undefined) return OFFERED.find((t) => TEMPLATE_INFO[t].framework === framework) ?? "showcase";
+  if (template === "minimal" || template === "svelte") return framework === "svelte" ? "svelte" : "minimal";
+  if (TEMPLATE_INFO[template].framework === framework) return template;
+  throw new ConfigError(
+    `--framework ${framework}: the ${template} template is a ${TEMPLATE_INFO[template].framework === "vue" ? "Vue" : "Svelte"} app. minimal comes in both`,
+  );
+}
+
 function answered<T>(value: p.Answer<T>): T {
   if (value === p.CANCEL) {
     p.cancel("Nothing was created.");
@@ -271,9 +300,11 @@ function answered<T>(value: p.Answer<T>): T {
 /** `sk create`: the questions the flags leave open, then {@link create}. */
 export async function createCommand(target: string | undefined, flags: CreateFlags): Promise<number> {
   const ask = !flags.yes && process.stdin.isTTY === true && process.stdout.isTTY === true;
+  const framework = flags.framework !== undefined ? parseFramework(flags.framework) : undefined;
+  const template = flags.template !== undefined ? parseTemplate(flags.template) : undefined;
   const options: CreateOptions = {
     name: flags.name,
-    template: flags.template !== undefined ? parseTemplate(flags.template) : undefined,
+    template: framework ? templateFor(template, framework) : template,
     platforms: flags.os
       ?.split(/[\s,]+/)
       .filter(Boolean)
@@ -303,10 +334,23 @@ export async function createCommand(target: string | undefined, flags: CreateFla
     options.template ??= answered(
       await p.select<Template>({
         message: "Template",
-        options: TEMPLATES.map((t) => ({ value: t, label: t, hint: TEMPLATE_INFO[t].hint })),
+        options: OFFERED.map((t) => ({ value: t, label: t, hint: TEMPLATE_INFO[t].hint })),
         initial: "showcase",
       }),
     );
+    if (options.template === "minimal" && framework === undefined) {
+      const picked = answered(
+        await p.select<Framework>({
+          message: "Framework",
+          options: [
+            { value: "vue", label: "Vue" },
+            { value: "svelte", label: "Svelte 5" },
+          ],
+          initial: "vue",
+        }),
+      );
+      options.template = templateFor("minimal", picked);
+    }
     options.platforms ??= answered(
       await p.multiselect<Platform>({
         message: "Package it for",

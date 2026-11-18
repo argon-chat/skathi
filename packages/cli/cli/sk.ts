@@ -142,8 +142,9 @@ export function cli(run: Run): Command {
     .option("--name <name>", "The app's name (default: the directory's)")
     .option(
       "--template <name>",
-      "showcase (every feature), minimal, svelte, player (a Svelte music player) or weather (a Vue weather app)",
+      "showcase (every feature), minimal (Vue or Svelte), player (a Svelte music player) or weather (a Vue weather app)",
     )
+    .option("--framework <name>", "vue or svelte, for minimal (default: vue)")
     .option("--os <list>", "What to package for: windows, macos, linux")
     .option("--devtools", "Keep devtools (F12) in published builds")
     .addOption(hidden("--no-devtools"))
@@ -156,6 +157,7 @@ export function cli(run: Run): Command {
       run.code = await createCommand(dir, {
         name: o.name,
         template: o.template,
+        framework: o.framework,
         os: o.os,
         devtools: o.devtools,
         pm: o.pm,

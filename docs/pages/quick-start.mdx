@@ -30,21 +30,20 @@ Open a new terminal afterwards so `bun` is on the `PATH`. If Bun is already inst
 bun create skathi my-app
 ```
 
-It asks for the app's name, a template, the platforms to package for, whether published builds keep devtools, and the package manager. The template decides the framework:
+It asks for the app's name, a template, the platforms to package for, whether published builds keep devtools, and the package manager. `minimal` then asks for Vue or Svelte; every other template is written in one of them:
 
-| Template   | Framework | What it is                                                      |
-| ---------- | --------- | --------------------------------------------------------------- |
-| `showcase` | Vue       | every SDK feature, one page each, with `vue-router` and `pinia` |
-| `minimal`  | Vue       | one window, one component                                       |
-| `svelte`   | Svelte 5  | the minimal app in Svelte                                       |
-| `player`   | Svelte 5  | a music player dressed in shaders                               |
-| `weather`  | Vue       | a weather app whose sky and rain are drawn by shaders           |
+| Template   | Framework       | What it is                                                      |
+| ---------- | --------------- | --------------------------------------------------------------- |
+| `showcase` | Vue             | every SDK feature, one page each, with `vue-router` and `pinia` |
+| `minimal`  | Vue or Svelte 5 | one window, one component                                       |
+| `player`   | Svelte 5        | a music player dressed in shaders                               |
+| `weather`  | Vue             | a weather app whose sky and rain are drawn by shaders           |
 
 `player` and `weather` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
 
 ```bash
 bun create skathi my-app --template minimal --yes
-bun create skathi my-app --template svelte --yes
+bun create skathi my-app --template minimal --framework svelte --yes
 ```
 
 Then install the dependencies:

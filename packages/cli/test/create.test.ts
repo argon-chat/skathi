@@ -190,6 +190,23 @@ test("an unknown template is refused before anything is written", async () => {
   expect(existsSync(dir)).toBe(false);
 });
 
+test("--framework picks minimal's flavour and refuses a template in the other framework", async () => {
+  const svelte = fresh();
+  expect(await createCommand(svelte, { template: "minimal", framework: "svelte", yes: true, color: false })).toBe(0);
+  expect(existsSync(join(svelte, "src/App.svelte"))).toBe(true);
+  const only = fresh();
+  expect(await createCommand(only, { framework: "svelte", yes: true, color: false })).toBe(0);
+  expect(existsSync(join(only, "src/App.svelte"))).toBe(true);
+  const vue = fresh();
+  expect(await createCommand(vue, { template: "svelte", framework: "vue", yes: true, color: false })).toBe(0);
+  expect(existsSync(join(vue, "src/App.vue"))).toBe(true);
+  const weather = fresh();
+  await expect(createCommand(weather, { template: "weather", framework: "svelte", yes: true })).rejects.toThrow(
+    ConfigError,
+  );
+  expect(existsSync(weather)).toBe(false);
+});
+
 test("keeping devtools keeps them in sk publish", () => {
   const dir = fresh();
   create(dir, { keepDevtools: true });
