@@ -1,6 +1,4 @@
 ---
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { GetStaticPaths } from "astro";
 import { Image } from "astro:assets";
 import { render } from "astro:content";
@@ -43,8 +41,7 @@ const toc = headings.filter((heading) => heading.depth === 2);
 const path = postUrl(post.id);
 const site = Astro.site ?? new URL("https://skathi.land/");
 const url = new URL(path, site).href;
-const card = `/og/blog/${post.id}.png`;
-const ogImage = existsSync(join(process.cwd(), "public", card)) ? card : undefined;
+const ogImage = `/og/blog/${post.id}.png`;
 const structuredData = {
   "@type": "BlogPosting",
   headline: title,
@@ -55,7 +52,7 @@ const structuredData = {
   publisher: { "@id": organizationId(site) },
   url,
   mainEntityOfPage: url,
-  image: new URL(ogImage ?? hero?.image?.src ?? "/social.png", site).href,
+  image: new URL(ogImage, site).href,
   inLanguage: "en",
   keywords: tags.join(", "),
   isPartOf: { "@type": "Blog", name: blogTitle, url: new URL(blogHome, site).href },
