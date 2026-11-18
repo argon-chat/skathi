@@ -43,7 +43,7 @@ describe("container queries", () => {
       );
       expect(wide.w).toBe(120);
       expect((await box("body")).x).toBeGreaterThan(wide.x);
-      expect(await js("getComputedStyle(document.getElementById('shelf')).containerType")).toBe("inline-size");
+      expect(await js<string>("getComputedStyle(document.getElementById('shelf')).containerType")).toBe("inline-size");
 
       const outer = Number(await js("String(__SK_TEST_CQ__.appWindow.getBounds().width)"));
       await js(`__SK_TEST_CQ__.appWindow.setBounds({ width: ${outer - 200} }); "ok"`);
