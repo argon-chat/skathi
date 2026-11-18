@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 
 const BARREL = 2;
 const ERASER = 32;
@@ -10,9 +10,30 @@ interface Dot {
   y: number;
   size: number;
 }
+interface Reading {
+  x: number;
+  y: number;
+  pressure: number;
+  tiltX: number;
+  tiltY: number;
+  t: number;
+}
+/** One stroke as `cargo run -p sk-tree --example predict-eval` reads it. */
+interface TraceStroke {
+  pointerType: string;
+  down: Reading;
+  moves: { t: number; readings: Reading[] }[];
+  up: Reading | null;
+}
 
 const canvas = ref<HTMLCanvasElement | null>(null);
+const overlay = ref<HTMLCanvasElement | null>(null);
 const coalesced = ref(true);
+const predicted = ref(true);
+const rec = reactive({ on: false, strokes: 0, status: "" });
+const recordLabel = computed(() =>
+  rec.strokes > 0 ? `Save ${rec.strokes} stroke${rec.strokes === 1 ? "" : "s"}…` : rec.on ? "Stop" : "Record",
+);
 const hud = reactive({
   type: "-",
   id: 0,
@@ -28,8 +49,11 @@ const hud = reactive({
 });
 
 let ctx: CanvasRenderingContext2D | null = null;
+let tail: CanvasRenderingContext2D | null = null;
 let last: Dot | null = null;
 let tool: Tool = "ink";
+let trace: TraceStroke[] = [];
+let stroke: TraceStroke | null = null;
 
 function fit() {
   const el = canvas.value;
@@ -37,6 +61,17 @@ function fit() {
   const dpr = devicePixelRatio || 1;
   const w = Math.round(el.clientWidth * dpr);
   const h = Math.round(el.clientHeight * dpr);
+  const top = overlay.value;
+  if (top && (top.width !== w || top.height !== h || !tail)) {
+    top.width = w;
+    top.height = h;
+    tail = top.getContext("2d");
+    if (tail) {
+      tail.setTransform(dpr, 0, 0, dpr, 0, 0);
+      tail.lineCap = "round";
+      tail.lineJoin = "round";
+    }
+  }
   if (el.width === w && el.height === h && ctx) return;
   const keep = ctx && el.width > 0 && el.height > 0 ? ctx.getImageData(0, 0, el.width, el.height) : null;
   el.width = w;
@@ -60,6 +95,10 @@ function clear() {
   ctx.fillStyle = "#fbfaf7";
   ctx.fillRect(0, 0, el.width, el.height);
   ctx.restore();
+  if (!rec.on && rec.strokes > 0) {
+    trace = [];
+    Object.assign(rec, { strokes: 0, status: "" });
+  }
 }
 
 function toolFor(e: PointerEvent): Tool {
@@ -86,6 +125,67 @@ function segment(a: Dot, b: Dot) {
   ctx.stroke();
 }
 
+function clearTail() {
+  const top = overlay.value;
+  if (!top || !tail) return;
+  tail.save();
+  tail.setTransform(1, 0, 0, 1, 0, 0);
+  tail.clearRect(0, 0, top.width, top.height);
+  tail.restore();
+}
+
+/** The predicted events, drawn on the overlay until the next move replaces them. */
+function drawTail(e: PointerEvent) {
+  clearTail();
+  if (!tail || !last || !predicted.value || tool === "eraser") return;
+  const ahead = e.getPredictedEvents();
+  if (ahead.length === 0) return;
+  tail.strokeStyle = "rgba(229, 72, 77, 0.8)";
+  tail.lineWidth = last.size;
+  tail.beginPath();
+  tail.moveTo(last.x, last.y);
+  for (const p of ahead) tail.lineTo(p.offsetX, p.offsetY);
+  tail.stroke();
+}
+
+function reading(e: PointerEvent): Reading {
+  return { x: e.clientX, y: e.clientY, pressure: e.pressure, tiltX: e.tiltX, tiltY: e.tiltY, t: e.timeStamp };
+}
+
+/** Starts recording; while recording, or with an unsaved recording, saves it. */
+async function record() {
+  if (!rec.on && rec.strokes === 0) {
+    trace = [];
+    Object.assign(rec, { on: true, status: "recording the next strokes" });
+    return;
+  }
+  rec.on = false;
+  stroke = null;
+  if (rec.strokes === 0) {
+    rec.status = "";
+    return;
+  }
+  try {
+    const file = await showSaveFilePicker({
+      id: "pen-draw-trace",
+      suggestedName: "pen-trace.json",
+      types: [{ description: "Pointer trace", accept: { "application/json": [".json"] } }],
+    });
+    const out = await file.createWritable();
+    await out.write(JSON.stringify({ format: "skathi-pointer-trace", version: 1, strokes: trace }));
+    await out.close();
+    rec.status = `saved ${trace.length} strokes to ${file.name}`;
+    trace = [];
+    rec.strokes = 0;
+  } catch (err) {
+    rec.status = `not saved (${err instanceof Error ? err.message : String(err)}); Clear drops it`;
+  }
+}
+
+function key(e: KeyboardEvent) {
+  if (e.key === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) void record();
+}
+
 function show(e: PointerEvent, samples: number) {
   hud.type = e.pointerType;
   hud.id = e.pointerId;
@@ -108,38 +208,56 @@ function down(e: PointerEvent) {
   last = dotFor(e);
   segment(last, last);
   show(e, 1);
+  if (rec.on) stroke = { pointerType: e.pointerType, down: reading(e), moves: [], up: null };
 }
 
 function move(e: PointerEvent) {
-  const events = coalesced.value ? e.getCoalescedEvents() : [];
-  const samples = events.length > 0 ? events : [e];
+  const events = e.getCoalescedEvents();
+  const samples = coalesced.value && events.length > 0 ? events : [e];
   show(e, samples.length);
+  stroke?.moves.push({ t: e.timeStamp, readings: (events.length > 0 ? events : [e]).map(reading) });
   if (!last) return;
   for (const s of samples) {
     const next = dotFor(s);
     segment(last, next);
     last = next;
   }
+  drawTail(e);
 }
 
 function up(e: PointerEvent) {
   show(e, 1);
   last = null;
+  clearTail();
+  if (stroke) {
+    stroke.up = reading(e);
+    trace.push(stroke);
+    rec.strokes = trace.length;
+    stroke = null;
+  }
 }
 
 onMounted(() => {
   fit();
   addEventListener("resize", fit);
+  addEventListener("keydown", key);
 });
-onBeforeUnmount(() => removeEventListener("resize", fit));
+onBeforeUnmount(() => {
+  removeEventListener("resize", fit);
+  removeEventListener("keydown", key);
+});
 </script>
 
 <template>
   <main class="page">
     <header class="bar">
       <strong>Pen draw</strong>
-      <span class="hint">Tip draws, barrel button highlights, eraser erases. A mouse draws too.</span>
+      <span class="hint">Tip draws, barrel button highlights, eraser erases.</span>
       <label class="toggle"><input v-model="coalesced" type="checkbox" /> coalesced events</label>
+      <label class="toggle"><input v-model="predicted" type="checkbox" /> predicted tail</label>
+      <button type="button" :class="{ recording: rec.on }" title="R" @click="record">
+        {{ recordLabel }}
+      </button>
       <button type="button" @click="clear">Clear</button>
     </header>
     <div class="sheet">
@@ -152,6 +270,7 @@ onBeforeUnmount(() => removeEventListener("resize", fit));
         @pointercancel="up"
         @contextmenu.prevent
       />
+      <canvas ref="overlay" class="tail" />
     </div>
     <footer class="hud">
       <span>{{ hud.type }} #{{ hud.id }}</span>
@@ -162,6 +281,7 @@ onBeforeUnmount(() => removeEventListener("resize", fit));
       <span>altitude {{ hud.altitude.toFixed(0) }}° azimuth {{ hud.azimuth.toFixed(0) }}°</span>
       <span>twist {{ hud.twist }}°</span>
       <span>{{ hud.samples }} sample{{ hud.samples === 1 ? "" : "s" }}/event</span>
+      <span v-if="rec.status" class="status">{{ rec.status }}</span>
     </footer>
   </main>
 </template>
@@ -214,10 +334,22 @@ body,
   background: #3a3546;
   color: inherit;
 }
+.bar button.recording {
+  border-color: #e5484d;
+  color: #ffb3b5;
+}
 .sheet {
+  position: relative;
   flex: 1;
   min-height: 0;
   margin: 0 16px;
+}
+.tail {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .paper {
   display: block;
@@ -235,5 +367,8 @@ body,
   padding: 10px 16px;
   color: #c9c3d6;
   font-variant-numeric: tabular-nums;
+}
+.hud .status {
+  color: #ffb3b5;
 }
 </style>
