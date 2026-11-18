@@ -20,6 +20,7 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "element-from-point": "api.Document.elementFromPoint",
   "scroll-into-view": "api.Element.scrollIntoView",
   "match-media": "api.Window.matchMedia",
+  contenteditable: "html.global_attributes.contenteditable",
   "fullscreen-api": "api.Element.requestFullscreen",
   "web-animations": "api.Element.animate",
   "view-transitions": "api.Document.startViewTransition",

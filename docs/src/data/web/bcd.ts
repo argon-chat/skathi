@@ -199,6 +199,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.Range",
     mdn: "https://developer.mozilla.org/docs/Web/API/Range",
   },
+  contenteditable: {
+    key: "html.global_attributes.contenteditable",
+    mdn: "https://developer.mozilla.org/docs/Web/HTML/Reference/Global_attributes/contenteditable",
+  },
   "match-media": {
     key: "api.Window.matchMedia",
     mdn: "https://developer.mozilla.org/docs/Web/API/Window/matchMedia",

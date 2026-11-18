@@ -451,6 +451,30 @@ const domAndEvents = section("DOM and events", [
     ],
     related: ["selection"],
   }),
+  api("contenteditable", "contenteditable", NO, "Lets the user edit an element's content in place.", {
+    notes: ["The attribute only makes the element focusable: typing, pasting and IME input change nothing."],
+    limitations: [
+      "`isContentEditable`, `document.execCommand()` and `document.designMode` do not exist.",
+      "Editors built on contenteditable do not work: CodeMirror, ProseMirror, Tiptap, Lexical, Quill, Slate and the like.",
+    ],
+    workaround:
+      "Use `<input>` or `<textarea>`, Skathi's native text editor with IME, undo and the clipboard. For formatted text, edit the source (Markdown, for example) in a `<textarea>` and render a preview beside it.",
+    related: ["selection", "input-event"],
+    aliases: [
+      "contentEditable",
+      "isContentEditable",
+      "execCommand",
+      "designMode",
+      "rich text editor",
+      "code editor",
+      "CodeMirror",
+      "ProseMirror",
+      "Tiptap",
+      "Lexical",
+      "Quill",
+      "Slate",
+    ],
+  }),
   method("matchMedia", OK, "Evaluates a media query and reports changes to its result.", {
     aliases: ["window.matchMedia", "MediaQueryList"],
   }),

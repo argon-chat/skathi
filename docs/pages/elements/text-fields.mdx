@@ -172,6 +172,12 @@ Setting `value` from script replaces the text and clears the undo history, which
 - **Disabled fields stay focusable**, and their text can still be selected and copied.
 - **A `disabled` `<fieldset>` does not disable the fields inside it.** Disable each one.
 
+## No contenteditable
+
+`<input>` and `<textarea>` are the only editable elements. [`contenteditable`](/web-platform/contenteditable/) is not supported: it makes an element focusable, but typing, pasting and IME input change nothing, and `document.execCommand()` does not exist. Editors built on it, such as CodeMirror, ProseMirror, Tiptap, Lexical, Quill and Slate, load but cannot be typed into.
+
+For code or notes, use a `<textarea>`. For formatted text, edit the source, Markdown for example, in a `<textarea>` and render a preview beside it.
+
 ## Types
 
 `text`, `search`, `url`, `tel`, `email`, `password` and `number` are all a single-line text field. `password` draws one bullet per character and refuses copy and cut; switching `type` between `password` and `text` shows and hides the value. `number` adds `valueAsNumber`, but there is no spinner and no input filtering.
@@ -257,6 +263,7 @@ The field is styled like any box: `font`, `color`, `padding`, `border`, `backgro
 - No constraint validation; `maxlength` is not enforced.
 - No spell checking, no `autofocus`, no date or time pickers, no number spinner.
 - Disabled fields stay focusable.
+- No `contenteditable`, so no rich text or code editor libraries.
 
 ## See also
 
