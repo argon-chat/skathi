@@ -20,9 +20,10 @@ use webview2_com::{
     AcceleratorKeyPressedEventHandler, CoreWebView2EnvironmentOptions,
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
-    NavigationCompletedEventHandler, NavigationStartingEventHandler,
-    NewWindowRequestedEventHandler, PermissionRequestedEventHandler, ProcessFailedEventHandler,
-    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
+    MoveFocusRequestedEventHandler, NavigationCompletedEventHandler,
+    NavigationStartingEventHandler, NewWindowRequestedEventHandler,
+    PermissionRequestedEventHandler, ProcessFailedEventHandler, WebMessageReceivedEventHandler,
+    WebResourceRequestedEventHandler,
 };
 use windows::core::{Interface, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
@@ -366,6 +367,26 @@ fn attach(
                     WPARAM(key as usize),
                     LPARAM(lparam as isize),
                 );
+                Ok(())
+            })),
+            &mut token,
+        )?;
+    }
+
+    unsafe {
+        let sink = inner.borrow().sink.clone();
+        controller.add_MoveFocusRequested(
+            &MoveFocusRequestedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let mut reason = COREWEBVIEW2_MOVE_FOCUS_REASON(0);
+                args.Reason(&mut reason)?;
+                let forward = match reason {
+                    COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT => true,
+                    COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS => false,
+                    _ => return Ok(()),
+                };
+                args.SetHandled(true)?;
+                sink.send(FrameEvent::FocusOut { forward });
                 Ok(())
             })),
             &mut token,

@@ -61,6 +61,10 @@ pub enum FrameEvent {
         wire: String,
     },
     Cursor(gpui::CursorStyle),
+    /// `Tab` (`forward`) or `Shift-Tab` went past the document's last or first focusable element.
+    FocusOut {
+        forward: bool,
+    },
 }
 
 /// Callable from the UI thread at any time; never re-enters JS — the event is queued for the next
@@ -466,6 +470,18 @@ fn deliver(window: &mut Window, cx: &mut App) {
                 });
                 if changed {
                     window.refresh();
+                }
+            }
+            FrameEvent::FocusOut { forward } => {
+                let before = window.focused(cx);
+                if forward {
+                    window.focus_next(cx);
+                } else {
+                    window.focus_prev(cx);
+                }
+                // Nothing else takes the focus: the keys go back to the document, which starts over.
+                if window.focused(cx) == before {
+                    focus(id, true);
                 }
             }
             FrameEvent::Message { origin, wire } => {

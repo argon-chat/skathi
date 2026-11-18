@@ -32,12 +32,17 @@
       //                  {t:"focus"}
       //   here -> host   {t:"ready"}
       //                  {t:"msg", o: origin, w: wire}            window.parent.postMessage
+      //                  {t:"load"}                               the iframe's load event
+      // WebView2 carries both directions over `chrome.webview`; WKWebView sends over the `skRelay`
+      // message handler (JSON text) and calls `__skRelay(message)` here.
       // `wire` is the codec of packages/runtime/src/iframe.ts, repeated below in plain JS.
       (() => {
         "use strict";
         const bridge = window.chrome && window.chrome.webview;
-        if (!bridge) return;
-        const send = bridge.postMessage.bind(bridge);
+        const handlers = window.webkit && window.webkit.messageHandlers;
+        const relay = handlers && handlers.skRelay;
+        if (!bridge && !relay) return;
+        const send = bridge ? bridge.postMessage.bind(bridge) : (m) => relay.postMessage(JSON.stringify(m));
         const APP = location.origin;
         let frame = null;
 
@@ -180,11 +185,14 @@
           if (m.fullscreen) frame.setAttribute("allowfullscreen", "");
           if (m.srcdoc != null) frame.srcdoc = m.srcdoc;
           else frame.src = m.src;
+          const mine = frame;
+          frame.addEventListener("load", () => {
+            if (mine === frame) send({ t: "load" });
+          });
           document.body.appendChild(frame);
         }
 
-        bridge.addEventListener("message", (e) => {
-          const m = e.data;
+        function receive(m) {
           if (!m || typeof m !== "object") return;
           switch (m.t) {
             case "nav":
@@ -205,7 +213,9 @@
               if (frame) frame.focus({ preventScroll: true });
               break;
           }
-        });
+        }
+        if (bridge) bridge.addEventListener("message", (e) => receive(e.data));
+        else Object.defineProperty(window, "__skRelay", { value: receive });
 
         window.addEventListener("message", (e) => {
           // Only the app's own iframe speaks to the app: not a frame nested in it,

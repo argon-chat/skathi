@@ -1,5 +1,6 @@
 //! `<iframe>`'s document, in the platform's webview. Implements `sk_tree::iframe::Backend` over WebView2 on
-//! Windows (`win`); elsewhere [`backend`] returns `None` and every `<iframe src>` answers `error`.
+//! Windows (`win`) and WKWebView on macOS (`mac`); elsewhere [`backend`] returns `None` and every
+//! `<iframe src>` answers `error`.
 //!
 //! The webview never loads the app's document directly: its top-level page is the relay page (`relay.html`,
 //! which also documents the message protocol) holding the one real `<iframe>`. Both are served from the
@@ -9,8 +10,14 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(windows)]
 mod win;
+
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use mac::frame_in_view;
 
 pub struct Config {
     pub assets: Rc<dyn Fn(&str) -> Option<Vec<u8>>>,
@@ -21,7 +28,11 @@ pub struct Config {
 
 /// The origin of the relay page and the app's files inside the webview. `.invalid` never resolves
 /// (RFC 6761), so a request the handler misses fails instead of reaching a network.
+#[cfg(not(target_os = "macos"))]
 pub const APP_ORIGIN: &str = "https://app.vn.invalid";
+/// WKWebView hands no `https:` request to the app, so its files come from a scheme of their own.
+#[cfg(target_os = "macos")]
+pub const APP_ORIGIN: &str = "sk-app://app";
 pub const RELAY_PATH: &str = "/__sk_iframe__/relay.html";
 
 pub fn backend(config: Config) -> Option<Rc<dyn sk_tree::iframe::Backend>> {
@@ -29,7 +40,11 @@ pub fn backend(config: Config) -> Option<Rc<dyn sk_tree::iframe::Backend>> {
     {
         Some(win::WebView2::new(config))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Some(mac::WebKit::new(config))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = config;
         None
@@ -123,17 +138,17 @@ mod tests {
     fn the_apps_own_urls_become_the_internal_origin() {
         assert_eq!(
             internal_url("app://redjs/games/pong/index.html", PAGE),
-            "https://app.vn.invalid/games/pong/index.html"
+            format!("{APP_ORIGIN}/games/pong/index.html")
         );
         assert_eq!(
             internal_url("/games/pong/index.html?x=1#y", PAGE),
-            "https://app.vn.invalid/games/pong/index.html?x=1#y"
+            format!("{APP_ORIGIN}/games/pong/index.html?x=1#y")
         );
         assert_eq!(
             internal_url("games/pong/index.html", PAGE),
-            "https://app.vn.invalid/games/pong/index.html"
+            format!("{APP_ORIGIN}/games/pong/index.html")
         );
-        assert_eq!(internal_url("app://redjs", PAGE), "https://app.vn.invalid/");
+        assert_eq!(internal_url("app://redjs", PAGE), format!("{APP_ORIGIN}/"));
     }
 
     #[test]
