@@ -165,7 +165,7 @@ The window that opens belongs to your process. Close it and `wait` returns; your
 | `lottie`          | on      | `<lottie>` and `<sk-sticker>`                                                    |
 | `video`           | on      | `<video>`, and WebM stickers with `lottie`                                       |
 | `hotkeys`         | on      | Global hotkeys: `appHotkeys` and `skathi::hotkeys`                               |
-| `webview`         | on      | `<iframe>` (WebView2, Windows)                                                   |
+| `webview`         | on      | `<iframe>` (WebView2 on Windows, WKWebView on macOS)                             |
 | `icu-root`        | off     | Links only ICU's root locale, about 12 MB less                                   |
 | `battery`         | off     | The Battery Status API                                                           |
 | `no-devtools`     | off     | Compiles out the devtools protocol and the inspector                             |

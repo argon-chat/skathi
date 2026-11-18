@@ -32,7 +32,7 @@ Each page opens with what you would build with the element and short recipes in 
 | [`<img>`](/elements/img/)                            | Decodes images off the UI thread, shares decodes between elements and keeps small copies of shrunk images. |
 | [`<svg>`](/elements/svg/)                            | Inline SVG is one leaf: its subtree is serialized and drawn by resvg, without per-shape hit testing.       |
 | [`<canvas>`](/elements/canvas/)                      | A 2D context rasterized on the CPU, or a WebGPU context on D3D12, Metal or Vulkan.                         |
-| [`<iframe>`](/elements/iframe/)                      | A web document in WebView2, composited under the app. Windows only.                                        |
+| [`<iframe>`](/elements/iframe/)                      | A web document in the system webview, composited under the app.                                            |
 | [`<input>` and `<textarea>`](/elements/text-fields/) | Native text editing with IME, undo and the clipboard; no selection API, no constraint validation.          |
 | [Form controls](/elements/form-controls/)            | Checkboxes, radios, range, color, `<select>` and file inputs, each drawn or picked natively.               |
 | [`<a>`](/elements/links/)                            | `<a href>` opens web and mail links in the system, and `<a download>` saves through a Save As dialog.      |

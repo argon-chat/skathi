@@ -1,8 +1,8 @@
 ---
 title: "<iframe>"
 label: "<iframe>"
-metaTitle: "<iframe>: a web document in WebView2"
-description: What <iframe> is in Skathi, a web document in the system's WebView2 composited under the app on Windows. What it can load, messaging with postMessage, origins, input, sizing, the limits, and macOS and Linux.
+metaTitle: "<iframe>: a web document in the system webview"
+description: What <iframe> is in Skathi, a web document in the system webview (WebView2 on Windows, WKWebView on macOS) composited under the app. What it can load, messaging with postMessage, origins, input, sizing, the limits, and how the platforms differ.
 section: Elements
 order: 10
 ---
@@ -11,9 +11,9 @@ import Demo from "../../src/components/Demo.astro";
 
 Sometimes part of the app already exists as a web page: a help center, your service's account or billing page, a report a server renders as HTML, a third-party widget. `<iframe>` shows it inside the app, under your own UI, without rewriting it.
 
-Skathi has no browser engine of its own, so the document runs in the system's webview, WebView2, in a separate browser process, and is composited into the element's box. It is the one place in a Skathi app where HTML and its JavaScript run in a real browser, with its own network stack, cookies and sandbox. The document is not a Skathi component: it cannot import your Vue or Svelte code or reach your state, and the two sides talk through `postMessage`.
+Skathi has no browser engine of its own, so the document runs in the system's webview, WebView2 on Windows and WebKit's WKWebView on macOS, in a separate browser process, and is composited into the element's box. It is the one place in a Skathi app where HTML and its JavaScript run in a real browser, with its own network stack, cookies and sandbox. The document is not a Skathi component: it cannot import your Vue or Svelte code or reach your state, and the two sides talk through `postMessage`.
 
-It works on **Windows only**. On macOS and Linux an `<iframe>` is an empty box that fires `error`, so check `skFeatures.iframe` and offer a fallback.
+Where the system has no webview Skathi can use, an `<iframe>` is an empty box that fires `error`, so check `skFeatures.iframe` and offer a fallback. [Platforms](#platforms) lists where it works and how the two webviews differ.
 
 <Demo id="elements/iframe" caption="A web page in an iframe under the app's own UI." />
 
@@ -42,7 +42,7 @@ function ping() {
 
 <template>
   <iframe v-if="webView" ref="frame" class="doc" src="help/index.html" />
-  <p v-else>Help needs Windows.</p>
+  <p v-else>Help is not available on this system.</p>
   <button @click="ping">Ping</button>
   <p>{{ reply }}</p>
 </template>
@@ -76,7 +76,7 @@ function ping() {
 {#if webView}
   <iframe bind:this={frame} class="doc" src="help/index.html" title="Help"></iframe>
 {:else}
-  <p>Help needs Windows.</p>
+  <p>Help is not available on this system.</p>
 {/if}
 <button onclick={ping}>Ping</button>
 <p>{reply}</p>
@@ -166,7 +166,8 @@ const state = ref<"loading" | "ready" | "failed">("loading");
 
 ## Things to watch for
 
-- **Windows only.** Check `skFeatures.iframe`; it is also `false` on Windows without the WebView2 runtime and in a host built without the `webview` feature.
+- **Not on every system.** Check `skFeatures.iframe`; it is `false` where the system has no webview Skathi can use, on Windows without the WebView2 runtime, and in a host built without the `webview` feature.
+- **Two engines.** The document runs in Chromium on Windows and WebKit on macOS. A page from the web that signs in with cookies may not work on macOS, where WebKit blocks third-party cookies; see [Platforms](#platforms).
 - **Your UI draws over it, its background does not show under it.** The document is drawn under the app through a hole cut in the app's drawing, so a menu over the iframe draws on top, but `opacity` on the iframe does not reach the document.
 - **No permissions.** Skathi denies every permission request from the webview: no camera, microphone, location or notifications, whatever `allow` says.
 - **Eight at most.** At most 8 documents are open at once across the app; the ninth `<iframe>` fires `error`.
@@ -177,10 +178,10 @@ const state = ref<"loading" | "ready" | "failed">("loading");
 | `src`                                             | Loads                                                                                                                    |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | A relative or root-relative path, `app://redjs/…` | The app's own file, served by Skathi from the package, or in development from the app's root or its `public/` directory. |
-| `https:`, `data:`, `//host/…`                     | Loaded by WebView2 from the network, with its own network stack, cache and cookies.                                      |
+| `https:`, `data:`, `//host/…`                     | Loaded by the webview from the network, with its own network stack, cache and cookies.                                   |
 | `srcdoc`                                          | That HTML. It wins over `src`.                                                                                           |
 
-Inside the webview, the app's files are served from the origin `https://app.vn.invalid`, a name that never resolves, so a request Skathi does not answer fails instead of going to the network. A document from the app's files sees that as its `location.origin` and as the origin of messages from the app. The app sees its own origin in messages from such a document.
+Inside the webview, the app's files are served from an origin of their own: `https://app.vn.invalid` on Windows, a name that never resolves, so a request Skathi does not answer fails instead of going to the network, and `sk-app://app` on macOS, a scheme only Skathi answers. Either is a secure context. A document from the app's files sees that origin as its `location.origin` and as the origin of messages from the app. The app sees its own origin in messages from such a document.
 
 ## Attributes
 
@@ -198,13 +199,13 @@ Inside the webview, the app's files are served from the origin `https://app.vn.i
 
 ## Events
 
-`load` and `error` fire once per navigation of the element: when it is created, and after each change of `src` or the other attributes above. Links followed inside the document fire nothing. Unlike a browser, which never fires `error` on an iframe, Skathi fires `error` when the page fails to load, when there is no webview, when the browser process exits, or when too many documents are open. The reason goes to the console.
+`load` and `error` fire once per navigation of the element: when it is created, and after each change of `src` or the other attributes above. Links followed inside the document fire nothing. Unlike a browser, which never fires `error` on an iframe, Skathi fires `error` when the page fails to load or its server answers with an HTTP error, when there is no webview, when the browser process exits, or when too many documents are open. The reason goes to the console.
 
 ## Input and focus
 
-An `<iframe>` is focusable by default. While it has focus, the keyboard goes to the document, except F5, F11, F12, combinations with Alt, and Escape while the app is full screen, which stay with the app.
+An `<iframe>` is focusable by default. While it has focus, the keyboard goes to the document, input methods included, except F5, F11, F12 and Escape while the app is full screen, which stay with the app. On Windows, combinations with Alt stay with the app too; on macOS, a Command shortcut the document does not use goes on to the app and its menus. `Tab` past the document's last focusable element, or `Shift+Tab` past its first, moves the focus to the app's next or previous element; with nothing else to focus, the document keeps it.
 
-Mouse buttons (left, middle, right) and the wheel go to the document where the app's hit test lands on the iframe's box, so an element positioned over the iframe gets the clicks there. Shift and Ctrl are passed with them; Alt and the Windows key are not. One wheel notch scrolls 100 pixels. Touch and pen input is not forwarded. The cursor follows the document's.
+Mouse buttons (left, middle, right) and the wheel go to the document where the app's hit test lands on the iframe's box, so an element positioned over the iframe gets the clicks there. On Windows, Shift and Ctrl are passed with them, Alt and the Windows key are not, and one wheel notch scrolls 100 pixels. On macOS the document gets the system's own events, with every modifier, and trackpad scrolling keeps its momentum and bounce. Touch and pen input is not forwarded, and neither are trackpad pinches. The cursor follows the document's.
 
 ## Size and CSS
 
@@ -218,20 +219,26 @@ When the iframe is not painted (`display: none`, scrolled out of view), its docu
 
 - A document exists while the element is in the document and has a `src` or `srcdoc`. Moving the element keeps its document; removing it closes the document.
 - At most 8 documents are open at once, across the app. The ninth `<iframe>` fires `error`.
-- The webview's own top-level navigation, new windows and popups are blocked. `alert()` and `confirm()` show no dialog.
-- Zooming, swipe navigation, autofill and password saving are off. The webview's devtools and context menu are on in development builds only.
+- The webview's own top-level navigation, new windows and popups are blocked. `alert()`, `confirm()` and `prompt()` show no dialog. A file input opens the system's file picker.
+- Zooming, swipe navigation, autofill and password saving are off. The webview's devtools and context menu are on in development builds only; on macOS the devtools are Safari's Web Inspector, from Safari's Develop menu.
 - Documents close when their window closes and when the app quits.
-- The webview's storage lives in the app's data directory, under `webview`.
+- On Windows the webview's storage lives in the app's data directory, under `webview`. On macOS it is WebKit's own store for the app.
 
 ## Platforms
 
 | Platform | `<iframe>`                                                                                         |
 | -------- | -------------------------------------------------------------------------------------------------- |
 | Windows  | WebView2, when the WebView2 runtime is installed. It ships with Windows 11 and current Windows 10. |
-| macOS    | An empty box that fires `error`.                                                                   |
+| macOS    | WKWebView, part of macOS.                                                                          |
 | Linux    | An empty box that fires `error`.                                                                   |
 
-`skFeatures.iframe` is `false` wherever there is no webview: on macOS and Linux, on Windows without the WebView2 runtime, and in a host built without the `webview` Cargo feature. Without the feature the element also prints a warning naming it; see [Features and size](/embedding/features/).
+`skFeatures.iframe` is `false` wherever there is no webview: on Linux, on Windows without the WebView2 runtime, and in a host built without the `webview` Cargo feature. Without the feature the element also prints a warning naming it; see [Features and size](/embedding/features/).
+
+The document runs in a different engine on each system, so test a page from the web on both. Where the two webviews differ:
+
+- **Cookies.** The document's top-level page is Skathi's, so a page from the web is a third party in it. WebKit blocks third-party cookies: a page that keeps its sign-in in cookies has to ask for them with `document.requestStorageAccess()`.
+- **Full screen.** `requestFullscreen()` inside the document is refused on macOS, `allowfullscreen` or not.
+- **Keys.** Alt combinations stay with the app on Windows; on macOS, Command shortcuts the document leaves unused reach the app.
 
 ## See also
 
