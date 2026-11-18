@@ -3,6 +3,7 @@ title: GPU frames on Windows
 description: Present Direct3D 11 and Direct3D 12 textures to <sk-surface> without a CPU copy, share textures across devices, processes and Vulkan, and synchronise with keyed mutexes or fences.
 section: Embedding
 order: 5
+since: "0.4"
 ---
 
 On Windows, a frame for [`<sk-surface>`](/embedding/native-frames/) can stay on the GPU from the producer's render to the screen. There are three ways in, by where the producer's texture lives.

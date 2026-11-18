@@ -4,6 +4,7 @@ label: Svelte support
 description: Which Svelte 5 features work in a Skathi app, which work with limits and which do not, what to use instead, and the sk check code that reports each one.
 section: Guides
 order: 9
+since: "0.4"
 ---
 
 A Svelte app on Skathi is compiled by the app's own `svelte/compiler` (Svelte 5) and runs Svelte's own client runtime. Svelte talks to the DOM directly, and in Skathi that DOM is a native element tree with its own CSS engine. So runes, blocks, snippets, bindings, transitions and stores work as they do in a browser. The differences are where Svelte needs browser machinery Skathi does not have: an HTML parser and custom elements.

@@ -18,6 +18,8 @@ export interface ConfigNote {
   notes?: readonly string[];
   /** The key's value in its example; checked against the schema at build time. */
   example?: unknown;
+  /** The release the key arrived in, for a key without a Window API entry to say so. */
+  since?: string;
 }
 
 export const groups: readonly ConfigGroup[] = [
@@ -212,6 +214,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
       "[Best practices](/guides/best-practices/#choose-how-much-locale-data-to-ship) shows what changes in invariant mode.",
     ],
     example: "invariant",
+    since: "0.4.0",
   },
   publishDevtools: { example: true },
   check: { example: { allow: { SK2001: ["some-package", "src/legacy/**"] } } },

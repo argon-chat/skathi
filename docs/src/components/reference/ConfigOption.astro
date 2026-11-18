@@ -2,7 +2,7 @@
 import { Code } from "astro:components";
 import StatusMark from "./StatusMark.vue";
 import { constraintText, optionId, windowApiUrl, type ConfigOption } from "../../lib/config";
-import { currentVersion, inline, newLabel, statuses } from "../../lib/reference";
+import { inline, isNew, newLabel, statuses } from "../../lib/reference";
 
 interface Props {
   option: ConfigOption;
@@ -18,7 +18,13 @@ const notes = [...option.notes, ...option.limitations];
   <Heading id={optionId(option.path)} class="cfg-name">
     <code>{option.path}</code>
     {option.required && <span class="cfg-flag">required</span>}
-    {option.fresh && <span class="flag flag-new" title={option.fresh}>{newLabel}</span>}
+    {
+      option.fresh && (
+        <span class="flag flag-new" title={option.fresh}>
+          {newLabel}
+        </span>
+      )
+    }
   </Heading>
   {option.description && <p class="cfg-desc">{option.description}</p>}
   <dl class="cfg-meta">
@@ -51,7 +57,7 @@ const notes = [...option.notes, ...option.limitations];
               <span class="pin-status" data-status={s.status}>
                 <StatusMark status={s.status} size={14} />
                 {s.label}: {statuses[s.status].label.toLowerCase()}
-                {s.since && <span class:list={["cfg-since", { "is-new": s.since === currentVersion }]}>since {s.since}</span>}
+                {s.since && <span class:list={["cfg-since", { "is-new": isNew(s.since) }]}>since {s.since}</span>}
               </span>
             ))}
           </dd>

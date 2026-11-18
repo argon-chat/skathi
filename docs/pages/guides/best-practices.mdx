@@ -224,7 +224,7 @@ Some browser behaviors have nothing to act on in a desktop app. Skathi keeps the
 - **Storage.** [`localStorage`](/web-platform/local-storage/) and [IndexedDB](/web-platform/indexed-db/) are saved to disk. To move them to another folder or encrypt them at rest, call `appStorage.setStorageFolder(path, { encrypted: true })` before the first `indexedDB` call, which fixes the folder for the run. `localStorage` reaches the disk at most once per frame and when the app quits; `appStorage.flush()` writes the pending change at once.
 - **Events the host does not deliver.** Adding a listener for one, or an `@event` handler, prints an advisory that the handler will never fire. Treat that advisory as a bug in your code, not as noise.
 
-## Choose how much locale data to ship
+## Choose how much locale data to ship (since 0.4)
 
 On Windows and Linux, `Intl`, `toLocaleString()`, `localeCompare()` and `Intl.Segmenter` read ICU's locale data. A published app carries only the root locale in its exe, and `sk build` and `sk publish` put the rest beside it as `icu.skpk`, about 12 MB. An app that shows no locale-formatted text, or formats it itself, can leave that file out with `"intl": "invariant"` in [sk.config.json](/sk-config/#intl). `sk dev` and macOS apps always have every locale.
 

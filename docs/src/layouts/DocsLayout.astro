@@ -1,6 +1,5 @@
 ---
 import type { CollectionEntry } from "astro:content";
-import type { MarkdownHeading } from "astro";
 import "../styles/docs.css";
 import Brand from "../components/Brand.astro";
 import Head from "../components/Head.astro";
@@ -11,7 +10,19 @@ import Pup from "../components/Pup.astro";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
 import { blogHome } from "../lib/blog";
-import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, statusLabels, version } from "../lib/docs";
+import {
+  docsHome,
+  getDocs,
+  isNew,
+  markdownUrl,
+  newLabel,
+  pageUrl,
+  repository,
+  sections,
+  statusLabels,
+  version,
+  type TocHeading,
+} from "../lib/docs";
 
 interface Link {
   label: string;
@@ -20,7 +31,7 @@ interface Link {
 
 interface Props {
   page?: CollectionEntry<"docs">;
-  headings?: MarkdownHeading[];
+  headings?: TocHeading[];
   title?: string;
   description?: string;
   /** A page outside the content collection: the sidebar entry it belongs under, and its own trail and links. */
@@ -75,6 +86,7 @@ const sectionIcons = {
   Contributing: "code",
 } as const;
 const status = page?.data.status;
+const fresh = isNew(page?.data.since);
 const structuredData = {
   "@context": "https://schema.org",
   "@type": "TechArticle",
@@ -151,6 +163,11 @@ const structuredData = {
                             <span class="sr-only">{statusLabels[entry.data.status]}</span>
                           </span>
                         )}
+                        {isNew(entry.data.since) && (
+                          <span class="new-badge" title={newLabel}>
+                            New
+                          </span>
+                        )}
                       </a>
                     </li>
                   ))}
@@ -204,13 +221,16 @@ const structuredData = {
             </div>
           ) : (
             <div class="article-heading">
-              {status ? (
+              {status || fresh ? (
                 <div class="article-title">
                   <h1>{title}</h1>
-                  <span class="page-status" data-status={status}>
-                    <Icon name="flask" size={15} />
-                    {statusLabels[status]}
-                  </span>
+                  {status && (
+                    <span class="page-status" data-status={status}>
+                      <Icon name="flask" size={15} />
+                      {statusLabels[status]}
+                    </span>
+                  )}
+                  {fresh && <span class="new-badge new-badge-title">{newLabel}</span>}
                 </div>
               ) : (
                 <h1>{title}</h1>
@@ -280,6 +300,11 @@ const structuredData = {
                 data-toc-id={heading.slug}
               >
                 {heading.text}
+                {heading.fresh && (
+                  <span class="new-badge" title={newLabel}>
+                    New
+                  </span>
+                )}
               </a>
             ))
           }

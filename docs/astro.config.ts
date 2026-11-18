@@ -4,7 +4,7 @@ import vue from "@astrojs/vue";
 import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig, fontProviders } from "astro/config";
 import { codeTransformers } from "./src/lib/code";
-import docsContent from "./src/lib/docs-content";
+import docsContent, { sectionSince } from "./src/lib/docs-content";
 import slang from "./src/lib/slang";
 
 const site = process.env["SITE_URL"] ?? "https://skathi.land";
@@ -64,7 +64,7 @@ export default defineConfig({
     },
   ],
   markdown: {
-    processor: satteri({ mdastPlugins: [docsContent] }),
+    processor: satteri({ mdastPlugins: [docsContent], hastPlugins: [sectionSince] }),
     shikiConfig: {
       themes: { light: "github-light", dark: "github-dark" },
       defaultColor: false,

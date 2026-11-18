@@ -4,6 +4,7 @@ label: Vue support
 description: Which Vue 3 features work in a Skathi app, which work with limits and which do not, what to use instead, and the sk check code that reports each one.
 section: Guides
 order: 8
+since: "0.4"
 ---
 
 A Skathi app runs Vue 3.5's own `@vue/runtime-core` and compiles its components with Vue's own SFC compiler. Only the renderer underneath is Skathi's: instead of creating DOM nodes in a browser, it builds Skathi's native element tree. So everything Vue does above the DOM (reactivity, components, slots, lifecycle, `<script setup>`, Suspense, KeepAlive) behaves as it does in a browser. The differences are where Vue leans on browser machinery Skathi does not have: an HTML parser, custom elements, Vapor's renderer.

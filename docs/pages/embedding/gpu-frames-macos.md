@@ -3,6 +3,7 @@ title: GPU frames on macOS
 description: Present Metal textures, IOSurfaces and CVPixelBuffers to <sk-surface> without a CPU copy, from Skathi's own MTLDevice, another device or process, VideoToolbox or AVFoundation, synchronised with MTLSharedEvent.
 section: Embedding
 order: 6
+since: "0.4"
 ---
 
 On macOS, a frame for [`<sk-surface>`](/embedding/native-frames/) can stay on the GPU from the producer's render to the screen. Skathi renders with Metal; pick the path by where the producer's pixels are:

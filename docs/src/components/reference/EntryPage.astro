@@ -8,12 +8,12 @@ import StatusMark from "./StatusMark.vue";
 import { repository } from "../../lib/docs";
 import {
   categoryId,
-  currentVersion,
   entryMarkdownUrl,
   entryUrl,
   find,
   freshNote,
   inline,
+  isNew,
   isProseName,
   kindLabel,
   newLabel,
@@ -54,7 +54,10 @@ const headings: MarkdownHeading[] = [
 const link = (e: RefEntry | undefined) => e && { label: plain(e.name), href: entryUrl(reference, e.slug) };
 const prose = isProseName(entry.name);
 const exampleId = (title: string, index: number) =>
-  `example-${index + 1}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+  `example-${index + 1}-${title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")}`;
 const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
 ---
 
@@ -97,14 +100,14 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
               <StatusMark status={value} size={16} />
               {statuses[value].label}
             </dd>
-            {since && <dd class:list={["spec-os-since", { "is-new": since === currentVersion }]}>since {since}</dd>}
+            {since && <dd class:list={["spec-os-since", { "is-new": isNew(since) }]}>since {since}</dd>}
           </div>
         );
       })
     }
     <div class="spec-cell spec-since">
       <dt>Since</dt>
-      <dd class:list={{ "is-new": entry.since === currentVersion }}>{entry.since ?? "Not yet"}</dd>
+      <dd class:list={{ "is-new": isNew(entry.since) }}>{entry.since ?? "Not yet"}</dd>
     </div>
   </dl>
   <div class="sheet-actions">
@@ -134,7 +137,13 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         </span>
       )
     }
-    {fresh && <span class="sheet-badge sheet-badge-new" title={fresh}>{newLabel}</span>}
+    {
+      fresh && (
+        <span class="sheet-badge sheet-badge-new" title={fresh}>
+          {newLabel}
+        </span>
+      )
+    }
     {entry.experimental && <span class="sheet-badge sheet-badge-planned">Experimental on the web</span>}
     {entry.webDeprecated && <span class="sheet-badge sheet-badge-no">Deprecated on the web</span>}
   </div>
@@ -227,7 +236,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
                 <tr>
                   <td>
                     <code>{value.value}</code>
-                    {value.since === currentVersion && <span class="flag flag-new">{newLabel}</span>}
+                    {isNew(value.since) && <span class="flag flag-new">{newLabel}</span>}
                   </td>
                   <td>
                     <span class="pin-status" data-status={value.status}>
@@ -236,7 +245,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
                     </span>
                   </td>
                   {valueSince && (
-                    <td class:list={["pin-since", { "is-new": value.since === currentVersion }]}>
+                    <td class:list={["pin-since", { "is-new": isNew(value.since) }]}>
                       {value.since ?? entry.since ?? ""}
                     </td>
                   )}
@@ -321,18 +330,18 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
   {
     entry.mdn ? null : (
       <>
-      <h2 id="reference">Reference</h2>
-      <div class="reference-card">
-        <span class="reference-glyph">sk</span>
-        <span>
-          <strong>{entry.skathiOnly ? "Not part of the web platform" : "Not in the browser reference"}</strong>
-          <small>
-            {entry.skathiOnly
-              ? "Browsers ignore it; Skathi reads it. This page is its reference."
-              : "MDN has no page for it: it is handled by Skathi's compiler and tooling, or outside the standard. This page is its reference."}
-          </small>
-        </span>
-      </div>
+        <h2 id="reference">Reference</h2>
+        <div class="reference-card">
+          <span class="reference-glyph">sk</span>
+          <span>
+            <strong>{entry.skathiOnly ? "Not part of the web platform" : "Not in the browser reference"}</strong>
+            <small>
+              {entry.skathiOnly
+                ? "Browsers ignore it; Skathi reads it. This page is its reference."
+                : "MDN has no page for it: it is handled by Skathi's compiler and tooling, or outside the standard. This page is its reference."}
+            </small>
+          </span>
+        </div>
       </>
     )
   }

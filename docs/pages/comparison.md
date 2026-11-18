@@ -4,6 +4,7 @@ label: Comparison
 description: Skathi next to Electron and Tauri 2. Size, memory, processes, start time and the cost of a native call, measured with the same app on one machine, then rendering, platforms, native code, tooling and licensing.
 section: Getting started
 order: 0.5
+since: "0.4"
 ---
 
 Electron ships Chromium and Node.js inside every app. Tauri puts a web UI in the WebView the OS provides and gives it a Rust backend in another process. Skathi runs Vue or Svelte in JavaScriptCore and draws it with its own renderer, in one process with your Rust code.

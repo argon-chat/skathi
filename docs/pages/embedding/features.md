@@ -15,7 +15,7 @@ skathi = { version = "0.4", default-features = false, features = ["prod", "types
 
 `default-features = false` drops everything; list what the app uses. Features are additive across your dependency graph, so one crate that depends on `skathi` with the defaults turns them back on for all.
 
-## When a feature is off
+## When a feature is off (since 0.4)
 
 Nothing pretends. An app built for a browser checks what exists, and Skathi answers truthfully:
 

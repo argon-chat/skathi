@@ -1,14 +1,21 @@
 import { getCollection, type CollectionEntry } from "astro:content";
-import cli from "../../../packages/cli/package.json";
+import type { MarkdownHeading } from "astro";
 import { configMarkdown, configPage } from "./config";
 import { catalogMarkdown } from "./reference";
 import { references } from "./references";
+import { isNew, newLabel } from "./release";
 import { expandSamples } from "./samples";
+
+export { isNew, newLabel, version } from "./release";
 
 export const sections = ["Getting started", "Guides", "Devtools", "Embedding", "Reference", "Contributing"] as const;
 export const repository = "https://github.com/argon-chat/skathi";
-export const version = cli.version;
 export const docsHome = "/introduction/";
+
+/** A heading in the page's table of contents; `fresh` when its section arrived in the current release. */
+export interface TocHeading extends MarkdownHeading {
+  fresh?: boolean;
+}
 
 export type PageStatus = NonNullable<CollectionEntry<"docs">["data"]["status"]>;
 
@@ -40,5 +47,6 @@ export function pageMarkdown(page: CollectionEntry<"docs">, site: URL): string {
       ? `\n\n${configMarkdown(site)}`
       : "";
   const status = page.data.status ? `\n\nStatus: ${statusLabels[page.data.status]}` : "";
-  return `# ${page.data.title}\n\n> ${page.data.description}\n\nSource: ${new URL(pageUrl(page.id), site).href}${status}\n\n${body}${catalog}\n`;
+  const fresh = isNew(page.data.since) ? `\n\n${newLabel}` : "";
+  return `# ${page.data.title}\n\n> ${page.data.description}\n\nSource: ${new URL(pageUrl(page.id), site).href}${status}${fresh}\n\n${body}${catalog}\n`;
 }

@@ -3,6 +3,7 @@ title: Errors, tasks and threads
 description: What the app sees when a native module function returns Err, panics or gets the wrong argument; how #[task] runs slow work on a worker, on Skathi's threads or your own executor; and what a reload does to work in flight.
 section: Embedding
 order: 2.2
+since: "0.4"
 ---
 
 A [native module](/embedding/native-modules/) function either returns a value or fails, and a failure in Rust is always an `Error` the app can catch: never a crash, never a hang. This page lists each way a call can fail and what JavaScript gets for it, then how tasks keep slow work off the UI thread.

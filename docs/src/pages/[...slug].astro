@@ -1,14 +1,15 @@
 ---
 import { render, type CollectionEntry } from "astro:content";
-import type { GetStaticPaths, MarkdownHeading } from "astro";
+import type { GetStaticPaths } from "astro";
 import "../styles/reference.css";
 import ConfigReference from "../components/reference/ConfigReference.astro";
 import RefCatalog from "../components/reference/RefCatalog.vue";
 import DocsLayout from "../layouts/DocsLayout.astro";
 import { configHeadings, configPage } from "../lib/config";
-import { getDocs } from "../lib/docs";
-import { catalogEntries, categoryId, currentVersion, inline, kindLabel } from "../lib/reference";
+import { getDocs, type TocHeading } from "../lib/docs";
+import { catalogEntries, categoryId, inline, kindLabel } from "../lib/reference";
 import { references } from "../lib/references";
+import { currentMinor, isNew } from "../lib/release";
 
 export const getStaticPaths = (async () =>
   (await getDocs()).map((page) => ({
@@ -21,14 +22,18 @@ interface Props {
 }
 
 const { page } = Astro.props;
-const { Content, headings } = await render(page);
+const { Content, headings: rendered, remarkPluginFrontmatter } = await render(page);
+const sectionSince = (remarkPluginFrontmatter["sectionSince"] ?? {}) as Record<string, string>;
+const headings: TocHeading[] = rendered.map((heading) => ({ ...heading, fresh: isNew(sectionSince[heading.text]) }));
 const reference = references[page.id];
 const catalog = reference ? catalogEntries(reference) : [];
 const notes = reference
-  ? Object.fromEntries(Object.entries(reference.categoryNotes).map(([category, note]) => [category, inline(note ?? "")]))
+  ? Object.fromEntries(
+      Object.entries(reference.categoryNotes).map(([category, note]) => [category, inline(note ?? "")]),
+    )
   : {};
 const kinds = Object.fromEntries(catalog.map((entry) => [entry.kind, kindLabel(entry.kind)]));
-const toc: MarkdownHeading[] = reference
+const toc: TocHeading[] = reference
   ? [
       ...headings.filter((heading) => heading.depth === 2),
       ...reference.categories.map((category) => ({ depth: 2, slug: categoryId(category), text: category })),
@@ -51,7 +56,7 @@ const toc: MarkdownHeading[] = reference
         kinds={kinds}
         base={`/${reference.id}/`}
         noun={reference.noun}
-        current={currentVersion}
+        current={currentMinor}
       />
     )
   }

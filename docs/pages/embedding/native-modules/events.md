@@ -3,6 +3,7 @@ title: Events
 description: Send news from Rust to the app with Handle::emit_to, from your own threads or from inside a native module; how delivery works, why an event nobody hears is dropped, and the state-plus-event pattern that covers it.
 section: Embedding
 order: 2.3
+since: "0.4"
 ---
 
 Functions and tasks answer the app. Events are the other direction: your program tells the app something happened, a download finished, a device appeared, a setting changed elsewhere. A [native module](/embedding/native-modules/) declares the events it sends, with a payload type each; `Handle::emit_to` sends one from any thread, and the app subscribes with `on`.

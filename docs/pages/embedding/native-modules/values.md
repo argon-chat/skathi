@@ -3,6 +3,7 @@ title: Values and types
 description: What every Rust type is in the app and how it crosses, borrowed strings and bytes, typed arrays, the #[skathi::data] attributes, the direct conversion and its serde fallback, and what a call costs.
 section: Embedding
 order: 2.1
+since: "0.4"
 ---
 
 A [native module](/embedding/native-modules/) function's parameters are its JavaScript arguments, each read into the type you declared; its result is handed to the app as an ordinary object, array, string or number. No JSON text is written or parsed on either side: values are read and built straight from the engine's own. They still _mean_ what JSON would, so the app sees the same thing whether it calls the module or posts the value to a server.

@@ -4,6 +4,7 @@ label: Migrating from appHost
 description: Move an embedder from Builder::function, appHost.call and Handle::emit to native modules, one function at a time, with the before and after side by side.
 section: Embedding
 order: 2.5
+since: "0.4"
 ---
 
 Before 0.4.0 an embedded app and its program talked through `appHost`: `Builder::function(name, handler)` with JSON text in and out, called as `appHost.call(name, ...args)`, and `Handle::emit(event, json)` heard by `appHost.on(event, …)`. Both still work. The Rust compiler marks them deprecated, and the app prints a `[skathi compat]` advisory once for each. They will be removed in a later release.

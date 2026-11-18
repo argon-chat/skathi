@@ -1,8 +1,9 @@
-import cli from "../../../packages/cli/package.json";
 import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../data/css/entries";
 import type { Detail, Example, Param } from "../data/details";
+import { isNew, newLabel } from "./release";
 
 export type { Example, Param, Platform, PlatformSince, Release, Status, ValueSupport };
+export { isNew, newLabel };
 
 export interface RefEntry extends Detail {
   slug: string;
@@ -54,10 +55,6 @@ export type CatalogEntry = Pick<
   | "aliases"
   | "platformSince"
 > & { changed?: Release; split?: boolean; fresh?: string };
-
-export const currentVersion = cli.version;
-/** The marker on what arrived in the current release: "New in 0.3". */
-export const newLabel = `New in ${currentVersion.split(".").slice(0, 2).join(".")}`;
 
 export const platforms: readonly {
   id: Platform;
@@ -190,14 +187,15 @@ export function sinceText(entry: Pick<RefEntry, "since" | "platformSince" | "pla
 export function freshNote(
   entry: Pick<RefEntry, "since" | "platformSince" | "platforms" | "values">,
 ): string | undefined {
-  if (changedIn(entry) !== currentVersion) return undefined;
-  if (entry.since === currentVersion) return `Arrived in ${currentVersion}`;
+  const changed = changedIn(entry);
+  if (!isNew(changed)) return undefined;
+  if (isNew(entry.since)) return `Arrived in ${entry.since}`;
   const parts: string[] = [];
-  const os = platforms.filter((p) => sinceOn(entry, p.id) === currentVersion).map((p) => p.label);
+  const os = platforms.filter((p) => isNew(sinceOn(entry, p.id))).map((p) => p.label);
   if (os.length) parts.push(`${os.join(" and ")} support`);
-  const values = (entry.values ?? []).filter((v) => v.since === currentVersion).map((v) => plain(v.value));
+  const values = (entry.values ?? []).filter((v) => isNew(v.since)).map((v) => plain(v.value));
   if (values.length) parts.push(values.join(", "));
-  return `${parts.join("; ")} arrived in ${currentVersion}`;
+  return `${parts.join("; ")} arrived in ${changed}`;
 }
 
 export function catalogEntries(ref: Reference): CatalogEntry[] {

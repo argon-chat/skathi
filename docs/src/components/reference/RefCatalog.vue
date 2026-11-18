@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   inline,
+  isNew,
   isProseName,
   newLabel,
   platforms,
@@ -108,7 +109,7 @@ const filtered = computed(() => {
     (entry) =>
       statusMatch(statusOf(entry)) &&
       (kind.value === "all" || entry.kind === kind.value) &&
-      (!onlyChanged.value || entry.changed === props.current),
+      (!onlyChanged.value || isNew(entry.changed)),
   );
 });
 
@@ -137,7 +138,7 @@ const visible = computed(() => (terms.value.length ? results.value : filtered.va
 const counts = computed(() =>
   Object.fromEntries(statusFilters.map((f) => [f.id, props.entries.filter((e) => f.match(statusOf(e))).length])),
 );
-const changedCount = computed(() => props.entries.filter((e) => e.changed === props.current).length);
+const changedCount = computed(() => props.entries.filter((e) => isNew(e.changed)).length);
 const filtersActive = computed(
   () =>
     status.value !== "all" ||
@@ -395,7 +396,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
               <span v-else class="row-status" :data-status="statusOf(entry)"
                 ><StatusMark :status="statusOf(entry)" :size="14" />{{ statusLabels[statusOf(entry)] }}</span
               >
-              <span class="row-since" :class="{ 'is-new': entry.changed === current }">{{ entry.since ?? "" }}</span>
+              <span class="row-since" :class="{ 'is-new': isNew(entry.changed) }">{{ entry.since ?? "" }}</span>
             </a>
           </li>
         </ul>
@@ -427,7 +428,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                 <span v-else class="row-status" :data-status="statusOf(entry)"
                   ><StatusMark :status="statusOf(entry)" :size="14" />{{ statusLabels[statusOf(entry)] }}</span
                 >
-                <span class="row-since" :class="{ 'is-new': entry.changed === current }">{{ entry.since ?? "" }}</span>
+                <span class="row-since" :class="{ 'is-new': isNew(entry.changed) }">{{ entry.since ?? "" }}</span>
               </a>
             </li>
           </ul>

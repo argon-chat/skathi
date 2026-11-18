@@ -15,6 +15,11 @@ const docs = defineCollection({
     order: z.number().default(0),
     label: z.string().optional(),
     status: z.enum(["experimental"]).optional(),
+    /** The minor release the page arrived in, such as "0.4"; it is marked New while that release is current. */
+    since: z
+      .string()
+      .regex(/^\d+\.\d+$/)
+      .optional(),
   }),
 });
 

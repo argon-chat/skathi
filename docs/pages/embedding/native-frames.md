@@ -4,6 +4,7 @@ label: Native frames
 description: Show what a native renderer draws (a video player such as libmpv, a game engine, another process) inside a Skathi element, with Vue or Svelte UI over and around it. The element, its events, and presenting frames from Rust.
 section: Embedding
 order: 4
+since: "0.4"
 ---
 
 This is the part a webview cannot do. Some content is drawn by native code: a video player built on libmpv, a game engine's viewport, a renderer in another process. [`<sk-surface>`](/web-platform/sk-surface/) shows it inside the page as an ordinary box: `object-fit`, `border-radius`, `overflow` clipping, transforms, opacity and z-order apply, and the app's controls sit over it like over any other element. No second window glued on top, no airspace problems.

@@ -14,6 +14,7 @@ import {
   type Release,
   type Status,
 } from "./reference";
+import { isNew } from "./release";
 import { windowReference } from "./window";
 
 interface Schema {
@@ -342,7 +343,7 @@ function build(): ConfigSection[] {
         });
       const fresh = freshNote(entry);
       if (fresh) result.fresh = fresh;
-    }
+    } else if (isNew(note.since)) result.fresh = `Arrived in ${note.since}`;
     return result;
   };
 
@@ -423,5 +424,5 @@ export function configMarkdown(site: URL): string {
 
 export const configHeadings = configSections.flatMap((section) => [
   { depth: 2, slug: section.id, text: section.title },
-  ...section.options.map((o) => ({ depth: 3, slug: optionId(o.path), text: o.path })),
+  ...section.options.map((o) => ({ depth: 3, slug: optionId(o.path), text: o.path, fresh: Boolean(o.fresh) })),
 ]);

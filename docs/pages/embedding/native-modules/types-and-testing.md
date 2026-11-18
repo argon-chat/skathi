@@ -3,6 +3,7 @@ title: Types, tests and CI
 description: The native-modules.d.ts your exe generates, answering sk types before your program's own startup, keeping the declarations current in CI, testing a module in Rust and in the app, and building the same code with Vite or vitest.
 section: Embedding
 order: 2.4
+since: "0.4"
 ---
 
 Your exe knows its [native modules](/embedding/native-modules/): their functions, their parameters and every type they reach. It writes that down as TypeScript for the app, so the app's type check catches a renamed field before a user does. This page covers that file, how to test a module on both sides, and the checks that keep them honest in CI.
