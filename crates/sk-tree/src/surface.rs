@@ -222,7 +222,8 @@ pub struct SurfaceDisplay {
     pub known: bool,
     /// The display is in HDR: Windows' HDR (PQ) mode, or a macOS screen with EDR headroom.
     pub hdr: bool,
-    /// The brightest value it shows now; 1.0 on an SDR display. On macOS it follows the brightness.
+    /// The brightest value it shows now; 1.0 on an SDR display. On macOS it follows the brightness,
+    /// and is 1.0 until a window on the screen asks for EDR.
     pub headroom: f32,
     /// The brightest it can show (macOS at full brightness); `headroom` on Windows.
     pub potential_headroom: f32,

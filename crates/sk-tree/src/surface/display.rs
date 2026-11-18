@@ -26,10 +26,11 @@ struct Probe {
     output: Output,
 }
 
-/// The window's HDR output: the SDR white it draws at while on.
+/// The window's HDR output: the SDR white it draws at while on, and the headroom it asks for.
 #[derive(Default)]
 struct Output {
     sdr_white: Option<f32>,
+    headroom: f32,
     unwanted_since: Option<Instant>,
     /// The renderer refused HDR output; the window stays standard.
     refused: bool,
@@ -73,14 +74,26 @@ pub(super) fn dynamic_range_high(key: WinKey) -> bool {
     PROBES.with(|p| p.borrow().get(&key).is_some_and(Probe::capable))
 }
 
+/// The most headroom `key`'s window can get: the display's potential where it can draw HDR, else
+/// 1.0. macOS raises the current headroom only once a window asks for EDR, so asking goes by this.
+pub(super) fn reach(key: WinKey) -> f32 {
+    PROBES.with(|p| {
+        p.borrow()
+            .get(&key)
+            .filter(|probe| probe.capable())
+            .map_or(1.0, |probe| probe.display.potential_headroom)
+    })
+}
+
 /// Whether any window can draw HDR, so a half-float CPU frame keeps its values for one.
 pub(super) fn any_capable() -> bool {
     ANY_CAPABLE.load(Ordering::Relaxed)
 }
 
-/// Switches `window` to HDR output while it can and `wanted`, and back to standard
-/// [`HDR_LINGER`] after it is no longer wanted. Returns whether it draws HDR.
-pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool {
+/// Switches `window` to HDR output while it can and its content wants more than SDR white
+/// (`headroom` > 1.0), asking for that headroom, and back to standard [`HDR_LINGER`] after it no
+/// longer does. Returns whether it draws HDR.
+pub(super) fn update_output(window: &Window, key: WinKey, headroom: f32) -> bool {
     PROBES.with(|p| {
         let mut probes = p.borrow_mut();
         let Some(probe) = probes.get_mut(&key) else {
@@ -88,6 +101,7 @@ pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool 
         };
         let capable = probe.capable();
         let output = &mut probe.output;
+        let wanted = headroom > 1.0;
         if wanted {
             output.unwanted_since = None;
         }
@@ -101,12 +115,17 @@ pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool 
         // Windows composes SDR content at its SDR white; macOS EDR is relative to it.
         let sdr_white = probe.display.sdr_white_nits.map_or(1.0, |nits| nits / 80.0);
         let target = (capable && (wanted || lingering)).then_some(sdr_white);
-        if target != output.sdr_white {
-            let output_set =
-                window.set_hdr_output(target.map(|sdr_white| gpui::HdrOutput { sdr_white }));
+        let tag = if wanted { headroom } else { output.headroom };
+        let retag = target.is_some() && (tag - output.headroom).abs() > 0.01 * tag;
+        if target != output.sdr_white || retag {
+            let output_set = window.set_hdr_output(target.map(|sdr_white| gpui::HdrOutput {
+                sdr_white,
+                content_headroom: tag,
+            }));
             let was = output.sdr_white.is_some();
             if output_set || target.is_none() {
                 output.sdr_white = target;
+                output.headroom = if target.is_some() { tag } else { 1.0 };
             } else {
                 output.refused = true;
                 output.sdr_white = None;
@@ -569,5 +588,29 @@ mod tests {
         );
         let sdr = macos_display(1.0, 1.0, 60, 1.0 / 60.0, 1.0 / 60.0);
         assert_eq!((sdr.hdr, sdr.variable_refresh), (false, Some(false)));
+    }
+
+    /// macOS reports a current headroom of 1.0 until a window asks for EDR.
+    #[test]
+    fn a_window_asks_for_the_headroom_its_screen_can_reach_not_what_it_shows_now() {
+        let probe = |display| Probe {
+            display,
+            ..Probe::default()
+        };
+        PROBES.with(|p| {
+            let mut probes = p.borrow_mut();
+            probes.insert(1, probe(macos_display(1.0, 16.0, 60, 0.0, 0.0)));
+            probes.insert(2, probe(macos_display(1.0, 1.0, 60, 0.0, 0.0)));
+            let mut refused = probe(macos_display(1.0, 16.0, 60, 0.0, 0.0));
+            refused.output.refused = true;
+            probes.insert(3, refused);
+        });
+        assert_eq!(
+            (reach(1), reach(2), reach(3), reach(4)),
+            (16.0, 1.0, 1.0, 1.0)
+        );
+        for key in 1..=3 {
+            forget(key);
+        }
     }
 }

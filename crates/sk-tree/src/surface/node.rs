@@ -341,17 +341,20 @@ fn note_headroom(id: u32, node: &mut Node, headroom: f32, touch: &mut Vec<u32>) 
     }
 }
 
-/// Puts `here` in HDR while a visible half-float surface in it may be brighter than SDR white.
+/// Puts `here` in HDR while a visible half-float surface in it may be brighter than SDR white,
+/// asking for the most headroom such a surface's `dynamic-range-limit` allows on its display.
 fn update_output(window: &Window, here: WinKey) -> bool {
-    let wanted = NODES.with(|m| {
-        m.borrow().values().any(|n| {
-            n.window == here
-                && n.visible
-                && n.headroom > 1.0
-                && n.surface.format() == SurfaceFormat::Rgba16Float
-        })
+    let reach = display::reach(here);
+    let headroom = NODES.with(|m| {
+        m.borrow()
+            .iter()
+            .filter(|(_, n)| {
+                n.window == here && n.visible && n.surface.format() == SurfaceFormat::Rgba16Float
+            })
+            .map(|(&id, _)| crate::inherit::dynamic_range_limit(id).headroom(reach))
+            .fold(1.0, f32::max)
     });
-    display::update_output(window, here, wanted)
+    display::update_output(window, here, headroom)
 }
 
 /// A pop-out's half of [`tick`], from its own draw: its nodes' tiles live in its atlas.

@@ -187,6 +187,7 @@ fn main() {
                         "known": info.display.known,
                         "hdr": info.display.hdr,
                         "headroom": info.display.headroom,
+                        "potentialHeadroom": info.display.potential_headroom,
                         "outputHeadroom": info.display.output_headroom,
                         "outputHdr": info.display.output_hdr,
                         "refreshHz": info.display.refresh_hz,

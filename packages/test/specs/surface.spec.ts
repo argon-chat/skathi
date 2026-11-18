@@ -34,6 +34,7 @@ type Stats = {
     known: boolean;
     hdr: boolean;
     headroom: number;
+    potentialHeadroom: number;
     outputHeadroom: number;
     outputHdr: boolean;
     refreshHz: number | null;
@@ -241,12 +242,15 @@ async function handOverHalf(names: string[]) {
   const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
   for (const name of names) expect(events).toContain(`${name}:ready:48x32`);
   // A visible half-float surface that may pass SDR white puts the window in HDR, and both sides hear it.
+  // macOS keeps the current headroom at 1.0 until a window asks for EDR, so this goes by the potential one.
   const first = names[0]!;
+  const wanted = (s: Stats) => s.display.hdr && s.display.potentialHeadroom > 1;
   const s = await until(
     () => stats(first),
-    (s) => s.display.outputHdr === s.contentHeadroom > 1,
+    (s) => s.display.outputHdr === wanted(s),
   );
-  expect(s.display.outputHdr).toBe(s.contentHeadroom > 1);
+  expect(s.dynamicRangeLimit).toBe("no-limit");
+  expect(s.display.outputHdr).toBe(wanted(s));
   const heard = ((await app.eval("globalThis.surfaceEvents.join('|')")) as string)
     .split("|")
     .filter((e) => e.startsWith(`${first}:display:`));
