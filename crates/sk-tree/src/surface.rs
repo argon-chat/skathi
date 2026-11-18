@@ -229,6 +229,9 @@ pub struct SurfaceDisplay {
     /// The brightest value a surface's frame reaches the display with: `headroom` where the
     /// window can draw HDR (Windows, macOS), else 1.0, where frames are clamped.
     pub output_headroom: f32,
+    /// Whether that element's window draws HDR now (a half-float swap chain or layer): while it
+    /// shows a half-float surface that may be brighter than SDR white, and two seconds after.
+    pub output_hdr: bool,
     /// SDR white in nits: Windows in HDR mode (its SDR content brightness setting).
     pub sdr_white_nits: Option<f32>,
     /// The display's peak and full-frame luminance in nits, where Windows knows them.
@@ -253,6 +256,7 @@ impl Default for SurfaceDisplay {
             headroom: 1.0,
             potential_headroom: 1.0,
             output_headroom: 1.0,
+            output_hdr: false,
             sdr_white_nits: None,
             peak_nits: None,
             full_frame_nits: None,
@@ -279,6 +283,7 @@ impl SurfaceDisplay {
         };
         self.known != other.known
             || self.hdr != other.hdr
+            || self.output_hdr != other.output_hdr
             || self.variable_refresh != other.variable_refresh
             || level(self.headroom, other.headroom)
             || level(self.potential_headroom, other.potential_headroom)
@@ -297,8 +302,8 @@ pub enum SurfaceEvent {
     Changed(SurfaceInfo),
     /// The renderer recreated its device; the frame is gone and GPU resources must be recreated.
     DeviceLost,
-    /// The display became known, changed (headroom, SDR white, refresh rate), or the largest
-    /// element moved to another one.
+    /// The display became known, changed (headroom, SDR white, refresh rate), the window switched
+    /// to or from HDR output, or the largest element moved to another one.
     DisplayChanged(SurfaceDisplay),
 }
 
@@ -1811,6 +1816,11 @@ mod tests {
             ..hdr
         };
         s.set_info(with(faster));
+        let drawing_hdr = SurfaceDisplay {
+            output_hdr: true,
+            ..faster
+        };
+        s.set_info(with(drawing_hdr));
         // The display clock is read live; a known display always has a period.
         let unclocked = |d: SurfaceDisplay| {
             assert!(d.refresh_period.is_some());
@@ -1831,10 +1841,11 @@ mod tests {
             heard,
             vec![
                 SurfaceEvent::DisplayChanged(hdr),
-                SurfaceEvent::DisplayChanged(faster)
+                SurfaceEvent::DisplayChanged(faster),
+                SurfaceEvent::DisplayChanged(drawing_hdr)
             ]
         );
-        assert_eq!(unclocked(s.info().display), faster);
+        assert_eq!(unclocked(s.info().display), drawing_hdr);
     }
 
     #[test]

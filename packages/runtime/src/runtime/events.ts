@@ -543,6 +543,7 @@ function surfaceDetail(name: string, a: number, b: number, c: number, d: number,
       refreshRate: c > 0 ? c : null,
       sdrWhiteNits: d > 0 ? d : null,
       hdr: flags.includes("hdr"),
+      outputHdr: flags.includes("output-hdr"),
       variableRefresh: flags.includes("vrr") ? true : flags.includes("fixed") ? false : null,
     };
   }

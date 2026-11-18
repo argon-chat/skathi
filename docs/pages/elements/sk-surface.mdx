@@ -212,19 +212,19 @@ That is all the element reads. The pixel format, the color space and the frames 
 
 ## Events
 
-| Event                  | When                                                                                   | Carries                                                                                  |
-| ---------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `surfaceresize`        | the painted size changes, and on first layout                                          | `width`, `height` in physical pixels, `devicePixelRatio`                                 |
-| `surfaceready`         | a frame shows for the first time, and again after a lost frame is replaced             | `width`, `height` of that frame                                                          |
-| `surfacelost`          | the frame shown goes away                                                              | `reason`: `"cleared"` or `"device"`                                                      |
-| `surfacedisplaychange` | the display is first known, its properties change, or the element moves to another one | `headroom`, `potentialHeadroom`, `refreshRate`, `sdrWhiteNits`, `hdr`, `variableRefresh` |
+| Event                  | When                                                                                                                              | Carries                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `surfaceresize`        | the painted size changes, and on first layout                                                                                     | `width`, `height` in physical pixels, `devicePixelRatio`                                              |
+| `surfaceready`         | a frame shows for the first time, and again after a lost frame is replaced                                                        | `width`, `height` of that frame                                                                       |
+| `surfacelost`          | the frame shown goes away                                                                                                         | `reason`: `"cleared"` or `"device"`                                                                   |
+| `surfacedisplaychange` | the display is first known, its properties change, the window switches to or from HDR output, or the element moves to another one | `headroom`, `potentialHeadroom`, `refreshRate`, `sdrWhiteNits`, `hdr`, `outputHdr`, `variableRefresh` |
 
 The values are on the event itself and on `detail`. The events do not bubble and cannot be cancelled, and they are only dispatched to an element that has a listener for them.
 
 - `surfaceresize` reports the size in physical pixels: the CSS size times the window's scale, rounded. It fires while the element is in the document with a non-zero width, visible or not.
 - `surfaceready` carries the frame's size, not the box's, and no `devicePixelRatio`.
 - `surfacelost` fires only for an element that has shown a frame. `"cleared"` means the producer called `clear()`; `"device"` means the GPU device was lost and the frame with it. A CPU frame survives a device loss.
-- `surfacedisplaychange` fires on Windows and macOS, on a change above 1 %. `refreshRate`, `sdrWhiteNits` and `variableRefresh` are `null` where the platform does not say. [The display](/embedding/native-frames/#the-display) explains the values.
+- `surfacedisplaychange` fires on Windows and macOS, on a change above 1 %. `refreshRate`, `sdrWhiteNits` and `variableRefresh` are `null` where the platform does not say. `outputHdr` is whether the element's window draws HDR now. [The display](/embedding/native-frames/#the-display) explains the values.
 
 ## Size and CSS
 

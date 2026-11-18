@@ -876,6 +876,8 @@ declare global {
     /** SDR white in nits: Windows in HDR mode, `null` elsewhere. */
     readonly sdrWhiteNits: number | null;
     readonly hdr: boolean;
+    /** The window draws HDR now (half-float output), as it does while it shows a half-float surface brighter than SDR white. */
+    readonly outputHdr: boolean;
     /** `null` where the platform does not say (Windows, Linux). */
     readonly variableRefresh: boolean | null;
   }

@@ -5537,6 +5537,7 @@ dependencies = [
  "futures",
  "image",
  "lightningcss",
+ "log",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-video",

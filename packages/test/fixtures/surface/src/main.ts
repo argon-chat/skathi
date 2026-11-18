@@ -28,7 +28,7 @@ const log = (id: string) => ({
   onSurfaceready: (e: SkSurfaceEvent) => events.push(`${id}:ready:${e.width}x${e.height}`),
   onSurfacelost: (e: SkSurfaceEvent) => events.push(`${id}:lost:${e.reason}`),
   onSurfacedisplaychange: (e: SkSurfaceDisplayEvent) =>
-    events.push(`${id}:display:${e.headroom}:${e.refreshRate}:${e.hdr}`),
+    events.push(`${id}:display:${e.headroom}:${e.refreshRate}:${e.hdr}:${e.outputHdr}`),
 });
 
 createApp({

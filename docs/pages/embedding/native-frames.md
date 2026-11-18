@@ -40,12 +40,12 @@ New in 0.4.0. On Windows a frame can be a Direct3D 11 or 12 texture, or one shar
 </style>
 ```
 
-| Event                  | When                                                                                 | Carries                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `surfaceresize`        | the painted content box changes, and on first layout                                 | `width`, `height` (physical px), `devicePixelRatio`                                      |
-| `surfaceready`         | the first frame shows                                                                | `width`, `height` of that frame                                                          |
-| `surfacelost`          | the frame goes                                                                       | `reason`: `"cleared"` or `"device"`                                                      |
-| `surfacedisplaychange` | the [display](#the-display) is first known, changes, or the element moves to another | `headroom`, `potentialHeadroom`, `refreshRate`, `sdrWhiteNits`, `hdr`, `variableRefresh` |
+| Event                  | When                                                                                                                            | Carries                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `surfaceresize`        | the painted content box changes, and on first layout                                                                            | `width`, `height` (physical px), `devicePixelRatio`                                                   |
+| `surfaceready`         | the first frame shows                                                                                                           | `width`, `height` of that frame                                                                       |
+| `surfacelost`          | the frame goes                                                                                                                  | `reason`: `"cleared"` or `"device"`                                                                   |
+| `surfacedisplaychange` | the [display](#the-display) is first known, changes, the window switches to or from HDR output, or the element moves to another | `headroom`, `potentialHeadroom`, `refreshRate`, `sdrWhiteNits`, `hdr`, `outputHdr`, `variableRefresh` |
 
 The box is 300 × 150 unless CSS sizes it, and `object-fit` defaults to `contain`, as on `<video>`. Until the first frame it paints nothing, so a background or a placeholder under it shows. Several elements may name the same surface; each shows the same frame at its own size.
 
@@ -165,7 +165,7 @@ New in 0.4.0. On Windows (Direct3D 12 and Direct3D 11) and macOS, a window whose
 
 Everything else in the window looks as it did. The page is still blended in sRGB-encoded values, as on an 8-bit target, now into a half-float one, and only a last pass makes it linear, with 1.0 at the SDR white Windows composes SDR content at (`sdr_white_nits / 80` in scRGB); on macOS EDR's 1.0 already is SDR white. Skathi's renderer tests draw text, translucent fills, antialiased corners and half-float tiles both ways on Direct3D 11, Direct3D 12, wgpu and Metal: every pixel of the HDR page is within one 8-bit code value of the standard one, and the output at SDR white encodes back to it within one code value. A tile of 4.0 limited to 2.5 shows at 2.5 times SDR white, and under `standard` at SDR white.
 
-On an SDR display, with HDR off, on Linux, and while no element needs it, a window draws exactly as before. [`output_headroom`](#the-display) and the `(dynamic-range: high)` media query say whether a window can show HDR. The wgpu renderer can switch where its surface offers extended linear sRGB, but Linux windows stay SDR.
+On an SDR display, with HDR off, on Linux, and while no element needs it, a window draws exactly as before. [`output_headroom`](#the-display) and the `(dynamic-range: high)` media query say whether a window can show HDR; [`output_hdr`](#the-display) says whether it does now. A switch either way fires `SurfaceEvent::DisplayChanged` and `surfacedisplaychange` (`outputHdr`), and `SK_LOG=info` logs it. A player that sets `dynamic-range-limit: standard` on SDR content to keep the window out of HDR sees `output_hdr` turn false two seconds later. The wgpu renderer can switch where its surface offers extended linear sRGB, but Linux windows stay SDR.
 
 A switch recreates the swap chain or reconfigures the layer, once each way. In HDR a window keeps a half-float copy of the page, and its swap chain is half float too, so it takes about three times the memory of an 8-bit one. At 3840×2160 with 96 full-window translucent layers, a Direct3D 12 frame took 23.4 ms in HDR against 23.2 ms standard on an RTX 5070.
 
@@ -175,19 +175,20 @@ A switch recreates the swap chain or reconfigures the layer, once each way. In H
 
 Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on every platform:
 
-| Field                          | Means                                                                                                  |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                         |
-| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`              |
-| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0      |
-| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere      |
-| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                         |
-| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                          |
-| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)               |
-| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows |
-| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                        |
-| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called        |
-| `known`                        | `false` on Linux, and before the window first draws                                                    |
+| Field                          | Means                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                               |
+| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`                    |
+| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0            |
+| `output_hdr`                   | whether the element's window draws HDR now (half-float swap chain or layer); see [HDR windows](#hdr-windows) |
+| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere            |
+| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                               |
+| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                                |
+| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)                     |
+| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows       |
+| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                              |
+| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called              |
+| `known`                        | `false` on Linux, and before the window first draws                                                          |
 
 1.0 as SDR white is what macOS EDR values already are, and how Windows composes SDR content in HDR mode: at the white level the user picked. On Windows, `headroom` is the screen's peak over that white (`MaxLuminance` / SDR white), and a scRGB value, where 1.0 is 80 nits, is a surface value times `sdr_white_nits / 80`. In SDR mode it is 1.0.
 

@@ -33,6 +33,7 @@ usvg = { version = "0.46.0", default-features = false }
 # Pinned to the version sk-css uses.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 futures = "0.3"
+log = "0.4"
 # `<sk-surface>` reads the display a window is on.
 raw-window-handle = "0.6"
 

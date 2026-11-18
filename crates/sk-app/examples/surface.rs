@@ -188,6 +188,7 @@ fn main() {
                         "hdr": info.display.hdr,
                         "headroom": info.display.headroom,
                         "outputHeadroom": info.display.output_headroom,
+                        "outputHdr": info.display.output_hdr,
                         "refreshHz": info.display.refresh_hz,
                     },
                 })

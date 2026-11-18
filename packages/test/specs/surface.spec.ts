@@ -35,6 +35,7 @@ type Stats = {
     hdr: boolean;
     headroom: number;
     outputHeadroom: number;
+    outputHdr: boolean;
     refreshHz: number | null;
   };
 };
@@ -239,6 +240,17 @@ async function handOverHalf(names: string[]) {
   }
   const events = (await app.eval("globalThis.surfaceEvents.join('|')")) as string;
   for (const name of names) expect(events).toContain(`${name}:ready:48x32`);
+  // A visible half-float surface that may pass SDR white puts the window in HDR, and both sides hear it.
+  const first = names[0]!;
+  const s = await until(
+    () => stats(first),
+    (s) => s.display.outputHdr === s.contentHeadroom > 1,
+  );
+  expect(s.display.outputHdr).toBe(s.contentHeadroom > 1);
+  const heard = ((await app.eval("globalThis.surfaceEvents.join('|')")) as string)
+    .split("|")
+    .filter((e) => e.startsWith(`${first}:display:`));
+  expect(heard.at(-1)).toEndWith(`:${s.display.outputHdr}`);
 }
 
 test.skipIf(!WINDOWS)(

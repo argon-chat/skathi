@@ -82,6 +82,7 @@ type SurfaceDisplayEvent = Event & {
   readonly refreshRate: number | null;
   readonly sdrWhiteNits: number | null;
   readonly hdr: boolean;
+  readonly outputHdr: boolean;
   readonly variableRefresh: boolean | null;
 };
 

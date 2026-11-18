@@ -32,6 +32,7 @@ struct Node {
     headroom: f32,
     /// The tile holds the frame's half-float values, painted up to `headroom`.
     hdr: bool,
+    attached: bool,
 }
 
 thread_local! {
@@ -85,6 +86,7 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             display: None,
             headroom: 1.0,
             hdr: false,
+            attached: false,
         });
         node.window = win;
         node.tile
@@ -237,13 +239,27 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 ));
             }
             if attached {
+                let limit = crate::inherit::dynamic_range_limit(id);
+                let output = display::of(node.window).output_headroom;
+                note_headroom(id, node, limit.headroom(output), &mut touch);
+            }
+            node.attached = attached;
+            if node.window != here {
+                draw |= node.visible && node.surface.lock_state().seq != node.seen;
+            }
+        }
+    });
+    // After the switch, so the display reported says whether this window now draws HDR.
+    let hdr = update_output(window, here);
+    NODES.with(|m| {
+        for (&id, node) in m.borrow_mut().iter_mut() {
+            if node.attached {
                 let on = display::of(node.window);
                 if on.known && node.display.is_none_or(|d| on.differs(&d)) {
                     node.display = Some(on);
                     events.push((id, Event::Display(on)));
                 }
                 let limit = crate::inherit::dynamic_range_limit(id);
-                note_headroom(id, node, limit.headroom(on.output_headroom), &mut touch);
                 let info = infos.entry(Arc::as_ptr(node.surface.shared())).or_default();
                 // The largest visible element sets the size; a hidden one's last size only stands in.
                 let rank = |visible: bool, w: u32, h: u32| (visible, u64::from(w) * u64::from(h));
@@ -260,14 +276,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 }
                 info.visible |= node.visible;
             }
-            if node.window != here {
-                draw |= node.visible && node.surface.lock_state().seq != node.seen;
-            }
-        }
-    });
-    let hdr = update_output(window, here);
-    NODES.with(|m| {
-        for (&id, node) in m.borrow_mut().iter_mut() {
             if node.window == here {
                 let (s, event) = write(window, here, id, node, hdr, &mut touch);
                 shown = shown.max(s);
@@ -556,22 +564,29 @@ fn refused(error: &super::SurfaceError) {
     );
 }
 
-/// `surfacedisplaychange`'s `key`: "hdr" when the display is in HDR, then "vrr" or "fixed" when its
-/// refresh is known to be variable or not.
-fn display_flags(on: &SurfaceDisplay) -> &'static str {
-    match (on.hdr, on.variable_refresh) {
-        (false, None) => "",
-        (true, None) => "hdr",
-        (false, Some(false)) => "fixed",
-        (true, Some(false)) => "hdr fixed",
-        (false, Some(true)) => "vrr",
-        (true, Some(true)) => "hdr vrr",
-    }
+/// `surfacedisplaychange`'s `key`: "hdr" when the display is in HDR, "output-hdr" when the window
+/// draws HDR, and "vrr" or "fixed" when its refresh is known to be variable or not.
+fn display_flags(on: &SurfaceDisplay) -> String {
+    let refresh = match on.variable_refresh {
+        None => None,
+        Some(false) => Some("fixed"),
+        Some(true) => Some("vrr"),
+    };
+    [
+        on.hdr.then_some("hdr"),
+        on.output_hdr.then_some("output-hdr"),
+        refresh,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {
     for (id, event) in events {
         let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
+        let flags;
         let (code, payload) = match event {
             Event::Resize(w, h, scale) => (
                 tree::EV_SURFACERESIZE,
@@ -610,7 +625,10 @@ fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {
                     b: on.potential_headroom as f64,
                     c: on.refresh_hz.unwrap_or(0.0) as f64,
                     d: on.sdr_white_nits.unwrap_or(0.0) as f64,
-                    key: Some(display_flags(&on)),
+                    key: Some({
+                        flags = display_flags(&on);
+                        &flags
+                    }),
                 },
             ),
         };

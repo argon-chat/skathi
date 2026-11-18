@@ -63,6 +63,7 @@ pub(super) fn sample(window: &Window, key: WinKey) {
         } else {
             1.0
         };
+        probe.display.output_hdr = probe.output.sdr_white.is_some();
         ANY_CAPABLE.store(probes.values().any(Probe::capable), Ordering::Relaxed);
     });
 }
@@ -103,6 +104,7 @@ pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool 
         if target != output.sdr_white {
             let output_set =
                 window.set_hdr_output(target.map(|sdr_white| gpui::HdrOutput { sdr_white }));
+            let was = output.sdr_white.is_some();
             if output_set || target.is_none() {
                 output.sdr_white = target;
             } else {
@@ -110,8 +112,19 @@ pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool 
                 output.sdr_white = None;
                 probe.display.output_headroom = 1.0;
             }
+            match (was, output.sdr_white.is_some()) {
+                (false, true) => {
+                    log::info!("[sk] window {key} switched to HDR output (half float)")
+                }
+                (true, false) => {
+                    log::info!("[sk] window {key} switched to standard output (8-bit)")
+                }
+                _ => {}
+            }
         }
-        output.sdr_white.is_some()
+        let hdr = probe.output.sdr_white.is_some();
+        probe.display.output_hdr = hdr;
+        hdr
     })
 }
 

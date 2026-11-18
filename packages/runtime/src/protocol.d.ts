@@ -130,7 +130,7 @@ type SkDispatcher = (
  * | `surfaceresize`           | width (px)   | height (px) | scale       | —          | —               |
  * | `surfaceready`            | frame width  | frame height | —          | —          | —               |
  * | `surfacelost`             | —            | —           | —           | —          | "cleared"/"device" |
- * | `surfacedisplaychange`    | headroom     | potential headroom | refresh Hz (0 ?) | SDR white nits (0 ?) | "hdr", "vrr"/"fixed", space-separated |
+ * | `surfacedisplaychange`    | headroom     | potential headroom | refresh Hz (0 ?) | SDR white nits (0 ?) | "hdr", "output-hdr", "vrr"/"fixed", space-separated |
  * | transitionend             | elapsedTime  | —           | —           | —          | property name   |
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
  * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
