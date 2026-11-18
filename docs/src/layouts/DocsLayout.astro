@@ -156,13 +156,15 @@ const structuredData = {
                         href={pageUrl(entry.id)}
                         aria-current={page?.id === entry.id ? "page" : navId === entry.id ? "true" : undefined}
                       >
-                        {entry.data.label ?? entry.data.title}
-                        {entry.data.status && (
-                          <span class="nav-status" title={statusLabels[entry.data.status]}>
-                            <Icon name="flask" size={12} />
-                            <span class="sr-only">{statusLabels[entry.data.status]}</span>
-                          </span>
-                        )}
+                        <span class="nav-label">
+                          {entry.data.label ?? entry.data.title}
+                          {entry.data.status && (
+                            <span class="nav-status" title={statusLabels[entry.data.status]}>
+                              <Icon name="flask" size={12} />
+                              <span class="sr-only">{statusLabels[entry.data.status]}</span>
+                            </span>
+                          )}
+                        </span>
                         {isNew(entry.data.since) && (
                           <span class="new-badge" title={newLabel}>
                             New
@@ -299,7 +301,7 @@ const structuredData = {
                 class:list={["toc-link", { "toc-nested": heading.depth === 3 }]}
                 data-toc-id={heading.slug}
               >
-                {heading.text}
+                <span class="nav-label">{heading.text}</span>
                 {heading.fresh && (
                   <span class="new-badge" title={newLabel}>
                     New

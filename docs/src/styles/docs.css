@@ -1567,6 +1567,21 @@
   .new-badge:empty::before {
     content: "New";
   }
+  /* Badges in the sidebar and the TOC line up at the link's right edge, whether the label wraps or not. */
+  .nav-section a:has(> .new-badge),
+  .toc-link:has(> .new-badge) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .nav-label {
+    flex: 1;
+    min-width: 0;
+  }
+  :is(.nav-section a, .toc-link) > .new-badge {
+    flex-shrink: 0;
+    margin-left: 0;
+  }
   .prose :is(h2, h3, h4) .new-badge {
     margin-left: 12px;
     padding: 0 9px;
