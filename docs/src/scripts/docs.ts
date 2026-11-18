@@ -524,8 +524,40 @@ function initializePage(): void {
   }
 }
 
+/** Keeps the nav where it was across a navigation, then glides the current page into view if it is off screen. */
+function revealCurrentPage(previousScroll?: number): void {
+  const nav = document.querySelector<HTMLElement>(".sidebar-nav");
+  const current = nav?.querySelector<HTMLElement>("a[aria-current]");
+  if (!nav) return;
+  if (previousScroll !== undefined) nav.scrollTop = previousScroll;
+  if (!current) return;
+  const section = current.closest("details");
+  if (section) section.open = true;
+  const area = nav.getBoundingClientRect();
+  const link = current.getBoundingClientRect();
+  const margin = 24;
+  const above = link.top < area.top + margin;
+  if (!above && link.bottom <= area.bottom - margin) return;
+  const top =
+    previousScroll === undefined
+      ? nav.scrollTop + link.top - area.top - (area.height - link.height) / 2
+      : above
+        ? nav.scrollTop + link.top - area.top - margin
+        : nav.scrollTop + link.bottom - area.bottom + margin;
+  const instant = previousScroll === undefined || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  nav.scrollTo({ top, behavior: instant ? "instant" : "smooth" });
+}
+
+let navScroll: number | undefined;
 document.addEventListener("astro:before-swap", (event: TransitionBeforeSwapEvent) => {
   event.newDocument.documentElement.dataset["theme"] = document.documentElement.dataset["theme"] ?? "dark";
+  navScroll = document.querySelector(".sidebar-nav")?.scrollTop;
+  const open = [...document.querySelectorAll<HTMLDetailsElement>(".sidebar-nav details")].map((d) => d.open);
+  event.newDocument.querySelectorAll<HTMLDetailsElement>(".sidebar-nav details").forEach((d, i) => {
+    if (open[i] === false) d.open = false;
+  });
 });
+document.addEventListener("astro:after-swap", () => revealCurrentPage(navScroll ?? 0));
 document.addEventListener("astro:page-load", initializePage);
 initializePage();
+revealCurrentPage();
