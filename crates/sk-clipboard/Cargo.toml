@@ -9,7 +9,7 @@ homepage.workspace = true
 
 [dependencies]
 # The `ClipboardHost` trait is declared in redjs and implemented here.
-sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false, features = ["clipboard"] }
+sk-runtime = { path = "../sk-runtime", version = "0.4.0", default-features = false, features = ["clipboard"] }
 # Not a second clipboard: gpui already owns the OS clipboard for the native <input>, and two
 # owners of one `OpenClipboard` race.
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.4.1", default-features = false }

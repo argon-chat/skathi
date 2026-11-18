@@ -38,7 +38,7 @@
     },
     "packages/cli": {
       "name": "@skathi-native/cli",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "bin": {
         "sk": "./cli/sk.ts",
       },
@@ -65,7 +65,7 @@
     },
     "packages/create-skathi": {
       "name": "create-skathi",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "bin": {
         "create-skathi": "./create-skathi.ts",
       },
@@ -75,7 +75,7 @@
     },
     "packages/runtime": {
       "name": "@skathi-native/runtime",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "devDependencies": {
         "pinia": "4.0.3",
         "svelte": "5.57.3",
@@ -93,7 +93,7 @@
     },
     "packages/test": {
       "name": "@skathi-native/test",
-      "version": "0.3.0",
+      "version": "0.4.0",
     },
   },
   "packages": {

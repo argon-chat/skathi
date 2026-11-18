@@ -5308,7 +5308,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "sk-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -5362,7 +5362,7 @@ dependencies = [
 
 [[package]]
 name = "sk-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "redjs",
  "windows 0.62.2",
@@ -5371,7 +5371,7 @@ dependencies = [
 
 [[package]]
 name = "sk-clipboard"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "sk-runtime",
@@ -5381,7 +5381,7 @@ dependencies = [
 
 [[package]]
 name = "sk-css"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "lightningcss",
  "parcel_selectors",
@@ -5392,7 +5392,7 @@ dependencies = [
 
 [[package]]
 name = "sk-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ashpd",
  "async-io",
@@ -5419,7 +5419,7 @@ dependencies = [
 
 [[package]]
 name = "sk-effects"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5428,21 +5428,21 @@ dependencies = [
 
 [[package]]
 name = "sk-elements"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "skathi-gpui",
 ]
 
 [[package]]
 name = "sk-hotkeys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "sk-locale"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "sk-runtime",
@@ -5450,7 +5450,7 @@ dependencies = [
 
 [[package]]
 name = "sk-lottie"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "flate2",
  "image",
@@ -5463,11 +5463,11 @@ dependencies = [
 
 [[package]]
 name = "sk-payload"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "sk-permissions"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -5480,14 +5480,14 @@ dependencies = [
 
 [[package]]
 name = "sk-resample"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "sk-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "redjs",
  "redjs-webgpu",
@@ -5497,7 +5497,7 @@ dependencies = [
 
 [[package]]
 name = "sk-sticker"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "lz4_flex",
  "sk-lottie",
@@ -5507,7 +5507,7 @@ dependencies = [
 
 [[package]]
 name = "sk-storage"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "core-foundation",
  "futures-lite",
@@ -5522,7 +5522,7 @@ dependencies = [
 
 [[package]]
 name = "sk-thorvg-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cc",
  "flate2",
@@ -5531,7 +5531,7 @@ dependencies = [
 
 [[package]]
 name = "sk-tree"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2 0.6.2",
  "futures",
@@ -5561,7 +5561,7 @@ dependencies = [
 
 [[package]]
 name = "sk-video"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -5581,14 +5581,14 @@ dependencies = [
 
 [[package]]
 name = "sk-vpx-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "sk-webview"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "raw-window-handle",
  "serde_json",
@@ -5601,11 +5601,11 @@ dependencies = [
 
 [[package]]
 name = "sk-yuv"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "skathi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde_json",
  "sk-app",
@@ -6014,7 +6014,7 @@ version = "0.4.1"
 
 [[package]]
 name = "skathi-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -722,6 +722,7 @@ const graphics = section("Graphics and media", [
       notes: [
         "`panner.panningModel = 'spatial'` hands the panner to the system's spatial sound renderer (`ISpatialAudioClient`) as a dynamic audio object: the renderer gets its signal before panning, its position relative to the listener and its distance and cone gain, and does the 3D rendering itself.",
         "The rest of the graph plays in the renderer's static bed, up to 7.1.4, on the device `setSinkId()` chose.",
+        "Dolby Atmos for Headphones ignores the position of dynamic objects, so on that format Skathi pans each `'spatial'` panner across the 7.1.4 bed itself, between the two nearest speakers of a layer and between ear level and the heights by elevation.",
         "`audioContext.spatialAudio` reports `{ active, requested, format, maxObjects, objectsInUse, reason }`. `format` names the renderer (`windows-sonic`, `dolby-atmos-headphones`, `dolby-atmos-home-theater`, `dolby-atmos-speakers`, `dts-headphone-x`, `dts-x-ultra`, `dts-x-home-theater`).",
         "A context switches to the spatial renderer when its first panner asks for `'spatial'`. Contexts without one play through the ordinary output, as in a browser.",
       ],

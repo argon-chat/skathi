@@ -77,27 +77,27 @@ log = "0.4"
 raw-window-handle = "0.6"
 anyhow = "1"
 gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/crates/gpui_platform", version = "0.4.1", default-features = false }
-sk-css = { path = "../sk-css", version = "0.3.0" }
-sk-effects = { path = "../sk-effects", version = "0.3.0" }
-sk-elements = { path = "../sk-elements", version = "0.3.0" }
+sk-css = { path = "../sk-css", version = "0.4.0" }
+sk-effects = { path = "../sk-effects", version = "0.4.0" }
+sk-elements = { path = "../sk-elements", version = "0.4.0" }
 # `default-features = false` here and in every dependent of sk-runtime: features unify across the
 # graph, so one plain dependency would turn every sk-runtime default back on.
-sk-runtime = { path = "../sk-runtime", version = "0.3.0", default-features = false, features = ["net-h2"] }
+sk-runtime = { path = "../sk-runtime", version = "0.4.0", default-features = false, features = ["net-h2"] }
 # Direct, so build.rs gets the engine pin (DEP_REDJS_WEBKIT_VERSION).
 redjs = { path = "../../vendor/redjs/redjs", version = "0.3.1", default-features = false }
-sk-tree = { path = "../sk-tree", version = "0.3.0", default-features = false }
-sk-webview = { path = "../sk-webview", version = "0.3.0", optional = true }
-sk-sticker = { path = "../sk-sticker", version = "0.3.0", default-features = false, optional = true }
-sk-payload = { path = "../sk-payload", version = "0.3.0" }
+sk-tree = { path = "../sk-tree", version = "0.4.0", default-features = false }
+sk-webview = { path = "../sk-webview", version = "0.4.0", optional = true }
+sk-sticker = { path = "../sk-sticker", version = "0.4.0", default-features = false, optional = true }
+sk-payload = { path = "../sk-payload", version = "0.4.0" }
 memmap2 = "0.9"
 self_cell = "1"
-sk-desktop = { path = "../sk-desktop", version = "0.3.0" }
-sk-hotkeys = { path = "../sk-hotkeys", version = "0.3.0", optional = true }
-sk-audio = { path = "../sk-audio", version = "0.3.0", optional = true }
-sk-permissions = { path = "../sk-permissions", version = "0.3.0" }
-sk-locale = { path = "../sk-locale", version = "0.3.0" }
-sk-storage = { path = "../sk-storage", version = "0.3.0", optional = true }
-sk-clipboard = { path = "../sk-clipboard", version = "0.3.0", optional = true }
+sk-desktop = { path = "../sk-desktop", version = "0.4.0" }
+sk-hotkeys = { path = "../sk-hotkeys", version = "0.4.0", optional = true }
+sk-audio = { path = "../sk-audio", version = "0.4.0", optional = true }
+sk-permissions = { path = "../sk-permissions", version = "0.4.0" }
+sk-locale = { path = "../sk-locale", version = "0.4.0" }
+sk-storage = { path = "../sk-storage", version = "0.4.0", optional = true }
+sk-clipboard = { path = "../sk-clipboard", version = "0.4.0", optional = true }
 futures = "0.3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sha2 = "0.10"
@@ -109,7 +109,7 @@ specta-serde = { version = "=0.0.15", optional = true }
 specta-typescript = { version = "=0.0.15", optional = true }
 
 [dev-dependencies]
-skathi-macros = { path = "../skathi-macros", features = ["types"] }
+skathi-macros = { path = "../skathi-macros", version = "0.4.0", features = ["types"] }
 # The marshalling conformance test compares against serde_json reading floats exactly.
 serde_json = { version = "1", features = ["float_roundtrip"] }
 

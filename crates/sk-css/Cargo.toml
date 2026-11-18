@@ -14,7 +14,7 @@ gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", versio
 # both share one `Selector` type; `into_owned` lets a compiled rule own its selector.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["into_owned"] }
 parcel_selectors = "0.28.3"
-sk-effects = { path = "../sk-effects", version = "0.3.0" }
+sk-effects = { path = "../sk-effects", version = "0.4.0" }
 
 [dev-dependencies]
 serde_json = "1"

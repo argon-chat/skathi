@@ -3,7 +3,6 @@ title: Skathi 0.4
 description: Rust modules the app imports like any other, native frames in HDR, surround and spatial Web Audio, container queries and scroll snapping, and the three things to change when you upgrade.
 date: 2026-11-18
 tags: [release, embedding, css, audio]
-draft: true
 release:
   version: "0.4.0"
   platforms: Windows, macOS and Linux
@@ -226,11 +225,11 @@ source.start();
 
 ### Spatial audio on Windows
 
-Set a panner's `panningModel` to `"spatial"` and Skathi hands it to the system's spatial sound renderer, Windows Sonic, Dolby Atmos or DTS, as a dynamic audio object. The renderer gets the signal before panning, its position relative to the listener and its distance and cone gain, and does the 3D rendering itself. The rest of the graph plays in the renderer's static bed, up to 7.1.4. `audioContext.spatialAudio` says what happened:
+Set a panner's `panningModel` to `"spatial"` and Skathi hands it to the system's spatial sound renderer, Windows Sonic, Dolby Atmos or DTS, as a dynamic audio object. The renderer gets the signal before panning, its position relative to the listener and its distance and cone gain, and does the 3D rendering itself. The rest of the graph plays in the renderer's static bed, up to 7.1.4. Dolby Atmos for Headphones ignores the position of dynamic objects, so there Skathi pans each `"spatial"` panner across the 7.1.4 bed itself, which Atmos does render in 3D. `audioContext.spatialAudio` says what happened:
 
 <Sample src="blog/SpatialPing" focus="panner,status" />
 
-The showcase template's Audio page has a new Spatial card that circles a quiet pulse around the listener. On Dolby Atmos for Headphones it reports `dolby-atmos-headphones · 1/64 objects · 12 output channels`.
+The showcase template's Audio page has a new Spatial card: a top-down 7.1.4 room where you drag a source around the listener and up over their head, snap it to any speaker, set it orbiting, switch between `spatial`, `HRTF` and `equalpower` to compare, and run a speaker test over the bed channels.
 
 The renderer lives in a new crate, `sk-audio`, behind the `spatial-audio` Cargo feature of `skathi`. It is on by default and costs about 0.1 MB.
 
