@@ -232,16 +232,21 @@ impl Gpu {
 }
 
 impl Queue {
-    /// A closed command list to reset, once the work that last used it is done.
-    fn commands(
-        &self,
-        submit: &mut Submit,
-    ) -> Result<(ID3D12CommandAllocator, ID3D12GraphicsCommandList), SurfaceError> {
+    /// Takes back the command lists of finished work and lets go of the slots it held.
+    fn reclaim(&self, submit: &mut Submit) {
         let completed = unsafe { self.fence.GetCompletedValue() };
         while submit.pending.front().is_some_and(|p| p.value <= completed) {
             let done = submit.pending.pop_front().expect("checked");
             submit.free.push(done.commands);
         }
+    }
+
+    /// A closed command list to reset, once the work that last used it is done.
+    fn commands(
+        &self,
+        submit: &mut Submit,
+    ) -> Result<(ID3D12CommandAllocator, ID3D12GraphicsCommandList), SurfaceError> {
+        self.reclaim(submit);
         let (allocator, commands) = match submit.free.pop() {
             Some(pair) => pair,
             None => {
@@ -806,6 +811,8 @@ fn copy_in(
     let (size, format) = describe(source)?;
     check_format(state.format, format)?;
     let queue = state.gpu12.queue(gpu)?;
+    // A finished copy's slot is held until reclaimed; nothing else reclaims while every slot is.
+    queue.reclaim(&mut lock(&queue.submit));
     let index = state.gpu12.free_slot(gpu, size, format)?;
     let target = state.gpu12.slots[index].texture.clone();
     if let Some(mut drawn) = target.drawn() {
@@ -1274,6 +1281,28 @@ mod tests {
             .wait(presented.release, Duration::from_secs(5)));
         assert!(!stalled.lock_state().gpu12.ready().unwrap().done());
         unsafe { never.Signal(1) }.unwrap();
+    }
+
+    #[test]
+    fn every_slot_queued_then_finished_takes_the_next_present() {
+        let r = renderer();
+        let s = surface("tests:d3d12-reclaim");
+        let state = D3D12_RESOURCE_STATE_COMMON.0;
+        let source = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[1, 2, 3, 255]);
+        let producer: ID3D12Fence =
+            unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let mut last = 0;
+        for _ in 0..MAX_SLOTS {
+            last = unsafe { s.present_d3d12(source.as_raw(), state, Some((producer.as_raw(), 1))) }
+                .unwrap()
+                .release;
+        }
+        unsafe { producer.Signal(1) }.unwrap();
+        assert!(s
+            .release_fence()
+            .unwrap()
+            .wait(last, Duration::from_secs(5)));
+        assert!(unsafe { s.present_d3d12(source.as_raw(), state, None) }.is_ok());
     }
 
     #[test]

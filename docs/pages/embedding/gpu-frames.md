@@ -125,7 +125,7 @@ let release = surface.release_fence()?;
 release.wait(presented.release, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
 ```
 
-`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface's textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames.
+`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface's textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames. Since 0.5 a texture is free again as soon as its copy has finished; before, in an HDR window, four copies queued at once could leave every later present `Busy`.
 
 ## Textures from another device, API or process
 
