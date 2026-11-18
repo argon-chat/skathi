@@ -328,6 +328,8 @@ type Feedback = {
   lostAt: number[];
   /** When each present began, and whether it was taken. */
   attempts: [number, boolean][];
+  /** When each frame dropped as hidden was presented. */
+  hiddenAt: number[];
 };
 
 type Producer = {
@@ -568,6 +570,135 @@ test.skipIf(!WINDOWS)(
     } finally {
       if (cover) user32.symbols.DestroyWindow(cover);
       user32.close();
+      await watched.close();
+    }
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "frames show again within a few refreshes of a restore or of the cover going away",
+  async () => {
+    const { dlopen, FFIType, ptr } = await import("bun:ffi");
+    const user32 = dlopen("user32.dll", {
+      CreateWindowExW: {
+        args: [
+          FFIType.u32,
+          FFIType.ptr,
+          FFIType.ptr,
+          FFIType.u32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.u64,
+          FFIType.u64,
+          FFIType.u64,
+          FFIType.ptr,
+        ],
+        returns: FFIType.u64,
+      },
+      ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+      DestroyWindow: { args: [FFIType.u64], returns: FFIType.i32 },
+      GetWindowRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+      IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
+      SetWindowPos: {
+        args: [FFIType.u64, FFIType.u64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
+        returns: FFIType.i32,
+      },
+    });
+    const kernel32 = dlopen("kernel32.dll", {
+      QueryPerformanceCounter: { args: [FFIType.ptr], returns: FFIType.i32 },
+      QueryPerformanceFrequency: { args: [FFIType.ptr], returns: FFIType.i32 },
+    });
+    // `monotonic_ns`: QPC in nanoseconds.
+    const qpc = new BigInt64Array(1);
+    kernel32.symbols.QueryPerformanceFrequency(ptr(qpc));
+    const frequency = qpc[0]!;
+    const now = () => {
+      kernel32.symbols.QueryPerformanceCounter(ptr(qpc));
+      const t = qpc[0]!;
+      return Number((t / frequency) * 1_000_000_000n + ((t % frequency) * 1_000_000_000n) / frequency);
+    };
+    const watched = await open("surface-reshown", { SK_OCCLUSION: "1" });
+    let cover = 0n;
+    try {
+      const ring: Producer = { name: "feedback", source: "bgra", ring: 3, on: watched };
+      const hwnd = await watched.hwnd();
+      user32.symbols.SetWindowPos(hwnd, 0n, 0, 0, 0, 0, 0x13);
+      const shown = await until(
+        () => callOn(watched, "stats", "feedback") as Promise<Stats>,
+        (s) => s.visible,
+        2_000,
+      );
+      // A window of the desktop's that stays above the harness window leaves it covered throughout.
+      if (!shown.visible) return;
+      // How long after `at` frames still dropped as hidden.
+      const hiddenFor = (f: Feedback, at: number) => Math.max(0, ...f.hiddenAt.map((t) => (t - at) / 1e6));
+
+      let restoredAt = 0;
+      const restore = await feedback(
+        60,
+        300,
+        false,
+        async () => {
+          await watched.eval("__sk_window_verb('minimize'); 'ok'");
+          const by = Date.now() + 10_000;
+          while (user32.symbols.IsIconic(hwnd) === 0 && Date.now() < by) await Bun.sleep(20);
+          await Bun.sleep(1_000);
+          restoredAt = now();
+          user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+          await Bun.sleep(600);
+        },
+        ring,
+      );
+
+      const rect = new Int32Array(4);
+      user32.symbols.GetWindowRect(hwnd, ptr(rect));
+      const [left, top, right, bottom] = rect;
+      let uncoveredAt = 0;
+      const uncover = await feedback(
+        60,
+        300,
+        false,
+        async () => {
+          cover = BigInt(
+            user32.symbols.CreateWindowExW(
+              0x0800_0088,
+              ptr(Buffer.from("STATIC\0", "utf16le")),
+              null,
+              0x8000_0000,
+              left! - 8,
+              top! - 8,
+              right! - left! + 16,
+              bottom! - top! + 16,
+              0n,
+              0n,
+              0n,
+              null,
+            ),
+          );
+          user32.symbols.ShowWindow(cover, 4 /* SW_SHOWNOACTIVATE */);
+          await Bun.sleep(500);
+          uncoveredAt = now();
+          user32.symbols.DestroyWindow(cover);
+          cover = 0n;
+          await Bun.sleep(600);
+        },
+        ring,
+      );
+      console.log(
+        `hidden after a restore for ${hiddenFor(restore, restoredAt).toFixed(1)} ms (${restore.hidden} hidden), ` +
+          `after the cover went away for ${hiddenFor(uncover, uncoveredAt).toFixed(1)} ms (${uncover.hidden} hidden)`,
+      );
+      expect(restore.hidden).toBeGreaterThan(0);
+      expect(uncover.hidden).toBeGreaterThan(0);
+      expect(hiddenFor(restore, restoredAt)).toBeLessThan(100);
+      expect(hiddenFor(uncover, uncoveredAt)).toBeLessThan(100);
+    } finally {
+      if (cover) user32.symbols.DestroyWindow(cover);
+      user32.close();
+      kernel32.close();
       await watched.close();
     }
   },

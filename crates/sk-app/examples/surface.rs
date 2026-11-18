@@ -530,6 +530,25 @@ mod feedback {
         summary["error"] = produced.error.into();
         summary["visibleLate"] = visible_late.into();
         summary["lostAt"] = json!(*run.lost.lock().unwrap());
+        let began: HashMap<u64, u64> = produced
+            .attempts
+            .iter()
+            .filter(|(_, taken)| *taken)
+            .map(|(at, _)| *at)
+            .zip(ids)
+            .map(|(at, id)| (*id, at))
+            .collect();
+        let hidden_at: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match *e {
+                FrameEvent::Dropped {
+                    frame,
+                    reason: FrameDropReason::Hidden,
+                } => began.get(&frame).copied(),
+                _ => None,
+            })
+            .collect();
+        summary["hiddenAt"] = json!(hidden_at);
         summary["attempts"] = json!(produced.attempts);
         summary
     }

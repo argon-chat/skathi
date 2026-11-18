@@ -1102,6 +1102,7 @@ pub fn occluded() -> bool {
     use crate::occlusion::{self, Seen};
     thread_local! {
         static LAST: Cell<Option<(std::time::Instant, Seen, bool)>> = const { Cell::new(None) };
+        static WATCH: RefCell<Option<occlusion::Watch>> = const { RefCell::new(None) };
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let on = *ON.get_or_init(
@@ -1119,6 +1120,8 @@ pub fn occluded() -> bool {
     let seen = Seen {
         foreground: occlusion::foreground(),
         display_off: occlusion::display_off(),
+        own: occlusion::own(main),
+        events: occlusion::events(),
     };
     if let Some((at, then, answer)) = LAST.with(Cell::get) {
         if occlusion::still_holds(now.saturating_duration_since(at), then, seen) {
@@ -1132,6 +1135,14 @@ pub fn occluded() -> bool {
                 .filter_map(hwnd_of)
                 .all(occlusion::hwnd_unseen);
     LAST.with(|l| l.set(Some((now, seen, answer))));
+    // Only a covered window needs to hear the others move; a minimised one hears its own restore.
+    let watch = answer && !seen.display_off && !seen.own.0;
+    WATCH.with(|w| {
+        let mut w = w.borrow_mut();
+        if watch != w.is_some() {
+            *w = watch.then(occlusion::Watch::start);
+        }
+    });
     answer
 }
 

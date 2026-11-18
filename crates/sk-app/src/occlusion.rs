@@ -6,9 +6,10 @@
 //! `requestAnimationFrame`, and JS on the background tick (src/background.rs).
 //!
 //! Chromium recomputes on window events from a thread of its own. Here the frame pump asks, and
-//! [`RECHECK`] bounds how often the walk runs, unless the foreground window or the display's power
-//! state changed since. A display the system turned off counts as covering every window, as in
-//! Chromium.
+//! [`RECHECK`] bounds how often the walk runs, unless what the answer was computed under changed
+//! since: the foreground window, the display's power state, our window's placement, or, while the
+//! window is covered, any top-level window ([`Watch`]). A display the system turned off counts as
+//! covering every window, as in Chromium.
 
 use std::time::Duration;
 
@@ -19,6 +20,10 @@ pub const RECHECK: Duration = Duration::from_millis(200);
 pub struct Seen {
     pub foreground: isize,
     pub display_off: bool,
+    /// Our window: minimised, and its rect.
+    pub own: (bool, Rect),
+    /// [`Watch`]'s count of window events.
+    pub events: u64,
 }
 
 /// Whether an answer computed `age` ago under `then` still stands `now`.
@@ -93,10 +98,125 @@ pub fn covered(target: Rect, displays: &[Rect], above: impl IntoIterator<Item = 
 
 #[cfg(target_os = "windows")]
 mod win {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use std::sync::Arc;
 
     use super::Rect;
-    use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, RECT};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetAncestor, GetMessageW, PeekMessageW, PostThreadMessageW, CHILDID_SELF,
+        EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE,
+        EVENT_OBJECT_REORDER, EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_MINIMIZEEND,
+        EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, MSG, OBJID_WINDOW, PM_NOREMOVE, WINEVENT_OUTOFCONTEXT,
+        WM_QUIT,
+    };
+
+    static EVENTS: AtomicU64 = AtomicU64::new(0);
+    /// A frame was asked for since the last [`events`]: one is enough to walk again.
+    static WOKEN: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "system" fn window_event(
+        _: HWINEVENTHOOK,
+        event: u32,
+        hwnd: HWND,
+        object: i32,
+        child: i32,
+        _: u32,
+        _: u32,
+    ) {
+        if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 || hwnd.is_invalid() {
+            return;
+        }
+        // A destroyed window has no ancestors left to ask about.
+        if event != EVENT_OBJECT_DESTROY && unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd {
+            return;
+        }
+        EVENTS.fetch_add(1, Ordering::SeqCst);
+        if !WOKEN.swap(true, Ordering::SeqCst) {
+            sk_runtime::frames::wake();
+        }
+    }
+
+    pub fn events() -> u64 {
+        WOKEN.store(false, Ordering::SeqCst);
+        EVENTS.load(Ordering::SeqCst)
+    }
+
+    /// Counts top-level windows shown, hidden, moved, restacked, minimised or cloaked, and asks for
+    /// a frame on the first since the last look, while it lives. The hooks run on a thread of their
+    /// own: a moving mouse alone sends them hundreds of events a second.
+    pub struct Watch {
+        thread: Arc<AtomicU32>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Watch {
+        pub fn start() -> Self {
+            let thread = Arc::new(AtomicU32::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (id, stopping) = (thread.clone(), stop.clone());
+            let _ = std::thread::Builder::new()
+                .name("sk-occlusion".into())
+                .spawn(move || {
+                    let mut msg = MSG::default();
+                    // SAFETY: creates this thread's queue, so a WM_QUIT posted from now on lands.
+                    let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
+                    let hooks: Vec<HWINEVENTHOOK> = [
+                        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+                        (EVENT_OBJECT_DESTROY, EVENT_OBJECT_REORDER),
+                        (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
+                        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+                    ]
+                    .into_iter()
+                    .map(|(from, to)| unsafe {
+                        SetWinEventHook(
+                            from,
+                            to,
+                            None,
+                            Some(window_event),
+                            0,
+                            0,
+                            WINEVENT_OUTOFCONTEXT,
+                        )
+                    })
+                    .filter(|h| !h.is_invalid())
+                    .collect();
+                    id.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+                    if !stopping.load(Ordering::SeqCst) {
+                        // Out-of-context hooks are called from inside GetMessageW.
+                        while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
+                            unsafe { DispatchMessageW(&msg) };
+                        }
+                    }
+                    for hook in hooks {
+                        let _ = unsafe { UnhookWinEvent(hook) };
+                    }
+                });
+            Self { thread, stop }
+        }
+    }
+
+    impl Drop for Watch {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let id = self.thread.load(Ordering::SeqCst);
+            if id != 0 {
+                let _ = unsafe { PostThreadMessageW(id, WM_QUIT, WPARAM(0), LPARAM(0)) };
+            }
+        }
+    }
+
+    pub fn own(raw: isize) -> (bool, Rect) {
+        let h = HWND(raw as *mut _);
+        let mut r = RECT::default();
+        let _ = unsafe { GetWindowRect(h, &mut r) };
+        (
+            unsafe { IsIconic(h) }.as_bool(),
+            (r.left, r.top, r.right, r.bottom),
+        )
+    }
+    use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, RECT, WPARAM};
     use windows::Win32::Graphics::Dwm::{
         DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
     };
@@ -293,9 +413,23 @@ mod win {
     pub fn foreground() -> isize {
         0
     }
+    pub fn own(_raw: isize) -> (bool, super::Rect) {
+        (false, (0, 0, 0, 0))
+    }
+    pub fn events() -> u64 {
+        0
+    }
+    pub struct Watch;
+    impl Watch {
+        pub fn start() -> Self {
+            Watch
+        }
+    }
 }
 
-pub use win::{covered as hwnd_covered, display_off, foreground, unseen as hwnd_unseen};
+pub use win::{
+    covered as hwnd_covered, display_off, events, foreground, own, unseen as hwnd_unseen, Watch,
+};
 
 #[cfg(test)]
 mod tests {
@@ -373,6 +507,8 @@ mod tests {
         let seen = Seen {
             foreground: 7,
             display_off: false,
+            own: (false, (100, 100, 900, 700)),
+            events: 3,
         };
         let short = Duration::from_millis(50);
         assert!(still_holds(short, seen, seen));
@@ -391,6 +527,35 @@ mod tests {
         };
         assert!(!still_holds(short, seen, off));
         assert!(!still_holds(short, off, seen), "the display came back");
+    }
+
+    #[test]
+    fn a_cached_answer_is_dropped_when_our_window_or_another_one_changes() {
+        let minimised = Seen {
+            foreground: 7,
+            display_off: false,
+            own: (true, (-32000, -32000, -31840, -31972)),
+            events: 3,
+        };
+        let short = Duration::from_millis(1);
+        let restored = Seen {
+            own: (false, (100, 100, 900, 700)),
+            ..minimised
+        };
+        assert!(!still_holds(short, minimised, restored));
+        let resized = Seen {
+            own: (false, (100, 100, 1000, 700)),
+            ..restored
+        };
+        assert!(!still_holds(short, restored, resized));
+        let moved_away = Seen {
+            events: 4,
+            ..restored
+        };
+        assert!(
+            !still_holds(short, restored, moved_away),
+            "the cover went away"
+        );
     }
 
     #[test]
