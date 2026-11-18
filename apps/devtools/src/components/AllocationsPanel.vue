@@ -183,7 +183,7 @@ onBeforeUnmount(() => {
         ><span class="bytes">{{ baseline ? "Live Δ" : "Captured live" }}</span
         ><span class="bytes allocated">Allocated</span><span class="blocks">Blocks</span>
       </div>
-      <div class="allocation-rows" @scroll="scroll = $event.target.scrollTop" :aria-busy="busy">
+      <div class="allocation-rows" @scroll="scroll = ($event.target as HTMLElement).scrollTop" :aria-busy="busy">
         <div :style="{ height: windowed.padTop + 'px' }"></div>
         <button
           v-for="row in visible"

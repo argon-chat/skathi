@@ -12,7 +12,8 @@
     "types": [],
     "paths": {
       "vue": ["./src/runtime.ts"],
-      "@skathi-native/runtime": ["./src/runtime.ts"]
+      "@skathi-native/runtime": ["./src/runtime.ts"],
+      "@skathi-native/runtime/jsx-runtime": ["./jsx-runtime.d.ts"]
     }
   },
   "vueCompilerOptions": { "lib": "@skathi-native/runtime" },

@@ -11,6 +11,7 @@
     "paths": {
       "vue": ["../packages/runtime/src/runtime.ts"],
       "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime/jsx-runtime": ["../packages/runtime/jsx-runtime.d.ts"],
       "vue-router": ["../node_modules/vue-router"],
       "pinia": ["../node_modules/pinia"]
     },

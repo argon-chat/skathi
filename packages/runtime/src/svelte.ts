@@ -85,16 +85,52 @@ type SurfaceDisplayEvent = Event & {
   readonly variableRefresh: boolean | null;
 };
 
+/** `SkLottieFrameEvent`, `SkLottieLoopEvent` and `SkLottieCompleteEvent` in the app's types (env.d.ts). */
+type LottieEvent<T> = Event & { readonly currentTime: number; readonly totalTime: number } & T;
+
+type Numberish = number | `${number}`;
+type SizeHints = { width?: Numberish | undefined; height?: Numberish | undefined };
+
 declare module "svelte/elements" {
   interface SvelteHTMLElements {
     /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */
-    "sk-surface": HTMLAttributes<HTMLElement> & {
-      name?: string | undefined;
-      onsurfaceresize?: ((event: SurfaceEvent) => void) | undefined;
-      onsurfaceready?: ((event: SurfaceEvent) => void) | undefined;
-      onsurfacelost?: ((event: SurfaceEvent) => void) | undefined;
-      onsurfacedisplaychange?: ((event: SurfaceDisplayEvent) => void) | undefined;
-    };
+    "sk-surface": HTMLAttributes<HTMLElement> &
+      SizeHints & {
+        name?: string | undefined;
+        onsurfaceresize?: ((event: SurfaceEvent) => void) | undefined;
+        onsurfaceready?: ((event: SurfaceEvent) => void) | undefined;
+        onsurfacelost?: ((event: SurfaceEvent) => void) | undefined;
+        onsurfacedisplaychange?: ((event: SurfaceDisplayEvent) => void) | undefined;
+      };
+    /** Plays a Lottie animation (`.json` or `.lottie`). */
+    lottie: HTMLAttributes<HTMLElement> &
+      SizeHints & {
+        src?: string | undefined;
+        autoplay?: Booleanish | undefined;
+        /** Present: loop forever. A number `n`: play `n` more times. */
+        loop?: Booleanish | Numberish | undefined;
+        speed?: Numberish | undefined;
+        direction?: 1 | -1 | "1" | "-1" | "forward" | "reverse" | undefined;
+        mode?: "normal" | "bounce" | undefined;
+        /** Two source frame numbers: `"30,59"`. */
+        segment?: string | undefined;
+        objectfit?: "fill" | "contain" | "cover" | "scale-down" | "none" | undefined;
+        onenterframe?: ((event: LottieEvent<{ elapsed: number; progress: number }>) => void) | undefined;
+        onloopcomplete?: ((event: LottieEvent<{ currentLoop: number }>) => void) | undefined;
+        oncomplete?: ((event: LottieEvent<{ loops: number }>) => void) | undefined;
+      };
+    /** An animated sticker from Lottie (`.json`, `.tgs`) or WebM with alpha; copies of one source share a decode. */
+    "sk-sticker": HTMLAttributes<HTMLElement> &
+      SizeHints & {
+        src?: string | undefined;
+        play?: "auto" | "on" | "off" | undefined;
+        /** `once` in Vue and HTML: Svelte takes any `on…` attribute for an event handler. */
+        "play-once"?: Booleanish | undefined;
+        tint?: Booleanish | undefined;
+        "max-fps"?: Numberish | undefined;
+        kind?: "auto" | "lottie" | "video" | "image" | undefined;
+        onended?: ((event: Event) => void) | undefined;
+      };
   }
 }
 

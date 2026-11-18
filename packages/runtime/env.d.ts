@@ -864,7 +864,7 @@ declare global {
   }
   /**
    * `<sk-surface>`'s `surfacedisplaychange`: the display the element is on, first known or changed. Values are in the
-   * surface's unit, where 1.0 is SDR white; frames are shown clamped to 1.0 for now. Not web API.
+   * surface's unit, where 1.0 is SDR white. Not web API.
    */
   interface SkSurfaceDisplayEvent extends Event {
     /** The brightest value the display shows now; 1 on an SDR display. */
@@ -879,11 +879,25 @@ declare global {
     /** `null` where the platform does not say (Windows, Linux). */
     readonly variableRefresh: boolean | null;
   }
-  /** `<lottie>`'s `loop` event. Not web API. */
+  /** `<lottie>`'s `enterFrame` event; the same numbers are on `detail`. Not web API. */
+  interface SkLottieFrameEvent extends Event {
+    readonly currentTime: number;
+    readonly totalTime: number;
+    readonly elapsed: number;
+    /** 0 to 1. */
+    readonly progress: number;
+  }
+  /** `<lottie>`'s `loopComplete` event. Not web API. */
   interface SkLottieLoopEvent extends Event {
     readonly currentTime: number;
     readonly totalTime: number;
     readonly currentLoop: number;
+  }
+  /** `<lottie>`'s `complete` event. Not web API. */
+  interface SkLottieCompleteEvent extends Event {
+    readonly currentTime: number;
+    readonly totalTime: number;
+    readonly loops: number;
   }
 
   interface CanvasGradient {
@@ -1037,6 +1051,7 @@ declare global {
     legend: HTMLLegendElement;
     li: HTMLLIElement;
     link: HTMLLinkElement;
+    lottie: HTMLElement;
     main: HTMLElement;
     map: HTMLMapElement;
     mark: HTMLElement;
@@ -1059,6 +1074,7 @@ declare global {
     script: HTMLScriptElement;
     section: HTMLElement;
     select: HTMLSelectElement;
+    "sk-sticker": HTMLElement;
     "sk-surface": HTMLElement;
     slot: HTMLSlotElement;
     small: HTMLElement;

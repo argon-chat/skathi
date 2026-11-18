@@ -4,7 +4,8 @@
     "lib": ["ESNext"],
     "paths": {
       "vue": ["../../../packages/runtime/src/runtime.ts"],
-      "@skathi-native/runtime": ["../../../packages/runtime/src/runtime.ts"]
+      "@skathi-native/runtime": ["../../../packages/runtime/src/runtime.ts"],
+      "@skathi-native/runtime/jsx-runtime": ["../../../packages/runtime/jsx-runtime.d.ts"]
     },
     "types": []
   },

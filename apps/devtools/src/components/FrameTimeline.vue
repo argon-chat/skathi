@@ -391,7 +391,12 @@ onBeforeUnmount(() => {
           ><span>{{ milliseconds(range.end) }}</span>
         </div>
       </div>
-      <div class="call-scroll" @scroll="scroll = $event.target.scrollTop" role="tree" aria-label="Frame calls">
+      <div
+        class="call-scroll"
+        @scroll="scroll = ($event.target as HTMLElement).scrollTop"
+        role="tree"
+        aria-label="Frame calls"
+      >
         <div :style="{ height: windowed.padTop + 'px' }"></div>
         <button
           v-for="row in visible"

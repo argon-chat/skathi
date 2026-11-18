@@ -135,7 +135,8 @@ fn props_of(t: &Tree, id: u32, node: &crate::tree::Node, prev: Option<&Arc<str>>
         image: kind.as_deref() == Some("image"),
         tint: bool_attr(t.prop(id, "tint")),
         play,
-        once: bool_attr(t.prop(id, "once")),
+        // Svelte compiles any `on…` attribute as an event handler, so `once` has a spelling it can write.
+        once: bool_attr(t.prop(id, "once").or_else(|| t.prop(id, "play-once"))),
         max_fps,
         fit,
     }

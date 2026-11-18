@@ -11,6 +11,7 @@
   "files": [
     "src",
     "env.d.ts",
+    "jsx-runtime.d.ts",
     "tsconfig.app.json",
     "tsconfig.svelte.json",
     "sk.config.schema.json",
@@ -20,6 +21,9 @@
   "exports": {
     ".": "./src/runtime.ts",
     "./svelte": "./src/svelte.ts",
+    "./jsx-runtime": {
+      "types": "./jsx-runtime.d.ts"
+    },
     "./package.json": "./package.json",
     "./tsconfig.app.json": "./tsconfig.app.json",
     "./tsconfig.svelte.json": "./tsconfig.svelte.json",
