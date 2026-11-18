@@ -12,7 +12,7 @@ import Command from "../components/Command.astro";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import Parallax from "../components/Parallax.astro";
-import Pup from "../components/Pup.astro";
+import SiteFooter from "../components/SiteFooter.astro";
 import SiteNav from "../components/SiteNav.astro";
 import { repository, version } from "../lib/docs";
 import { fetchStats } from "../lib/stats";
@@ -828,14 +828,7 @@ const structuredData = {
       </section>
     </main>
 
-    <footer class="site-footer landing-footer">
-      <a href="/">Skathi</a><span>Native by nature.</span><a href="/llms.txt">llms.txt</a><a
-        href={`${repository}/blob/master/LICENSE-MIT`}
-        target="_blank"
-        rel="noreferrer">MIT / Apache-2.0</a
-      >
-      <Pup class="landing-pup" />
-    </footer>
+    <SiteFooter />
     <script>
       import "../scripts/docs";
       import "../scripts/landing";

@@ -515,17 +515,6 @@
     margin: 26px auto 0;
   }
 
-  .landing-footer {
-    width: min(1120px, 100% - 48px);
-    margin: 0 auto;
-  }
-  .landing-footer > span {
-    margin-right: auto;
-  }
-  .landing-footer > a:last-child {
-    margin-left: 0;
-  }
-
   .shading {
     width: min(1120px, 100% - 48px);
     margin: 0 auto;

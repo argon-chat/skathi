@@ -1,0 +1,84 @@
+---
+import wolf from "../../../logos/logo_single.svg?url";
+import Icon from "./Icon.astro";
+import Pup from "./Pup.astro";
+import { docsHome, repository, version } from "../lib/docs";
+import { blogFeed, blogHome } from "../lib/blog";
+
+interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+const year = new Date().getFullYear();
+
+const columns = [
+  {
+    title: "Learn",
+    links: [
+      { label: "Introduction", href: docsHome },
+      { label: "Quick start", href: "/quick-start/" },
+      { label: "Best practices", href: "/guides/best-practices/" },
+      { label: "Compared with others", href: "/comparison/" },
+    ],
+  },
+  {
+    title: "Reference",
+    links: [
+      { label: "CSS", href: "/css/" },
+      { label: "App API", href: "/app-api/" },
+      { label: "Devtools", href: "/devtools/overview/" },
+      { label: "Embedding", href: "/embedding/overview/" },
+    ],
+  },
+  {
+    title: "Project",
+    links: [
+      { label: "Blog", href: blogHome },
+      { label: "Releases", href: `${repository}/releases`, external: true },
+      { label: "Issues", href: `${repository}/issues`, external: true },
+      { label: "llms.txt", href: "/llms.txt" },
+    ],
+  },
+];
+---
+
+<footer class:list={["page-footer", className]}>
+  <div class="page-footer-top">
+    <div class="page-footer-brand">
+      <a class="page-footer-mark" href="/" aria-label="Skathi home">
+        <img src={wolf} width="30" height="30" alt="" /><span>Skathi</span>
+      </a>
+      <p class="page-footer-tagline">Native by nature.</p>
+      <p class="page-footer-about">Desktop apps from Vue and Svelte, rendered natively, without a browser.</p>
+      <div class="page-footer-social">
+        <a href={`${repository}/releases`} class="page-footer-version" target="_blank" rel="noreferrer">v{version}</a>
+        <a href={repository} target="_blank" rel="noreferrer" aria-label="Skathi on GitHub"
+          ><Icon name="github" size={18} /></a
+        >
+        <a href={blogFeed} aria-label="Blog RSS feed"><Icon name="rss" size={18} /></a>
+      </div>
+    </div>
+    {
+      columns.map((column) => (
+        <nav class="page-footer-column" aria-label={column.title}>
+          <p>{column.title}</p>
+          {column.links.map((link) =>
+            link.external ? (
+              <a href={link.href} target="_blank" rel="noreferrer">
+                {link.label}
+              </a>
+            ) : (
+              <a href={link.href}>{link.label}</a>
+            ),
+          )}
+        </nav>
+      ))
+    }
+  </div>
+  <div class="page-footer-bottom">
+    <Pup class="page-footer-pup" />
+    <span>© {year} Argon Inc. LLC</span>
+    <a href={`${repository}/blob/master/LICENSE-MIT`} target="_blank" rel="noreferrer">MIT / Apache-2.0</a>
+  </div>
+</footer>

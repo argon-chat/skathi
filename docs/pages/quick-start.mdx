@@ -12,7 +12,17 @@ Go from a fresh directory to a native window using Bun and the Skathi CLI. Write
 
 ## Before you begin
 
-Install [Bun](https://bun.sh/) 1.4 or later and use a supported desktop platform: Windows x64, macOS on Apple silicon, or Linux x64.
+Skathi runs on Windows x64, macOS on Apple silicon and Linux x64. Its CLI needs [Bun](https://bun.sh/) 1.4 or later:
+
+```powershell title="Windows" os="windows"
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+```bash title="macOS and Linux" os="unix"
+curl -fsSL https://bun.sh/install | bash
+```
+
+Open a new terminal afterwards so `bun` is on the `PATH`. If Bun is already installed, `bun upgrade` brings it up to date, and `bun --version` shows the version.
 
 ## Create an application
 

@@ -234,7 +234,13 @@ function initializePage(): void {
 
   let ticking = false;
   function updateReading(): void {
-    const line = window.innerHeight * 0.32;
+    // Over the last screen of scroll the reading line slides to the viewport's bottom, so the
+    // sections that never reach 32% are still read by the end of the page.
+    const base = window.innerHeight * 0.32;
+    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    const zone = Math.min(window.innerHeight, maxScroll);
+    const approach = zone > 0 ? Math.min(Math.max(1 - (maxScroll - window.scrollY) / zone, 0), 1) : 0;
+    const line = base + approach * (window.innerHeight - base);
     if (prose && rail && !rail.hidden) {
       const reading = line - prose.getBoundingClientRect().top;
       const filled = Math.min(Math.max(reading - railTop, 0), railHeight);
@@ -319,9 +325,23 @@ function initializePage(): void {
     );
   }
 
+  const osLabels: Record<string, string> = { windows: "Windows", unix: "macOS / Linux" };
   document.querySelectorAll<HTMLPreElement>(".prose pre").forEach((pre) => {
     const code = pre.querySelector("code");
     if (!code || pre.closest("[data-code-block]")) return;
+    const titleText = pre.dataset["title"] ?? pre.dataset["language"] ?? code.dataset["language"] ?? "Code";
+    const os = pre.dataset["os"];
+    // Consecutive fences for different systems share one block, with a tab per system.
+    const group = pre.previousElementSibling;
+    if (os && group instanceof HTMLElement && group.dataset["osGroup"] !== undefined) {
+      group
+        .querySelector(".code-title")
+        ?.append(Object.assign(document.createElement("span"), { textContent: titleText }));
+      group.querySelector(".code-title > span:last-child")?.setAttribute("data-os", os);
+      group.querySelector(".code-tabs")?.append(osTab(os));
+      group.append(pre);
+      return;
+    }
     const wrapper = document.createElement("div");
     wrapper.className = "code-block";
     pre.before(wrapper);
@@ -329,17 +349,44 @@ function initializePage(): void {
     toolbar.className = "code-toolbar";
     const title = document.createElement("span");
     title.className = "code-title";
-    title.textContent = pre.dataset["title"] ?? pre.dataset["language"] ?? code.dataset["language"] ?? "Code";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "code-copy";
     button.setAttribute("aria-label", "Copy code");
     button.innerHTML =
       '<svg class="code-copy-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-copy" d="M9 9h11v11H9V9Zm-4 6H4V4h11v1"/><path class="icon-check" d="m5 12 5 5L20 7"/></svg><span class="code-copy-label">Copy</span>';
-    toolbar.append(title, button);
+    if (os) {
+      wrapper.dataset["osGroup"] = "";
+      const label = document.createElement("span");
+      label.dataset["os"] = os;
+      label.textContent = titleText;
+      title.append(label);
+      const tabs = document.createElement("div");
+      tabs.className = "code-tabs";
+      tabs.setAttribute("role", "group");
+      tabs.setAttribute("aria-label", "Operating system");
+      tabs.append(osTab(os));
+      const actions = document.createElement("div");
+      actions.className = "code-actions";
+      actions.append(tabs, button);
+      toolbar.append(title, actions);
+    } else {
+      title.textContent = titleText;
+      toolbar.append(title, button);
+    }
     wrapper.append(toolbar, pre);
-    attachCopy(button, () => code);
+    attachCopy(button, () =>
+      os ? [...wrapper.querySelectorAll<HTMLElement>("pre > code")].find((c) => c.offsetParent !== null) : code,
+    );
   });
+  function osTab(os: string): HTMLButtonElement {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.dataset["osChoice"] = os;
+    tab.setAttribute("aria-pressed", "false");
+    tab.textContent = osLabels[os] ?? os;
+    return tab;
+  }
 
   document.querySelectorAll<HTMLElement>("[data-code-block]").forEach((block) => {
     const button = block.querySelector<HTMLButtonElement>(".code-copy");
@@ -368,6 +415,27 @@ function initializePage(): void {
         window.scrollBy({ top: button.getBoundingClientRect().top - before, behavior: "instant" });
         try {
           localStorage.setItem("skathi-framework", value);
+        } catch {}
+      },
+      { signal },
+    ),
+  );
+
+  const osButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-os-choice]")];
+  function setOs(value: string): void {
+    root.dataset["os"] = value;
+    osButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset["osChoice"] === value)));
+  }
+  setOs(root.dataset["os"] === "unix" ? "unix" : "windows");
+  osButtons.forEach((button) =>
+    button.addEventListener(
+      "click",
+      () => {
+        const value = button.dataset["osChoice"];
+        if (!value) return;
+        setOs(value);
+        try {
+          localStorage.setItem("skathi-os", value);
         } catch {}
       },
       { signal },

@@ -120,9 +120,8 @@
       display: none;
     }
   }
-  /* First in the footer row, its feet on the bottom edge of the page. */
-  .landing-pup {
-    order: -1;
+  /* First in the footer's bottom row, its feet on the bottom edge of the page. */
+  .page-footer-pup {
     align-self: flex-end;
     margin: -40px -4px -20px 0;
   }

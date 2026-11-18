@@ -976,7 +976,9 @@
     color: var(--text);
   }
   :root:not([data-framework="svelte"]) .code-block [data-framework="svelte"],
-  :root[data-framework="svelte"] .code-block [data-framework="vue"] {
+  :root[data-framework="svelte"] .code-block [data-framework="vue"],
+  :root:not([data-os="unix"]) .prose [data-os="unix"],
+  :root[data-os="unix"] .prose [data-os="windows"] {
     display: none;
   }
   .code-block .line {
