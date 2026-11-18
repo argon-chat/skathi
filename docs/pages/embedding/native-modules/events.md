@@ -106,7 +106,7 @@ fn main() {
 
 ## How delivery works
 
-- **In the app's next frame, in order.** `emit_to` serializes the data on your thread and queues it; it never blocks, and the app's thread only builds the JS values. At most a frame's budget of queued items is delivered per frame; the rest follow in the next.
+- **At once, in order.** `emit_to` serializes the data on your thread and queues it; it never blocks, and the app's thread only builds the JS values. The app's thread picks the queue up between frames without waiting for the next one, and delivers at most a frame's budget of items at a time; the rest follow right after.
 - **An event nobody listens to is dropped.** Nothing is kept for a handler that subscribes later. The same goes for events sent while the page reloads: they belonged to the old page.
 - **A handler that throws** does not stop the others. Its error and stack go to your program's stderr as `[native:notes] a handler for "progress" threw: …`.
 - **Events emitted before the app has loaded** wait for it, then follow the rule above: delivered if a handler is subscribed by then.

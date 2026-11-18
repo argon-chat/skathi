@@ -53,6 +53,10 @@ test.skipIf(!WINDOWS)(
       reversed: "Uint8Array:3,2,1",
       repeated: "Uint8Array:7,8,7,8",
     });
+    // The worker's result wakes the JS thread directly, not at the next frame.
+    console.log(`task round trip: median ${first.roundTrip.median} ms, p95 ${first.roundTrip.p95} ms`);
+    expect(first.roundTrip.median).toBeLessThan(2);
+    expect(first.burst).toBe(2000);
     expect(out.second).toEqual({ tick: { n: 1 } });
     expect(out.third).toEqual({ legacy: { n: 2 } });
     expect(out.undeclared).not.toBeNull();

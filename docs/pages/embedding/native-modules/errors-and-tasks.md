@@ -118,7 +118,7 @@ What stays a function: reading state the module already holds (a snapshot behind
 1. **The arguments are read in the call**, on the UI thread, before the task is queued. A wrong argument rejects the promise at once, and the worker gets owned Rust values: that is why a task cannot borrow `&str` or `&[u8]`.
 2. **The method runs on a worker.** It has `&self` like any method, shared with the UI thread and the other workers, so state it changes is behind a `Mutex` or an atomic.
 3. **The result is serialized on the worker**, so a large result costs the UI thread nothing but building the JS values. A `Vec<u8>` result hands its memory over without a copy.
-4. **The promise settles in a later frame**, in the order results arrive.
+4. **The promise settles as soon as the result is in**, in the order results arrive. The app's thread runs it between frames, like a browser task, without waiting for the next frame: a task that does nothing round-trips in about 0.1 ms, also while the window is idle or hidden.
 
 Tasks run on four worker threads Skathi owns. A program with its own pool hands them over instead:
 

@@ -170,7 +170,7 @@ const { totalBytes } = await folderSize("C:\\Users\\me\\Documents");
 | ------------------ | ------------------- | ---------------- | --------------------------------- |
 | a `pub fn`         | the Skathi thread   | no: it is the UI | a value, or a throw               |
 | a `#[task]` method | a worker thread     | yes              | a promise                         |
-| `Handle::emit_to`  | any thread          | it never blocks  | delivered in the app's next frame |
+| `Handle::emit_to`  | any thread          | it never blocks  | delivered as soon as it is queued |
 | an `on` handler    | the app's JS thread | no: it is the UI | —                                 |
 
 A function holds up the UI while it runs: nothing paints and no input is handled. A lookup in memory or a small computation is fine. Anything that touches a disk, a network, a lock another thread holds, or takes more than a millisecond or two, is a task. [Errors, tasks and threads](/embedding/native-modules/errors-and-tasks/) has the details.

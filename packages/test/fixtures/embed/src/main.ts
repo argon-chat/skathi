@@ -27,6 +27,18 @@ function shown(bytes: Uint8Array): string {
   return `${bytes.constructor.name}:${bytes.join()}`;
 }
 
+/** Sequential round trips of a task that does nothing, in ms. */
+async function roundTrips(n: number): Promise<{ median: number; p95: number }> {
+  const ms: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = performance.now();
+    await worker();
+    ms.push(performance.now() - t);
+  }
+  ms.sort((a, b) => a - b);
+  return { median: ms[n >> 1]!, p95: ms[Math.floor(n * 0.95)]! };
+}
+
 async function run(): Promise<void> {
   const seen = {
     available,
@@ -53,8 +65,12 @@ async function run(): Promise<void> {
     report({ tick });
   });
   appHost.on("legacy", (data) => report({ legacy: data as Value }));
+  // After the window has gone idle, when it draws no frames.
+  await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+  const roundTrip = await roundTrips(200);
+  const burst = (await Promise.all(Array.from({ length: 2000 }, () => worker()))).length;
   status.value = "reported";
-  report(seen as unknown as Value);
+  report({ ...seen, roundTrip, burst } as unknown as Value);
 }
 
 createApp({

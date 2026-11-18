@@ -85,12 +85,26 @@ pub fn poke() {
 }
 
 async fn poked() {
+    flagged(&POKED, &POKE).await
+}
+
+static PROMPTED: AtomicBool = AtomicBool::new(false);
+static PROMPT: AtomicWaker = AtomicWaker::new();
+
+/// A native module's result or event is queued for JS: run a wave now, from the message loop,
+/// instead of at the next frame (up to a refresh interval away). Callable from any thread.
+pub fn prompt() {
+    PROMPTED.store(true, Ordering::Release);
+    PROMPT.wake();
+}
+
+async fn flagged(flag: &AtomicBool, waker: &AtomicWaker) {
     std::future::poll_fn(|task| {
-        if POKED.swap(false, Ordering::AcqRel) {
+        if flag.swap(false, Ordering::AcqRel) {
             return Poll::Ready(());
         }
-        POKE.register(task.waker());
-        if POKED.swap(false, Ordering::AcqRel) {
+        waker.register(task.waker());
+        if flag.swap(false, Ordering::AcqRel) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -100,6 +114,15 @@ async fn poked() {
 }
 
 pub fn start(cx: &mut App) {
+    cx.spawn(async move |cx| loop {
+        flagged(&PROMPTED, &PROMPT).await;
+        let Some(handle) = crate::MAIN_WINDOW.with(|w| w.get()) else {
+            continue;
+        };
+        // Fails while the window is mid-update; the frame `embed::wake` also asked for drains it.
+        let _ = handle.update(cx, |_, window, cx| prompt_wave(window, cx));
+    })
+    .detach();
     cx.spawn(async move |cx| loop {
         // Only Windows paces an idle window to no frames (src/idle.rs).
         if !cfg!(target_os = "windows") {
@@ -143,6 +166,20 @@ pub fn start(cx: &mut App) {
         let _ = handle.update(cx, |_, window, cx| wave(window, cx));
     })
     .detach();
+}
+
+/// As a task between two frames in a browser. Not before the boot wave, which is a frame's; not
+/// inside a published phase (a nested message loop), where the frame pump drains it.
+fn prompt_wave(window: &mut gpui::Window, cx: &mut App) {
+    if !pumped_once()
+        || sk_runtime::with_app(|_| ()).is_some()
+        || sk_runtime::bridge::poisoned()
+        || !crate::embed::queued()
+    {
+        return;
+    }
+    crate::js_wave(window, cx, crate::Wave::Background);
+    crate::after_wave(window, cx);
 }
 
 fn wave(window: &mut gpui::Window, cx: &mut App) {

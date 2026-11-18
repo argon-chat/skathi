@@ -634,6 +634,10 @@ static QUEUED: AtomicUsize = AtomicUsize::new(0);
 static TASKS: AtomicUsize = AtomicUsize::new(0);
 static NEXT_TOKEN: AtomicU32 = AtomicU32::new(1);
 
+pub(super) fn queued() -> bool {
+    QUEUED.load(Ordering::Acquire) != 0
+}
+
 // Only the first item wakes the JS thread: it drains until the queue is empty, and wakes itself
 // again when it stops early.
 fn push(item: Item) {

@@ -930,6 +930,12 @@ fn wake() {
         sk_runtime::redjs::web::wake(sk_runtime::redjs::context::ContextId(id));
     }
     sk_runtime::frames::wake();
+    crate::background::prompt();
+}
+
+/// A call's answer, a module task's result or a native event is waiting for JS.
+pub(crate) fn queued() -> bool {
+    QUEUED.load(Ordering::Acquire) != 0 || module::queued()
 }
 
 fn is_ours(g: *mut c_void) -> bool {
