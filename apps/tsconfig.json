@@ -42,6 +42,8 @@
     "windows/src/**/*.vue",
     "elements/src/**/*.ts",
     "elements/src/**/*.vue",
+    "pen-draw/src/**/*.ts",
+    "pen-draw/src/**/*.vue",
     "../benches/*/app/src/**/*.ts",
     "../benches/*/app/src/**/*.vue",
     "devtools/src/**/*.ts",

@@ -1,0 +1,12 @@
+{
+  "name": "pen-draw",
+  "window": {
+    "title": "Skathi — pen draw",
+    "width": 960,
+    "height": 680,
+    "minWidth": 480,
+    "minHeight": 360,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 44
+  }
+}
