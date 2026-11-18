@@ -132,7 +132,11 @@ test(
     ])
       await call("present", "hidden", "bgra", color, 8, 8);
     await Bun.sleep(300);
-    expect(await stats("hidden")).toMatchObject({ presented: 2, shown: 0, visible: false });
+    expect(await stats("hidden")).toMatchObject({
+      presented: 2,
+      shown: 0,
+      visible: false,
+    });
 
     await app.eval("globalThis.showHidden()");
     const shown = await until(
@@ -303,13 +307,34 @@ type Feedback = {
   hidden: number;
   exact: number;
   cadence: number[];
+  busy: number;
+  shown: number;
+  error: string | null;
 };
 
-async function feedback(fps: number, ms: number, paced: boolean, during?: () => Promise<void>): Promise<Feedback> {
-  await call("feedbackStart", "feedback", fps, paced);
+type Producer = {
+  name: string;
+  source: "bgra" | "d3d12" | "d3d12-rgba16f";
+  ring: number;
+};
+
+async function feedback(
+  fps: number,
+  ms: number,
+  paced: boolean,
+  during?: () => Promise<void>,
+  { name, source, ring }: Producer = {
+    name: "feedback",
+    source: "bgra",
+    ring: 3,
+  },
+): Promise<Feedback> {
+  await call("feedbackStart", name, fps, paced, source, ring);
   await Bun.sleep(ms);
   if (during) await during();
-  return (await call("feedbackStop", "feedback")) as Feedback;
+  const f = (await call("feedbackStop", name)) as Feedback;
+  expect(f.error).toBeNull();
+  return f;
 }
 
 test.skipIf(!WINDOWS)(
@@ -340,6 +365,49 @@ test.skipIf(!WINDOWS)(
     expect(f.inOrder).toBe(true);
     expect(f.superseded).toBeGreaterThan(f.presents / 2);
     expect(f.presented).toBeGreaterThan(0);
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "a D3D12 producer that outruns the display still shows a new frame on most refreshes",
+  async () => {
+    const ring: Producer = { name: "ring", source: "d3d12", ring: 3 };
+    const s = await until(
+      () => stats("ring"),
+      (s) => s.visible && s.display.known,
+    );
+    const hz = s.display.refreshHz!;
+    for (const fps of [0, hz * 1.01]) {
+      const f = await feedback(fps, 2_000, false, undefined, ring);
+      const perRefresh = f.shown / (hz * 2);
+      console.log(
+        `${fps ? fps.toFixed(1) : "unthrottled"} presents/s on ${hz} Hz: ${f.presents} presents, ${f.shown} shown ` +
+          `(${perRefresh.toFixed(2)} a refresh), ${f.presented} presented, ${f.superseded} superseded, ${f.busy} busy`,
+      );
+      expect(f.exactlyOnce).toBe(true);
+      expect(f.inOrder).toBe(true);
+      expect(perRefresh).toBeGreaterThan(0.5);
+      expect(f.presented).toBeGreaterThan(hz * 2 * 0.5);
+    }
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "a ring of five half-float textures presented as fast as it goes never leaves the surface busy",
+  async () => {
+    const ring: Producer = { name: "ring", source: "d3d12-rgba16f", ring: 5 };
+    const flood = await feedback(0, 1_000, false, undefined, ring);
+    const paced = await feedback(60, 1_000, false, undefined, ring);
+    const { display } = await stats("ring");
+    console.log(
+      `HDR output ${display.outputHdr}: flood ${flood.presents} presents, ${flood.busy} busy, ${flood.shown} shown; ` +
+        `60 fps ${paced.presents} presents, ${paced.busy} busy, ${paced.shown} shown`,
+    );
+    expect(flood.shown).toBeGreaterThan(0);
+    expect(paced.busy).toBe(0);
+    expect(paced.presented).toBeGreaterThan(paced.presents * 0.9);
   },
   T,
 );

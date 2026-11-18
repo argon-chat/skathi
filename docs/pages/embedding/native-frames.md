@@ -106,7 +106,7 @@ std::thread::spawn(move || {
 
 ### What a present costs the UI
 
-Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time. `stats().shown` against `stats().presented` tells how many reach the screen; [`on_frame`](#knowing-when-a-frame-is-on-screen) tells which, and when.
+Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time: since 0.5, while the newest GPU frame is still being copied, the element shows the newest frame whose copy has finished, so a producer at or above the refresh rate drops frames instead of freezing. `stats().shown` against `stats().presented` tells how many reach the screen; [`on_frame`](#knowing-when-a-frame-is-on-screen) tells which, and when.
 
 ## GPU frames, Windows and macOS
 
@@ -253,12 +253,12 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 - **`Presented` once, on first display.** `shown_at` is the start of the refresh the frame first showed on; a frame left on screen is not reported again. It stayed until the next frame's `shown_at`, so the difference is how long it was held. `refresh_interval` is that refresh's actual distance from the one before, which is not the nominal period on a variable-refresh screen; `info().display.refresh_period` keeps the nominal one.
 - **`Dropped` says why:**
 
-| `FrameDropReason` | When                                                                                                                                                                                                 |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Superseded`      | a newer frame replaced it before it reached the screen: presented twice within a refresh, or before the window drew it. Reported as soon as that is known                                            |
-| `Hidden`          | nothing showing the surface could be on screen (`info().visible` is false, or the window is minimised, covered or hidden): what was waiting drops then, and every present while hidden drops at once |
-| `DeviceLost`      | the renderer lost its device: everything waiting drops, before `surfacelost`                                                                                                                         |
-| `Closed`          | the window showing it closed, or the app quit                                                                                                                                                        |
+| `FrameDropReason` | When                                                                                                                                                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Superseded`      | a newer frame replaced it before it reached the screen: presented twice within a refresh, or before the window drew it. Reported as soon as that is known; since 0.5 a GPU frame counts as replaced once a newer one has finished copying, since until then the window may still show it |
+| `Hidden`          | nothing showing the surface could be on screen (`info().visible` is false, or the window is minimised, covered or hidden): what was waiting drops then, and every present while hidden drops at once                                                                                     |
+| `DeviceLost`      | the renderer lost its device: everything waiting drops, before `surfacelost`                                                                                                                                                                                                             |
+| `Closed`          | the window showing it closed, or the app quit                                                                                                                                                                                                                                            |
 
 - **No timeout is needed.** A frame resolves when the display shows a window present carrying it, or when one of the above makes that impossible. Only a stalled UI thread, which draws no window, can hold a frame unresolved; a newer present still supersedes it at once.
 

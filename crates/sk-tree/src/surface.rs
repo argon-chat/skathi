@@ -427,6 +427,8 @@ pub(crate) struct State {
     presented: u64,
     shown: u64,
     shown_seq: u64,
+    /// The newest frame present feedback was told is ready to be shown.
+    settled: u64,
     info: SurfaceInfo,
     pub(crate) format: SurfaceFormat,
     #[cfg(windows)]
@@ -481,13 +483,43 @@ impl State {
             let (key, id, visible) = (self.key, self.frame_id, self.info.visible);
             feedback::with(|t| t.put(key, id, visible));
         }
-        self.frame_id
+        let id = self.frame_id;
+        let copied_later = match &self.frame {
+            #[cfg(windows)]
+            Some(Frame::D3D12 { .. }) => true,
+            #[cfg(target_os = "macos")]
+            Some(Frame::Metal { .. }) => true,
+            _ => false,
+        };
+        if !copied_later {
+            self.settle(id);
+        }
+        id
     }
 
     pub(crate) fn note_shown(&mut self, seq: u64) {
         if seq > self.shown_seq {
             self.shown_seq = seq;
             self.shown += 1;
+        }
+    }
+
+    /// Frame `frame` is ready to be shown, so no older one will be.
+    pub(crate) fn settle(&mut self, frame: u64) {
+        if frame > self.settled {
+            self.settled = frame;
+            if self.watched {
+                let key = self.key;
+                feedback::with(|t| t.settle(key, frame));
+            }
+        }
+    }
+
+    /// The tick is writing `frame`; called under the lock it read the frame with.
+    pub(crate) fn pin(&mut self, frame: u64) {
+        if self.watched {
+            let key = self.key;
+            feedback::with(|t| t.pin(key, frame));
         }
     }
 
@@ -707,6 +739,10 @@ impl SurfaceHandle {
         if st.frame.take().is_some() {
             st.seq += 1;
             st.lost = "cleared";
+            #[cfg(windows)]
+            st.gpu12.withdraw();
+            #[cfg(target_os = "macos")]
+            st.metal.withdraw();
             if st.watched {
                 let key = st.key;
                 feedback::with(|t| t.cleared(key));

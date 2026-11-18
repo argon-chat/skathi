@@ -26,8 +26,10 @@ pub(crate) fn key(shared: &Arc<Shared>) -> Key {
 struct Track {
     /// Frames not yet delivered, with their event once known.
     open: BTreeMap<u64, Option<FrameEvent>>,
-    /// The surface's own frame.
-    current: Option<u64>,
+    /// The oldest frame the surface may still show: it holds that one and every newer one.
+    held: Option<u64>,
+    /// The frame a tick is writing, held until its window says what it carries.
+    pinned: Option<u64>,
     /// The time of the last frame shown, for the display clock.
     last_shown: Option<u64>,
 }
@@ -62,7 +64,7 @@ impl Tracker {
             return;
         };
         track.open.insert(frame, None);
-        let old = track.current.replace(frame);
+        track.held.get_or_insert(frame);
         if !visible || self.page_hidden {
             self.resolve(
                 s,
@@ -70,14 +72,43 @@ impl Tracker {
                 FrameEvent::dropped(frame, FrameDropReason::Hidden),
             );
         }
-        if let Some(old) = old {
-            self.release(s, old);
+    }
+
+    /// The surface can no longer show frames older than `frame`, which is ready to be shown.
+    pub(crate) fn settle(&mut self, s: Key, frame: u64) {
+        let Some(track) = self.surfaces.get_mut(&s) else {
+            return;
+        };
+        let Some(held) = track.held.filter(|&held| held < frame) else {
+            return;
+        };
+        track.held = Some(frame);
+        let older: Vec<u64> = track.open.range(held..frame).map(|(&f, _)| f).collect();
+        for f in older {
+            self.release(s, f);
         }
     }
 
     /// The surface's frame was withdrawn.
     pub(crate) fn cleared(&mut self, s: Key) {
-        if let Some(old) = self.surfaces.get_mut(&s).and_then(|t| t.current.take()) {
+        let Some(track) = self.surfaces.get_mut(&s) else {
+            return;
+        };
+        if track.held.take().is_some() {
+            let open: Vec<u64> = track.open.keys().copied().collect();
+            for f in open {
+                self.release(s, f);
+            }
+        }
+    }
+
+    /// A tick writes `frame`: a present on another thread must not release it before the
+    /// tick's [`Self::carry`].
+    pub(crate) fn pin(&mut self, s: Key, frame: u64) {
+        let Some(track) = self.surfaces.get_mut(&s) else {
+            return;
+        };
+        if let Some(old) = track.pinned.replace(frame).filter(|&old| old != frame) {
             self.release(s, old);
         }
     }
@@ -88,15 +119,22 @@ impl Tracker {
             .into_iter()
             .filter(|(s, _)| self.surfaces.contains_key(s))
             .collect();
-        if carrying.is_empty() && !self.windows.contains_key(&window) {
-            return;
-        }
-        let win = self.windows.entry(window).or_default();
-        let old = std::mem::replace(&mut win.carrying, carrying);
-        for (s, frame) in old {
-            if self.windows[&window].carrying.get(&s) != Some(&frame) {
-                self.release(s, frame);
+        if !carrying.is_empty() || self.windows.contains_key(&window) {
+            let win = self.windows.entry(window).or_default();
+            let old = std::mem::replace(&mut win.carrying, carrying);
+            for (s, frame) in old {
+                if self.windows[&window].carrying.get(&s) != Some(&frame) {
+                    self.release(s, frame);
+                }
             }
+        }
+        let pinned: Vec<(Key, u64)> = self
+            .surfaces
+            .iter_mut()
+            .filter_map(|(&s, t)| Some((s, t.pinned.take()?)))
+            .collect();
+        for (s, frame) in pinned {
+            self.release(s, frame);
         }
     }
 
@@ -277,7 +315,9 @@ impl Tracker {
         if !self.unresolved(s, frame) {
             return;
         }
-        let held = self.surfaces[&s].current == Some(frame)
+        let track = &self.surfaces[&s];
+        let held = track.held.is_some_and(|held| frame >= held)
+            || track.pinned == Some(frame)
             || self.windows.values().any(|w| {
                 w.carrying.get(&s) == Some(&frame)
                     || w.records.iter().any(|(_, f)| f.contains(&(s, frame)))
@@ -674,6 +714,10 @@ mod tests {
 
     /// One tick: `carrying` is written, then the window presents as `present`.
     fn tick(t: &mut Tracker, carrying: &[(Key, u64)], present: u64) {
+        for &(s, frame) in carrying {
+            t.settle(s, frame);
+            t.pin(s, frame);
+        }
         t.carry(W, carrying.iter().copied().collect());
         t.queued(W, present);
     }
@@ -719,6 +763,42 @@ mod tests {
         t.put(A, 4, true);
         tick(&mut t, &[(A, 4)], 3);
         outcome(&mut t, 2, PresentOutcome::Discarded);
+        outcome(&mut t, 3, shown(3000));
+        assert_eq!(
+            frames(&mut t, A),
+            [dropped(3, FrameDropReason::Superseded), presented(4, 3000)]
+        );
+    }
+
+    #[test]
+    fn a_frame_a_tick_writes_is_not_superseded_before_the_tick_carries_it() {
+        let mut t = tracker(&[A]);
+        t.put(A, 1, true);
+        t.settle(A, 1);
+        t.pin(A, 1);
+        t.put(A, 2, true);
+        t.settle(A, 2);
+        assert!(frames(&mut t, A).is_empty());
+        t.carry(W, [(A, 1)].into());
+        t.queued(W, 1);
+        outcome(&mut t, 1, shown(1000));
+        assert_eq!(frames(&mut t, A), [presented(1, 1000)]);
+    }
+
+    #[test]
+    fn a_frame_shown_while_a_newer_one_copies_is_presented_not_superseded() {
+        let mut t = tracker(&[A]);
+        t.put(A, 1, true);
+        t.put(A, 2, true);
+        tick(&mut t, &[(A, 1)], 1);
+        outcome(&mut t, 1, shown(1000));
+        assert_eq!(frames(&mut t, A), [presented(1, 1000)]);
+        t.put(A, 3, true);
+        tick(&mut t, &[(A, 2)], 2);
+        outcome(&mut t, 2, shown(2000));
+        assert_eq!(frames(&mut t, A), [presented(2, 2000)]);
+        t.put(A, 4, true);
+        tick(&mut t, &[(A, 4)], 3);
         outcome(&mut t, 3, shown(3000));
         assert_eq!(
             frames(&mut t, A),

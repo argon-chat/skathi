@@ -407,8 +407,7 @@ fn write(
         node.seen = 0;
     }
     // One lock: a present on another thread may resize the surface's texture in between.
-    let (seq, frame_id, frame, lost, texture) = {
-        #[cfg_attr(not(windows), allow(unused_mut))]
+    let locked = {
         let mut st = node.surface.lock_state();
         #[cfg(windows)]
         let texture = match st.frame {
@@ -432,25 +431,48 @@ fn write(
         };
         #[cfg(not(any(windows, target_os = "macos")))]
         let texture = ();
-        (st.seq, st.frame_id, st.frame.clone(), st.lost, texture)
+        let copied = copied(&texture);
+        let showable = match copied {
+            Some((done, (_, frame, _))) => done.then_some(frame),
+            None => st.frame.is_some().then_some(st.frame_id),
+        };
+        if let Some(frame) = showable {
+            st.settle(frame);
+            if node.visible && st.seq != node.seen {
+                st.pin(frame);
+            }
+        }
+        (
+            st.seq,
+            st.frame_id,
+            st.frame.clone(),
+            st.lost,
+            texture,
+            copied,
+        )
     };
+    let (mut seq, mut frame_id, frame, lost, texture, copied) = locked;
     if seq == node.seen {
         return (Shown::Nowhere, None);
     }
     // The copy into the surface's texture waits on the producer's fence on the GPU; handing it to
-    // the atlas before it ran would stall the renderer's queue on the producer.
-    #[cfg(windows)]
-    if let Some(Gpu::D3D12(ready)) = &texture {
-        if node.visible && !ready.done() {
-            sk_runtime::frames::wake();
-            return (Shown::Nowhere, None);
-        }
-    }
-    #[cfg(target_os = "macos")]
-    if let Some(Gpu::Metal(ready)) = &texture {
-        if node.visible && !ready.done() {
-            sk_runtime::frames::wake();
-            return (Shown::Nowhere, None);
+    // the atlas before it ran would stall the renderer's queue on the producer. While the newest
+    // frame copies, the newest copied one is shown.
+    let mut size = None;
+    if let Some((done, (ready_seq, ready_frame, ready_size))) = copied {
+        if node.visible {
+            if !done {
+                sk_runtime::frames::wake();
+                return (Shown::Nowhere, None);
+            }
+            if ready_seq != seq {
+                sk_runtime::frames::wake();
+                if ready_seq <= node.seen {
+                    return (Shown::Nowhere, None);
+                }
+                (seq, frame_id) = (ready_seq, ready_frame);
+            }
+            size = Some(ready_size);
         }
     }
     let Some(frame) = frame else {
@@ -465,7 +487,7 @@ fn write(
     if !node.visible {
         return (Shown::Nowhere, None);
     }
-    let size = frame.size();
+    let size = size.unwrap_or_else(|| frame.size());
     let fits = node
         .tile
         .as_ref()
@@ -554,6 +576,24 @@ fn write(
         wrote
     };
     (shown, first.then_some(Event::Ready(size.0, size.1)))
+}
+
+/// For a frame copied on the surface's own queue: whether the copy has run, and the frame's `seq`,
+/// id and size.
+#[cfg(any(windows, target_os = "macos"))]
+fn copied(texture: &Option<Gpu>) -> Option<(bool, (u64, u64, (u32, u32)))> {
+    match texture {
+        #[cfg(windows)]
+        Some(Gpu::D3D12(ready)) => Some((ready.done(), ready.frame())),
+        #[cfg(target_os = "macos")]
+        Some(Gpu::Metal(ready)) => Some((ready.done(), ready.frame())),
+        _ => None,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn copied(_: &()) -> Option<(bool, (u64, u64, (u32, u32)))> {
+    None
 }
 
 /// A half-float frame whose 8-bit mapping could not be drawn.

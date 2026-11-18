@@ -71,8 +71,9 @@ const D3D11_RENDERER: &str =
     "this host renders with Direct3D 11 (built without the native-dx12 feature): present a D3D11 \
      texture, or a shared texture synchronised with a keyed mutex or a fence";
 
-/// More in flight than this means the atlas is not keeping up; the present is refused.
-const MAX_SLOTS: usize = 4;
+/// Four copies in flight and the newest copied frame. More means the atlas is not keeping up; the
+/// present is refused.
+const MAX_SLOTS: usize = 5;
 
 struct Gpu {
     device: ID3D12Device,
@@ -488,6 +489,10 @@ struct Slot {
     format: SurfaceFormat,
     generation: u64,
     written: u64,
+    /// The surface's `seq` and the frame id of the frame in the slot; `seq` is 0 while it holds
+    /// none that may be shown.
+    seq: u64,
+    frame: u64,
 }
 
 #[derive(Default)]
@@ -508,12 +513,19 @@ pub(crate) struct Ready {
     value: u64,
     size: (u32, u32),
     mapped: bool,
+    seq: u64,
+    frame: u64,
 }
 
 impl Ready {
     /// Whether the copy into the texture has run; until then the atlas must not read it.
     pub(crate) fn done(&self) -> bool {
         unsafe { self.queue.fence.GetCompletedValue() >= self.value }
+    }
+
+    /// The surface's `seq` and frame id when this frame was presented, and its size.
+    pub(crate) fn frame(&self) -> (u64, u64, (u32, u32)) {
+        (self.seq, self.frame, self.size)
     }
 
     /// What the atlas copies: the texture, or for a half-float frame its 8-bit mapping, drawn on
@@ -553,15 +565,42 @@ impl Ready {
 }
 
 impl SurfaceGpu {
+    /// The newest frame whose copy has run; while none has, the newest frame.
     pub(crate) fn ready(&self) -> Option<Ready> {
-        let slot = &self.slots[self.current?];
+        let queue = self.queue.clone()?;
+        let current = self.current?;
+        let completed = unsafe { queue.fence.GetCompletedValue() };
+        let index = match self.slots[current].written <= completed {
+            true => current,
+            false => self.newest_done(completed).unwrap_or(current),
+        };
+        let slot = &self.slots[index];
         Some(Ready {
             texture: slot.texture.clone(),
-            queue: self.queue.clone()?,
+            queue,
             value: slot.written,
             size: slot.size,
             mapped: false,
+            seq: slot.seq,
+            frame: slot.frame,
         })
+    }
+
+    /// The slot of the newest frame copied by `completed` that may be shown.
+    fn newest_done(&self, completed: u64) -> Option<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.seq != 0 && s.written <= completed)
+            .max_by_key(|(_, s)| s.written)
+            .map(|(i, _)| i)
+    }
+
+    /// The frame was withdrawn: no slot's frame may be shown again.
+    pub(crate) fn withdraw(&mut self) {
+        for slot in &mut self.slots {
+            slot.seq = 0;
+        }
     }
 
     pub(crate) fn forget(&mut self) {
@@ -586,7 +625,9 @@ impl SurfaceGpu {
         Ok(queue)
     }
 
-    /// A slot neither shown as the frame nor still read by the atlas (whose copy holds its `Arc`).
+    /// A slot holding neither the newest frame nor the newest copied one (which the tick shows
+    /// while a newer copy runs), and not still copied into or read by the atlas (both hold its
+    /// `Arc`).
     fn free_slot(
         &mut self,
         gpu: &Gpu,
@@ -597,8 +638,13 @@ impl SurfaceGpu {
             self.slots.clear();
             self.current = None;
         }
+        let completed = self
+            .queue
+            .as_ref()
+            .map_or(0, |q| unsafe { q.fence.GetCompletedValue() });
+        let shown = self.newest_done(completed);
         let free = |(i, s): &(usize, &Slot)| {
-            Some(*i) != self.current && Arc::strong_count(&s.texture) == 1
+            Some(*i) != self.current && Some(*i) != shown && Arc::strong_count(&s.texture) == 1
         };
         let fits = |s: &Slot| s.size == size && s.format == format;
         let pick = self
@@ -615,6 +661,8 @@ impl SurfaceGpu {
                 format,
                 generation: gpu.generation,
                 written: 0,
+                seq: 0,
+                frame: 0,
             })
         };
         match pick {
@@ -894,12 +942,18 @@ fn copy_in(
         _slot: target,
     });
     drop(submit);
-    state.gpu12.slots[index].written = value;
     state.gpu12.current = Some(index);
     let frame = state.put(Frame::D3D12 {
         width: size.0,
         height: size.1,
     });
+    let slot = &mut state.gpu12.slots[index];
+    (slot.written, slot.seq, slot.frame) = (value, state.seq, frame);
+    let completed = unsafe { queue.fence.GetCompletedValue() };
+    if let Some(done) = state.gpu12.newest_done(completed) {
+        let done = state.gpu12.slots[done].frame;
+        state.settle(done);
+    }
     Ok((frame, value))
 }
 
@@ -1303,6 +1357,39 @@ mod tests {
             .unwrap()
             .wait(last, Duration::from_secs(5)));
         assert!(unsafe { s.present_d3d12(source.as_raw(), state, None) }.is_ok());
+    }
+
+    #[test]
+    fn while_newer_frames_copy_the_newest_copied_one_is_kept_and_ready() {
+        let r = renderer();
+        let s = surface("tests:d3d12-newest-copied");
+        let state = D3D12_RESOURCE_STATE_COMMON.0;
+        let a = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[1, 2, 3, 255]);
+        let b = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[4, 5, 6, 255]);
+        let release = s.release_fence().unwrap();
+        let first = unsafe { s.present_d3d12(a.as_raw(), state, None) }.unwrap();
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        let producer: ID3D12Fence =
+            unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let behind = || unsafe { s.present_d3d12(b.as_raw(), state, Some((producer.as_raw(), 1))) };
+        let mut last = first;
+        for _ in 1..MAX_SLOTS {
+            last = behind().unwrap();
+        }
+        let ready = s.lock_state().gpu12.ready().unwrap();
+        assert!(ready.done());
+        assert_eq!(ready.frame().1, first.frame);
+        assert_eq!(shown(&r, &ready), [[1, 2, 3, 255]]);
+        assert_eq!(
+            behind(),
+            Err(SurfaceError::Busy),
+            "the copied frame keeps its slot"
+        );
+        unsafe { producer.Signal(1) }.unwrap();
+        assert!(release.wait(last.release, Duration::from_secs(5)));
+        let ready = s.lock_state().gpu12.ready().unwrap();
+        assert_eq!(ready.frame().1, last.frame);
+        assert_eq!(shown(&r, &ready), [[4, 5, 6, 255]]);
     }
 
     #[test]

@@ -15,9 +15,11 @@
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
-//! - `feedbackStart(name, fps, paced)` and `feedbackStop(name)`: frames at `fps` with
-//!   `on_frame` listening; the stop prints each frame's event and the cadence, and answers a
-//!   summary.
+//! - `feedbackStart(name, fps, paced, source, ring)` and `feedbackStop(name)`: frames at `fps`
+//!   (0: as fast as they go) with `on_frame` listening; the stop prints each frame's event and the
+//!   cadence, and answers a summary. `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
+//!   `"d3d12-rgba16f"` (a ring of `ring` textures on the renderer's D3D12 device, each presented
+//!   behind its fence).
 //!
 //! ```text
 //! cargo build -p sk-app --example surface
@@ -155,7 +157,13 @@ fn main() {
             let args = args_of(&call);
             let fps = args.get(1).and_then(Value::as_f64).unwrap_or(24.0);
             let paced = args.get(2).and_then(Value::as_bool).unwrap_or(false);
-            feedback::start(surface_of(&args), fps, paced);
+            let source = args
+                .get(3)
+                .and_then(Value::as_str)
+                .unwrap_or("bgra")
+                .to_string();
+            let ring = args.get(4).and_then(Value::as_u64).unwrap_or(3) as usize;
+            feedback::start(surface_of(&args), fps, paced, source, ring);
             call.resolve("true");
         })
         .function("feedbackStop", |call| {
@@ -225,13 +233,20 @@ mod feedback {
 
     use serde_json::{json, Value};
     use sk_app::embed::{
-        monotonic_ns, FrameDropReason, FrameEvent, FramePrecision, FrameWatch, SurfaceHandle,
+        monotonic_ns, FrameDropReason, FrameEvent, FramePrecision, FrameWatch, SurfaceError,
+        SurfaceFormat, SurfaceHandle,
     };
+
+    /// What the producer thread answers: the ids presented, the presents refused `Busy`, and why
+    /// it could not start, if it could not.
+    type Produced = (Vec<u64>, usize, Option<String>);
 
     struct Run {
         stop: Arc<AtomicBool>,
-        producer: JoinHandle<Vec<u64>>,
+        producer: JoinHandle<Produced>,
         events: Arc<Mutex<Vec<FrameEvent>>>,
+        surface: SurfaceHandle,
+        shown: u64,
         _watch: FrameWatch,
     }
 
@@ -243,17 +258,50 @@ mod feedback {
     /// With `paced`, each frame is presented a refresh and a half before the vblank its time
     /// falls on (the display clock in `info().display`), as a display-synced player would, so
     /// jitter in this thread's wakeups or the window's draw cannot move it to another refresh.
-    pub fn start(surface: SurfaceHandle, fps: f64, paced: bool) {
+    pub fn start(surface: SurfaceHandle, fps: f64, paced: bool, source: String, ring: usize) {
+        let half = source.ends_with("-rgba16f");
+        surface.set_format(if half {
+            SurfaceFormat::Rgba16Float
+        } else {
+            SurfaceFormat::Bgra8
+        });
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let watch = surface.on_frame(move |e| sink.lock().unwrap().push(e));
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let name = surface.name().to_string();
+        let shown = surface.stats().shown;
+        let producing = surface.clone();
         let producer = std::thread::spawn(move || {
-            let interval = (1e9 / fps.max(1.0)) as u64;
+            let surface = producing;
+            let mut present: Box<dyn FnMut(usize) -> Result<u64, SurfaceError>> =
+                if source.starts_with("d3d12") {
+                    #[cfg(windows)]
+                    match super::gpu::d3d12::Ring::new(&surface, ring, half) {
+                        Ok(mut ring) => {
+                            let surface = surface.clone();
+                            Box::new(move |n| ring.present(&surface, n))
+                        }
+                        Err(e) => return (Vec::new(), 0, Some(e)),
+                    }
+                    #[cfg(not(windows))]
+                    return (
+                        Vec::new(),
+                        0,
+                        Some(format!("{ring} D3D12 textures off Windows")),
+                    );
+                } else {
+                    let surface = surface.clone();
+                    Box::new(move |n| {
+                        let shade = (n * 37 % 256) as u8;
+                        let frame = [shade, 255 - shade, 128, 255].repeat(64 * 64);
+                        surface.present_bgra(&frame, 64, 64, 64 * 4)
+                    })
+                };
+            let interval = if fps > 0.0 { (1e9 / fps) as u64 } else { 0 };
             let start = monotonic_ns();
-            let mut ids = Vec::new();
+            let (mut ids, mut busy) = (Vec::new(), 0);
             for n in 0.. {
                 if stopping.load(Ordering::Acquire) {
                     break;
@@ -268,19 +316,24 @@ mod feedback {
                     }
                     _ => due,
                 };
-                std::thread::sleep(Duration::from_nanos(at.saturating_sub(monotonic_ns())));
-                let shade = (ids.len() * 37 % 256) as u8;
-                let frame = [shade, 255 - shade, 128, 255].repeat(64 * 64);
-                if let Ok(id) = surface.present_bgra(&frame, 64, 64, 64 * 4) {
-                    ids.push(id);
+                let wait = at.saturating_sub(monotonic_ns());
+                if wait > 0 {
+                    std::thread::sleep(Duration::from_nanos(wait));
+                }
+                match present(n as usize) {
+                    Ok(id) => ids.push(id),
+                    Err(SurfaceError::Busy) => busy += 1,
+                    Err(_) => {}
                 }
             }
-            ids
+            (ids, busy, None)
         });
         let run = Run {
             stop,
             producer,
             events,
+            surface,
+            shown,
             _watch: watch,
         };
         if let Some(old) = runs().lock().unwrap().insert(name, run) {
@@ -293,13 +346,18 @@ mod feedback {
             return Value::Null;
         };
         run.stop.store(true, Ordering::Release);
-        let ids = run.producer.join().unwrap_or_default();
+        let (ids, busy, error) = run.producer.join().unwrap_or_default();
+        let shown = run.surface.stats().shown - run.shown;
         let deadline = Instant::now() + Duration::from_secs(3);
         while run.events.lock().unwrap().len() < ids.len() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         let events = run.events.lock().unwrap().clone();
-        summary(name, &ids, &events)
+        let mut summary = summary(name, &ids, &events);
+        summary["busy"] = busy.into();
+        summary["shown"] = shown.into();
+        summary["error"] = error.into();
+        summary
     }
 
     fn summary(name: &str, ids: &[u64], events: &[FrameEvent]) -> Value {
@@ -807,6 +865,142 @@ mod gpu {
                 Ok(())
             } else {
                 Err("the release fence did not reach the returned value".into())
+            }
+        }
+
+        struct RingTexture {
+            texture: ID3D12Resource,
+            allocator: ID3D12CommandAllocator,
+            list: ID3D12GraphicsCommandList,
+            heap: ID3D12DescriptorHeap,
+            cleared: u64,
+            released: u64,
+        }
+
+        /// A video player's pipeline on the renderer's device: a ring of textures, each cleared on
+        /// the producer's queue and presented behind its fence at once; a texture is reused once
+        /// the surface has released it.
+        pub struct Ring {
+            producer: Producer,
+            textures: Vec<RingTexture>,
+            release: sk_app::embed::D3D12Fence,
+            value: u64,
+            half: bool,
+        }
+
+        impl Ring {
+            pub fn new(surface: &SurfaceHandle, n: usize, half: bool) -> Result<Self> {
+                let renderer = surface.d3d12_device().map_err(err)?;
+                let raw = renderer.as_raw();
+                let device = unsafe { ID3D12Device::from_raw_borrowed(&raw) }
+                    .ok_or("null device")?
+                    .clone();
+                let producer = Producer::new(device, false)?;
+                let fill = if half {
+                    Fill::Half([0.0; 4])
+                } else {
+                    Fill::Bgra([0; 4])
+                };
+                let mut textures = Vec::new();
+                for _ in 0..n.max(1) {
+                    let texture = producer.texture(64, 64, D3D12_HEAP_FLAG_NONE, fill)?;
+                    let heap: ID3D12DescriptorHeap = unsafe {
+                        producer
+                            .device
+                            .CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
+                                Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                                NumDescriptors: 1,
+                                ..Default::default()
+                            })
+                    }
+                    .map_err(err)?;
+                    unsafe {
+                        producer.device.CreateRenderTargetView(
+                            &texture,
+                            None,
+                            heap.GetCPUDescriptorHandleForHeapStart(),
+                        )
+                    };
+                    let allocator: ID3D12CommandAllocator = unsafe {
+                        producer
+                            .device
+                            .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+                    }
+                    .map_err(err)?;
+                    let list: ID3D12GraphicsCommandList = unsafe {
+                        producer.device.CreateCommandList(
+                            0,
+                            D3D12_COMMAND_LIST_TYPE_DIRECT,
+                            &allocator,
+                            None,
+                        )
+                    }
+                    .map_err(err)?;
+                    unsafe { list.Close() }.map_err(err)?;
+                    textures.push(RingTexture {
+                        texture,
+                        allocator,
+                        list,
+                        heap,
+                        cleared: 0,
+                        released: 0,
+                    });
+                }
+                Ok(Ring {
+                    producer,
+                    textures,
+                    release: surface.release_fence().map_err(err)?,
+                    value: 0,
+                    half,
+                })
+            }
+
+            /// Clears the `n`th frame's texture to a shade of its own and presents it.
+            pub fn present(
+                &mut self,
+                surface: &SurfaceHandle,
+                n: usize,
+            ) -> std::result::Result<u64, sk_app::embed::SurfaceError> {
+                use sk_app::embed::SurfaceError;
+                let count = self.textures.len();
+                let t = &mut self.textures[n % count];
+                let timeout = std::time::Duration::from_secs(2);
+                if !self.release.wait(t.released, timeout)
+                    || wait(&self.producer.fence, t.cleared).is_err()
+                {
+                    return Err(SurfaceError::Timeout);
+                }
+                let shade = (n * 37 % 256) as f32 / 255.0;
+                let color = if self.half {
+                    [4.0 * shade, 0.5, 1.0 - shade, 1.0]
+                } else {
+                    [shade, 1.0 - shade, 0.5, 1.0]
+                };
+                let platform = |e: windows::core::Error| SurfaceError::Platform(e.to_string());
+                self.value += 1;
+                unsafe {
+                    t.allocator.Reset().map_err(platform)?;
+                    t.list.Reset(&t.allocator, None).map_err(platform)?;
+                    let rtv = t.heap.GetCPUDescriptorHandleForHeapStart();
+                    t.list.ClearRenderTargetView(rtv, &color, None);
+                    t.list.Close().map_err(platform)?;
+                    let list: ID3D12CommandList = t.list.cast().map_err(platform)?;
+                    self.producer.queue.ExecuteCommandLists(&[Some(list)]);
+                    self.producer
+                        .queue
+                        .Signal(&self.producer.fence, self.value)
+                        .map_err(platform)?;
+                }
+                t.cleared = self.value;
+                let presented = unsafe {
+                    surface.present_d3d12(
+                        t.texture.as_raw(),
+                        D3D12_RESOURCE_STATE_RENDER_TARGET.0,
+                        Some((self.producer.fence.as_raw(), self.value)),
+                    )
+                }?;
+                t.released = presented.release;
+                Ok(presented.frame)
             }
         }
 

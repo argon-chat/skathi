@@ -242,7 +242,7 @@ Until the first frame arrives the element paints nothing over its own background
 
 ## What counts as visible
 
-The element takes a frame on its next paint, and only while it is visible: in the document, in a shown window, not in a hidden page, with a non-zero painted size, and with its painted rectangle inside the viewport and every clipping ancestor. `display: none` counts as hidden. `opacity: 0` and an element covered by another one count as visible.
+The element takes a frame on its next paint, and only while it is visible: in the document, in a shown window, not in a hidden page, with a non-zero painted size, and with its painted rectangle inside the viewport and every clipping ancestor. `display: none` counts as hidden. `opacity: 0` and an element covered by another one count as visible. Since 0.5 a GPU frame whose copy is still running when the element paints does not hold the picture back: the element shows the newest frame already copied, and the newer one on a later paint.
 
 ## Several elements, one surface
 
