@@ -666,6 +666,11 @@
       margin-left: 64px;
     }
   }
+  @media (min-width: 1600px) {
+    .blog {
+      --post-width: 840px;
+    }
+  }
   @media (max-width: 1250px) {
     .post-shell {
       grid-template-columns: minmax(0, var(--post-width));
