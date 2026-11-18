@@ -17,6 +17,15 @@ export interface PointerReading {
   twist: number;
   width: number;
   height: number;
+  /** When the hardware took it, on the `performance.now()` clock. */
+  time: number;
+}
+
+/** Where the pointer is predicted to be at `time`. */
+export interface PredictedReading {
+  x: number;
+  y: number;
+  time: number;
 }
 
 /** What drove a host mouse event: the mouse, or a pen with its readings (oldest first, the event's own last). */
@@ -26,23 +35,34 @@ export interface PointerSource {
   eraser: boolean;
   barrel: boolean;
   readings: PointerReading[];
+  predicted: PredictedReading[];
 }
 
-export const MOUSE_SOURCE: PointerSource = { id: MOUSE_ID, type: "mouse", eraser: false, barrel: false, readings: [] };
+export const MOUSE_SOURCE: PointerSource = {
+  id: MOUSE_ID,
+  type: "mouse",
+  eraser: false,
+  barrel: false,
+  readings: [],
+  predicted: [],
+};
 
 // Lockstep with sk-tree's pen.rs.
 const PEN_ERASER = 1;
 const PEN_BARREL = 2;
 const PEN_MOUSE = 8;
-const READING_LEN = 9;
+const READING_LEN = 10;
+const PREDICTED_LEN = 3;
 
-/** The host's pen packet (`[flags, ...readings]`); the mouse when there is none. */
+/** The host's pen packet (`[flags, count, ...readings, ...predicted]`); the mouse when there is none. */
 export function pointerSource(raw: unknown): PointerSource {
-  if (!Array.isArray(raw) || raw.length < 1 + READING_LEN) return MOUSE_SOURCE;
+  if (!Array.isArray(raw) || raw.length < 2 + READING_LEN) return MOUSE_SOURCE;
   const n = raw as number[];
   const flags = n[0] ?? 0;
+  const count = n[1] ?? 0;
   const readings: PointerReading[] = [];
-  for (let i = 1; i + READING_LEN <= n.length; i += READING_LEN) {
+  let i = 2;
+  for (; readings.length < count && i + READING_LEN <= n.length; i += READING_LEN) {
     readings.push({
       x: n[i]!,
       y: n[i + 1]!,
@@ -53,10 +73,20 @@ export function pointerSource(raw: unknown): PointerSource {
       twist: n[i + 6]!,
       width: n[i + 7]!,
       height: n[i + 8]!,
+      time: n[i + 9]!,
     });
   }
-  if (flags & PEN_MOUSE) return { ...MOUSE_SOURCE, readings };
-  return { id: PEN_ID, type: "pen", eraser: !!(flags & PEN_ERASER), barrel: !!(flags & PEN_BARREL), readings };
+  const predicted: PredictedReading[] = [];
+  for (; i + PREDICTED_LEN <= n.length; i += PREDICTED_LEN) predicted.push({ x: n[i]!, y: n[i + 1]!, time: n[i + 2]! });
+  if (flags & PEN_MOUSE) return { ...MOUSE_SOURCE, readings, predicted };
+  return {
+    id: PEN_ID,
+    type: "pen",
+    eraser: !!(flags & PEN_ERASER),
+    barrel: !!(flags & PEN_BARREL),
+    readings,
+    predicted,
+  };
 }
 
 // -- pointer capture: one owner per pointer; the host routes input to it even outside its hitbox.

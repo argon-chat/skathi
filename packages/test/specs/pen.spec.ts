@@ -25,6 +25,9 @@ async function pen(kind: string, x: number, y: number, extra: Record<string, unk
 async function log(): Promise<string[]> {
   return JSON.parse(String(await app.eval("JSON.stringify(__SK_TEST_PEN__.log.splice(0))"))) as string[];
 }
+async function moves(): Promise<unknown[]> {
+  return JSON.parse(String(await app.eval("JSON.stringify(__SK_TEST_PEN__.moves.splice(0))"))) as unknown[];
+}
 
 describe("pen input", () => {
   // macOS CI: the window does not get frames for synthetic input when it is not key.
@@ -39,9 +42,15 @@ describe("pen input", () => {
         "pointerenter:pen",
         "pointermove:pen:2:b-1/0:p0.00:t20,-10:c1:60@0.00",
       ]);
+      await moves();
       await pen("down", 60, 60, { pressure: 0.3 });
-      await pen("move", 100, 60, { pressure: 0.8, fromX: 60, fromY: 60, fromPressure: 0.4, steps: 4 });
+      await pen("move", 100, 60, { pressure: 0.8, fromX: 60, fromY: 60, fromPressure: 0.4, steps: 4, interval: 4 });
       await pen("up", 100, 60);
+      // The readings' own times, 4 ms apart on the page's clock; Chromium's predictor carries the
+      // stroke on at that interval for 25 ms.
+      expect(await moves()).toEqual([
+        { steps: [4, 4, 4], beforeEvent: true, recent: true, ahead: [4, 8, 12, 16, 20, 24], forward: true },
+      ]);
       expect(await log()).toEqual([
         "pointerdown:pen:2:b0/1:p0.30:t0,0",
         "got:2",

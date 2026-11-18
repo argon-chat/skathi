@@ -1181,6 +1181,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                         .map(|(x, y)| (x as f32, y as f32)),
                     from_pressure: num("fromPressure").map(|p| p.clamp(0.0, 1.0) as f32),
                     steps: num("steps").map_or(1, |n| n.clamp(1.0, 64.0) as usize),
+                    interval: num("interval").map_or(4.0, |ms| ms.clamp(0.0, 1000.0)),
                 },
             )
         }
@@ -2073,6 +2074,8 @@ struct PenExtras {
     /// The pressure at `from`; the readings ramp from it. Defaults to `pressure`.
     from_pressure: Option<f32>,
     steps: usize,
+    /// Milliseconds between the readings; the last is taken now.
+    interval: f64,
 }
 
 fn pen_input(
@@ -2086,12 +2089,16 @@ fn pen_input(
     } else {
         gpui::MouseButton::Left
     };
-    let reading = |position, pressure| gpui::PenSample {
+    let now = std::time::Instant::now();
+    let reading = |position, pressure, before: usize| gpui::PenSample {
         position,
         pressure,
         tilt_x: extras.tilt_x,
         tilt_y: extras.tilt_y,
         twist: extras.twist,
+        time: now.checked_sub(std::time::Duration::from_secs_f64(
+            extras.interval * before as f64 / 1000.0,
+        )),
         ..Default::default()
     };
     let pressure = if contact { extras.pressure } else { 0.0 };
@@ -2110,7 +2117,7 @@ fn pen_input(
                     } else {
                         0.0
                     };
-                    reading(at, start + (pressure - start) * t)
+                    reading(at, start + (pressure - start) * t, n - i)
                 })
                 .collect()
         }
@@ -2149,7 +2156,7 @@ fn pen_input(
             eraser: extras.eraser,
             barrel: extras.barrel,
             in_contact: contact,
-            sample: reading(position, pressure),
+            sample: reading(position, pressure, 0),
             history,
         },
     })

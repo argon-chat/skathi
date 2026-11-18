@@ -10,14 +10,14 @@ class FakePointerEvent extends Event {
     super(type, init as EventInit);
     this.init = init;
     for (const k of Object.keys(init))
-      if (k !== "coalescedEvents" && k !== "bubbles")
+      if (k !== "coalescedEvents" && k !== "predictedEvents" && k !== "bubbles")
         Object.defineProperty(this, k, { value: init[k], configurable: true });
   }
   getCoalescedEvents(): unknown[] {
     return [...((this.init.coalescedEvents as unknown[] | undefined) ?? [])];
   }
   getPredictedEvents(): unknown[] {
-    return [];
+    return [...((this.init.predictedEvents as unknown[] | undefined) ?? [])];
   }
 }
 class FakeMouseEvent extends FakePointerEvent {}
@@ -44,6 +44,7 @@ type Ev = Event & {
   width: number;
   relatedTarget: unknown;
   getCoalescedEvents(): Ev[];
+  getPredictedEvents(): Ev[];
 };
 type Rt = ReturnType<typeof createRuntime>;
 
@@ -65,6 +66,7 @@ interface Reading {
   pressure?: number;
   tiltX?: number;
   twist?: number;
+  time?: number;
 }
 const ERASER = 1;
 const BARREL = 2;
@@ -72,7 +74,8 @@ const CONTACT = 4;
 const MOUSE = 8;
 const packet = (flags: number, ...readings: Reading[]) => [
   flags,
-  ...readings.flatMap((r) => [r.x, r.y, r.pressure ?? 0, 0, r.tiltX ?? 0, 0, r.twist ?? 0, 0, 0]),
+  readings.length,
+  ...readings.flatMap((r) => [r.x, r.y, r.pressure ?? 0, 0, r.tiltX ?? 0, 0, r.twist ?? 0, 0, 0, r.time ?? NaN]),
 ];
 const fire = (
   rt: Rt,
@@ -170,6 +173,28 @@ describe("pen pointer events", () => {
       ["pointermove", 6, 0.3, 3],
     ]);
     expect(target).toBe(canvas);
+  });
+
+  test("coalesced events take their readings' times; predicted events follow the move with theirs", () => {
+    const { rt, canvas } = world();
+    let seen: Ev | undefined;
+    listen(canvas, "pointermove", (e) => (seen = e));
+    const pen = [
+      ...packet(CONTACT, { x: 2, y: 0, pressure: 0.2, time: 100 }, { x: 4, y: 0, pressure: 0.4, time: 104 }),
+      ...[6, 1, 108, 8, 2, 112],
+    ];
+    rt.host.dispatcher(canvas.__skId, rt.EV_CODES.mousemove, 4, 0, 0, 0, undefined, undefined, 2, 0, pen);
+    expect(seen?.getCoalescedEvents().map((e) => e.timeStamp)).toEqual([100, 104]);
+    const movement = (e: Ev) => [
+      (e as unknown as { movementX: number }).movementX,
+      (e as unknown as { movementY: number }).movementY,
+    ];
+    expect(
+      seen?.getPredictedEvents().map((e) => [e.type, e.clientX, e.clientY, e.timeStamp, e.pressure, ...movement(e)]),
+    ).toEqual([
+      ["pointermove", 6, 1, 108, 0.4, 2, 1],
+      ["pointermove", 8, 2, 112, 0.4, 2, 1],
+    ]);
   });
 
   test("a mouse move coalesces its positions too, and a lone move lists itself", () => {

@@ -1,16 +1,23 @@
 //! What a pen adds to the mouse events gpui dispatches for it (`Window::vn_pen`): the runtime
 //! builds `pointerType: "pen"` pointer events from it. A move carries every reading (for a mouse,
-//! every position) since the previous delivered move: its `getCoalescedEvents()`.
+//! every position) since the previous delivered move, each with its time: its
+//! `getCoalescedEvents()`; and where the pointer is predicted next: its `getPredictedEvents()`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::time::Instant;
 
 use gpui::{PenSample, Window};
 
+use crate::predict::KalmanPredictor;
 use crate::tree;
 use crate::windows;
 
-/// Numbers per reading: x, y, pressure, tangentialPressure, tiltX, tiltY, twist, width, height.
-pub const SAMPLE_LEN: usize = 9;
+/// Numbers per reading: x, y, pressure, tangentialPressure, tiltX, tiltY, twist, width, height,
+/// time.
+pub const SAMPLE_LEN: usize = 10;
+/// Numbers per predicted reading: x, y, time.
+pub const PREDICTED_LEN: usize = 3;
 /// Flags leading the packet.
 pub const ERASER: f64 = 1.0;
 pub const BARREL: f64 = 2.0;
@@ -21,34 +28,134 @@ pub const MOUSE: f64 = 8.0;
 /// A pen that never gets a frame (a hidden window) must not grow without bound.
 const TRAIL_CAP: usize = 1024;
 
+/// A pointer's predictor key: `None` for the mouse, else the pen's platform id.
+type Key = Option<u32>;
+
+/// One window's readings not yet delivered, and its pointers' predictors.
+#[derive(Default)]
+pub struct PenState {
+    trail: Vec<PenSample>,
+    /// Strokes that ended (a press, release or exit) after the first `usize` readings of `trail`.
+    ends: Vec<(usize, Key)>,
+    predictors: HashMap<Key, KalmanPredictor>,
+}
+
 thread_local! {
     static NEXT: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };
 }
 
+fn key(window: &Window) -> Key {
+    window.vn_pen().map(|p| p.pointer_id)
+}
+
 /// A move's readings join the trail the next `mousemove` reports; a mouse's are its positions
-/// (none while the pointer is locked, when every move is at the lock's position).
+/// (none while the pointer is locked, when every move is at the lock's position). A reading
+/// without a platform time takes its delivery's.
 pub(crate) fn note_move(window: &mut Window) {
+    let now = Instant::now();
     let readings = match window.vn_pen() {
         Some(pen) => {
             let mut readings = pen.history.clone();
             readings.push(pen.sample);
+            for r in &mut readings {
+                r.time.get_or_insert(now);
+            }
             readings
         }
         None if window.vn_pointer_locked() => return,
         None => vec![PenSample {
             position: window.mouse_position(),
+            time: Some(now),
             ..Default::default()
         }],
     };
     windows::here(window, |w| {
-        w.pen_trail.extend(readings);
-        let over = w.pen_trail.len().saturating_sub(TRAIL_CAP);
-        w.pen_trail.drain(..over);
+        let pen = &mut w.pen;
+        pen.trail.extend(readings);
+        let over = pen.trail.len().saturating_sub(TRAIL_CAP);
+        pen.trail.drain(..over);
+        for end in &mut pen.ends {
+            end.0 = end.0.saturating_sub(over);
+        }
+    });
+}
+
+/// A press, release or exit: the pointer's prediction starts over after the readings so far.
+pub(crate) fn end_stroke(window: &mut Window) {
+    let key = key(window);
+    windows::here(window, |w| {
+        let at = w.pen.trail.len();
+        w.pen.ends.push((at, key));
     });
 }
 
 pub(crate) fn clear_trail(window: &mut Window) {
-    windows::here(window, |w| w.pen_trail.clear());
+    windows::here(window, |w| {
+        let pen = &mut w.pen;
+        pen.trail.clear();
+        for (_, key) in pen.ends.drain(..) {
+            pen.predictors.remove(&key);
+        }
+    });
+}
+
+/// The runtime's clock (`performance.now()`, `event.timeStamp`) read with an `Instant`.
+struct Clock {
+    at: Instant,
+    ms: f64,
+}
+
+impl Clock {
+    fn now() -> Self {
+        let ms = sk_runtime::redjs::web::now_ms();
+        Self {
+            at: Instant::now(),
+            ms,
+        }
+    }
+
+    fn ms(&self, t: Option<Instant>) -> f64 {
+        t.map_or(self.ms, |t| {
+            self.ms - self.at.saturating_duration_since(t).as_secs_f64() * 1000.0
+        })
+    }
+}
+
+/// The trail with its times, oldest first and never decreasing, and the predicted readings after
+/// it; the trail feeds `key`'s predictor.
+fn take_move(window: &mut Window, key: Key) -> (Vec<(PenSample, f64)>, Vec<(f64, f64, f64)>) {
+    let clock = Clock::now();
+    windows::here(window, |w| {
+        let pen = &mut w.pen;
+        let trail = std::mem::take(&mut pen.trail);
+        let mut ends = std::mem::take(&mut pen.ends).into_iter().peekable();
+        if key.is_some() {
+            pen.predictors.remove(&None);
+        }
+        let mut readings = Vec::with_capacity(trail.len());
+        let mut prev = f64::NEG_INFINITY;
+        for (i, s) in trail.into_iter().enumerate() {
+            while let Some((_, ended)) = ends.next_if(|&(at, _)| at <= i) {
+                pen.predictors.remove(&ended);
+            }
+            let t = clock.ms(s.time).max(prev);
+            prev = t;
+            pen.predictors.entry(key).or_default().update(
+                f64::from(f32::from(s.position.x)),
+                f64::from(f32::from(s.position.y)),
+                t,
+            );
+            readings.push((s, t));
+        }
+        let predicted = match pen.predictors.get(&key) {
+            Some(p) if !readings.is_empty() => p.predictions(),
+            _ => Vec::new(),
+        };
+        for (_, ended) in ends {
+            pen.predictors.remove(&ended);
+        }
+        (readings, predicted)
+    })
 }
 
 fn mouse_family(event: u32) -> bool {
@@ -69,18 +176,18 @@ fn mouse_family(event: u32) -> bool {
 }
 
 /// Arms the next dispatch with the pen's data when `event` comes from one; a `mousemove` takes
-/// the trail.
+/// the trail and its predictions, a mouse's too.
 pub(crate) fn arm(window: &mut Window, event: u32) {
     NEXT.with(|n| n.borrow_mut().take());
     if !mouse_family(event) {
         return;
     }
+    let key = key(window);
     let Some(pen) = window.vn_pen() else {
         if event == tree::EV_MOUSEMOVE {
-            let trail = windows::here(window, |w| std::mem::take(&mut w.pen_trail));
-            if trail.len() > 1 {
-                let latest = trail[trail.len() - 1];
-                NEXT.with(|n| *n.borrow_mut() = Some(packet(MOUSE, &trail, latest)));
+            let (readings, predicted) = take_move(window, key);
+            if !readings.is_empty() {
+                NEXT.with(|n| *n.borrow_mut() = Some(packet(MOUSE, &readings, &predicted)));
             }
         }
         return;
@@ -96,24 +203,29 @@ pub(crate) fn arm(window: &mut Window, event: u32) {
         flags += CONTACT;
     }
     let latest = pen.sample;
-    let trail = if event == tree::EV_MOUSEMOVE {
-        windows::here(window, |w| std::mem::take(&mut w.pen_trail))
+    let (mut readings, predicted) = if event == tree::EV_MOUSEMOVE {
+        take_move(window, key)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
-    NEXT.with(|n| *n.borrow_mut() = Some(packet(flags, &trail, latest)));
+    if readings.is_empty() {
+        readings.push((latest, Clock::now().ms(latest.time)));
+    }
+    NEXT.with(|n| *n.borrow_mut() = Some(packet(flags, &readings, &predicted)));
 }
 
-/// `[flags, ...readings]`, oldest first; the last reading is the event's own.
-pub fn packet(flags: f64, trail: &[PenSample], latest: PenSample) -> Vec<f64> {
-    let readings: &[PenSample] = if trail.is_empty() {
-        std::slice::from_ref(&latest)
-    } else {
-        trail
-    };
-    let mut out = Vec::with_capacity(1 + readings.len() * SAMPLE_LEN);
+/// `[flags, readings.len(), ...readings, ...predicted]`, oldest first; the last reading is the
+/// event's own.
+pub fn packet(
+    flags: f64,
+    readings: &[(PenSample, f64)],
+    predicted: &[(f64, f64, f64)],
+) -> Vec<f64> {
+    let mut out =
+        Vec::with_capacity(2 + readings.len() * SAMPLE_LEN + predicted.len() * PREDICTED_LEN);
     out.push(flags);
-    for s in readings {
+    out.push(readings.len() as f64);
+    for (s, time) in readings {
         out.extend_from_slice(&[
             f64::from(f32::from(s.position.x)),
             f64::from(f32::from(s.position.y)),
@@ -124,7 +236,11 @@ pub fn packet(flags: f64, trail: &[PenSample], latest: PenSample) -> Vec<f64> {
             f64::from(s.twist),
             f64::from(s.width),
             f64::from(s.height),
+            *time,
         ]);
+    }
+    for &(x, y, time) in predicted {
+        out.extend_from_slice(&[x, y, time]);
     }
     out
 }
@@ -148,18 +264,16 @@ mod tests {
     }
 
     #[test]
-    fn a_packet_holds_the_trail_oldest_first_or_the_latest_reading() {
+    fn a_packet_holds_the_readings_oldest_first_then_the_predictions() {
         let p = packet(
             ERASER + CONTACT,
-            &[at(1.0, 0.1), at(3.0, 0.3)],
-            at(3.0, 0.3),
+            &[(at(1.0, 0.1), 5.0), (at(3.0, 0.3), 9.0)],
+            &[(4.0, 2.0, 13.0)],
         );
-        assert_eq!(p.len(), 1 + 2 * SAMPLE_LEN);
-        assert_eq!(p[0], 5.0);
-        assert_eq!(&p[1..4], &[1.0, 2.0, f64::from(0.1f32)]);
-        assert_eq!(p[1 + SAMPLE_LEN], 3.0);
-        let lone = packet(0.0, &[], at(7.0, 0.0));
-        assert_eq!(lone.len(), 1 + SAMPLE_LEN);
-        assert_eq!((lone[1], lone[5]), (7.0, 10.0));
+        assert_eq!(p.len(), 2 + 2 * SAMPLE_LEN + PREDICTED_LEN);
+        assert_eq!(&p[..5], &[5.0, 2.0, 1.0, 2.0, f64::from(0.1f32)]);
+        assert_eq!(p[2 + SAMPLE_LEN - 1], 5.0);
+        assert_eq!(p[2 + SAMPLE_LEN], 3.0);
+        assert_eq!(&p[2 + 2 * SAMPLE_LEN..], &[4.0, 2.0, 13.0]);
     }
 }

@@ -327,11 +327,12 @@ export const COMMANDS: CommandSpec[] = [
     description:
       "A stylus event at a window coordinate, dispatched the way a platform reports a pen: the page gets " +
       '`pointerType: "pen"` pointer events with pressure and tilt, then the mouse events. A move with ' +
-      "--from-x/--from-y and --steps N carries N readings, its getCoalescedEvents(). No OS input.",
+      "--from-x/--from-y and --steps N carries N readings --interval ms apart (default 4), its " +
+      "getCoalescedEvents(), and feeds its getPredictedEvents(). No OS input.",
     usage: [
       "  pen      [selector] [--x N --y N] [--kind hover|down|move|up|leave] [--pressure P]",
       "           [--tilt-x D] [--tilt-y D] [--twist D] [--eraser] [--barrel]",
-      "           [--from-x N --from-y N --from-pressure P --steps N]",
+      "           [--from-x N --from-y N --from-pressure P --steps N --interval MS]",
       "                                     a pen event through gpui's dispatch",
     ],
     args: {
@@ -350,6 +351,7 @@ export const COMMANDS: CommandSpec[] = [
       fromY: int("where the readings of a move start"),
       fromPressure: int("the pressure the readings ramp from (default: --pressure)"),
       steps: int("how many readings the move carries"),
+      interval: int("milliseconds between the readings (default 4)"),
     },
     cli: (rest, flags) => {
       const base = compact({
@@ -364,6 +366,7 @@ export const COMMANDS: CommandSpec[] = [
         fromY: num(flags["from-y"]),
         fromPressure: num(flags["from-pressure"]),
         steps: num(flags.steps),
+        interval: num(flags.interval),
       });
       if (rest[0]) return withIndex({ ...base, selector: rest[0] }, flags);
       const x = num(flags.x);

@@ -165,9 +165,20 @@ pub(crate) fn routed_target(window: &Window) -> Option<u32> {
 /// must collect moves beyond the captured box and beyond the client area as well. Every move's
 /// motion adds up here until a `mousemove` reports it.
 pub(crate) fn capture_listeners(window: &mut Window) {
-    window.on_mouse_event(|_: &gpui::MouseDownEvent, phase, _, _| {
+    window.on_mouse_event(|_: &gpui::MouseDownEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
             crate::pointer_lock::note_gesture();
+            crate::pen::end_stroke(window);
+        }
+    });
+    window.on_mouse_event(|_: &gpui::MouseUpEvent, phase, window, _| {
+        if phase == DispatchPhase::Capture {
+            crate::pen::end_stroke(window);
+        }
+    });
+    window.on_mouse_event(|_: &gpui::MouseExitEvent, phase, window, _| {
+        if phase == DispatchPhase::Capture {
+            crate::pen::end_stroke(window);
         }
     });
     window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {

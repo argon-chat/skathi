@@ -183,15 +183,20 @@ function readingInit(src: PointerSource, r: PointerReading | undefined, buttons:
   };
 }
 
+type MoveInit = Record<string, unknown> & { clientX: number; clientY: number; movementX?: number; movementY?: number };
+
+/** An event for one reading: its `timeStamp` is the reading's time. */
+function stamped(ev: PointerEvent, time: number | undefined): PointerEvent {
+  if (time !== undefined && Number.isFinite(time))
+    Object.defineProperty(ev, "timeStamp", { value: time, configurable: true });
+  return ev;
+}
+
 /** A `pointermove`'s coalesced events: one per reading since the last move, or the event alone. */
-function coalescedMoves(
-  init: Record<string, unknown> & { clientX: number; clientY: number; movementX?: number; movementY?: number },
-  src: PointerSource,
-  buttons: number,
-): PointerEvent[] {
+function coalescedMoves(init: MoveInit, src: PointerSource, buttons: number): PointerEvent[] {
   const readings = src.readings;
   const base = { ...init, bubbles: false, cancelable: false };
-  if (readings.length < 2) return [new PointerEvent("pointermove", base)];
+  if (readings.length < 2) return [stamped(new PointerEvent("pointermove", base), readings[0]?.time)];
   const first = readings[0]!;
   const last = readings[readings.length - 1]!;
   let px = first.x - ((init.movementX ?? 0) - (last.x - first.x));
@@ -207,7 +212,27 @@ function coalescedMoves(
     });
     px = r.x;
     py = r.y;
-    return ev;
+    return stamped(ev, r.time);
+  });
+}
+
+/** A `pointermove`'s predicted events: the event at each predicted position, as Chromium makes them. */
+function predictedMoves(init: MoveInit, src: PointerSource): PointerEvent[] {
+  let px = init.clientX;
+  let py = init.clientY;
+  return src.predicted.map((p) => {
+    const ev = new PointerEvent("pointermove", {
+      ...init,
+      bubbles: false,
+      cancelable: false,
+      clientX: p.x,
+      clientY: p.y,
+      movementX: p.x - px,
+      movementY: p.y - py,
+    });
+    px = p.x;
+    py = p.y;
+    return stamped(ev, p.time);
   });
 }
 
@@ -334,9 +359,11 @@ export function synthesize(
       const fields = readingInit(src, src.readings[src.readings.length - 1], buttons);
       const init = { ...common, ...M, clientX: a, clientY: b, ...moved, button, buttons, ...fields };
       if (typeof PointerEvent === "function") {
-        const coalescedEvents = name === "pointermove" ? coalescedMoves(init, src, buttons) : [];
-        const ev = withOffsets(new PointerEvent(name, { ...init, coalescedEvents }), a, b);
-        for (const e of coalescedEvents) withOffsets(e, e.clientX, e.clientY, () => ev.target);
+        const move = name === "pointermove";
+        const coalescedEvents = move ? coalescedMoves(init, src, buttons) : [];
+        const predictedEvents = move ? predictedMoves(init, src) : [];
+        const ev = withOffsets(new PointerEvent(name, { ...init, coalescedEvents, predictedEvents }), a, b);
+        for (const e of [...coalescedEvents, ...predictedEvents]) withOffsets(e, e.clientX, e.clientY, () => ev.target);
         return ev;
       }
       // No PointerEvent class: a MouseEvent carrying the pointer fields reads the same.
