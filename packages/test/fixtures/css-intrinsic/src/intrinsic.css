@@ -82,6 +82,22 @@
   height: 10px;
 }
 
+#flex-col {
+  display: flex;
+  flex-direction: column;
+}
+#flex-a,
+#flex-b {
+  height: 10px;
+}
+#flex-half {
+  height: calc-size(auto, size * 0.4);
+  overflow: hidden;
+}
+#flex-half-content {
+  height: 100px;
+}
+
 #logical {
   inline-size: 50px;
   block-size: 30px;

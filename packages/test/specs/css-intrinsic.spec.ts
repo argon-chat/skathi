@@ -72,6 +72,13 @@ describe("interpolate-size and calc-size()", () => {
     expect(await size("basis")).toEqual([60, 10]);
   });
 
+  test("a calc-size() flex item applies its calculation once, and keeps it once nothing moves", async () => {
+    expect((await size("flex-half"))[1]).toBe(40);
+    await sleep(500);
+    expect(await height("flex-half")).toBe(40);
+    expect((await size("flex-half"))[1]).toBe(40);
+  });
+
   test("logical sizes map to width and height", async () => {
     expect(await size("logical")).toEqual([50, 30]);
   });

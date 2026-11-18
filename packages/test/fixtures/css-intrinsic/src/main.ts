@@ -13,6 +13,7 @@ createApp({
         content("half"),
         h("div", { id: "basis-row" }, [content("basis")]),
         box("logical"),
+        h("div", { id: "flex-col" }, [box("flex-a"), content("flex-half"), box("flex-b")]),
       ]),
       h("div", { id: "functions" }, [
         box("fn-size"),
