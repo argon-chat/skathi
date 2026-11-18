@@ -1107,80 +1107,12 @@
     border-radius: inherit;
     pointer-events: none;
   }
-  .player-frame > span {
+  .player-picture {
     position: absolute;
-  }
-  .scene-sky {
     inset: 0;
-    background:
-      radial-gradient(circle at 12% 14%, #fff 0 1px, #fff0 2px),
-      radial-gradient(circle at 27% 31%, #fffc 0 1px, #fff0 1.5px),
-      radial-gradient(circle at 41% 9%, #fff 0 1px, #fff0 2px),
-      radial-gradient(circle at 56% 22%, #fffa 0 1px, #fff0 1.5px),
-      radial-gradient(circle at 71% 12%, #fff 0 1.2px, #fff0 2px),
-      radial-gradient(circle at 84% 27%, #fffc 0 1px, #fff0 1.5px),
-      radial-gradient(circle at 93% 8%, #fff 0 1px, #fff0 2px),
-      radial-gradient(circle at 6% 36%, #fff9 0 1px, #fff0 1.5px),
-      linear-gradient(180deg, #120f2b 0%, #2b1d55 32%, #6b3a86 56%, #d76f9a 76%, #ffb38a 90%);
-  }
-  .scene-sun {
-    left: 60%;
-    top: 58%;
-    width: 21%;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    background: radial-gradient(circle, #fff 0 32%, #ffeccc 44%, #ffb38a 58%, #ffb38a00 71%);
-  }
-  .scene-ridge {
-    left: 0;
-    right: 0;
-  }
-  .scene-ridge-far {
-    bottom: 26%;
-    height: 32%;
-    background: linear-gradient(180deg, #4a3480, #2c2160);
-    clip-path: polygon(
-      0 62%,
-      9% 44%,
-      17% 56%,
-      29% 18%,
-      40% 47%,
-      50% 33%,
-      61% 62%,
-      73% 28%,
-      85% 50%,
-      100% 34%,
-      100% 100%,
-      0 100%
-    );
-  }
-  .scene-ridge-near {
-    bottom: 26%;
-    height: 20%;
-    background: #1b1438;
-    clip-path: polygon(
-      0 40%,
-      12% 70%,
-      24% 38%,
-      37% 66%,
-      52% 44%,
-      66% 74%,
-      80% 36%,
-      92% 60%,
-      100% 48%,
-      100% 100%,
-      0 100%
-    );
-  }
-  .scene-water {
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 26%;
-    background:
-      repeating-linear-gradient(180deg, #ffffff00 0 5px, #ffffff12 5px 6px),
-      radial-gradient(ellipse 9% 90% at 60% 0%, #ffd9b3cc, #ffd9b300), linear-gradient(180deg, #2c1f52, #0e0b20);
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   .player-tag {
     position: absolute;
