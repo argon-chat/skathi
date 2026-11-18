@@ -386,11 +386,48 @@ meter();`,
   music.gain.linearRampToValueAtTime(0, now + seconds);
 }`,
       },
+      {
+        title: "Play a 5.1 track on a surround system",
+        lang: "ts",
+        code: `const audio = new AudioContext();
+const track = await audio.decodeAudioData(await (await fetch("assets/sounds/intro-5.1.flac")).arrayBuffer());
+// 6 on a 5.1 device; a stereo device keeps 2 and the track is mixed down.
+audio.destination.channelCount = Math.min(track.numberOfChannels, audio.destination.maxChannelCount);
+const source = audio.createBufferSource();
+source.buffer = track;
+source.connect(audio.destination);
+source.start();`,
+      },
     ],
     edgeCases: [
+      "`destination.channelCount` above `maxChannelCount` throws `IndexSizeError`; `channelCount` 0 or above 32 on any node throws `NotSupportedError`.",
       "`start`, `stop` and parameter automation take effect on the first frame at or after the requested time, not on the exact sample.",
       "Connecting nodes of two different `AudioContext`s throws `InvalidAccessError`.",
       "`createMediaElementSource(video)` returns a silent node and logs an advisory; decode the file with `decodeAudioData` instead. `decodeAudioData` rejects with `EncodingError` for empty or undecodable data.",
+    ],
+  },
+  "spatial-audio": {
+    examples: [
+      {
+        title: "Place a sound around the listener",
+        lang: "ts",
+        code: `const audio = new AudioContext();
+const panner = audio.createPanner();
+panner.panningModel = "spatial"; // HRTF wherever no spatial renderer takes it
+panner.positionX.value = 2;
+panner.positionZ.value = -1;
+source.connect(panner).connect(audio.destination);
+
+const status = audio.spatialAudio;
+if (status?.active) console.log(\`\${status.format}: \${status.objectsInUse}/\${status.maxObjects} objects\`);
+else if (status?.requested) console.log("spatial audio is off:", status.reason);`,
+        note: "Write `'spatial'` only where Skathi runs, or guard it: browsers ignore the value and keep the previous model.",
+      },
+    ],
+    edgeCases: [
+      "Turning the spatial sound format off or switching the output device while a context plays reopens its output: the context carries on, its panners render with HRTF or on the new renderer, and `spatialAudio` follows.",
+      "`spatialAudio` is read fresh each time; it is a plain object, not live.",
+      "Setting `panningModel` back to `'HRTF'` or `'equalpower'` frees the panner's object for the next panner waiting for one.",
     ],
   },
   "get-user-media": {

@@ -5331,6 +5331,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sk-audio",
  "sk-clipboard",
  "sk-css",
  "sk-desktop",
@@ -5357,6 +5358,15 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-sys 0.61.2",
  "zmij",
+]
+
+[[package]]
+name = "sk-audio"
+version = "0.3.0"
+dependencies = [
+ "redjs",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

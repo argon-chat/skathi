@@ -156,6 +156,7 @@ The window that opens belongs to your process. Close it and `wait` returns; your
 | `prod`            | on      | Runs a payload. Off, the exe boots the dev output named by `SK_DIST` (`sk dev`). |
 | `types`           | on      | The TypeScript for native modules (`sk types`)                                   |
 | `audio`           | on      | Web Audio                                                                        |
+| `spatial-audio`   | on      | Windows Sonic, Dolby Atmos and DTS objects for `PannerNode`s; implies `audio`    |
 | `storages`        | on      | localStorage, cookies and secrets on disk                                        |
 | `clipboard`       | on      | `navigator.clipboard`                                                            |
 | `indexeddb`       | on      | IndexedDB                                                                        |

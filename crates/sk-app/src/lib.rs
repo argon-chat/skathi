@@ -77,6 +77,8 @@ mod reload;
 mod shared_gpu;
 mod shutdown;
 mod slot;
+#[cfg(feature = "spatial-audio")]
+mod spatial_audio;
 mod transparency;
 pub mod tray;
 mod window;
@@ -1158,6 +1160,8 @@ fn run_app() {
             popout::install(rt);
             #[cfg(feature = "audio")]
             microphone::install();
+            #[cfg(feature = "spatial-audio")]
+            spatial_audio::install(rt);
             // gpui's clipboard, the one native <input> uses, so there is one owner of `OpenClipboard`.
             #[cfg(feature = "clipboard")]
             sk_clipboard::install();

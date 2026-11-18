@@ -37,13 +37,14 @@ Nothing panics, and the same payload runs on a full host and on a trimmed one.
 
 Sizes are the release exe of a minimal embedder on Windows x64, a `main` that spawns the app and waits, built with the size profile from [Shipping](/embedding/shipping/#binary-size): opt-level `"s"` with the Skathi crates at 3, thin LTO, `rust-lld`. "Exe" is what removing that one feature from the defaults takes off the exe (or, for the features that are off by default, what turning it on does); "Crates" is how many packages leave `cargo tree` for Windows, build dependencies included. 1 MB is 10⁶ bytes.
 
-With every default feature on, the exe is **101.4 MB** and the graph **459 crates**. With all of them off but `prod`, it is **84.9 MB** and **354 crates**; add `icu-root` and `no-devtools` and it is **74.0 MB**.
+With every default feature on, the exe is **101.5 MB** and the graph **460 crates**. With all of them off but `prod`, it is **84.9 MB** and **354 crates**; add `icu-root` and `no-devtools` and it is **74.0 MB**.
 
 | Feature           | Default | What the app gets                                                                           | With it off                                                                             | Exe     | Crates | At build time                                                                         |
 | ----------------- | ------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------- | ------ | ------------------------------------------------------------------------------------- |
 | `prod`            | on      | Runs a payload                                                                              | The exe boots the dev output in `SK_DIST` ([dev loop](/embedding/dev-loop/))            |         |        |                                                                                       |
 | `types`           | on      | `sk types` reads your native modules' TypeScript from the exe                               | Modules work; `sk types` says the exe was built without it                              | −0.7 MB | −5     | specta                                                                                |
 | `audio`           | on      | [Web Audio](/web-platform/web-audio/), `navigator.mediaDevices`, `getUserMedia`             | All three are absent                                                                    | −5.1 MB | −57    | firewheel, cpal, symphonia                                                            |
+| `spatial-audio`   | on      | [Spatial audio](/web-platform/spatial-audio/): `panningModel = "spatial"` on Windows        | `"spatial"` is ignored and `AudioContext.spatialAudio` is absent                        | −0.1 MB | −1     | none                                                                                  |
 | `storages`        | on      | [localStorage](/web-platform/local-storage/), sessionStorage, `appStorage`, cookies on disk | `localStorage` is undefined, `appStorage` inert; cookies and IndexedDB last for the run | −1.1 MB | −1     | none                                                                                  |
 | `clipboard`       | on      | [`navigator.clipboard`](/web-platform/async-clipboard/)                                     | `navigator.clipboard` is undefined; copy and paste in text fields still work            | −0.2 MB | −1     | none                                                                                  |
 | `indexeddb`       | on      | [IndexedDB](/web-platform/indexed-db/) and `navigator.storage`, encrypted SQLite on disk    | `indexedDB` is undefined                                                                | −1.4 MB | 0      | with `storages`: downloads SQLite3 Multiple Ciphers and compiles it (C)               |
@@ -67,6 +68,7 @@ On a clean target directory, with the JavaScriptCore prebuilt and the ThorVG arc
 ### Platform notes
 
 - **`native-dx12`** only does something on Windows; elsewhere it changes nothing.
+- **`spatial-audio`** renders objects on Windows only, through the spatial sound format the user turned on for the device; on macOS and Linux, and without such a format, `"spatial"` panners render with HRTF and `spatialAudio.reason` says why.
 - **`webview`**: `<iframe>` has a backend on Windows only (WebView2, which ships with Windows 11 and current Windows 10). On macOS and Linux it is an empty box with or without the feature.
 - **`video`** decodes with the OS: Media Foundation on Windows, AVFoundation on macOS, GStreamer on Linux, loaded at run time so the exe starts without it. The codecs are the machine's, not the feature's.
 - **`storages`** on Linux brings the Secret Service client, and on macOS the Keychain and `ring`.
@@ -153,6 +155,7 @@ exit $status
 | `sk-video`      | `video`            |
 | `sk-webview`    | `webview`          |
 | `sk-hotkeys`    | `hotkeys`          |
+| `sk-audio`      | `spatial-audio`    |
 | `sk-storage`    | `storages`         |
 | `sk-clipboard`  | `clipboard`        |
 | `wgpu`          | `webgpu`           |

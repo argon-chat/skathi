@@ -39,8 +39,10 @@ devtools = []
 
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
-default = ["audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview"]
+default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview"]
 audio = ["sk-runtime/audio", "sk-permissions/audio"]
+# `panningModel: "spatial"` and `AudioContext.spatialAudio`: Windows spatial audio objects.
+spatial-audio = ["audio", "dep:sk-audio"]
 
 # `localStorage` / `sessionStorage` and the `appStorage` extension. Off, the whole surface
 # vanishes, so `typeof localStorage === "undefined"` tells the truth. No third-party dependency;
@@ -91,6 +93,7 @@ memmap2 = "0.9"
 self_cell = "1"
 sk-desktop = { path = "../sk-desktop", version = "0.3.0" }
 sk-hotkeys = { path = "../sk-hotkeys", version = "0.3.0", optional = true }
+sk-audio = { path = "../sk-audio", version = "0.3.0", optional = true }
 sk-permissions = { path = "../sk-permissions", version = "0.3.0" }
 sk-locale = { path = "../sk-locale", version = "0.3.0" }
 sk-storage = { path = "../sk-storage", version = "0.3.0", optional = true }

@@ -509,11 +509,73 @@ interface AudioParam {
   cancelScheduledValues(cancelTime: number): AudioParam;
 }
 
+type ChannelCountMode = "max" | "clamped-max" | "explicit";
+type ChannelInterpretation = "speakers" | "discrete";
+
 interface AudioNode {
   readonly numberOfInputs: number;
   readonly numberOfOutputs: number;
+  channelCount: number;
+  channelCountMode: ChannelCountMode;
+  channelInterpretation: ChannelInterpretation;
   connect(destinationNode: AudioNode, output?: number, input?: number): AudioNode;
   disconnect(outputOrDestination?: number | AudioNode, output?: number, input?: number): void;
+}
+
+interface AudioDestinationNode extends AudioNode {
+  /** The output device's channels; `channelCount` may be raised up to it. */
+  readonly maxChannelCount: number;
+}
+
+interface StereoPannerNode extends AudioNode {
+  readonly pan: AudioParam;
+}
+
+/** `"spatial"` is Skathi's: the panner renders as a Windows spatial audio object while one is free. Not web API. */
+type PanningModelType = "equalpower" | "HRTF" | "spatial";
+type DistanceModelType = "linear" | "inverse" | "exponential";
+
+interface PannerNode extends AudioNode {
+  panningModel: PanningModelType;
+  distanceModel: DistanceModelType;
+  readonly positionX: AudioParam;
+  readonly positionY: AudioParam;
+  readonly positionZ: AudioParam;
+  readonly orientationX: AudioParam;
+  readonly orientationY: AudioParam;
+  readonly orientationZ: AudioParam;
+  refDistance: number;
+  maxDistance: number;
+  rolloffFactor: number;
+  coneInnerAngle: number;
+  coneOuterAngle: number;
+  coneOuterGain: number;
+}
+
+interface AudioListener {
+  readonly positionX: AudioParam;
+  readonly positionY: AudioParam;
+  readonly positionZ: AudioParam;
+  readonly forwardX: AudioParam;
+  readonly forwardY: AudioParam;
+  readonly forwardZ: AudioParam;
+  readonly upX: AudioParam;
+  readonly upY: AudioParam;
+  readonly upZ: AudioParam;
+}
+
+/** `AudioContext.spatialAudio`: whether `"spatial"` panners render as spatial audio objects. Not web API. */
+interface SkSpatialAudioStatus {
+  /** A spatial renderer has the context's output. */
+  readonly active: boolean;
+  /** A panner of the context asked for `"spatial"`. */
+  readonly requested: boolean;
+  /** `"windows-sonic"`, `"dolby-atmos-headphones"`, `"dts-headphone-x"`, …; `null` while inactive. */
+  readonly format: string | null;
+  readonly maxObjects: number;
+  readonly objectsInUse: number;
+  /** Why a requested spatial output is not active; its panners render with HRTF meanwhile. */
+  readonly reason: string | null;
 }
 
 interface GainNode extends AudioNode {
@@ -562,8 +624,8 @@ interface AudioBufferSourceNode extends AudioNode {
 
 interface AudioNodeOptions {
   channelCount?: number;
-  channelCountMode?: string;
-  channelInterpretation?: string;
+  channelCountMode?: ChannelCountMode;
+  channelInterpretation?: ChannelInterpretation;
 }
 interface ChannelSplitterOptions extends AudioNodeOptions {
   numberOfOutputs?: number;
@@ -571,16 +633,8 @@ interface ChannelSplitterOptions extends AudioNodeOptions {
 interface ChannelMergerOptions extends AudioNodeOptions {
   numberOfInputs?: number;
 }
-interface ChannelSplitterNode extends AudioNode {
-  channelCount: number;
-  channelCountMode: string;
-  channelInterpretation: string;
-}
-interface ChannelMergerNode extends AudioNode {
-  channelCount: number;
-  channelCountMode: string;
-  channelInterpretation: string;
-}
+interface ChannelSplitterNode extends AudioNode {}
+interface ChannelMergerNode extends AudioNode {}
 declare var ChannelSplitterNode: {
   new (context: AudioContext, options?: ChannelSplitterOptions): ChannelSplitterNode;
   prototype: ChannelSplitterNode;
@@ -637,11 +691,16 @@ interface AudioContext {
   readonly state: "suspended" | "running" | "closed";
   readonly sampleRate: number;
   readonly currentTime: number;
-  readonly destination: AudioNode;
+  readonly destination: AudioDestinationNode;
+  readonly listener: AudioListener;
   readonly audioWorklet?: unknown;
+  /** Skathi's spatial output status; present with the `spatial-audio` feature. Not web API. */
+  readonly spatialAudio?: SkSpatialAudioStatus;
   createGain(): GainNode;
   createOscillator(): OscillatorNode;
   createAnalyser(): AnalyserNode;
+  createPanner(): PannerNode;
+  createStereoPanner(): StereoPannerNode;
   createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
   createBufferSource(): AudioBufferSourceNode;
   createChannelSplitter(numberOfOutputs?: number): ChannelSplitterNode;
