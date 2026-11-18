@@ -185,26 +185,26 @@ macOS raises a screen's headroom above 1.0 only while a window on it asks for ED
 
 Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on every platform:
 
-| Field                          | Means                                                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                               |
-| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`                    |
-| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0            |
-| `output_hdr`                   | whether the element's window draws HDR now (half-float swap chain or layer); see [HDR windows](#hdr-windows) |
-| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere            |
-| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                               |
-| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                                |
-| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)                     |
-| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows       |
-| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                              |
-| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called              |
-| `known`                        | `false` on Linux, and before the window first draws                                                          |
+| Field                          | Means                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                                                                                      |
+| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`                                                                           |
+| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0                                                                   |
+| `output_hdr`                   | whether the element's window draws HDR now (half-float swap chain or layer); see [HDR windows](#hdr-windows)                                                        |
+| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere                                                                   |
+| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                                                                                      |
+| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                                                                                       |
+| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)                                                                            |
+| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows                                                              |
+| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                                                                                     |
+| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called: never ahead of that moment, and at most `refresh_period` before it |
+| `known`                        | `false` on Linux, and before the window first draws                                                                                                                 |
 
 1.0 as SDR white is what macOS EDR values already are, and how Windows composes SDR content in HDR mode: at the white level the user picked. On macOS `headroom` is 1.0 until a window on the screen asks for EDR, then what the system grants, which follows the brightness and, from macOS 26, goes no higher than the window's tag unless something else on the screen asks for more (see [HDR windows](#hdr-windows)). On Windows, `headroom` is the screen's peak over that white (`MaxLuminance` / SDR white), and a scRGB value, where 1.0 is 80 nits, is a surface value times `sdr_white_nits / 80`. In SDR mode it is 1.0.
 
 macOS sends nothing when the EDR headroom moves with the brightness, and Windows nothing when the SDR slider moves, so Skathi reads the display as it draws: on macOS every frame, on Windows the monitor and DXGI's state every frame and the display configuration once a second (at once on a move to another monitor or a display change). While a surface is visible and nothing else draws, it looks four times a second. A change smaller than 1 % is not reported. Since 0.5 a level that keeps moving, as macOS's headroom does for a second or two after a window enters or leaves EDR, is reported at most every 200 ms and once more where it settles, so a producer that re-derives its tone mapping on each event is not run on every frame of the ramp. `known`, `hdr` and `output_hdr` are reported at once, and a `variable_refresh` change once it has held for 100 ms: macOS's refresh range can blink for a few milliseconds. Windows does not say whether a screen refreshes at a variable rate, and Linux reports nothing yet.
 
-`refresh_period` and `last_vblank` are the display clock, so a player can aim at a vblank without a thread of its own: the next ones are `last_vblank + k × refresh_period`. On Windows both are the compositor's (`DwmGetCompositionTimingInfo`), used while its rate matches the surface's screen. Elsewhere, and on a screen of another rate, `last_vblank` is carried forward from the last frame [`on_frame`](#knowing-when-a-frame-is-on-screen) saw shown, so it is `None` until one was.
+`refresh_period` and `last_vblank` are the display clock, so a player can aim at a vblank without a thread of its own: the next ones are `last_vblank + k × refresh_period`, for k ≥ 1. On Windows both are the compositor's (`DwmGetCompositionTimingInfo`), used while its rate matches the surface's screen. Since 0.5 `last_vblank` is the latest vblank already past on Windows too, carried forward on the compositor's grid when it has not composed for a while; before, it was usually the coming one. Elsewhere, and on a screen of another rate, `last_vblank` is carried forward from the last frame [`on_frame`](#knowing-when-a-frame-is-on-screen) saw shown, so it is `None` until one was.
 
 ### A video player
 

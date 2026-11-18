@@ -244,8 +244,9 @@ pub struct SurfaceDisplay {
     pub variable_refresh: Option<bool>,
     /// The display's nominal refresh period: the compositor's on Windows, else from `refresh_hz`.
     pub refresh_period: Option<Duration>,
-    /// When its last vblank was, in [`monotonic_ns`]'s clock, as `info()` was called. Off Windows
-    /// it is extrapolated from the last frame shown, so it is known once one was.
+    /// When its latest vblank was, in [`monotonic_ns`]'s clock, as `info()` was called: never after
+    /// that, and at most `refresh_period` before. Off Windows it is extrapolated from the last
+    /// frame shown, so it is known once one was.
     pub last_vblank: Option<u64>,
 }
 

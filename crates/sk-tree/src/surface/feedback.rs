@@ -538,24 +538,32 @@ pub(crate) fn display_clock(s: Key, refresh_hz: Option<f32>) -> (Option<u64>, Op
     let nominal = refresh_hz
         .filter(|hz| *hz > 0.0)
         .map(|hz| Duration::from_secs_f64(1.0 / f64::from(hz)));
+    // DWM's vblank is usually the coming one, and is not updated every refresh while little is
+    // composed; it is exact as a point on the grid.
     if let Some((vblank, period)) = platform::compositor_clock() {
         let agrees = nominal.is_none_or(|n| {
             (n.as_secs_f64() - period.as_secs_f64()).abs() <= 0.01 * n.as_secs_f64()
         });
         if agrees {
-            return (Some(vblank), Some(period));
+            return (
+                Some(latest_on_grid(vblank, period, monotonic_ns())),
+                Some(period),
+            );
         }
     }
     let Some(period) = nominal else {
         return (None, None);
     };
     let last = lock(&global().tracker).last_shown(s);
-    let vblank = last.map(|last| {
-        let p = period.as_nanos().max(1) as u64;
-        let now = monotonic_ns();
-        last + now.saturating_sub(last) / p * p
-    });
+    let vblank = last.map(|last| latest_on_grid(last, period, monotonic_ns()));
     (vblank, Some(period))
+}
+
+/// The latest point of the grid through `point` spaced `period` apart that is not after `now`.
+fn latest_on_grid(point: u64, period: Duration, now: u64) -> u64 {
+    let p = i128::from(period.as_nanos().max(1) as u64);
+    let behind = i128::from(now) - i128::from(point);
+    (i128::from(point) + behind.div_euclid(p) * p).clamp(0, i128::from(now)) as u64
 }
 
 #[cfg(windows)]
@@ -768,6 +776,41 @@ mod tests {
             frames(&mut t, A),
             [dropped(3, FrameDropReason::Superseded), presented(4, 3000)]
         );
+    }
+
+    #[test]
+    fn a_vblank_ahead_or_stale_becomes_the_latest_past_one_on_its_grid() {
+        let p = Duration::from_nanos(4_000);
+        assert_eq!(latest_on_grid(13_000, p, 10_000), 9_000, "ahead by 3 µs");
+        assert_eq!(latest_on_grid(13_000, p, 13_000), 13_000);
+        assert_eq!(
+            latest_on_grid(1_000, p, 30_500),
+            29_000,
+            "seven refreshes stale"
+        );
+        assert_eq!(
+            latest_on_grid(50_500, p, 10_000),
+            6_500,
+            "ten refreshes ahead"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_compositor_vblank_is_past_and_within_a_refresh() {
+        for _ in 0..200 {
+            let before = monotonic_ns();
+            let (Some(vblank), Some(period)) = display_clock(0, None) else {
+                return;
+            };
+            let after = monotonic_ns();
+            assert!(vblank <= after, "{vblank} is after {after}");
+            assert!(
+                vblank + period.as_nanos() as u64 >= before,
+                "more than a refresh old"
+            );
+            std::thread::sleep(Duration::from_micros(700));
+        }
     }
 
     #[test]
