@@ -37,6 +37,22 @@ afterAll(async () => {
   }
 });
 
+async function crashAndRestart() {
+  const pid = app.pid;
+  await app.close();
+  const deadline = Date.now() + 8_000;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    if (Date.now() >= deadline) throw new Error(`Host ${pid} survived the forced shutdown.`);
+    await Bun.sleep(50);
+  }
+  app = await host();
+}
+
 async function until<T>(read: () => Promise<T>, matches: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 10_000;
   for (;;) {
@@ -184,10 +200,9 @@ describe.if(SCREENSHOTS)("the draw template", () => {
     await app.expectNoErrors();
   }, 60_000);
 
-  test("the drawing comes back from IndexedDB after a restart", async () => {
+  test("the drawing comes back from IndexedDB after the host is killed", async () => {
     const saved = await until(storedStrokes, (s) => JSON.parse(s).length === 3);
-    await app.close();
-    app = await host();
+    await crashAndRestart();
     await attrIs("ready", "true");
     await app.eval('__SK_WINDOW__.appWindow.theme = "light"');
     await attrIs("strokes", "3");
@@ -363,4 +378,225 @@ describe.if(SCREENSHOTS)("the draw template", () => {
     expect(text.match(/<path d=/g)?.length).toBe(await strokes());
     await app.expectNoErrors();
   }, 30_000);
+  test("records painting, recovers after restart and replays saved pixels", async () => {
+    const theme = async (value: "light" | "dark") => {
+      await app.eval(`__SK_WINDOW__.appWindow.theme = "${value}"`);
+      await Bun.sleep(180);
+    };
+    const panel = () => click("#recording");
+    const stroke = async (key: string, xy: [number, number, number, number], count: number) => {
+      await press(key);
+      await line(...xy, { tiltX: 25, tiltY: -12, twist: 22 });
+      await attrIs("strokes", String(count));
+    };
+    await click("#menu");
+    await click("#new-drawing");
+    await attrIs("strokes", "0");
+    await theme("light");
+    await panel();
+    await click("#record-start");
+    await attrIs("recording", "recording");
+    await press("u");
+    await drag([
+      [260, 180],
+      [370, 245],
+      [470, 330],
+    ]);
+    await attrIs("strokes", "1");
+    await click("#swatch-1");
+    // Ink readback is in flight when the same pointerup reaches the window.
+    await app.eval(`window.addEventListener('pointerup', () => {
+      globalThis.__attemptedUndoDuringFill = true;
+      document.querySelector('#undo').click();
+    }, {once:true});`);
+    await stroke("k", [350, 250, 350, 250], 2);
+    expect(await app.eval("globalThis.__attemptedUndoDuringFill")).toBe(true);
+    await inkIs(
+      [
+        [350, 250],
+        [500, 300],
+      ],
+      [true, false],
+    );
+    await click("#swatch-2");
+    await stroke("s", [285, 400, 555, 465], 3);
+    await click("#swatch-4");
+    await stroke("a", [315, 430, 570, 420], 4);
+    await stroke("d", [400, 428, 455, 475], 5);
+    await press("f");
+    await click("#swatch-3");
+    await drag([
+      [595, 315],
+      [695, 265],
+      [755, 340],
+      [690, 390],
+      [595, 315],
+    ]);
+    await attrIs("strokes", "6");
+    await click("#layers");
+    await click("#add-layer");
+    await click("#layers");
+    await stroke("b", [600, 260, 780, 350], 7);
+    await click("#layers");
+    await click("#layer-clipping");
+    await click("#layer-lock");
+    await app.eval(
+      '(()=>{const s=document.querySelector("#layer-blend");s.value="multiply";s.dispatchEvent(new Event("change",{bubbles:true}))})()',
+    );
+    await click("#layers");
+    for (const [k, x, n] of [
+      ["p", 340, 8],
+      ["n", 380, 9],
+      ["m", 420, 10],
+      ["e", 460, 11],
+    ] as const)
+      await stroke(k, [x, 210, x + 100, 320], n);
+    await click("#undo");
+    await attrIs("strokes", "10");
+    await click("#redo");
+    await attrIs("strokes", "11");
+    await app.send("mouse", { kind: "move", x: 3, y: 4 });
+    await Bun.sleep(300);
+    const source = readPng(await app.screenshot(join(dir, "source-frame.png")));
+    await panel();
+    await click("#record-pause");
+    await attrIs("recording", "paused");
+    await crashAndRestart();
+    await attrIs("ready", "true");
+    await attrIs("recording", "paused");
+    await attrIs("strokes", "11");
+    await panel();
+    await click("#record-resume");
+    await attrIs("recording", "recording");
+    await theme("dark");
+    await theme("light");
+    await crashAndRestart();
+    await attrIs("recording", "recording");
+    await attrIs("strokes", "11");
+    await panel();
+    await click("#record-stop");
+    await attrIs("recording", "stopped");
+    expect(await app.eval('document.querySelector(".recording-panel button").id')).toBe("record-save");
+    await click("#record-new");
+    await click("#record-cancel-new");
+    await attrIs("recording", "stopped");
+    await app.locator("#record-save").click({ real: true });
+    const file = join(dir, "painting.skev");
+    await app.answerDialog((await app.waitForDialog()).id, file);
+    await until(async () => existsSync(file) && readFileSync(file).length > 32, Boolean);
+    await crashAndRestart();
+    await attrIs("ready", "true");
+    await panel();
+    await app.locator("#record-open").click({ real: true });
+    await app.answerDialog((await app.waitForDialog()).id, file);
+    await attrIs("player", "true");
+    const duration = Number(await attr("duration", "#player-transport"));
+    await app.eval(`window.__draw.seek(${duration})`);
+    await attrIs("strokes", "11");
+    await Bun.sleep(250);
+    const last = readPng(await app.screenshot(join(dir, "last-frame.png")));
+    expect(last.width).toBe(source.width);
+    expect(last.height).toBe(source.height);
+    const scale = source.width / Number(await app.eval("innerWidth"));
+    let different = 0,
+      painted = 0;
+    const paper = source.at(Math.round(185 * scale), Math.round(140 * scale));
+    for (let y = Math.round(150 * scale); y < 490 * scale; y++)
+      for (let x = Math.round(220 * scale); x < 820 * scale; x++) {
+        const a = source.at(x, y),
+          b = last.at(x, y);
+        if (a.some((c, i) => Math.abs(c - paper[i]!) > 40)) painted++;
+        if (a.some((c, i) => Math.abs(c - b[i]!) > 12)) different++;
+      }
+    expect(painted).toBeGreaterThan(5000);
+    expect(different / painted).toBeLessThan(0.005);
+    await app.eval("window.__draw.seek(0)");
+    await app.eval(
+      "globalThis.__pauseResult = ''; window.__draw.play({ speed: 0.1 }).then(() => globalThis.__pauseResult = 'paused');window.__draw.pause()",
+    );
+    await until(
+      async () => await app.eval("globalThis.__pauseResult"),
+      (value) => value === "paused",
+    );
+    await line(300, 500, 400, 500);
+    await attrIs("strokes", "0");
+    await app.eval(
+      "globalThis.__fitStart=performance.now();window.__draw.play({fitTo:30,hideUi:true}).then(()=>{globalThis.__fitElapsed=performance.now()-globalThis.__fitStart})",
+    );
+    await Bun.sleep(29_000);
+    const elapsed = await until(
+      async () => Number(await app.eval("globalThis.__fitElapsed || 0")),
+      (v) => v > 0,
+    );
+    expect(Math.abs(elapsed - 30_000)).toBeLessThan(500);
+    await attrIs("strokes", "11");
+    await press("Escape");
+    await app.eval(`window.__draw.seek(${duration * 0.45})`);
+    const partial = await strokes();
+    await click("#player-options");
+    await click("#player-continue");
+    await attrIs("player", "false");
+    await attrIs("strokes", String(partial));
+    await click("#layers");
+    await click("#add-layer");
+    await click("#layers");
+    await stroke("b", [250, 500, 450, 500], partial + 1);
+    await panel();
+    await click("#record-protect");
+    await click("#record-preview");
+    await attrIs("player", "true");
+    await click("#player-options");
+    expect(await app.eval('document.querySelector("#player-continue").disabled')).toBe(true);
+    await click("#player-close");
+    await attrIs("strokes", String(partial + 1));
+    await app.expectNoErrors();
+  }, 150_000);
+  test("a hard kill during pen contact restores the durable live checkpoint", async () => {
+    await attrIs("ready", "true");
+    await app.eval('__SK_WINDOW__.appWindow.theme = "light"');
+    await click("#menu");
+    await click("#new-drawing");
+    await attrIs("strokes", "0");
+    await click("#recording");
+    await click("#record-new");
+    await click("#record-start");
+    await attrIs("recording", "recording");
+    await press("p");
+    await click("#swatch-0");
+    await line(300, 240, 460, 240);
+    await attrIs("strokes", "1");
+    await inkIs([[390, 240]], [true]);
+    await app.send("pen", { kind: "down", x: 300, y: 370, pressure: 0.8 });
+    await app.send("pen", { kind: "move", fromX: 300, fromY: 370, x: 525, y: 370, pressure: 0.8, steps: 36 });
+    await until(async () => {
+      await app.eval(`(() => {
+        globalThis.__checkpoint = null;
+        const req = indexedDB.open('skathi-draw-events');
+        req.onsuccess = () => {
+          const db = req.result, draft = db.transaction('session').objectStore('session').get('draft');
+          draft.onsuccess = () => { globalThis.__checkpoint = !!draft.result; db.close(); };
+        };
+      })()`);
+      return until(
+        async () => await app.eval("globalThis.__checkpoint"),
+        (v) => typeof v === "boolean",
+      );
+    }, Boolean);
+    // No pointerup and no window.close(). Only the incremental journal can supply this stroke.
+    await attrIs("strokes", "1");
+    await crashAndRestart();
+    await attrIs("recording", "recording");
+    await attrIs("strokes", "2");
+    await attrIs("ready", "true");
+    await inkIs(
+      [
+        [390, 240],
+        [390, 370],
+      ],
+      [true, true],
+    );
+    await crashAndRestart();
+    await attrIs("strokes", "2");
+    await app.expectNoErrors();
+  }, 60_000);
 });
