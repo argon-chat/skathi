@@ -19,7 +19,7 @@ onMounted(async () => {
 <template>
   <section class="home">
     <div class="hero">
-      <div class="logo">{{ productName.charAt(0) }}</div>
+      <img class="logo" src="assets/skathi.png" alt="" />
       <h1 class="title">{{ productName }}</h1>
       <p class="lead">
         Vue 3 on a native GPU renderer, with no browser inside. Every page in the sidebar shows one part of Skathi in a
@@ -61,17 +61,8 @@ onMounted(async () => {
   text-align: center;
 }
 .logo {
-  width: 72px;
-  height: 72px;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--accent), #b48cff);
-  box-shadow: 0 14px 36px #6d7cff55;
-  color: #ffffff;
-  font-size: 34px;
-  font-weight: 700;
+  width: 88px;
+  height: 88px;
   animation: float 5s ease-in-out infinite;
 }
 @keyframes float {

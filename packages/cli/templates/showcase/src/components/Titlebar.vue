@@ -29,7 +29,7 @@ onUnmounted(() => {
 <template>
   <header class="titlebar">
     <div class="brand">
-      <span class="mark">{{ productName.charAt(0) }}</span>
+      <img class="mark" src="assets/skathi.png" alt="" />
       <span class="name">{{ productName }}</span>
       <span class="sep">/</span>
       <span class="page">{{ page }}</span>
@@ -77,14 +77,6 @@ onUnmounted(() => {
 .mark {
   width: 20px;
   height: 20px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--accent), #b48cff);
-  color: #ffffff;
-  font-size: 11px;
-  font-weight: 700;
 }
 .name {
   font-weight: 600;
