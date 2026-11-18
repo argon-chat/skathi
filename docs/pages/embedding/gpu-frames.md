@@ -18,7 +18,7 @@ Skathi renders with Direct3D 12 (the default build), or with Direct3D 11 in a bu
 | D3D12 on its own device or process | `SharedTexture::with_fence`, `present_shared_fenced`                                           | same (an `ID3D11Fence` opens the D3D12 one) |
 | Vulkan                             | external memory and a semaphore shared as a D3D12 fence: `with_fence`, `present_shared_fenced` | same                                        |
 
-Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. Each surface has its own queue and release fence: a fence that is never signalled holds back only the surface it was presented to. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
+Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. Since 0.5 each surface has its own queue and release fence: a fence that is never signalled holds back only the surface it was presented to. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
 
 Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms), or `R16G16B16A16_FLOAT` on a [half-float surface](#half-float-textures); mip 0 is shown. Alpha is straight.
 

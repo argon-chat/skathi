@@ -526,6 +526,9 @@ const domAndEvents = section("DOM and events", [
     related: ["xml-serializer"],
   }),
   api("custom-elements", "Custom elements", NO, "Defines new HTML elements with their own behavior.", {
+    notes: [
+      "Since 0.5 a `customElements` registry exists, so code that probes it works: `get()` returns `undefined`, `getName()` returns `null`, and `define()` and `whenDefined()` fail with `NotSupportedError`. Svelte then sets attributes on `sk-*` tags as plain attributes.",
+    ],
     workaround: NO_SHADOW,
     related: ["shadow-dom"],
     aliases: ["customElements", "customElements.define", "CustomElementRegistry", "web components"],
