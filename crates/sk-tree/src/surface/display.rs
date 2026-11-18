@@ -19,9 +19,20 @@ const IDLE: Duration = Duration::from_millis(250);
 /// does not switch the swap chain back and forth.
 const HDR_LINGER: Duration = Duration::from_secs(2);
 
+/// While a level keeps moving, as macOS's headroom does for a second or two after a window enters
+/// or leaves EDR, it is reported at most this often.
+const LEVEL_EVERY: Duration = Duration::from_millis(200);
+
+/// macOS's refresh interval range can blink for a few milliseconds; a `variable_refresh` change is
+/// taken once it has held this long.
+const REFRESH_HOLD: Duration = Duration::from_millis(100);
+
 #[derive(Default)]
 struct Probe {
+    /// What the platform read last, with the window's output.
     display: SurfaceDisplay,
+    /// `display` as elements and producers hear it.
+    reported: Reported,
     platform: platform::State,
     output: Output,
 }
@@ -39,6 +50,84 @@ struct Output {
 impl Probe {
     fn capable(&self) -> bool {
         self.display.known && self.display.hdr && !self.output.refused
+    }
+}
+
+impl Output {
+    /// What to ask the window for, if anything: HDR while it can and `headroom` > 1.0 (or for
+    /// [`HDR_LINGER`] after), tagged with that headroom, else standard output.
+    fn request(
+        &mut self,
+        capable: bool,
+        headroom: f32,
+        sdr_white: f32,
+        now: Instant,
+    ) -> Option<Option<gpui::HdrOutput>> {
+        let wanted = headroom > 1.0;
+        if wanted {
+            self.unwanted_since = None;
+        }
+        let lingering = !wanted
+            && self.sdr_white.is_some()
+            && now.duration_since(*self.unwanted_since.get_or_insert(now)) < HDR_LINGER;
+        let target = (capable && (wanted || lingering)).then_some(sdr_white);
+        let tag = if wanted { headroom } else { self.headroom };
+        let retag = target.is_some() && (tag - self.headroom).abs() > 0.01 * tag;
+        (target != self.sdr_white || retag).then(|| {
+            target.map(|sdr_white| gpui::HdrOutput {
+                sdr_white,
+                content_headroom: tag,
+            })
+        })
+    }
+
+    /// Takes the window's answer to `request`.
+    fn answered(&mut self, request: Option<gpui::HdrOutput>, set: bool) {
+        if set || request.is_none() {
+            self.sdr_white = request.map(|r| r.sdr_white);
+            self.headroom = request.map_or(1.0, |r| r.content_headroom);
+        } else {
+            self.refused = true;
+            self.sdr_white = None;
+        }
+    }
+}
+
+/// What has been reported of a display: a flag change at once, a level change past 1 % at most
+/// every [`LEVEL_EVERY`], and a `variable_refresh` change once it held for [`REFRESH_HOLD`].
+#[derive(Default)]
+struct Reported {
+    display: SurfaceDisplay,
+    at: Option<Instant>,
+    /// A `variable_refresh` other than the reported one, and since when it is read.
+    refresh: Option<(Option<bool>, Instant)>,
+}
+
+impl Reported {
+    fn offer(&mut self, mut read: SurfaceDisplay, now: Instant) {
+        let shown = self.display;
+        if shown.variable_refresh.is_some() && read.variable_refresh != shown.variable_refresh {
+            let since = match self.refresh {
+                Some((value, since)) if value == read.variable_refresh => since,
+                _ => self.refresh.insert((read.variable_refresh, now)).1,
+            };
+            if now.duration_since(since) < REFRESH_HOLD {
+                read.variable_refresh = shown.variable_refresh;
+            }
+        } else {
+            self.refresh = None;
+        }
+        let flag = read.known != shown.known
+            || read.hdr != shown.hdr
+            || read.output_hdr != shown.output_hdr
+            || read.variable_refresh != shown.variable_refresh;
+        let due = self
+            .at
+            .is_none_or(|at| now.duration_since(at) >= LEVEL_EVERY);
+        if flag || (due && read.differs(&shown)) {
+            self.display = read;
+            self.at = Some(now);
+        }
     }
 }
 
@@ -65,6 +154,7 @@ pub(super) fn sample(window: &Window, key: WinKey) {
             1.0
         };
         probe.display.output_hdr = probe.output.sdr_white.is_some();
+        probe.reported.offer(probe.display, Instant::now());
         ANY_CAPABLE.store(probes.values().any(Probe::capable), Ordering::Relaxed);
     });
 }
@@ -100,35 +190,14 @@ pub(super) fn update_output(window: &Window, key: WinKey, headroom: f32) -> bool
             return false;
         };
         let capable = probe.capable();
-        let output = &mut probe.output;
-        let wanted = headroom > 1.0;
-        if wanted {
-            output.unwanted_since = None;
-        }
-        let lingering = !wanted
-            && output.sdr_white.is_some()
-            && output
-                .unwanted_since
-                .get_or_insert_with(Instant::now)
-                .elapsed()
-                < HDR_LINGER;
         // Windows composes SDR content at its SDR white; macOS EDR is relative to it.
         let sdr_white = probe.display.sdr_white_nits.map_or(1.0, |nits| nits / 80.0);
-        let target = (capable && (wanted || lingering)).then_some(sdr_white);
-        let tag = if wanted { headroom } else { output.headroom };
-        let retag = target.is_some() && (tag - output.headroom).abs() > 0.01 * tag;
-        if target != output.sdr_white || retag {
-            let output_set = window.set_hdr_output(target.map(|sdr_white| gpui::HdrOutput {
-                sdr_white,
-                content_headroom: tag,
-            }));
+        let output = &mut probe.output;
+        if let Some(request) = output.request(capable, headroom, sdr_white, Instant::now()) {
+            let set = window.set_hdr_output(request);
             let was = output.sdr_white.is_some();
-            if output_set || target.is_none() {
-                output.sdr_white = target;
-                output.headroom = if target.is_some() { tag } else { 1.0 };
-            } else {
-                output.refused = true;
-                output.sdr_white = None;
+            output.answered(request, set);
+            if output.refused {
                 probe.display.output_headroom = 1.0;
             }
             match (was, output.sdr_white.is_some()) {
@@ -143,13 +212,19 @@ pub(super) fn update_output(window: &Window, key: WinKey, headroom: f32) -> bool
         }
         let hdr = probe.output.sdr_white.is_some();
         probe.display.output_hdr = hdr;
+        probe.reported.offer(probe.display, Instant::now());
         hdr
     })
 }
 
-/// What `key`'s display reported last; unknown before its first read.
+/// What is reported of `key`'s display; unknown before its first read.
 pub(super) fn of(key: WinKey) -> SurfaceDisplay {
-    PROBES.with(|p| p.borrow().get(&key).map(|p| p.display).unwrap_or_default())
+    PROBES.with(|p| {
+        p.borrow()
+            .get(&key)
+            .map(|p| p.reported.display)
+            .unwrap_or_default()
+    })
 }
 
 pub(super) fn forget(key: WinKey) {
@@ -612,5 +687,102 @@ mod tests {
         for key in 1..=3 {
             forget(key);
         }
+    }
+
+    /// macOS lets the headroom fall back to 1.0 some 15 s after nothing on the screen shows EDR.
+    #[test]
+    fn a_window_asks_for_edr_on_a_screen_at_sdr_white_and_again_after_an_edr_pause() {
+        use sk_css::DynamicRangeLimit as Limit;
+        let key = 7;
+        let start = Instant::now();
+        let screen = |current| {
+            PROBES.with(|p| {
+                p.borrow_mut().entry(key).or_default().display =
+                    macos_display(current, 16.0, 120, 0.0, 0.0)
+            })
+        };
+        let ask = |limit: Limit, secs: f32| {
+            let headroom = limit.headroom(reach(key));
+            PROBES.with(|p| {
+                let mut probes = p.borrow_mut();
+                let probe = probes.get_mut(&key).expect("probed");
+                let now = start + Duration::from_secs_f32(secs);
+                let capable = probe.capable();
+                let request = probe.output.request(capable, headroom, 1.0, now);
+                if let Some(request) = request {
+                    probe.output.answered(request, true);
+                }
+                request.map(|r| r.map(|r| r.content_headroom))
+            })
+        };
+        screen(1.0);
+        assert_eq!(ask(Limit::NO_LIMIT, 0.0), Some(Some(16.0)));
+        screen(6.11);
+        assert_eq!(ask(Limit::NO_LIMIT, 1.0), None, "the ramp asks nothing new");
+        assert_eq!(ask(Limit::CONSTRAINED, 1.5), Some(Some(2.0)), "retagged");
+        assert_eq!(ask(Limit::STANDARD, 2.0), None, "lingers");
+        assert_eq!(ask(Limit::STANDARD, 4.1), Some(None), "back to standard");
+        screen(1.0);
+        assert_eq!(ask(Limit::STANDARD, 20.0), None);
+        assert_eq!(ask(Limit::NO_LIMIT, 21.0), Some(Some(16.0)), "asks again");
+        forget(key);
+    }
+
+    #[test]
+    fn a_headroom_ramp_is_reported_a_few_times_and_where_it_settles() {
+        let start = Instant::now();
+        let mut reported = Reported::default();
+        let mut heard: Vec<(u64, f32)> = Vec::new();
+        // 120 Hz frames over 1.6 s, the headroom rising from 1.0 to 6.11, then idle ticks.
+        let frames = 192;
+        let ramp = (0..=frames).map(|f| (f * 1000 / 120, 1.0 + 5.11 * f as f64 / frames as f64));
+        let idle = (1..=4).map(|i| (frames * 1000 / 120 + i * 250, 6.11));
+        for (ms, headroom) in ramp.chain(idle) {
+            let mut read = macos_display(headroom, 16.0, 120, 1.0 / 120.0, 1.0 / 24.0);
+            read.output_hdr = true;
+            read.output_headroom = read.headroom;
+            let before = reported.display;
+            reported.offer(read, start + Duration::from_millis(ms));
+            if reported.display != before {
+                heard.push((ms, reported.display.headroom));
+            }
+        }
+        assert!(heard.len() <= 10, "{} reports: {heard:?}", heard.len());
+        assert!(
+            heard.windows(2).all(|w| w[1].0 - w[0].0 >= 200),
+            "{heard:?}"
+        );
+        let (last, settled) = *heard.last().expect("reported");
+        assert!((settled - 6.11).abs() <= 0.01 * 6.11, "{heard:?}");
+
+        let mut step = reported.display;
+        step.headroom = 3.0;
+        reported.offer(step, start + Duration::from_millis(last + 300));
+        assert_eq!(
+            reported.display.headroom, 3.0,
+            "a step after a quiet spell is reported at once"
+        );
+    }
+
+    #[test]
+    fn a_variable_refresh_blink_is_not_reported_and_a_change_that_holds_is() {
+        let start = Instant::now();
+        let mut reported = Reported::default();
+        let read = |variable: bool| {
+            let max_interval = if variable { 1.0 / 24.0 } else { 1.0 / 120.0 };
+            macos_display(1.0, 16.0, 120, 1.0 / 120.0, max_interval)
+        };
+        let at = |ms| start + Duration::from_millis(ms);
+        reported.offer(read(true), at(0));
+        assert_eq!(reported.display.variable_refresh, Some(true));
+        reported.offer(read(false), at(1000));
+        reported.offer(read(true), at(1008));
+        reported.offer(read(true), at(1500));
+        assert_eq!(reported.display.variable_refresh, Some(true), "a blink");
+        reported.offer(read(false), at(2000));
+        reported.offer(read(false), at(2050));
+        assert_eq!(reported.display.variable_refresh, Some(true));
+        reported.offer(read(false), at(2100));
+        assert_eq!(reported.display.variable_refresh, Some(false), "held");
     }
 }
