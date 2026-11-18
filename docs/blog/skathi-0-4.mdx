@@ -243,13 +243,13 @@ Without a spatial sound format on the device (Sound settings › Spatial sound),
 
 Everything in this section is new in 0.4. Each feature has its page, with its limits, in the [CSS reference](/css/).
 
-- **Container queries.** `container-type`, `container-name` and the `container` shorthand; `@container` with `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`, range syntax and `and`, `or`, `not`; style queries on custom properties; and the `cqw`, `cqh`, `cqi`, `cqb`, `cqmin` and `cqmax` units. A query Skathi cannot answer, such as `scroll-state()`, drops its block, and `sk check` reports it as `SK4004`.
-- **Scroll snapping.** `scroll-snap-type`, `scroll-snap-align`, `scroll-snap-stop`, `scroll-padding` and `scroll-margin`, on every way a box scrolls: wheel, touchpad and touch, the scrollbar, `scrollTo()`, `scrollIntoView()` and the keyboard.
+- **Container queries.** [`container-type`](/css/container-type/), [`container-name`](/css/container-name/) and the [`container`](/css/container/) shorthand; [`@container`](/css/at-container/) with `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`, range syntax and `and`, `or`, `not`; style queries on custom properties; and the [`cqw`, `cqh`, `cqi`, `cqb`, `cqmin` and `cqmax` units](/css/unit-container/). A query Skathi cannot answer, such as `scroll-state()`, drops its block, and `sk check` reports it as `SK4004`.
+- **Scroll snapping.** [`scroll-snap-type`](/css/scroll-snap-type/), [`scroll-snap-align`](/css/scroll-snap-align/), [`scroll-snap-stop`](/css/scroll-snap-stop/), [`scroll-padding`](/css/scroll-padding/) and [`scroll-margin`](/css/scroll-margin/), on every way a box scrolls: wheel, touchpad and touch, the scrollbar, `scrollTo()`, `scrollIntoView()` and the keyboard.
 - **Keyboard scrolling.** Arrows, Page Up, Page Down, Space, Home and End scroll the focused element's nearest scroll container, after the app's key handlers, gliding unless reduced motion is on.
-- **`calc-size()` and `interpolate-size`.** `height: auto` transitions, and `calc-size(auto, size * 0.4)` is 40 % of the content's height.
-- **`@function`.** Custom functions with typed parameters and defaults. A `--name(…)` call is substituted like `var()`.
-- **`light-dark()` and `color-scheme`.** They resolve per element and follow `appWindow.theme` and the OS theme live. Checkboxes, radios, range, colour and file inputs and the select popup draw dark under a dark scheme.
-- **The smaller ones.** `flex-flow`; `aspect-ratio: auto` and `auto <ratio>`; `inline-size`, `block-size` and their `min-` and `max-` forms; the cursors `all-scroll`, `cell`, `no-drop`, `zoom-out` and `none`; `contain: size`, `inline-size` and `strict`; and the media features `prefers-reduced-transparency`, `device-width` and `device-height`.
+- **[`calc-size()`](/css/function-calc-size/) and [`interpolate-size`](/css/interpolate-size/).** `height: auto` transitions, and `calc-size(auto, size * 0.4)` is 40 % of the content's height.
+- **[`@function`](/css/at-function/).** Custom functions with typed parameters and defaults. A [`--name(…)` call](/css/dashed-function/) is substituted like [`var()`](/css/function-var/).
+- **[`light-dark()`](/css/function-light-dark/) and [`color-scheme`](/css/color-scheme/).** They resolve per element and follow `appWindow.theme` and the OS theme live. Checkboxes, radios, range, colour and file inputs and the select popup draw dark under a dark scheme.
+- **The smaller ones.** [`flex-flow`](/css/flex-flow/); [`aspect-ratio`](/css/aspect-ratio/) `auto` and `auto <ratio>`; [`inline-size`](/css/inline-size/), [`block-size`](/css/block-size/) and their `min-` and `max-` forms; the [cursors](/css/cursor/) `all-scroll`, `cell`, `no-drop`, `zoom-out` and `none`; [`contain`](/css/contain/) `size`, `inline-size` and `strict`; and the media features [`prefers-reduced-transparency`](/css/media-prefers-reduced-transparency/), [`device-width`](/css/media-device-width/) and [`device-height`](/css/media-device-height/).
 
 ```css title="styles.css"
 .profile {
@@ -289,7 +289,7 @@ The showcase template has a new Layout page with these at work: a profile card t
 
 ## CSS for shape and light
 
-**`corner-shape` and `superellipse()`.** `round`, `squircle`, `bevel`, `scoop`, `notch`, `square` and `superellipse()`, as a shorthand of one to four values, with the physical, logical and per-side longhands. The shapes interpolate in transitions, `@keyframes` and `element.animate()`. The background, borders, outline, `box-shadow`, `backdrop-filter`, `--shading`, `overflow` and `clip-path` clips and hit testing all follow the shape, and an `<img>` or `<video>` clips its picture to it.
+**[`corner-shape`](/css/corner-shape/) and `superellipse()`.** `round`, `squircle`, `bevel`, `scoop`, `notch`, `square` and `superellipse()`, as a shorthand of one to four values, with the physical, logical and per-side longhands. The shapes interpolate in transitions, `@keyframes` and `element.animate()`. The background, borders, outline, `box-shadow`, `backdrop-filter`, `--shading`, `overflow` and `clip-path` clips and hit testing all follow the shape, and an `<img>` or `<video>` clips its picture to it.
 
 ```css title="tag.css"
 .tag {
@@ -304,21 +304,21 @@ The showcase template has a new Layout page with these at work: a profile card t
 }
 ```
 
-**`dynamic-range-limit`**, with `standard`, `constrained` and `no-limit`, and `dynamic-range-limit-mix()`, cap how bright an element's HDR content gets, as in the [surface section](#native-frames-now-in-hdr). The media features `dynamic-range` and `video-dynamic-range` match `high` while the window's display is in HDR and the window can draw it.
+**[`dynamic-range-limit`](/css/dynamic-range-limit/)**, with `standard`, `constrained` and `no-limit`, and [`dynamic-range-limit-mix()`](/css/function-dynamic-range-limit-mix/), cap how bright an element's HDR content gets, as in the [surface section](#native-frames-now-in-hdr). The media features [`dynamic-range`](/css/media-dynamic-range/) and [`video-dynamic-range`](/css/media-video-dynamic-range/) match `high` while the window's display is in HDR and the window can draw it.
 
 <Aside kind="new" title="Already there before 0.4">
 
-Masks, `text-shadow`, the colour functions (`hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `color-mix()` and relative colours) and view transitions have been in Skathi since 0.2, and `position: sticky` since 0.3. The showcase's Styles page now puts them next to the new features: `corner-shape` swatches, `text-shadow`, `hsl()` against `oklch()` ramps, `color-mix()`, `display-p3` and relative colours, a `light-dark()` panel and an `@function` palette.
+[Masks](/css/mask/), [`text-shadow`](/css/text-shadow/), the colour functions ([`hwb()`](/css/function-hwb/), [`lab()`](/css/function-lab/), [`lch()`](/css/function-lch/), [`oklab()`](/css/function-oklab/), [`oklch()`](/css/function-oklch/), [`color()`](/css/function-color/), [`color-mix()`](/css/function-color-mix/) and relative colours) and [view transitions](/css/feature-view-transitions/) have been in Skathi since 0.2, and [`position: sticky`](/css/position/) since 0.3. The showcase's Styles page now puts them next to the new features: `corner-shape` swatches, `text-shadow`, `hsl()` against `oklch()` ramps, `color-mix()`, `display-p3` and relative colours, a `light-dark()` panel and an `@function` palette.
 
 </Aside>
 
 ## Forms and motion in Vue and Svelte
 
-- **Checkboxes and radios are native controls.** They used to render as text fields. A click, Space or a label toggles them, radios group by name and move with the arrow keys, and they draw in `accent-color` or drop their look under `appearance: none`. Vue's `v-model` on checkboxes (a boolean, an array, a `Set`, `true-value` and `false-value`) and radios works, and so do Svelte's `bind:checked`, `bind:indeterminate` and `bind:group`.
+- **Checkboxes and radios are native controls.** They used to render as text fields. A click, Space or a label toggles them, radios group by name and move with the arrow keys, and they draw in [`accent-color`](/css/accent-color/) or drop their look under [`appearance: none`](/css/appearance/). Vue's `v-model` on checkboxes (a boolean, an array, a `Set`, `true-value` and `false-value`) and radios works, and so do Svelte's `bind:checked`, `bind:indeterminate` and `bind:group`.
 
 <Sample src="blog/Export" focus="checks,radios" />
 
-- **`:checked` follows the selected `<option>`**, so Svelte's `bind:value` on a `<select>` works, single and multiple.
+- **[`:checked`](/css/pseudo-checked/) follows the selected `<option>`**, so Svelte's `bind:value` on a `<select>` works, single and multiple.
 - **`<Transition>` waits for CSS animations** as well as transitions. `<TransitionGroup>` plays its moves with the `-move` class, and Svelte's `animate:flip` works.
 - **Errors go where Vue sends them.** What a template handler throws reaches `app.config.errorHandler` and `onErrorCaptured`. A throwing listener is reported as uncaught, as in a browser, and the other listeners still run.
 
