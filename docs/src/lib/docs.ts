@@ -8,7 +8,15 @@ import { expandSamples } from "./samples";
 
 export { isNew, newLabel, version } from "./release";
 
-export const sections = ["Getting started", "Guides", "Devtools", "Embedding", "Reference", "Contributing"] as const;
+export const sections = [
+  "Getting started",
+  "Guides",
+  "Elements",
+  "Embedding",
+  "Devtools",
+  "Reference",
+  "Contributing",
+] as const;
 export const repository = "https://github.com/argon-chat/skathi";
 export const docsHome = "/introduction/";
 

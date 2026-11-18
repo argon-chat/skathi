@@ -1,0 +1,54 @@
+---
+title: "<SkWindow>"
+label: "<SkWindow>"
+metaTitle: "<SkWindow>: paint part of the tree in its own window"
+description: The component that opens a second OS window painting part of your component tree, with the same state and no message passing. What it renders, its props, events and exposed values, and where the full guide is.
+section: Elements
+order: 5
+---
+
+import Sample from "../../src/components/Sample.astro";
+
+`<SkWindow>` opens a second OS window that paints part of your component tree: a palette, an inspector, a tooltip that leaves the main window, a click-through overlay. It is a component from `@skathi-native/runtime` (Vue) and `@skathi-native/runtime/svelte` (Svelte), not a custom element, and it is the only way to get a second window: `window.open()` returns `null`.
+
+[Pop-out windows](/guides/pop-out-windows/) is the full guide: palettes, tooltips that follow the main window, click-through overlays, owned windows, focus, screen-capture protection, multiple monitors and the platform table. This page is the summary.
+
+## A minimal example
+
+Mount it to open the window, unmount it to close the window:
+
+<Sample src="pop-out-windows/NotesPopout" focus="window" />
+
+## What it renders
+
+`<SkWindow>` renders a `div.sk-window-root` that fills the window. Attributes and classes you put on `<SkWindow>` land on that root. Its children are its content.
+
+Skathi runs one JavaScript realm, one app and one element tree. `<SkWindow>` marks its root node as popped out: the node stops painting in the main window, and a second window paints it and its subtree. Nothing is remounted. The components inside keep their instances, local state and watchers, and a click in the pop-out runs the same handler on the same state, so the main window updates in the same frame.
+
+The window opens on the next effect cycle after the mount, not inside it. When it closes from outside your code, the subtree is painted inline in the main window again unless you unmount it, which is why the example sets `notesOpen = false` in `@close`.
+
+## Props, events and exposed values
+
+The props set the window: `title`, `bounds`, `backdrop`, `alwaysOnTop`, `titleBarHeight`, `activate`, `visible`, `fullResolution`, `ignoreMouseEvents`, `contentProtection` and `monitor` apply live; `chrome`, `cover`, `taskbar`, `focusable`, `resizable`, `minWidth` and `minHeight` are read when the window is created. [Live and creation-time props](/guides/pop-out-windows/#live-and-creation-time-props) has the table, with defaults and platforms.
+
+| Event    | Svelte callback | When                                                                                 |
+| -------- | --------------- | ------------------------------------------------------------------------------------ |
+| `open`   | `onopen`        | the OS window exists; carries its id, which devtools' `--window` takes               |
+| `close`  | `onclose`       | the window closes: by the user or the OS, or because the component unmounts          |
+| `focus`  | `onfocus`       | the window gains focus                                                               |
+| `blur`   | `onblur`        | it loses focus                                                                       |
+| `resize` | `onresize`      | its size or scale changes; carries `width`, `height` and `scale`                     |
+| `show`   | `onshow`        | it is on screen with its first frame drawn: once after it opens, and after each hide |
+| `hide`   | `onhide`        | it is hidden                                                                         |
+
+The component exposes `el` (the root element, usable as a `<Teleport>` target), `windowId`, `width`, `height`, `scale` and `mapFromMain()`. In Svelte they are `bind:` targets, and `bind:this` gives `mapFromMain()`.
+
+## CSS in a pop-out
+
+CSS is evaluated against the window that paints the element: `@media` queries, `env(titlebar-area-*)` and `position: fixed` describe the pop-out. Global JavaScript APIs (`window.innerWidth`, `matchMedia()`, `appWindow`) describe the main window, even when the code runs from a click in a pop-out. [One app, many windows](/guides/pop-out-windows/#one-app-many-windows) has the full table.
+
+## See also
+
+- [Pop-out windows](/guides/pop-out-windows/): the guide.
+- [`SkWindow` in the Window API reference](/window-api/): every prop and event.
+- [Custom title bar](/guides/custom-title-bar/): a frameless pop-out with `chrome`.

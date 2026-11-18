@@ -11,7 +11,7 @@ const docs = defineCollection({
   schema: z.object({
     title: z.string(),
     description: z.string(),
-    section: z.enum(["Getting started", "Guides", "Devtools", "Embedding", "Reference", "Contributing"]),
+    section: z.enum(["Getting started", "Guides", "Elements", "Embedding", "Devtools", "Reference", "Contributing"]),
     order: z.number().default(0),
     label: z.string().optional(),
     /** The <title> for search results when the heading alone says little, without the " · Skathi" suffix. */
