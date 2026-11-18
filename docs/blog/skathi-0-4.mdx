@@ -437,12 +437,22 @@ A Svelte app's `tsconfig.json` now extends `@skathi-native/runtime/tsconfig.svel
 - A Lottie or sticker referenced by URL, through an import, `<lottie src>` or `new URL(…, import.meta.url)`, is packed into the payload.
 - `cloneNode()` keeps scoped-style ids, so a scoped `.list-move` class plays.
 - WebGPU: `destroy()` of an unmapped buffer works, and native errors are readable.
+- `calc-size()` interpolates with `auto` without `interpolate-size: allow-keywords`, as the spec says.
+- An error thrown in an event listener is reported as uncaught, and Vue handlers reach the app's `errorHandler`.
+- Media that plays or loads keeps the frame clock going in an otherwise idle app.
+- On macOS, a window whose `CAMetalDisplayLink` stops delivering frames, as on hosted virtual machines, takes its frames from `CVDisplayLink` instead.
+- The "no frames" notice is logged only for a hidden page, not for an idle visible window.
+- `<sk-surface>` events are typed in Svelte apps without the app's globals.
 - `sk` refuses a Bun older than the app's `engines.bun` and names the binary to upgrade.
 - For embedders: an event emitted just before a reload no longer reaches the new page, and a function returning `()` is typed `void`.
 
 ## Start from a template
 
 The templates moved with the release. `bun create skathi` offers the showcase, a minimal Vue app, a Svelte app, a music player and a weather app, and each now depends on its framework itself.
+
+- **Showcase.** A new Layout page with container queries, sticky headers, a snapping carousel, `order` and `flex-flow`, and `aspect-ratio`. Styles gains corner shapes, text shadows, colour spaces, `light-dark()`, `@function` and cursors; Forms the native checkboxes and radios; Motion list moves and animating to `height: auto`; Media a focal point with `object-position`; Audio the interactive 7.1.4 spatial room.
+- **Player.** Squircle cover art and tiles, and playlist rows that slide into place with FLIP.
+- **Weather.** A 24-hour strip that snaps to whole hours, squircle glass, and hero text that stays legible on bright skies.
 
 <Demo
   id="player"
