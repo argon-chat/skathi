@@ -1,0 +1,13 @@
+{
+  "$comment": "Small text under fractional translations and a rotation, with hidden prefixes of it whose widths say where its gaps are.",
+
+  "name": "sk-test-transformed-text",
+
+  "window": {
+    "title": "Skathi — transformed text (fixture)",
+    "width": 600,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
