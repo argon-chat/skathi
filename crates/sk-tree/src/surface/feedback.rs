@@ -849,6 +849,37 @@ mod tests {
         );
     }
 
+    /// The window ticks every refresh but presents only now and then, and hears of a present
+    /// refreshes after newer frames were written.
+    #[test]
+    fn ticks_without_a_present_do_not_release_what_a_waiting_present_carries() {
+        let mut t = tracker(&[A]);
+        let mut presents = Vec::new();
+        for frame in 1..=6 {
+            t.put(A, frame, true);
+            if frame % 2 == 1 {
+                let present = presents.len() as u64 + 1;
+                tick(&mut t, &[(A, frame)], present);
+                presents.push((present, frame));
+            } else {
+                t.settle(A, frame);
+                t.pin(A, frame);
+                t.carry(W, [(A, frame)].into());
+            }
+            t.carry(W, [(A, frame)].into());
+        }
+        for (present, frame) in presents {
+            outcome(&mut t, present, shown(frame * 1000));
+        }
+        let expected: Vec<FrameEvent> = (1..=5)
+            .map(|f| match f % 2 {
+                1 => presented(f, f * 1000),
+                _ => dropped(f, FrameDropReason::Superseded),
+            })
+            .collect();
+        assert_eq!(frames(&mut t, A), expected);
+    }
+
     #[test]
     fn a_frame_shown_in_another_window_first_supersedes_older_ones() {
         const W2: u64 = 2;
