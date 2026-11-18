@@ -78,6 +78,7 @@ fn create_shared_generation() -> Result<ExternalDirectXDevice> {
     }
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::DX12;
+    descriptor.flags |= wgpu::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION;
     let instance = wgpu::Instance::new(descriptor);
     let adapters = instance.enumerate_adapters(wgpu::Backends::DX12);
     let wanted = std::env::var("SK_ADAPTER")
@@ -104,10 +105,11 @@ fn create_shared_generation() -> Result<ExternalDirectXDevice> {
             adapter.get_info().name
         );
     }
+    let (required_features, required_limits) = backend::shareable_capabilities(&adapter);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("skathi shared renderer/WebGPU"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_features,
+        required_limits,
         memory_hints: wgpu::MemoryHints::MemoryUsage,
         ..Default::default()
     }))?;

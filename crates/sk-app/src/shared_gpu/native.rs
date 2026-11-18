@@ -147,6 +147,7 @@ impl HostState {
         descriptor
             .flags
             .remove(wgpu::InstanceFlags::VALIDATION | wgpu::InstanceFlags::GPU_BASED_VALIDATION);
+        descriptor.flags |= wgpu::InstanceFlags::AUTOMATIC_TIMESTAMP_NORMALIZATION;
         let instance = wgpu::Instance::new(descriptor);
         let candidates = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12));
         let mut matching = None;
@@ -172,11 +173,12 @@ impl HostState {
         let adapter = Arc::new(adapter);
         // The renderer's adapter selection is authoritative. WebGPU's power
         // preference is a hint and cannot move a canvas to another device.
+        let (required_features, required_limits) = backend::shareable_capabilities(&adapter);
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("skathi lazy shared D3D12 WebGPU guest"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_features,
+                required_limits,
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 ..Default::default()
             }))?;
