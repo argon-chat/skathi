@@ -180,7 +180,7 @@ function notSupported(msg: string): Error {
     : Object.assign(new Error(msg), { name: "NotSupportedError" });
 }
 const NO_CUSTOM_ELEMENTS =
-  "Skathi has no custom elements (no customElements registry, no shadow DOM) — " +
+  "Skathi has no custom elements (customElements.define() throws, no shadow DOM) — " +
   "use the component directly instead of defining an element for it";
 
 export class VueElement {

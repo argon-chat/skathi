@@ -201,7 +201,7 @@ Skathi renders Vue through runtime-core's virtual-DOM renderer and has no Vapor 
 
 ## Custom elements
 
-Not supported; may be revisited around 1.0, with no commitment. Skathi has no `customElements` registry and no shadow DOM, which costs too much for Skathi right now (`SK5002`, an error). `defineCustomElement()` returns a class that throws `NotSupportedError` when it is constructed, and `useHost()` and `useShadowRoot()` answer `null`. Use the component directly, and pass what a host element would carry as props or with `provide`/`inject`.
+Not supported; may be revisited around 1.0, with no commitment. Skathi has no custom elements and no shadow DOM, which costs too much for Skathi right now (`SK5002`, an error): `customElements.get()` answers `undefined` and `customElements.define()` throws `NotSupportedError`. `defineCustomElement()` returns a class that throws `NotSupportedError` when it is constructed, and `useHost()` and `useShadowRoot()` answer `null`. Use the component directly, and pass what a host element would carry as props or with `provide`/`inject`.
 
 ## SSR and hydration
 

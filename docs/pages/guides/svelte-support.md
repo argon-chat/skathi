@@ -152,7 +152,7 @@ As in a browser, `<svelte:boundary>` does not catch an error thrown by an event 
 
 ## Custom elements
 
-Not supported; may be revisited around 1.0, with no commitment. Skathi has no `customElements` registry and no shadow DOM, which costs too much for Skathi right now (`SK5002`, an error). A component with `<svelte:options customElement="my-element">` compiles to a `customElements.define()` call, which throws a `ReferenceError` when the module loads, and `$host()` only compiles in such a component. Use the component as a component; pass what the host element would carry as props or through context.
+Not supported; may be revisited around 1.0, with no commitment. Skathi has no custom elements and no shadow DOM, which costs too much for Skathi right now (`SK5002`, an error): `customElements.get()` answers `undefined` and `customElements.define()` throws `NotSupportedError`. A component with `<svelte:options customElement="my-element">` compiles to a `customElements.define()` call, which throws when the module loads, and `$host()` only compiles in such a component. Use the component as a component; pass what the host element would carry as props or through context.
 
 ## hydrate
 

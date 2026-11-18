@@ -25,7 +25,7 @@ const VAPOR: Rule = {
 };
 const customElement = (what: string): Rule => ({
   code: "SK5002",
-  message: `${what}: Skathi has no custom elements (no \`customElements\` registry, no shadow DOM)`,
+  message: `${what}: Skathi has no custom elements (\`customElements.define()\` throws, no shadow DOM)`,
 });
 const ssr = (what: string): Rule => ({
   code: "SK5009",

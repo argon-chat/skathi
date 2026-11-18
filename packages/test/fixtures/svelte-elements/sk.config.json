@@ -1,0 +1,13 @@
+{
+  "$comment": "Skathi's own elements from Svelte: <sk-surface>, <sk-sticker> and <lottie> with attributes and events.",
+
+  "name": "sk-test-svelte-elements",
+
+  "window": {
+    "title": "Skathi — Svelte elements (fixture)",
+    "width": 480,
+    "height": 240,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

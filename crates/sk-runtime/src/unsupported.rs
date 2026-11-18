@@ -1,13 +1,13 @@
 //! Web APIs Skathi has no implementation for, defined so code written for a browser keeps running:
 //! `alert`, `confirm`, `prompt` and `Notification` advise once and answer as a browser does when the
-//! user dismisses or denies.
+//! user dismisses or denies. `customElements` has no element defined and refuses `define()`.
 
 use std::cell::Cell;
 use std::ffi::c_void;
 
 use redjs::webapi::util::*;
 
-use crate::host::{global, resolved, warn_compat};
+use crate::host::{global, rejected, resolved, throw, warn_compat};
 
 const ALERT: &str = "alert() is not supported in Skathi: no dialog is shown. Show the message in the app's own UI instead.";
 const CONFIRM: &str =
@@ -17,6 +17,8 @@ const PROMPT: &str = "prompt() is not supported in Skathi: no dialog is shown an
 const NOTIFICATION: &str =
     "Notification is not supported in Skathi: nothing is shown and its permission is always \
                             \"denied\". Show the message in the app's own UI instead.";
+const CUSTOM_ELEMENTS: &str = "Skathi has no custom elements (no shadow DOM, nothing can be defined in \
+                               customElements): use the component directly instead of defining an element for it.";
 
 thread_local! {
     static NOTIFICATION_PROTO: Cell<u64> = const { Cell::new(0) };
@@ -71,7 +73,7 @@ crate::host_fn!(fn notification_construct(g, args) {
     }
 });
 
-crate::host_fn!(fn notification_close(_g, _args) {
+crate::host_fn!(fn noop(_g, _args) {
     UNDEF
 });
 
@@ -91,8 +93,49 @@ crate::host_fn!(fn notification_request_permission(g, args) {
     }
 });
 
-/// Replaces redjs's own `alert`, `confirm` and `prompt`, which throw without a host dialog handler.
+crate::host_fn!(fn elements_define(g, _args) {
+    unsafe {
+        warn_compat(g, "customElements", CUSTOM_ELEMENTS);
+        throw(g, "NotSupportedError", &format!("customElements.define(): {CUSTOM_ELEMENTS}"))
+    }
+});
+
+crate::host_fn!(fn elements_get(_g, _args) {
+    UNDEF
+});
+
+crate::host_fn!(fn elements_get_name(_g, _args) {
+    NULL
+});
+
+crate::host_fn!(fn elements_when_defined(g, _args) {
+    unsafe { rejected(g, "NotSupportedError", &format!("customElements.whenDefined(): {CUSTOM_ELEMENTS}")) }
+});
+
+/// Replaces redjs's own `alert`, `confirm` and `prompt`, which throw without a host dialog handler, and
+/// defines `customElements`.
 pub(crate) unsafe fn install(g: *mut c_void) {
+    let registry = define_class(
+        g,
+        &ClassSpec {
+            name: "CustomElementRegistry",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[
+                ("define", 2, elements_define),
+                ("get", 1, elements_get),
+                ("getName", 1, elements_get_name),
+                ("upgrade", 1, noop),
+                ("whenDefined", 1, elements_when_defined),
+            ],
+            getters: &[],
+            accessors: &[],
+        },
+    );
+    let elements = new_object(g, registry.proto);
+    define(g, global(g), "customElements", elements, 2);
+
     let global = global(g);
     define(g, global, "alert", make_fn(g, "alert", 0, js_alert), 2);
     define(
@@ -116,7 +159,7 @@ pub(crate) unsafe fn install(g: *mut c_void) {
             } else {
                 0
             },
-            methods: &[("close", 0, notification_close)],
+            methods: &[("close", 0, noop)],
             getters: &[],
             accessors: &[],
         },
@@ -189,5 +232,17 @@ mod tests {
             .lines()
             .filter(|l| l.contains("is not supported in Skathi"));
         assert_eq!(ours.count(), 4, "{warned}");
+    }
+
+    #[test]
+    fn custom_elements_define_nothing_and_refuse_define() {
+        assert_eq!(
+            eval("String(customElements.get('sk-surface'))"),
+            "undefined"
+        );
+        assert_eq!(
+            eval("(() => { try { customElements.define('x-y', class extends Object {}); return 'no throw'; } catch (e) { return e.name; } })()"),
+            "NotSupportedError"
+        );
     }
 }

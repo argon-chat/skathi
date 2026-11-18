@@ -245,7 +245,7 @@ const CODES: CodeInfo[] = [
     severity: "error",
     title: "custom elements (web components)",
     explanation:
-      "Skathi has no `customElements` registry and no shadow DOM. Vue's `defineCustomElement()` returns a class that throws NotSupportedError when constructed, and `useHost()`/`useShadowRoot()` answer null. A Svelte component with `<svelte:options customElement>` compiles to a `customElements.define()` call, which throws a ReferenceError when the module loads; `$host()` only compiles in such a component.",
+      "Skathi has no custom elements and no shadow DOM: `customElements.get()` answers undefined and `customElements.define()` throws NotSupportedError. Vue's `defineCustomElement()` returns a class that throws NotSupportedError when constructed, and `useHost()`/`useShadowRoot()` answer null. A Svelte component with `<svelte:options customElement>` compiles to a `customElements.define()` call, which throws when the module loads; `$host()` only compiles in such a component.",
     example:
       'import { defineCustomElement } from "vue";\nimport Counter from "./Counter.vue";\n\ncustomElements.define("my-counter", defineCustomElement(Counter));',
     fix: "Use the component directly (`<Counter />`), and pass what a host element would carry as props or with provide/inject (Vue) or context (Svelte).",
