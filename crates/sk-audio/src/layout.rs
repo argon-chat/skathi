@@ -105,6 +105,107 @@ pub fn object_gain(gain: f32) -> (f32, f32) {
     }
 }
 
+/// Formats whose renderer plays dynamic objects at the listener's centre, ignoring `SetPosition` and
+/// `SetVolume` (seen with Dolby Atmos for Headphones): their objects are panned into the bed.
+pub fn objects_in_bed(format: &str) -> bool {
+    format == "dolby-atmos-headphones"
+}
+
+/// A bed speaker's azimuth (degrees, clockwise from front) and elevation; `None` for LFE.
+fn speaker_angles(object_type: u32) -> Option<(f32, f32)> {
+    Some(match object_type {
+        0x2 => (-30.0, 0.0),
+        0x4 => (30.0, 0.0),
+        0x8 => (0.0, 0.0),
+        0x20 => (-90.0, 0.0),
+        0x40 => (90.0, 0.0),
+        0x80 => (-135.0, 0.0),
+        0x100 => (135.0, 0.0),
+        0x200 => (-45.0, 45.0),
+        0x400 => (45.0, 45.0),
+        0x800 => (-135.0, 45.0),
+        0x1000 => (135.0, 45.0),
+        _ => return None,
+    })
+}
+
+const HEIGHT_ELEVATION: f32 = 45.0;
+
+/// Equal-power gains that place a source at `pos` (listener space) on the bed: between the two
+/// nearest speakers of each layer by azimuth, and between the layers by elevation.
+pub fn bed_gains(pos: V, bed: &[BedChannel], out: &mut [f32]) {
+    out.fill(0.0);
+    let [x, y, z] = pos;
+    let horizontal = (x * x + z * z).sqrt();
+    let azimuth = if horizontal > 1e-6 {
+        x.atan2(-z).to_degrees()
+    } else {
+        0.0
+    };
+    let elevation = y.atan2(horizontal).to_degrees();
+    let layer = |height: bool| -> Vec<(usize, f32)> {
+        bed.iter()
+            .enumerate()
+            .filter_map(|(k, c)| {
+                let (az, el) = speaker_angles(c.object_type)?;
+                ((el > 0.0) == height).then_some((k, az.rem_euclid(360.0)))
+            })
+            .collect()
+    };
+    let (ear, top) = (layer(false), layer(true));
+    let t = if top.is_empty() {
+        0.0
+    } else {
+        (elevation / HEIGHT_ELEVATION).clamp(0.0, 1.0)
+    };
+    let angle = t * core::f32::consts::FRAC_PI_2;
+    ring_pan(&ear, azimuth, angle.cos(), out);
+    ring_pan(&top, azimuth, angle.sin(), out);
+}
+
+fn ring_pan(ring: &[(usize, f32)], azimuth: f32, weight: f32, out: &mut [f32]) {
+    if ring.is_empty() || weight <= 0.0 {
+        return;
+    }
+    if let [(k, _)] = ring {
+        out[*k] += weight;
+        return;
+    }
+    let mut ring = ring.to_vec();
+    ring.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let az = azimuth.rem_euclid(360.0);
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        let span = (b.1 - a.1).rem_euclid(360.0);
+        let off = (az - a.1).rem_euclid(360.0);
+        if off <= span + 1e-3 {
+            let frac = if span > 0.0 {
+                (off / span).min(1.0)
+            } else {
+                0.0
+            };
+            let angle = frac * core::f32::consts::FRAC_PI_2;
+            out[a.0] += weight * angle.cos();
+            out[b.0] += weight * angle.sin();
+            return;
+        }
+    }
+}
+
+/// Add a mono block to the interleaved bed, its gains moving linearly from `from` to `to`.
+pub fn mix_into_bed(samples: &[f32], from: &[f32], to: &[f32], mix: &mut [f32], channels: usize) {
+    let frames = samples.len().min(mix.len() / channels.max(1));
+    let step = 1.0 / frames.max(1) as f32;
+    for (i, s) in samples[..frames].iter().enumerate() {
+        let t = (i + 1) as f32 * step;
+        let frame = &mut mix[i * channels..(i + 1) * channels];
+        for ((m, a), b) in frame.iter_mut().zip(from).zip(to) {
+            *m += s * (a + (b - a) * t);
+        }
+    }
+}
+
 /// An object's mono signal: a stereo panner input is mixed down as the spec's speakers rule does.
 pub fn object_samples(left: &[f32], right: &[f32], channels: u32, gain: f32, out: &mut [f32]) {
     let n = out.len().min(left.len());
@@ -214,6 +315,99 @@ mod tests {
             [0.0, 1.0, 0.0],
         );
         assert_eq!(listener_space(&nan), [0.0; 3]);
+    }
+
+    fn gains_at(pos: V, b: &[BedChannel]) -> Vec<f32> {
+        let mut g = vec![0.0; b.len()];
+        bed_gains(pos, b, &mut g);
+        g
+    }
+
+    fn only(g: &[f32], b: &[BedChannel], object_type: u32) -> bool {
+        g.iter().zip(b).all(|(v, c)| {
+            (*v - if c.object_type == object_type {
+                1.0
+            } else {
+                0.0
+            })
+            .abs()
+                < 1e-4
+        })
+    }
+
+    #[test]
+    fn a_source_on_a_speaker_plays_from_that_speaker_alone() {
+        let b = bed(object_type_mask(&BED_7_1_4));
+        let at = |az: f32, el: f32| {
+            let (a, e) = (az.to_radians(), el.to_radians());
+            [a.sin() * e.cos(), e.sin(), -a.cos() * e.cos()]
+        };
+        for (az, el, ty) in [
+            (-30.0, 0.0, 0x2),
+            (0.0, 0.0, 0x8),
+            (90.0, 0.0, 0x40),
+            (-135.0, 0.0, 0x80),
+            (45.0, 45.0, 0x400),
+            (-135.0, 45.0, 0x800),
+        ] {
+            let g = gains_at(at(az, el), &b);
+            assert!(only(&g, &b, ty), "{az}/{el}: {g:?}");
+        }
+        let overhead = gains_at([0.0, 3.0, 0.0], &b);
+        let h = core::f32::consts::FRAC_1_SQRT_2;
+        assert!(overhead[..8].iter().all(|&v| v == 0.0), "{overhead:?}");
+        assert!(
+            (overhead[8] - h).abs() < 1e-4 && (overhead[9] - h).abs() < 1e-4,
+            "{overhead:?}"
+        );
+    }
+
+    #[test]
+    fn panned_gains_keep_their_power_everywhere_on_every_bed() {
+        let full = bed(object_type_mask(&BED_7_1_4));
+        let flat = bed(0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x80 | 0x100);
+        let stereo = bed(0);
+        for b in [&full, &flat, &stereo] {
+            for az in (0..360).step_by(7) {
+                for el in [-30.0f32, 0.0, 20.0, 60.0] {
+                    let (a, e) = ((az as f32).to_radians(), el.to_radians());
+                    let g = gains_at(
+                        [
+                            a.sin() * e.cos() * 2.0,
+                            e.sin() * 2.0,
+                            -a.cos() * e.cos() * 2.0,
+                        ],
+                        b,
+                    );
+                    let power: f32 = g.iter().map(|v| v * v).sum();
+                    assert!(
+                        (power - 1.0).abs() < 1e-3,
+                        "{az}/{el} on {} ch: {g:?}",
+                        b.len()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_between_speakers_leans_to_the_nearer_one() {
+        let b = bed(object_type_mask(&BED_7_1_4));
+        let g = gains_at([1.0, 0.0, -0.2], &b);
+        let (sr, fr) = (g[7], g[1]);
+        assert!(sr > fr && fr > 0.0, "{g:?}");
+        let s = gains_at([-1.0, 0.0, 1.0], &bed(0));
+        assert!(
+            (s[0] - s[1]).abs() > 0.1 && s[0] > s[1],
+            "behind-left on stereo leans left: {s:?}"
+        );
+    }
+
+    #[test]
+    fn an_object_mixed_into_the_bed_ramps_its_gains_over_the_block() {
+        let mut mix = vec![0.0; 4 * 2];
+        mix_into_bed(&[1.0; 4], &[1.0, 0.0], &[0.0, 1.0], &mut mix, 2);
+        assert_eq!(mix, [0.75, 0.25, 0.5, 0.5, 0.25, 0.75, 0.0, 1.0]);
     }
 
     #[test]

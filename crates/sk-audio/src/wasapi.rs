@@ -1,5 +1,6 @@
 //! `ISpatialAudioClient` on its own event-driven thread: the context's destination in the static
-//! bed, each panner the page put in the `"spatial"` model on a dynamic object.
+//! bed, each panner the page put in the `"spatial"` model on a dynamic object (or panned into the
+//! bed, see `layout::objects_in_bed`).
 
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -196,13 +197,17 @@ fn run(
         let max_frames = client
             .GetMaxFrameCount(format_ptr)
             .map_err(hr("GetMaxFrameCount"))?;
+        let label = endpoint_id
+            .as_deref()
+            .map_or_else(|| "spatial".into(), format_label);
+        let in_bed = layout::objects_in_bed(&label);
 
         let event = Event(CreateEventW(None, false, false, None).map_err(hr("CreateEventW"))?);
         let mut params = SpatialAudioObjectRenderStreamActivationParams {
             ObjectFormat: format_ptr,
             StaticObjectTypeMask: AudioObjectType(layout::object_type_mask(&bed) as i32),
             MinDynamicObjectCount: 0,
-            MaxDynamicObjectCount: max_objects,
+            MaxDynamicObjectCount: if in_bed { 0 } else { max_objects },
             Category: AudioCategory_SoundEffects,
             EventHandle: event.0,
             NotifyObject: ManuallyDrop::new(None),
@@ -234,9 +239,6 @@ fn run(
             .collect::<Result<Vec<_>, _>>()
             .map_err(hr("activating the static bed"))?;
 
-        let label = endpoint_id
-            .as_deref()
-            .map_or_else(|| "spatial".into(), format_label);
         *announced = true;
         if opened
             .send(Ok(Opened {
@@ -260,7 +262,8 @@ fn run(
             &stream,
             &statics,
             &mut renderer,
-            bed.len(),
+            &bed,
+            in_bed,
             max_frames,
             max_objects,
             &event,
@@ -280,17 +283,22 @@ unsafe fn render_loop(
     stream: &ISpatialAudioObjectRenderStream,
     statics: &[ISpatialAudioObject],
     renderer: &mut Renderer,
-    channels: usize,
+    bed: &[BedChannel],
+    in_bed: bool,
     max_frames: u32,
     max_objects: u32,
     event: &Event,
     stop: &AtomicBool,
     label: &str,
 ) -> Result<(), String> {
+    let channels = bed.len();
     let mut mix = vec![0.0f32; max_frames as usize * channels];
     let mut dynamic: Vec<Option<Dynamic>> = (0..max_objects).map(|_| None).collect();
     let mut seen = vec![false; max_objects as usize];
     let mut ran_out = false;
+    let mut mono = vec![0.0f32; max_frames as usize];
+    let mut panned: Vec<Option<(u64, Vec<f32>)>> = (0..max_objects).map(|_| None).collect();
+    let mut target = vec![0.0f32; channels];
     while !stop.load(Ordering::Acquire) {
         if WaitForSingleObject(event.0, 200) != WAIT_OBJECT_0 {
             continue;
@@ -301,6 +309,40 @@ unsafe fn render_loop(
             .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
         let frames = (frames as usize).min(max_frames as usize);
         renderer.render(&mut mix, channels, frames);
+        if in_bed {
+            seen.fill(false);
+            for block in renderer.objects() {
+                let i = block.index as usize;
+                let Some(slot) = panned.get_mut(i) else {
+                    continue;
+                };
+                seen[i] = true;
+                let gain = block.placement.gain;
+                let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+                let out = &mut mono[..frames];
+                layout::object_samples(block.left, block.right, block.channels, gain, out);
+                layout::bed_gains(layout::listener_space(&block.placement), bed, &mut target);
+                let fresh = !matches!(slot, Some((owner, _)) if *owner == block.owner);
+                let prev = slot.get_or_insert_with(|| (block.owner, vec![0.0; channels]));
+                if fresh {
+                    prev.0 = block.owner;
+                    prev.1.copy_from_slice(&target);
+                }
+                layout::mix_into_bed(
+                    out,
+                    &prev.1,
+                    &target,
+                    &mut mix[..frames * channels],
+                    channels,
+                );
+                prev.1.copy_from_slice(&target);
+            }
+            for (slot, seen) in panned.iter_mut().zip(&seen) {
+                if !seen {
+                    *slot = None;
+                }
+            }
+        }
         for (k, object) in statics.iter().enumerate() {
             if let Some(buf) = buffer(object, frames) {
                 for (i, s) in buf.iter_mut().enumerate() {
@@ -310,7 +352,7 @@ unsafe fn render_loop(
         }
 
         seen.fill(false);
-        for block in renderer.objects() {
+        for block in renderer.objects().filter(|_| !in_bed) {
             let i = block.index as usize;
             let Some(slot) = dynamic.get_mut(i) else {
                 continue;
