@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
@@ -9,6 +9,13 @@ const seats = ref(5);
 const yearly = ref(true);
 const notes = ref("");
 const price = () => seats.value * (plan.value === "team" ? 8 : 15) * (yearly.value ? 10 : 1);
+
+const toppings = ["Cheese", "Mushrooms", "Olives", "Basil"];
+const chosen = ref<string[]>(["Cheese"]);
+const all = computed(() => chosen.value.length === toppings.length);
+const some = computed(() => chosen.value.length > 0 && !all.value);
+const toggleAll = () => (chosen.value = all.value ? [] : [...toppings]);
+const size = ref("medium");
 
 // Selection is the document's, as in a browser: drag over the paragraph, or double-click a word.
 const selected = ref("");
@@ -57,6 +64,32 @@ onUnmounted(() => document.removeEventListener("selectionchange", onSelection));
       <div class="summary">
         {{ name || "Someone" }} · {{ plan }} · {{ seats }} seats · ${{ price() }} per {{ yearly ? "year" : "month" }}
       </div>
+    </Card>
+
+    <Card title="Checkboxes and radios" api="<input type=checkbox> · :checked">
+      <div class="choices">
+        <div class="group">
+          <label class="choice">
+            <input type="checkbox" :checked="all" :indeterminate="some" @change="toggleAll" />
+            <span>All toppings</span>
+          </label>
+          <label v-for="t in toppings" :key="t" class="choice nested">
+            <input v-model="chosen" type="checkbox" :value="t" />
+            <span>{{ t }}</span>
+          </label>
+        </div>
+        <div class="group">
+          <label v-for="s in ['small', 'medium', 'large']" :key="s" class="choice">
+            <input v-model="size" type="radio" name="size" :value="s" />
+            <span>{{ s }}</span>
+          </label>
+        </div>
+      </div>
+      <div class="summary">A {{ size }} pizza with {{ chosen.join(", ").toLowerCase() || "nothing on it" }}</div>
+      <p class="faint">
+        Native controls with v-model, drawn in accent-color. Space and arrow keys work; the labels turn bold through
+        :checked.
+      </p>
     </Card>
 
     <Card title="Text selection" api="getSelection()">
@@ -124,6 +157,31 @@ onUnmounted(() => document.removeEventListener("selectionchange", onSelection));
   border-radius: 10px;
   background: var(--accent-soft);
   font-size: 13px;
+}
+.choices {
+  display: flex;
+  gap: 48px;
+  accent-color: var(--accent-strong);
+}
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.nested {
+  margin-left: 22px;
+}
+.choice input:checked + span {
+  font-weight: 600;
+  color: var(--text);
 }
 .prose {
   margin: 0;

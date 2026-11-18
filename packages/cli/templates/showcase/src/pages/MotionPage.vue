@@ -33,6 +33,36 @@ const tiles = [
   { name: "Ember", fill: "linear-gradient(135deg, #fb923c, #f43f5e)", text: "The last coals of a fire." },
   { name: "Moss", fill: "linear-gradient(135deg, #a3e635, #22c55e)", text: "Green on a north-facing stone." },
 ];
+const faq = [
+  {
+    q: "Does height: auto animate?",
+    a: "Yes. interpolate-size: allow-keywords on an ancestor lets a transition run between a length and auto, measured from the content.",
+  },
+  {
+    q: "What does calc-size() add?",
+    a: "Arithmetic on the measured size: calc-size(auto, size * 0.5) is half the content's height, and it animates to and from auto too.",
+  },
+  {
+    q: "Is there script involved?",
+    a: "None. The class changes and the renderer measures and interpolates the height on every frame.",
+  },
+];
+const asked = ref<number | null>(0);
+const more = ref(false);
+
+let nextId = 7;
+const cards = ref([1, 2, 3, 4, 5, 6]);
+const shuffle = () => {
+  const next = [...cards.value];
+  for (let i = next.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j]!, next[i]!];
+  }
+  cards.value = next;
+};
+const add = () => cards.value.splice(Math.floor(Math.random() * (cards.value.length + 1)), 0, nextId++);
+const remove = (n: number) => (cards.value = cards.value.filter((c) => c !== n));
+
 const open = ref<number | null>(null);
 const opened = () => tiles[open.value ?? 0]!;
 const show = (i: number | null) =>
@@ -80,6 +110,47 @@ const show = (i: number | null) =>
       <Transition name="swap" mode="out-in">
         <div :key="word" class="word">{{ words[word] }}</div>
       </Transition>
+    </Card>
+
+    <Card title="Lists" api="<TransitionGroup>">
+      <div class="row">
+        <button class="btn" @click="shuffle">Shuffle</button>
+        <button class="btn" @click="add">Add</button>
+        <span class="faint">Click a card to remove it.</span>
+      </div>
+      <TransitionGroup name="list" tag="div" class="deck">
+        <div v-for="n in cards" :key="n" class="playing" @click="remove(n)">{{ n }}</div>
+      </TransitionGroup>
+      <p class="faint">Moves play as FLIP transforms; cards enter and leave with @keyframes animations.</p>
+    </Card>
+
+    <Card title="Animating to auto" api="interpolate-size · calc-size()">
+      <div class="auto">
+        <div class="faq">
+          <div v-for="(item, i) in faq" :key="item.q" class="qa" :class="{ open: asked === i }">
+            <div class="question" @click="asked = asked === i ? null : i">
+              <span>{{ item.q }}</span>
+              <span class="plus">+</span>
+            </div>
+            <div class="answer">
+              <p class="muted">{{ item.a }}</p>
+            </div>
+          </div>
+        </div>
+        <div class="excerpt" :class="{ more }">
+          <p class="muted">
+            Analytical Engine, 1843. The engine might act upon other things besides number, were objects found whose
+            mutual fundamental relations could be expressed by those of the abstract science of operations. Supposing,
+            for instance, that the fundamental relations of pitched sounds in the science of harmony and of musical
+            composition were susceptible of such expression and adaptations, the engine might compose elaborate and
+            scientific pieces of music of any degree of complexity or extent.
+          </p>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn" @click="more = !more">{{ more ? "Show less" : "Read more" }}</button>
+        <span class="faint mono">height: calc-size(auto, size * 0.4) ↔ auto</span>
+      </div>
     </Card>
 
     <Card title="View transitions" api="document.startViewTransition()">
@@ -230,6 +301,103 @@ const show = (i: number | null) =>
   opacity: 0;
   transform: translateY(-10px);
 }
+.deck {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.playing {
+  width: 64px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(160deg, #26283a, #1a1b28);
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.playing:hover {
+  border-color: var(--accent);
+}
+@keyframes deal {
+  from {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.6);
+  }
+  70% {
+    transform: translateY(2px) scale(1.06);
+  }
+}
+@keyframes discard {
+  to {
+    opacity: 0;
+    transform: translateY(16px) rotate(12deg) scale(0.8);
+  }
+}
+.list-enter-active {
+  animation: deal 380ms ease-out;
+}
+.list-leave-active {
+  animation: discard 260ms ease-in forwards;
+}
+.auto {
+  interpolate-size: allow-keywords;
+}
+.faq {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.qa + .qa {
+  border-top: 1px solid var(--line);
+}
+.question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plus {
+  font-size: 18px;
+  color: var(--text-faint);
+  transition: transform 300ms ease;
+}
+.qa.open .plus {
+  transform: rotate(45deg);
+}
+.answer {
+  height: 0;
+  overflow: hidden;
+  transition: height 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+.qa.open .answer {
+  height: auto;
+}
+.answer p {
+  margin: 0;
+  padding: 0 14px 14px;
+}
+.excerpt {
+  height: calc-size(auto, size * 0.4);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  transition: height 400ms cubic-bezier(0.2, 0, 0, 1);
+}
+.excerpt.more {
+  height: auto;
+  mask-image: none;
+}
+.excerpt p {
+  margin: 0;
+}
 .tiles {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -265,5 +433,11 @@ const show = (i: number | null) =>
   font-size: 28px;
   font-weight: 700;
   color: #ffffff;
+}
+</style>
+
+<style>
+.deck > .list-move {
+  transition: transform 450ms cubic-bezier(0.2, 0, 0, 1);
 }
 </style>

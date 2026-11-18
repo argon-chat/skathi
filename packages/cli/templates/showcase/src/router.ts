@@ -7,6 +7,7 @@ import FilesPage from "./pages/FilesPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
 import GraphicsPage from "./pages/GraphicsPage.vue";
 import HomePage from "./pages/HomePage.vue";
+import LayoutPage from "./pages/LayoutPage.vue";
 import LocalePage from "./pages/LocalePage.vue";
 import MediaPage from "./pages/MediaPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
@@ -123,7 +124,7 @@ export const pages: PageEntry[] = [
     title: "Motion",
     icon: "motion",
     section: "Interface",
-    blurb: "Transitions, keyframes and the Web Animations API",
+    blurb: "Transitions, keyframes, list moves and the Web Animations API",
     component: MotionPage,
   },
   {
@@ -131,15 +132,23 @@ export const pages: PageEntry[] = [
     title: "Styles",
     icon: "styles",
     section: "Interface",
-    blurb: "Gradients, shadows, glass and the engine's own shading",
+    blurb: "Gradients, shadows, modern colour and the engine's own shading",
     component: StylesPage,
+  },
+  {
+    path: "/layout",
+    title: "Layout",
+    icon: "layout",
+    section: "Interface",
+    blurb: "Container queries, sticky headers and scrollers that snap",
+    component: LayoutPage,
   },
   {
     path: "/forms",
     title: "Forms",
     icon: "forms",
     section: "Interface",
-    blurb: "Native text fields, controls and text selection",
+    blurb: "Native text fields, checkboxes, radios and text selection",
     component: FormsPage,
   },
   {

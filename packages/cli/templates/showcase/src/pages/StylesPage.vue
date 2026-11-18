@@ -4,6 +4,35 @@ import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
 const hot = ref(false);
+
+const shapes = ["squircle", "bevel", "scoop", "notch", "superellipse"];
+
+const hues = Array.from({ length: 12 }, (_, i) => i * 30);
+const mix = ref(50);
+
+const schemes = ["light", "dark", "light dark"];
+const scheme = ref("light");
+const notify = ref(true);
+const level = ref(60);
+
+const hue = ref(265);
+
+const cursors = [
+  "pointer",
+  "text",
+  "move",
+  "help",
+  "wait",
+  "progress",
+  "crosshair",
+  "not-allowed",
+  "ew-resize",
+  "ns-resize",
+  "nwse-resize",
+  "col-resize",
+  "all-scroll",
+  "none",
+];
 </script>
 
 <template>
@@ -19,6 +48,15 @@ const hot = ref(false);
         <div class="swatch lifted">layered</div>
         <div class="swatch ring">ring</div>
       </div>
+    </Card>
+
+    <Card title="Corner shapes" api="corner-shape">
+      <div class="row gap">
+        <div v-for="shape in shapes" :key="shape" class="swatch shaped" :class="shape">
+          {{ shape === "superellipse" ? "superellipse(3)" : shape }}
+        </div>
+      </div>
+      <p class="faint">Squircles, bevels and notches from one border-radius. Hover one: shapes interpolate.</p>
     </Card>
 
     <Card title="Glass" api="backdrop-filter: blur()">
@@ -43,7 +81,95 @@ const hot = ref(false);
       </p>
     </Card>
 
-    <Card title="Layout" api="grid · ::before · :hover">
+    <Card title="Text shadow" api="text-shadow">
+      <div class="row type-row">
+        <span class="type neon">Neon</span>
+        <span class="type offset">Offset</span>
+        <span class="type soft">Soft</span>
+        <span class="type outline">Outline</span>
+      </div>
+      <p class="faint">Several shadows with blur, and they animate: hover the neon sign.</p>
+    </Card>
+
+    <Card title="Modern colour" api="oklch() · color-mix()">
+      <div class="ramp-row">
+        <span class="ramp-label mono">hsl()</span>
+        <div class="ramp">
+          <span v-for="h in hues" :key="h" class="step" :style="{ background: `hsl(${h} 85% 60%)` }" />
+        </div>
+      </div>
+      <div class="ramp-row">
+        <span class="ramp-label mono">oklch()</span>
+        <div class="ramp">
+          <span v-for="h in hues" :key="h" class="step" :style="{ background: `oklch(0.72 0.14 ${h})` }" />
+        </div>
+      </div>
+      <p class="faint">The same hues at one lightness: in oklch() they really are one lightness.</p>
+      <label class="field">
+        <span class="label">Blue {{ mix }}% · yellow {{ 100 - mix }}%</span>
+        <input v-model.number="mix" type="range" min="0" max="100" />
+      </label>
+      <div class="ramp-row">
+        <span class="ramp-label mono">in srgb</span>
+        <div class="mixed" :style="{ background: `color-mix(in srgb, #3b82f6 ${mix}%, #facc15)` }" />
+      </div>
+      <div class="ramp-row">
+        <span class="ramp-label mono">in oklch</span>
+        <div class="mixed" :style="{ background: `color-mix(in oklch, #3b82f6 ${mix}%, #facc15)` }" />
+      </div>
+      <div class="row">
+        <span class="chip" style="background: lab(62% 52 -38)">lab()</span>
+        <span class="chip" style="background: lch(70% 60 150)">lch()</span>
+        <span class="chip" style="background: hwb(20 10% 5%)">hwb()</span>
+        <span class="chip" style="background: color(display-p3 0.2 0.6 1)">color(display-p3)</span>
+        <span class="chip" style="background: rgb(from #8b9dff r g b / 45%)">rgb(from …)</span>
+      </div>
+    </Card>
+
+    <Card title="Light and dark" api="light-dark() · color-scheme">
+      <div class="row">
+        <button v-for="s in schemes" :key="s" class="btn mono" :class="{ on: scheme === s }" @click="scheme = s">
+          {{ s }}
+        </button>
+      </div>
+      <div class="scheme" :style="{ colorScheme: scheme }">
+        <div class="scheme-title">Notifications</div>
+        <p class="scheme-text">Colours from light-dark(), resolved per element from color-scheme.</p>
+        <label class="scheme-line"><input v-model="notify" type="checkbox" /> Show previews</label>
+        <label class="scheme-line">
+          Volume <input v-model.number="level" type="range" min="0" max="100" />
+        </label>
+      </div>
+      <p class="faint">
+        The checkbox and slider follow the scheme too. "light dark" follows the window's theme, live.
+      </p>
+    </Card>
+
+    <Card title="Custom functions" api="@function">
+      <div class="palette" :style="{ '--hue': hue }">
+        <span class="tone t1" />
+        <span class="tone t2" />
+        <span class="tone t3" />
+        <span class="tone base">base</span>
+        <span class="tone t4" />
+        <span class="tone t5" />
+        <span class="tone t6" />
+      </div>
+      <label class="field">
+        <span class="label">Base hue · {{ hue }}</span>
+        <input v-model.number="hue" type="range" min="0" max="359" />
+      </label>
+      <p class="faint mono">--tint(var(--base), 25%), --shade(var(--base)): one colour in, a palette out.</p>
+    </Card>
+
+    <Card title="Cursors" api="cursor">
+      <div class="cursors">
+        <span v-for="c in cursors" :key="c" class="cursor mono" :style="{ cursor: c }">{{ c }}</span>
+      </div>
+      <p class="faint">The system's own cursors. Hover each one.</p>
+    </Card>
+
+    <Card title="Grid and selectors" api="grid · ::before · :hover">
       <div class="grid">
         <div class="cell wide">grid-column: span 2</div>
         <div class="cell">1fr</div>
@@ -90,6 +216,31 @@ const hot = ref(false);
   box-shadow:
     0 0 0 2px #0b0b10,
     0 0 0 5px #8b9dff;
+}
+.shaped {
+  border-radius: 24px;
+  background: linear-gradient(135deg, #6d7cff, #b48cff);
+  font-family: var(--mono);
+  font-weight: 400;
+  transition: corner-shape 400ms ease;
+}
+.squircle {
+  corner-shape: squircle;
+}
+.bevel {
+  corner-shape: bevel;
+}
+.scoop {
+  corner-shape: scoop;
+}
+.notch {
+  corner-shape: notch;
+}
+.superellipse {
+  corner-shape: superellipse(3);
+}
+.shaped:hover {
+  corner-shape: round;
 }
 .scene {
   position: relative;
@@ -203,5 +354,175 @@ const hot = ref(false);
 .hover:hover {
   background: var(--accent-strong);
   color: #ffffff;
+}
+.type-row {
+  gap: 28px;
+  padding: 8px 4px;
+}
+.type {
+  font-size: 30px;
+  font-weight: 800;
+}
+.neon {
+  color: #fff0fa;
+  text-shadow:
+    0 0 4px #ffffff,
+    0 0 12px #ff2d95,
+    0 0 24px #ff2d95;
+  cursor: pointer;
+  transition: text-shadow 300ms ease;
+}
+.neon:hover {
+  text-shadow:
+    0 0 6px #ffffff,
+    0 0 18px #ff2d95,
+    0 0 32px #ff2d95;
+}
+.offset {
+  color: #ffffff;
+  text-shadow: 3px 3px 0 var(--accent-strong);
+}
+.soft {
+  color: #e0e7ff;
+  text-shadow: 0 6px 16px #000000;
+}
+.outline {
+  color: #0b0b10;
+  text-shadow:
+    1px 1px 0 var(--accent),
+    -1px 1px 0 var(--accent),
+    1px -1px 0 var(--accent),
+    -1px -1px 0 var(--accent);
+}
+.ramp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ramp-label {
+  width: 64px;
+  color: var(--text-faint);
+}
+.ramp {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+}
+.step {
+  flex: 1;
+  height: 26px;
+  border-radius: 6px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+.label {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.mixed {
+  flex: 1;
+  height: 26px;
+  border-radius: 6px;
+}
+.chip {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.scheme {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid light-dark(#d4d4dc, #ffffff1f);
+  background: light-dark(#f6f6f9, #17171f);
+  color: light-dark(#18181b, #ececf1);
+  accent-color: light-dark(#4f46e5, #8b9dff);
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    border-color 200ms ease;
+}
+.scheme-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.scheme-text {
+  margin: 0;
+  font-size: 13px;
+  color: light-dark(#52525b, #a1a1aa);
+}
+.scheme-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+@function --tint(--c <color>, --amount <percentage>: 50%) returns <color> {
+  result: color-mix(in oklch, var(--c), white var(--amount));
+}
+@function --shade(--c <color>, --amount <percentage>: 50%) returns <color> {
+  result: color-mix(in oklch, var(--c), black var(--amount));
+}
+.palette {
+  --base: oklch(0.62 0.17 var(--hue));
+  display: flex;
+  gap: 6px;
+}
+.tone {
+  flex: 1;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.t1 {
+  background: --tint(var(--base), 75%);
+}
+.t2 {
+  background: --tint(var(--base), 50%);
+}
+.t3 {
+  background: --tint(var(--base), 25%);
+}
+.base {
+  background: var(--base);
+}
+.t4 {
+  background: --shade(var(--base), 25%);
+}
+.t5 {
+  background: --shade(var(--base));
+}
+.t6 {
+  background: --shade(var(--base), 70%);
+}
+.cursors {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.cursor {
+  padding: 10px 6px;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  text-align: center;
+}
+.cursor:hover {
+  background: var(--surface-strong);
+  color: var(--text);
 }
 </style>

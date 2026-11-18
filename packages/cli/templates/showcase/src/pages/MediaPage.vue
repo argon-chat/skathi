@@ -14,6 +14,13 @@ const toggleVideo = () => {
 
 const stickerPlaying = ref(true);
 const speed = ref(1);
+
+const focal = ref("50% 50%");
+const focals = [
+  { name: "Left", at: "0% 50%" },
+  { name: "Centre", at: "50% 50%" },
+  { name: "Right", at: "100% 50%" },
+];
 </script>
 
 <template>
@@ -42,6 +49,18 @@ const speed = ref(1);
           <button class="btn" @click="stickerPlaying = !stickerPlaying">{{ stickerPlaying ? "Pause" : "Play" }}</button>
           <button v-for="s in [0.5, 1, 2]" :key="s" class="btn" :class="{ on: speed === s }" @click="speed = s">
             {{ s }}×
+          </button>
+        </div>
+      </Card>
+
+      <Card class="tile" title="Focal point" api="object-position">
+        <div class="crops">
+          <img class="crop" src="assets/media/aurora.png" alt="Aurora, cropped" :style="{ objectPosition: focal }" />
+          <img class="crop tall" src="assets/media/aurora.png" alt="Aurora, cropped" :style="{ objectPosition: focal }" />
+        </div>
+        <div class="row">
+          <button v-for="f in focals" :key="f.at" class="btn" :class="{ on: focal === f.at }" @click="focal = f.at">
+            {{ f.name }}
           </button>
         </div>
       </Card>
@@ -77,6 +96,21 @@ const speed = ref(1);
   justify-content: center;
   border-radius: 10px;
   background: radial-gradient(circle, #8b9dff30, #00000000);
+}
+.crops {
+  height: 160px;
+  display: flex;
+  gap: 10px;
+}
+.crop {
+  flex: 1;
+  height: 100%;
+  border-radius: 10px;
+  object-fit: cover;
+  transition: object-position 500ms cubic-bezier(0.2, 0, 0, 1);
+}
+.tall {
+  flex: 0 0 90px;
 }
 .sticker {
   width: 120px;
