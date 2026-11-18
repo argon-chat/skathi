@@ -319,7 +319,7 @@ defineDom("insertAdjacentText", function (this: MirrorElement, where: unknown, d
   if (slot) insertAll(slot[0], [looseCreated(nodeOps.createText(String(data)))], slot[1]);
 });
 
-/** A loose copy of `node`: tag, namespace, attributes (class and inline style among them) and, when `deep`, its subtree. Listeners and scope ids are not copied, as in the DOM. */
+/** A loose copy of `node`: tag, namespace, attributes (class, inline style and scoped-style ids among them) and, when `deep`, its subtree. Listeners are not copied, as in the DOM. */
 export function cloneMirror(node: MirrorNode, deep: boolean): MirrorNode {
   const copy = copyOf(node, deep);
   return isLoose(copy) ? copy : looseCreated(copy);
@@ -339,6 +339,7 @@ function copyOf(node: MirrorNode, deep: boolean): MirrorNode {
     const value = node.getAttribute(name);
     if (value !== null) copy.setAttribute(name, value);
   }
+  __sk_copy_scopes(node.__skId, copy.__skId);
   if (!deep) return copy;
   if (node.ownText) nodeOps.setElementText(copy, node.ownText);
   for (const child of node.childNodes) insertNode(copyOf(child, true), copy, null, false);

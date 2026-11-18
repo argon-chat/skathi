@@ -858,6 +858,17 @@ impl Tree {
         }
     }
 
+    /// `cloneNode()`: scoped-style ids are attributes in the DOM, so a copy carries them.
+    pub fn copy_scopes(&mut self, from: u32, to: u32) {
+        let scopes = self
+            .node(from)
+            .map(|n| n.scopes.clone())
+            .unwrap_or_default();
+        for scope in scopes {
+            self.add_scope(to, scope);
+        }
+    }
+
     pub fn set_class(&mut self, id: u32, classes: &str) {
         if let Some(n) = self.node_mut(id) {
             if n.class_attr == classes {

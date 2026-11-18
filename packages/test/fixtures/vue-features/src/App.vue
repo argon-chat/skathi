@@ -219,9 +219,6 @@ onMounted(async () => {
 .list-leave-to {
   opacity: 0;
 }
-.list-move {
-  transition: transform 0.5s;
-}
 .bounce-enter-active {
   animation: bounce-in 0.6s;
 }
@@ -255,5 +252,11 @@ onMounted(async () => {
 }
 .custom:checked::before {
   content: "x";
+}
+</style>
+
+<style scoped>
+.list-move {
+  transition: transform 0.5s;
 }
 </style>

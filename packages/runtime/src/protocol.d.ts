@@ -67,6 +67,7 @@ declare function __sk_set_class(id: SkNodeId, classes: string): void;
 /** One attribute-channel prop. `undefined` (or `null`) REMOVES it; anything else must be a string. */
 declare function __sk_set_prop(id: SkNodeId, key: SkNameId, value: string | undefined): void;
 declare function __sk_add_scope(id: SkNodeId, scope: string): void;
+declare function __sk_copy_scopes(from: SkNodeId, to: SkNodeId): void;
 /** Before a click's listeners: toggles a checkbox or radio and answers what `__sk_toggle_end` restores, or -1. */
 declare function __sk_toggle_begin(id: SkNodeId): number;
 /** After them: restores a cancelled click's state; `true` when `input` and `change` fire. */

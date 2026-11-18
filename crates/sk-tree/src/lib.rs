@@ -251,6 +251,12 @@ host_fn!(fn sk_add_scope(g, args) {
     UNDEF
 });
 
+host_fn!(fn sk_copy_scopes(_g, args) {
+    let (from, to) = (arg_id(args.arg(0)), arg_id(args.arg(1)));
+    tree::with_tree(|t| t.copy_scopes(from, to));
+    UNDEF
+});
+
 host_fn!(fn sk_set_stylesheet(g, args) {
     let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let extra = args.arg(1).0;
@@ -456,6 +462,7 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_set_class", 2, sk_set_class as *const _),
         ("__sk_set_prop", 3, sk_set_prop as *const _),
         ("__sk_add_scope", 2, sk_add_scope as *const _),
+        ("__sk_copy_scopes", 2, sk_copy_scopes as *const _),
         ("__sk_set_stylesheet", 1, sk_set_stylesheet as *const _),
         ("__sk_set_listener", 3, sk_set_listener as *const _),
         ("__sk_create_root", 0, sk_create_root as *const _),

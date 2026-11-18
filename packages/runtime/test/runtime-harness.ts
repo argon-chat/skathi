@@ -666,6 +666,7 @@ export function createRuntime(
     "__sk_set_class",
     "__sk_set_prop",
     "__sk_add_scope",
+    "__sk_copy_scopes",
     "__sk_set_stylesheet",
     "__sk_set_listener",
     "__sk_create_root",
@@ -757,6 +758,7 @@ export function createRuntime(
     (id: number, key: number, value: unknown) => host.styles.push({ id, key: nameOf(key), value }),
     (id: number, value: unknown) => host.classes.push({ id, value }),
     (id: number, key: number, value: unknown) => host.props.push({ id, key: nameOf(key), value }),
+    () => {},
     () => {},
     (css: unknown, extra: unknown) => {
       const parts = [String(css), ...((extra as string[] | undefined) ?? []).map(String)];
