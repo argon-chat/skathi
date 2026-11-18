@@ -121,7 +121,10 @@ fn size_pair(from: Slot, to: Slot, p: &TransitionProperty, keywords: bool) -> Op
         return None;
     }
     use TransitionProperty::*;
-    let auto_is_initial = matches!(p, Width | Height | MinWidth | MinHeight);
+    let calc = |s: &Slot| matches!(s, Slot::Value(Animatable::Size(_)));
+    // `auto` meets a `calc-size()` as `calc-size(auto, size)`, which needs no opt-in.
+    let auto = matches!(p, Width | Height | MinWidth | MinHeight)
+        && (keywords || calc(&from) || calc(&to));
     let lift = |s: Slot| -> Option<SizeForm> {
         match s {
             Slot::Value(Animatable::Size(form)) => Some(form),
@@ -136,16 +139,14 @@ fn size_pair(from: Slot, to: Slot, p: &TransitionProperty, keywords: bool) -> Op
                     pixels: gpui::px(pixels),
                 })))
             }
-            Slot::Opaque(Opaque::Auto) if keywords && auto_is_initial => {
-                Some(SizeForm::of(Length::Auto))
-            }
-            Slot::Missing if keywords && auto_is_initial => Some(SizeForm::of(Length::Auto)),
+            Slot::Opaque(Opaque::Auto) if auto => Some(SizeForm::of(Length::Auto)),
+            Slot::Missing if auto => Some(SizeForm::of(Length::Auto)),
             _ => None,
         }
     };
     let sized = |s: &Slot| match s {
         Slot::Value(Animatable::Size(_)) => true,
-        Slot::Opaque(Opaque::Auto) | Slot::Missing => keywords && auto_is_initial,
+        Slot::Opaque(Opaque::Auto) | Slot::Missing => auto,
         _ => false,
     };
     if !sized(&from) && !sized(&to) {
@@ -2909,6 +2910,15 @@ mod size_interpolation {
                 500
             ),
             auto_times(0.5, 60.)
+        );
+        assert_eq!(
+            height_at(
+                false,
+                "height: calc-size(auto, size * 0.5)",
+                "height: auto",
+                500
+            ),
+            auto_times(0.75, 0.)
         );
         assert_eq!(
             height_at(false, "height: 50%", "height: calc-size(auto, size)", 500),
