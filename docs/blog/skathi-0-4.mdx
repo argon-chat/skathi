@@ -137,11 +137,11 @@ The same calls next to Electron and Tauri, from the [comparison page](/compariso
 
 <div class="wide leaders">
 
-| Native call          | Skathi                  | Electron                      | Tauri 2                      |
-| -------------------- | ----------------------- | ----------------------------- | ---------------------------- |
-| Where the call runs  | **in the same process** | in the main process, over IPC | in the app process, over IPC |
-| `add(a, b)`, a call  | **0.06 µs**             | 109 µs                        | 932 µs                       |
-| 1 MiB to native code | **&lt;0.001 ms**<sup>1</sup> | 1.14 ms<sup>2</sup>      | 8.9 ms<sup>2</sup>           |
+| Native call          | Skathi                       | Electron                      | Tauri 2                      |
+| -------------------- | ---------------------------- | ----------------------------- | ---------------------------- |
+| Where the call runs  | **in the same process**      | in the main process, over IPC | in the app process, over IPC |
+| `add(a, b)`, a call  | **0.06 µs**                  | 109 µs                        | 932 µs                       |
+| 1 MiB to native code | **&lt;0.001 ms**<sup>1</sup> | 1.14 ms<sup>2</sup>           | 8.9 ms<sup>2</sup>           |
 
 </div>
 
@@ -164,11 +164,11 @@ The same calls next to Electron and Tauri, from the [comparison page](/compariso
 
 Your program presents frames by name, from the thread that renders. A present stores the frame and returns: nothing waits for the UI, and a frame no one can see costs no upload. On Windows and macOS a frame never leaves the GPU.
 
-| Platform   | Frames                                                                                                                      |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Platform   | Frames                                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Windows    | Direct3D 11 textures; Direct3D 12 resources with a fence; shared handles from another device or process; Vulkan through a shared texture |
-| macOS      | Metal textures; IOSurfaces; CVPixelBuffers from VideoToolbox, AVFoundation or ScreenCaptureKit, BGRA or 4:2:0                |
-| Everywhere | CPU frames in BGRA or BGRX; on Linux, CPU frames only                                                                         |
+| macOS      | Metal textures; IOSurfaces; CVPixelBuffers from VideoToolbox, AVFoundation or ScreenCaptureKit, BGRA or 4:2:0                            |
+| Everywhere | CPU frames in BGRA or BGRX; on Linux, CPU frames only                                                                                    |
 
 ### Half floats, and HDR output
 
@@ -214,9 +214,14 @@ Web Audio graphs are multichannel now and follow the spec's channel rules: `chan
 
 ```ts title="intro.ts"
 const audio = new AudioContext();
-const track = await audio.decodeAudioData(await (await fetch("assets/sounds/intro-5.1.flac")).arrayBuffer());
+const track = await audio.decodeAudioData(
+  await (await fetch("assets/sounds/intro-5.1.flac")).arrayBuffer(),
+);
 // 6 on a 5.1 device; a stereo device keeps 2 and the track is mixed down.
-audio.destination.channelCount = Math.min(track.numberOfChannels, audio.destination.maxChannelCount);
+audio.destination.channelCount = Math.min(
+  track.numberOfChannels,
+  audio.destination.maxChannelCount,
+);
 const source = audio.createBufferSource();
 source.buffer = track;
 source.connect(audio.destination);
@@ -330,7 +335,13 @@ The main window opens where `sk.config.json` says, on the monitor it names, with
 
 ```json title="sk.config.json"
 {
-  "window": { "width": 420, "height": 640, "x": 24, "y": 24, "monitor": "cursor" }
+  "window": {
+    "width": 420,
+    "height": 640,
+    "x": 24,
+    "y": 24,
+    "monitor": "cursor"
+  }
 }
 ```
 
@@ -361,12 +372,12 @@ The devtools have a docs section of their own: [eight pages](/devtools/overview/
 
 <div class="leaders">
 
-| Measured                                              | Before   | After       |
-| ----------------------------------------------------- | -------- | ----------- |
-| Start to first frame, minimal embedder<sup>1</sup>    | 491 ms   | **311 ms**  |
-| Start to first frame, every default feature           | 587 ms   | **370 ms**  |
-| CPU when idle, % of one core<sup>2</sup>              | 1.09     | **0**       |
-| Windows release host<sup>3</sup>                      | 99.2 MB  | **87.2 MB** |
+| Measured                                           | Before  | After       |
+| -------------------------------------------------- | ------- | ----------- |
+| Start to first frame, minimal embedder<sup>1</sup> | 491 ms  | **311 ms**  |
+| Start to first frame, every default feature        | 587 ms  | **370 ms**  |
+| CPU when idle, % of one core<sup>2</sup>           | 1.09    | **0**       |
+| Windows release host<sup>3</sup>                   | 99.2 MB | **87.2 MB** |
 
 </div>
 

@@ -3,6 +3,7 @@ import "../styles/docs.css";
 import "../styles/blog.css";
 import Head from "../components/Head.astro";
 import Parallax from "../components/Parallax.astro";
+import Pup from "../components/Pup.astro";
 import SiteNav from "../components/SiteNav.astro";
 import { blogFeed } from "../lib/blog";
 import { repository } from "../lib/docs";
@@ -43,10 +44,12 @@ const { title, description, path, type, structuredData, blog, noindex = false } 
         target="_blank"
         rel="noreferrer">MIT / Apache-2.0</a
       >
+      <Pup class="landing-pup" />
     </footer>
     <script>
       import "../scripts/docs";
       import "../scripts/parallax";
+      import "../scripts/pup";
     </script>
   </body>
 </html>

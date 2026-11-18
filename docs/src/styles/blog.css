@@ -22,6 +22,12 @@
     width: min(1120px, 100% - 48px);
     margin: 88px auto 0;
   }
+  .blog-footer > span {
+    margin-right: auto;
+  }
+  .blog-footer > a:last-child {
+    margin-left: 0;
+  }
 
   /* Shared by the index and the posts. */
   .post-tags {
@@ -642,6 +648,22 @@
   @media (min-width: 1251px) {
     .post .prose .wide {
       margin-inline: -40px;
+    }
+  }
+  /* Wide enough for the TOC in the right margin: the post is centred on the page. */
+  @media (min-width: 1384px) {
+    .post-shell {
+      grid-template-columns: minmax(0, 1fr) minmax(0, var(--post-width)) minmax(0, 1fr);
+      column-gap: 0;
+    }
+    .post-shell > .main-content {
+      grid-column: 2;
+    }
+    .post-aside {
+      grid-column: 3;
+      justify-self: start;
+      width: var(--post-toc);
+      margin-left: 64px;
     }
   }
   @media (max-width: 1250px) {
