@@ -13,5 +13,6 @@ createApp({
       h("div", { id: "luminance", class: "cell luminance" }),
       h("div", { id: "webkit", class: "cell webkit" }),
       h("div", { id: "pseudo", class: "cell pseudo" }),
+      h("div", { id: "edge", class: "cell edge" }),
     ]),
 }).mount();

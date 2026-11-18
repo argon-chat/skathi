@@ -112,3 +112,12 @@
   background: currentColor;
   mask: url("icons/square.svg") center / contain no-repeat;
 }
+
+.edge {
+  left: 100px;
+  top: 220px;
+  width: 400px;
+  height: 40px;
+  background: rgb(0, 0, 255);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 100px), transparent calc(100% - 100px));
+}

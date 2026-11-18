@@ -177,6 +177,17 @@ describe("gradient masks and tiling", () => {
     },
     T,
   );
+
+  test.skipIf(!SCREENSHOTS)(
+    "a stop at `calc(100% - 100px)` is a hard edge 100px from the end",
+    async () => {
+      const b = await box("#edge");
+      const s = await until((s) => blue(s.at(b.x + 290, b.y + 20)));
+      for (const x of [20, 200, 290]) expect(blue(s.at(b.x + x, b.y + 20)), said(s, b.x + x, b.y + 20)).toBe(true);
+      for (const x of [310, 390]) expect(white(s.at(b.x + x, b.y + 20)), said(s, b.x + x, b.y + 20)).toBe(true);
+    },
+    T,
+  );
 });
 
 describe("advisories", () => {

@@ -2656,6 +2656,26 @@ struct Stop {
 enum StopPosition {
     Fraction(f32),
     Pixels(f32),
+    /// `calc(fraction + pixels)`, e.g. `calc(100% - 20px)`.
+    Calc(f32, f32),
+}
+
+impl StopPosition {
+    fn of(fraction: f32, pixels: f32) -> Self {
+        match (fraction, pixels) {
+            (f, p) if p == 0.0 => StopPosition::Fraction(f),
+            (f, p) if f == 0.0 => StopPosition::Pixels(p),
+            (f, p) => StopPosition::Calc(f, p),
+        }
+    }
+
+    fn parts(self) -> (f32, f32) {
+        match self {
+            StopPosition::Fraction(f) => (f, 0.0),
+            StopPosition::Pixels(p) => (0.0, p),
+            StopPosition::Calc(f, p) => (f, p),
+        }
+    }
 }
 
 fn resolve_stop_positions(stops: &mut [Stop]) {
@@ -2678,19 +2698,17 @@ fn resolve_stop_positions(stops: &mut [Stop]) {
         if i > anchor + 1 {
             let gap = (i - anchor) as f32;
             let ends = match (stops[anchor].position, stops[i].position) {
-                (Some(StopPosition::Fraction(a)), Some(StopPosition::Fraction(b))) => {
-                    Some((a, b, true))
-                }
-                (Some(StopPosition::Pixels(a)), Some(StopPosition::Pixels(b))) => {
-                    Some((a, b, false))
-                }
+                (Some(StopPosition::Fraction(_)), Some(StopPosition::Pixels(_)))
+                | (Some(StopPosition::Pixels(_)), Some(StopPosition::Fraction(_))) => None,
+                (Some(a), Some(b)) => Some((a.parts(), b.parts())),
                 _ => None,
             };
             for (step, slot) in (anchor + 1..i).enumerate() {
                 let t = (step + 1) as f32 / gap;
                 stops[slot].position = Some(match ends {
-                    Some((a, b, true)) => StopPosition::Fraction(a + (b - a) * t),
-                    Some((a, b, false)) => StopPosition::Pixels(a + (b - a) * t),
+                    Some(((af, ap), (bf, bp))) => {
+                        StopPosition::of(af + (bf - af) * t, ap + (bp - ap) * t)
+                    }
                     None => StopPosition::Fraction(slot as f32 / (n - 1).max(1) as f32),
                 });
             }
@@ -2739,7 +2757,15 @@ fn stop_position_lp(v: &LengthPercentage) -> Option<StopPosition> {
     match v {
         DimensionPercentage::Percentage(p) => Some(StopPosition::Fraction(p.0)),
         DimensionPercentage::Dimension(d) => length_value_px(d).map(StopPosition::Pixels),
-        DimensionPercentage::Calc(c) => lp_calc_px(c).map(StopPosition::Pixels),
+        DimensionPercentage::Calc(c) => match calc_linear(c) {
+            Some((fraction, pixels)) if fraction.is_finite() && pixels.is_finite() => {
+                Some(StopPosition::of(fraction, pixels))
+            }
+            _ => {
+                calc_dropped();
+                None
+            }
+        },
     }
 }
 
@@ -2841,15 +2867,17 @@ fn with_resolved_stops(background: gpui::Background, stops: &[Stop]) -> gpui::Ba
         .map(|s| {
             let value = match s.position {
                 Some(StopPosition::Pixels(v)) | Some(StopPosition::Fraction(v)) => v,
-                None => 0.0,
+                Some(StopPosition::Calc(..)) | None => 0.0,
             };
             gpui::linear_color_stop(s.color, value)
         })
         .collect();
     let mut background = background.with_stops(&packed);
     for (i, stop) in stops.iter().enumerate().take(gpui::GRADIENT_STOPS) {
-        if matches!(stop.position, Some(StopPosition::Pixels(_))) {
-            background = background.stop_in_pixels(i);
+        match stop.position {
+            Some(StopPosition::Pixels(_)) => background = background.stop_in_pixels(i),
+            Some(StopPosition::Calc(f, p)) => background = background.stop_at_calc(i, f, p),
+            _ => {}
         }
     }
     background
