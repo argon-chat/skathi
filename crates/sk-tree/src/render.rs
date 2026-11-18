@@ -2770,6 +2770,7 @@ pub(crate) fn clip_replaced(
     }
     let mut clip = gpui::div().size_full().overflow_hidden().child(picture);
     radii.apply(clip.style());
+    clip.style().vn_corner_shapes = outer.vn_corner_shapes.clone();
     clip.into_any_element()
 }
 

@@ -16,6 +16,7 @@ pub mod catalog;
 pub mod container;
 #[cfg(test)]
 mod container_tests;
+mod corner_shape;
 mod dynamic_range;
 mod element;
 #[cfg(test)]
@@ -50,6 +51,7 @@ pub use animator::{
     script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock,
     ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming,
 };
+pub use corner_shape::to_css as corner_shape_css;
 pub use dynamic_range::{DynamicRangeLimit, CONSTRAINED_HEADROOM};
 pub use element::{Interaction, MatchDom};
 #[doc(hidden)]
@@ -288,29 +290,46 @@ pub struct PseudoBox {
 pub struct InheritedRadii {
     lengths: [Option<gpui::AbsoluteLength>; 4],
     relative: [Option<Option<gpui::VnCornerRadius>>; 4],
+    shapes: [Option<gpui::CornerShape>; 4],
 }
 
 impl InheritedRadii {
     pub fn of(style: &StyleRefinement) -> Self {
-        let (c, v) = (&style.corner_radii, &style.vn_corner_radii);
+        let (c, v, s) = (
+            &style.corner_radii,
+            &style.vn_corner_radii,
+            &style.vn_corner_shapes,
+        );
         Self {
             lengths: [c.top_left, c.top_right, c.bottom_right, c.bottom_left],
             relative: [v.top_left, v.top_right, v.bottom_right, v.bottom_left],
+            shapes: [s.top_left, s.top_right, s.bottom_right, s.bottom_left],
         }
     }
 
     fn fill(&self, style: &mut StyleRefinement, corners: u8) {
-        let (c, v) = (&mut style.corner_radii, &mut style.vn_corner_radii);
+        let (c, v, s) = (
+            &mut style.corner_radii,
+            &mut style.vn_corner_radii,
+            &mut style.vn_corner_shapes,
+        );
         let slots = [
-            (&mut c.top_left, &mut v.top_left),
-            (&mut c.top_right, &mut v.top_right),
-            (&mut c.bottom_right, &mut v.bottom_right),
-            (&mut c.bottom_left, &mut v.bottom_left),
+            (&mut c.top_left, &mut v.top_left, &mut s.top_left),
+            (&mut c.top_right, &mut v.top_right, &mut s.top_right),
+            (
+                &mut c.bottom_right,
+                &mut v.bottom_right,
+                &mut s.bottom_right,
+            ),
+            (&mut c.bottom_left, &mut v.bottom_left, &mut s.bottom_left),
         ];
-        for (i, (length, relative)) in slots.into_iter().enumerate() {
+        for (i, (length, relative, shape)) in slots.into_iter().enumerate() {
             if corners & (1 << i) != 0 {
                 *length = Some(self.lengths[i].unwrap_or(gpui::px(0.).into()));
                 *relative = Some(self.relative[i].flatten());
+            }
+            if corners & corner_shape::inherit_bit(i) != 0 {
+                *shape = Some(self.shapes[i].unwrap_or_default());
             }
         }
     }
@@ -6731,6 +6750,29 @@ mod tests {
             .expect("the implicit from-keyframe is no effect");
         assert!(!fade.from.is_some());
         assert!((fade.progress - 0.25).abs() < 1e-3);
+    }
+
+    #[test]
+    fn corner_shape_keyframes_move_the_half_corner() {
+        let engine = Engine::compile(
+            "@keyframes morph { from { corner-shape: bevel } to { corner-shape: square } } \
+             .box { animation: morph 1000ms linear }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
+        let half = a
+            .overlay(
+                1,
+                &StyleRefinement::default(),
+                now + Duration::from_millis(500),
+            )
+            .unwrap();
+        let mid = gpui::CornerShape::BEVEL.interpolate(gpui::CornerShape::SQUARE, 0.5);
+        assert_eq!(half.vn_corner_shapes.top_left, Some(mid));
+        assert_eq!(half.vn_corner_shapes.bottom_left, Some(mid));
     }
 
     #[test]

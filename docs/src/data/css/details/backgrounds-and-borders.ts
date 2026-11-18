@@ -651,7 +651,28 @@ defineProps<{ src: string; name: string }>();
     ],
   },
   "corner-shape": {
-    edgeCases: ["A declaration prints an advisory and changes nothing; the corners stay round."],
+    examples: [
+      {
+        title: "Give a tag a cut-corner look and morph it on hover",
+        lang: "css",
+        code: `.tag {
+  padding: 4px 12px;
+  border-radius: 8px;
+  corner-shape: bevel;
+  background: #2563eb;
+  transition: corner-shape 200ms ease;
+}
+.tag:hover {
+  corner-shape: squircle;
+}`,
+        note: "The border, background and overflow clip all follow the shape.",
+      },
+    ],
+    edgeCases: [
+      "Without a `border-radius` the corner has no area, so `corner-shape` changes nothing.",
+      "`square` looks like `border-radius: 0` but animates smoothly to and from the other shapes.",
+      "`corner-shape: inherit` takes the parent's shapes, as `border-radius: inherit` takes its radii.",
+    ],
   },
   "border-image": {
     examples: [

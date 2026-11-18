@@ -226,6 +226,10 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "text-shadow",
     "color-scheme",
     "aspect-ratio",
+    "corner-top-left-shape",
+    "corner-top-right-shape",
+    "corner-bottom-right-shape",
+    "corner-bottom-left-shape",
     "flex-direction",
     "flex-wrap",
     "cursor",
@@ -460,6 +464,19 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             Some(r) if r < 0.0 => format!("auto {} / 1", -r),
             _ => "auto".into(),
         },
+        "corner-top-left-shape"
+        | "corner-top-right-shape"
+        | "corner-bottom-right-shape"
+        | "corner-bottom-left-shape" => {
+            let s = &cs.base.vn_corner_shapes;
+            let shape = match name {
+                "corner-top-left-shape" => s.top_left,
+                "corner-top-right-shape" => s.top_right,
+                "corner-bottom-right-shape" => s.bottom_right,
+                _ => s.bottom_left,
+            };
+            sk_css::corner_shape_css(shape.unwrap_or_default())
+        }
         "flex-direction" => match cs.base.flex_direction.unwrap_or_default() {
             gpui::FlexDirection::Row => "row",
             gpui::FlexDirection::RowReverse => "row-reverse",

@@ -424,6 +424,7 @@ fn css_value(v: Animatable) -> Option<String> {
                 axis(p.y_fraction, p.y_offset)
             )
         }
+        Animatable::CornerShape(s) => crate::corner_shape::to_css(s),
         Animatable::TextShadows(shadows) => crate::text_shadow_css(shadows.list(), shadows.current),
         Animatable::Size(form) => form.length().to_string(),
         Animatable::Effect(_) | Animatable::EffectFade(..) => return None,

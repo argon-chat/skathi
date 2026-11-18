@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 10;
+export const SCHEMA = 11;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -96,7 +96,7 @@ function checkWgslBindings(code: string, file: string) {
 /// argument table for every effect, so the renderer binds these and nothing else.
 const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["buffer(0)", "GlobalParams", "constant, the 48-byte globals"],
-  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 224 bytes each"],
+  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 256 bytes each"],
   ["texture(0)", "sk_backdrop_input", "the blurred backdrop"],
   ["texture(2)", "sk_backdrop_original", "the render-target snapshot"],
   ["texture(7)", "sk_content", "the element's content"],

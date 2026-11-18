@@ -304,9 +304,18 @@ public struct SkCorners
     public float bottom_left;
 };
 
+/// `gpui::CornerShapes`, CSS `corner-shape`; see `sk_shaped_corner_piece`.
+public struct SkCornerShapes
+{
+    public uint top_left;
+    public uint top_right;
+    public uint bottom_right;
+    public uint bottom_left;
+};
+
 /// Keep in sync with `gpui::EffectQuad` (vendor/gpui/crates/gpui/src/scene.rs),
 /// `struct EffectQuad` in gpui_windows/src/effects.hlsl and in
-/// gpui_wgpu/src/shaders_effects.wgsl. 56 words / 224 bytes.
+/// gpui_wgpu/src/shaders_effects.wgsl. 64 words / 256 bytes.
 ///
 /// The parameter block is `float[]`, not `float4`s: a WGSL storage buffer
 /// aligns a `vec4` to 16 bytes, which would move it from offset 72 to 80.
@@ -318,6 +327,7 @@ public struct SkEffectQuad
     public SkBounds content_mask;
     /// The content mask's rounded corners; see `sk_content_mask_coverage`.
     public SkCorners content_mask_radii;
+    public SkCornerShapes content_mask_shapes;
     public SkCorners corner_radii;
     public float params[32];
     public float opacity;
@@ -326,6 +336,8 @@ public struct SkEffectQuad
     public float backdrop_blur_radius;
     public float scale;
     public uint flags;
+    /// The element's CSS `corner-shape`.
+    public SkCornerShapes corner_shapes;
 };
 
 [[vk::binding(0, 1)]]
@@ -682,18 +694,101 @@ public float sk_quad_sdf(float2 point, SkBounds bounds, SkCorners radii)
         - radius;
 }
 
+uint sk_pick_corner_shape(float2 center_to_point, SkCornerShapes shapes)
+{
+    uint top = center_to_point.x < 0.0 ? shapes.top_left : shapes.top_right;
+    uint bottom = center_to_point.x < 0.0 ? shapes.bottom_left : shapes.bottom_right;
+    return center_to_point.y < 0.0 ? top : bottom;
+}
+
+float sk_shape_pow(float x, float e)
+{
+    return x <= 0.0 ? 0.0 : exp2(e * log2(x));
+}
+
+/// How far `q` is outside the curve of a shaped corner of radius `r`, negative
+/// inside; `q` runs inward from the corner. Mirrors `shaped_corner_piece` in
+/// gpui_windows/src/shaders.hlsl.
+float sk_shaped_corner_piece(float2 q, float r, uint word, float2 inset)
+{
+    uint code = word & 0xfffu;
+    if (code == 0u || code == 0xfffu || r <= 0.0)
+    {
+        return -3.0e38;
+    }
+    float h = float(code - 1u) / 4094.0;
+    bool convex = h >= 0.5;
+    float2 a = float2(r, 0.0);
+    float2 b = float2(0.0, r);
+    if (inset.x > 0.0 || inset.y > 0.0)
+    {
+        float cp = saturate(2.41421356 * h - 0.70710678);
+        float d = clamp(inset.x - inset.y, -r, r);
+        if (h <= 0.5 && abs(d) >= r)
+        {
+            return -3.0e38;
+        }
+        float start = cp;
+        if (d != 0.0)
+        {
+            float s = sqrt(2.0 * r * r - d * d);
+            float bevel = (s - d) / (2.0 * s);
+            start = convex ? 1.0 - (1.0 - bevel) * 2.0 * (1.0 - cp) : bevel * 2.0 * cp;
+        }
+        float end = 2.0 * cp - start;
+        a = a + normalize(float2(1.0 - start, start)) * inset.y;
+        b = b + normalize(float2(end, 1.0 - end)) * inset.x;
+    }
+    float2 axes = float2(a.x - b.x, b.y - a.y);
+    if (axes.x <= 0.0 || axes.y <= 0.0)
+    {
+        return -3.0e38;
+    }
+    float n = -0.69314718 / min(log(convex ? h : 1.0 - h), -1e-4);
+    float2 uv = max(convex ? (float2(a.x, b.y) - q) / axes : (q - float2(b.x, a.y)) / axes, float2(0.0, 0.0));
+    float m = max(uv.x, uv.y);
+    if (m <= 0.0)
+    {
+        float depth = min(axes.x, axes.y);
+        return convex ? -depth : depth;
+    }
+    float l = m * sk_shape_pow(sk_shape_pow(uv.x / m, n) + sk_shape_pow(uv.y / m, n), 1.0 / n);
+    float2 slope = n > 1.0001
+        ? float2(sk_shape_pow(uv.x / l, n - 1.0), sk_shape_pow(uv.y / l, n - 1.0))
+        : float2(1.0, 1.0);
+    float distance = (l - 1.0) / max(length(slope / axes), 1e-6);
+    return convex ? distance : -distance;
+}
+
+/// `sk_quad_sdf` with CSS `corner-shape`; a round corner is `sk_quad_sdf`'s.
+public float sk_shaped_quad_sdf(float2 point, SkBounds bounds, SkCorners radii, SkCornerShapes shapes)
+{
+    float2 half_size = bounds.size / 2.0;
+    float2 center_to_point = point - (bounds.origin + half_size);
+    uint word = sk_pick_corner_shape(center_to_point, shapes);
+    if ((word & 0xfffu) == 0u)
+    {
+        return sk_quad_sdf(point, bounds, radii);
+    }
+    float radius = sk_pick_corner_radius(center_to_point, radii);
+    float2 corner_to_point = abs(center_to_point) - half_size;
+    float2 inset = float2(float((word >> 12) & 0x3ffu), float(word >> 22)) * 0.25;
+    return max(max(corner_to_point.x, corner_to_point.y),
+        sk_shaped_corner_piece(inset - corner_to_point, radius, word, inset));
+}
+
 /// The coverage of the quad's content mask, the rounded clip an `overflow`
 /// ancestor with a `border-radius` pushes. All-zero radii are the plain rect
 /// the clip distances already cut, so they return 1 before any SDF math.
 /// Mirrors `content_mask_coverage` in gpui_windows/src/shaders.hlsl.
-public float sk_content_mask_coverage(float2 position, SkBounds mask, SkCorners radii)
+public float sk_content_mask_coverage(float2 position, SkBounds mask, SkCorners radii, SkCornerShapes shapes)
 {
     if (radii.top_left == 0.0 && radii.top_right == 0.0 &&
         radii.bottom_right == 0.0 && radii.bottom_left == 0.0)
     {
         return 1.0;
     }
-    return saturate(0.5 - sk_quad_sdf(position, mask, radii));
+    return saturate(0.5 - sk_shaped_quad_sdf(position, mask, radii, shapes));
 }
 
 /// The DirectComposition swap chain is premultiplied; keep rgb <= a so the
@@ -731,6 +826,21 @@ public EffectInput sk_begin(uint id, float4 frag_position)
 
     float2 element_origin = q.bounds.origin + q.bleed;
     float2 element_size = max(q.bounds.size - 2.0 * q.bleed, float2(1.0, 1.0));
+    // A shaped corner dilated by `bleed` is no Minkowski sum, so the element's
+    // own shape is measured instead.
+    SkCornerShapes shapes = q.corner_shapes;
+    if (((shapes.top_left | shapes.top_right | shapes.bottom_right | shapes.bottom_left) & 0xfffu) != 0u)
+    {
+        SkBounds element;
+        element.origin = element_origin;
+        element.size = element_size;
+        SkCorners radii;
+        radii.top_left = max(q.corner_radii.top_left - q.bleed, 0.0);
+        radii.top_right = max(q.corner_radii.top_right - q.bleed, 0.0);
+        radii.bottom_right = max(q.corner_radii.bottom_right - q.bleed, 0.0);
+        radii.bottom_left = max(q.corner_radii.bottom_left - q.bleed, 0.0);
+        sd_element = sk_shaped_quad_sdf(position, element, radii, shapes);
+    }
 
     bool has_backdrop = (q.flags & SK_FLAG_NEEDS_BACKDROP) != 0u;
 
@@ -753,7 +863,7 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.time = q.time;
     i.scale = q.scale;
     i.opacity = q.opacity;
-    i.clip = sk_content_mask_coverage(position, q.content_mask, q.content_mask_radii);
+    i.clip = sk_content_mask_coverage(position, q.content_mask, q.content_mask_radii, q.content_mask_shapes);
     return i;
 }
 

@@ -39,6 +39,11 @@ pub enum TransitionProperty {
     BorderTopRightRadius,
     BorderBottomRightRadius,
     BorderBottomLeftRadius,
+    /// Interpolates the normalized half corner, not `K`.
+    CornerTopLeftShape,
+    CornerTopRightShape,
+    CornerBottomRightShape,
+    CornerBottomLeftShape,
     BorderTopWidth,
     BorderRightWidth,
     BorderBottomWidth,
@@ -63,7 +68,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 36;
+pub const ANIMATABLE_COUNT: usize = 40;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -96,6 +101,10 @@ impl TransitionProperty {
             BorderTopRightRadius,
             BorderBottomRightRadius,
             BorderBottomLeftRadius,
+            CornerTopLeftShape,
+            CornerTopRightShape,
+            CornerBottomRightShape,
+            CornerBottomLeftShape,
             BorderTopWidth,
             BorderRightWidth,
             BorderBottomWidth,
@@ -154,6 +163,10 @@ impl TransitionProperty {
             BorderTopRightRadius => "border-top-right-radius",
             BorderBottomRightRadius => "border-bottom-right-radius",
             BorderBottomLeftRadius => "border-bottom-left-radius",
+            CornerTopLeftShape => "corner-top-left-shape",
+            CornerTopRightShape => "corner-top-right-shape",
+            CornerBottomRightShape => "corner-bottom-right-shape",
+            CornerBottomLeftShape => "corner-bottom-left-shape",
             BorderTopWidth => "border-top-width",
             BorderRightWidth => "border-right-width",
             BorderBottomWidth => "border-bottom-width",
@@ -602,6 +615,28 @@ fn expand(id: &PropertyId) -> Expansion {
         "border-top-right-radius" => one(BorderTopRightRadius),
         "border-bottom-right-radius" => one(BorderBottomRightRadius),
         "border-bottom-left-radius" => one(BorderBottomLeftRadius),
+        "corner-shape" => Expansion::Props(vec![
+            CornerTopLeftShape,
+            CornerTopRightShape,
+            CornerBottomRightShape,
+            CornerBottomLeftShape,
+        ]),
+        "corner-top-left-shape" | "corner-start-start-shape" => one(CornerTopLeftShape),
+        "corner-top-right-shape" | "corner-start-end-shape" => one(CornerTopRightShape),
+        "corner-bottom-right-shape" | "corner-end-end-shape" => one(CornerBottomRightShape),
+        "corner-bottom-left-shape" | "corner-end-start-shape" => one(CornerBottomLeftShape),
+        "corner-top-shape" | "corner-block-start-shape" => {
+            Expansion::Props(vec![CornerTopLeftShape, CornerTopRightShape])
+        }
+        "corner-bottom-shape" | "corner-block-end-shape" => {
+            Expansion::Props(vec![CornerBottomLeftShape, CornerBottomRightShape])
+        }
+        "corner-left-shape" | "corner-inline-start-shape" => {
+            Expansion::Props(vec![CornerTopLeftShape, CornerBottomLeftShape])
+        }
+        "corner-right-shape" | "corner-inline-end-shape" => {
+            Expansion::Props(vec![CornerTopRightShape, CornerBottomRightShape])
+        }
         "gap" => Expansion::Props(vec![RowGap, ColumnGap]),
         "row-gap" => one(RowGap),
         "column-gap" => one(ColumnGap),

@@ -44,7 +44,7 @@ export type Category = (typeof categories)[number];
 /** Section prose from the coverage page that applies to the whole category. Inline code is Markdown. */
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Transitions and animations":
-    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
+    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `corner-shape` and its corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
   "SVG properties in CSS": "These apply to inline `<svg>`.",
   "Media features": "A query that uses an unsupported feature drops its whole `@media` block, with an advisory.",
   "Vendor prefixes":
@@ -1460,8 +1460,44 @@ const backgrounds = section("Backgrounds and borders", [
       "-webkit-border-radius",
     ],
   }),
-  prop("corner-shape", NO, "Sets the shape of rounded corners, such as bevel, scoop or squircle.", {
+  sh("corner-shape", PART, "Sets the shape of rounded corners, such as bevel, scoop or squircle.", {
+    since: "0.4.0",
+    notes: [
+      "All six keywords and `superellipse()` with a number, `infinity` or `-infinity` are supported, on the shorthand, the corner longhands and the side shorthands.",
+      "Shapes interpolate along the curve's half corner, as browsers do.",
+      "The `corner` and `corner-top-left`-style shorthands that set radius and shape together are not supported, as in browsers.",
+    ],
+    limitations: [
+      "Corners stay circular: an elliptical radius is drawn as a circle of the smaller radius, capped at half the box's shorter side. The cap also keeps opposite concave corners from overlapping.",
+      "A blurred `box-shadow` around a shaped corner is approximated. It is exact for straight edges and round corners.",
+      "Between `scoop` and `bevel` (`superellipse()` from -1 to 0), the inner border edge and the overflow clip approximate the curve with a superellipse.",
+      "Dashed borders space their dashes along an estimated length of a shaped corner.",
+      "`<img>`, `<video>` and other replaced content are clipped with the same shape at the padding box's radius.",
+      "A `--shading` effect that draws its element's content clips that content to round corners under a shaped `overflow` ancestor.",
+      "The flow-relative longhands are mapped left-to-right, top-to-bottom.",
+    ],
+    animates: "interpolated",
     related: ["border-radius"],
+    aliases: [
+      "corner-top-left-shape",
+      "corner-top-right-shape",
+      "corner-bottom-right-shape",
+      "corner-bottom-left-shape",
+      "corner-start-start-shape",
+      "corner-start-end-shape",
+      "corner-end-start-shape",
+      "corner-end-end-shape",
+      "corner-top-shape",
+      "corner-right-shape",
+      "corner-bottom-shape",
+      "corner-left-shape",
+      "corner-block-start-shape",
+      "corner-block-end-shape",
+      "corner-inline-start-shape",
+      "corner-inline-end-shape",
+      "superellipse()",
+      "squircle",
+    ],
   }),
   sh("border-image", NO, "Draws an image or gradient in place of an element's border.", {
     workaround: "For a gradient border, use `background` with `mask` (see Effects), or a wrapper with padding.",

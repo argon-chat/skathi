@@ -89,6 +89,7 @@ pub struct DropShadow {
 
 /// Which corners' `border-*-radius` is `inherit`, in cascade order. `border-radius` does not
 /// inherit, so `inherit` asks for the PARENT's computed radius, which the mapper cannot know.
+/// The high four bits are the corners' `corner-*-shape`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RadiusInherit {
     pub declared: u8,
@@ -5853,6 +5854,11 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if crate::corner_shape::is_property(name.0.as_ref()) =>
+            {
+                apply_corner_shape(name.0.as_ref(), p, r, x, diagnostics);
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
                     "window-drag" | "app-region" | "-webkit-app-region"
@@ -6562,6 +6568,35 @@ fn apply_unparsed(
         return true;
     }
     false
+}
+
+fn apply_corner_shape(
+    name: &str,
+    p: &Property,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    use crate::corner_shape::{inherit_bit, parse, Declared};
+    match parse(name, &value_text(p).unwrap_or_default()) {
+        Ok(Declared::Inherit(bits)) => x.radius_inherit.write(bits, true),
+        Ok(Declared::Shapes(shapes)) => {
+            let s = &mut r.vn_corner_shapes;
+            let slots = [
+                &mut s.top_left,
+                &mut s.top_right,
+                &mut s.bottom_right,
+                &mut s.bottom_left,
+            ];
+            for (i, (slot, shape)) in slots.into_iter().zip(shapes).enumerate() {
+                if let Some(shape) = shape {
+                    *slot = Some(shape);
+                    x.radius_inherit.write(inherit_bit(i), false);
+                }
+            }
+        }
+        Err(why) => once(diagnostics, format!("`{name}` was dropped: {why}")),
+    }
 }
 
 fn presentation_name(p: &Property) -> Option<&'static str> {

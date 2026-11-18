@@ -31,6 +31,7 @@ enum Animatable {
     Transform(TransformSpec),
     Overflow(gpui::Overflow),
     ObjectPosition(gpui::ObjectPosition),
+    CornerShape(gpui::CornerShape),
     TextShadows(TextShadows),
     /// A sizing length with a `calc-size()` or an intrinsic keyword on one side.
     Size(SizeForm),
@@ -259,6 +260,10 @@ fn slot_length(v: Option<Length>) -> Slot {
     }
 }
 
+fn slot_shape(v: Option<gpui::CornerShape>) -> Slot {
+    v.map_or(Slot::Missing, |s| Slot::Value(Animatable::CornerShape(s)))
+}
+
 fn slot_color(v: Option<Hsla>) -> Slot {
     v.map_or(Slot::Missing, |c| Slot::Value(Animatable::Color(c)))
 }
@@ -335,6 +340,10 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         BorderTopRightRadius => slot_absolute(r.corner_radii.top_right),
         BorderBottomRightRadius => slot_absolute(r.corner_radii.bottom_right),
         BorderBottomLeftRadius => slot_absolute(r.corner_radii.bottom_left),
+        CornerTopLeftShape => slot_shape(r.vn_corner_shapes.top_left),
+        CornerTopRightShape => slot_shape(r.vn_corner_shapes.top_right),
+        CornerBottomRightShape => slot_shape(r.vn_corner_shapes.bottom_right),
+        CornerBottomLeftShape => slot_shape(r.vn_corner_shapes.bottom_left),
         BorderTopWidth => slot_absolute(r.border_widths.top),
         BorderRightWidth => slot_absolute(r.border_widths.right),
         BorderBottomWidth => slot_absolute(r.border_widths.bottom),
@@ -498,6 +507,20 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         BorderTopRightRadius => r.corner_radii.top_right = to_absolute(v),
         BorderBottomRightRadius => r.corner_radii.bottom_right = to_absolute(v),
         BorderBottomLeftRadius => r.corner_radii.bottom_left = to_absolute(v),
+        CornerTopLeftShape
+        | CornerTopRightShape
+        | CornerBottomRightShape
+        | CornerBottomLeftShape => {
+            if let Animatable::CornerShape(shape) = v {
+                let s = &mut r.vn_corner_shapes;
+                *match p {
+                    CornerTopLeftShape => &mut s.top_left,
+                    CornerTopRightShape => &mut s.top_right,
+                    CornerBottomRightShape => &mut s.bottom_right,
+                    _ => &mut s.bottom_left,
+                } = Some(shape);
+            }
+        }
         BorderTopWidth => r.border_widths.top = to_absolute(v),
         BorderRightWidth => r.border_widths.right = to_absolute(v),
         BorderBottomWidth => r.border_widths.bottom = to_absolute(v),
@@ -585,6 +608,10 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         BorderTopRightRadius => r.corner_radii.top_right = None,
         BorderBottomRightRadius => r.corner_radii.bottom_right = None,
         BorderBottomLeftRadius => r.corner_radii.bottom_left = None,
+        CornerTopLeftShape => r.vn_corner_shapes.top_left = None,
+        CornerTopRightShape => r.vn_corner_shapes.top_right = None,
+        CornerBottomRightShape => r.vn_corner_shapes.bottom_right = None,
+        CornerBottomLeftShape => r.vn_corner_shapes.bottom_left = None,
         BorderTopWidth => r.border_widths.top = None,
         BorderRightWidth => r.border_widths.right = None,
         BorderBottomWidth => r.border_widths.bottom = None,
@@ -639,6 +666,14 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         BorderTopRightRadius => dst.corner_radii.top_right = src.corner_radii.top_right,
         BorderBottomRightRadius => dst.corner_radii.bottom_right = src.corner_radii.bottom_right,
         BorderBottomLeftRadius => dst.corner_radii.bottom_left = src.corner_radii.bottom_left,
+        CornerTopLeftShape => dst.vn_corner_shapes.top_left = src.vn_corner_shapes.top_left,
+        CornerTopRightShape => dst.vn_corner_shapes.top_right = src.vn_corner_shapes.top_right,
+        CornerBottomRightShape => {
+            dst.vn_corner_shapes.bottom_right = src.vn_corner_shapes.bottom_right
+        }
+        CornerBottomLeftShape => {
+            dst.vn_corner_shapes.bottom_left = src.vn_corner_shapes.bottom_left
+        }
         BorderTopWidth => dst.border_widths.top = src.border_widths.top,
         BorderRightWidth => dst.border_widths.right = src.border_widths.right,
         BorderBottomWidth => dst.border_widths.bottom = src.border_widths.bottom,
@@ -709,6 +744,10 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
         Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         ObjectPosition => Some(Animatable::ObjectPosition(gpui::ObjectPosition::default())),
+        CornerTopLeftShape
+        | CornerTopRightShape
+        | CornerBottomRightShape
+        | CornerBottomLeftShape => Some(Animatable::CornerShape(gpui::CornerShape::ROUND)),
         Shading => Some(Animatable::Effect(EffectSpec::NONE)),
         TextShadow => TextShadows::new(&[], gpui::black()).map(Animatable::TextShadows),
         _ => None,
@@ -732,6 +771,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (Effect(_), Effect(_)) | (EffectFade(..), Effect(_)) => Some((a, b)),
         (Transform(_), Transform(_)) => Some((a, b)),
         (ObjectPosition(_), ObjectPosition(_)) => Some((a, b)),
+        (CornerShape(_), CornerShape(_)) => Some((a, b)),
         (TextShadows(_), TextShadows(_)) => Some((a, b)),
         (Size(x), Size(y)) if x.basis.is_none() || y.basis.is_none() || x.basis == y.basis => {
             Some((a, b))
@@ -774,6 +814,7 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             y_fraction: f32::interpolate(a.y_fraction, b.y_fraction, t),
             y_offset: gpui::Pixels::interpolate(a.y_offset, b.y_offset, t),
         }),
+        (CornerShape(a), CornerShape(b)) => CornerShape(a.interpolate(b, t)),
         (TextShadows(a), TextShadows(b)) => TextShadows(lerp_text_shadows(a, b, t)),
         (Size(a), Size(b)) => Size(SizeForm::lerp(a, b, t)),
         _ => to,

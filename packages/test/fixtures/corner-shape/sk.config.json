@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS `corner-shape`: each keyword, superellipse(), mixed corners, overflow clipping, spread shadows, and a paused animation halfway from scoop to round.",
+
+  "name": "sk-test-corner-shape",
+
+  "window": {
+    "title": "Skathi — corner-shape (fixture)",
+    "width": 840,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
