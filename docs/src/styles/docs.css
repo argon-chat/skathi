@@ -1,4 +1,4 @@
-@layer reset, theme, layout, content, components, responsive;
+@layer reset, theme, layout, content, components, responsive, site, landing, blog;
 
 @layer reset {
   *,
@@ -330,20 +330,24 @@
     padding: 16px 20px 18px;
     border-top: 1px solid var(--border);
   }
-  .agent-link {
+  .sidebar-links {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .sidebar-link {
     display: flex;
     align-items: center;
     gap: 9px;
     font-size: var(--fs-sm);
-    margin-bottom: 20px;
   }
-  .agent-link svg:first-child {
+  .sidebar-link svg:first-child {
     color: var(--accent);
   }
-  .agent-link svg:last-child {
+  .sidebar-link svg:last-child {
     margin-left: auto;
   }
-  .agent-link:hover {
+  .sidebar-link:hover {
     color: var(--accent);
   }
   .sidebar-meta {
@@ -1034,7 +1038,7 @@
   .prose li > p {
     margin-bottom: 10px;
   }
-  .prose blockquote {
+  .prose :is(blockquote, .callout) {
     --tone: var(--accent);
     position: relative;
     margin: 26px 0;
@@ -1045,13 +1049,16 @@
     font-size: var(--fs-lg);
     line-height: 1.75;
   }
-  .prose blockquote[data-kind="tip"] {
+  .prose :is(blockquote, .callout)[data-kind="tip"] {
     --tone: var(--ok);
   }
-  .prose blockquote[data-kind="warning"] {
+  .prose :is(blockquote, .callout)[data-kind="warning"] {
     --tone: var(--partial);
   }
-  .prose blockquote::before {
+  .prose :is(blockquote, .callout)[data-kind="new"] {
+    --tone: var(--hold);
+  }
+  .prose :is(blockquote, .callout)::before {
     content: "";
     position: absolute;
     top: 18px;
@@ -1062,17 +1069,23 @@
     mask: var(--callout-icon) center / contain no-repeat;
     --callout-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 11v6M12 7.5v.01'/%3E%3C/svg%3E");
   }
-  .prose blockquote[data-kind="warning"]::before {
+  .prose :is(blockquote, .callout)[data-kind="warning"]::before {
     --callout-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5 2.8 19.5h18.4L12 3.5Z'/%3E%3Cpath d='M12 10v4.5M12 17.2v.01'/%3E%3C/svg%3E");
   }
-  .prose blockquote[data-kind="tip"]::before {
+  .prose :is(blockquote, .callout)[data-kind="tip"]::before {
     --callout-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3Z'/%3E%3C/svg%3E");
   }
-  .prose blockquote > p:first-child > strong:first-child {
+  .prose :is(blockquote, .callout)[data-kind="new"]::before {
+    --callout-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z'/%3E%3C/svg%3E");
+  }
+  .prose :is(blockquote, .callout) > p:first-child > strong:first-child {
     color: var(--tone);
   }
-  .prose blockquote p:last-child {
+  .prose :is(blockquote, .callout) :is(p, ul, ol):last-child {
     margin-bottom: 0;
+  }
+  .prose .callout-title {
+    margin-bottom: 6px;
   }
   .prose hr {
     border: 0;
@@ -1132,6 +1145,9 @@
     min-width: 600px;
     table-layout: fixed;
     overflow-wrap: break-word;
+  }
+  .prose .wide td code {
+    white-space: normal;
   }
   .prose td sup {
     margin-left: 2px;
@@ -1736,8 +1752,11 @@
     .prose pre {
       padding: 16px;
     }
-    .prose blockquote {
-      padding: 15px 17px;
+    .prose :is(blockquote, .callout) {
+      padding: 15px 17px 15px 46px;
+    }
+    .prose :is(blockquote, .callout)::before {
+      left: 16px;
     }
     .pagination span {
       font-size: var(--fs-xs);

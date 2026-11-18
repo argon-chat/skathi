@@ -1,0 +1,52 @@
+---
+import "../styles/docs.css";
+import "../styles/blog.css";
+import Head from "../components/Head.astro";
+import Parallax from "../components/Parallax.astro";
+import SiteNav from "../components/SiteNav.astro";
+import { blogFeed } from "../lib/blog";
+import { repository } from "../lib/docs";
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  type: "website" | "article";
+  structuredData: Record<string, unknown>;
+  blog: "index" | "post";
+  noindex?: boolean;
+}
+
+const { title, description, path, type, structuredData, blog, noindex = false } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <Head
+      title={title}
+      description={description}
+      canonical={new URL(path, Astro.site)}
+      type={type}
+      structuredData={structuredData}
+      noindex={noindex}
+    />
+  </head>
+  <body class="blog" transition:animate="none">
+    <a href="#main-content" class="skip-link">Skip to content</a>
+    <Parallax docs />
+    <SiteNav blog={blog} />
+    <slot />
+    <footer class="site-footer blog-footer">
+      <a href="/">Skathi</a><span>Native by nature.</span><a href={blogFeed}>RSS</a><a
+        href={`${repository}/blob/master/LICENSE-MIT`}
+        target="_blank"
+        rel="noreferrer">MIT / Apache-2.0</a
+      >
+    </footer>
+    <script>
+      import "../scripts/docs";
+      import "../scripts/parallax";
+    </script>
+  </body>
+</html>

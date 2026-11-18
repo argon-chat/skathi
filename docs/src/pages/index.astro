@@ -8,12 +8,13 @@ import wolf from "../../../logos/logo_single.svg?url";
 import shadingGlass from "../assets/shading-glass.png";
 import shadingNebula from "../assets/shading-nebula.png";
 import slang from "../lib/slang";
+import Command from "../components/Command.astro";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import Parallax from "../components/Parallax.astro";
 import Pup from "../components/Pup.astro";
-import ThemeSwitch from "../components/ThemeSwitch.astro";
-import { docsHome, repository, version } from "../lib/docs";
+import SiteNav from "../components/SiteNav.astro";
+import { repository, version } from "../lib/docs";
 import { fetchStats } from "../lib/stats";
 
 const command = "bun create skathi my-blazing-fast-app";
@@ -278,20 +279,7 @@ const structuredData = {
   <body class="landing" transition:animate="none">
     <a href="#main-content" class="skip-link">Skip to content</a>
     <Parallax />
-    <header class="landing-nav">
-      <a class="landing-mark" href="/" aria-label="Skathi home">
-        <img src={wolf} width="34" height="34" alt="" /><span>Skathi</span>
-      </a>
-      <nav class="landing-links" aria-label="Site">
-        <a href={docsHome}>Docs</a>
-        <a href="/quick-start/" class="wide-only">Quick start</a>
-        <a href="/css/" class="wide-only">CSS</a>
-        <a href={repository} target="_blank" rel="noreferrer" aria-label="Skathi on GitHub"
-          ><Icon name="github" size={19} /></a
-        >
-        <ThemeSwitch />
-      </nav>
-    </header>
+    <SiteNav />
 
     <main id="main-content" tabindex="-1">
       <section class="hero">
@@ -305,13 +293,7 @@ const structuredData = {
         </p>
         <h1>Desktop apps from Vue, <span class="candy-text">without a browser.</span></h1>
         <p class="hero-lead">{description}</p>
-        <div class="command">
-          <span class="command-prompt" aria-hidden="true">$</span>
-          <code>{command}</code>
-          <button type="button" class="command-copy" data-copy={command} aria-label="Copy the command">
-            <Icon name="copy" size={15} /><span data-copy-label>Copy</span>
-          </button>
-        </div>
+        <Command command={command} />
         <div class="hero-actions">
           <a class="button button-primary" href="/quick-start/">Get started<Icon name="arrow" size={15} /></a>
           <a class="button" href={repository} target="_blank" rel="noreferrer"
@@ -785,13 +767,13 @@ const structuredData = {
             </div>
             <p>
               Set a surface to <code>Rgba16Float</code> and it takes FP16 frames in linear extended sRGB, from the CPU or
-              the GPU. SDR content comes out exactly as on the 8-bit path. On an SDR screen highlights above SDR white
-              clip.
+              the GPU. SDR content comes out exactly as on the 8-bit path. On an SDR screen highlights above SDR white clip.
             </p>
             <p>
-              On an HDR display the window switches to HDR output while such a surface is visible, and highlights reach the
-              screen's headroom, capped per element by <code>dynamic-range-limit</code>. The rest of the window stays at SDR
-              white. A player that sizes its output to <code>content_headroom()</code> gets the right peak on both.
+              On an HDR display the window switches to HDR output while such a surface is visible, and highlights reach
+              the screen's headroom, capped per element by <code>dynamic-range-limit</code>. The rest of the window
+              stays at SDR white. A player that sizes its output to <code>content_headroom()</code> gets the right peak on
+              both.
             </p>
             <p class="section-note">
               New in 0.4. GPU frames on Windows and macOS, CPU frames on Linux. HDR output on Windows and macOS; Linux
@@ -842,13 +824,7 @@ const structuredData = {
       <section class="cta">
         <img src={wolf} width="96" height="96" alt="" class="cta-wolf" />
         <h2>Your next desktop app starts here.</h2>
-        <div class="command">
-          <span class="command-prompt" aria-hidden="true">$</span>
-          <code>{command}</code>
-          <button type="button" class="command-copy" data-copy={command} aria-label="Copy the command">
-            <Icon name="copy" size={15} /><span data-copy-label>Copy</span>
-          </button>
-        </div>
+        <Command command={command} />
       </section>
     </main>
 

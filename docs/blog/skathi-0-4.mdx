@@ -1,0 +1,460 @@
+---
+title: Skathi 0.4
+description: Rust modules the app imports like any other, native frames in HDR, surround and spatial Web Audio, container queries and scroll snapping, and the three things to change when you upgrade.
+date: 2026-11-18
+tags: [release, embedding, css, audio]
+draft: true
+release:
+  version: "0.4.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.4.0 && bun add -d @skathi-native/cli@^0.4.0
+    - label: Rust program
+      command: cargo add skathi@0.4
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Change from "../src/components/blog/Change.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+import Figure from "../src/components/blog/Figure.astro";
+import Migration from "../src/components/blog/Migration.astro";
+import Demo from "../src/components/Demo.astro";
+import Sample from "../src/components/Sample.astro";
+import rulesShot from "../src/assets/devtools/elements-rules.png";
+
+Skathi 0.4 is where the Rust side and the UI side meet. A Rust program hands the app typed modules instead of JSON strings, and its own renderer's frames instead of a second window glued on top. The rest of the release fills in the platform: surround and spatial sound, the CSS layout features of the last few browser years, and a main window that opens where the config says.
+
+<FeatureGrid label="What is new in 0.4">
+  <Feature icon="plug" title="Native modules" href="#native-modules" tone="pink">`#[skathi::module]` and `#[skathi::data]`, with values read straight from the engine.</Feature>
+  <Feature icon="play" title="HDR native frames" href="#native-frames-now-in-hdr" tone="blue">`<sk-surface>` from Direct3D, Metal or the CPU, in half floats, with frame feedback.</Feature>
+  <Feature icon="volume" title="Surround and spatial audio" href="#surround-and-spatial-audio" tone="lilac">5.1 and 7.1 graphs, and panners as Windows spatial audio objects.</Feature>
+  <Feature icon="layers" title="CSS for layout" href="#css-for-layout" tone="yellow">Container queries, scroll snapping, `calc-size()`, `@function`, `light-dark()`.</Feature>
+  <Feature icon="sparkle" title="CSS for shape and light" href="#css-for-shape-and-light" tone="pink">`corner-shape`, `superellipse()` and `dynamic-range-limit`.</Feature>
+  <Feature icon="braces" title="Forms and motion" href="#forms-and-motion-in-vue-and-svelte" tone="blue">Native checkboxes and radios, FLIP moves, CSS-animated transitions.</Feature>
+  <Feature icon="monitor" title="Window placement" href="#the-main-window" tone="lilac">`x`, `y` and `monitor` in `sk.config.json`, with no flash at a default spot.</Feature>
+  <Feature icon="package" title="Leaner packages" href="#packaging-and-crates" tone="yellow">Frameworks as the app's own dependencies, and crates released on their own.</Feature>
+</FeatureGrid>
+
+## Native modules
+
+An embedder used to talk to its app through `appHost.call`, with names in strings and every value through JSON. In 0.4 the program gives the app a **native module**. Mark an `impl` block `#[skathi::module]` and the types that cross `#[skathi::data]`, register it on the builder, and the app imports the methods from `native:<name>`.
+
+```rust title="src/main.rs"
+#[skathi::data]
+#[derive(Clone)]
+pub struct Note {
+    pub id: u64,
+    pub title: String,
+}
+
+#[derive(Default)]
+pub struct Notes(std::sync::Mutex<Vec<Note>>);
+
+#[skathi::module]
+impl Notes {
+    pub fn count(&self) -> u32 {
+        self.0.lock().unwrap().len() as u32
+    }
+
+    #[task]
+    pub fn search(&self, text: String) -> Vec<Note> {
+        let notes = self.0.lock().unwrap();
+        let found = notes.iter().filter(|n| n.title.contains(&text));
+        found.cloned().collect()
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let ui = skathi::Builder::new()
+        .payload_file("app/dist/release/.sk/app.skpk")
+        .module("notes", Notes::default())
+        .spawn()?;
+    ui.wait();
+    Ok(())
+}
+```
+
+```vue title="app/src/NoteSearch.vue"
+<script setup lang="ts">
+import { ref, watch } from "vue";
+import { count, search, type Note } from "native:notes";
+
+const total = count();
+const query = ref("");
+const found = ref<Note[]>([]);
+
+watch(query, async (text) => {
+  found.value = await search(text);
+});
+</script>
+
+<template>
+  <input v-model="query" placeholder="Search notes" />
+  <p>{{ found.length }} of {{ total }}</p>
+  <p v-for="note in found" :key="note.id">{{ note.title }}</p>
+</template>
+```
+
+Three kinds of export, one rule each:
+
+- A `pub fn` taking `&self` runs inside the call, on the UI thread, and returns its value.
+- The same with `#[task]` runs on a worker thread and returns a promise.
+- `events(name = Type)` on the attribute declares what `Handle::emit_to` sends from any thread; the app's `on` receives it.
+
+`bunx sk types --exe <your exe>` asks the exe for its modules and writes the app's `.d.ts`, so a renamed field fails the type check instead of a user. Under `sk dev`, or as its own exe, the import still resolves: `available` is `false` and each function throws an error that says the app is not embedded. The [native modules guide](/embedding/native-modules/) walks through a first module.
+
+### No JSON in between
+
+Arguments are read straight from the engine's values, and results are built into engine objects in one call. A `#[skathi::data]` struct converts field by field, with its field names made into engine strings once. A `&str` or a `&[u8]` is read in place for the length of a synchronous call.
+
+<div class="wide leaders">
+
+| Call                                               | As JSON text | 0.4          |
+| -------------------------------------------------- | ------------ | ------------ |
+| `add(a: f64, b: f64) -> f64`                       | 0.51 µs      | **0.06 µs**  |
+| a 32-character `String` argument                   | 0.62 µs      | **0.08 µs**  |
+| a 1 MiB `Uint8Array` as a `Vec<u8>` argument       | 36 ms        | **0.015 ms** |
+| a 1 MiB `Vec<u8>` result                           | 13.5 ms      | **0.13 ms**  |
+| 1000 structs as an argument<sup>1</sup>            | 0.72 ms      | **0.31 ms**  |
+| an event, from `emit_to` to the handler, in bursts | 1.2 µs       | **0.6 µs**   |
+
+</div>
+
+<div class="table-notes">
+
+A release build on Windows, a Ryzen 9 9950X, medians of five runs. More rows in [Values and types](/embedding/native-modules/values/).
+
+1. `{ id: u32, name: String, tags: Vec<String>, score: Option<f64> }` with `#[skathi::data]`.
+
+</div>
+
+A task's result no longer waits for the next frame either. The app's thread picks it up between frames, as a browser runs a task, also while the window is idle or hidden. A task that does nothing went from 6.06 ms to 0.08 ms per round trip: the median, in a debug build, with an idle window.
+
+The same calls next to Electron and Tauri, from the [comparison page](/comparison/), where each framework builds one small app on one machine:
+
+<div class="wide leaders">
+
+| Native call          | Skathi                  | Electron                      | Tauri 2                      |
+| -------------------- | ----------------------- | ----------------------------- | ---------------------------- |
+| Where the call runs  | **in the same process** | in the main process, over IPC | in the app process, over IPC |
+| `add(a, b)`, a call  | **0.06 µs**             | 109 µs                        | 932 µs                       |
+| 1 MiB to native code | **&lt;0.001 ms**<sup>1</sup> | 1.14 ms<sup>2</sup>      | 8.9 ms<sup>2</sup>           |
+
+</div>
+
+<div class="table-notes">
+
+1. A `Uint8Array` read in place as a `&[u8]`; as a `Vec<u8>`, copied once, 0.014 ms.
+2. Electron sends a structured clone of a `Uint8Array`, Tauri an `ArrayBuffer` as a raw body.
+
+</div>
+
+<Aside kind="note" title="appHost.call still works">
+
+`appHost.call` and `appHost.on` in the app, and `Builder::function` and `Handle::emit` in Rust, are deprecated. They keep working, and `appHost` advises the move once. [Migrating from appHost.call](/embedding/native-modules/migrating/) shows each call next to its module form.
+
+</Aside>
+
+## Native frames, now in HDR
+
+`<sk-surface name="player">` shows what native code draws: a video player built on libmpv, a game engine's viewport, a renderer in another process. It is an ordinary element. `object-fit`, `border-radius`, clipping, transforms, opacity and z-order apply, and the app's Vue or Svelte controls sit on top of it.
+
+Your program presents frames by name, from the thread that renders. A present stores the frame and returns: nothing waits for the UI, and a frame no one can see costs no upload. On Windows and macOS a frame never leaves the GPU.
+
+| Platform   | Frames                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Windows    | Direct3D 11 textures; Direct3D 12 resources with a fence; shared handles from another device or process; Vulkan through a shared texture |
+| macOS      | Metal textures; IOSurfaces; CVPixelBuffers from VideoToolbox, AVFoundation or ScreenCaptureKit, BGRA or 4:2:0                |
+| Everywhere | CPU frames in BGRA or BGRX; on Linux, CPU frames only                                                                         |
+
+### Half floats, and HDR output
+
+A producer that renders in linear light can hand over half floats. Set the surface's format once, before presenting:
+
+```rust
+use skathi::SurfaceFormat;
+
+let surface = skathi::surface("player");
+surface.set_format(SurfaceFormat::Rgba16Float);
+```
+
+The values are linear extended sRGB, what Windows calls scRGB: 1.0 is SDR white, and highlights go above it. Every path takes them: `present_rgba16f` from the CPU, `R16G16B16A16_FLOAT` textures and shared handles on Direct3D, `RGBA16Float` on Metal, `'RGhA'` IOSurfaces and CVPixelBuffers.
+
+On an SDR display each frame maps into the window's 8-bit sRGB with the exact sRGB curve, so SDR content looks the same as on the 8-bit path. Skathi's tests put all 256 sRGB code values through half floats and get every one back unchanged, on Direct3D 11, Direct3D 12 and Metal.
+
+On an HDR display the window switches to HDR output while it shows a half-float surface that may be brighter than SDR white. Windows gets a half-float swap chain in scRGB, on Direct3D 12 and Direct3D 11; macOS gets an `RGBA16Float` layer with extended dynamic range. Two seconds after the last such element is gone, the window switches back. The rest of the page looks as it did: in the renderer's tests every pixel of the HDR page is within one 8-bit code value of the standard one.
+
+A window that shows no HDR content never switches. It keeps the standard path, bit for bit, and skips the HDR swap chain, which takes about three times the memory.
+
+CSS sets how bright each element may get, and the producer reads the result as `content_headroom()`, the peak to tone-map to:
+
+```css title="player.css"
+.thumbnail sk-surface {
+  dynamic-range-limit: standard;
+}
+.player sk-surface {
+  dynamic-range-limit: no-limit;
+}
+```
+
+### The display, and every frame's fate
+
+Each element showing a surface fires `surfacedisplaychange` with its screen's `headroom`, `potentialHeadroom`, `sdrWhiteNits`, `hdr`, `refreshRate` and `variableRefresh`. The producer reads the same from `info().display`, with the last vblank and the refresh period.
+
+`on_frame` reports exactly one event per presented frame, in order: `Presented` with the refresh it first showed on, or `Dropped` as `Superseded`, `Hidden`, `DeviceLost` or `Closed`. Callbacks run off the UI thread, and an idle window costs nothing. In Skathi's surface example, a 24 fps clip on a 165 Hz screen shows each frame `Presented` and held for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, which is the cadence a player keeps its clock against.
+
+[Native frames](/embedding/native-frames/) covers the API, [GPU frames on Windows](/embedding/gpu-frames/) and [on macOS](/embedding/gpu-frames-macos/) the producers.
+
+## Surround and spatial audio
+
+Web Audio graphs are multichannel now and follow the spec's channel rules: `channelCount`, `channelCountMode` and `channelInterpretation` on every node, speaker up- and down-mixing for mono, stereo, quad and 5.1, discrete mixing otherwise, up to 32 channels. `destination.maxChannelCount` is the output device's channel count. Raise `destination.channelCount` to it, and a 5.1 or 7.1 graph plays on a 5.1 or 7.1 device as such.
+
+```ts title="intro.ts"
+const audio = new AudioContext();
+const track = await audio.decodeAudioData(await (await fetch("assets/sounds/intro-5.1.flac")).arrayBuffer());
+// 6 on a 5.1 device; a stereo device keeps 2 and the track is mixed down.
+audio.destination.channelCount = Math.min(track.numberOfChannels, audio.destination.maxChannelCount);
+const source = audio.createBufferSource();
+source.buffer = track;
+source.connect(audio.destination);
+source.start();
+```
+
+### Spatial audio on Windows
+
+Set a panner's `panningModel` to `"spatial"` and Skathi hands it to the system's spatial sound renderer, Windows Sonic, Dolby Atmos or DTS, as a dynamic audio object. The renderer gets the signal before panning, its position relative to the listener and its distance and cone gain, and does the 3D rendering itself. The rest of the graph plays in the renderer's static bed, up to 7.1.4. `audioContext.spatialAudio` says what happened:
+
+<Sample src="blog/SpatialPing" focus="panner,status" />
+
+The showcase template's Audio page has a new Spatial card that circles a quiet pulse around the listener. On Dolby Atmos for Headphones it reports `dolby-atmos-headphones · 1/64 objects · 12 output channels`.
+
+The renderer lives in a new crate, `sk-audio`, behind the `spatial-audio` Cargo feature of `skathi`. It is on by default and costs about 0.1 MB.
+
+<Aside kind="warning" title="Windows only, with a fallback">
+
+Without a spatial sound format on the device (Sound settings › Spatial sound), on macOS and Linux, and when the renderer fails, `"spatial"` panners render with HRTF, and `spatialAudio.reason` says why. The renderer's objects are limited, often 15 to 32 and shared with other apps; panners past the limit render with HRTF too.
+
+</Aside>
+
+## CSS for layout
+
+Everything in this section is new in 0.4. Each feature has its page, with its limits, in the [CSS reference](/css/).
+
+- **Container queries.** `container-type`, `container-name` and the `container` shorthand; `@container` with `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`, range syntax and `and`, `or`, `not`; style queries on custom properties; and the `cqw`, `cqh`, `cqi`, `cqb`, `cqmin` and `cqmax` units. A query Skathi cannot answer, such as `scroll-state()`, drops its block, and `sk check` reports it as `SK4004`.
+- **Scroll snapping.** `scroll-snap-type`, `scroll-snap-align`, `scroll-snap-stop`, `scroll-padding` and `scroll-margin`, on every way a box scrolls: wheel, touchpad and touch, the scrollbar, `scrollTo()`, `scrollIntoView()` and the keyboard.
+- **Keyboard scrolling.** Arrows, Page Up, Page Down, Space, Home and End scroll the focused element's nearest scroll container, after the app's key handlers, gliding unless reduced motion is on.
+- **`calc-size()` and `interpolate-size`.** `height: auto` transitions, and `calc-size(auto, size * 0.4)` is 40 % of the content's height.
+- **`@function`.** Custom functions with typed parameters and defaults. A `--name(…)` call is substituted like `var()`.
+- **`light-dark()` and `color-scheme`.** They resolve per element and follow `appWindow.theme` and the OS theme live. Checkboxes, radios, range, colour and file inputs and the select popup draw dark under a dark scheme.
+- **The smaller ones.** `flex-flow`; `aspect-ratio: auto` and `auto <ratio>`; `inline-size`, `block-size` and their `min-` and `max-` forms; the cursors `all-scroll`, `cell`, `no-drop`, `zoom-out` and `none`; `contain: size`, `inline-size` and `strict`; and the media features `prefers-reduced-transparency`, `device-width` and `device-height`.
+
+```css title="styles.css"
+.profile {
+  container: profile / inline-size;
+}
+@container profile (width >= 420px) {
+  .profile .card {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+  }
+}
+.card h2 {
+  font-size: clamp(16px, 6cqi, 28px);
+}
+
+.carousel {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.slide {
+  flex: 0 0 80%;
+  scroll-snap-align: center;
+}
+
+.excerpt {
+  height: calc-size(auto, size * 0.4);
+  overflow: hidden;
+  transition: height 300ms ease;
+}
+.excerpt.open {
+  height: auto;
+}
+```
+
+The showcase template has a new Layout page with these at work: a profile card that relayouts by its own width, sticky letter headers in a scrolling list, a snapping carousel with a `scroll-snap-stop` toggle, and `aspect-ratio` transitions.
+
+## CSS for shape and light
+
+**`corner-shape` and `superellipse()`.** `round`, `squircle`, `bevel`, `scoop`, `notch`, `square` and `superellipse()`, as a shorthand of one to four values, with the physical, logical and per-side longhands. The shapes interpolate in transitions, `@keyframes` and `element.animate()`. The background, borders, outline, `box-shadow`, `backdrop-filter`, `--shading`, `overflow` and `clip-path` clips and hit testing all follow the shape, and an `<img>` or `<video>` clips its picture to it.
+
+```css title="tag.css"
+.tag {
+  padding: 4px 12px;
+  border-radius: 8px;
+  corner-shape: bevel;
+  background: #2563eb;
+  transition: corner-shape 200ms ease;
+}
+.tag:hover {
+  corner-shape: squircle;
+}
+```
+
+**`dynamic-range-limit`**, with `standard`, `constrained` and `no-limit`, and `dynamic-range-limit-mix()`, cap how bright an element's HDR content gets, as in the [surface section](#native-frames-now-in-hdr). The media features `dynamic-range` and `video-dynamic-range` match `high` while the window's display is in HDR and the window can draw it.
+
+<Aside kind="new" title="Already there before 0.4">
+
+Masks, `text-shadow`, the colour functions (`hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `color-mix()` and relative colours) and view transitions have been in Skathi since 0.2, and `position: sticky` since 0.3. The showcase's Styles page now puts them next to the new features: `corner-shape` swatches, `text-shadow`, `hsl()` against `oklch()` ramps, `color-mix()`, `display-p3` and relative colours, a `light-dark()` panel and an `@function` palette.
+
+</Aside>
+
+## Forms and motion in Vue and Svelte
+
+- **Checkboxes and radios are native controls.** They used to render as text fields. A click, Space or a label toggles them, radios group by name and move with the arrow keys, and they draw in `accent-color` or drop their look under `appearance: none`. Vue's `v-model` on checkboxes (a boolean, an array, a `Set`, `true-value` and `false-value`) and radios works, and so do Svelte's `bind:checked`, `bind:indeterminate` and `bind:group`.
+
+<Sample src="blog/Export" focus="checks,radios" />
+
+- **`:checked` follows the selected `<option>`**, so Svelte's `bind:value` on a `<select>` works, single and multiple.
+- **`<Transition>` waits for CSS animations** as well as transitions. `<TransitionGroup>` plays its moves with the `-move` class, and Svelte's `animate:flip` works.
+- **Errors go where Vue sends them.** What a template handler throws reaches `app.config.errorHandler` and `onErrorCaptured`. A throwing listener is reported as uncaught, as in a browser, and the other listeners still run.
+
+[Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/) are new pages that list what works, what has limits and what does not, each with its `sk check` code.
+
+## The main window
+
+The main window opens where `sk.config.json` says, on the monitor it names, with no flash at a default spot first:
+
+```json title="sk.config.json"
+{
+  "window": { "width": 420, "height": 640, "x": 24, "y": 24, "monitor": "cursor" }
+}
+```
+
+- `x` and `y` are CSS px from the top-left corner of the monitor's work area, the part the taskbar or Dock leaves free. An axis without a value is centred.
+- `monitor` is `"primary"`, the default, `"cursor"` for the monitor under the pointer, or an index from `0`.
+- The window is kept inside the work area, and shrunk to fit it.
+
+Two window fixes: moving or resizing the main window in the same turn a pop-out closes is no longer lost, and `window.y` and `<SkWindow>` bounds land exactly, where they were 4 px high at 100 %.
+
+## Devtools and sk check
+
+The devtools have a docs section of their own: [eight pages](/devtools/overview/), each walking through a task with screenshots of the inspector.
+
+<Figure
+  src={rulesShot}
+  alt="The Elements tab with button.btn.primary selected in the tree. The styles pane lists five rules: .btn.primary:hover with a hover badge, .btn.primary, .btn:active, .btn:hover and .btn, each with its specificity and source order; overridden declarations such as the .btn background are dimmed"
+  caption="The Count up button of the Showcase template, picked in the app. .btn.primary overrides the background and colour that .btn sets."
+/>
+
+- **Elements search** matches selectors as well as text: `.card`, `#id` and the rest.
+- **The Elements tree** follows changes made outside the frame pump, such as a click on a counter, without a manual refresh.
+- **The Styles pane** strikes through what the cascade drops, longhand by longhand: a later `padding-left` no longer kills all of an earlier `padding`. It weighs `!important`, pseudo-elements and state rules the way the cascade does.
+- **Performance data** counts container relayouts, and memory stats count the new half-float atlas.
+
+`sk check` has a new range of codes, `SK5xxx`, for Vue and Svelte features Skathi does not support or runs differently. Errors: Vapor mode (`SK5001`), custom elements (`SK5002`), `v-html`, bound `innerHTML` and `{@html}` (`SK5003`) and `<style module>` (`SK5004`). Warnings: web and hash router history (`SK5008`), SSR and hydration (`SK5009`), `v-model.lazy` (`SK5010`), style preprocessors (`SK5011`) and TSX or JSX under `sk dev` (`SK5012`). A dependency that uses any of them gets one `SK5013`. `sk dev`, `sk build` and `sk publish` print them with the CSS warnings.
+
+## Faster to start, quiet when idle
+
+<div class="leaders">
+
+| Measured                                              | Before   | After       |
+| ----------------------------------------------------- | -------- | ----------- |
+| Start to first frame, minimal embedder<sup>1</sup>    | 491 ms   | **311 ms**  |
+| Start to first frame, every default feature           | 587 ms   | **370 ms**  |
+| CPU when idle, % of one core<sup>2</sup>              | 1.09     | **0**       |
+| Windows release host<sup>3</sup>                      | 99.2 MB  | **87.2 MB** |
+
+</div>
+
+<div class="table-notes">
+
+Each row was measured before and after its change, on Windows.
+
+1. From process creation to the second `requestAnimationFrame` after mount, for an app with a heading, a counter and 1,000 rows; median of 7 interleaved runs. The Direct3D devices are created on a thread while JavaScriptCore boots.
+2. The bench app, idle and after scrolling, median of 3 runs. The frame clock now waits for the next timer or task, or for something to draw.
+3. The standard host, with `icu-root`. Most crates are built at `opt-level = "s"`, the hot ones at 3, and linked with `rust-lld` and `/OPT:SAFEICF`; frame time, layout, paint and start stayed within noise.
+
+</div>
+
+Published hosts now link only ICU's root locale. `sk build` and `sk publish` put the rest beside the exe as `icu.skpk`, about 12 MB, which the app reads at start. An app that shows no locale-formatted text can leave it out with `"intl": "invariant"` in [sk.config.json](/sk-config/#intl). `sk dev` and macOS apps keep every locale.
+
+## Packaging and crates
+
+- **Frameworks are your app's dependencies.** `@skathi-native/runtime` no longer depends on Vue, pinia or vue-router; `vue` ^3.5 and `svelte` ^5.57.3 are optional peers. The CLI compiles `.vue` files with the app's own `vue/compiler-sfc`, and loads `tailwindcss` ^3.4, an optional peer, only when a `tailwind.config.*` exists. A Svelte app installs nothing of Vue. This one needs a change; see [Breaking changes](#breaking-changes).
+- **Crates released on their own.** `skathi-gpui` and `redjs` now release from their own repositories, on version lines of their own, as `skathi-taffy` already did. A Skathi release publishes only Skathi's crates and requires versions of the three that crates.io already has.
+- **Smaller embedders.** `lottie`, `video`, `hotkeys`, `webview` and `spatial-audio` are new Cargo features of `skathi`, all on by default. Turned off, their crates leave the build, and the app gets a truthful answer: `<video>` is an empty box that warns once. A minimal embedder is 101.5 MB with every default feature, 84.9 MB with only `prod`, and 74.0 MB with `icu-root` and `no-devtools` added. [Features and size](/embedding/features/) lists each feature's cost.
+
+## Breaking changes
+
+<Migration title="Upgrading from 0.3" summary="Three changes to make when you upgrade from 0.3.">
+<Change title="Vue, Svelte and Tailwind are your app's own dependencies" who="Every app">
+
+An app created before 0.4 got Vue's runtime, vue-router and pinia from `@skathi-native/runtime`, and `tailwindcss` from the CLI. Add what it uses:
+
+```bash
+bun add vue@^3.5           # a Vue app
+bun add vue-router pinia   # if it imports them
+bun add -d tailwindcss@3   # if it has a tailwind.config.*
+```
+
+`sk dev`, `sk build`, `sk publish` and `sk check` stop with the command to run when a Vue app has no `vue`, or a `tailwind.config.*` has no `tailwindcss` 3 beside it.
+
+</Change>
+<Change title="Svelte apps extend the Svelte tsconfig" who="Svelte apps">
+
+A Svelte app's `tsconfig.json` now extends `@skathi-native/runtime/tsconfig.svelte.json`, which types the runtime without Vue. Change its `extends` from `@skathi-native/runtime/tsconfig.app.json` to that.
+
+</Change>
+<Change title="Compiled effects are schema 11" who="Apps with effects">
+
+`corner-shape` grew the data each effect draws with, so the effect schema went from 10 to 11 and the built-in effects were regenerated. A 0.4 host refuses an `effects.json` built for 0.3, with `effects.json is schema 10 but this build understands 11`. Rebuild the app, or an embedder's payload, with `sk` 0.4.
+
+</Change>
+</Migration>
+
+## Known limits
+
+<Aside kind="warning" title="What 0.4 does not do yet">
+
+- **Spatial audio is Windows-only.** Elsewhere, and without a spatial sound format, `"spatial"` panners render with HRTF.
+- **Only gain follows a spatial panner.** An audio object leaves the graph at its panner. `GainNode`s between the panner and the destination still scale it, but filters, analysers and stream destinations after it do not hear it. Put effects before the panner.
+- **No HDR on Linux.** Linux windows stay SDR, `<sk-surface>` takes CPU frames there, and the display reports nothing yet.
+- **`"monitor": "cursor"` is read on Windows only.** macOS and Linux open on the primary monitor, with an advisory. Under Wayland the compositor places the window.
+- **`corner-shape` is partial.** The `corner` and `corner-*-style` shorthands are not supported, as in browsers.
+
+</Aside>
+
+## Fixes worth a line
+
+- Scroll snap positions, `scrollIntoView()`, `clientWidth` and `clientHeight` measure from the padding box, as in browsers. A box with a border no longer snaps off by its width.
+- A `calc-size()` flex item applies its calculation once: `calc-size(auto, size * 0.4)` over 100px is 40px, not 16 to 20.
+- Gradient stops at a `calc()` of a percentage and a length, such as `calc(100% - 200px)`, keep their place, in `background-image` and `mask-image`.
+- A declared underline or line-through paints without a declared thickness.
+- A Lottie or sticker referenced by URL, through an import, `<lottie src>` or `new URL(…, import.meta.url)`, is packed into the payload.
+- `cloneNode()` keeps scoped-style ids, so a scoped `.list-move` class plays.
+- WebGPU: `destroy()` of an unmapped buffer works, and native errors are readable.
+- `sk` refuses a Bun older than the app's `engines.bun` and names the binary to upgrade.
+- For embedders: an event emitted just before a reload no longer reaches the new page, and a function returning `()` is typed `void`.
+
+## Start from a template
+
+The templates moved with the release. `bun create skathi` offers the showcase, a minimal Vue app, a Svelte app, a music player and a weather app, and each now depends on its framework itself.
+
+<Demo
+  id="player"
+  caption="The player template, in Svelte 5, with its spectrum, aurora and glass drawn in shaders."
+  label="The player template: a radial spectrum round the cover, recolouring with each track, and hearts when a song is liked"
+  width={1280}
+  height={820}
+/>
+
+```bash
+bun create skathi my-app --template player
+```
+
+Run the commands at the top of this post, make the changes in [Breaking changes](#breaking-changes), and run `bunx sk check` to see what else in your app or its dependencies Skathi reports.

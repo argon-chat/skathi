@@ -1,0 +1,47 @@
+---
+import Command from "../Command.astro";
+import { formatDate, isoDate } from "../../lib/blog";
+
+interface Props {
+  version: string;
+  date: Date;
+  platforms?: string | undefined;
+  install: { label: string; command: string }[];
+}
+
+const { version, date, platforms, install } = Astro.props;
+---
+
+<section class="release" aria-label={`Skathi ${version} at a glance`}>
+  <div class="release-head">
+    <p class="release-version">
+      <span>Skathi</span><strong class="candy-text">{version}</strong>
+    </p>
+    <dl class="release-facts">
+      <div>
+        <dt>Released</dt>
+        <dd><time datetime={isoDate(date)}>{formatDate(date)}</time></dd>
+      </div>
+      {
+        platforms && (
+          <div>
+            <dt>Runs on</dt>
+            <dd>{platforms}</dd>
+          </div>
+        )
+      }
+    </dl>
+  </div>
+  <dl class="release-install">
+    {
+      install.map((row) => (
+        <div>
+          <dt>{row.label}</dt>
+          <dd>
+            <Command command={row.command} />
+          </dd>
+        </div>
+      ))
+    }
+  </dl>
+</section>

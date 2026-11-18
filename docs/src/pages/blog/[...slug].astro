@@ -1,0 +1,158 @@
+---
+import type { GetStaticPaths } from "astro";
+import { Image } from "astro:assets";
+import { render } from "astro:content";
+import wolf from "../../../../logos/logo_single.svg?url";
+import Demo from "../../components/Demo.astro";
+import Icon from "../../components/Icon.astro";
+import ReleaseSummary from "../../components/blog/ReleaseSummary.astro";
+import BlogLayout from "../../layouts/BlogLayout.astro";
+import {
+  blogFeed,
+  blogHome,
+  blogTitle,
+  formatDate,
+  getPosts,
+  isoDate,
+  postUrl,
+  readingMinutes,
+  type Post,
+} from "../../lib/blog";
+
+export const getStaticPaths = (async () => {
+  const posts = await getPosts();
+  return posts.map((post, index) => ({
+    params: { slug: post.id },
+    props: { post, newer: posts[index - 1], older: posts[index + 1] },
+  }));
+}) satisfies GetStaticPaths;
+
+interface Props {
+  post: Post;
+  newer: Post | undefined;
+  older: Post | undefined;
+}
+
+const { post, newer, older } = Astro.props;
+const { title, description, date, author, tags, draft, release, hero } = post.data;
+const { Content, headings } = await render(post);
+const toc = headings.filter((heading) => heading.depth === 2);
+const path = postUrl(post.id);
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: title,
+  description,
+  datePublished: isoDate(date),
+  author: { "@type": "Organization", name: author },
+  url: new URL(path, Astro.site).href,
+  inLanguage: "en",
+  keywords: tags.join(", "),
+  isPartOf: { "@type": "Blog", name: blogTitle, url: new URL(blogHome, Astro.site).href },
+};
+---
+
+<BlogLayout
+  title={`${title} · Skathi`}
+  description={description}
+  path={path}
+  type="article"
+  structuredData={structuredData}
+  blog="post"
+  noindex={draft}
+>
+  <div class="post-shell">
+    <main id="main-content" class="main-content post" tabindex="-1">
+      <a class="post-back" href={blogHome}><Icon name="chevron" size={13} />All posts</a>
+      <header class="post-header">
+        <h1>{title}</h1>
+        <p class="post-deck">{description}</p>
+        <p class="post-byline">
+          <img src={wolf} width="28" height="28" alt="" />
+          <span class="post-author">{author}</span>
+          <time datetime={isoDate(date)}>{formatDate(date)}</time>
+          <span>{readingMinutes(post.body ?? "")} min read</span>
+          {draft && <span class="post-draft">Draft</span>}
+        </p>
+        {
+          tags.length > 0 && (
+            <ul class="post-tags" aria-label="Tags">
+              {tags.map((tag) => (
+                <li>{tag}</li>
+              ))}
+            </ul>
+          )
+        }
+      </header>
+      {release && <ReleaseSummary {...release} date={date} />}
+      {
+        hero?.image && (
+          <figure class="post-hero">
+            <Image
+              src={hero.image}
+              alt={hero.alt}
+              widths={[Math.round(hero.image.width / 2), hero.image.width]}
+              sizes="(max-width: 860px) 100vw, 800px"
+              format="webp"
+              loading="eager"
+            />
+            {hero.caption && <figcaption>{hero.caption}</figcaption>}
+          </figure>
+        )
+      }
+      {hero?.video && <Demo id={hero.video} caption={hero.caption ?? ""} label={hero.alt} />}
+      <article class="prose post-prose">
+        <Content />
+      </article>
+      <footer class="post-footer">
+        <nav class="pagination" aria-label="Previous and next posts">
+          {
+            older ? (
+              <a href={postUrl(older.id)} class="previous-page">
+                <small>Previous post</small>
+                <span>
+                  <Icon name="chevron" size={14} />
+                  {older.data.title}
+                </span>
+              </a>
+            ) : (
+              <span />
+            )
+          }
+          {
+            newer && (
+              <a href={postUrl(newer.id)} class="next-page">
+                <small>Next post</small>
+                <span>
+                  {newer.data.title}
+                  <Icon name="chevron" size={14} />
+                </span>
+              </a>
+            )
+          }
+        </nav>
+        <p class="post-footer-links">
+          <a href={blogHome}><Icon name="chevron" size={13} />All posts</a>
+          <a href={blogFeed}><Icon name="rss" size={15} />Subscribe with RSS</a>
+        </p>
+      </footer>
+    </main>
+    {
+      toc.length > 1 && (
+        <aside class="right-sidebar post-aside" aria-label="On this page">
+          <nav class="toc">
+            <p class="toc-title">On this page</p>
+            <a href="#main-content" class="toc-link is-active" data-toc-overview>
+              Overview
+            </a>
+            {toc.map((heading) => (
+              <a href={`#${heading.slug}`} class="toc-link" data-toc-id={heading.slug}>
+                {heading.text}
+              </a>
+            ))}
+          </nav>
+        </aside>
+      )
+    }
+  </div>
+</BlogLayout>

@@ -1,0 +1,35 @@
+---
+import type { ImageMetadata } from "astro";
+import { Image } from "astro:assets";
+
+interface Props {
+  /** An imported image from src/assets, or a path under public/. */
+  src: ImageMetadata | string;
+  alt: string;
+  caption?: string;
+  width?: number;
+  height?: number;
+}
+
+const { src, alt, caption, width, height } = Astro.props;
+---
+
+<figure class="demo shot">
+  <div class="demo-frame" data-rail-bend>
+    {
+      typeof src === "string" ? (
+        <img src={src} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
+      ) : (
+        <Image
+          src={src}
+          alt={alt}
+          widths={[Math.round(src.width / 2), src.width]}
+          sizes="(max-width: 860px) 100vw, 800px"
+          format="webp"
+          quality={90}
+        />
+      )
+    }
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

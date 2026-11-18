@@ -2,6 +2,7 @@
 import { Font } from "astro:assets";
 import { ClientRouter } from "astro:transitions";
 import favicon from "../../../logos/logo_single.svg?url";
+import { blogFeed, blogTitle } from "../lib/blog";
 
 interface Props {
   title: string;
@@ -31,6 +32,7 @@ const image = new URL("/social.png", Astro.site);
 <link rel="canonical" href={canonical} />
 <link rel="sitemap" href="/sitemap-index.xml" />
 <link rel="alternate" type="text/plain" title="Skathi documentation for agents" href="/llms.txt" />
+<link rel="alternate" type="application/rss+xml" title={blogTitle} href={blogFeed} />
 {markdownUrl && <link rel="alternate" type="text/markdown" title={`${title} as Markdown`} href={markdownUrl} />}
 <meta property="og:type" content={type} />
 <meta property="og:site_name" content="Skathi" />

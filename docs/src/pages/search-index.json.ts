@@ -1,5 +1,6 @@
-import type { APIRoute } from "astro";
+import type { APIRoute, MarkdownHeading } from "astro";
 import { render } from "astro:content";
+import { getPosts, postUrl } from "../lib/blog";
 import { configPage, configSections, optionId, type ConfigOption } from "../lib/config";
 import { getDocs, pageUrl, sections, statusLabels } from "../lib/docs";
 import { entryUrl, kindLabel, ordered, plain, statuses } from "../lib/reference";
@@ -13,7 +14,8 @@ const groupOf: Readonly<Record<string, string>> = {
   "web-platform": "Web platform",
   css: "CSS",
 };
-const groups = [...sections, apiGroup, "Web platform", "CSS", "sk.config.json"];
+const blogGroup = "Blog";
+const groups = [...sections, apiGroup, "Web platform", "CSS", "sk.config.json", blogGroup];
 
 /** Markdown prose as plain text: no code blocks, MDX imports or tags, link targets or emphasis marks. */
 function plainText(markdown: string): string {
@@ -71,32 +73,86 @@ function splitSections(markdown: string): Section[] {
   return out;
 }
 
+interface Page {
+  group: number;
+  title: string;
+  crumb: string;
+  url: string;
+  description: string;
+  status: string;
+  body: string;
+  headings: MarkdownHeading[];
+}
+
+/** A record for the page's lead and one per heading down to level four. */
+function pageRecords(page: Page): SearchRecord[] {
+  const records: SearchRecord[] = [];
+  const rendered = page.headings.filter((heading) => heading.depth > 1);
+  let next = 0;
+  const parents: string[] = [];
+  for (const section of splitSections(page.body)) {
+    const text = plainText(section.lines.join("\n"));
+    if (section.depth === 1) {
+      records.push([page.group, page.title, page.crumb, page.url, page.description, text, "", "", page.status]);
+      continue;
+    }
+    const index = rendered.findIndex((heading, i) => i >= next && heading.depth === section.depth);
+    const match = rendered[index];
+    if (!match) continue;
+    next = index + 1;
+    parents[section.depth] = match.text;
+    parents.length = section.depth + 1;
+    const trail = [page.title, ...parents.slice(2, section.depth)].filter(Boolean);
+    if (section.depth > 4) continue;
+    records.push([
+      page.group,
+      match.text,
+      trail.join(" › "),
+      `${page.url}#${match.slug}`,
+      "",
+      text,
+      "",
+      "",
+      page.status,
+    ]);
+  }
+  return records;
+}
+
 async function docRecords(): Promise<SearchRecord[]> {
   const records: SearchRecord[] = [];
   for (const page of await getDocs()) {
-    const { headings } = await render(page);
-    const url = pageUrl(page.id);
-    const group = sections.indexOf(page.data.section);
-    const status = page.data.status ? statusLabels[page.data.status] : "";
-    const rendered = headings.filter((heading) => heading.depth > 1);
-    let next = 0;
-    const parents: string[] = [];
-    for (const section of splitSections(page.body ?? "")) {
-      const text = plainText(section.lines.join("\n"));
-      if (section.depth === 1) {
-        records.push([group, page.data.title, page.data.section, url, page.data.description, text, "", "", status]);
-        continue;
-      }
-      const index = rendered.findIndex((heading, i) => i >= next && heading.depth === section.depth);
-      const match = rendered[index];
-      if (!match) continue;
-      next = index + 1;
-      parents[section.depth] = match.text;
-      parents.length = section.depth + 1;
-      const trail = [page.data.title, ...parents.slice(2, section.depth)].filter(Boolean);
-      if (section.depth > 4) continue;
-      records.push([group, match.text, trail.join(" › "), `${url}#${match.slug}`, "", text, "", "", status]);
-    }
+    records.push(
+      ...pageRecords({
+        group: sections.indexOf(page.data.section),
+        title: page.data.title,
+        crumb: page.data.section,
+        url: pageUrl(page.id),
+        description: page.data.description,
+        status: page.data.status ? statusLabels[page.data.status] : "",
+        body: page.body ?? "",
+        headings: (await render(page)).headings,
+      }),
+    );
+  }
+  return records;
+}
+
+async function postRecords(): Promise<SearchRecord[]> {
+  const records: SearchRecord[] = [];
+  for (const post of await getPosts()) {
+    records.push(
+      ...pageRecords({
+        group: groups.indexOf(blogGroup),
+        title: post.data.title,
+        crumb: blogGroup,
+        url: postUrl(post.id),
+        description: post.data.description,
+        status: post.data.draft ? "Draft" : "",
+        body: post.body ?? "",
+        headings: (await render(post)).headings,
+      }),
+    );
   }
   return records;
 }
@@ -148,6 +204,9 @@ function configRecords(): SearchRecord[] {
 }
 
 export const GET: APIRoute = async () => {
-  const data: SearchData = { groups, records: [...(await docRecords()), ...referenceRecords(), ...configRecords()] };
+  const data: SearchData = {
+    groups,
+    records: [...(await docRecords()), ...referenceRecords(), ...configRecords(), ...(await postRecords())],
+  };
   return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 };

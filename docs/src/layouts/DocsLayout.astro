@@ -10,6 +10,7 @@ import Parallax from "../components/Parallax.astro";
 import Pup from "../components/Pup.astro";
 import Search from "../components/Search.vue";
 import ThemeSwitch from "../components/ThemeSwitch.astro";
+import { blogHome } from "../lib/blog";
 import { docsHome, getDocs, markdownUrl, pageUrl, repository, sections, statusLabels, version } from "../lib/docs";
 
 interface Link {
@@ -160,9 +161,13 @@ const structuredData = {
       </nav>
       <div class="sidebar-pup"><Pup /></div>
       <div class="sidebar-bottom">
-        <a class="agent-link" href="/llms.txt"
-          ><Icon name="terminal" size={17} /><span>Built for your agent, too</span><Icon name="arrow" size={14} /></a
-        >
+        <nav class="sidebar-links" aria-label="More from Skathi">
+          <a class="sidebar-link" href={blogHome}
+            ><Icon name="rss" size={17} /><span>The Skathi blog</span><Icon name="arrow" size={14} /></a
+          ><a class="sidebar-link" href="/llms.txt"
+            ><Icon name="terminal" size={17} /><span>Built for your agent, too</span><Icon name="arrow" size={14} /></a
+          >
+        </nav>
         <div class="sidebar-meta">
           <a href={repository} aria-label="Skathi on GitHub" target="_blank" rel="noreferrer"
             ><Icon name="github" size={19} /></a

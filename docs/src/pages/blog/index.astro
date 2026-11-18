@@ -1,0 +1,154 @@
+---
+import { Image } from "astro:assets";
+import { render } from "astro:content";
+import Icon from "../../components/Icon.astro";
+import BlogLayout from "../../layouts/BlogLayout.astro";
+import {
+  blogDescription,
+  blogFeed,
+  blogHome,
+  blogTitle,
+  formatDate,
+  getPosts,
+  isoDate,
+  postUrl,
+  readingMinutes,
+} from "../../lib/blog";
+import { docsHome } from "../../lib/docs";
+
+const posts = await getPosts();
+const [featured, ...earlier] = posts;
+const inside = featured ? (await render(featured)).headings.filter((heading) => heading.depth === 2) : [];
+const canonical = new URL(blogHome, Astro.site);
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "Blog",
+  name: blogTitle,
+  description: blogDescription,
+  url: canonical.href,
+  inLanguage: "en",
+  blogPost: posts.map((post) => ({
+    "@type": "BlogPosting",
+    headline: post.data.title,
+    datePublished: isoDate(post.data.date),
+    url: new URL(postUrl(post.id), Astro.site).href,
+  })),
+};
+---
+
+<BlogLayout
+  title={`${blogTitle} · Skathi`}
+  description={blogDescription}
+  path={blogHome}
+  type="website"
+  structuredData={structuredData}
+  blog="index"
+>
+  <main id="main-content" class="main-content blog-index" tabindex="-1">
+    <header class="blog-intro">
+      <h1>The Skathi blog. <span class="candy-text">Every release, in detail.</span></h1>
+      <p>{blogDescription}</p>
+      <p class="blog-intro-links">
+        <a href={blogFeed}><Icon name="rss" size={15} />RSS feed</a>
+        <a href={docsHome}><Icon name="book" size={15} />Documentation</a>
+      </p>
+    </header>
+
+    {
+      featured ? (
+        <article class="post-featured" aria-labelledby="featured-title">
+          <div class="post-featured-main">
+            {featured.data.release && (
+              <p class="post-featured-version" aria-hidden="true">
+                <span>Skathi</span>
+                <strong class="candy-text">{featured.data.release.version}</strong>
+              </p>
+            )}
+            <p class="post-meta">
+              {featured.data.draft && <span class="post-draft">Draft</span>}
+              <time datetime={isoDate(featured.data.date)}>{formatDate(featured.data.date)}</time>
+              <span>{readingMinutes(featured.body ?? "")} min read</span>
+            </p>
+            <h2 id="featured-title">
+              <a href={postUrl(featured.id)}>{featured.data.title}</a>
+            </h2>
+            <p class="post-featured-summary">{featured.data.description}</p>
+            {featured.data.tags.length > 0 && (
+              <ul class="post-tags" aria-label="Tags">
+                {featured.data.tags.map((tag) => (
+                  <li>{tag}</li>
+                ))}
+              </ul>
+            )}
+            <a class="button button-primary" href={postUrl(featured.id)}>
+              Read the post
+              <Icon name="arrow" size={15} />
+            </a>
+          </div>
+          {featured.data.hero?.image ? (
+            <figure class="post-featured-art">
+              <Image
+                src={featured.data.hero.image}
+                alt={featured.data.hero.alt}
+                widths={[480, 960]}
+                sizes="(max-width: 900px) 100vw, 480px"
+                format="webp"
+              />
+            </figure>
+          ) : (
+            inside.length > 0 && (
+              <nav class="post-featured-inside" aria-label={`Inside ${featured.data.title}`}>
+                <p>Inside this post</p>
+                <ol>
+                  {inside.map((heading) => (
+                    <li>
+                      <a href={`${postUrl(featured.id)}#${heading.slug}`}>{heading.text}</a>
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+            )
+          )}
+        </article>
+      ) : (
+        <div class="blog-empty">
+          <p>No posts yet.</p>
+          <p>
+            Subscribe to the <a href={blogFeed}>feed</a> to hear about the first one, or start with the
+            <a href={docsHome}>documentation</a>.
+          </p>
+        </div>
+      )
+    }
+
+    {
+      earlier.length > 0 && (
+        <section class="post-archive" aria-labelledby="archive-title">
+          <h2 id="archive-title">Earlier posts</h2>
+          <ol class="post-list">
+            {earlier.map((post) => (
+              <li>
+                <time datetime={isoDate(post.data.date)}>{formatDate(post.data.date)}</time>
+                <div>
+                  <h3>
+                    <a href={postUrl(post.id)}>{post.data.title}</a>
+                    {post.data.draft && <span class="post-draft">Draft</span>}
+                  </h3>
+                  <p>{post.data.description}</p>
+                  {post.data.tags.length > 0 && (
+                    <ul class="post-tags" aria-label="Tags">
+                      {post.data.tags.map((tag) => (
+                        <li>{tag}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <span class="post-list-time">{readingMinutes(post.body ?? "")} min read</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )
+    }
+  </main>
+</BlogLayout>

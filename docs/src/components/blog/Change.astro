@@ -1,0 +1,19 @@
+---
+interface Props {
+  title: string;
+  /** Who it affects, such as "Vue apps" or "Embedders". */
+  who?: string;
+}
+
+const { title, who } = Astro.props;
+---
+
+<li class="migration-item">
+  <p class="migration-title">
+    {title}
+    {who && <span class="migration-who">{who}</span>}
+  </p>
+  <div class="migration-body">
+    <slot />
+  </div>
+</li>

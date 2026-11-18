@@ -18,4 +18,37 @@ const docs = defineCollection({
   }),
 });
 
-export const collections = { docs };
+const blog = defineCollection({
+  loader: glob({ base: "./blog", pattern: "**/*.{md,mdx}" }),
+  schema: ({ image }) =>
+    z.object({
+      title: z.string(),
+      /** The summary on the index, in the feed and under the title. */
+      description: z.string(),
+      date: z.coerce.date(),
+      author: z.string().default("The Skathi team"),
+      tags: z.array(z.string()).default([]),
+      /** Left out of production builds; see `showDrafts`. */
+      draft: z.boolean().default(false),
+      /** A release post: its version and the commands that install it, shown at the top. */
+      release: z
+        .object({
+          version: z.string(),
+          platforms: z.string().optional(),
+          install: z.array(z.object({ label: z.string(), command: z.string() })).min(1),
+        })
+        .optional(),
+      /** An image from src/assets, or a clip in public/media given as `<group>/<name>` like `Demo`. */
+      hero: z
+        .object({
+          image: image().optional(),
+          video: z.string().optional(),
+          alt: z.string(),
+          caption: z.string().optional(),
+        })
+        .refine((hero) => Boolean(hero.image) !== Boolean(hero.video), "A hero has an image or a video, not both.")
+        .optional(),
+    }),
+});
+
+export const collections = { docs, blog };

@@ -1,0 +1,19 @@
+---
+import type { ComponentProps } from "astro/types";
+import Icon from "../Icon.astro";
+
+interface Props {
+  icon: ComponentProps<typeof Icon>["name"];
+  title: string;
+  href: string;
+  tone?: "pink" | "lilac" | "blue" | "yellow";
+}
+
+const { icon, title, href, tone = "pink" } = Astro.props;
+---
+
+<li class="whatsnew-item" data-tone={tone}>
+  <span class="whatsnew-icon"><Icon name={icon} size={18} /></span>
+  <a class="whatsnew-title" href={href}>{title}</a>
+  <span class="whatsnew-text"><slot /></span>
+</li>
