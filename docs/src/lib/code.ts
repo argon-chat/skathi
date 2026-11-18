@@ -59,8 +59,10 @@ const metaTransformer: ShikiTransformer = {
     if (metaFocus(meta).size) this.addClassToHast(node, "has-focused");
     const title = metaValue(meta, "title");
     if (title) node.properties["data-title"] = title;
-    const os = metaValue(meta, "os");
-    if (os) node.properties["data-os"] = os;
+    for (const key of ["os", "framework"]) {
+      const value = metaValue(meta, key);
+      if (value) node.properties[`data-${key}`] = value;
+    }
   },
 };
 
