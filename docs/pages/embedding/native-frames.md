@@ -185,26 +185,26 @@ macOS raises a screen's headroom above 1.0 only while a window on it asks for ED
 
 Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on every platform:
 
-| Field                          | Means                                                                                                                                                               |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                                                                                      |
-| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`                                                                           |
-| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0                                                                   |
-| `output_hdr`                   | whether the element's window draws HDR now (half-float swap chain or layer); see [HDR windows](#hdr-windows)                                                        |
-| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere                                                                   |
-| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                                                                                      |
-| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                                                                                       |
-| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)                                                                            |
-| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows                                                              |
-| `refresh_period`               | the nominal refresh period: the compositor's on Windows, else from `refresh_hz`                                                                                     |
-| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called: never ahead of that moment, and at most `refresh_period` before it |
-| `known`                        | `false` on Linux, and before the window first draws                                                                                                                 |
+| Field                          | Means                                                                                                                                                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                                                                                                                                                               |
+| `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`                                                                                                                                                    |
+| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0                                                                                                                                            |
+| `output_hdr`                   | whether the element's window draws HDR now (half-float swap chain or layer); see [HDR windows](#hdr-windows)                                                                                                                                 |
+| `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere                                                                                                                                            |
+| `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                                                                                                                                                               |
+| `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                                                                                                                                                                |
+| `refresh_hz`                   | Windows: the current mode's rate; macOS: the screen's maximum (`maximumFramesPerSecond`)                                                                                                                                                     |
+| `variable_refresh`             | macOS: whether the screen's refresh interval has a range (ProMotion, Adaptive-Sync); `None` on Windows                                                                                                                                       |
+| `refresh_period`               | the refresh period: since 0.5 on Windows, measured from Skathi's own vblank waits on the window's display; elsewhere, and until then, the nominal one from `refresh_hz`                                                                      |
+| `last_vblank`                  | when the latest vblank was, in [`monotonic_ns`](#the-clock)'s clock, read as `info()` is called: never ahead of that moment, and at most `refresh_period` before it. Since 0.5 it stays known once it was, through a refresh-rate change too |
+| `known`                        | `false` on Linux, and before the window first draws                                                                                                                                                                                          |
 
 1.0 as SDR white is what macOS EDR values already are, and how Windows composes SDR content in HDR mode: at the white level the user picked. On macOS `headroom` is 1.0 until a window on the screen asks for EDR, then what the system grants, which follows the brightness and, from macOS 26, goes no higher than the window's tag unless something else on the screen asks for more (see [HDR windows](#hdr-windows)). On Windows, `headroom` is the screen's peak over that white (`MaxLuminance` / SDR white), and a scRGB value, where 1.0 is 80 nits, is a surface value times `sdr_white_nits / 80`. In SDR mode it is 1.0.
 
 macOS sends nothing when the EDR headroom moves with the brightness, and Windows nothing when the SDR slider moves, so Skathi reads the display as it draws: on macOS every frame, on Windows the monitor and DXGI's state every frame and the display configuration once a second (at once on a move to another monitor or a display change). While a surface is visible and nothing else draws, it looks four times a second. A change smaller than 1 % is not reported. Since 0.5 a level that keeps moving, as macOS's headroom does for a second or two after a window enters or leaves EDR, is reported at most every 200 ms and once more where it settles, so a producer that re-derives its tone mapping on each event is not run on every frame of the ramp. Only the reports are spaced: since 0.5 the clamp an HDR window paints a surface with follows the headroom every frame, while `content_headroom()`, like `info().display`, moves with the reports. `known`, `hdr` and `output_hdr` are reported at once, and a `variable_refresh` change once it has held for 100 ms: macOS's refresh range can blink for a few milliseconds. Windows does not say whether a screen refreshes at a variable rate, and Linux reports nothing yet.
 
-`refresh_period` and `last_vblank` are the display clock, so a player can aim at a vblank without a thread of its own: the next ones are `last_vblank + k × refresh_period`, for k ≥ 1. On Windows both are the compositor's (`DwmGetCompositionTimingInfo`), used while its rate matches the surface's screen. Since 0.5 `last_vblank` is the latest vblank already past on Windows too, carried forward on the compositor's grid when it has not composed for a while; before, it was usually the coming one. Elsewhere, and on a screen of another rate, `last_vblank` is carried forward from the last frame [`on_frame`](#knowing-when-a-frame-is-on-screen) saw shown, so it is `None` until one was.
+`refresh_period` and `last_vblank` are the display clock, so a player can aim at a vblank without a thread of its own: the next ones are `last_vblank + k × refresh_period`, for k ≥ 1. Since 0.5 on Windows both come from the vblank waits of Skathi's vsync thread (`IDXGIOutput::WaitForVBlank`) on the window's display, which return within about 0.1 ms of its vblank, and are used while their rate matches the surface's screen. DWM's clock (`DwmGetCompositionTimingInfo`), which they came from before, follows one display only, and against another display of nearly the same rate it drifts through the whole refresh; it is now the fallback while the waits have not measured the display. Since 0.5 `last_vblank` is the latest vblank already past on Windows too; before, it was usually the coming one. Elsewhere, and on a screen of another rate, `last_vblank` is carried forward from the last frame [`on_frame`](#knowing-when-a-frame-is-on-screen) saw shown. Since 0.5 a refresh-rate change does not make it `None`: the last vblank known is carried forward at the new rate until the display is measured again. It is `None` only until the first vblank is known.
 
 ### A video player
 
@@ -250,7 +250,7 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 
 - **One event per frame.** Each frame presented while a `FrameWatch` is held gets exactly one `FrameEvent`, `Presented` or `Dropped`, never none and never two. Frames presented before `on_frame` or after the last watch dropped are not reported.
 - **In frame order.** A surface's events arrive in the order of their ids. A frame that is settled early (superseded at once, say) waits for the ones before it.
-- **`Presented` once, on first display.** `shown_at` is the start of the refresh the frame first showed on; a frame left on screen is not reported again. It stayed until the next frame's `shown_at`, so the difference is how long it was held. `refresh_interval` is that refresh's actual distance from the one before, which is not the nominal period on a variable-refresh screen; `info().display.refresh_period` keeps the nominal one.
+- **`Presented` once, on first display.** `shown_at` is the start of the refresh the frame first showed on; a frame left on screen is not reported again. It stayed until the next frame's `shown_at`, so the difference is how long it was held. `refresh_interval` is that refresh's actual distance from the one before, which is not the nominal period on a variable-refresh screen; `info().display.refresh_period` keeps the display's steady one.
 - **`Dropped` says why:**
 
 | `FrameDropReason` | When                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -266,14 +266,14 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 
 `precision` says how `shown_at` was known:
 
-| Platform               | `Exact`                                                                                                     | `Estimated`                                                                                                                                                                                                                                                                                                 |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows                | the swap chain's frame statistics named the window present that showed it, and the refresh, at its QPC time | the statistics lagged (DWM refreshes a composed window's only now and then) or a poll was missed: placed on the refresh after the first vblank following its GPU work, ±1 refresh; `refresh_interval` is then the nominal period                                                                            |
-| Windows, no statistics |                                                                                                             | a swap chain whose statistics stay empty: every frame, the same way                                                                                                                                                                                                                                         |
-| macOS                  | the drawable's `presentedTime`; `refresh_interval` is the nominal period                                    | since 0.5, a drawable macOS hands back without a `presentedTime`, as it can at sparse presents and during a live resize, that no later present was aimed at the same refresh: placed on the refresh it was aimed at, the display link's target or, while the window is resized, a refresh after its present |
-| Linux                  |                                                                                                             | about a refresh after the window's tick                                                                                                                                                                                                                                                                     |
+| Platform               | `Exact`                                                                                                     | `Estimated`                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows                | the swap chain's frame statistics named the window present that showed it, and the refresh, at its QPC time | the statistics lagged (DWM refreshes a composed window's only now and then) or a poll was missed: placed as many refreshes after the first vblank following its GPU work as the last `Exact` frames took (since 0.5; one before, and until there are any), ±1 refresh; `refresh_interval` is then the nominal period |
+| Windows, no statistics |                                                                                                             | a swap chain whose statistics stay empty: every frame, the same way                                                                                                                                                                                                                                                  |
+| macOS                  | the drawable's `presentedTime`; `refresh_interval` is the nominal period                                    | since 0.5, a drawable macOS hands back without a `presentedTime`, as it can at sparse presents and during a live resize, that no later present was aimed at the same refresh: placed on the refresh it was aimed at, the display link's target or, while the window is resized, a refresh after its present          |
+| Linux                  |                                                                                                             | about a refresh after the window's tick                                                                                                                                                                                                                                                                              |
 
-On Windows, gpui presents with `Present(0)` on a flip-model swap chain. Its vsync thread waited for each refresh in `DwmFlush`, which returns when DWM is done composing, anywhere in the refresh; since 0.5 it waits on the vblank of the display showing the first shown window (`IDXGIOutput::WaitForVBlank`), with `DwmFlush` as the fallback, so the tick keeps its place in the refresh at low present rates too. DWM silently discards a present that a newer one replaced before its vblank. Skathi records which frame of each surface every window present carries, and its vsync thread reads `GetFrameStatistics` (`PresentCount`, `PresentRefreshCount`, `SyncQPCTime`) every refresh while any frame waits, and once more after each present. A frame is `Presented` by the first window present the display showed that carried it; a present the statistics skipped over was discarded, unless a refresh was free for it between its neighbours, in which case it is placed there as `Estimated`. While no frame waits, the vsync thread sleeps as before, so an idle window costs nothing.
+On Windows, gpui presents with `Present(0)` on a flip-model swap chain. Its vsync thread waited for each refresh in `DwmFlush`, which returns when DWM is done composing, anywhere in the refresh; since 0.5 it waits on the vblank of the display showing the first shown window (`IDXGIOutput::WaitForVBlank`), with `DwmFlush` as the fallback, so the tick keeps its place in the refresh, 0.08 to 0.17 of it after the vblank, at low present rates too. DWM silently discards a present that a newer one replaced before its vblank. Skathi records which frame of each surface every window present carries, and its vsync thread reads `GetFrameStatistics` (`PresentCount`, `PresentRefreshCount`, `SyncQPCTime`) every refresh while any frame waits, and once more after each present. A frame is `Presented` by the first window present the display showed that carried it; a present the statistics skipped over was discarded, unless a refresh was free for it between its neighbours, in which case it is placed there as `Estimated`. While no frame waits, the vsync thread sleeps as before, so an idle window costs nothing.
 
 ### Threading
 
@@ -288,11 +288,12 @@ The callback runs on Skathi's vsync thread on Windows and on a thread of Skathi'
 With the render API, libmpv draws each frame when told to and paces playback itself. `video-sync=display-resample` times frames to the display: it needs the refresh rate, and one iteration of its loop per refresh. After each frame it waits until `mpv_render_context_report_swap` is called, and it measures the display from when those calls come. So call it from the render thread, right after each render, and drive that thread from the display clock:
 
 1. Set `display-fps-override` to `info().display.refresh_hz`, and again on `DisplayChanged`.
-2. Once per refresh, wait for `MPV_RENDER_UPDATE_FRAME`, then sleep until shortly after the vblank, computed from `info().display.last_vblank`. About 5% into the refresh leaves the render most of the refresh before the window's next tick, which runs just after the vblank.
+2. Once per refresh, wait for `MPV_RENDER_UPDATE_FRAME`, then sleep until the render should start, computed from `info().display.last_vblank` and `refresh_period`: early enough that the present lands near the middle of the refresh (see [when to render](#when-to-render)).
 3. Ask libmpv what comes next with `MPV_RENDER_PARAM_NEXT_FRAME_INFO`. A repeat (`MPV_RENDER_FRAME_INFO_REPEAT` without `MPV_RENDER_FRAME_INFO_REDRAW`) is the frame already on screen: render with `MPV_RENDER_PARAM_SKIP_RENDERING` and present nothing. Anything else is rendered into the next texture and presented.
 4. Call `report_swap` right after each render call, skipped or not. Use `on_frame` for statistics only.
 
 ```rust
+use std::time::{Duration, Instant};
 use skathi::{FrameDropReason, FrameEvent, SurfaceEvent};
 
 let surface = skathi::surface("player");
@@ -322,24 +323,28 @@ let _frames = surface.on_frame(move |event| match event {
 });
 
 // The render thread (`render` wraps mpv_render_context).
-const START: f64 = 0.05; // into the refresh
+let mut render_time = Duration::from_millis(2); // measured below
 loop {
     render.wait_for_frame(); // MPV_RENDER_UPDATE_FRAME
     let display = surface.info().display;
+    // `None` only before the first vblank is known: render at once.
     if let (Some(vblank), Some(period)) = (display.last_vblank, display.refresh_period) {
         let p = period.as_nanos() as u64;
-        let first = vblank + (p as f64 * START) as u64;
+        let start = (0.5 - render_time.as_secs_f64() / period.as_secs_f64()).max(0.0);
+        let first = vblank + (p as f64 * start) as u64;
         let now = skathi::monotonic_ns();
         let at = first + now.saturating_sub(first).div_ceil(p) * p;
-        std::thread::sleep(std::time::Duration::from_nanos(at - now));
+        std::thread::sleep(Duration::from_nanos(at - now));
     }
     let next = render.next_frame_info(); // MPV_RENDER_PARAM_NEXT_FRAME_INFO
     if next.repeat && !next.redraw {
         render.skip(); // mpv_render_context_render with MPV_RENDER_PARAM_SKIP_RENDERING = 1
     } else {
+        let began = Instant::now();
         let texture = ring.next();
         render.render_into(texture); // mpv_render_context_render on the shared device
         unsafe { surface.present_d3d11_texture(texture.as_raw()) }?;
+        render_time = (render_time * 7 + began.elapsed()) / 8;
     }
     render.report_swap();
 }
@@ -349,7 +354,21 @@ Calling `report_swap` from `on_frame`, as this page used to, does not work: libm
 
 `last_vblank` is the latest vblank already past since 0.5; on Windows in 0.4 it was usually the coming one. The `saturating_sub` above lands on a refresh either way.
 
-Reported this way, libmpv takes a frame to flip when its render returns, a constant few refreshes before it is seen. `shown_at` minus the time of the report says how much on a given machine; `audio-delay` can make up for it. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
+Reported this way, libmpv takes a frame to flip when its render returns, a constant few refreshes before it is seen. `shown_at` minus the time of the report says how much on a given machine; `audio-delay` can make up for it. One user measured about 2.4 refreshes on Windows, 10 ms at 240 Hz, and about 45 ms on a 120 Hz Mac; that has not been checked against real audio output. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
+
+### When to render (since 0.5)
+
+A present is taken into the window by the window's next tick. On Windows the tick runs 0.08 to 0.17 of a refresh after the vblank, and a present that lands near it races it: some frames make that tick and some the next, and frames that should be held evenly are held a refresh more or less. A present that lands near the middle of the refresh is clear of the tick on both sides, so start the render that much earlier, at `0.5 − render_time / refresh_period` of the refresh after the vblank.
+
+Measured on a 165 Hz screen, the share of frames shown on the refresh they were meant for, by where in the refresh the render started:
+
+| Render starts at | On the intended refresh |
+| ---------------- | ----------------------- |
+| 0.05             | 83–99 %                 |
+| 0.3              | 95–97 %                 |
+| 0.6              | 99.7–100 %              |
+
+The rule also accounts for what has worked elsewhere: 0.05 for a 3–4 ms render on a 120 Hz Mac, and 0.3 for 2160p HDR frames at 240 Hz. Measure your render time on the machine it runs on, from the start of the render until the present returns, as the loop above does; a fixed start that suits one machine or one video can land on the tick on another.
 
 ## Device loss
 
