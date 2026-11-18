@@ -31,7 +31,7 @@ Every `appWindow` verb is synchronous and returns `undefined`. There are no prom
 ## The lifecycle, from launch to quit
 
 1. **Launch.** With [`"singleInstance": true`](/window-api/config-single-instance/), a second launch hands its arguments to the running copy and exits without opening a window.
-2. **Create.** The host reads the `window` block of `sk.config.json` and creates the window at that size, centred on the primary display. On Windows the window is created hidden. On macOS and Linux it is shown at once.
+2. **Create.** The host reads the `window` block of `sk.config.json` and creates the window at that size and in its place: centred on the primary display unless [`x`, `y` and `monitor`](#start-position-and-monitor) say otherwise. On Windows the window is created hidden. On macOS and Linux it is shown at once.
 3. **Run your bundle.** `appWindow` already works at the top level of `main.ts`. Reads return the initial state; verbs are queued and applied at the top of the first frame. [`DOMContentLoaded` and `load`](/window-api/event-load/) fire once, after the bundle has run.
 4. **First frame.** The queued verbs are applied and window `resize` fires once. On Windows the host paints the first styled frame and only then shows the window, so there is no blank flash.
 5. **Running.** State changes arrive as events and as reactive reads, covered in [Reactive reads and events](#reactive-reads-and-events).
@@ -71,6 +71,22 @@ The default `titleBarStyle` is `"hidden"`: your app draws its own title bar. Thi
 
 [`minWidth`](/window-api/config-window-min-width/) and [`minHeight`](/window-api/config-window-min-height/) each work alone; the other side is then not limited.
 
+### Start position and monitor
+
+[`x` and `y`](/window-api/config-window-x/) place the window when it is created, so it never shows at a default spot first. They are CSS px from the top-left corner of the monitor's work area, the part of the screen the taskbar or Dock leaves free. [`monitor`](/window-api/config-window-monitor/) picks the monitor: `"primary"` (the default), `"cursor"` for the one under the mouse pointer, or an index from `0`.
+
+```json
+{
+  "window": { "width": 420, "height": 640, "x": 24, "y": 24, "monitor": "cursor" }
+}
+```
+
+- An axis without a value is centred, so `{ "y": 0 }` opens at the top, centred horizontally. With neither, the window opens centred, which is what [`center: true`](/window-api/config-window-center/) also says. `center: true` together with `x` or `y` centres the window and warns.
+- The window is kept inside the work area: an `x` past the right edge puts it against that edge, and a window larger than the work area is shrunk to fit. With `titleBarStyle: "default"` the OS caption stays on screen too.
+- On Windows each monitor's own scale is used, so `x: 24` is 24 CSS px on a 100 % monitor and on a 200 % one alike.
+- An index past the last monitor opens on the primary one and prints an advisory. Monitor indices follow the OS's own order, the same order as `<SkWindow :monitor>`.
+- `"cursor"` is read on Windows only. On macOS and Linux the window opens on the primary monitor and an advisory says so. Under Wayland the compositor places the window and ignores `x` and `y`.
+
 ### defineWindow
 
 [`defineWindow()`](/window-api/define-window/) is a convenience for the settings that can change at runtime. It runs when your bundle runs, after the window exists, and applies each key through the same setter a runtime call would use.
@@ -94,19 +110,20 @@ Everything else is a property or method of `appWindow`, plus the web globals. Ch
 
 ### Which layer sets what
 
-| Setting                               | `sk.config.json`                          | `defineWindow` | At runtime                                                                           |
-| ------------------------------------- | ----------------------------------------- | -------------- | ------------------------------------------------------------------------------------ |
-| Title                                 | `title`                                   | yes            | [`appWindow.title`](/window-api/title/), `document.title`                            |
-| Initial size                          | `width`, `height`                         | no             | [`setContentBounds()`](/window-api/set-content-bounds/)                              |
-| Minimum size                          | `minWidth`, `minHeight`                   | no             | no                                                                                   |
-| Resizable, minimizable, maximizable   | `resizable`, `minimizable`, `maximizable` | no             | no                                                                                   |
-| Title bar style and fallback strip    | `titleBarStyle`, `titleBarFallback`       | no             | no                                                                                   |
-| Title bar height and host buttons     | `titleBarHeight`, `titleBarOverlay`       | yes            | [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/)                         |
-| Backdrop                              | `backdrop`                                | yes            | [`appWindow.backdrop`](/window-api/backdrop/)                                        |
-| Always on top                         | `alwaysOnTop`                             | yes            | [`appWindow.alwaysOnTop`](/window-api/always-on-top/)                                |
-| `window.focus()` raises               | `focus: "raise"`                          | no             | no                                                                                   |
-| Theme                                 | none                                      | yes            | [`appWindow.theme`](/window-api/theme/)                                              |
-| Start position, maximized, fullscreen | none                                      | no             | [`setBounds()`](/window-api/set-bounds/), `maximize()`, `setFullscreen()` at startup |
+| Setting                             | `sk.config.json`                          | `defineWindow` | At runtime                                                   |
+| ----------------------------------- | ----------------------------------------- | -------------- | ------------------------------------------------------------ |
+| Title                               | `title`                                   | yes            | [`appWindow.title`](/window-api/title/), `document.title`    |
+| Initial size                        | `width`, `height`                         | no             | [`setContentBounds()`](/window-api/set-content-bounds/)      |
+| Minimum size                        | `minWidth`, `minHeight`                   | no             | no                                                           |
+| Resizable, minimizable, maximizable | `resizable`, `minimizable`, `maximizable` | no             | no                                                           |
+| Title bar style and fallback strip  | `titleBarStyle`, `titleBarFallback`       | no             | no                                                           |
+| Title bar height and host buttons   | `titleBarHeight`, `titleBarOverlay`       | yes            | [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/) |
+| Backdrop                            | `backdrop`                                | yes            | [`appWindow.backdrop`](/window-api/backdrop/)                |
+| Always on top                       | `alwaysOnTop`                             | yes            | [`appWindow.alwaysOnTop`](/window-api/always-on-top/)        |
+| `window.focus()` raises             | `focus: "raise"`                          | no             | no                                                           |
+| Theme                               | none                                      | yes            | [`appWindow.theme`](/window-api/theme/)                      |
+| Start position and monitor          | `x`, `y`, `center`, `monitor`             | no             | [`setBounds()`](/window-api/set-bounds/)                     |
+| Maximized, fullscreen               | none                                      | no             | `maximize()`, `setFullscreen()` at startup                   |
 
 [`frame: false`](/window-api/config-window-frame/) does less than its name suggests: it prints an advisory and does nothing. Use `titleBarStyle` instead.
 

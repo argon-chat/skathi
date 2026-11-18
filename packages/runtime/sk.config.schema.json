@@ -44,6 +44,25 @@
           "minimum": 0
         },
         "minHeight": { "description": "Minimum height in logical pixels.", "type": "number", "minimum": 0 },
+        "x": {
+          "description": "Where the window opens: logical pixels from the left of the monitor's work area. Without it the window is centred horizontally. Kept inside the work area.",
+          "type": "number"
+        },
+        "y": {
+          "description": "Where the window opens: logical pixels from the top of the monitor's work area. Without it the window is centred vertically. Kept inside the work area.",
+          "type": "number"
+        },
+        "center": {
+          "description": "true: the window opens centred on its monitor's work area, which is also what happens without x and y. With x or y it wins, with a warning.",
+          "type": "boolean"
+        },
+        "monitor": {
+          "description": "The monitor the window opens on: \"primary\" (default), \"cursor\" (the one under the mouse pointer; Windows only, elsewhere the primary) or an index from 0. A missing index opens on the primary monitor with an advisory.",
+          "oneOf": [
+            { "type": "string", "enum": ["primary", "cursor"] },
+            { "type": "integer", "minimum": 0 }
+          ]
+        },
         "frame": {
           "description": "false only prints an advisory: the window keeps its frame, shadow, animations and edge resizing. Hide the OS title bar with titleBarStyle \"hidden\".",
           "type": "boolean"

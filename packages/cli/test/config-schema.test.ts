@@ -86,6 +86,28 @@ test("the schema and the CSS custom data ship in @skathi-native/runtime", () => 
   }
 });
 
+describe("window placement", () => {
+  const load = (window: Record<string, unknown>) => {
+    const dir = tmp();
+    writeFileSync(join(dir, "main.ts"), "");
+    const config = { name: "p", version: "1.0.0", windows: { icon: "main.ts" }, window };
+    writeFileSync(join(dir, "sk.config.json"), JSON.stringify(config));
+    return loadAppConfig(dir);
+  };
+
+  test("x, y, center and monitor load; values the host cannot place by are refused", () => {
+    expect(load({ x: 40, y: -10, monitor: 1 }).warnings).toEqual([]);
+    expect(load({ center: true, monitor: "cursor" }).warnings).toEqual([]);
+    for (const bad of [{ x: "40" }, { center: "yes" }, { monitor: "left" }, { monitor: -1 }, { monitor: 1.5 }]) {
+      expect(() => load(bad)).toThrow(/window\.(x|center|monitor)/);
+    }
+  });
+
+  test("center with x/y warns that it wins", () => {
+    expect(load({ center: true, x: 10 }).warnings.join("\n")).toContain('"window.center": true');
+  });
+});
+
 describe("$schema", () => {
   test("the loader takes it without a warning", () => {
     const dir = tmp();

@@ -439,6 +439,7 @@ export function loadAppConfig(
     );
   }
   const win = raw.window && typeof raw.window === "object" ? (raw.window as Record<string, unknown>) : {};
+  checkWindowPlacement(win, warnings);
   const title = typeof win.title === "string" && win.title.trim() ? win.title.trim() : undefined;
   const productName = str(raw.productName, where('"productName"')) ?? title ?? name;
 
@@ -594,6 +595,33 @@ export function loadAppConfig(
     platforms: readPlatforms(raw.platforms),
     warnings,
   };
+}
+
+/** `window.x`/`y`/`center`/`monitor`: the host would advise and open centred on the primary monitor. */
+function checkWindowPlacement(win: Record<string, unknown>, warnings: string[]): void {
+  for (const key of ["x", "y"] as const) {
+    const v = win[key];
+    if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v))) {
+      throw new ConfigError(
+        `sk.config.json "window.${key}" must be a number: CSS px from the left/top of the monitor's work area`,
+      );
+    }
+  }
+  if (win.center !== undefined && typeof win.center !== "boolean") {
+    throw new ConfigError('sk.config.json "window.center" must be true or false');
+  }
+  const m = win.monitor;
+  const index = typeof m === "number" && Number.isInteger(m) && m >= 0;
+  if (m !== undefined && m !== "primary" && m !== "cursor" && !index) {
+    throw new ConfigError(
+      `sk.config.json "window.monitor" must be "primary", "cursor" or a monitor index (0, 1, …), not ${JSON.stringify(m)}`,
+    );
+  }
+  if (win.center === true && (win.x !== undefined || win.y !== undefined)) {
+    warnings.push(
+      'sk.config.json "window.center": true and "window.x"/"y" both place the window; it opens centred. Remove one of them',
+    );
+  }
 }
 
 const PLATFORM_NAMES: readonly Platform[] = ["windows", "macos", "linux"];

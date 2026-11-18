@@ -107,6 +107,10 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   "window.height": { example: 800 },
   "window.minWidth": { example: 480 },
   "window.minHeight": { example: 320 },
+  "window.x": { example: 24 },
+  "window.y": { example: 24 },
+  "window.center": { example: true },
+  "window.monitor": { example: "cursor" },
   "window.frame": { example: false },
   "window.titleBarStyle": {
     default: '`"hidden"`',

@@ -2247,10 +2247,10 @@ createApp(App).mount("#app");`,
     summary: "The block of `sk.config.json` that describes the main window as it opens.",
     platforms: all(OK),
     syntax:
-      '{\n  "window": {\n    "title": string,\n    "width": number,\n    "height": number,\n    "minWidth": number,\n    "minHeight": number,\n    "titleBarStyle": "hidden" | "default" | "hiddenInset",\n    "titleBarHeight": number,\n    "titleBarFallback": boolean,\n    "titleBarOverlay": boolean | { "height"?: number, "color"?: string, "symbolColor"?: string },\n    "backdrop": string,\n    "resizable": boolean,\n    "minimizable": boolean,\n    "alwaysOnTop": boolean,\n    "focus": "raise",\n    "devtools": boolean\n  }\n}',
+      '{\n  "window": {\n    "title": string,\n    "width": number,\n    "height": number,\n    "minWidth": number,\n    "minHeight": number,\n    "x": number,\n    "y": number,\n    "center": boolean,\n    "monitor": "primary" | "cursor" | number,\n    "titleBarStyle": "hidden" | "default" | "hiddenInset",\n    "titleBarHeight": number,\n    "titleBarFallback": boolean,\n    "titleBarOverlay": boolean | { "height"?: number, "color"?: string, "symbolColor"?: string },\n    "backdrop": string,\n    "resizable": boolean,\n    "minimizable": boolean,\n    "alwaysOnTop": boolean,\n    "focus": "raise",\n    "devtools": boolean\n  }\n}',
     notes: [
       CREATION_ONLY,
-      "The window opens centered on the primary display. No key sets a start position, a maximized, fullscreen or hidden start, or the theme.",
+      "The window opens centered on the primary display, unless `x`, `y` and `monitor` place it elsewhere. No key sets a maximized, fullscreen or hidden start, or the theme.",
       "An unknown key is ignored without a warning. A value of the wrong type keeps the default.",
       "The environment variable `SK_WINDOW=1280x800` overrides `width` and `height`.",
       "Changing the window later is done through `appWindow` and `defineWindow()`.",
@@ -2405,6 +2405,160 @@ createApp(App).mount("#app");`,
       },
     ],
     related: ["config-window-min-width", "sk-window-min-height"],
+  },
+  {
+    slug: "config-window-x",
+    name: "window.x",
+    kind: "option",
+    summary: "Places the main window when it is created: CSS px from the left edge of its monitor's work area.",
+    platforms: os(OK, OK, PART),
+    since: "0.4.0",
+    syntax: '{ "window": { "x": number } }',
+    params: [
+      {
+        name: "x",
+        type: "number",
+        description: "CSS px from the left edge of the work area to the window.",
+        default: "centred",
+        optional: true,
+      },
+    ],
+    notes: [
+      CREATION_ONLY,
+      "The window is created at that place, so it never shows at a default one first.",
+      "The work area is the monitor minus the taskbar or the Dock. `window.monitor` picks the monitor; the default is the primary one.",
+      'Without it the window is centred horizontally: `{ "y": 0 }` opens at the top, centred.',
+      'The window is kept inside the work area. A value past an edge puts the window against that edge, and a window larger than the work area is shrunk to fit it. Under `titleBarStyle: "default"` the OS caption stays on screen too.',
+      "On Windows, the number is in the target monitor's own scale.",
+      "With `center: true` as well, the window is centred and `sk build` warns.",
+    ],
+    examples: [
+      {
+        title: "Open a narrow side window at the top-left of the screen",
+        lang: "ts",
+        code: `{
+  "window": { "width": 380, "height": 720, "x": 16, "y": 16 }
+}`,
+      },
+    ],
+    limitations: ["On Linux under Wayland, the compositor places the window and `x` is ignored."],
+    related: ["config-window-y", "config-window-monitor", "config-window-center", "set-bounds"],
+    aliases: ["position", "start position", "initial position"],
+  },
+  {
+    slug: "config-window-y",
+    name: "window.y",
+    kind: "option",
+    summary: "Places the main window when it is created: CSS px from the top edge of its monitor's work area.",
+    platforms: os(OK, OK, PART),
+    since: "0.4.0",
+    syntax: '{ "window": { "y": number } }',
+    params: [
+      {
+        name: "y",
+        type: "number",
+        description: "CSS px from the top edge of the work area to the window.",
+        default: "centred",
+        optional: true,
+      },
+    ],
+    notes: [
+      CREATION_ONLY,
+      "Without it the window is centred vertically. It works as `window.x` does, on the other axis.",
+      'Under `titleBarStyle: "default"`, it places the top of the OS caption, which stays inside the work area.',
+    ],
+    examples: [
+      {
+        title: "Open at the top of the screen, centred horizontally",
+        lang: "ts",
+        code: `{
+  "window": { "y": 0 }
+}`,
+      },
+    ],
+    limitations: ["On Linux under Wayland, the compositor places the window and `y` is ignored."],
+    related: ["config-window-x", "config-window-monitor", "set-bounds"],
+  },
+  {
+    slug: "config-window-center",
+    name: "window.center",
+    kind: "option",
+    summary: "Opens the main window centred on its monitor's work area.",
+    platforms: os(OK, OK, PART),
+    since: "0.4.0",
+    syntax: '{ "window": { "center": boolean } }',
+    params: [
+      {
+        name: "center",
+        type: "boolean",
+        description: "`true` centres the window, whatever `x` and `y` say.",
+        default: "`false`",
+        optional: true,
+      },
+    ],
+    notes: [
+      CREATION_ONLY,
+      "Without `x` and `y` the window is centred anyway; `center: true` says so explicitly.",
+      "With `x` or `y` as well, the window is centred, the host prints an advisory and `sk build` warns.",
+    ],
+    examples: [
+      {
+        title: "Centre the window on the monitor under the pointer",
+        lang: "ts",
+        code: `{
+  "window": { "center": true, "monitor": "cursor" }
+}`,
+      },
+    ],
+    limitations: ["On Linux under Wayland, the compositor places the window."],
+    related: ["config-window-x", "config-window-monitor", "center"],
+  },
+  {
+    slug: "config-window-monitor",
+    name: "window.monitor",
+    kind: "option",
+    summary: "Picks the monitor the main window opens on.",
+    platforms: os(OK, PART, PART),
+    since: "0.4.0",
+    syntax: '{ "window": { "monitor": "primary" | "cursor" | number } }',
+    params: [
+      {
+        name: "monitor",
+        type: '"primary" | "cursor" | number',
+        description:
+          '`"primary"`: the primary monitor. `"cursor"`: the monitor under the mouse pointer. A number: the monitor at that index, from `0`, in the OS\'s own order.',
+        default: '`"primary"`',
+        optional: true,
+      },
+    ],
+    notes: [
+      CREATION_ONLY,
+      "`x` and `y` are measured from this monitor's work area; without them the window is centred on it.",
+      "An index past the last monitor opens the window on the primary monitor and prints an advisory.",
+      "The indices are in the same order as `<SkWindow :monitor>`.",
+    ],
+    examples: [
+      {
+        title: "Open where the user is looking",
+        lang: "ts",
+        code: `{
+  "window": { "monitor": "cursor" }
+}`,
+      },
+      {
+        title: "Open on the second monitor, at its top-right",
+        lang: "ts",
+        code: `{
+  "window": { "monitor": 1, "x": 100000, "y": 0 }
+}`,
+      },
+    ],
+    limitations: [
+      'On macOS and Linux, `"cursor"` opens on the primary monitor with an advisory.',
+      "On Linux under Wayland, the compositor picks the monitor.",
+    ],
+    related: ["config-window-x", "config-window-center", "sk-window-monitor"],
+    aliases: ["display", "screen"],
   },
   {
     slug: "config-window-frame",

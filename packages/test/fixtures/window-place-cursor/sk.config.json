@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-window-place-cursor",
+
+  "window": {
+    "title": "Skathi — window placement, cursor monitor (fixture)",
+    "width": 360,
+    "height": 240,
+    "center": true,
+    "monitor": "cursor"
+  }
+}

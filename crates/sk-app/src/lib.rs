@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 
 use gpui::{
-    div, prelude::*, px, rgba, size, App, Bounds, Context, TitlebarOptions, WeakEntity, Window,
+    div, prelude::*, px, rgba, size, App, Context, TitlebarOptions, WeakEntity, Window,
     WindowBounds, WindowControlArea, WindowOptions,
 };
 use gpui_platform::application;
@@ -65,6 +65,7 @@ mod occlusion;
 mod owner;
 mod payload;
 mod perf;
+mod placement;
 mod popout;
 mod popout_win;
 #[cfg(feature = "prod")]
@@ -1225,7 +1226,7 @@ fn run_app() {
             return;
         }
 
-        let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
+        let (bounds, display_id) = placement::initial_bounds(&cfg, cx);
         let startup_visible = embed::visible();
         let startup_focus = !devtools_mode && !quiet::never_focus() && embed::activates();
         let defer_reveal = cfg!(target_os = "windows") && startup_visible;
@@ -1235,6 +1236,7 @@ fn run_app() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                display_id,
                 window_background: cfg.backdrop.to_gpui(),
                 titlebar: Some(TitlebarOptions {
                     title: Some(cfg.title.clone().into()),

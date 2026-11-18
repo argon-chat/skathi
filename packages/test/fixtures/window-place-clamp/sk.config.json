@@ -1,0 +1,13 @@
+{
+  "name": "sk-test-window-place-clamp",
+
+  "window": {
+    "title": "Skathi — window placement, clamped (fixture)",
+    "width": 360,
+    "height": 240,
+    "x": 100000,
+    "y": -500,
+    "monitor": 0,
+    "titleBarStyle": "default"
+  }
+}

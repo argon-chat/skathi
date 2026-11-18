@@ -1,0 +1,14 @@
+{
+  "name": "sk-test-window-place",
+
+  "window": {
+    "title": "Skathi — window placement (fixture)",
+    "width": 360,
+    "height": 240,
+    "x": 40,
+    "y": 30,
+    "monitor": "primary",
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

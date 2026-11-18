@@ -244,6 +244,10 @@ pub struct Config {
     pub height: f32,
     pub min_width: Option<f32>,
     pub min_height: Option<f32>,
+    /// Offset from the monitor's work area, CSS px; an absent axis is centred.
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    pub monitor: crate::placement::Monitor,
     pub frame: bool,
     pub title_bar_style: TitleBarStyle,
     pub title_bar_height: f32,
@@ -271,6 +275,9 @@ impl Default for Config {
             height: 420.0,
             min_width: None,
             min_height: None,
+            x: None,
+            y: None,
+            monitor: crate::placement::Monitor::Primary,
             frame: true,
             title_bar_style: TitleBarStyle::Hidden,
             title_bar_height: 32.0,
@@ -336,6 +343,18 @@ pub fn load_config(raw: Option<String>) -> Config {
         }
         cfg.min_width = f32_of(&v, "minWidth");
         cfg.min_height = f32_of(&v, "minHeight");
+        cfg.x = f32_of(&v, "x").filter(|n| n.is_finite());
+        cfg.y = f32_of(&v, "y").filter(|n| n.is_finite());
+        if bool_of(&v, "center") == Some(true) && (cfg.x.is_some() || cfg.y.is_some()) {
+            advisories.push(
+                "`window.center: true` and `window.x`/`y` both place the window; it is centred. \
+                 Remove one of them."
+                    .into(),
+            );
+            cfg.x = None;
+            cfg.y = None;
+        }
+        cfg.monitor = crate::placement::parse_monitor(v.get("monitor"), &mut advisories);
         if let Some(b) = bool_of(&v, "frame") {
             cfg.frame = b;
             if !b {
