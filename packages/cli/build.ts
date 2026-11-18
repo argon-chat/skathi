@@ -48,6 +48,7 @@ import {
 } from "./runtime-path";
 import {
   GLOB_TRIPWIRE,
+  TEMPLATE_ASSET_URLS,
   LEAF_IMPORT,
   SFC_FS,
   appDefines,
@@ -61,6 +62,7 @@ import {
   svgDefaultOf,
   tagModuleNamespaces,
   takeDefineArgs,
+  templateJsonUrls,
   transformSource,
   viteShapesPlugin,
 } from "./vitecompat";
@@ -477,6 +479,7 @@ async function compileVue(
       id: shortId,
       scoped: hasScoped,
       slotted: descriptor.slotted,
+      transformAssetUrls: TEMPLATE_ASSET_URLS,
       compilerOptions: {
         hoistStatic: false, // compileTemplate force-sets true; our spread wins (F7)
         ...(bindings && { bindingMetadata: bindings }),
@@ -489,7 +492,7 @@ async function compileVue(
     if (t.errors.length) {
       throw new Error(`${id} <template>: ${t.errors.map(String).join("; ")}`);
     }
-    chunks.push(t.code);
+    chunks.push(templateJsonUrls(t.code));
     chunks.push("_sfc_main.render = render;");
   }
 

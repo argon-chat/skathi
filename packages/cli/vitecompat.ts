@@ -122,7 +122,57 @@ export function takeDefineArgs(argv: string[]): { defines: string[]; rest: strin
 }
 
 export const ASSET_EXT =
-  /\.(apng|bmp|png|jpe?g|jfif|pjpeg|pjp|gif|ico|webp|avif|cur|jxl|mp4|webm|ogg|mp3|wav|flac|aac|opus|mov|m4a|vtt|woff2?|eot|ttf|otf|webmanifest|pdf|txt)$/i;
+  /\.(apng|bmp|png|jpe?g|jfif|pjpeg|pjp|gif|ico|webp|avif|cur|jxl|mp4|webm|ogg|mp3|wav|flac|aac|opus|mov|m4a|vtt|woff2?|eot|ttf|otf|webmanifest|pdf|txt|tgs|lottie)$/i;
+
+/**
+ * The template attributes compiled to imports (Vue's defaults plus `<lottie src>`), so a relative
+ * file there is packed like an imported one.
+ */
+export const TEMPLATE_ASSET_URLS = {
+  tags: {
+    video: ["src", "poster"],
+    source: ["src"],
+    img: ["src"],
+    image: ["xlink:href", "href"],
+    use: ["xlink:href", "href"],
+    lottie: ["src"],
+  },
+};
+
+/** A template's `<lottie src="./a.json">` import must be the file's URL, not the parsed JSON. */
+export function templateJsonUrls(code: string): string {
+  return code.replace(
+    /(\bimport\s+_imports_\d+\s+from\s+)(["'])([^"'\n]+\.json)\2/g,
+    (_m, head: string, q: string, spec: string) => `${head}${q}${spec}?url${q}`,
+  );
+}
+
+/**
+ * `new URL("./a.tgs", import.meta.url)`: Vite's asset reference. The file becomes a packed asset and
+ * the URL its root-relative one on the page's origin, which is how the host resolves app files.
+ */
+export function rewriteAssetUrls(
+  code: string,
+  file: string,
+  docRoot: string,
+  assets: Map<string, string> | undefined,
+): { code: string; count: number } | null {
+  if (!/\bnew\s+URL\s*\(/.test(code)) return null;
+  let count = 0;
+  const out = code.replace(
+    /\bnew\s+URL\s*\(\s*(['"`])([^'"`$\n]+)\1\s*,\s*import\.meta\.url\s*\)/g,
+    (whole: string, _q: string, spec: string) => {
+      if (/^[a-z][\w+.-]*:|^[/#?]|\.(?:[cm]?[jt]sx?|wasm)(?:[?#]|$)/i.test(spec)) return whole;
+      const abs = resolve(dirname(file), spec.replace(/[?#].*$/, ""));
+      if (!existsSync(abs) || !statSync(abs).isFile()) return whole;
+      const { key, url } = assetKey(abs, docRoot);
+      assets?.set(key, realpathSync(abs));
+      count++;
+      return `new URL(${J(url + spec.slice(spec.replace(/[?#].*$/, "").length))}, location.href)`;
+    },
+  );
+  return count ? { code: out, count } : null;
+}
 
 /**
  * The payload key and URL of an imported file: root-relative inside the document root (one URL
@@ -560,7 +610,7 @@ export function loaderOf(path: string): "ts" | "tsx" | "js" | "jsx" {
 export function transformSource(
   code: string,
   file: string,
-  o: Pick<ShapesOptions, "docRoot" | "wsRoot" | "notes" | "dev">,
+  o: Pick<ShapesOptions, "docRoot" | "wsRoot" | "notes" | "dev"> & { assets?: Map<string, string> | undefined },
 ): string | null {
   let changed = false;
   const add = (what: string, n: number) => o.notes.set(what, (o.notes.get(what) ?? 0) + n);
@@ -576,6 +626,12 @@ export function transformSource(
     code = w.code;
     changed = true;
     add("new Worker(new URL(…)) stubbed (no Workers yet)", w.count);
+  }
+  const u = rewriteAssetUrls(code, file, o.docRoot, o.assets);
+  if (u) {
+    code = u.code;
+    changed = true;
+    add("new URL(…, import.meta.url) (packed as an asset)", u.count);
   }
   return changed ? code : null;
 }

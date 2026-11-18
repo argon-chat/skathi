@@ -40,6 +40,7 @@ import {
 import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
 import {
   GLOB_TRIPWIRE,
+  TEMPLATE_ASSET_URLS,
   SFC_FS,
   appDefines,
   frameworkDep,
@@ -50,6 +51,7 @@ import {
   svgDefaultOf,
   tagModuleNamespaces,
   takeDefineArgs,
+  templateJsonUrls,
   transformSource,
   viteShapesPlugin,
   type CssPiece,
@@ -319,6 +321,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
       inlineTemplate: true,
       genDefaultAs: "_sfc_main",
       templateOptions: {
+        transformAssetUrls: TEMPLATE_ASSET_URLS,
         compilerOptions: {
           // compileTemplate defaults this to true then spreads compilerOptions over it, so ours wins.
           hoistStatic: false,
@@ -338,6 +341,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
         isProd: true,
         scoped: hasScoped,
         slotted: descriptor.slotted,
+        transformAssetUrls: TEMPLATE_ASSET_URLS,
         compilerOptions: {
           hoistStatic: false,
           expressionPlugins: isTS ? ["typescript"] : [],
@@ -363,6 +367,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   if (/\bcreateStaticVNode\b/.test(code)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }
+  code = templateJsonUrls(code);
   code = transformSource(code, absPath, SHAPES) ?? code;
 
   STYLED_COMPONENTS.add(absPath);

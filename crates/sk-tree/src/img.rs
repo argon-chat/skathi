@@ -867,7 +867,7 @@ fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
 
 /// The raw file bytes behind a `src`, for elements that parse the document themselves (`<lottie>`).
 pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
-    let src = src.trim();
+    let src = own_origin(src.trim());
     if src.is_empty() {
         return Err(format!(
             "<{tag} src=\"\">: the src is empty — nothing to load"
@@ -896,7 +896,7 @@ pub(crate) enum Readable {
 }
 
 pub(crate) fn readable(tag: &str, src: &str) -> Result<Readable, String> {
-    let src = src.trim();
+    let src = own_origin(src.trim());
     let scheme = scheme_of(src);
     if src.is_empty() || scheme == "data" || scheme == "blob" {
         return read_bytes(tag, src).map(Readable::Bytes);
@@ -921,7 +921,7 @@ pub(crate) fn read_file(tag: &str, src: &str, path: &std::path::Path) -> Result<
 /// The file PATH behind a `src`, for `<video>`: the OS owns the read-ahead, so a long clip never
 /// becomes a `Vec<u8>`.
 pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
-    let src = src.trim();
+    let src = own_origin(src.trim());
     if src.is_empty() {
         return Err(format!(
             "<{tag} src=\"\">: the src is empty — nothing to load"
@@ -967,7 +967,7 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
 /// The [`sk_video::MediaSource`] behind a `<video src>`: a path, an http(s) URL verbatim (the
 /// platform streams it), or bytes for `data:`.
 pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSource, String> {
-    let src = src.trim();
+    let src = own_origin(src.trim());
     if src.is_empty() {
         return Err(format!(
             "<{tag} src=\"\">: the src is empty — nothing to load"
@@ -1010,6 +1010,16 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<sk_video::MediaSourc
             })
         }
         _ => resolve_path(tag, src).map(sk_video::MediaSource::Path),
+    }
+}
+
+const PAGE_ORIGIN: &str = "app://redjs/";
+
+/// A URL on the page's own origin (`new URL("/a.png", location.href)`) names the app's file `/a.png`.
+fn own_origin(src: &str) -> &str {
+    match src.get(..PAGE_ORIGIN.len()) {
+        Some(head) if head.eq_ignore_ascii_case(PAGE_ORIGIN) => &src[PAGE_ORIGIN.len() - 1..],
+        _ => src,
     }
 }
 
@@ -1057,7 +1067,7 @@ fn warn(msg: String) {
 }
 
 pub(crate) fn resolve(src: &str) -> Option<ImageSource> {
-    let src = src.trim();
+    let src = own_origin(src.trim());
     if src.is_empty() {
         return None;
     }
@@ -1846,6 +1856,10 @@ mod tests {
         let _g = packaged();
         assert_eq!(read_bytes("lottie", "assets/s.tgs").unwrap(), b"tgs");
         assert_eq!(read_bytes("lottie", "/assets/s.tgs?x").unwrap(), b"tgs");
+        assert_eq!(
+            read_bytes("lottie", "app://redjs/assets/s.tgs").unwrap(),
+            b"tgs"
+        );
         assert!(read_bytes("lottie", "assets/missing.tgs").is_err());
         match resolve_media("video", "assets/clip.mp4") {
             Ok(MediaSource::StaticBytes { mime, data }) => {
