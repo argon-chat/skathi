@@ -635,10 +635,6 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     }
     let flush = sk_tree::flush_changes_kind();
     let tree_moved = flush != sk_tree::Flush::Unchanged;
-    #[cfg(sk_devtools)]
-    if tree_moved {
-        devtools::ws::note_tree_changed();
-    }
     // A hidden page paints no animation. Playing media asks for a draw only via `media_moved`.
     let animating = sk_tree::animating() && !window::page_hidden();
     let moving = animating || media_moved;
@@ -671,6 +667,9 @@ impl Render for Shell {
         perf::render_begin();
         let el = self.render_body(window, cx);
         perf::render_done();
+        // An input dispatch flushes its own changes and draws, and a paced pump may not follow it.
+        #[cfg(sk_devtools)]
+        devtools::ws::broadcast_frame();
         el
     }
 }

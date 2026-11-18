@@ -50,8 +50,6 @@ struct Sub {
 
 static SUBS: Mutex<Vec<Sub>> = Mutex::new(Vec::new());
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-/// Bumped every frame the retained tree changed.
-static TREE_REV: AtomicU64 = AtomicU64::new(0);
 
 /// Serves the connection until it closes. The token is read from the query string (`/?token=…`):
 /// a browser `WebSocket` cannot set a header.
@@ -409,14 +407,9 @@ fn hello() -> String {
         ("proto", Json::n(1.0)),
         ("pid", Json::n(std::process::id() as f64)),
         ("logCursor", Json::n(sk_tree::log::next_seq() as f64)),
-        ("treeRev", Json::n(TREE_REV.load(Ordering::Relaxed) as f64)),
+        ("treeRev", Json::n(sk_tree::tree_revision() as f64)),
     ])
     .to_json()
-}
-
-/// The retained tree changed this frame.
-pub fn note_tree_changed() {
-    TREE_REV.fetch_add(1, Ordering::Relaxed);
 }
 
 thread_local! {
@@ -489,7 +482,7 @@ pub fn broadcast_frame() {
     }
 
     // The tree revision: a number, not a tree, so the client decides whether to spend the target's frame on a `tree` command.
-    let rev = TREE_REV.load(Ordering::Relaxed);
+    let rev = sk_tree::tree_revision();
     if LAST_TREE_REV.with(|c| c.replace(rev)) != rev {
         broadcast(
             &mut subs,

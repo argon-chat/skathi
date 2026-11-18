@@ -634,9 +634,18 @@ pub fn flush_changes() -> bool {
 }
 
 /// Like [`flush_changes`], but tells a wave a forced layout already drew from one that needs a draw.
+static TREE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Advances on every flush that found the tree changed, whichever path flushed it: a frame, an
+/// input dispatch, a forced layout or a devtools command.
+pub fn tree_revision() -> u64 {
+    TREE_REVISION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn flush_changes_kind() -> Flush {
     let dirty = tree::with_tree(|t| t.take_dirty());
     if dirty {
+        TREE_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tree::restyle_all();
         render::gc_node_state();
         containers::gc(&|id| tree::read_tree(|t| t.node(id).is_some()));
@@ -866,6 +875,22 @@ mod tests {
         assert!(tree::with_tree(|t| t.take_dirty()));
         assert!(set_env(env(801.0, 600.0, true, false)));
         assert!(tree::with_tree(|t| t.take_dirty()));
+    }
+
+    #[test]
+    fn a_text_change_flushed_outside_the_frame_advances_the_tree_revision() {
+        let text = tree::with_tree(|t| {
+            let root = t.create_root();
+            let text = t.create_text();
+            t.set_text(text, "0".into());
+            t.insert(text, root, 0);
+            text
+        });
+        flush_changes();
+        let before = tree_revision();
+        tree::with_tree(|t| t.set_text(text, "1".into()));
+        assert!(flush_changes());
+        assert!(tree_revision() > before);
     }
 
     #[test]

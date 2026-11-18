@@ -165,6 +165,22 @@ describe("the panels", () => {
     T,
   );
 
+  test.skipIf(MACOS)(
+    "a text change made by a click reaches the tree without a refresh",
+    async () => {
+      await target.eval(
+        `(() => { const b = document.createElement("div"); b.className = "dt-counter"; b.style.cssText = "position: fixed; left: 300px; top: 300px; width: 160px; height: 40px; z-index: 9999; background-color: white;"; let n = 0; b.textContent = "clicks 0"; b.addEventListener("click", () => { b.textContent = "clicks " + ++n; }); setTimeout(() => document.body.appendChild(b), 0); return 0; })()`,
+      );
+      await expect(inspector.locator(".list").first()).toContainText("clicks 0");
+      await target.send("mouse", { selector: ".dt-counter", kind: "click" });
+      await expect(inspector.locator(".list").first()).toContainText("clicks 1", { timeout: 2500 });
+      await target.send("mouse", { selector: ".dt-counter", kind: "click" });
+      await expect(inspector.locator(".list").first()).toContainText("clicks 2", { timeout: 2500 });
+      await target.eval(`setTimeout(() => document.querySelector(".dt-counter").remove(), 0); 0`);
+    },
+    T,
+  );
+
   // The macOS and Linux CI hosts read under 1 fps here.
   test.skipIf(!WINDOWS)(
     "the Performance panel reads the target's rolling frame clock",
