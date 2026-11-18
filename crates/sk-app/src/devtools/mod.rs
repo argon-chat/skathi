@@ -1076,6 +1076,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
     TARGET_WINDOW.with(|c| c.set(window_arg));
     let arg = |name: &str| req.get(name).and_then(Json::as_str).map(str::to_string);
     let num = |name: &str| req.get(name).and_then(Json::as_f64);
+    let flag = |name: &str| req.get(name).and_then(Json::as_bool).unwrap_or(false);
     let text = match cmd {
         "ping" => ok(Json::obj(vec![
             ("pid", Json::n(std::process::id() as f64)),
@@ -1083,7 +1084,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         ])),
         "query" => match arg("selector") {
             None => err("query needs a `selector`"),
-            Some(sel) => cmd_query(&sel),
+            Some(sel) => cmd_query(&sel, flag("quiet"), flag("ids")),
         },
         "text" => match arg("selector") {
             None => err("text needs a `selector`"),
@@ -1408,19 +1409,25 @@ fn node_json(id: u32, with_text: bool) -> Json {
     Json::obj(entries)
 }
 
-fn cmd_query(selector: &str) -> String {
+/// `quiet`: an invalid selector is only the reply's error, not an advisory in the app's log (the
+/// inspector's search sends one per keystroke). `ids`: the matches as bare ids.
+fn cmd_query(selector: &str, quiet: bool, ids_only: bool) -> String {
     match sk_tree::devtools::query(selector) {
         Err(advisory) => {
-            sk_tree::log::record("advisory", format!("[query] {advisory}"));
+            if !quiet {
+                sk_tree::log::record("advisory", format!("[query] {advisory}"));
+            }
             err(advisory)
         }
         Ok((ids, warnings)) => {
+            let nodes = if ids_only {
+                ids.iter().map(|&id| Json::n(f64::from(id))).collect()
+            } else {
+                ids.iter().map(|&id| node_json(id, true)).collect()
+            };
             let mut entries = vec![
                 ("count", Json::n(ids.len() as f64)),
-                (
-                    "nodes",
-                    Json::arr(ids.iter().map(|&id| node_json(id, true)).collect()),
-                ),
+                (if ids_only { "ids" } else { "nodes" }, Json::arr(nodes)),
             ];
             if !warnings.is_empty() {
                 entries.push((

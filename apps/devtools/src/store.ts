@@ -1,6 +1,7 @@
 import { markRaw, reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel, rowVisible } from "./dump";
+import { searchHit } from "./search";
 import { gcSummary, memUnsupported, sampleOf, type MemSample } from "./memfmt";
 import type {
   ConsoleLine,
@@ -21,6 +22,7 @@ import type {
   PingReply,
   PushMessage,
   PushStream,
+  QueryIdsReply,
   Row,
   RulesReply,
   ScreenshotReply,
@@ -495,6 +497,8 @@ let inspectionEpoch = 0;
 let treeTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTreeRefresh = -Infinity;
 const TREE_REFRESH_MS = 200;
+let selectorHits: Set<NodeId> | null = null;
+let selectorSeq = 0;
 
 function cancelTreeRefresh(): void {
   if (treeTimer !== null) clearTimeout(treeTimer);
@@ -529,6 +533,7 @@ export async function refreshTree(): Promise<void> {
     state.seenRev = revision;
     if (!Object.keys(state.expanded).length) expandInitial(tree, 0);
     reindex();
+    if (state.elementSearch.trim()) void matchSelector();
   } catch (e) {
     if (epoch === inspectionEpoch && target === state.target) state.treeError = fail(e);
   } finally {
@@ -549,15 +554,16 @@ function expandInitial(node: TreeNode | null, depth: number): void {
 
 export function reindex(): void {
   const byId: Record<NodeId, TreeNode> = {};
+  const matches: NodeId[] = [];
   const index = (node: TreeNode | null): void => {
     if (!node || node.id === undefined) return;
     byId[node.id] = node;
+    if (searchHit(node, state.elementSearch, selectorHits)) matches.push(node.id);
     for (const child of node.children || []) index(child);
   };
   index(state.tree);
 
-  const query = state.elementSearch.trim().toLowerCase();
-  const matches: NodeId[] = [];
+  const hits = new Set(matches);
   const rows: Row[] = [];
   const walk = (node: TreeNode | null, depth: number): void => {
     if (!node || node.id === undefined) return;
@@ -565,8 +571,7 @@ export function reindex(): void {
     // no row — see `rowVisible`.
     if (!rowVisible(node, state.showAnchors)) return;
     const children = node.children || [];
-    const hit = query ? rowText(node).includes(query) : false;
-    if (hit) matches.push(node.id);
+    const hit = hits.has(node.id);
     rows.push({
       id: node.id,
       depth,
@@ -584,12 +589,6 @@ export function reindex(): void {
   state.byId = markRaw(byId);
   state.matches = matches;
   if (state.matchIndex >= matches.length) state.matchIndex = 0;
-}
-
-function rowText(node: TreeNode): string {
-  const classes = (node.classes || []).join(" ");
-  const id = node.props?.id || "";
-  return `${node.tag || ""} ${classes} ${id} ${node.text || ""}`.toLowerCase();
 }
 
 export function toggle(id: NodeId): void {
@@ -659,10 +658,29 @@ export async function refreshStyles(): Promise<void> {
   if (state.selected !== null) await loadStyles(state.selected);
 }
 
+/** Runs the search as a selector in the target; an invalid one leaves the text search alone. */
+async function matchSelector(): Promise<void> {
+  const query = state.elementSearch.trim();
+  const seq = ++selectorSeq;
+  let hits: Set<NodeId> | null = null;
+  if (query && state.target) {
+    try {
+      hits = new Set((await cmd<QueryIdsReply>("query", { selector: query, quiet: true, ids: true })).ids);
+    } catch {
+      hits = null;
+    }
+  }
+  if (seq !== selectorSeq) return;
+  selectorHits = hits;
+  reindex();
+}
+
 export function searchElements(query: string): void {
   state.elementSearch = query;
   state.matchIndex = 0;
+  selectorHits = null;
   reindex();
+  void matchSelector();
 }
 
 /**
@@ -670,11 +688,10 @@ export function searchElements(query: string): void {
  * a collapsed subtree would be invisible.
  */
 export function stepMatch(delta: number): void {
-  const query = state.elementSearch.trim().toLowerCase();
-  if (!query || !state.tree) return;
+  if (!state.elementSearch.trim() || !state.tree) return;
   const all: NodeId[] = [];
   const walk = (node: TreeNode, trail: NodeId[]): void => {
-    if (rowText(node).includes(query)) {
+    if (searchHit(node, state.elementSearch, selectorHits)) {
       all.push(node.id);
       for (const ancestor of trail) state.expanded[ancestor] = true;
     }

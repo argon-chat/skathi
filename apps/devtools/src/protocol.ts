@@ -35,6 +35,11 @@ export interface PingReply {
   [key: string]: unknown;
 }
 
+export interface QueryIdsReply {
+  count: number;
+  ids: NodeId[];
+}
+
 export interface TreeNode {
   id: NodeId;
   kind: string;

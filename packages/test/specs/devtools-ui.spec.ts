@@ -127,6 +127,26 @@ describe("the panels", () => {
     T,
   );
 
+  test.skipIf(MACOS)(
+    "the search matches `.class` and `#id` as selectors, and text a selector cannot parse",
+    async () => {
+      await target.eval(
+        `(() => { const d = document.createElement("div"); d.className = "dt-probe"; d.setAttribute("id", "dt-search"); d.textContent = "probe (dt)"; setTimeout(() => document.body.appendChild(d), 0); return 0; })()`,
+      );
+      await expect(inspector.locator(".list").first()).toContainText("probe (dt)");
+      for (const query of [".dt-probe", "#dt-search", "(dt)"]) {
+        await inspector.press("Ctrl+f");
+        await inspector.locator(".search .input").type(query);
+        await expect(inspector.locator(".row.hit").first()).toContainText("probe (dt)");
+        bunExpect(Number(await inspector.locator(".hits").textContent())).toBe(1);
+        await inspector.press("Escape");
+        await expect(inspector.locator(".search .input")).toHaveCount(0);
+      }
+      await target.eval(`setTimeout(() => document.querySelector(".dt-probe").remove(), 0); 0`);
+    },
+    T,
+  );
+
   // The macOS and Linux CI hosts read under 1 fps here.
   test.skipIf(!WINDOWS)(
     "the Performance panel reads the target's rolling frame clock",
