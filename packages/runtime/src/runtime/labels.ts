@@ -67,6 +67,7 @@ export function adviseJsSourced(el: MirrorElement, name: string, via: string): v
         el,
         (n) =>
           isFileInput(n) ||
+          (name === "showpicker" && isColorInput(n)) ||
           (name === "change" &&
             (isSelectEl(n) ||
               isToggleInput(n) ||

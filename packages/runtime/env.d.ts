@@ -66,6 +66,8 @@ declare global {
     scroll: Event;
     scrollend: Event;
     select: Event;
+    /** Skathi: before `<input type=color>` shows its picker; `preventDefault()` keeps it closed. */
+    showpicker: Event;
     submit: Event;
     surfacedisplaychange: SkSurfaceDisplayEvent;
     surfacelost: SkSurfaceEvent;

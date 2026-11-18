@@ -818,6 +818,13 @@ fn publish_app_root() {
     }
 }
 
+/// `sk.config.json`'s `"colorPicker": "system"`: `<input type=color>` opens the OS dialog.
+fn system_color_picker(window_json: Option<&str>) -> bool {
+    window_json
+        .and_then(json::parse)
+        .is_some_and(|w| w.get("colorPicker").and_then(json::Json::as_str) == Some("system"))
+}
+
 #[cfg(feature = "webview")]
 fn install_iframe_backend() {
     #[cfg(feature = "storages")]
@@ -1110,6 +1117,7 @@ fn run_app() {
         // The HTTP cache cap rides in the same block; read before it is consumed.
         #[cfg(feature = "storages")]
         let http_cache_mb = http_client::cache_mb(window_json.as_deref());
+        sk_tree::color_picker::use_system_dialog(system_color_picker(window_json.as_deref()));
         let cfg = window::load_config(window_json);
 
         // Before `JsRuntime::init` so the bundle's first line sees the settled state.
@@ -1211,6 +1219,8 @@ fn run_app() {
             // Without storage the answers last for the run.
             #[cfg(feature = "storages")]
             sk_permissions::set_decisions_file(sk_storage::cookies::folder().map(|f| f.join("permissions.json")));
+            #[cfg(feature = "storages")]
+            sk_tree::color_picker::set_recents_file(sk_storage::cookies::folder().map(|f| f.join("recent-colors.txt")));
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;

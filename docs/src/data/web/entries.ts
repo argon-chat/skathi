@@ -248,6 +248,44 @@ const domAndEvents = section("DOM and events", [
       aliases: ["DOM", "Element", "attributes", "setAttribute", "getAttribute"],
     },
   ),
+  el("input-type-color", "<input type=color>", OK, "A form control that lets the user pick a color.", {
+    since: "0.5.0",
+    notes: [
+      "A click, Enter, Space or `showPicker()` opens a picker Skathi draws inside the window, under the input: a saturation and brightness square, a hue slider, a hex field and the app's recent colors, in the input's light or dark `color-scheme`.",
+      "Dragging, the arrow keys and typing fire `input` as the color moves; Enter or a click outside commits with `change`; Escape restores the value the picker opened with.",
+      "The `alpha` attribute adds an alpha slider; `value` is then `color(srgb r g b / a)`, as in the HTML standard. Without it `value` is `#rrggbb`. Any CSS color can be assigned.",
+      "The input fires a cancelable `showpicker` event before any picker opens: `preventDefault()` keeps it closed so the app can show its own.",
+      '`"colorPicker": "system"` in `sk.config.json` opens the OS color dialog instead.',
+    ],
+    limitations: ["No eyedropper.", "The `colorspace` attribute is ignored: colors are sRGB."],
+    related: ["html-input-element-show-picker", "showpicker"],
+    aliases: ["color input", "color picker", "color well"],
+  }),
+  method("HTMLInputElement.showPicker()", OK, "Opens an input's picker from script.", {
+    since: "0.5.0",
+    notes: [
+      "Opens the color picker of `<input type=color>` and the file dialog of `<input type=file>`, after the `showpicker` event of a color input.",
+      "Needs a user gesture: without one it throws a `NotAllowedError`, and on a disabled input an `InvalidStateError`.",
+    ],
+    limitations: ["Other input types have no picker: the call does nothing, with an advisory."],
+    related: ["input-type-color", "input-type-file", "showpicker"],
+  }),
+  ev(
+    "showpicker",
+    "showpicker",
+    OK,
+    "Fired at a color input before its picker opens; cancel it to show your own picker.",
+    {
+      since: "0.5.0",
+      skathiOnly: true,
+      notes: [
+        "Bubbles and is cancelable. It fires for a click, Enter, Space, a `<label>` and `showPicker()`, after the user-gesture check.",
+        "After `preventDefault()` nothing opens; set `value` and dispatch `input` and `change` from your own picker.",
+      ],
+      related: ["input-type-color", "html-input-element-show-picker"],
+      aliases: ["onshowpicker", "custom color picker"],
+    },
+  ),
   method("getComputedStyle", PART, "Returns the resolved values of the CSS properties of an element.", {
     notes: [DOM_NOTE],
     limitations: [

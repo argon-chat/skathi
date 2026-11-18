@@ -43,7 +43,7 @@ export const groups: readonly ConfigGroup[] = [
   {
     title: "Runtime",
     intro: "Settings the host reads at start. Each also works inside `window`, where it wins over the top-level key.",
-    keys: ["devtools", "httpCache"],
+    keys: ["devtools", "httpCache", "colorPicker"],
   },
   {
     title: "Launch",
@@ -144,6 +144,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   "window.devtools": { default: "the top-level `devtools`, else `true`", example: false },
   "window.httpCache": { default: "the top-level `httpCache`", example: { maxMB: 64 } },
   "window.httpCache.maxMB": { example: 64 },
+  "window.colorPicker": { default: "the top-level `colorPicker`", example: "system", since: "0.5.0" },
   devtools: {
     default: "`true`",
     notes: [
@@ -159,6 +160,14 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     example: { maxMB: 64 },
   },
   "httpCache.maxMB": { example: 64 },
+  colorPicker: {
+    default: '`"builtin"`',
+    notes: [
+      "An app can also show its own picker per input by cancelling the input's `showpicker` event ([Form controls](/elements/form-controls/#show-your-own-picker)).",
+    ],
+    example: "system",
+    since: "0.5.0",
+  },
   singleInstance: { example: true },
   raiseOnSecondInstance: { example: false },
   protocols: {

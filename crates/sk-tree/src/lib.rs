@@ -13,6 +13,7 @@ mod bgimage;
 mod cache;
 mod clipboard;
 mod color;
+pub mod color_picker;
 mod containers;
 mod css_namespace;
 mod cull;
@@ -43,6 +44,7 @@ mod pen;
 pub mod perf;
 mod pointer;
 mod pointer_lock;
+mod popup;
 #[doc(hidden)]
 pub mod predict;
 mod range;
@@ -386,6 +388,16 @@ host_fn!(fn sk_input_select(_g, args) {
     Value::boolean(render::select_input_text(arg_id(args.arg(0)))).0
 });
 
+host_fn!(fn sk_color_picker(_g, args) {
+    Value::boolean(color_picker::request(arg_id(args.arg(0)))).0
+});
+
+// `__sk_color_value(text, alpha)`: a color input's sanitized value.
+host_fn!(fn sk_color_value(g, args) {
+    let text = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    ret_string(&color::sanitize(&text, args.arg(1).as_bool().unwrap_or(false)))
+});
+
 // `name=value` lines, empty for a node that is not a loaded `<video>`.
 host_fn!(fn sk_media_state(_g, args) {
     let id = arg_id(args.arg(0));
@@ -482,6 +494,8 @@ pub fn install(rt: &JsRuntime) {
         ("__sk_perf_visible", 1, sk_perf_visible as *const _),
         ("__sk_focus", 2, sk_focus as *const _),
         ("__sk_input_select", 1, sk_input_select as *const _),
+        ("__sk_color_picker", 1, sk_color_picker as *const _),
+        ("__sk_color_value", 2, sk_color_value as *const _),
         ("__sk_media_state", 1, sk_media_state as *const _),
         ("__sk_media_prop", 2, sk_media_prop as *const _),
         ("__sk_media_call", 3, sk_media_call as *const _),

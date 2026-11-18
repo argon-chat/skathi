@@ -114,7 +114,8 @@
           "description": "Overrides the top-level \"devtools\" for this window.",
           "type": "boolean"
         },
-        "httpCache": { "$ref": "#/definitions/httpCache" }
+        "httpCache": { "$ref": "#/definitions/httpCache" },
+        "colorPicker": { "$ref": "#/definitions/colorPicker" }
       }
     },
     "devtools": {
@@ -137,6 +138,7 @@
       "default": "full"
     },
     "httpCache": { "$ref": "#/definitions/httpCache" },
+    "colorPicker": { "$ref": "#/definitions/colorPicker" },
     "assets": {
       "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",
       "type": "array",
@@ -290,6 +292,10 @@
     }
   },
   "definitions": {
+    "colorPicker": {
+      "description": "What <input type=\"color\"> opens. \"builtin\": Skathi's picker, drawn in the window under the input. \"system\": the OS color dialog (ChooseColor on Windows, NSColorPanel on macOS, zenity or kdialog on Linux).",
+      "enum": ["builtin", "system"]
+    },
     "httpCache": {
       "description": "The disk HTTP cache: { \"maxMB\": N } caps it (0 turns it off); false turns it off. Default 256 MB.",
       "oneOf": [

@@ -321,6 +321,9 @@ interface RuntimeHost {
   acceptCalls: string[];
   inputSelectCalls: number[];
   inputSelectAnswer: boolean;
+  /** `__sk_color_picker`: the ids asked for, and whether the in-window picker took them (false: the OS dialog). */
+  colorPickerCalls: number[];
+  colorPickerAnswer: boolean;
   focus: { calls: { id: number; op: number }[]; answer: (id: number, op: number) => string };
   reloads: number;
   mediaById: Map<number, string>;
@@ -522,6 +525,8 @@ export function createRuntime(
     acceptCalls: [],
     inputSelectCalls: [],
     inputSelectAnswer: true,
+    colorPickerCalls: [],
+    colorPickerAnswer: true,
     focus: {
       calls: [],
       answer: (_id, op) => (op === 1 ? "" : "refused"),
@@ -717,6 +722,8 @@ export function createRuntime(
     "__sk_perf_visible",
     "__sk_toggle_begin",
     "__sk_toggle_end",
+    "__sk_color_picker",
+    "__sk_color_value",
     ...Object.keys(style.fns),
   ];
   const args = [
@@ -922,6 +929,20 @@ export function createRuntime(
       : undefined,
     () => -1,
     () => false,
+    (id: number) => {
+      host.colorPickerCalls.push(id);
+      return host.colorPickerAnswer;
+    },
+    // The host's sanitization (sk-tree `color::sanitize`) for hex input; anything else is black.
+    (text: string, alpha: boolean) => {
+      const t = text.trim().toLowerCase();
+      const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(t)
+        ? t.length <= 5
+          ? "#" + [...t.slice(1)].map((c) => c + c).join("")
+          : t
+        : "#000000";
+      return alpha ? hex : hex.slice(0, 7);
+    },
     ...Object.entries(style.fns).map(([name, fn]) => (...a: unknown[]) => {
       host.styleCalls[name] = (host.styleCalls[name] ?? 0) + 1;
       return Reflect.apply(fn, undefined, a);

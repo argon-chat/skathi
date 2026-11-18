@@ -214,7 +214,10 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
             .then(|| captured_target(window))
             .flatten()
     });
-    if capture.is_none() && crate::select::refine(kind, p, window, cx) {
+    if capture.is_none()
+        && (crate::select::refine(kind, p, window, cx)
+            || crate::color_picker::refine(kind, p, window, cx))
+    {
         return;
     }
     let tags = window.vn_tags_at(p);
@@ -495,7 +498,7 @@ const STILL_POINTER_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 
 pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     let pos = window.mouse_position();
-    if crate::select::covers(window, pos) {
+    if crate::select::covers(window, pos) || crate::color_picker::covers(window, pos) {
         return;
     }
     let inside = window.vn_pointer_inside();

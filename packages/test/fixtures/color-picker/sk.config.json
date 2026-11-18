@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-color-picker",
+
+  "window": {
+    "title": "Skathi — color picker (fixture)",
+    "width": 460,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

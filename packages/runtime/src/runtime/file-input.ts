@@ -43,24 +43,17 @@ export function isColorInput(n: unknown): boolean {
   );
 }
 
-export function colorValue(value: unknown): string {
-  const text = String(value ?? "")
-    .trim()
-    .toLowerCase();
-  if (/^#[0-9a-f]{6}$/.test(text)) return text;
-  if (/^#[0-9a-f]{3,4}$/.test(text)) return "#" + [...text.slice(1, 4)].map((c) => c + c).join("");
-  if (/^#[0-9a-f]{8}$/.test(text)) return text.slice(0, 7);
-  if (text)
-    warnCompat(
-      "input-color:value",
-      "<input type=color> currently accepts hex colors (#rgb, #rgba, #rrggbb, #rrggbbaa); other CSS color values normalize to #000000",
-    );
-  return "#000000";
+export const hasAlpha = (el: MirrorElement): boolean => el.attrs.alpha != null && el.attrs.alpha !== "false";
+
+/** HTML's value sanitization for a color input, in the host: any CSS color, else black. */
+export function colorValue(el: MirrorElement, value: unknown): string {
+  return __sk_color_value(String(value ?? ""), hasAlpha(el));
 }
 
-// A picker is asynchronous. An already-open picker cannot be replaced by a
+// The OS dialog (`"colorPicker": "system"`) is asynchronous: an open one cannot be replaced by a
 // second click, and its result belongs to the original control.
 const colorPickers = new WeakSet<object>();
+/** HTML "show the picker": the cancelable `showpicker` event, then the host's in-window picker or the OS dialog. */
 export function showColorPicker(el: MirrorElement, via: "showPicker" | null): void {
   if (isDisabledControl(el)) return;
   if (colorPickers.has(el)) return;
@@ -68,20 +61,22 @@ export function showColorPicker(el: MirrorElement, via: "showPicker" | null): vo
     console.warn("Color chooser dialog can only be shown with a user activation.");
     return;
   }
+  if (!propagate(el, "showpicker", new Event("showpicker", { bubbles: true, cancelable: true }))) return;
+  activation.consume();
+  if (__sk_color_picker(el.__skId)) return;
   if (!fsHost) {
     warnCompat("input-color:nohost", "<input type=color>: this host has no sk-desktop, so there is no color picker");
     return;
   }
-  const before = colorValue(el.value);
+  const before = colorValue(el, el.value);
   const id = el.__skId;
-  activation.consume();
   colorPickers.add(el);
   void fsHost
     .pickColor(before)
     .then((selected) => {
       if (selected == null) return;
-      const next = colorValue(selected);
-      if (el.__skId !== id || !isColorInput(el) || next === colorValue(el.value)) return;
+      const next = colorValue(el, selected);
+      if (el.__skId !== id || !isColorInput(el) || next === colorValue(el, el.value)) return;
       writeControlValue(el, next);
       propagate(el, "input", fileEvent("input"));
       propagate(el, "change", fileEvent("change"));

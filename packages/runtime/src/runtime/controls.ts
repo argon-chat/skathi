@@ -70,7 +70,7 @@ export function writeControlValue(el: MirrorElement, v: unknown, dirty = true): 
   const s = isRangeInput(el)
     ? rangeValue(el, v)
     : isColorInput(el)
-      ? colorValue(v)
+      ? colorValue(el, v)
       : v == null && el.tag !== "select"
         ? ""
         : String(v);
@@ -90,7 +90,7 @@ defineDomGet(
     if (isOptionEl(this)) return optionValue(this);
     if (isToggleInput(this)) return this.attrs.value ?? "on";
     if (isRangeInput(this)) return rangeValue(this, this._value);
-    if (isColorInput(this)) return colorValue(this._value);
+    if (isColorInput(this)) return colorValue(this, this._value);
     return this._value;
   },
   function (this: MirrorElement, v: unknown) {

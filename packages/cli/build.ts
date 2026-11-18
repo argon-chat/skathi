@@ -133,10 +133,19 @@ function foldHttpCache(
   return { ...(win ?? {}), httpCache: cfg.httpCache };
 }
 
+function foldColorPicker(
+  cfg: Record<string, unknown> | undefined,
+  win: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!cfg || cfg.colorPicker === undefined) return win;
+  if (win && win.colorPicker !== undefined) return win;
+  return { ...(win ?? {}), colorPicker: cfg.colorPicker };
+}
+
 function readWindowConfig(): Record<string, unknown> | undefined {
   const cfg = readSkConfig();
   const win = cfg && typeof cfg.window === "object" && cfg.window ? (cfg.window as Record<string, unknown>) : undefined;
-  return foldHttpCache(cfg, foldDevtoolsFlag(cfg, win));
+  return foldColorPicker(cfg, foldHttpCache(cfg, foldDevtoolsFlag(cfg, win)));
 }
 
 function readAppName(): string | undefined {

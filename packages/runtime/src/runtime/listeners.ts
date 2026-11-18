@@ -305,7 +305,13 @@ export function interceptGlobalTarget(target: object | undefined): void {
 const looksNative = (name: string): boolean => /^[a-z]+$/.test(name);
 
 /** Platform events the runtime fires itself (a file input's `change`/`cancel`, pointer capture): listeners are kept, no advisory. */
-export const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel", "gotpointercapture", "lostpointercapture"]);
+export const JS_SOURCED_EVENTS = new Set<string>([
+  "change",
+  "cancel",
+  "showpicker",
+  "gotpointercapture",
+  "lostpointercapture",
+]);
 
 // Events a browser fires only on `window`/`document`: no advisory for an element listener (dead code in Chrome too).
 const WINDOW_ONLY_EVENTS = new Set<string>([

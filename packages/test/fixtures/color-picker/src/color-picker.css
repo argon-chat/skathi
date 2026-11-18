@@ -1,0 +1,31 @@
+#page {
+  position: relative;
+  height: 100%;
+  background-color: rgb(40, 48, 64);
+  color: rgb(255, 255, 255);
+  font-size: 14px;
+  color-scheme: light;
+}
+#page.dark {
+  color-scheme: dark;
+}
+input {
+  position: absolute;
+  top: 20px;
+}
+#plain {
+  left: 20px;
+}
+#alpha {
+  left: 100px;
+}
+#custom {
+  left: 180px;
+}
+#pick {
+  position: absolute;
+  left: 260px;
+  top: 20px;
+  width: 100px;
+  height: 28px;
+}

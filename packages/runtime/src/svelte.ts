@@ -93,6 +93,12 @@ type Numberish = number | `${number}`;
 type SizeHints = { width?: Numberish | undefined; height?: Numberish | undefined };
 
 declare module "svelte/elements" {
+  interface HTMLInputAttributes {
+    /** `type="color"`: the value carries alpha, and the picker shows an alpha slider. */
+    alpha?: boolean | undefined | null;
+    /** Before `type="color"` shows its picker; `preventDefault()` keeps it closed. */
+    onshowpicker?: ((event: Event) => void) | undefined | null;
+  }
   interface SvelteHTMLElements {
     /** Shows the frames native code presents to the surface `name` (Rust: `skathi::surface(name)`). */
     "sk-surface": HTMLAttributes<HTMLElement> &

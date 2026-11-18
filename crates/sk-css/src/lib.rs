@@ -73,7 +73,7 @@ pub use mapper::{
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
-    set_composed_font_families, take_unreached_fonts, text_shadow_css, transform_css,
+    parse_color, set_composed_font_families, take_unreached_fonts, text_shadow_css, transform_css,
 };
 pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]

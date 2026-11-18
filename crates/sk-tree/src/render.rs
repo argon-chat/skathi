@@ -2442,6 +2442,7 @@ fn build_node<V: 'static>(
                     d = bind_menu_keys(d, id);
                     // A `<select>`'s keys: its popup's before the page's, a closed one's after them.
                     d = crate::select::bind_root(d);
+                    d = crate::color_picker::bind_root(d);
                     d = crate::range::bind_root(d);
                     d = crate::toggle::bind_root(d);
                     d = bind_root_key_clicks(d);
@@ -2595,6 +2596,9 @@ fn build_node<V: 'static>(
                     if opens && close_context() {
                         split.set(true);
                         kids = split_in_flow(kids, background_kids, &stacking);
+                    }
+                    if id == root {
+                        kids.extend(crate::color_picker::layer(t, window, cx));
                     }
                     crate::cache::normalize_inner_root(id, d.style());
                     d.children(kids).into_any_element()

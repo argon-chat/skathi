@@ -3,6 +3,7 @@
 //   "name"                       identity: %LOCALAPPDATA%\<name>\storage, the devtools slot
 //   "productName", "version"     display name (default window.title ?? name); default: package.json version
 //   "httpCache": { "maxMB": 256 }  disk HTTP cache cap; 0 or false = none
+//   "colorPicker": "system"      <input type=color> opens the OS dialog instead of the in-window picker
 //   "id", "singleInstance", "raiseOnSecondInstance", "protocols"  launch identity and URL schemes
 //   "assets", "publicDir"        what is packaged (relative to the app root); Vite's public/, keyed relative to it
 //   "packs": [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }]
@@ -169,6 +170,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "aot",
   "intl",
   "httpCache",
+  "colorPicker",
   "assets",
   "publicDir",
   "packs",
@@ -536,6 +538,12 @@ export function loadAppConfig(
         throw new ConfigError('sk.config.json "windows.console" must be true or false');
       windows.console = w.console;
     }
+  }
+
+  if (raw.colorPicker !== undefined && raw.colorPicker !== "builtin" && raw.colorPicker !== "system") {
+    throw new ConfigError(
+      'sk.config.json "colorPicker" must be "builtin" (the in-window picker) or "system" (the OS dialog)',
+    );
   }
 
   if (raw.httpCache !== undefined && raw.httpCache !== false) {

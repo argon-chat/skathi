@@ -1516,6 +1516,12 @@ fn color(c: &CssColor) -> Option<Hsla> {
     Some(gpui::Rgba { r, g, b, a }.into())
 }
 
+/// A CSS `<color>` as sRGB channels, `None` for anything else, `currentColor` and system colours.
+pub fn parse_color(text: &str) -> Option<[f32; 4]> {
+    use lightningcss::traits::Parse as _;
+    srgb(&CssColor::parse_string(text.trim()).ok()?)
+}
+
 /// A concrete colour in sRGB channels. `lab()`, `oklch()`, `color()` and the rest are converted
 /// and clipped per channel, which is what browsers paint on an sRGB display; `color-mix()` and
 /// relative colours arrive here already computed.

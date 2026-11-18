@@ -1,5 +1,5 @@
 import type { MirrorElement, MirrorNode } from "./types";
-import { isFileInput, isTextWidget } from "./file-input";
+import { fileEvent, isColorInput, isFileInput, isTextWidget } from "./file-input";
 import {
   ACTIVATING_EVENTS,
   CODE_TO_NAME,
@@ -328,6 +328,11 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   if (name === "input" && isRangeInput(target as MirrorElement) && b === 1) {
     if (key != null) (target as MirrorElement)._value = rangeValue(target as MirrorElement, key);
     return propagate(target, "change", synthesize("change", 0, 0, 0, 0, undefined));
+  }
+  // The color picker likewise: b=1 is its commit, already holding the value its `input` events wrote.
+  if (name === "input" && b === 1 && isColorInput(target)) {
+    if (key != null) (target as MirrorElement)._value = key;
+    return propagate(target, "change", fileEvent("change"));
   }
   if ((name === "input" || name === "change") && key != null)
     // The storage, not the accessor: the host already holds this value, and

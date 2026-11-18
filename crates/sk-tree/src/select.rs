@@ -404,7 +404,7 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
     }
 }
 
-fn hit_nothing(kind: VnHitKind, window: &mut Window) {
+pub(crate) fn hit_nothing(kind: VnHitKind, window: &mut Window) {
     windows::here(window, |w| {
         w.hit = None;
         match kind {
@@ -766,123 +766,28 @@ pub(crate) fn popup_child(
         .border_color(pal.border)
         .line_height(relative(1.2))
         .child(list);
-    let placed = Placed {
-        select: id,
-        child: frame.into_any_element(),
-    };
     Some(
-        gpui::deferred(placed)
-            .priority(1)
-            .with_stack_key(std::rc::Rc::from([u128::MAX]))
-            .into_any_element(),
+        crate::popup::Placed {
+            anchor: id,
+            fallback: Default::default(),
+            gap: 0.0,
+            child: frame.into_any_element(),
+            placed: note_placed,
+        }
+        .deferred(),
     )
 }
 
-/// The popup's placement: under the select's box, or above when it does not fit and fits better
-/// there, kept inside the window sideways (gpui's `anchored` flips around one point, a popup around a box).
-struct Placed {
-    select: u32,
-    child: AnyElement,
-}
-
-impl gpui::Element for Placed {
-    type RequestLayoutState = gpui::LayoutId;
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, gpui::LayoutId) {
-        let child = self.child.request_layout(window, cx);
-        let style = gpui::Style {
-            position: gpui::Position::Absolute,
-            display: gpui::Display::Flex,
-            ..Default::default()
-        };
-        (window.request_layout(style, [child], cx), child)
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        child: &mut gpui::LayoutId,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let laid = window.layout_bounds(*child);
-        let k = windows::key(window);
-        let rect = windows::peek(k, |w| {
-            w.bounds
-                .get(&self.select)
-                .or_else(|| w.prev_bounds.get(&self.select))
-                .copied()
-        })
-        .flatten()
-        .unwrap_or_default();
-        let viewport = window.viewport_size();
-        let origin = place(rect, laid.size, viewport);
-        let placed = Bounds {
-            origin,
-            size: laid.size,
-        };
-        let offset = origin - laid.origin;
-        window.with_element_offset(gpui::point(offset.x.round(), offset.y.round()), |window| {
-            self.child.prepaint(window, cx)
-        });
-        OPEN.with(|o| {
-            if let Some(o) = o
-                .borrow_mut()
-                .as_mut()
-                .filter(|o| o.select == self.select && o.window == k)
-            {
-                o.bounds = Some(placed);
-            }
-        });
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _child: &mut gpui::LayoutId,
-        _prepaint: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.child.paint(window, cx);
-    }
-}
-
-fn place(
-    rect: windows::Rect,
-    size: gpui::Size<Pixels>,
-    viewport: gpui::Size<Pixels>,
-) -> Point<Pixels> {
-    let (x, y, _, h) = rect;
-    let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
-    let (pw, ph) = (f32::from(size.width), f32::from(size.height));
-    let below = vh - (y + h);
-    let top = if ph <= below || below >= y {
-        y + h
-    } else {
-        (y - ph).max(0.0)
-    };
-    let left = x.min(vw - pw).max(0.0);
-    gpui::point(px(left), px(top))
+fn note_placed(k: WinKey, select: u32, placed: Bounds<Pixels>) {
+    OPEN.with(|o| {
+        if let Some(o) = o
+            .borrow_mut()
+            .as_mut()
+            .filter(|o| o.select == select && o.window == k)
+        {
+            o.bounds = Some(placed);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1059,27 +964,5 @@ mod tests {
         assert_eq!(ta.find(&rows, Some(2), 'c', later), Some(4));
         assert!(ta.active(later));
         assert!(!ta.active(later + TYPEAHEAD_RESET));
-    }
-
-    #[test]
-    fn the_popup_goes_under_the_box_and_above_it_when_only_that_fits() {
-        let vp = gpui::size(px(800.), px(600.));
-        let sz = |w: f32, h: f32| gpui::size(px(w), px(h));
-        assert_eq!(
-            place((10., 100., 200., 30.), sz(200., 300.), vp),
-            gpui::point(px(10.), px(130.))
-        );
-        assert_eq!(
-            place((10., 500., 200., 30.), sz(200., 300.), vp),
-            gpui::point(px(10.), px(200.))
-        );
-        assert_eq!(
-            place((10., 100., 200., 30.), sz(200., 550.), vp),
-            gpui::point(px(10.), px(130.))
-        );
-        assert_eq!(
-            place((700., 100., 80., 30.), sz(200., 100.), vp),
-            gpui::point(px(600.), px(130.))
-        );
     }
 }

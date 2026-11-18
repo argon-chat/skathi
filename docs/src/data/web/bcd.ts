@@ -83,6 +83,14 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.Element",
     mdn: "https://developer.mozilla.org/docs/Web/API/Element",
   },
+  "input-type-color": {
+    key: "html.elements.input.type_color",
+    mdn: "https://developer.mozilla.org/docs/Web/HTML/Reference/Elements/input/color",
+  },
+  "html-input-element-show-picker": {
+    key: "api.HTMLInputElement.showPicker",
+    mdn: "https://developer.mozilla.org/docs/Web/API/HTMLInputElement/showPicker",
+  },
   "get-computed-style": {
     key: "api.Window.getComputedStyle",
     mdn: "https://developer.mozilla.org/docs/Web/API/Window/getComputedStyle",
