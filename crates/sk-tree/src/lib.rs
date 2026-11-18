@@ -826,6 +826,9 @@ pub fn forget_window(key: windows::WinKey) {
 pub fn set_page_hidden(hidden: bool) {
     live::set_hidden(hidden);
     surface::feedback::set_page_hidden(hidden);
+    if hidden {
+        surface::page_hidden();
+    }
 }
 
 /// The app is quitting: `<sk-surface>` frames still waiting to be shown are dropped as closed.

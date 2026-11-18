@@ -552,6 +552,19 @@ pub(crate) fn any() -> bool {
     ANY.load(Ordering::Relaxed)
 }
 
+/// The page was hidden: no element shows a frame now, whether or not a tick runs to say so.
+pub(crate) fn page_hidden() {
+    for surface in all() {
+        let info = surface.state().info;
+        if info.visible {
+            surface.set_info(SurfaceInfo {
+                visible: false,
+                ..info
+            });
+        }
+    }
+}
+
 pub(crate) fn all() -> Vec<SurfaceHandle> {
     lock(registry())
         .values()
@@ -1822,6 +1835,31 @@ mod tests {
             vec![SurfaceEvent::Changed(info), SurfaceEvent::DeviceLost]
         );
         assert_eq!(s.info(), SurfaceInfo::default());
+    }
+
+    #[test]
+    fn hiding_the_page_makes_a_surface_invisible_at_once() {
+        let s = surface("tests:page-hidden");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let _watch = s.on_change(move |_, e| lock(&sink).push(e));
+        let shown = SurfaceInfo {
+            width: 64,
+            height: 64,
+            visible: true,
+            ..Default::default()
+        };
+        s.set_info(shown);
+        page_hidden();
+        let hidden = SurfaceInfo {
+            visible: false,
+            ..shown
+        };
+        assert_eq!(s.info(), hidden);
+        assert_eq!(
+            *lock(&heard),
+            vec![SurfaceEvent::Changed(shown), SurfaceEvent::Changed(hidden)]
+        );
     }
 
     #[test]

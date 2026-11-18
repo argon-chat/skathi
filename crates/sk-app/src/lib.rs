@@ -503,6 +503,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // A cloaked or occluded window is a hidden page: decline the pump and, by not stamping the
     // frame clock, hand the window to the background tick. Not before the first frame (boot wave).
     if background::pumped_once() && (window::cloaked() || window::occluded()) {
+        window::declined(window, cx);
         idle::rearm_paced(window, pump_frame, Some(idle::CLOAKED_INTERVAL));
         return;
     }

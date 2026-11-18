@@ -1057,14 +1057,30 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         .detach();
 }
 
+/// The pump declines a covered or cloaked window: hide the page now, not once the background tick
+/// takes over, so a frame presented meanwhile is dropped as hidden.
+pub fn declined(window: &mut Window, cx: &mut gpui::App) {
+    if !page_hidden() {
+        platform_changed(window, cx);
+    }
+}
+
 /// Runs the frame funnel out of band; the next frame's diff then sees nothing new, so nothing fires twice.
 fn platform_changed(window: &mut Window, cx: &mut gpui::App) {
     if sk_runtime::bridge::poisoned()
-        // Nested inside a published phase: the frame's own diff picks the change up.
-        || sk_runtime::with_app(|_| ()).is_some()
         // Before the first frame: that frame's funnel owns `boot`.
         || PREV.with(|p| p.borrow().is_none())
     {
+        return;
+    }
+    // Nested inside a published phase (JS minimised the window, say): once it returns, since a
+    // window that stopped drawing has no next frame whose diff would pick the change up.
+    if sk_runtime::with_app(|_| ()).is_some() {
+        window.defer(cx, |window, cx| {
+            if sk_runtime::with_app(|_| ()).is_none() {
+                platform_changed(window, cx);
+            }
+        });
         return;
     }
     sk_runtime::bridge::with_published(window, cx, sk_runtime::Phase::Commit, || {
@@ -1079,34 +1095,43 @@ pub fn cloaked() -> bool {
     win::is_cloaked()
 }
 
-/// Every window of the app is out of sight behind other windows: a hidden page, as when cloaked.
-/// Cached for [`crate::occlusion::RECHECK`]. Never in a test host or with `SK_OCCLUSION=0`.
+/// Every window of the app is out of sight behind other windows, or the display is off: a hidden
+/// page, as when cloaked. Cached for [`crate::occlusion::RECHECK`]. Off in a test host unless
+/// `SK_OCCLUSION=1`, and everywhere with `SK_OCCLUSION=0`.
 pub fn occluded() -> bool {
+    use crate::occlusion::{self, Seen};
     thread_local! {
-        static LAST: Cell<Option<(std::time::Instant, bool)>> = const { Cell::new(None) };
+        static LAST: Cell<Option<(std::time::Instant, Seen, bool)>> = const { Cell::new(None) };
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var("SK_OCCLUSION").map_or(true, |v| v.trim() != "0"))
-        || crate::quiet::never_focus()
-    {
+    let on = *ON.get_or_init(
+        || match std::env::var("SK_OCCLUSION").as_deref().map(str::trim) {
+            Ok("0") => false,
+            Ok("1") => true,
+            _ => !crate::quiet::never_focus(),
+        },
+    );
+    if !on {
         return false;
     }
     let Some(main) = hwnd_raw() else { return false };
     let now = std::time::Instant::now();
-    if let Some((at, answer)) = LAST.with(Cell::get) {
-        // Brought to the front: drawing resumes at once, not on the next recheck.
-        if now.saturating_duration_since(at) < crate::occlusion::RECHECK
-            && !(answer && is_foreground(main))
-        {
+    let seen = Seen {
+        foreground: occlusion::foreground(),
+        display_off: occlusion::display_off(),
+    };
+    if let Some((at, then, answer)) = LAST.with(Cell::get) {
+        if occlusion::still_holds(now.saturating_duration_since(at), then, seen) {
             return answer;
         }
     }
-    let answer = crate::occlusion::hwnd_covered(main)
-        && crate::popout::ids()
-            .into_iter()
-            .filter_map(hwnd_of)
-            .all(crate::occlusion::hwnd_unseen);
-    LAST.with(|l| l.set(Some((now, answer))));
+    let answer = seen.display_off
+        || occlusion::hwnd_covered(main)
+            && crate::popout::ids()
+                .into_iter()
+                .filter_map(hwnd_of)
+                .all(occlusion::hwnd_unseen);
+    LAST.with(|l| l.set(Some((now, seen, answer))));
     answer
 }
 
@@ -1126,16 +1151,6 @@ pub fn app_focused(_cx: &gpui::App) -> bool {
 #[cfg(not(target_os = "windows"))]
 pub fn app_focused(cx: &gpui::App) -> bool {
     cx.active_window().is_some()
-}
-
-#[cfg(target_os = "windows")]
-fn is_foreground(raw: isize) -> bool {
-    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as isize == raw
-}
-
-#[cfg(not(target_os = "windows"))]
-fn is_foreground(_raw: isize) -> bool {
-    false
 }
 
 pub fn page_hidden() -> bool {

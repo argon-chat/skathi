@@ -6,12 +6,31 @@
 //! `requestAnimationFrame`, and JS on the background tick (src/background.rs).
 //!
 //! Chromium recomputes on window events from a thread of its own. Here the frame pump asks, and
-//! [`RECHECK`] bounds how often the walk runs; the foreground window is never covered (it is read on
-//! every ask, so it comes back at once).
+//! [`RECHECK`] bounds how often the walk runs, unless the foreground window or the display's power
+//! state changed since. A display the system turned off counts as covering every window, as in
+//! Chromium.
 
 use std::time::Duration;
 
 pub const RECHECK: Duration = Duration::from_millis(200);
+
+/// What a cached answer was computed under.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Seen {
+    pub foreground: isize,
+    pub display_off: bool,
+}
+
+/// Whether an answer computed `age` ago under `then` still stands `now`.
+pub fn still_holds(age: Duration, then: Seen, now: Seen) -> bool {
+    age < RECHECK && then == now
+}
+
+/// `GUID_CONSOLE_DISPLAY_STATE`'s value: 0 off, 1 on, 2 dimmed.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn display_off_state(state: u32) -> bool {
+    state == 0
+}
 
 /// Past this many uncovered pieces the answer is "not covered": a pathological
 /// tiling must not make the walk expensive, and drawing is the safe default.
@@ -74,17 +93,76 @@ pub fn covered(target: Rect, displays: &[Rect], above: impl IntoIterator<Item = 
 
 #[cfg(target_os = "windows")]
 mod win {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::Rect;
-    use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT};
+    use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Dwm::{
         DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
     };
     use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetWindowRgnBox, HDC, HMONITOR};
+    use windows::Win32::System::Power::{
+        PowerSettingRegisterNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS,
+        POWERBROADCAST_SETTING,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
-        IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_HWNDPREV, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
-        LWA_ALPHA, LWA_COLORKEY, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        IsIconic, IsWindowVisible, DEVICE_NOTIFY_CALLBACK, GWL_EXSTYLE, GW_HWNDPREV,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, LWA_COLORKEY, PBT_POWERSETTINGCHANGE,
+        WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
+
+    const CONSOLE_DISPLAY_STATE: windows::core::GUID =
+        windows::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+
+    static DISPLAY_OFF: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "system" fn display_changed(
+        _: *const std::ffi::c_void,
+        kind: u32,
+        setting: *const std::ffi::c_void,
+    ) -> u32 {
+        if kind == PBT_POWERSETTINGCHANGE && !setting.is_null() {
+            // SAFETY: a power setting change passes a POWERBROADCAST_SETTING, `DataLength` bytes
+            // of data following its header.
+            let setting = unsafe { &*setting.cast::<POWERBROADCAST_SETTING>() };
+            if setting.PowerSetting == CONSOLE_DISPLAY_STATE && setting.DataLength >= 4 {
+                // SAFETY: as above; at least four bytes.
+                let state = unsafe { setting.Data.as_ptr().cast::<u32>().read_unaligned() };
+                DISPLAY_OFF.store(super::display_off_state(state), Ordering::Relaxed);
+                sk_runtime::frames::wake();
+            }
+        }
+        0
+    }
+
+    /// The system turned the displays off. Watched from the first ask; the system reports the
+    /// state at once on registering.
+    pub fn display_off() -> bool {
+        static WATCH: std::sync::Once = std::sync::Once::new();
+        WATCH.call_once(|| {
+            let params = Box::leak(Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+                Callback: Some(display_changed),
+                Context: std::ptr::null_mut(),
+            }));
+            let mut handle = std::ptr::null_mut();
+            // SAFETY: the parameters are leaked, so they outlive the registration, which lasts
+            // for the process.
+            let _ = unsafe {
+                PowerSettingRegisterNotification(
+                    &CONSOLE_DISPLAY_STATE,
+                    DEVICE_NOTIFY_CALLBACK,
+                    HANDLE(std::ptr::from_mut(params).cast()),
+                    &mut handle,
+                )
+            };
+        });
+        DISPLAY_OFF.load(Ordering::Relaxed)
+    }
+
+    pub fn foreground() -> isize {
+        unsafe { GetForegroundWindow() }.0 as isize
+    }
 
     /// The rect DWM draws: `GetWindowRect` includes the invisible resize
     /// borders, which would cover a strip of whatever is beside the window.
@@ -179,9 +257,6 @@ mod win {
 
     pub fn covered(raw: isize) -> bool {
         let h = HWND(raw as *mut _);
-        if unsafe { GetForegroundWindow() } == h {
-            return false;
-        }
         let Some(target) = bounds(h) else {
             return false;
         };
@@ -212,9 +287,15 @@ mod win {
     pub fn unseen(_raw: isize) -> bool {
         false
     }
+    pub fn display_off() -> bool {
+        false
+    }
+    pub fn foreground() -> isize {
+        0
+    }
 }
 
-pub use win::{covered as hwnd_covered, unseen as hwnd_unseen};
+pub use win::{covered as hwnd_covered, display_off, foreground, unseen as hwnd_unseen};
 
 #[cfg(test)]
 mod tests {
@@ -285,6 +366,38 @@ mod tests {
                 assert!(empty(intersect(*a, *b)), "{a:?} overlaps {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_cached_answer_lasts_a_recheck_unless_the_foreground_or_the_display_changes() {
+        let seen = Seen {
+            foreground: 7,
+            display_off: false,
+        };
+        let short = Duration::from_millis(50);
+        assert!(still_holds(short, seen, seen));
+        assert!(!still_holds(RECHECK, seen, seen));
+        let other = Seen {
+            foreground: 8,
+            ..seen
+        };
+        assert!(
+            !still_holds(short, seen, other),
+            "a cover took the foreground"
+        );
+        let off = Seen {
+            display_off: true,
+            ..seen
+        };
+        assert!(!still_holds(short, seen, off));
+        assert!(!still_holds(short, off, seen), "the display came back");
+    }
+
+    #[test]
+    fn only_a_display_turned_off_counts_as_off() {
+        assert!(display_off_state(0));
+        assert!(!display_off_state(1));
+        assert!(!display_off_state(2), "dimmed still shows");
     }
 
     #[test]

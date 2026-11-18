@@ -226,7 +226,7 @@ fn main() {
 /// every event and the cadence (refreshes each frame was held), and answers a summary.
 mod feedback {
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
@@ -237,14 +237,31 @@ mod feedback {
         SurfaceFormat, SurfaceHandle,
     };
 
-    /// What the producer thread answers: the ids presented, the presents refused `Busy`, and why
-    /// it could not start, if it could not.
-    type Produced = (Vec<u64>, usize, Option<String>);
+    /// What the producer thread answers.
+    #[derive(Default)]
+    struct Produced {
+        ids: Vec<u64>,
+        /// `info().visible` as each of them was presented, and when.
+        visible: Vec<(bool, u64)>,
+        /// Presents refused `Busy`.
+        busy: usize,
+        /// Why it could not start.
+        error: Option<String>,
+    }
+
+    fn failed(error: String) -> Produced {
+        Produced {
+            error: Some(error),
+            ..Default::default()
+        }
+    }
 
     struct Run {
         stop: Arc<AtomicBool>,
         producer: JoinHandle<Produced>,
         events: Arc<Mutex<Vec<FrameEvent>>>,
+        /// When the first frame since the last one presented was reported hidden.
+        hidden_at: Arc<AtomicU64>,
         surface: SurfaceHandle,
         shown: u64,
         _watch: FrameWatch,
@@ -267,7 +284,23 @@ mod feedback {
         });
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        let watch = surface.on_frame(move |e| sink.lock().unwrap().push(e));
+        let hidden_at = Arc::new(AtomicU64::new(0));
+        let first_hidden = hidden_at.clone();
+        let watch = surface.on_frame(move |e| {
+            match e {
+                FrameEvent::Presented { .. } => first_hidden.store(0, Ordering::Relaxed),
+                FrameEvent::Dropped {
+                    reason: FrameDropReason::Hidden,
+                    ..
+                } => {
+                    let now = monotonic_ns();
+                    let _ =
+                        first_hidden.compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed);
+                }
+                FrameEvent::Dropped { .. } => {}
+            }
+            sink.lock().unwrap().push(e)
+        });
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let name = surface.name().to_string();
@@ -283,14 +316,10 @@ mod feedback {
                             let surface = surface.clone();
                             Box::new(move |n| ring.present(&surface, n))
                         }
-                        Err(e) => return (Vec::new(), 0, Some(e)),
+                        Err(e) => return failed(e),
                     }
                     #[cfg(not(windows))]
-                    return (
-                        Vec::new(),
-                        0,
-                        Some(format!("{ring} D3D12 textures off Windows")),
-                    );
+                    return failed(format!("{ring} D3D12 textures off Windows"));
                 } else {
                     let surface = surface.clone();
                     Box::new(move |n| {
@@ -301,13 +330,14 @@ mod feedback {
                 };
             let interval = if fps > 0.0 { (1e9 / fps) as u64 } else { 0 };
             let start = monotonic_ns();
-            let (mut ids, mut busy) = (Vec::new(), 0);
+            let mut produced = Produced::default();
             for n in 0.. {
                 if stopping.load(Ordering::Acquire) {
                     break;
                 }
                 let due = start + n * interval;
-                let display = surface.info().display;
+                let info = surface.info();
+                let display = info.display;
                 let at = match (paced, display.last_vblank, display.refresh_period) {
                     (true, Some(vblank), Some(period)) => {
                         let p = period.as_nanos() as u64;
@@ -321,17 +351,21 @@ mod feedback {
                     std::thread::sleep(Duration::from_nanos(wait));
                 }
                 match present(n as usize) {
-                    Ok(id) => ids.push(id),
-                    Err(SurfaceError::Busy) => busy += 1,
+                    Ok(id) => {
+                        produced.ids.push(id);
+                        produced.visible.push((info.visible, monotonic_ns()));
+                    }
+                    Err(SurfaceError::Busy) => produced.busy += 1,
                     Err(_) => {}
                 }
             }
-            (ids, busy, None)
+            produced
         });
         let run = Run {
             stop,
             producer,
             events,
+            hidden_at,
             surface,
             shown,
             _watch: watch,
@@ -346,17 +380,27 @@ mod feedback {
             return Value::Null;
         };
         run.stop.store(true, Ordering::Release);
-        let (ids, busy, error) = run.producer.join().unwrap_or_default();
+        let produced = run.producer.join().unwrap_or_default();
+        let ids = &produced.ids;
         let shown = run.surface.stats().shown - run.shown;
         let deadline = Instant::now() + Duration::from_secs(3);
         while run.events.lock().unwrap().len() < ids.len() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         let events = run.events.lock().unwrap().clone();
-        let mut summary = summary(name, &ids, &events);
-        summary["busy"] = busy.into();
+        let mut summary = summary(name, ids, &events);
+        // Frames presented while `info().visible` still said so, after the frames since the last
+        // one shown began to drop as hidden.
+        let hidden_at = run.hidden_at.load(Ordering::Relaxed);
+        let visible_late = produced
+            .visible
+            .iter()
+            .filter(|&&(visible, at)| hidden_at != 0 && at > hidden_at && visible)
+            .count();
+        summary["busy"] = produced.busy.into();
         summary["shown"] = shown.into();
-        summary["error"] = error.into();
+        summary["error"] = produced.error.into();
+        summary["visibleLate"] = visible_late.into();
         summary
     }
 

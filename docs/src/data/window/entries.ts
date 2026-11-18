@@ -1380,7 +1380,7 @@ const quit = () => window.close();
     mdn: `${MDN}API/Document/visibilityState`,
     syntax: 'readonly document.visibilityState: "visible" | "hidden"\nreadonly document.hidden: boolean',
     notes: [
-      "On Windows, the page is hidden while the window is hidden, minimized, on another virtual desktop, or fully covered by other windows. A shown window in the background stays visible.",
+      "On Windows, the page is hidden while the window is hidden, minimized, on another virtual desktop, or fully covered by other windows. A shown window in the background stays visible. Since 0.5 a fully covered window is hidden even while it has the focus, and every window is hidden while the system has turned the display off.",
       "On macOS and Linux, the page is hidden while the window is hidden or minimized.",
       "It is set before the app's code runs.",
       "While hidden, `requestAnimationFrame` callbacks do not run and animations pause.",
@@ -2116,7 +2116,7 @@ sync();`,
     mdn: `${MDN}API/Document/visibilitychange_event`,
     syntax: 'document.addEventListener("visibilitychange", (event: Event) => void)',
     notes: [
-      "Hidden means hidden with `hide()` or minimized, and on Windows also on another virtual desktop or fully covered.",
+      "Hidden means hidden with `hide()` or minimized, and on Windows also on another virtual desktop or fully covered (since 0.5 also while focused), and since 0.5 while the system has turned the display off.",
       "It fires before `minimize` and `restore` in the same frame.",
     ],
     examples: [

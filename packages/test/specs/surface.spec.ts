@@ -1,7 +1,18 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { EXE_SUFFIX, launch, MACOS, readPng, REPO, SCREENSHOTS, TARGET, WINDOWS, type Bounds } from "../src/index";
+import {
+  EXE_SUFFIX,
+  launch,
+  MACOS,
+  readPng,
+  REPO,
+  SCREENSHOTS,
+  TARGET,
+  WINDOWS,
+  type Bounds,
+  type SkApp,
+} from "../src/index";
 
 const EXE = join(REPO, "target", TARGET, "debug", "examples", `surface${EXE_SUFFIX}`);
 const build = spawnSync("cargo", ["build", "-p", "sk-app", "--target", TARGET, "--example", "surface"], {
@@ -12,12 +23,15 @@ const build = spawnSync("cargo", ["build", "-p", "sk-app", "--target", TARGET, "
 });
 if (build.status !== 0) throw new Error(`building the surface example failed:\n${build.stderr}`);
 
-const app = await launch({
-  app: "packages/test/fixtures/surface/src/main.ts",
-  exe: EXE,
-  window: [720, 540],
-  label: "surface",
-});
+const open = (label: string, env?: Record<string, string>) =>
+  launch({
+    app: "packages/test/fixtures/surface/src/main.ts",
+    exe: EXE,
+    window: [720, 540],
+    label,
+    ...(env ? { env } : {}),
+  });
+const app = await open("surface");
 afterAll(() => app.close());
 
 const T = 60_000;
@@ -41,15 +55,15 @@ type Stats = {
   };
 };
 
-/** `appHost.call(name, ...args)` in the page; its settled value. */
-async function call(name: string, ...args: unknown[]): Promise<unknown> {
-  await app.eval(
+/** `appHost.call(name, ...args)` in `on`'s page; its settled value. */
+async function callOn(on: SkApp, name: string, ...args: unknown[]): Promise<unknown> {
+  await on.eval(
     `globalThis.__sv = undefined; globalThis.hostCall(${JSON.stringify(name)}, ...${JSON.stringify(args)}).then(` +
       `v => { globalThis.__sv = JSON.stringify({ ok: v }); }, e => { globalThis.__sv = JSON.stringify({ err: String(e && e.message) }); }); 0`,
   );
   const until = Date.now() + 20_000;
   while (Date.now() < until) {
-    const raw = await app.eval("globalThis.__sv === undefined ? '' : globalThis.__sv");
+    const raw = await on.eval("globalThis.__sv === undefined ? '' : globalThis.__sv");
     if (raw) {
       const settled = JSON.parse(String(raw)) as { ok?: unknown; err?: string };
       if (settled.err !== undefined) throw new Error(`${name}: ${settled.err}`);
@@ -59,6 +73,8 @@ async function call(name: string, ...args: unknown[]): Promise<unknown> {
   }
   throw new Error(`${name} never settled`);
 }
+
+const call = (name: string, ...args: unknown[]) => callOn(app, name, ...args);
 
 const stats = (name: string) => call("stats", name) as Promise<Stats>;
 
@@ -132,11 +148,7 @@ test(
     ])
       await call("present", "hidden", "bgra", color, 8, 8);
     await Bun.sleep(300);
-    expect(await stats("hidden")).toMatchObject({
-      presented: 2,
-      shown: 0,
-      visible: false,
-    });
+    expect(await stats("hidden")).toMatchObject({ presented: 2, shown: 0, visible: false });
 
     await app.eval("globalThis.showHidden()");
     const shown = await until(
@@ -310,29 +322,22 @@ type Feedback = {
   busy: number;
   shown: number;
   error: string | null;
+  visibleLate: number;
 };
 
-type Producer = {
-  name: string;
-  source: "bgra" | "d3d12" | "d3d12-rgba16f";
-  ring: number;
-};
+type Producer = { name: string; source: "bgra" | "d3d12" | "d3d12-rgba16f"; ring: number; on?: SkApp };
 
 async function feedback(
   fps: number,
   ms: number,
   paced: boolean,
   during?: () => Promise<void>,
-  { name, source, ring }: Producer = {
-    name: "feedback",
-    source: "bgra",
-    ring: 3,
-  },
+  { name, source, ring, on = app }: Producer = { name: "feedback", source: "bgra", ring: 3 },
 ): Promise<Feedback> {
-  await call("feedbackStart", name, fps, paced, source, ring);
+  await callOn(on, "feedbackStart", name, fps, paced, source, ring);
   await Bun.sleep(ms);
   if (during) await during();
-  const f = (await call("feedbackStop", name)) as Feedback;
+  const f = (await callOn(on, "feedbackStop", name)) as Feedback;
   expect(f.error).toBeNull();
   return f;
 }
@@ -431,8 +436,12 @@ test.skipIf(!WINDOWS)(
       });
       expect(f.exactlyOnce).toBe(true);
       expect(f.inOrder).toBe(true);
+      console.log(
+        `minimised: ${f.hidden} hidden, ${f.visibleLate} presented after one was hidden while info().visible lagged`,
+      );
       expect(f.presented).toBeGreaterThan(0);
       expect(f.hidden).toBeGreaterThan(10);
+      expect(f.visibleLate).toBeLessThan(3);
     } finally {
       user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
       user32.close();
@@ -441,6 +450,96 @@ test.skipIf(!WINDOWS)(
       () => stats("feedback"),
       (s) => s.visible,
     );
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS)(
+  "frames under a topmost window that does not take the foreground are dropped as hidden",
+  async () => {
+    const { dlopen, FFIType, ptr } = await import("bun:ffi");
+    const user32 = dlopen("user32.dll", {
+      CreateWindowExW: {
+        args: [
+          FFIType.u32,
+          FFIType.ptr,
+          FFIType.ptr,
+          FFIType.u32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.i32,
+          FFIType.u64,
+          FFIType.u64,
+          FFIType.u64,
+          FFIType.ptr,
+        ],
+        returns: FFIType.u64,
+      },
+      ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+      DestroyWindow: { args: [FFIType.u64], returns: FFIType.i32 },
+      GetWindowRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+      GetForegroundWindow: { args: [], returns: FFIType.u64 },
+      SetWindowPos: {
+        args: [FFIType.u64, FFIType.u64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
+        returns: FFIType.i32,
+      },
+    });
+    // Occlusion is off in test hosts unless asked for.
+    const watched = await open("surface-occlusion", { SK_OCCLUSION: "1" });
+    let cover = 0n;
+    try {
+      const ring: Producer = { name: "feedback", source: "bgra", ring: 3, on: watched };
+      const hwnd = await watched.hwnd();
+      // Above the other windows, without activating it (SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE).
+      user32.symbols.SetWindowPos(hwnd, 0n, 0, 0, 0, 0, 0x13);
+      const uncovered = (
+        await until(
+          () => callOn(watched, "stats", "feedback") as Promise<Stats>,
+          (s) => s.visible,
+          2_000,
+        )
+      ).visible;
+      const before = await feedback(60, 600, false, undefined, ring);
+      const rect = new Int32Array(4);
+      user32.symbols.GetWindowRect(hwnd, ptr(rect));
+      const [left, top, right, bottom] = rect;
+      const foreground = user32.symbols.GetForegroundWindow();
+      // WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP: shown without activation.
+      cover = BigInt(
+        user32.symbols.CreateWindowExW(
+          0x0800_0088,
+          ptr(Buffer.from("STATIC\0", "utf16le")),
+          null,
+          0x8000_0000,
+          left! - 8,
+          top! - 8,
+          right! - left! + 16,
+          bottom! - top! + 16,
+          0n,
+          0n,
+          0n,
+          null,
+        ),
+      );
+      expect(cover).not.toBe(0n);
+      user32.symbols.ShowWindow(cover, 4 /* SW_SHOWNOACTIVATE */);
+      expect(user32.symbols.GetForegroundWindow(), "the cover took no foreground").toBe(foreground);
+      const covered = await feedback(60, 1_500, false, undefined, ring);
+      console.log(
+        `before the cover: ${before.presented} presented, ${before.hidden} hidden of ${before.presents}; ` +
+          `covered: ${covered.presented} presented, ${covered.hidden} hidden of ${covered.presents}`,
+      );
+      // A window of the desktop's that stays above the harness window leaves it covered throughout.
+      if (uncovered) expect(before.presented).toBeGreaterThan(before.presents * 0.5);
+      expect(covered.exactlyOnce).toBe(true);
+      expect(covered.hidden).toBeGreaterThan(covered.presents * 0.8);
+      expect((await callOn(watched, "stats", "feedback")) as Stats).toMatchObject({ visible: false });
+    } finally {
+      if (cover) user32.symbols.DestroyWindow(cover);
+      user32.close();
+      await watched.close();
+    }
   },
   T,
 );
