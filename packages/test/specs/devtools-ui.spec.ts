@@ -147,6 +147,24 @@ describe("the panels", () => {
     T,
   );
 
+  test.skipIf(MACOS)(
+    "an overridden declaration is struck through with a line that paints",
+    async () => {
+      await inspector.press("Ctrl+f");
+      await inspector.locator(".search .input").type(".tab.router-link-active");
+      await expect(inspector.locator(".hits")).toHaveText("1");
+      await inspector.press("Enter");
+      await expect(inspector.locator(".who")).toContainText("router-link-active");
+      await inspector.press("Escape");
+      await expect(inspector.locator(".decl.dead").first()).toBeVisible();
+      const dead = await inspector.query(".decl.dead .prop");
+      bunExpect(dead.nodes.map((n) => n.text).sort()).toEqual(["background", "color"]);
+      const base = (await inspector.send("styles", { node: dead.nodes[0]!.id })).computed.base.join("\n");
+      bunExpect(base).toMatch(/strikethrough: Some\(\s*StrikethroughStyle \{\s*thickness: (?!0px)[\d.]+px/);
+    },
+    T,
+  );
+
   // The macOS and Linux CI hosts read under 1 fps here.
   test.skipIf(!WINDOWS)(
     "the Performance panel reads the target's rolling frame clock",

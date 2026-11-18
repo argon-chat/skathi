@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { Declaration, Rule } from "../protocol";
+import type { Rule } from "../protocol";
+import { overriddenDeclarations } from "../cascade";
 import { cssColor, cssish, hslaCss, nodeLabel, parseHsla, topLevel } from "../dump";
 import { refreshStyles, state } from "../store";
 
@@ -10,23 +11,16 @@ const node = computed(() => (state.selected === null ? null : state.byId[state.s
 const rules = computed(() => state.rules?.rules || []);
 const copied = ref("");
 
-const winners = computed(() => {
-  const best: Record<string, { rule: number; decl: number; important: boolean }> = {};
-  rules.value.forEach((rule, ri) => {
-    rule.declarations.forEach((decl, di) => {
-      const held = best[decl.property];
-      const important = !!decl.important;
-      if (!held || important || !held.important) {
-        best[decl.property] = { rule: ri, decl: di, important };
-      }
-    });
-  });
-  return best;
+const dead = computed(() => {
+  const hovered = !!state.styles?.hovered;
+  return overriddenDeclarations(
+    rules.value,
+    (rule) => rule.state === "base" || (rule.state === "hover" && !rule.ancestorState && hovered),
+  );
 });
 
-function overridden(ruleIndex: number, declIndex: number, decl: Declaration): boolean {
-  const won = winners.value[decl.property];
-  return !won || won.rule !== ruleIndex || won.decl !== declIndex;
+function overridden(ruleIndex: number, declIndex: number): boolean {
+  return dead.value.has(`${ruleIndex}:${declIndex}`);
 }
 
 const ordered = computed(() =>
@@ -135,7 +129,7 @@ function ruleText(rule: Rule): string {
               v-for="(decl, di) in entry.rule.declarations"
               :key="decl.property + di"
               class="decl mono"
-              :class="{ dead: overridden(entry.index, di, decl) }"
+              :class="{ dead: overridden(entry.index, di) }"
             >
               <span
                 v-if="cssColor(decl.value)"

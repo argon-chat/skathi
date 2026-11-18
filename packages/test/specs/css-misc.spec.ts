@@ -129,6 +129,18 @@ describe("CSS Color 4/5 functions", () => {
   });
 });
 
+describe("text-decoration", () => {
+  for (const line of ["under", "strike"]) {
+    test.skipIf(!SCREENSHOTS)(`a declared ${line} line paints without a declared thickness`, async () => {
+      const b = await box(`#deco-${line}`);
+      const at = await shoot();
+      let lit = 0;
+      for (let y = 0; y < b.h; y++) lit += span(at, b, y, red) ? 1 : 0;
+      bunExpect(lit).toBeGreaterThan(0);
+    });
+  }
+});
+
 describe("contain", () => {
   test.skipIf(!SCREENSHOTS)("contain: paint clips the content to the box", async () => {
     const b = await box("#contain");

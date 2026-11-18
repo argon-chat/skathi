@@ -449,12 +449,31 @@ impl DecorationPatch {
                 }
             }
         }
-        if let (Some(strikethrough), Some(Some(color))) = (text.strikethrough.as_mut(), self.color)
-        {
+        if let Some(strikethrough) = text.strikethrough.as_mut() {
             if !cancelled(strikethrough.thickness, strikethrough.color) {
-                strikethrough.color = Some(color);
+                if let Some(Some(color)) = self.color {
+                    strikethrough.color = Some(color);
+                }
+                if let Some(thickness) = self.thickness {
+                    strikethrough.thickness = px(thickness);
+                }
             }
         }
+    }
+}
+
+/// gpui paints a zero-thickness line as nothing, so a declared line starts at CSS `auto`'s usual 1px.
+fn underline_line() -> gpui::UnderlineStyle {
+    gpui::UnderlineStyle {
+        thickness: px(1.0),
+        ..Default::default()
+    }
+}
+
+fn strike_line() -> gpui::StrikethroughStyle {
+    gpui::StrikethroughStyle {
+        thickness: px(1.0),
+        color: None,
     }
 }
 
@@ -4863,6 +4882,9 @@ fn apply_property(
                     if let Some(u) = r.text.underline.as_mut() {
                         u.thickness = px(w);
                     }
+                    if let Some(s) = r.text.strikethrough.as_mut() {
+                        s.thickness = px(w);
+                    }
                 }
             }
         }
@@ -4871,10 +4893,10 @@ fn apply_property(
         TextDecoration(d, _) => {
             use lightningcss::properties::text::TextDecorationLine as TDL;
             if d.line.contains(TDL::Underline) {
-                r.text.underline = Some(gpui::UnderlineStyle::default());
+                r.text.underline = Some(underline_line());
             }
             if d.line.contains(TDL::LineThrough) {
-                r.text.strikethrough = Some(gpui::StrikethroughStyle::default());
+                r.text.strikethrough = Some(strike_line());
             }
             x.decoration.color = Some(color(&d.color));
             if let Some(c) = color(&d.color) {
@@ -5782,10 +5804,10 @@ fn apply_property(
         TextDecorationLine(v, _) => {
             use lightningcss::properties::text::TextDecorationLine as TDL;
             if v.contains(TDL::Underline) {
-                r.text.underline = Some(gpui::UnderlineStyle::default());
+                r.text.underline = Some(underline_line());
             }
             if v.contains(TDL::LineThrough) {
-                r.text.strikethrough = Some(gpui::StrikethroughStyle::default());
+                r.text.strikethrough = Some(strike_line());
             }
             if v.intersects(TDL::Overline | TDL::Blink) {
                 unsupported(diagnostics, "text-decoration-line: overline/blink");
@@ -8346,6 +8368,29 @@ mod tests {
         assert_eq!(u.color.map(|c| c.a), Some(0.0));
         let strike = r.text.strikethrough.expect("cleared too");
         assert_eq!(strike.thickness, px(0.0));
+    }
+
+    #[test]
+    fn a_declared_line_is_thick_enough_to_paint() {
+        for css in [
+            "text-decoration: line-through",
+            "text-decoration-line: line-through",
+        ] {
+            let strike = clean(css).text.strikethrough.expect("declared");
+            assert!(strike.thickness > px(0.0), "{css}: {strike:?}");
+        }
+        for css in [
+            "text-decoration: underline",
+            "text-decoration-line: underline",
+        ] {
+            let underline = clean(css).text.underline.expect("declared");
+            assert!(underline.thickness > px(0.0), "{css}: {underline:?}");
+        }
+        let strike = clean("text-decoration-line: line-through; text-decoration-thickness: 3px")
+            .text
+            .strikethrough
+            .expect("declared");
+        assert_eq!(strike.thickness, px(3.0));
     }
 
     #[test]

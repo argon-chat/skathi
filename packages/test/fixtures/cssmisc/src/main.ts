@@ -45,5 +45,7 @@ createApp({
       ...colours(),
       ...contained(),
       ...scrollers(),
+      h("div", { id: "deco-under", class: "deco deco-under" }, "MMMMMM"),
+      h("div", { id: "deco-strike", class: "deco deco-strike" }, "MMMMMM"),
     ]),
 }).mount();

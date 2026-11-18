@@ -111,3 +111,20 @@
 .row {
   height: 50px;
 }
+
+.deco {
+  position: absolute;
+  left: 260px;
+  font-size: 24px;
+  color: transparent;
+  background: white;
+}
+.deco-under {
+  top: 280px;
+  text-decoration: underline red;
+}
+.deco-strike {
+  top: 330px;
+  text-decoration-line: line-through;
+  text-decoration-color: red;
+}
