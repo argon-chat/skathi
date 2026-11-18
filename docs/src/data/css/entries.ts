@@ -1276,9 +1276,11 @@ const color = section("Color", [
     notes: [
       "Parsed, computed and inherited; `getComputedStyle(el).dynamicRangeLimit` reads it, with a mix written as `dynamic-range-limit-mix()`.",
       "An `<sk-surface>` producer reads it from `SurfaceInfo::dynamic_range_limit`, and `SurfaceInfo::content_headroom()` turns it into the brightest value a frame should reach on the surface's display, such as a video player's target peak.",
+      "On Windows and macOS, a window on an HDR display shows an `<sk-surface>`'s half-float frames above SDR white, each element's clamped to the headroom its `dynamic-range-limit` allows (new in 0.4.0).",
     ],
     limitations: [
-      "Windows draw SDR, so it has no visible effect on `<video>`, images or the page; only what an `<sk-surface>` producer does with it.",
+      "It has no effect on `<video>`, images or the rest of the page, which are SDR.",
+      "Linux windows draw SDR, so there only a surface's producer acts on it.",
       "Transitions and animations of it snap to the end value.",
     ],
     aliases: ["hdr", "high dynamic range"],
@@ -2668,7 +2670,22 @@ const mediaFeatures = section("Media features", [
   mf("inverted-colors", NO, "Tests whether the system inverts colors."),
   mf("color", NO, "Tests the number of bits per color component of the output device."),
   mf("color-gamut", NO, "Tests the range of colors the output device can show."),
-  mf("dynamic-range", NO, "Tests whether the output device supports high dynamic range."),
+  mf("dynamic-range", PART, "Tests whether the output device supports high dynamic range.", {
+    since: "0.4.0",
+    platforms: { windows: OK, macos: OK, linux: PART },
+    notes: [
+      "`high` matches while the window's display is in HDR (Windows' HDR mode, a Mac screen with EDR headroom); `standard` always matches. It follows the window to another display.",
+    ],
+    limitations: ["Linux always answers `standard`."],
+    related: ["media-video-dynamic-range", "dynamic-range-limit"],
+  }),
+  mf("video-dynamic-range", PART, "Tests whether the output device supports high dynamic range for video.", {
+    since: "0.4.0",
+    platforms: { windows: OK, macos: OK, linux: PART },
+    notes: ["Answers as `dynamic-range` does: a window draws video and the page alike."],
+    limitations: ["Linux always answers `standard`."],
+    related: ["media-dynamic-range"],
+  }),
   mf("scripting", NO, "Tests whether scripting is available."),
   mf("update", NO, "Tests how quickly the output device can change what it shows."),
   mf("-webkit-device-pixel-ratio", NO, "Tests the device pixel ratio; the non-standard predecessor of `resolution`.", {

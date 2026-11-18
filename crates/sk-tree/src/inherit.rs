@@ -34,8 +34,8 @@ pub(crate) fn dynamic_range_limit_in(t: &Tree, id: u32) -> sk_css::DynamicRangeL
 }
 
 /// The computed `dynamic-range-limit` of an element: how bright the HDR content it shows (an
-/// `<sk-surface>`, `<video>` or image) may be. Windows draw SDR today, so only a surface's
-/// producer acts on it ([`crate::surface::SurfaceInfo::dynamic_range_limit`]).
+/// `<sk-surface>`, `<video>` or image) may be. An HDR window paints a half-float surface up to
+/// it; a producer reads it as [`crate::surface::SurfaceInfo::dynamic_range_limit`].
 pub fn dynamic_range_limit(id: u32) -> sk_css::DynamicRangeLimit {
     tree::read_tree(|t| dynamic_range_limit_in(t, id))
 }

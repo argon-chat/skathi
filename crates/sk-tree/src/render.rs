@@ -5443,6 +5443,7 @@ fn build_surface<V: 'static>(
             .absolute()
             .size_full();
         picture.style().vn_object_position = Some(object_position_of(d.style()));
+        let picture = crate::surface::node::HdrPicture(id, picture.into_any_element());
         let radii = padding_box_radii(d.style(), window.rem_size());
         d = if radii.is_square() {
             d.child(picture)

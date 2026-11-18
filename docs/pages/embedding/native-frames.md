@@ -146,16 +146,27 @@ From then on the surface takes half-float RGBA and refuses 8-bit frames, and the
 
 The values are linear extended sRGB: sRGB (BT.709) primaries, no transfer curve, 1.0 is SDR white, and values may go below 0 and above 1. That is what CoreVideo's `'RGhA'` holds in `kCGColorSpaceExtendedLinearSRGB`, and Windows' scRGB. Alpha is straight, as in the 8-bit paths.
 
-### What shows today
+### What shows
 
-The window itself still draws 8-bit sRGB, so the element maps each frame into it: every channel is clamped to 0…1 and then encoded with the exact sRGB curve, the one gradients and video already go through. Values from 0 to 1 are never touched; there is no tone-curve shoulder below 1.0, and anything brighter than SDR white is clipped to it. Two things follow:
+On a standard window every frame is mapped into the window's 8-bit sRGB: each channel is clamped to 0…1 and then encoded with the exact sRGB curve, the one gradients and video already go through. Values from 0 to 1 are never touched; there is no tone-curve shoulder below 1.0, and anything brighter than SDR white is clipped to it. Two things follow:
 
 - **SDR content looks exactly as on the 8-bit path.** Linearise your 8-bit sRGB frames with the sRGB EOTF and they look identical to the BGRA8 path: Skathi's tests put all 256 sRGB code values through half floats and get every one back unchanged, on Direct3D 11, Direct3D 12 and Metal.
-- **Highlights clip.** A producer that has highlights above 1.0 and wants them rolled off rather than clipped tone-maps them itself, to a peak of 1.0.
-
-Clipping is what Windows does with scRGB content and macOS with EDR content on a screen that has no headroom, and it keeps the mapping exact for everything an SDR frame can hold. The window does not yet tag its output as HDR (no FP16 swapchain on Windows, no EDR on macOS), so values above 1.0 are clipped even on an HDR display; [`output_headroom`](#the-display) says so.
+- **Highlights clip.** A producer that has highlights above 1.0 and wants them rolled off rather than clipped tone-maps them itself, to the element's [`content_headroom()`](#a-video-player).
 
 GPU frames stay half float in the surface's own textures; an element maps a frame into an 8-bit texture when it first draws it, on the GPU, so a frame replaced before it is shown is never mapped. CPU frames are mapped when presented, on the producer's thread, through a table. A half-float frame takes twice the memory of an 8-bit one, and the mapping costs one small GPU pass per frame shown.
+
+### HDR windows
+
+New in 0.4.0. On Windows (Direct3D 12 and Direct3D 11) and macOS, a window whose display is in HDR draws HDR while it shows a half-float surface that may be brighter than SDR white: a visible element whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 on that display. The element then shows the frame's own values, clamped to that limit and to the display's headroom, instead of the 8-bit mapping. Two seconds after no such element is visible, the window goes back to standard output.
+
+- **Windows** switches the swap chain to `R16G16B16A16_FLOAT` in scRGB (`DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`).
+- **macOS** switches the window's layer to `RGBA16Float` with `wantsExtendedDynamicRangeContent`, in the screen's colour space extended past 1.0 (extended Display P3 for a window that asked for Display P3).
+
+Everything else in the window looks as it did. The page is still blended in sRGB-encoded values, as on an 8-bit target, now into a half-float one, and only a last pass makes it linear, with 1.0 at the SDR white Windows composes SDR content at (`sdr_white_nits / 80` in scRGB); on macOS EDR's 1.0 already is SDR white. Skathi's renderer tests draw text, translucent fills, antialiased corners and half-float tiles both ways on Direct3D 11, Direct3D 12, wgpu and Metal: every pixel of the HDR page is within one 8-bit code value of the standard one, and the output at SDR white encodes back to it within one code value. A tile of 4.0 limited to 2.5 shows at 2.5 times SDR white, and under `standard` at SDR white.
+
+On an SDR display, with HDR off, on Linux, and while no element needs it, a window draws exactly as before. [`output_headroom`](#the-display) and the `(dynamic-range: high)` media query say whether a window can show HDR. The wgpu renderer can switch where its surface offers extended linear sRGB, but Linux windows stay SDR.
+
+A switch recreates the swap chain or reconfigures the layer, once each way. In HDR a window keeps a half-float copy of the page, and its swap chain is half float too, so it takes about three times the memory of an 8-bit one. At 3840×2160 with 96 full-window translucent layers, a Direct3D 12 frame took 23.4 ms in HDR against 23.2 ms standard on an RTX 5070.
 
 ## The display
 
@@ -167,7 +178,7 @@ Brightness is in the surface's unit, where 1.0 is SDR white (paper white), on ev
 | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | `headroom`                     | the brightest value the screen shows now; 1.0 on an SDR screen                                         |
 | `potential_headroom`           | the brightest it can show; on macOS at full brightness, on Windows the same as `headroom`              |
-| `output_headroom`              | the brightest value a frame reaches the screen with: 1.0, because windows draw 8-bit sRGB              |
+| `output_headroom`              | the brightest a frame reaches the screen with: `headroom` where the window can draw HDR, else 1.0      |
 | `sdr_white_nits`               | SDR white in nits, on Windows in HDR mode (the "SDR content brightness" slider); `None` elsewhere      |
 | `peak_nits`, `full_frame_nits` | the screen's luminance, where Windows knows it                                                         |
 | `hdr`                          | Windows' HDR mode is on, or the macOS screen has EDR headroom                                          |
@@ -198,7 +209,7 @@ fn retarget(player: &mpv::Handle, info: &skathi::SurfaceInfo) {
 }
 ```
 
-Today `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. Once windows output HDR it follows `headroom`, and the same code gives highlights the room the screen has, no more than `dynamic-range-limit` allows: `standard` keeps them at SDR white, `constrained` at twice it, and a `dynamic-range-limit-mix()` in between, mixed in stops. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
+On an SDR display `output_headroom` is 1.0, so mpv tone-maps HDR video down to SDR white, which is all a frame can show. On an HDR display it follows `headroom`, and the same code gives highlights the room the screen has, no more than `dynamic-range-limit` allows: `standard` keeps them at SDR white, `constrained` at twice it, and a `dynamic-range-limit-mix()` in between, mixed in stops. Render with `target-trc=linear` and `target-prim=bt.709` into an `RGBA16F` target to hand the frames over as [half floats](#half-float-frames).
 
 `info.dynamic_range_limit` is the computed value itself, as weights of the three keywords, for a producer that applies it some other way: `dynamic_range_limit.headroom(display.headroom)` is the limit on the screen's own headroom. The value is the largest element's, and a change to it fires `SurfaceEvent::Changed`.
 

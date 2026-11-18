@@ -508,6 +508,11 @@ impl Ready {
         })
     }
 
+    /// A half-float frame, whose own texture an HDR window copies instead of its mapping.
+    pub(crate) fn is_half_float(&self) -> bool {
+        self.texture.mapped.is_some()
+    }
+
     pub(crate) fn handle(&self) -> gpui::D3D12TextureHandle {
         let resource = match (&self.texture.mapped, self.mapped) {
             (Some(mapped), true) => &mapped.texture,

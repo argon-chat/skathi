@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use gpui::{App, RenderImage, Window};
 
-use super::{display, feedback, Frame, SurfaceDisplay, SurfaceHandle, SurfaceInfo};
+use super::{display, feedback, Frame, SurfaceDisplay, SurfaceFormat, SurfaceHandle, SurfaceInfo};
 use crate::live::{self, LiveTile, Shown};
 use crate::tree;
 use crate::windows::{self, WinKey};
@@ -28,6 +28,10 @@ struct Node {
     ready: bool,
     /// The display last reported to JS.
     display: Option<SurfaceDisplay>,
+    /// The brightest the frame may be painted: `dynamic-range-limit` applied to the display.
+    headroom: f32,
+    /// The tile holds the frame's half-float values, painted up to `headroom`.
+    hdr: bool,
 }
 
 thread_local! {
@@ -79,6 +83,8 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             visible: false,
             ready: false,
             display: None,
+            headroom: 1.0,
+            hdr: false,
         });
         node.window = win;
         node.tile
@@ -86,6 +92,67 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             .filter(|t| t.window() == win && node.ready)
             .map(LiveTile::image)
     })
+}
+
+fn paint_headroom(id: u32) -> f32 {
+    NODES.with(|m| {
+        m.borrow()
+            .get(&id)
+            .filter(|n| n.hdr)
+            .map_or(1.0, |n| n.headroom)
+    })
+}
+
+/// Node `id`'s picture, painted with the headroom its frame may reach.
+pub(crate) struct HdrPicture(pub(crate) u32, pub(crate) gpui::AnyElement);
+
+impl gpui::Element for HdrPicture {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.1.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.1.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let headroom = paint_headroom(self.0);
+        window.with_image_headroom(headroom, |window| self.1.paint(window, cx));
+    }
 }
 
 /// Called from the paint with the content box in window pixels.
@@ -142,7 +209,6 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     #[cfg(target_os = "macos")]
     super::metal::watch_device();
     let here = windows::key(window);
-    display::sample(window, here);
     let page_hidden = live::page_hidden();
     let here_shown = window.is_visible();
     let mut events = DEFERRED.with(|d| std::mem::take(&mut *d.borrow_mut()));
@@ -172,6 +238,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                     node.display = Some(on);
                     events.push((id, Event::Display(on)));
                 }
+                let limit = crate::inherit::dynamic_range_limit(id);
+                note_headroom(id, node, limit.headroom(on.output_headroom), &mut touch);
                 let info = infos.entry(Arc::as_ptr(node.surface.shared())).or_default();
                 // The largest visible element sets the size; a hidden one's last size only stands in.
                 let rank = |visible: bool, w: u32, h: u32| (visible, u64::from(w) * u64::from(h));
@@ -182,7 +250,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                     info.height = node.painted.1;
                     info.scale = node.painted.2;
                     info.display = on;
-                    info.dynamic_range_limit = crate::inherit::dynamic_range_limit(id);
+                    info.dynamic_range_limit = limit;
                 } else if !info.display.known {
                     info.display = on;
                 }
@@ -190,11 +258,17 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             }
             if node.window != here {
                 draw |= node.visible && node.surface.lock_state().seq != node.seen;
-                continue;
             }
-            let (s, event) = write(window, here, id, node, &mut touch);
-            shown = shown.max(s);
-            events.extend(event.map(|e| (id, e)));
+        }
+    });
+    let hdr = update_output(window, here);
+    NODES.with(|m| {
+        for (&id, node) in m.borrow_mut().iter_mut() {
+            if node.window == here {
+                let (s, event) = write(window, here, id, node, hdr, &mut touch);
+                shown = shown.max(s);
+                events.extend(event.map(|e| (id, e)));
+            }
         }
     });
     live::note(shown);
@@ -240,18 +314,46 @@ fn carry(window: &Window, here: WinKey) {
     feedback::ticked(key, display::of(here).refresh_hz);
 }
 
+/// Samples `window`'s display; every tick, so `dynamic-range` answers without a surface.
+pub(crate) fn sample_display(window: &Window) {
+    display::sample(window, windows::key(window));
+}
+
+/// Moves a node to the headroom it may now be painted with; a picture shown in HDR is repainted.
+fn note_headroom(id: u32, node: &mut Node, headroom: f32, touch: &mut Vec<u32>) {
+    if (headroom - node.headroom).abs() > 1e-3 * headroom {
+        node.headroom = headroom;
+        if node.hdr && node.ready {
+            touch.push(id);
+        }
+    }
+}
+
+/// Puts `here` in HDR while a visible half-float surface in it may be brighter than SDR white.
+fn update_output(window: &Window, here: WinKey) -> bool {
+    let wanted = NODES.with(|m| {
+        m.borrow().values().any(|n| {
+            n.window == here
+                && n.visible
+                && n.headroom > 1.0
+                && n.surface.format() == SurfaceFormat::Rgba16Float
+        })
+    });
+    display::update_output(window, here, wanted)
+}
+
 /// A pop-out's half of [`tick`], from its own draw: its nodes' tiles live in its atlas.
 pub(crate) fn window_tick(window: &mut Window) {
     if !super::any() {
         return;
     }
     let here = windows::key(window);
-    display::sample(window, here);
+    let hdr = update_output(window, here);
     let mut touch = Vec::new();
     NODES.with(|m| {
         for (&id, node) in m.borrow_mut().iter_mut() {
             if node.window == here {
-                if let (_, Some(event)) = write(window, here, id, node, &mut touch) {
+                if let (_, Some(event)) = write(window, here, id, node, hdr, &mut touch) {
                     DEFERRED.with(|d| d.borrow_mut().push((id, event)));
                 }
             }
@@ -279,8 +381,16 @@ fn write(
     here: WinKey,
     id: u32,
     node: &mut Node,
+    window_hdr: bool,
     touch: &mut Vec<u32>,
 ) -> (Shown, Option<Event>) {
+    // A half-float frame goes to an HDR window as it is, to a standard one mapped to 8-bit: a
+    // switch rewrites the frame already shown.
+    let hdr = window_hdr && node.surface.format() == SurfaceFormat::Rgba16Float;
+    if hdr != node.hdr {
+        node.hdr = hdr;
+        node.seen = 0;
+    }
     // One lock: a present on another thread may resize the surface's texture in between.
     let (seq, frame_id, frame, lost, texture) = {
         #[cfg_attr(not(windows), allow(unused_mut))]
@@ -290,7 +400,7 @@ fn write(
             Some(Frame::D3D12 { .. }) => st.gpu12.ready().map(Gpu::D3D12),
             // Only a visible node's tick may draw a half-float frame's mapping.
             Some(Frame::Gpu { .. }) if node.visible && st.seq != node.seen => {
-                match st.gpu_texture() {
+                match st.gpu_texture(hdr) {
                     Ok(texture) => texture.map(Gpu::D3D11),
                     Err(error) => {
                         refused(&error);
@@ -355,6 +465,13 @@ fn write(
     #[cfg(not(any(windows, target_os = "macos")))]
     let () = texture;
     let wrote = match frame {
+        Frame::Cpu {
+            bgra,
+            halves: Some(halves),
+            ..
+        } if hdr => tile
+            .write_rgba16f(window, &halves, true)
+            .unwrap_or_else(|| tile.write_bgra(window, bgra.to_vec(), true)),
         Frame::Cpu { bgra, .. } => tile.write_bgra(window, bgra.to_vec(), true),
         #[cfg(any(windows, target_os = "macos"))]
         _ => {
@@ -362,6 +479,11 @@ fn write(
                 #[cfg(windows)]
                 Some(Gpu::D3D11(texture)) => {
                     tile.write_gpu(window, gpui::GpuTextureHandle(texture.as_raw()), true)
+                }
+                #[cfg(windows)]
+                Some(Gpu::D3D12(ready)) if hdr && ready.is_half_float() => {
+                    let handle = ready.handle();
+                    tile.write_d3d12(window, handle, Arc::new(ready), true)
                 }
                 #[cfg(windows)]
                 Some(Gpu::D3D12(ready)) => match ready.for_atlas() {
@@ -374,6 +496,11 @@ fn write(
                         return (Shown::Nowhere, None);
                     }
                 },
+                #[cfg(target_os = "macos")]
+                Some(Gpu::Metal(ready)) if hdr && ready.is_half_float() => {
+                    let (handle, wait) = (ready.handle(), ready.ready());
+                    tile.write_metal(window, handle, wait, Arc::new(ready), true)
+                }
                 #[cfg(target_os = "macos")]
                 Some(Gpu::Metal(ready)) => match ready.for_atlas() {
                     Ok(ready) => {

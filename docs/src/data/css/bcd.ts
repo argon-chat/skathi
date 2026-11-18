@@ -1796,6 +1796,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.at-rules.media.dynamic-range",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/dynamic-range",
   },
+  "media-video-dynamic-range": {
+    key: "css.at-rules.media.video-dynamic-range",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/video-dynamic-range",
+  },
   "media-scripting": {
     key: "css.at-rules.media.scripting",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@media/scripting",

@@ -30,6 +30,8 @@ pub struct Env {
     pub reduce_transparency: bool,
     /// `device-width` / `device-height`: the window's monitor, CSS px.
     pub device_size: (f32, f32),
+    /// `dynamic-range: high`: the window's display is in HDR and the window can draw it.
+    pub dynamic_range_high: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +65,7 @@ impl Default for Env {
             safe_area_insets: [0.0; 4],
             reduce_transparency: false,
             device_size: (1920.0, 1080.0),
+            dynamic_range_high: false,
         }
     }
 }
@@ -123,6 +126,7 @@ pub(crate) enum Feature {
     ReducedTransparency(bool),
     DeviceWidth(Cmp, f32),
     DeviceHeight(Cmp, f32),
+    DynamicRange(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +160,7 @@ impl Feature {
             Feature::ReducedTransparency(reduce) => env.reduce_transparency == reduce,
             Feature::DeviceWidth(cmp, px) => cmp.eval(env.device_size.0, px),
             Feature::DeviceHeight(cmp, px) => cmp.eval(env.device_size.1, px),
+            Feature::DynamicRange(high) => !high || env.dynamic_range_high,
         }
     }
 }
@@ -210,7 +215,7 @@ pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media type
      range and interval syntax), `device-width`/`device-height` (and their `min-`/`max-` forms), \
      `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-reduced-transparency`, \
      `resolution`/`min-resolution`/`max-resolution` (dppx/dpi/dpcm), `display-mode`, \
-     `pointer`/`any-pointer`, `hover`/`any-hover`, \
+     `pointer`/`any-pointer`, `hover`/`any-hover`, `dynamic-range`/`video-dynamic-range`, \
      combined with `and`/`or`/`not`/`,`";
 
 pub(crate) fn parse_list(list: &MediaList<'_>) -> Result<Cond, Unsupported> {
@@ -350,11 +355,19 @@ fn hover(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> 
     }))
 }
 
+fn dynamic_range(value: &MediaFeatureValue<'_>) -> Result<Cond, Unsupported> {
+    Ok(Cond::Feature(Feature::DynamicRange(match ident(value)? {
+        "high" => true,
+        "standard" => false,
+        _ => return Err("an unknown `dynamic-range` value"),
+    })))
+}
+
 fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
     use MediaFeatureId::{
-        AnyHover, AnyPointer, DeviceHeight, DeviceWidth, DisplayMode as DisplayModeId, Height,
-        Hover as HoverId, Pointer as PointerId, PrefersColorScheme, PrefersReducedMotion,
-        PrefersReducedTransparency, Resolution, Width,
+        AnyHover, AnyPointer, DeviceHeight, DeviceWidth, DisplayMode as DisplayModeId,
+        DynamicRange, Height, Hover as HoverId, Pointer as PointerId, PrefersColorScheme,
+        PrefersReducedMotion, PrefersReducedTransparency, Resolution, VideoDynamicRange, Width,
     };
     Ok(match f {
         QueryFeature::Plain { name, value } => match standard(name)? {
@@ -367,6 +380,7 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             AnyPointer => pointer(value, true)?,
             HoverId => hover(value, false)?,
             AnyHover => hover(value, true)?,
+            DynamicRange | VideoDynamicRange => dynamic_range(value)?,
             PrefersColorScheme => match ident(value)? {
                 "dark" => Cond::Feature(Feature::ColorScheme(true)),
                 "light" => Cond::Feature(Feature::ColorScheme(false)),
@@ -390,7 +404,7 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             PrefersColorScheme => Cond::Always,
             PrefersReducedMotion => Cond::Feature(Feature::ReducedMotion(true)),
             PointerId | AnyPointer | HoverId | AnyHover => Cond::Always,
-            Resolution | DisplayModeId => Cond::Always,
+            Resolution | DisplayModeId | DynamicRange | VideoDynamicRange => Cond::Always,
             _ => return Err("an unsupported media feature"),
         },
         QueryFeature::Range {
@@ -599,6 +613,23 @@ mod tests {
             "(aspect-ratio: 16/9)",
         ] {
             assert!(cond(prelude).is_err(), "{prelude} should be rejected");
+        }
+    }
+
+    #[test]
+    fn dynamic_range_high_follows_the_window_and_standard_always_matches() {
+        let sdr = Env::default();
+        let hdr = Env {
+            dynamic_range_high: true,
+            ..Env::default()
+        };
+        let t = |q: &str, env: &Env| cond(q).unwrap().eval(env);
+        for feature in ["dynamic-range", "video-dynamic-range"] {
+            assert!(!t(&format!("({feature}: high)"), &sdr));
+            assert!(t(&format!("({feature}: high)"), &hdr));
+            assert!(t(&format!("({feature}: standard)"), &sdr));
+            assert!(t(&format!("({feature}: standard)"), &hdr));
+            assert!(cond(&format!("({feature}: wide)")).is_err());
         }
     }
 

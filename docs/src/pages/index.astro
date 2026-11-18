@@ -774,25 +774,29 @@ const structuredData = {
             </dl>
           </div>
           <div class="surface-hdr">
-            <h3>Half-float frames now. HDR output next.</h3>
+            <h3>Half-float frames, shown in HDR.</h3>
             <div
               class="range"
               role="img"
-              aria-label="Values from 0 to 1.0 show today; values above 1.0 clip until HDR output"
+              aria-label="Values from 0 to 1.0 show everywhere; values above 1.0 show up to the screen's headroom on an HDR display"
             >
-              <span class="range-sdr">0 to 1.0: shown</span>
-              <span class="range-hdr">above 1.0: clipped, until HDR output</span>
+              <span class="range-sdr">0 to 1.0: shown everywhere</span>
+              <span class="range-hdr">above 1.0: up to the screen's headroom, on an HDR display</span>
             </div>
             <p>
               Set a surface to <code>Rgba16Float</code> and it takes FP16 frames in linear extended sRGB, from the CPU or
-              the GPU. The window draws SDR today: SDR content comes out exactly as on the 8-bit path, and highlights above
-              SDR white clip.
+              the GPU. SDR content comes out exactly as on the 8-bit path. On an SDR screen highlights above SDR white
+              clip.
             </p>
             <p>
-              HDR window output is next. A player that sizes its output to <code>content_headroom()</code> gets the screen's
-              headroom then, with the same code.
+              On an HDR display the window switches to HDR output while such a surface is visible, and highlights reach the
+              screen's headroom, capped per element by <code>dynamic-range-limit</code>. The rest of the window stays at SDR
+              white. A player that sizes its output to <code>content_headroom()</code> gets the right peak on both.
             </p>
-            <p class="section-note">New in 0.4. GPU frames on Windows and macOS, CPU frames on Linux.</p>
+            <p class="section-note">
+              New in 0.4. GPU frames on Windows and macOS, CPU frames on Linux. HDR output on Windows and macOS; Linux
+              windows stay SDR.
+            </p>
           </div>
         </div>
       </section>

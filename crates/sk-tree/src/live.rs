@@ -203,6 +203,20 @@ impl LiveTile {
         shown(write, visible)
     }
 
+    /// Writes a half-float CPU frame (linear, straight alpha, rows packed) into an HDR tile; `None`
+    /// when the renderer has none: fall back to [`LiveTile::write_bgra`].
+    pub(crate) fn write_rgba16f(
+        &mut self,
+        window: &mut Window,
+        halves: &[u16],
+        visible: bool,
+    ) -> Option<Shown> {
+        match window.write_image_tile_rgba16f(&self.image, 0, halves) {
+            Ok(TileWrite::Refused) | Err(_) => None,
+            Ok(write) => Some(shown(write, visible)),
+        }
+    }
+
     /// `None` when the renderer refused the texture: fall back to [`LiveTile::write_bgra`].
     pub(crate) fn write_gpu(
         &mut self,

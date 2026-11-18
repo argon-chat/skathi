@@ -318,13 +318,14 @@ impl Mapped {
 
 impl SurfaceGpu {
     /// The texture the atlas copies: the frame's, or a half-float frame's 8-bit mapping, drawn
-    /// the first time it is asked for.
-    pub(crate) fn texture(&mut self) -> Result<Option<Texture>, SurfaceError> {
+    /// the first time it is asked for. With `hdr` the half-float texture itself.
+    pub(crate) fn texture(&mut self, hdr: bool) -> Result<Option<Texture>, SurfaceError> {
         let Some(slot) = self.slot.as_mut() else {
             return Ok(None);
         };
         match &mut slot.mapped {
             None => Ok(Some(Texture(slot.texture.clone()))),
+            Some(_) if hdr => Ok(Some(Texture(slot.texture.clone()))),
             Some(mapped) => {
                 if !mapped.drawn {
                     mapped.draw(&slot.gpu, slot.size)?;
@@ -705,7 +706,7 @@ mod tests {
 
     /// The BGRA the atlas would copy for the surface's frame.
     fn shown(device: &ID3D11Device, surface: &SurfaceHandle) -> Vec<[u8; 4]> {
-        let shown = surface.lock_state().gpu_texture().unwrap().unwrap();
+        let shown = surface.lock_state().gpu_texture(false).unwrap().unwrap();
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { shown.0.GetDesc(&mut desc) };
         assert_eq!(desc.Format, DXGI_FORMAT_B8G8R8A8_UNORM);

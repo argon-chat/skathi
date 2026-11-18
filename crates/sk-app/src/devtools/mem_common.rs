@@ -166,8 +166,8 @@ pub(super) fn collect(code: bool) -> f64 {
 
 pub(super) struct Renderer {
     pub(super) targets: f64,
-    /// Atlas texture bytes per kind: monochrome, polychrome, subpixel.
-    pub(super) atlas: [f64; 3],
+    /// Atlas texture bytes per kind: monochrome, polychrome, subpixel, half-float polychrome.
+    pub(super) atlas: [f64; 4],
     pub(super) json: Json,
 }
 
@@ -181,24 +181,24 @@ pub(super) fn renderer(window: &Window) -> Renderer {
     // 32 bytes a pixel on both backends: 3 BGRA swap-chain buffers plus a
     // single-sample and a 4x MSAA path target.
     let targets = 32.0 * w * h;
-    let mut per_kind = [0.0; 3];
+    let mut per_kind = [0.0; 4];
     let atlas_json = match window.sprite_atlas_stats() {
         None => Json::Null,
         Some(a) => {
-            let names = ["monochrome", "polychrome", "subpixel"];
+            let names = ["monochrome", "polychrome", "subpixel", "polychromeHdr"];
+            let bpp = [1.0, 4.0, 4.0, 8.0];
             let mut kinds = Vec::new();
             let mut total = 0.0;
-            for (i, k) in a.kinds.iter().enumerate() {
+            for (i, k) in a.kinds.iter().enumerate().take(per_kind.len()) {
                 per_kind[i] = k.bytes as f64;
                 total += k.bytes as f64;
-                let bpp = if i == 0 { 1.0 } else { 4.0 };
                 kinds.push((
                     names[i],
                     Json::obj(vec![
                         ("pages", Json::n(f64::from(k.pages))),
                         ("MB", mb(k.bytes as f64)),
                         ("tiles", Json::n(f64::from(k.tiles))),
-                        ("usedMB", mb(k.tile_pixels as f64 * bpp)),
+                        ("usedMB", mb(k.tile_pixels as f64 * bpp[i])),
                     ]),
                 ));
             }
@@ -226,6 +226,7 @@ pub(super) fn gpu_items(r: &Renderer) -> Vec<Json> {
         item("sprite atlas: monochrome (glyphs)", a[0]),
         item("sprite atlas: polychrome (images, emoji, SVG)", a[1]),
         item("sprite atlas: subpixel (glyphs)", a[2]),
+        item("sprite atlas: half-float polychrome (HDR surfaces)", a[3]),
         item(
             "render targets (swap chain + path MSAA, estimate)",
             r.targets,

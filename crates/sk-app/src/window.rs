@@ -1407,6 +1407,7 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
         safe_area_insets: [0.0; 4],
         reduce_transparency: crate::transparency::reduce_transparency(),
         device_size: device_size(s.screen.0, s.screen.1, (s.inner_width, s.inner_height)),
+        ..sk_css::Env::default()
     }
 }
 
@@ -1496,6 +1497,7 @@ pub fn popout_env(
             monitor.map_or(0.0, |s| f32::from(s.height)),
             viewport,
         ),
+        ..sk_css::Env::default()
     }
 }
 

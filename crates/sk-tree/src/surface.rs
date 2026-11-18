@@ -9,7 +9,8 @@
 //! (synchronised by an `MTLSharedEvent`) or a CVPixelBuffer. Everywhere it can be CPU BGRA.
 //!
 //! A surface set to [`SurfaceFormat::Rgba16Float`] takes half-float frames instead; they stay
-//! half-float until an element composites them, where they are mapped to the window's 8-bit sRGB.
+//! half-float until an element composites them: an HDR window (Windows, macOS, on an HDR display)
+//! shows them up to the element's `dynamic-range-limit`, a standard one maps them to 8-bit sRGB.
 
 mod color;
 #[cfg(windows)]
@@ -225,8 +226,8 @@ pub struct SurfaceDisplay {
     pub headroom: f32,
     /// The brightest it can show (macOS at full brightness); `headroom` on Windows.
     pub potential_headroom: f32,
-    /// The brightest value a surface's frame reaches the display with: 1.0 while windows draw
-    /// 8-bit sRGB, so frames are clamped there whatever the display can do.
+    /// The brightest value a surface's frame reaches the display with: `headroom` where the
+    /// window can draw HDR (Windows, macOS), else 1.0, where frames are clamped.
     pub output_headroom: f32,
     /// SDR white in nits: Windows in HDR mode (its SDR content brightness setting).
     pub sdr_white_nits: Option<f32>,
@@ -432,11 +433,13 @@ pub(crate) struct State {
 
 #[derive(Clone)]
 pub(crate) enum Frame {
-    /// BGRA, straight alpha, rows packed.
+    /// BGRA, straight alpha, rows packed; a half-float frame's own values too while a window can
+    /// draw HDR.
     Cpu {
         width: u32,
         height: u32,
         bgra: Arc<[u8]>,
+        halves: Option<Arc<[u16]>>,
     },
     /// In the surface's own texture on the renderer's device.
     #[cfg(windows)]
@@ -482,10 +485,14 @@ impl State {
         }
     }
 
-    /// The texture the atlas copies for a [`Frame::Gpu`], referenced for the caller.
+    /// The texture the atlas copies for a [`Frame::Gpu`], referenced for the caller; with `hdr`, a
+    /// half-float frame's own texture instead of its 8-bit mapping.
     #[cfg(windows)]
-    pub(crate) fn gpu_texture(&mut self) -> Result<Option<d3d11::Texture>, SurfaceError> {
-        self.gpu.texture()
+    pub(crate) fn gpu_texture(
+        &mut self,
+        hdr: bool,
+    ) -> Result<Option<d3d11::Texture>, SurfaceError> {
+        self.gpu.texture(hdr)
     }
 }
 
@@ -496,6 +503,11 @@ fn registry() -> &'static Mutex<HashMap<String, Arc<Shared>>> {
 }
 
 static ANY: AtomicBool = AtomicBool::new(false);
+
+/// Whether `key`'s window can draw HDR on its display now: `dynamic-range: high`.
+pub(crate) fn dynamic_range_high(key: crate::windows::WinKey) -> bool {
+    display::dynamic_range_high(key)
+}
 
 pub(crate) fn any() -> bool {
     ANY.load(Ordering::Relaxed)
@@ -597,7 +609,8 @@ impl SurfaceHandle {
     }
 
     /// Presents a CPU frame to a [`SurfaceFormat::Rgba16Float`] surface: RGBA half floats (IEEE
-    /// binary16 bits), straight alpha, `stride` values per row. It is mapped to 8-bit sRGB here.
+    /// binary16 bits), straight alpha, `stride` values per row. It is mapped to 8-bit sRGB here,
+    /// and kept as it is too while a window can draw HDR.
     pub fn present_rgba16f(
         &self,
         pixels: &[u16],
@@ -617,10 +630,17 @@ impl SurfaceHandle {
             )));
         }
         let bgra = color::rgba16f_to_bgra8(pixels, width, height, stride);
+        let halves = display::any_capable().then(|| {
+            (0..height as usize)
+                .flat_map(|y| &pixels[y * stride..y * stride + row])
+                .copied()
+                .collect()
+        });
         let frame = self.state().put(Frame::Cpu {
             width,
             height,
             bgra: bgra.into(),
+            halves,
         });
         sk_runtime::frames::wake();
         Ok(frame)
@@ -669,6 +689,7 @@ impl SurfaceHandle {
             width,
             height,
             bgra: packed.into(),
+            halves: None,
         });
         sk_runtime::frames::wake();
         Ok(frame)

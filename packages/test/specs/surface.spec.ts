@@ -30,7 +30,13 @@ type Stats = {
   visible: boolean;
   dynamicRangeLimit: string;
   contentHeadroom: number;
-  display: { known: boolean; headroom: number; refreshHz: number | null };
+  display: {
+    known: boolean;
+    hdr: boolean;
+    headroom: number;
+    outputHeadroom: number;
+    refreshHz: number | null;
+  };
 };
 
 /** `appHost.call(name, ...args)` in the page; its settled value. */
@@ -403,6 +409,46 @@ test(
     } finally {
       await set("root", "");
       await set("contain", "");
+    }
+  },
+  T,
+);
+
+test.skipIf(!WINDOWS && !MACOS)(
+  "dynamic-range answers for the window's display and the limit caps the headroom a frame is shown with",
+  async () => {
+    const s = await until(
+      () => stats("contain"),
+      (s) => s.display.known,
+    );
+    const output = s.display.hdr ? s.display.headroom : 1;
+    expect(s.display.outputHeadroom).toBeCloseTo(output, 3);
+    const matches = (query: string) => app.eval(`matchMedia(${JSON.stringify(query)}).matches`) as Promise<boolean>;
+    for (const feature of ["dynamic-range", "video-dynamic-range"]) {
+      expect(
+        await until(
+          () => matches(`(${feature}: high)`),
+          (m) => m === s.display.hdr,
+        ),
+      ).toBe(s.display.hdr);
+      expect(await matches(`(${feature}: standard)`)).toBe(true);
+    }
+
+    const set = (value: string) =>
+      app.eval(`document.getElementById("contain").style.setProperty("dynamic-range-limit", "${value}"); 0`);
+    const headroom = (limit: string) =>
+      until(
+        () => stats("contain"),
+        (s) => s.dynamicRangeLimit === limit,
+      ).then((s) => s.contentHeadroom);
+    try {
+      expect(await headroom("no-limit")).toBeCloseTo(output, 3);
+      await set("standard");
+      expect(await headroom("standard")).toBe(1);
+      await set("constrained");
+      expect(await headroom("constrained")).toBeCloseTo(Math.min(2, output), 3);
+    } finally {
+      await set("");
     }
   },
   T,

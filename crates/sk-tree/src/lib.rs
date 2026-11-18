@@ -743,6 +743,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let video_moved = video::tick(window, cx);
     let stickers_moved = render::sticker::tick(window, cx);
     let canvas_moved = render::canvas::tick(window);
+    surface::node::sample_display(window);
     let surfaces_moved = surface::node::tick(window, cx);
     let snapped = snap::tick();
     let gliding = scroll::tick() | snapped;
@@ -784,6 +785,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
     render::sticker::window_tick(window);
+    surface::node::sample_display(window);
     surface::node::window_tick(window);
     render::apply_pending_blur(window, cx);
     render::apply_pending_focus(window, cx);

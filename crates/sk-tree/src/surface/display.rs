@@ -15,11 +15,33 @@ use crate::windows::WinKey;
 
 const IDLE: Duration = Duration::from_millis(250);
 
+/// How long a window stays in HDR after nothing it shows needs it, so content that comes and goes
+/// does not switch the swap chain back and forth.
+const HDR_LINGER: Duration = Duration::from_secs(2);
+
 #[derive(Default)]
 struct Probe {
     display: SurfaceDisplay,
     platform: platform::State,
+    output: Output,
 }
+
+/// The window's HDR output: the SDR white it draws at while on.
+#[derive(Default)]
+struct Output {
+    sdr_white: Option<f32>,
+    unwanted_since: Option<Instant>,
+    /// The renderer refused HDR output; the window stays standard.
+    refused: bool,
+}
+
+impl Probe {
+    fn capable(&self) -> bool {
+        self.display.known && self.display.hdr && !self.output.refused
+    }
+}
+
+static ANY_CAPABLE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static PROBES: RefCell<HashMap<WinKey, Probe>> = RefCell::new(HashMap::new());
@@ -36,7 +58,61 @@ pub(super) fn sample(window: &Window, key: WinKey) {
         if let Some(display) = platform::read(window, &mut probe.platform) {
             probe.display = display;
         }
+        probe.display.output_headroom = if probe.capable() {
+            probe.display.headroom
+        } else {
+            1.0
+        };
+        ANY_CAPABLE.store(probes.values().any(Probe::capable), Ordering::Relaxed);
     });
+}
+
+/// Whether `key`'s window can draw HDR on its display now (`dynamic-range: high`).
+pub(super) fn dynamic_range_high(key: WinKey) -> bool {
+    PROBES.with(|p| p.borrow().get(&key).is_some_and(Probe::capable))
+}
+
+/// Whether any window can draw HDR, so a half-float CPU frame keeps its values for one.
+pub(super) fn any_capable() -> bool {
+    ANY_CAPABLE.load(Ordering::Relaxed)
+}
+
+/// Switches `window` to HDR output while it can and `wanted`, and back to standard
+/// [`HDR_LINGER`] after it is no longer wanted. Returns whether it draws HDR.
+pub(super) fn update_output(window: &Window, key: WinKey, wanted: bool) -> bool {
+    PROBES.with(|p| {
+        let mut probes = p.borrow_mut();
+        let Some(probe) = probes.get_mut(&key) else {
+            return false;
+        };
+        let capable = probe.capable();
+        let output = &mut probe.output;
+        if wanted {
+            output.unwanted_since = None;
+        }
+        let lingering = !wanted
+            && output.sdr_white.is_some()
+            && output
+                .unwanted_since
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                < HDR_LINGER;
+        // Windows composes SDR content at its SDR white; macOS EDR is relative to it.
+        let sdr_white = probe.display.sdr_white_nits.map_or(1.0, |nits| nits / 80.0);
+        let target = (capable && (wanted || lingering)).then_some(sdr_white);
+        if target != output.sdr_white {
+            let output_set =
+                window.set_hdr_output(target.map(|sdr_white| gpui::HdrOutput { sdr_white }));
+            if output_set || target.is_none() {
+                output.sdr_white = target;
+            } else {
+                output.refused = true;
+                output.sdr_white = None;
+                probe.display.output_headroom = 1.0;
+            }
+        }
+        output.sdr_white.is_some()
+    })
 }
 
 /// What `key`'s display reported last; unknown before its first read.
@@ -451,7 +527,10 @@ mod tests {
             (scrgb_one - 80.0).abs() < 1e-3,
             "scRGB 1.0 is 80 nits: {scrgb_one}"
         );
-        assert_eq!(hdr.output_headroom, 1.0, "windows draw 8-bit sRGB for now");
+        assert_eq!(
+            hdr.output_headroom, 1.0,
+            "raised once the window is known to draw HDR"
+        );
         assert_eq!((hdr.refresh_hz, hdr.variable_refresh), (Some(144.0), None));
 
         let sdr = windows_display(false, 300.0, 300.0, Some(1000), Some(60.0));

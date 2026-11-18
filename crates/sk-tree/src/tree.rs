@@ -1997,7 +1997,12 @@ thread_local! {
 /// resize or theme flip can toggle any `@media` rule).
 pub fn set_env(env: sk_css::Env) -> bool {
     set_reduce_motion(env.reduce_motion);
-    crate::windows::set_env(crate::windows::primary(), env);
+    let primary = crate::windows::primary();
+    let env = sk_css::Env {
+        dynamic_range_high: crate::surface::dynamic_range_high(primary),
+        ..env
+    };
+    crate::windows::set_env(primary, env);
     ENV.with(|e| {
         if e.get() == env {
             return false;
@@ -2008,6 +2013,10 @@ pub fn set_env(env: sk_css::Env) -> bool {
 }
 
 pub fn set_window_env(k: crate::windows::WinKey, env: sk_css::Env) -> bool {
+    let env = sk_css::Env {
+        dynamic_range_high: crate::surface::dynamic_range_high(k),
+        ..env
+    };
     if !crate::windows::set_env(k, env) {
         return false;
     }
