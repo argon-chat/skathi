@@ -741,7 +741,7 @@ fn inspector_overlay() -> Option<gpui::Div> {
 ///
 /// `window_control_area` makes `WM_NCHITTEST` answer HTMINBUTTON/HTMAXBUTTON/HTCLOSE, so the OS
 /// performs the action and HTMAXBUTTON arms the Windows 11 snap-layouts flyout.
-fn window_controls_overlay(window: &Window) -> Option<gpui::Div> {
+fn window_controls_overlay(window: &Window) -> Option<gpui::Deferred> {
     let (height, overlay) = window::overlay()?;
     let dark = window::effective_dark(window);
     // Win10 has these code points in Segoe MDL2 Assets; `fallbacks` is DirectWrite's per-code-point chain.
@@ -788,18 +788,21 @@ fn window_controls_overlay(window: &Window) -> Option<gpui::Div> {
     if let Some(bg) = overlay.color {
         strip = strip.bg(rgba(bg));
     }
-    Some(
-        strip
-            .child(button("wco-min", MIN, WindowControlArea::Min, hover))
-            .child(button("wco-max", MAX, WindowControlArea::Max, hover))
-            .child(button(
-                "wco-close",
-                CLOSE,
-                WindowControlArea::Close,
-                0xc42b1cff,
-            )),
-    )
+    let strip = strip
+        .child(button("wco-min", MIN, WindowControlArea::Min, hover))
+        .child(button("wco-max", MAX, WindowControlArea::Max, hover))
+        .child(button(
+            "wco-close",
+            CLOSE,
+            WindowControlArea::Close,
+            0xc42b1cff,
+        ));
+    // The page's positioned and `z-index`ed boxes are deferred draws, painted and hit-tested after
+    // every in-flow element; the cluster must come after all of them.
+    Some(gpui::deferred(strip).priority(CAPTION_PRIORITY))
 }
+
+const CAPTION_PRIORITY: usize = usize::MAX;
 
 /// The directory a relative `<img src>` resolves against: `SK_APP_ROOT`, else [`dev::boot`] reads
 /// it from the dev build's manifest. Prod leaves it unset (working directory, with an advisory).

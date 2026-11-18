@@ -1,0 +1,14 @@
+{
+  "$comment": "Host-drawn caption buttons (setTitleBarOverlay) over a canvas that fills the window, WebGPU or 2D.",
+
+  "name": "sk-test-caption-canvas",
+
+  "window": {
+    "title": "Skathi — caption canvas (fixture)",
+    "width": 640,
+    "height": 400,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 40,
+    "backdrop": "none"
+  }
+}
