@@ -345,7 +345,7 @@ When the GPU driver resets on Windows, Skathi recreates its device; on macOS the
 | `Format`, `Size` | The frame's format is not one a surface takes, it is zero or oversized, or the buffer is too short |
 | `FormatMismatch` | The frame is BGRA8 and the surface is set to `Rgba16Float`, or the other way round                 |
 | `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented                             |
-| `Busy`           | Every surface texture is still in flight; drop the frame or wait                                   |
+| `Busy`           | Every texture of this surface is still in flight; drop the frame or wait                           |
 | `Platform`       | A system call failed; the message carries its error                                                |
 
 ## Platform support

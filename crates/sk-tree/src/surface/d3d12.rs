@@ -77,19 +77,48 @@ const MAX_SLOTS: usize = 4;
 struct Gpu {
     device: ID3D12Device,
     renderer_queue: ID3D12CommandQueue,
-    queue: ID3D12CommandQueue,
-    /// Signalled after each copy: the release fence the producer waits on.
-    fence: ID3D12Fence,
     generation: u64,
-    submit: Mutex<Submit>,
     pipeline: OnceLock<Result<Pipeline, String>>,
     _lease: Arc<dyn std::any::Any + Send + Sync>,
 }
 
-// SAFETY: D3D12 devices, queues and fences are free-threaded; command lists are recorded under
-// `submit`'s mutex.
+// SAFETY: D3D12 devices and queues are free-threaded.
 unsafe impl Send for Gpu {}
 unsafe impl Sync for Gpu {}
+
+/// A surface's own copy queue: a producer fence that never arrives stalls only this surface.
+struct Queue {
+    gpu: Arc<Gpu>,
+    queue: ID3D12CommandQueue,
+    /// Signalled after each copy: the release fence the producer waits on.
+    fence: ID3D12Fence,
+    submit: Mutex<Submit>,
+}
+
+// SAFETY: D3D12 queues and fences are free-threaded; command lists are recorded under `submit`'s
+// mutex.
+unsafe impl Send for Queue {}
+unsafe impl Sync for Queue {}
+
+impl Queue {
+    fn new(gpu: &Arc<Gpu>) -> Result<Arc<Self>, SurfaceError> {
+        let queue: ID3D12CommandQueue = unsafe {
+            gpu.device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                ..Default::default()
+            })
+        }
+        .map_err(|e| platform("creating the surface queue", e))?;
+        let fence: ID3D12Fence = unsafe { gpu.device.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }
+            .map_err(|e| platform("creating the release fence", e))?;
+        Ok(Arc::new(Self {
+            gpu: gpu.clone(),
+            queue,
+            fence,
+            submit: Mutex::new(Submit::default()),
+        }))
+    }
+}
 
 /// The half-float mapping: a fullscreen triangle reading one texture.
 struct Pipeline {
@@ -200,7 +229,9 @@ impl Gpu {
             .as_ref()
             .map_err(|e| SurfaceError::Platform(e.clone()))
     }
+}
 
+impl Queue {
     /// A closed command list to reset, once the work that last used it is done.
     fn commands(
         &self,
@@ -215,12 +246,13 @@ impl Gpu {
             Some(pair) => pair,
             None => {
                 let allocator: ID3D12CommandAllocator = unsafe {
-                    self.device
+                    self.gpu
+                        .device
                         .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
                 }
                 .map_err(|e| platform("CreateCommandAllocator", e))?;
                 let commands: ID3D12GraphicsCommandList = unsafe {
-                    self.device.CreateCommandList(
+                    self.gpu.device.CreateCommandList(
                         0,
                         D3D12_COMMAND_LIST_TYPE_DIRECT,
                         &allocator,
@@ -290,22 +322,10 @@ fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
     let renderer_queue: ID3D12CommandQueue = borrowed(&lease.queue)?
         .cast()
         .map_err(|e| platform("ID3D12CommandQueue", e))?;
-    let queue: ID3D12CommandQueue = unsafe {
-        device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            ..Default::default()
-        })
-    }
-    .map_err(|e| platform("creating the surface queue", e))?;
-    let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }
-        .map_err(|e| platform("creating the release fence", e))?;
     let gpu = Arc::new(Gpu {
         device,
         renderer_queue,
-        queue,
-        fence,
         generation: lease.generation,
-        submit: Mutex::new(Submit::default()),
         pipeline: OnceLock::new(),
         _lease: lease.keep_alive,
     });
@@ -339,7 +359,7 @@ pub(super) fn device(state: &Mutex<State>) -> Result<Device, SurfaceError> {
     Ok(Device(gpu))
 }
 
-pub(crate) struct Fence(Arc<Gpu>);
+pub(crate) struct Fence(Arc<Queue>);
 
 impl Fence {
     pub(crate) fn as_raw(&self) -> *mut c_void {
@@ -347,7 +367,7 @@ impl Fence {
     }
 
     pub(crate) fn generation(&self) -> u64 {
-        self.0.generation
+        self.0.gpu.generation
     }
 
     pub(crate) fn completed(&self) -> u64 {
@@ -375,8 +395,9 @@ impl Fence {
     }
 }
 
-pub(super) fn release_fence() -> Result<Fence, SurfaceError> {
-    gpu().map(Fence)
+pub(super) fn release_fence(state: &Mutex<State>) -> Result<Fence, SurfaceError> {
+    let gpu = gpu()?;
+    lock(state).gpu12.queue(&gpu).map(Fence)
 }
 
 pub(crate) struct SlotTexture {
@@ -468,7 +489,7 @@ struct Slot {
 pub(crate) struct SurfaceGpu {
     slots: Vec<Slot>,
     current: Option<usize>,
-    fence: Option<Arc<Gpu>>,
+    queue: Option<Arc<Queue>>,
 }
 
 // SAFETY: see `Gpu`.
@@ -478,7 +499,7 @@ unsafe impl Send for SurfaceGpu {}
 /// [`Ready::for_atlas`] drew it) signals.
 pub(crate) struct Ready {
     texture: Arc<SlotTexture>,
-    fence: Arc<Gpu>,
+    queue: Arc<Queue>,
     value: u64,
     size: (u32, u32),
     mapped: bool,
@@ -487,7 +508,7 @@ pub(crate) struct Ready {
 impl Ready {
     /// Whether the copy into the texture has run; until then the atlas must not read it.
     pub(crate) fn done(&self) -> bool {
-        unsafe { self.fence.fence.GetCompletedValue() >= self.value }
+        unsafe { self.queue.fence.GetCompletedValue() >= self.value }
     }
 
     /// What the atlas copies: the texture, or for a half-float frame its 8-bit mapping, drawn on
@@ -497,7 +518,7 @@ impl Ready {
             return Ok(self);
         };
         if *drawn == 0 {
-            *drawn = draw_mapped(&self.fence, &self.texture, self.size)?;
+            *drawn = draw_mapped(&self.queue, &self.texture, self.size)?;
         }
         let value = *drawn;
         drop(drawn);
@@ -520,7 +541,7 @@ impl Ready {
         };
         gpui::D3D12TextureHandle {
             resource: resource.as_raw(),
-            ready_fence: self.fence.fence.as_raw(),
+            ready_fence: self.queue.fence.as_raw(),
             ready_value: self.value,
         }
     }
@@ -531,7 +552,7 @@ impl SurfaceGpu {
         let slot = &self.slots[self.current?];
         Some(Ready {
             texture: slot.texture.clone(),
-            fence: self.fence.clone()?,
+            queue: self.queue.clone()?,
             value: slot.written,
             size: slot.size,
             mapped: false,
@@ -541,7 +562,23 @@ impl SurfaceGpu {
     pub(crate) fn forget(&mut self) {
         self.slots.clear();
         self.current = None;
-        self.fence = None;
+        self.queue = None;
+    }
+
+    fn queue(&mut self, gpu: &Arc<Gpu>) -> Result<Arc<Queue>, SurfaceError> {
+        if let Some(queue) = self
+            .queue
+            .as_ref()
+            .filter(|q| q.gpu.generation == gpu.generation)
+        {
+            return Ok(queue.clone());
+        }
+        if self.queue.is_some() {
+            self.forget();
+        }
+        let queue = Queue::new(gpu)?;
+        self.queue = Some(queue.clone());
+        Ok(queue)
     }
 
     /// A slot neither shown as the frame nor still read by the atlas (whose copy holds its `Arc`).
@@ -552,7 +589,8 @@ impl SurfaceGpu {
         format: SurfaceFormat,
     ) -> Result<usize, SurfaceError> {
         if self.slots.iter().any(|s| s.generation != gpu.generation) {
-            self.forget();
+            self.slots.clear();
+            self.current = None;
         }
         let free = |(i, s): &(usize, &Slot)| {
             Some(*i) != self.current && Arc::strong_count(&s.texture) == 1
@@ -653,14 +691,14 @@ fn describe(resource: &ID3D12Resource) -> Result<((u32, u32), SurfaceFormat), Su
 /// Draws a half-float slot into its 8-bit texture on the surface's queue, after the copy into it.
 /// Returns the release-fence value the draw signals.
 fn draw_mapped(
-    gpu: &Arc<Gpu>,
+    queue: &Queue,
     slot: &Arc<SlotTexture>,
     size: (u32, u32),
 ) -> Result<u64, SurfaceError> {
     let mapped = slot.mapped.as_ref().expect("a half-float slot");
-    let pipeline = gpu.pipeline()?;
-    let mut submit = lock(&gpu.submit);
-    let (allocator, commands) = gpu.commands(&mut submit)?;
+    let pipeline = queue.gpu.pipeline()?;
+    let mut submit = lock(&queue.submit);
+    let (allocator, commands) = queue.commands(&mut submit)?;
     transition(
         &commands,
         &slot.texture,
@@ -702,9 +740,10 @@ fn draw_mapped(
     let list: ID3D12CommandList = commands.cast().map_err(|e| platform("cast", e))?;
     let value = submit.next + 1;
     unsafe {
-        gpu.queue.ExecuteCommandLists(&[Some(list)]);
-        gpu.queue
-            .Signal(&gpu.fence, value)
+        queue.queue.ExecuteCommandLists(&[Some(list)]);
+        queue
+            .queue
+            .Signal(&queue.fence, value)
             .map_err(|e| platform("signalling the release fence", e))?;
     }
     submit.next = value;
@@ -766,13 +805,14 @@ fn copy_in(
 ) -> Result<(u64, u64), SurfaceError> {
     let (size, format) = describe(source)?;
     check_format(state.format, format)?;
+    let queue = state.gpu12.queue(gpu)?;
     let index = state.gpu12.free_slot(gpu, size, format)?;
     let target = state.gpu12.slots[index].texture.clone();
     if let Some(mut drawn) = target.drawn() {
         *drawn = 0;
     }
-    let mut submit = lock(&gpu.submit);
-    let (allocator, commands) = gpu.commands(&mut submit)?;
+    let mut submit = lock(&queue.submit);
+    let (allocator, commands) = queue.commands(&mut submit)?;
     transition(
         &commands,
         source,
@@ -817,16 +857,19 @@ fn copy_in(
     let value = submit.next + 1;
     unsafe {
         if let Some((fence, at)) = wait {
-            gpu.queue
+            queue
+                .queue
                 .Wait(fence, at)
                 .map_err(|e| platform("waiting on the producer's fence", e))?;
         }
-        gpu.queue.ExecuteCommandLists(&[Some(list)]);
-        gpu.queue
-            .Signal(&gpu.fence, value)
+        queue.queue.ExecuteCommandLists(&[Some(list)]);
+        queue
+            .queue
+            .Signal(&queue.fence, value)
             .map_err(|e| platform("signalling the release fence", e))?;
         if let Some((fence, at)) = signal {
-            gpu.queue
+            queue
+                .queue
                 .Signal(fence, at)
                 .map_err(|e| platform("signalling the producer's fence", e))?;
         }
@@ -846,7 +889,6 @@ fn copy_in(
     drop(submit);
     state.gpu12.slots[index].written = value;
     state.gpu12.current = Some(index);
-    state.gpu12.fence = Some(gpu.clone());
     let frame = state.put(Frame::D3D12 {
         width: size.0,
         height: size.1,
@@ -1213,6 +1255,25 @@ mod tests {
         assert_eq!(pixels[256], [0, 255, 255, 255]);
         let again = s.lock_state().gpu12.ready().unwrap().for_atlas().unwrap();
         assert_eq!(again.value, ready.value, "a frame is mapped once");
+    }
+
+    #[test]
+    fn a_fence_that_never_arrives_stalls_only_its_own_surface() {
+        let r = renderer();
+        let stalled = surface("tests:d3d12-stalled");
+        let other = surface("tests:d3d12-other");
+        let state = D3D12_RESOURCE_STATE_COMMON.0;
+        let never: ID3D12Fence = unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let a = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[1, 2, 3, 255]);
+        unsafe { stalled.present_d3d12(a.as_raw(), state, Some((never.as_raw(), 1))) }.unwrap();
+        let b = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[4, 5, 6, 255]);
+        let presented = unsafe { other.present_d3d12(b.as_raw(), state, None) }.unwrap();
+        assert!(other
+            .release_fence()
+            .unwrap()
+            .wait(presented.release, Duration::from_secs(5)));
+        assert!(!stalled.lock_state().gpu12.ready().unwrap().done());
+        unsafe { never.Signal(1) }.unwrap();
     }
 
     #[test]

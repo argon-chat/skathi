@@ -15,13 +15,13 @@ On macOS, a frame for [`<sk-surface>`](/embedding/native-frames/) can stay on th
 | VideoToolbox, AVFoundation, ScreenCaptureKit, Core Image           | `present_cv_pixel_buffer`                                                           |
 | CPU, or anything else                                              | `present_bgra`, `present_bgrx`                                                      |
 
-Every GPU path copies the frame on a command queue of the surface's own into one of up to four textures it owns. A wait on the producer's event happens on the GPU, and the window takes the frame once the copy has finished, so a slow producer never stalls the UI. Textures are `BGRA8Unorm` or `BGRA8Unorm_sRGB` (the bytes are shown as they are), or `RGBA16Float` on a [half-float surface](#half-float-frames), 2D and single-sampled; alpha is straight.
+Every GPU path copies the frame on a command queue of the surface's own into one of up to four textures it owns. A wait on the producer's event happens on the GPU, and the window takes the frame once the copy has finished, so a slow producer never stalls the UI. Each surface has its own queue and release event: an event that never reaches its value holds back only the surface it was presented to. Textures are `BGRA8Unorm` or `BGRA8Unorm_sRGB` (the bytes are shown as they are), or `RGBA16Float` on a [half-float surface](#half-float-frames), 2D and single-sampled; alpha is straight.
 
 The handles are raw pointers (`id<MTLDevice>`, `id<MTLTexture>`, `IOSurfaceRef`, `CVPixelBufferRef`), so any binding works: `objc2-metal`, the `metal` crate, or C and Swift on the other side of an FFI call.
 
 ## Metal on the renderer's device
 
-`metal_device()` is the `MTLDevice` Skathi composites with, `NoDevice` until a window has drawn. Render on a command queue of your own into a texture made on it, signal an `MTLSharedEvent` of yours, and present the texture with that event and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release event. `present_metal_texture` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Render into the texture again once `release_event()` reaches it (`wait` on the CPU, or `encodeWaitForEvent` on your queue), or keep a few textures in rotation.
+`metal_device()` is the `MTLDevice` Skathi composites with, `NoDevice` until a window has drawn. Render on a command queue of your own into a texture made on it, signal an `MTLSharedEvent` of yours, and present the texture with that event and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals the surface's release event. `present_metal_texture` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Render into the texture again once `release_event()` reaches it (`wait` on the CPU, or `encodeWaitForEvent` on your queue), or keep a few textures in rotation.
 
 This producer, with `objc2` and `objc2-metal` 0.3, clears a texture to a moving colour at the element's size:
 
@@ -127,7 +127,7 @@ fn clear(g: &Gpu, [red, green, blue]: [f64; 3], frame: u64) {
 
 `crates/sk-app/examples/surface.rs` in the Skathi repository is a complete program with every path.
 
-`metal_device().queue()` is the renderer's own queue: work committed there delays the next frame, so a producer keeps its own. A texture made on another `MTLDevice` returns `SurfaceError::WrongDevice`; share it as an IOSurface instead. If the surface textures are all still in flight (the producer outruns the window, or its event is never signalled), a present returns `SurfaceError::Busy` and the frame can be dropped.
+`metal_device().queue()` is the renderer's own queue: work committed there delays the next frame, so a producer keeps its own. A texture made on another `MTLDevice` returns `SurfaceError::WrongDevice`; share it as an IOSurface instead. If the surface's textures are all still in flight (the producer outruns the window, or its event is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames.
 
 ## IOSurfaces from another device or process
 

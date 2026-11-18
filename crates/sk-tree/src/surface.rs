@@ -112,7 +112,7 @@ pub enum SurfaceError {
     /// The keyed mutex was not released to the acquire key, or the fence not signalled, in time;
     /// nothing was presented.
     Timeout,
-    /// Every surface texture is still being copied or shown; nothing was presented.
+    /// Every texture of this surface is still being copied or shown; nothing was presented.
     Busy,
     /// The platform call failed; the message carries its error.
     Platform(String),
@@ -173,8 +173,8 @@ impl fmt::Display for SurfaceError {
                  fence, in time",
             ),
             Self::Busy => f.write_str(
-                "every surface texture is still in use: the producer presents faster than the \
-                 window draws, or a fence it waits on is never signalled; drop this frame",
+                "every texture of this surface is still in use: the producer presents faster than \
+                 the window draws, or a fence it waits on is never signalled; drop this frame",
             ),
             Self::Platform(why) => f.write_str(why),
             Self::FormatMismatch { surface, frame } => write!(
@@ -756,12 +756,12 @@ impl SurfaceHandle {
         }
     }
 
-    /// The fence [`Self::present_d3d12`] signals once it has copied a frame out of the producer's
-    /// resource.
+    /// This surface's fence, which [`Self::present_d3d12`] signals once it has copied a frame out
+    /// of the producer's resource.
     pub fn release_fence(&self) -> Result<D3D12Fence, SurfaceError> {
         #[cfg(windows)]
         {
-            d3d12::release_fence().map(|inner| D3D12Fence { inner })
+            d3d12::release_fence(&self.shared.state).map(|inner| D3D12Fence { inner })
         }
         #[cfg(not(windows))]
         {
@@ -904,12 +904,12 @@ impl SurfaceHandle {
         }
     }
 
-    /// The `MTLSharedEvent` [`Self::present_metal_texture`] signals once it has copied a frame out
-    /// of the producer's texture.
+    /// This surface's `MTLSharedEvent`, which [`Self::present_metal_texture`] signals once it has
+    /// copied a frame out of the producer's texture.
     pub fn release_event(&self) -> Result<MetalEvent, SurfaceError> {
         #[cfg(target_os = "macos")]
         {
-            metal::release_event().map(|inner| MetalEvent { inner })
+            metal::release_event(&self.shared.state).map(|inner| MetalEvent { inner })
         }
         #[cfg(not(target_os = "macos"))]
         {

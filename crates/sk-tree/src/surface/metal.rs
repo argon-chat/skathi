@@ -49,21 +49,49 @@ type SharedEvent = ProtocolObject<dyn MTLSharedEvent>;
 struct Gpu {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     renderer_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
-    /// Signalled after each copy: the release event the producer waits on.
-    event: Retained<SharedEvent>,
     generation: u64,
-    /// The last value signalled on `event`; held across each commit so values rise in queue order.
-    next: Mutex<u64>,
     nv12: OnceLock<Result<Pipeline, String>>,
     rgba16f: OnceLock<Result<Pipeline, String>>,
     _lease: Arc<dyn Any + Send + Sync>,
 }
 
-// SAFETY: Metal devices, queues, events and pipeline states are thread-safe; command buffers are
-// encoded under `next`'s mutex.
+// SAFETY: Metal devices, queues and pipeline states are thread-safe.
 unsafe impl Send for Gpu {}
 unsafe impl Sync for Gpu {}
+
+/// A surface's own command queue: a producer event that never fires stalls only this surface.
+struct Queue {
+    gpu: Arc<Gpu>,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    /// Signalled after each copy: the release event the producer waits on.
+    event: Retained<SharedEvent>,
+    /// The last value signalled on `event`; held across each commit so values rise in queue order.
+    next: Mutex<u64>,
+}
+
+// SAFETY: Metal queues and events are thread-safe; command buffers are encoded under `next`'s
+// mutex.
+unsafe impl Send for Queue {}
+unsafe impl Sync for Queue {}
+
+impl Queue {
+    fn new(gpu: &Arc<Gpu>) -> Result<Arc<Self>, SurfaceError> {
+        let queue = gpu
+            .device
+            .newCommandQueue()
+            .ok_or_else(|| platform("creating the surface queue"))?;
+        let event = gpu
+            .device
+            .newSharedEvent()
+            .ok_or_else(|| platform("creating the release event"))?;
+        Ok(Arc::new(Self {
+            gpu: gpu.clone(),
+            queue,
+            event,
+            next: Mutex::new(0),
+        }))
+    }
+}
 
 static GPU: Mutex<Option<Arc<Gpu>>> = Mutex::new(None);
 
@@ -85,19 +113,10 @@ fn gpu() -> Result<Arc<Gpu>, SurfaceError> {
     let renderer_queue =
         unsafe { Retained::retain(lease.queue.cast::<ProtocolObject<dyn MTLCommandQueue>>()) }
             .ok_or_else(|| SurfaceError::NoDevice("the renderer returned a null queue".into()))?;
-    let queue = device
-        .newCommandQueue()
-        .ok_or_else(|| platform("creating the surface queue"))?;
-    let event = device
-        .newSharedEvent()
-        .ok_or_else(|| platform("creating the release event"))?;
     let gpu = Arc::new(Gpu {
         device,
         renderer_queue,
-        queue,
-        event,
         generation: lease.generation,
-        next: Mutex::new(0),
         nv12: OnceLock::new(),
         rgba16f: OnceLock::new(),
         _lease: lease.keep_alive,
@@ -144,7 +163,7 @@ pub(super) fn device(state: &Mutex<State>) -> Result<Device, SurfaceError> {
     Ok(Device(gpu))
 }
 
-pub(crate) struct Event(Arc<Gpu>);
+pub(crate) struct Event(Arc<Queue>);
 
 impl Event {
     pub(crate) fn as_raw(&self) -> *mut c_void {
@@ -152,7 +171,7 @@ impl Event {
     }
 
     pub(crate) fn generation(&self) -> u64 {
-        self.0.generation
+        self.0.gpu.generation
     }
 
     pub(crate) fn signaled(&self) -> u64 {
@@ -181,8 +200,9 @@ impl Event {
     }
 }
 
-pub(super) fn release_event() -> Result<Event, SurfaceError> {
-    gpu().map(Event)
+pub(super) fn release_event(state: &Mutex<State>) -> Result<Event, SurfaceError> {
+    let gpu = gpu()?;
+    lock(state).metal.queue(&gpu).map(Event)
 }
 
 pub(crate) struct SlotTexture {
@@ -229,7 +249,7 @@ struct Slot {
 pub(crate) struct SurfaceGpu {
     slots: Vec<Slot>,
     current: Option<usize>,
-    gpu: Option<Arc<Gpu>>,
+    queue: Option<Arc<Queue>>,
     /// The generation `metal_device` last handed out: a texture from another device after that one
     /// changed means the device changed, not that it is wrong.
     handed: u64,
@@ -242,7 +262,7 @@ unsafe impl Send for SurfaceGpu {}
 /// [`Ready::for_atlas`] made it) signals.
 pub(crate) struct Ready {
     texture: Arc<SlotTexture>,
-    gpu: Arc<Gpu>,
+    queue: Arc<Queue>,
     value: u64,
     size: (u32, u32),
     mapped: bool,
@@ -255,7 +275,7 @@ unsafe impl Sync for Ready {}
 impl Ready {
     /// Whether the copy into the texture has run; until then the atlas must not read it.
     pub(crate) fn done(&self) -> bool {
-        self.gpu.event.signaledValue() >= self.value
+        self.queue.event.signaledValue() >= self.value
     }
 
     /// What the atlas copies: the texture, or for a half-float frame its 8-bit mapping, encoded on
@@ -265,7 +285,7 @@ impl Ready {
             return Ok(self);
         };
         if *mapped == 0 {
-            *mapped = map(&self.gpu, &self.texture, self.size)?;
+            *mapped = map(&self.queue, &self.texture, self.size)?;
         }
         let value = *mapped;
         drop(mapped);
@@ -292,7 +312,7 @@ impl Ready {
     /// The release event and the value the atlas copy waits for.
     pub(crate) fn ready(&self) -> (*mut c_void, u64) {
         (
-            Retained::as_ptr(&self.gpu.event).cast_mut().cast(),
+            Retained::as_ptr(&self.queue.event).cast_mut().cast(),
             self.value,
         )
     }
@@ -303,7 +323,7 @@ impl SurfaceGpu {
         let slot = &self.slots[self.current?];
         Some(Ready {
             texture: slot.texture.clone(),
-            gpu: self.gpu.clone()?,
+            queue: self.queue.clone()?,
             value: slot.written,
             size: slot.size,
             mapped: false,
@@ -313,7 +333,23 @@ impl SurfaceGpu {
     pub(crate) fn forget(&mut self) {
         self.slots.clear();
         self.current = None;
-        self.gpu = None;
+        self.queue = None;
+    }
+
+    fn queue(&mut self, gpu: &Arc<Gpu>) -> Result<Arc<Queue>, SurfaceError> {
+        if let Some(queue) = self
+            .queue
+            .as_ref()
+            .filter(|q| q.gpu.generation == gpu.generation)
+        {
+            return Ok(queue.clone());
+        }
+        if self.queue.is_some() {
+            self.forget();
+        }
+        let queue = Queue::new(gpu)?;
+        self.queue = Some(queue.clone());
+        Ok(queue)
     }
 
     /// A slot neither shown as the frame nor still copied into or read by the atlas (both hold
@@ -325,7 +361,8 @@ impl SurfaceGpu {
         format: SurfaceFormat,
     ) -> Result<usize, SurfaceError> {
         if self.slots.iter().any(|s| s.generation != gpu.generation) {
-            self.forget();
+            self.slots.clear();
+            self.current = None;
         }
         let free = |(i, s): &(usize, &Slot)| {
             Some(*i) != self.current && Arc::strong_count(&s.texture) == 1
@@ -468,11 +505,11 @@ fn rgba16f_pipeline(gpu: &Gpu) -> Result<Pipeline, SurfaceError> {
 
 /// Maps a half-float slot into its 8-bit texture on the surface's queue, after the copy into it.
 /// Returns the release value the mapping signals.
-fn map(gpu: &Arc<Gpu>, slot: &Arc<SlotTexture>, size: (u32, u32)) -> Result<u64, SurfaceError> {
+fn map(queue: &Queue, slot: &Arc<SlotTexture>, size: (u32, u32)) -> Result<u64, SurfaceError> {
     let (mapped, _) = slot.mapped.as_ref().expect("a half-float slot");
-    let pipeline = rgba16f_pipeline(gpu)?;
-    let mut next = lock(&gpu.next);
-    let command = gpu
+    let pipeline = rgba16f_pipeline(&queue.gpu)?;
+    let mut next = lock(&queue.next);
+    let command = queue
         .queue
         .commandBuffer()
         .ok_or_else(|| platform("creating a surface command buffer"))?;
@@ -501,7 +538,7 @@ fn map(gpu: &Arc<Gpu>, slot: &Arc<SlotTexture>, size: (u32, u32)) -> Result<u64,
     }
     encoder.endEncoding();
     let value = *next + 1;
-    command.encodeSignalEvent_value(ProtocolObject::from_ref(&*gpu.event), value);
+    command.encodeSignalEvent_value(ProtocolObject::from_ref(&*queue.event), value);
     let held = Mutex::new(Some(slot.clone()));
     let done = RcBlock::new(move |_: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
         lock(&held).take();
@@ -548,13 +585,14 @@ fn copy_in(
         Source::Nv12 { .. } => SurfaceFormat::Bgra8,
     };
     check_format(state.format, format)?;
+    let queue = state.metal.queue(gpu)?;
     let index = state.metal.free_slot(gpu, size, format)?;
     let target = state.metal.slots[index].texture.clone();
     if let Some(mut mapped) = target.mapped() {
         *mapped = 0;
     }
-    let mut next = lock(&gpu.next);
-    let command = gpu
+    let mut next = lock(&queue.next);
+    let command = queue
         .queue
         .commandBuffer()
         .ok_or_else(|| platform("creating a surface command buffer"))?;
@@ -616,7 +654,7 @@ fn copy_in(
         }
     }
     let value = *next + 1;
-    command.encodeSignalEvent_value(ProtocolObject::from_ref(&*gpu.event), value);
+    command.encodeSignalEvent_value(ProtocolObject::from_ref(&*queue.event), value);
     if let Some((event, value)) = signal {
         command.encodeSignalEvent_value(ProtocolObject::from_ref(event), value);
     }
@@ -635,7 +673,6 @@ fn copy_in(
     drop(next);
     state.metal.slots[index].written = value;
     state.metal.current = Some(index);
-    state.metal.gpu = Some(gpu.clone());
     let frame = state.put(Frame::Metal {
         width: size.0,
         height: size.1,
@@ -1182,7 +1219,7 @@ mod tests {
         };
         assert_eq!(texture.pixelFormat(), MTLPixelFormat::BGRA8Unorm);
         let (w, h) = (texture.width(), texture.height());
-        let device = &ready.gpu.device;
+        let device = &ready.queue.gpu.device;
         let buffer = device
             .newBufferWithLength_options(w * h * 4, MTLResourceOptions::StorageModeShared)
             .unwrap();
@@ -1240,6 +1277,26 @@ mod tests {
             .unwrap()
             .wait(released, Duration::from_secs(5)));
         assert!(all_near(&shown(&s), [10, 20, 30, 255], 0));
+    }
+
+    #[test]
+    fn an_event_that_never_fires_stalls_only_its_own_surface() {
+        let Some(device) = renderer() else { return };
+        let stalled = surface("tests:metal-stalled");
+        let other = surface("tests:metal-other");
+        let never = device.newSharedEvent().unwrap();
+        let a = filled(&device, [1, 2, 3, 255]);
+        unsafe { stalled.present_metal_texture(raw(&*a), Some((raw(&*never), 1))) }.unwrap();
+        let b = filled(&device, [4, 5, 6, 255]);
+        let released = unsafe { other.present_metal_texture(raw(&*b), None) }
+            .unwrap()
+            .release;
+        assert!(other
+            .release_event()
+            .unwrap()
+            .wait(released, Duration::from_secs(5)));
+        assert!(!stalled.lock_state().metal.ready().unwrap().done());
+        never.setSignaledValue(1);
     }
 
     #[test]

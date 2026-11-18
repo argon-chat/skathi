@@ -18,7 +18,7 @@ Skathi renders with Direct3D 12 (the default build), or with Direct3D 11 in a bu
 | D3D12 on its own device or process | `SharedTexture::with_fence`, `present_shared_fenced`                                           | same (an `ID3D11Fence` opens the D3D12 one) |
 | Vulkan                             | external memory and a semaphore shared as a D3D12 fence: `with_fence`, `present_shared_fenced` | same                                        |
 
-Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
+Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. Each surface has its own queue and release fence: a fence that is never signalled holds back only the surface it was presented to. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
 
 Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms), or `R16G16B16A16_FLOAT` on a [half-float surface](#half-float-textures); mip 0 is shown. Alpha is straight.
 
@@ -107,7 +107,7 @@ fn render_target(device: &ID3D11Device, (w, h): (u32, u32)) -> ((u32, u32), ID3D
 
 ## Direct3D 12 on the renderer's device
 
-`d3d12_device()` is the renderer's `ID3D12Device` and its direct queue. Render on a queue of your own on that device, signal a fence of yours, and present the resource with that fence and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals its release fence. `present_d3d12` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Write the resource again once `release_fence()` reaches it, or make your queue wait on it (`ID3D12CommandQueue::Wait`), or keep a few resources in rotation.
+`d3d12_device()` is the renderer's `ID3D12Device` and its direct queue. Render on a queue of your own on that device, signal a fence of yours, and present the resource with that fence and value. Nothing blocks: the surface's queue waits for your value on the GPU, copies, and signals the surface's release fence. `present_d3d12` returns a `FramePresent`: the frame's id ([when it reached the screen](/embedding/native-frames/#knowing-when-a-frame-is-on-screen)) and that release value. Write the resource again once `release_fence()` reaches it, or make your queue wait on it (`ID3D12CommandQueue::Wait`), or keep a few resources in rotation.
 
 ```rust
 let gpu = surface.d3d12_device()?; // NotSupported under the D3D11 renderer
@@ -125,7 +125,7 @@ let release = surface.release_fence()?;
 release.wait(presented.release, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
 ```
 
-`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present returns `SurfaceError::Busy` and the frame can be dropped.
+`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface's textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames.
 
 ## Textures from another device, API or process
 
