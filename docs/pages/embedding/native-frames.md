@@ -366,7 +366,6 @@ Measured on one 165 Hz screen, the share of frames shown on the refresh they wer
 | ---------------- | ----------------------- |
 | 0.05             | 83–99 %                 |
 | 0.3              | 95–97 %                 |
-| 0.6              | 99.7–100 %              |
 
 The rule also accounts for what has worked elsewhere: 0.05 for a 3–4 ms render on a 120 Hz Mac, and 0.3 for 2160p HDR frames at 240 Hz. Measure your render time on the machine it runs on, from the start of the render until the present returns, as the loop above does; a fixed start that suits one machine or one video can land on the tick on another.
 
