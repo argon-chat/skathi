@@ -14,6 +14,7 @@
  *   bun scripts/aot/no-jit.ts --check       fails unless the inventories match the pinned archive
  *   bun scripts/aot/no-jit.ts --write       rewrites the inventories from the pinned archive, to review after a pin change
  *   --remove JIT                            only the JIT (default: JIT,WebAssembly)
+ *   --remove JIT,WebAssembly,Interpreter    qualification archive for the experimental no-interpreter Cargo feature
  */
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
@@ -49,6 +50,18 @@ export const REMOVED: readonly RemovedFeature[] = [
   },
 ];
 
+export const TRIMMABLE: readonly RemovedFeature[] = [
+  ...REMOVED,
+  {
+    name: "Interpreter",
+    id: 1,
+    abort: "redjs_removed_interpreter_entry",
+    throws: "redjs_removed_interpreter_host_function",
+    skips: "redjs_removed_interpreter_skip",
+    inventory: "interpreter-entries.json",
+  },
+];
+
 const GUARD_SECTION = ".bun_removable_entry_points";
 const RECORD_BYTES = 24;
 const STUB_ABORT = 0;
@@ -61,6 +74,9 @@ const ORIGIN_BUILTIN_NAMED_BY_ENGINE = 3;
 const HOST_FUNCTION = /^\?\w+@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z$/;
 /** A free function returning void, which a bare return stands in for whatever its arguments. */
 const VOID_FUNCTION = /^\?\w+(@\w+)*@@YAX/;
+// MSVC spells the static void RemovableBody::run for VM::createBytecodeIntrinsicRegistry with its lambda type.
+const VOID_REGISTRY_BODY =
+  "?run@?$RemovableBody@$00$02XV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@JSC@@AEAAXXZ@@JSC@@SAXAEAV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@2@AEAAXXZ@@Z";
 const REL_ADDR64 = 1;
 const REL_REL32 = 4;
 const SCN_LNK_NRELOC_OVFL = 0x01000000;
@@ -259,7 +275,7 @@ function removableEntries(object: CoffObject, removed: ReadonlyMap<number, Remov
           stub === STUB_RETURN_DEFAULT &&
           origin === ORIGIN_NATIVE_CODE &&
           feature.skips !== undefined &&
-          VOID_FUNCTION.test(symbol);
+          (VOID_FUNCTION.test(symbol) || (feature.name === "Interpreter" && symbol === VOID_REGISTRY_BODY));
         const throws =
           stub === STUB_THROW &&
           origin === ORIGIN_BUILTIN_NAMED_BY_ENGINE &&
@@ -639,17 +655,17 @@ if (import.meta.main) {
   });
   if ([values.out !== undefined, values.check, values.write].filter(Boolean).length !== 1) {
     console.error(
-      "no-jit.ts --out <dir> | --check | --write  [--remove JIT[,WebAssembly]] [--webkit <bun-webkit prebuilt>]",
+      "no-jit.ts --out <dir> | --check | --write  [--remove JIT[,WebAssembly][,Interpreter]] [--webkit <bun-webkit prebuilt>]",
     );
     process.exit(2);
   }
   if (process.platform !== "win32" || process.arch !== "x64")
     throw Error("the aot-nojit archive is made on Windows x64, from the Windows prebuilt");
   const names = values.remove?.split(",").map((n) => n.trim()) ?? REMOVED.map((f) => f.name);
-  const removed = REMOVED.filter((f) => names.includes(f.name));
+  const removed = TRIMMABLE.filter((f) => names.includes(f.name));
   for (const name of names)
-    if (!REMOVED.some((f) => f.name === name))
-      throw Error(`--remove: ${name} is not one of ${REMOVED.map((f) => f.name).join(", ")}`);
+    if (!TRIMMABLE.some((f) => f.name === name))
+      throw Error(`--remove: ${name} is not one of ${TRIMMABLE.map((f) => f.name).join(", ")}`);
   if (!names.includes("JIT")) throw Error("--remove: the archive always leaves out the JIT");
   const webkit = resolve(values.webkit ?? join(SDK, "vendor/redjs/prebuilt/bun-webkit"));
   const t0 = performance.now();

@@ -638,6 +638,7 @@ pub fn host_info_json() -> String {
         (cfg!(feature = "native-aot"), "native-aot"),
         (cfg!(feature = "no-jit"), "no-jit"),
         (cfg!(feature = "no-wasm"), "no-wasm"),
+        (cfg!(feature = "no-interpreter"), "no-interpreter"),
         (cfg!(feature = "no-devtools"), "no-devtools"),
         (cfg!(feature = "audio"), "audio"),
         (cfg!(feature = "storages"), "storages"),

@@ -11,6 +11,8 @@
 //     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
 //     none of the entry points the inventories of scripts/aot/no-jit.ts list (the JIT's, WebAssembly's)
 //     while no-devtools links them, and aot-nojit exports what no-devtools does.
+//   bun scripts/release-hosts.ts --check-no-interpreter <exe> --map <link.map>
+//     verify a Windows x64 experimental no-interpreter build locally.
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
@@ -22,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { NO_JIT_VARIANT, platformVariants } from "../packages/cli/cli/config";
-import { inventoryPath, REMOVED, type Inventory } from "./aot/no-jit";
+import { inventoryPath, REMOVED, TRIMMABLE, type Inventory } from "./aot/no-jit";
 import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
   aotCompilerAssetName,
@@ -48,8 +50,24 @@ const { values } = parseArgs({
     "native-inspector": { type: "string" },
     "no-jit": { type: "string" },
     "check-tag": { type: "string" },
+    "check-no-interpreter": { type: "string" },
+    map: { type: "string" },
   },
 });
+
+if (values["check-no-interpreter"] || values.map) {
+  if (!values["check-no-interpreter"] || !values.map)
+    throw new Error("--check-no-interpreter <exe> needs --map <link.map>");
+  const exe = resolve(values["check-no-interpreter"]);
+  const info = hostInfo(exe);
+  const problem = checkHost(exe, info, NO_JIT_VARIANT, false);
+  if (problem) throw new Error(problem);
+  for (const feature of ["native-aot", "no-jit", "no-wasm", "no-interpreter"]) {
+    if (!info.features.includes(feature)) throw new Error(`${exe} does not declare ${feature}`);
+  }
+  checkLink(NO_JIT_VARIANT, exe, resolve(values.map), true, false);
+  process.exit(0);
+}
 
 if (values["check-tag"] !== undefined) {
   const tag = values["check-tag"];
@@ -130,21 +148,32 @@ if (variants.includes(NO_JIT_VARIANT) && !(inspector && noJit)) {
 
 // What a Windows host's link map must show, and what each host exports.
 const maps = platform === "windows" ? mkdtempSync(join(tmpdir(), "sk-host-maps-")) : null;
-const removedEntries = REMOVED.map((feature) => ({
-  feature,
-  names: Object.keys((JSON.parse(readFileSync(inventoryPath(feature), "utf8")) as Inventory).entries),
-}));
 const exportsOf = new Map<string, string[]>();
-function checkLink(variant: string, exe: string, map: string): void {
+function checkLink(
+  variant: string,
+  exe: string,
+  map: string,
+  noInterpreter: boolean,
+  verifyFull: boolean,
+  reference?: string[],
+): string[] {
   const linked = readFileSync(map, "latin1");
   const has = (symbol: string) => linked.includes(` ${symbol} `);
   if (/\s\?compileProgram@AOT@JSC@@/.test(linked)) throw new Error(`${variant}: the host links the image compiler`);
-  const entryUse = removedEntries.map(({ feature, names }) => ({ feature, names, kept: names.filter(has) }));
+  const entryUse = (noInterpreter ? TRIMMABLE : REMOVED).map((feature) => {
+    const names = Object.keys((JSON.parse(readFileSync(inventoryPath(feature), "utf8")) as Inventory).entries);
+    return { feature, names, kept: names.filter(has) };
+  });
   for (const { feature, names, kept } of entryUse) {
+    if (noInterpreter) {
+      for (const stub of [feature.abort, feature.throws, feature.skips]) {
+        if (stub && !has(stub)) throw new Error(`${variant}: ${map} does not contain ${stub}`);
+      }
+    }
     if (variant === NO_JIT_VARIANT && kept.length) {
       throw new Error(`${variant}: the host links ${kept.length} ${feature.name} entry points, among them ${kept[0]}`);
     }
-    if (variant === "no-devtools" && inspector && kept.length !== names.length) {
+    if (variant === "no-devtools" && verifyFull && kept.length !== names.length) {
       throw new Error(
         `${variant}: ${names.length - kept.length} of scripts/aot/${feature.inventory} are not in the map; it names other symbols than the link`,
       );
@@ -155,13 +184,12 @@ function checkLink(variant: string, exe: string, map: string): void {
   const names = [...listing.stdout.matchAll(/^\s*Name: (\S+)\s*$/gm)].map((m) => m[1]!).sort();
   if (names.some((n) => n.startsWith("rjs_aot_compil")))
     throw new Error(`${variant}: the host exports the image compiler`);
-  exportsOf.set(variant, names);
-  const reference = exportsOf.get("no-devtools");
   if (variant === NO_JIT_VARIANT && reference && reference.join("\n") !== names.join("\n")) {
     throw new Error(`${variant}: the host exports other symbols than no-devtools: ${names.join(", ")}`);
   }
   const counts = entryUse.map(({ feature, names: all, kept }) => `${kept.length} of ${all.length} ${feature.name}`);
   console.log(`[release] ${variant}: ${counts.join(", ")} entry points linked, ${names.length} exports`);
+  return names;
 }
 
 const entries: HostManifestEntry[] = [];
@@ -176,8 +204,8 @@ for (const variant of variants) {
     },
     features: inspector ? (devtools ? ["native-aot", "native-inspector"] : ["native-aot"]) : [],
   });
-  if (map) checkLink(variant, exe, map);
   const info = hostInfo(exe);
+  if (map) exportsOf.set(variant, checkLink(variant, exe, map, false, !!inspector, exportsOf.get("no-devtools")));
   const problem = checkHost(exe, info, variant, false);
   if (problem) throw new Error(problem);
   if (aotCompiler) {

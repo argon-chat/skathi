@@ -1,0 +1,210 @@
+{
+  "schema": "skathi.no-jit-inventory",
+  "version": 1,
+  "engine": "3bc94211496460feda299ef85eef710eb67fafb3",
+  "archiveSha256": "184a2aed6f833823f19e71885be3ad97924e9d158ff6eaefd5aef9433c1d01ab",
+  "feature": {
+    "name": "Interpreter",
+    "id": 1
+  },
+  "references": {
+    "definition": 109,
+    "callSite": 15
+  },
+  "entries": {
+    "??$generate@VEvalNode@JSC@@VUnlinkedEvalCodeBlock@2@@BytecodeGenerator@JSC@@SA?AVParserError@1@AEAVVM@1@PEAVEvalNode@1@AEBVSourceCode@1@PEAVUnlinkedEvalCodeBlock@1@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEBV?$RefPtr@VTDZEnvironmentLink@JSC@@U?$RawPtrTraits@VTDZEnvironmentLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VTDZEnvironmentLink@JSC@@@4@@8@PEBV?$FixedVector@VIdentifier@JSC@@UFastMalloc@WTF@@@8@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@8@W4OptimizeBytecode@1@V?$RefPtr@VDeclaredNamesLink@JSC@@U?$RawPtrTraits@VDeclaredNamesLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VDeclaredNamesLink@JSC@@@4@@8@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$generate@VFunctionNode@JSC@@VUnlinkedFunctionCodeBlock@2@@BytecodeGenerator@JSC@@SA?AVParserError@1@AEAVVM@1@PEAVFunctionNode@1@AEBVSourceCode@1@PEAVUnlinkedFunctionCodeBlock@1@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEBV?$RefPtr@VTDZEnvironmentLink@JSC@@U?$RawPtrTraits@VTDZEnvironmentLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VTDZEnvironmentLink@JSC@@@4@@8@PEBV?$FixedVector@VIdentifier@JSC@@UFastMalloc@WTF@@@8@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@8@W4OptimizeBytecode@1@V?$RefPtr@VDeclaredNamesLink@JSC@@U?$RawPtrTraits@VDeclaredNamesLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VDeclaredNamesLink@JSC@@@4@@8@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$generate@VModuleProgramNode@JSC@@VUnlinkedModuleProgramCodeBlock@2@@BytecodeGenerator@JSC@@SA?AVParserError@1@AEAVVM@1@PEAVModuleProgramNode@1@AEBVSourceCode@1@PEAVUnlinkedModuleProgramCodeBlock@1@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEBV?$RefPtr@VTDZEnvironmentLink@JSC@@U?$RawPtrTraits@VTDZEnvironmentLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VTDZEnvironmentLink@JSC@@@4@@8@PEBV?$FixedVector@VIdentifier@JSC@@UFastMalloc@WTF@@@8@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@8@W4OptimizeBytecode@1@V?$RefPtr@VDeclaredNamesLink@JSC@@U?$RawPtrTraits@VDeclaredNamesLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VDeclaredNamesLink@JSC@@@4@@8@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$generate@VProgramNode@JSC@@VUnlinkedProgramCodeBlock@2@@BytecodeGenerator@JSC@@SA?AVParserError@1@AEAVVM@1@PEAVProgramNode@1@AEBVSourceCode@1@PEAVUnlinkedProgramCodeBlock@1@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEBV?$RefPtr@VTDZEnvironmentLink@JSC@@U?$RawPtrTraits@VTDZEnvironmentLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VTDZEnvironmentLink@JSC@@@4@@8@PEBV?$FixedVector@VIdentifier@JSC@@UFastMalloc@WTF@@@8@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@8@W4OptimizeBytecode@1@V?$RefPtr@VDeclaredNamesLink@JSC@@U?$RawPtrTraits@VDeclaredNamesLink@JSC@@@WTF@@U?$DefaultRefDerefTraits@VDeclaredNamesLink@JSC@@@4@@8@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedEvalCodeBlock@JSC@@VDirectEvalExecutable@2@@JSC@@YAPEAVUnlinkedEvalCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVDirectEvalExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedEvalCodeBlock@JSC@@VIndirectEvalExecutable@2@@JSC@@YAPEAVUnlinkedEvalCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVIndirectEvalExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedModuleProgramCodeBlock@JSC@@VModuleProgramExecutable@2@@JSC@@YAPEAVUnlinkedModuleProgramCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVModuleProgramExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedModuleProgramCodeBlock@JSC@@VScriptExecutable@2@@JSC@@YAPEAVUnlinkedModuleProgramCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVScriptExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedProgramCodeBlock@JSC@@VProgramExecutable@2@@JSC@@YAPEAVUnlinkedProgramCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVProgramExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$generateUnlinkedCodeBlockImpl@VUnlinkedProgramCodeBlock@JSC@@VScriptExecutable@2@@JSC@@YAPEAVUnlinkedProgramCodeBlock@0@AEAVVM@0@AEBVSourceCode@0@EW4JSParserScriptMode@0@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@0@W4EvalContextType@0@W4DerivedContextType@0@_NPEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@6@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@6@PEAVScriptExecutable@0@W4OptimizeBytecode@0@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$parse@VEvalNode@JSC@@@JSC@@YA?AV?$unique_ptr@VEvalNode@JSC@@U?$default_delete@VEvalNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@AEBVIdentifier@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@W4FunctionMode@0@W4SuperBinding@0@AEAVParserError@0@W4ConstructorKind@0@W4DerivedContextType@0@W4EvalContextType@0@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@WTF@@PEBV?$FixedVector@UClassElementDefinition@UnlinkedFunctionExecutable@JSC@@UFastMalloc@WTF@@@WTF@@_N@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$parse@VFunctionNode@JSC@@@JSC@@YA?AV?$unique_ptr@VFunctionNode@JSC@@U?$default_delete@VFunctionNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@AEBVIdentifier@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@W4FunctionMode@0@W4SuperBinding@0@AEAVParserError@0@W4ConstructorKind@0@W4DerivedContextType@0@W4EvalContextType@0@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@WTF@@PEBV?$FixedVector@UClassElementDefinition@UnlinkedFunctionExecutable@JSC@@UFastMalloc@WTF@@@WTF@@_N@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "??$parse@VModuleProgramNode@JSC@@@JSC@@YA?AV?$unique_ptr@VModuleProgramNode@JSC@@U?$default_delete@VModuleProgramNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@AEBVIdentifier@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@W4FunctionMode@0@W4SuperBinding@0@AEAVParserError@0@W4ConstructorKind@0@W4DerivedContextType@0@W4EvalContextType@0@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@WTF@@PEBV?$FixedVector@UClassElementDefinition@UnlinkedFunctionExecutable@JSC@@UFastMalloc@WTF@@@WTF@@_N@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$parse@VProgramNode@JSC@@@JSC@@YA?AV?$unique_ptr@VProgramNode@JSC@@U?$default_delete@VProgramNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@AEBVIdentifier@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@W4FunctionMode@0@W4SuperBinding@0@AEAVParserError@0@W4ConstructorKind@0@W4DerivedContextType@0@W4EvalContextType@0@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@WTF@@PEBV?$FixedVector@UClassElementDefinition@UnlinkedFunctionExecutable@JSC@@UFastMalloc@WTF@@@WTF@@_N@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "??$parseRootNode@VModuleProgramNode@JSC@@@JSC@@YA?AV?$unique_ptr@VModuleProgramNode@JSC@@U?$default_delete@VModuleProgramNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@AEAVParserError@0@W4ConstructorKind@0@PEAUDebuggerParseData@0@@Z": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "??$parseRootNode@VProgramNode@JSC@@@JSC@@YA?AV?$unique_ptr@VProgramNode@JSC@@U?$default_delete@VProgramNode@JSC@@@std@@@std@@AEAVVM@0@AEBVSourceCode@0@W4ImplementationVisibility@0@W4JSParserBuiltinMode@0@EW4JSParserScriptMode@0@W4SourceParseMode@0@AEAVParserError@0@W4ConstructorKind@0@PEAUDebuggerParseData@0@@Z": {
+      "definition": 10,
+      "callSite": 0
+    },
+    "?callAsyncFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?callAsyncGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?callFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?callGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?constructAsyncFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?constructAsyncGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?constructFunctionSkippingEvalEnabledCheck@JSC@@YAPEAVJSObject@1@PEAVJSGlobalObject@1@$$QEAVString@WTF@@EAEBVIdentifier@1@AEBVSourceOrigin@1@AEBV45@VSourceTaintedness@1@AEBVTextPosition@5@HV?$optional@H@std@@W4FunctionConstructionMode@1@VJSValue@1@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?constructGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?constructWithFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?create@DirectEvalExecutable@JSC@@SAPEAV12@PEAVJSGlobalObject@2@AEBVSourceCode@2@EW4DerivedContextType@2@W4NeedsClassFieldInitializer@2@W4PrivateBrandRequirement@2@_N5W4EvalContextType@2@PEBV?$HashSet@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UIdentifierRepHash@JSC@@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$RawPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UHashTableTraits@2@$0A@@WTF@@PEBV?$HashMap@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@UPrivateNameEntry@JSC@@UIdentifierRepHash@4@U?$HashTraits@V?$RefPtr@VUniquedStringImpl@WTF@@U?$PackedPtrTraits@VUniquedStringImpl@WTF@@@2@U?$DefaultRefDerefTraits@VUniquedStringImpl@WTF@@@2@@WTF@@@2@UPrivateNameEntryHashTraits@4@UHashTableTraits@2@$0A@UFastMalloc@2@@WTF@@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?dumpBytecode@CodeBlock@JSC@@QEAAXAEAVPrintStream@WTF@@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "?encodeCodeBlock@JSC@@YA?AV?$RefPtr@VCachedBytecode@JSC@@U?$RawPtrTraits@VCachedBytecode@JSC@@@WTF@@U?$DefaultRefDerefTraits@VCachedBytecode@JSC@@@4@@WTF@@AEAVVM@1@AEBVSourceCodeKey@1@PEBVUnlinkedCodeBlock@1@AEAVFileHandle@FileSystemImpl@3@AEAVBytecodeCacheError@1@PEAVEncoderStringTable@1@W4BytecodeCacheUpdatable@1@@Z": {
+      "definition": 5,
+      "callSite": 0
+    },
+    "?encodeFunctionCodeBlock@JSC@@YA?AV?$RefPtr@VCachedBytecode@JSC@@U?$RawPtrTraits@VCachedBytecode@JSC@@@WTF@@U?$DefaultRefDerefTraits@VCachedBytecode@JSC@@@4@@WTF@@AEAVVM@1@PEBVUnlinkedFunctionCodeBlock@1@AEAVBytecodeCacheError@1@@Z": {
+      "definition": 1,
+      "callSite": 0
+    },
+    "?executeEval@Interpreter@JSC@@QEAA?AVJSValue@2@PEAVEvalExecutable@2@V32@PEAVJSScope@2@@Z": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "?generateUnlinkedCodeBlockForFunctions@JSC@@YAXAEAVVM@1@PEAVUnlinkedCodeBlock@1@AEBVSourceCode@1@V?$OptionSet@W4CodeGenerationMode@JSC@@$0A@@WTF@@AEAVParserError@1@IW4OptimizeBytecode@1@@Z": {
+      "definition": 8,
+      "callSite": 0
+    },
+    "?getUnlinkedCodeBlock@ModuleProgramExecutable@JSC@@QEAAPEAVUnlinkedModuleProgramCodeBlock@2@PEAVJSGlobalObject@2@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?installBytecodeInterpreter@LLInt@JSC@@YAXPEAPEAX00@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?parseFunctionForFunctionConstructor@JSC@@YA?AV?$unique_ptr@VProgramNode@JSC@@U?$default_delete@VProgramNode@JSC@@@std@@@std@@AEAVVM@1@AEBVSourceCode@1@EAEAVParserError@1@V?$optional@H@3@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?reconcileLLIntInlineCachesAtGCEnd@CodeBlock@JSC@@IEAAXXZ": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?run@?$RemovableBody@$00$02XV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@JSC@@AEAAXXZ@@JSC@@SAXAEAV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@2@AEAAXXZ@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?run@?$RemovableBody@$00$0A@PEAVIndirectEvalExecutable@JSC@@V<lambda_1>@?0???$createImpl@V<lambda_16>@?0??create@IndirectEvalExecutable@JSC@@SAPEAV34@PEAVJSGlobalObject@4@AEBVSourceCode@4@EW4DerivedContextType@4@_NW4EvalContextType@4@AEAV?$NakedPtr@VJSObject@JSC@@@WTF@@@Z@@12@CAPEAV12@PEAVJSGlobalObject@2@AEBVSourceCode@2@EW4DerivedContextType@2@_NW4EvalContextType@2@V<lambda_16>@?0??create@12@SAPEAV12@01E234AEAV?$NakedPtr@VJSObject@JSC@@@WTF@@@Z@@Z@@JSC@@SAPEAVIndirectEvalExecutable@2@AEAV<lambda_1>@?0???$createImpl@V<lambda_16>@?0??create@IndirectEvalExecutable@JSC@@SAPEAV34@PEAVJSGlobalObject@4@AEBVSourceCode@4@EW4DerivedContextType@4@_NW4EvalContextType@4@AEAV?$NakedPtr@VJSObject@JSC@@@WTF@@@Z@@32@CAPEAV32@PEAVJSGlobalObject@2@AEBVSourceCode@2@EW4DerivedContextType@2@_NW4EvalContextType@2@V<lambda_16>@?0??create@32@SAPEAV32@01E234AEAV?$NakedPtr@VJSObject@JSC@@@WTF@@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$00$0A@PEAVIndirectEvalExecutable@JSC@@V<lambda_1>@?0???$createImpl@V<lambda_17>@?0??tryCreate@IndirectEvalExecutable@JSC@@SAPEAV34@PEAVJSGlobalObject@4@AEBVSourceCode@4@EW4DerivedContextType@4@_NW4EvalContextType@4@@Z@@12@CAPEAV12@PEAVJSGlobalObject@2@AEBVSourceCode@2@EW4DerivedContextType@2@_NW4EvalContextType@2@V<lambda_17>@?0??tryCreate@12@SAPEAV12@01E234@Z@@Z@@JSC@@SAPEAVIndirectEvalExecutable@2@AEAV<lambda_1>@?0???$createImpl@V<lambda_17>@?0??tryCreate@IndirectEvalExecutable@JSC@@SAPEAV34@PEAVJSGlobalObject@4@AEBVSourceCode@4@EW4DerivedContextType@4@_NW4EvalContextType@4@@Z@@32@CAPEAV32@PEAVJSGlobalObject@2@AEBVSourceCode@2@EW4DerivedContextType@2@_NW4EvalContextType@2@V<lambda_17>@?0??tryCreate@32@SAPEAV32@01E234@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$00$0A@VJSValue@JSC@@V<lambda_27>@?0??executeProgram@Interpreter@2@QEAA?AV12@AEBVSourceCode@2@PEAVJSGlobalObject@2@PEAVJSObject@2@PEAVUnlinkedProgramCodeBlock@2@@Z@@JSC@@SA?AVJSValue@2@AEAV<lambda_27>@?0??executeProgram@Interpreter@2@QEAA?AV32@AEBVSourceCode@2@PEAVJSGlobalObject@2@PEAVJSObject@2@PEAVUnlinkedProgramCodeBlock@2@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?setEntrypoint@LLInt@JSC@@YAXPEAVCodeBlock@2@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?tryEvalAsJSON@JSC@@YA?AVJSValue@1@PEAVJSGlobalObject@1@VStringView@WTF@@PEAVCodeBlock@1@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?tryJSONPParse@?$LiteralParser@ULatin1Character@WTF@@$0A@@JSC@@QEAA_NAEAV?$Vector@UJSONPData@JSC@@$0A@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@_N@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?tryJSONPParse@?$LiteralParser@_S$0A@@JSC@@QEAA_NAEAV?$Vector@UJSONPData@JSC@@$0A@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@_N@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?updateAllPredictions@CodeBlock@JSC@@QEAAXW4ValueProfileSamples@12@@Z": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "?updatePredictionsConcurrently@CodeBlock@JSC@@QEAAXW4ValueProfileSamples@12@@Z": {
+      "definition": 4,
+      "callSite": 0
+    }
+  },
+  "throwing": [
+    "?callAsyncFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callAsyncGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructAsyncFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructAsyncGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructGeneratorFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructWithFunctionConstructor@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z"
+  ],
+  "skipped": [
+    "?installBytecodeInterpreter@LLInt@JSC@@YAXPEAPEAX00@Z",
+    "?run@?$RemovableBody@$00$02XV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@JSC@@AEAAXXZ@@JSC@@SAXAEAV<lambda_19>@?0??createBytecodeIntrinsicRegistry@VM@2@AEAAXXZ@@Z"
+  ]
+}
