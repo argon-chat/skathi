@@ -1,0 +1,26 @@
+name: CSS checker
+description: sk check's CSS checker, after bun install with vendor/gpui, vendor/taffy and vendor/redjs checked out.
+
+runs:
+  using: composite
+  steps:
+    # A hit holds a checker built from the same inputs, and --ensure confirms it without Rust.
+    - name: Cache the CSS checker
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          packages/cli/check/sk-css.wasm.br
+          target/css-check-inputs.json
+        key: css-checker-${{ hashFiles('package.json', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'scripts/css-engine.ts', 'crates/sk-css/**', 'crates/sk-effects/**', 'vendor/gpui/Cargo.toml', 'vendor/gpui/crates/**', 'vendor/taffy/Cargo.toml', 'vendor/taffy/src/**') }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: ./.github/actions/rust
+      with:
+        targets: wasm32-unknown-unknown
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: css-checker
+    - name: Build the CSS checker
+      shell: bash
+      run: bun scripts/css-engine.ts --ensure

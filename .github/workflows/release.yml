@@ -184,7 +184,7 @@ jobs:
     name: npm
     needs: [publish]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -202,9 +202,13 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: npm with trusted publishing
         run: npm install -g npm@11.5.1
+      # The CLI ships the CSS checker built from sk-css, which needs these.
+      - name: Check out gpui, taffy and redjs
+        run: git submodule update --init --depth 1 -- vendor/gpui vendor/taffy vendor/redjs
       - run: bun install --frozen-lockfile
       - name: Check the tag
         run: bun scripts/release-hosts.ts --check-tag "$TAG"
+      - uses: ./.github/actions/css-checker
       # bun pm pack writes workspace:* as the real version; the licenses live at the repo root. The CLI
       # downloads the gallery templates at the commit the templates submodule is pinned to.
       - name: Pack
@@ -216,6 +220,7 @@ jobs:
             (cd "packages/$pkg" && bun pm pack --destination ../../npm-tarballs)
           done
           ls -l npm-tarballs
+          tar -tzf npm-tarballs/skathi-native-cli-*.tgz | grep -qx package/check/sk-css.wasm.br
       # The runtime first: the published CLI depends on it at exactly this version. A re-run skips
       # what is already published. A prerelease (0.1.0-beta.1) goes to its own dist-tag, not latest.
       - name: Publish

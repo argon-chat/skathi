@@ -1,0 +1,20 @@
+name: Rust toolchain
+description: The pinned Rust toolchain, minimal profile, with the given targets.
+
+inputs:
+  targets:
+    description: Comma-separated Rust target triples
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Rust
+      shell: bash
+      run: |
+        if ! command -v rustup >/dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.targets }}

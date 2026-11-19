@@ -1,80 +1,238 @@
-// Regenerate with the wasm32-unknown-unknown Rust target and Binaryen's wasm-metadce/wasm-opt on PATH.
-import { execFileSync } from "node:child_process";
+// Builds packages/cli/check/sk-css.wasm.br, the CSS checker `sk check` runs: sk-css's css-check example for
+// wasm32-unknown-unknown, trimmed with Binaryen (the root `binaryen` devDependency) and brotli-compressed. A custom
+// section stamps it with a hash of every input, so --ensure rebuilds only a missing or stale module.
+//
+//   bun scripts/css-engine.ts            build
+//   bun scripts/css-engine.ts --ensure   build when missing or stale
+
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 const root = resolve(import.meta.dir, "..");
 const target = resolve(root, process.env.CARGO_TARGET_DIR ?? "target");
 const output = join(root, "packages/cli/check/sk-css.wasm.br");
-const sourceDir = "crates/sk-css/src";
-const sources = readdirSync(join(root, sourceDir), { recursive: true, withFileTypes: true })
-  .filter((e) => e.isFile())
-  .map((e) =>
-    join(e.parentPath, e.name)
-      .slice(root.length + 1)
-      .replaceAll("\\", "/"),
-  );
-const hash = createHash("sha256");
-for (const path of [...sources, "crates/sk-css/Cargo.toml", "crates/sk-css/examples/css-check.rs"].sort()) {
-  hash
-    .update(path)
-    .update("\0")
-    .update(readFileSync(join(root, path), "utf8").replaceAll("\r\n", "\n"))
-    .update("\0");
-}
-const digest = hash.digest();
 const section = "sk-css-sources";
-if (process.argv.includes("--check") || process.argv.includes("--ensure")) {
-  if (existsSync(output)) {
-    const module = new WebAssembly.Module(brotliDecompressSync(readFileSync(output)));
-    const [stamp] = WebAssembly.Module.customSections(module, section);
-    if (stamp && digest.equals(Buffer.from(stamp))) process.exit(0);
+const rel = (path: string) => relative(root, path).replaceAll("\\", "/");
+
+interface Inputs {
+  key: string;
+  /** Manifests that decide the dependency graph; the key hashes them. */
+  manifests: string[];
+  dirs: string[];
+  files: string[];
+}
+
+function graphKey(manifests: string[]) {
+  const hash = createHash("sha256");
+  for (const path of manifests) hash.update(path).update("\0").update(read(path)).update("\0");
+  return hash.digest("hex");
+}
+
+function read(path: string): Buffer {
+  try {
+    return readFileSync(join(root, path));
+  } catch {
+    return Buffer.alloc(0);
   }
-  if (process.argv.includes("--check"))
-    throw new Error("sk-css changed. Regenerate the CLI checker with bun scripts/css-engine.ts.");
 }
-execFileSync(
-  "cargo",
-  ["build", "--locked", "--release", "--target", "wasm32-unknown-unknown", "-p", "sk-css", "--example", "css-check"],
-  { cwd: root, stdio: "inherit" },
-);
-const wasm = join(target, "wasm32-unknown-unknown/release/examples/css_check.wasm");
-const graph = join(target, "css-check-exports.json");
-const pruned = join(target, "css-check-pruned.wasm");
-const optimized = join(target, "css-check-opt.wasm");
-writeFileSync(graph, JSON.stringify(["check", "memory"].map((name) => ({ name, export: name, root: true }))));
-execFileSync("wasm-metadce", ["--all-features", "--graph-file=" + graph, wasm, "-o", pruned], {
-  stdio: ["ignore", "ignore", "inherit"],
-});
-execFileSync(
-  "wasm-opt",
-  [
-    "--all-features",
-    "--remove-unused-module-elements",
-    "--strip-debug",
-    "--strip-producers",
-    "-Oz",
-    pruned,
-    "-o",
-    optimized,
-  ],
-  { stdio: "inherit" },
-);
-const bytes = readFileSync(optimized);
-const module = new WebAssembly.Module(bytes);
-for (const i of WebAssembly.Module.imports(module)) {
-  if (
-    (i.module === "sk" && ["read", "write"].includes(i.name)) ||
-    (i.module === "__wbindgen_placeholder__" && /^__wbg___wbindgen_throw_[a-f0-9]+$/.test(i.name))
-  )
-    continue;
-  throw new Error("Unexpected checker import: " + i.module + "." + i.name);
+
+interface Metadata {
+  packages: {
+    id: string;
+    name: string;
+    source: string | null;
+    manifest_path: string;
+    targets: { kind: string[]; src_path: string }[];
+  }[];
+  resolve: { nodes: { id: string; deps: { pkg: string; dep_kinds: { kind: string | null }[] }[] }[] };
 }
-const stamp = Buffer.concat([
-  Buffer.from([0, section.length + 1 + digest.length, section.length]),
-  Buffer.from(section),
-  digest,
-]);
-writeFileSync(output, brotliCompressSync(Buffer.concat([bytes, stamp])));
+
+/** sk-css and the path dependencies a wasm32 build of the example compiles, from `cargo metadata`. */
+function cargoInputs(): Inputs {
+  const metadata = JSON.parse(
+    execFileSync(
+      "cargo",
+      ["metadata", "--format-version", "1", "--locked", "--filter-platform", "wasm32-unknown-unknown"],
+      { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, stdio: ["ignore", "pipe", "inherit"] },
+    ),
+  ) as Metadata;
+  const packages = new Map(metadata.packages.map((p) => [p.id, p]));
+  const nodes = new Map(metadata.resolve.nodes.map((n) => [n.id, n]));
+  const start = metadata.packages.find((p) => p.name === "sk-css" && p.source === null);
+  if (!start) throw new Error("cargo metadata has no sk-css package");
+  const seen = new Set<string>();
+  const queue = [start.id];
+  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const dep of nodes.get(id)?.deps ?? []) {
+      if (dep.dep_kinds.some((k) => k.kind !== "dev" || id === start.id)) queue.push(dep.pkg);
+    }
+  }
+  const manifests = new Set(["Cargo.lock", "Cargo.toml"]);
+  const dirs = new Set<string>();
+  const files = new Set(["crates/sk-css/examples/css-check.rs"]);
+  for (const id of seen) {
+    const pkg = packages.get(id);
+    if (!pkg || pkg.source !== null) continue;
+    manifests.add(rel(pkg.manifest_path));
+    for (let dir = dirname(dirname(pkg.manifest_path)); dir.length > root.length; dir = dirname(dir)) {
+      const manifest = join(dir, "Cargo.toml");
+      if (existsSync(manifest) && /^\[workspace\]/m.test(readFileSync(manifest, "utf8"))) manifests.add(rel(manifest));
+    }
+    for (const t of pkg.targets) {
+      if (t.kind.includes("custom-build")) files.add(rel(t.src_path));
+      else if (!t.kind.some((k) => ["example", "test", "bench"].includes(k))) dirs.add(rel(dirname(t.src_path)));
+    }
+  }
+  const sorted = [...manifests].sort();
+  return { key: graphKey(sorted), manifests: sorted, dirs: [...dirs].sort(), files: [...files].sort() };
+}
+
+function inputs(): Inputs {
+  const cache = join(target, "css-check-inputs.json");
+  try {
+    const cached = JSON.parse(readFileSync(cache, "utf8")) as Inputs;
+    if (cached.key === graphKey(cached.manifests)) return cached;
+  } catch {}
+  const fresh = cargoInputs();
+  mkdirSync(target, { recursive: true });
+  writeFileSync(cache, JSON.stringify(fresh));
+  return fresh;
+}
+
+function binaryen(): { dir: string; version: string } {
+  const manifest = Bun.resolveSync("binaryen/package.json", root);
+  return {
+    dir: join(dirname(manifest), "bin"),
+    version: (JSON.parse(readFileSync(manifest, "utf8")) as { version: string }).version,
+  };
+}
+
+function digest(): Buffer {
+  const { manifests, dirs, files } = inputs();
+  const all = new Set([...manifests, ...files, "rust-toolchain.toml", ".cargo/config.toml", "scripts/css-engine.ts"]);
+  const contents = new Map<string, Buffer>();
+  const included = /include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)/g;
+  for (const dir of dirs) {
+    for (const entry of readdirSync(join(root, dir), { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(entry.parentPath, entry.name);
+      const text = readFileSync(path);
+      contents.set(rel(path), text);
+      if (!entry.name.endsWith(".rs")) continue;
+      for (const [, file] of text.toString("utf8").matchAll(included)) {
+        const resolved = resolve(entry.parentPath, file!);
+        if (resolved.startsWith(root) && existsSync(resolved)) all.add(rel(resolved));
+      }
+    }
+  }
+  for (const path of contents.keys()) all.add(path);
+  const hash = createHash("sha256").update("binaryen " + binaryen().version + "\0");
+  for (const path of [...all].sort()) {
+    hash
+      .update(path)
+      .update("\0")
+      .update(contents.get(path) ?? read(path))
+      .update("\0");
+  }
+  return hash.digest();
+}
+
+/** The custom section build() appends last. */
+const stampSection = (stamp: Buffer) =>
+  Buffer.concat([Buffer.from([0, section.length + 1 + stamp.length, section.length]), Buffer.from(section), stamp]);
+
+function current(stamp: Buffer): boolean {
+  try {
+    return brotliDecompressSync(readFileSync(output))
+      .subarray(-stamp.length - section.length - 3)
+      .equals(stampSection(stamp));
+  } catch {
+    return false;
+  }
+}
+
+function run(command: string, args: string[], quiet: boolean, failure: string) {
+  const r = spawnSync(command, args, {
+    cwd: root,
+    stdio: quiet ? ["ignore", "pipe", "pipe"] : ["ignore", 2, 2],
+    maxBuffer: 64 << 20,
+  });
+  if (r.status === 0) return;
+  if (quiet) process.stderr.write(Buffer.concat([r.stdout ?? Buffer.alloc(0), r.stderr ?? Buffer.alloc(0)]));
+  throw new Error(failure + (r.error ? ": " + r.error.message : ""));
+}
+
+function build(stamp: Buffer, quiet: boolean) {
+  run(
+    "cargo",
+    ["build", "--locked", "--release", "--target", "wasm32-unknown-unknown", "-p", "sk-css", "--example", "css-check"],
+    quiet,
+    "cargo build of the css-check example failed. It needs the wasm32-unknown-unknown target: rustup target add wasm32-unknown-unknown",
+  );
+  const wasm = join(target, "wasm32-unknown-unknown/release/examples/css_check.wasm");
+  const graph = join(target, "css-check-exports.json");
+  const pruned = join(target, "css-check-pruned.wasm");
+  const optimized = join(target, "css-check-opt.wasm");
+  const tools = binaryen().dir;
+  // Binaryen's tools are Emscripten builds; Node runs wasm-opt about a third faster than bun.
+  const js = Bun.which("node") ?? process.execPath;
+  // JavaScriptCore cannot parse the compact import section.
+  const features = ["--all-features", "--disable-compact-imports"];
+  writeFileSync(graph, JSON.stringify(["check", "memory"].map((name) => ({ name, export: name, root: true }))));
+  run(
+    js,
+    [join(tools, "wasm-metadce"), ...features, "--graph-file=" + graph, wasm, "-o", pruned],
+    true,
+    "wasm-metadce failed",
+  );
+  run(
+    js,
+    [
+      join(tools, "wasm-opt"),
+      ...features,
+      "--remove-unused-module-elements",
+      "--strip-debug",
+      "--strip-producers",
+      "-Oz",
+      pruned,
+      "-o",
+      optimized,
+    ],
+    quiet,
+    "wasm-opt failed",
+  );
+  const bytes = readFileSync(optimized);
+  for (const i of WebAssembly.Module.imports(new WebAssembly.Module(bytes))) {
+    if (
+      (i.module === "sk" && ["read", "write"].includes(i.name)) ||
+      (i.module === "__wbindgen_placeholder__" && /^__wbg___wbindgen_throw_[a-f0-9]+$/.test(i.name))
+    )
+      continue;
+    throw new Error("Unexpected checker import: " + i.module + "." + i.name);
+  }
+  writeFileSync(output + ".tmp", brotliCompressSync(Buffer.concat([bytes, stampSection(stamp)])));
+  renameSync(output + ".tmp", output);
+}
+
+/** Builds the checker when it is missing or stale, saying so in one line on stderr. */
+export function ensureCssEngine() {
+  const stamp = digest();
+  if (current(stamp)) return;
+  console.error("Building the CSS checker (sk-css for wasm32-unknown-unknown)");
+  build(stamp, true);
+}
+
+if (import.meta.main) {
+  try {
+    if (process.argv.includes("--ensure")) ensureCssEngine();
+    else build(digest(), false);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exit(1);
+  }
+}

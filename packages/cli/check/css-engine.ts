@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { brotliDecompressSync } from "node:zlib";
 
 interface Span {
@@ -24,10 +26,24 @@ interface Checker {
   memory: WebAssembly.Memory;
 }
 
+const modulePath = fileURLToPath(new URL("./sk-css.wasm.br", import.meta.url));
+let ensured = false;
+
+/** In a repository checkout, builds the checker when it is missing or older than its sources. */
+export function ensureCssEngine() {
+  if (ensured) return;
+  const builder = fileURLToPath(new URL("../../../scripts/css-engine.ts", import.meta.url));
+  if (existsSync(builder)) {
+    (createRequire(import.meta.url)(builder) as { ensureCssEngine(): void }).ensureCssEngine();
+  } else if (!existsSync(modulePath)) {
+    throw new Error("This @skathi-native/cli install has no CSS checker (check/sk-css.wasm.br). Reinstall the CLI.");
+  }
+  ensured = true;
+}
+
 function loadEngine() {
-  const module = new WebAssembly.Module(
-    brotliDecompressSync(readFileSync(new URL("./sk-css.wasm.br", import.meta.url))),
-  );
+  ensureCssEngine();
+  const module = new WebAssembly.Module(brotliDecompressSync(readFileSync(modulePath)));
   let input: Uint8Array;
   let result: CssDiagnostic[];
   const decode = (pointer: number, length: number) =>

@@ -18,25 +18,17 @@ runs:
       with:
         arch: x64
     - if: runner.os == 'Windows'
-      name: Rust and LLVM
+      name: LLVM
       shell: pwsh
       run: |
         $llvm = Join-Path $env:ProgramFiles 'LLVM/bin'
         if (Test-Path -LiteralPath $llvm) { Add-Content -LiteralPath $env:GITHUB_PATH -Value $llvm }
         # The image's MSVC STL can require a newer Clang than the image's LLVM.
         Add-Content -LiteralPath $env:GITHUB_ENV -Value 'CXXFLAGS=-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH'
-        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.target }}
 
-    - if: runner.os != 'Windows'
-      name: Rust
-      shell: bash
-      run: |
-        if ! command -v rustup >/dev/null; then
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.cargo/bin:$PATH"
-        fi
-        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.target }}
+    - uses: ./.github/actions/rust
+      with:
+        targets: ${{ inputs.target }}
 
     - if: runner.os == 'macOS'
       name: Metal toolchain

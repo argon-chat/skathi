@@ -9,6 +9,8 @@ crates/sk-thorvg-sys/tools/regen-bindings/Cargo.lock
 node_modules/
 !packages/cli/test/fixtures/check-*/node_modules/
 dist/
+# Built by scripts/css-engine.ts.
+/packages/cli/check/sk-css.wasm.br
 
 # Research clones (read-only study material; reports are tracked)
 /research/zed/

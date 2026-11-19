@@ -4,6 +4,10 @@ import ts from "typescript";
 import { analyze, type AnalyzeInput } from "../check";
 import { parseCheckConfig } from "../check/config";
 import type { CheckReport, Diagnostic } from "../check/schema";
+import { ensureCssEngine } from "../check/css-engine";
+
+// Outside any test, so a first build is not cut short by a test timeout.
+ensureCssEngine();
 
 export const FIXTURES = join(import.meta.dir, "fixtures");
 export const RULES = join(FIXTURES, "check-rules");
