@@ -273,11 +273,11 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 | macOS                  | the drawable's `presentedTime`; `refresh_interval` is the nominal period                                    | since 0.5, a drawable macOS hands back without a `presentedTime`, as it can at sparse presents and during a live resize, that no later present was aimed at the same refresh: placed on the refresh it was aimed at, the display link's target or, while the window is resized, a refresh after its present          |
 | Linux                  |                                                                                                             | about a refresh after the window's tick                                                                                                                                                                                                                                                                              |
 
-On Windows, gpui presents with `Present(0)` on a flip-model swap chain. Its vsync thread waited for each refresh in `DwmFlush`, which returns when DWM is done composing, anywhere in the refresh; since 0.5 it waits on the vblank of the display showing the first shown window (`IDXGIOutput::WaitForVBlank`), with `DwmFlush` as the fallback, so the tick keeps its place in the refresh, 0.08 to 0.17 of it after the vblank, at low present rates too. DWM silently discards a present that a newer one replaced before its vblank. Skathi records which frame of each surface every window present carries, and its vsync thread reads `GetFrameStatistics` (`PresentCount`, `PresentRefreshCount`, `SyncQPCTime`) every refresh while any frame waits, and once more after each present. A frame is `Presented` by the first window present the display showed that carried it; a present the statistics skipped over was discarded, unless a refresh was free for it between its neighbours, in which case it is placed there as `Estimated`. While no frame waits, the vsync thread sleeps as before, so an idle window costs nothing.
+On Windows, gpui presents with `Present(0)` on a flip-model swap chain. Its vsync thread waited for each refresh in `DwmFlush`, which returns when DWM is done composing, anywhere in the refresh; since 0.5 it waits on the vblank of the display showing the first shown window (`IDXGIOutput::WaitForVBlank`), with `DwmFlush` as the fallback, so the tick keeps its place in the refresh, about 0.05 to 0.15 of it after the vblank, at low present rates too. DWM silently discards a present that a newer one replaced before its vblank. Skathi records which frame of each surface every window present carries, and its vsync thread reads `GetFrameStatistics` (`PresentCount`, `PresentRefreshCount`, `SyncQPCTime`) every refresh while any frame waits, and once more after each present. A frame is `Presented` by the first window present the display showed that carried it; a present the statistics skipped over was discarded, unless a refresh was free for it between its neighbours, in which case it is placed there as `Estimated`. While no frame waits, the vsync thread sleeps as before, so an idle window costs nothing.
 
 ### Threading
 
-The callback runs on Skathi's vsync thread on Windows and on a thread of Skathi's own on macOS and Linux, never on the UI thread, and the UI's queue is never in the way: it comes at most a refresh after the frame was shown. The vsync thread paces every window, so keep the callback short: record, signal, return. It may present, or drop its own watch. `Closed` events at quit are delivered on the thread that quits.
+The callback runs on Skathi's vsync thread on Windows and on a thread of Skathi's own on macOS and Linux, never on the UI thread, and the UI's queue is never in the way: it comes at most a refresh after the frame was shown. Since 0.5 the vsync thread calls it after it has asked the windows to paint, and with [exact frame feedback](#exact-frame-feedback-on-windows) a thread of its own calls it. The vsync thread paces every window, so keep the callback short: record, signal, return. It may present, or drop its own watch. `Closed` events at quit are delivered on the thread that quits.
 
 ### The clock
 
@@ -354,13 +354,13 @@ Calling `report_swap` from `on_frame`, as this page used to, does not work: libm
 
 `last_vblank` is the latest vblank already past since 0.5; on Windows in 0.4 it was usually the coming one. The `saturating_sub` above lands on a refresh either way.
 
-Reported this way, libmpv takes a frame to flip when its render returns, a constant few refreshes before it is seen. `shown_at` minus the time of the report says how much on a given machine; `audio-delay` can make up for it. One user measured about 2.4 refreshes on Windows, 10 ms at 240 Hz, and about 45 ms on a 120 Hz Mac; that has not been checked against real audio output. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
+Reported this way, libmpv takes a frame to flip when its render returns, a constant few refreshes before it is seen. `shown_at` minus the time of the report says how much on a given machine; `audio-delay` can make up for it. One user measured 1.43 refreshes, 5.96 ms, at 240 Hz on Windows (a refresh more with [exact frame feedback](#exact-frame-feedback-on-windows)), and about 45 ms on a 120 Hz Mac; neither has been checked against real audio output. `crates/sk-app/examples/surface.rs` (`feedbackStart`, `feedbackStop`) presents at a fixed rate paced to `last_vblank` and prints every event and the cadence: 24 fps on a 165 Hz screen holds frames for 7, 7, 7, 7, 7, 7, 7 and 6 refreshes, over and over.
 
 ### When to render (since 0.5)
 
-A present is taken into the window by the window's next tick. On Windows the tick runs 0.08 to 0.17 of a refresh after the vblank, and a present that lands near it races it: some frames make that tick and some the next, and frames that should be held evenly are held a refresh more or less. A present that lands near the middle of the refresh is clear of the tick on both sides, so start the render that much earlier, at `0.5 − render_time / refresh_period` of the refresh after the vblank.
+A present is taken into the window by the window's next tick. On Windows the tick runs about 0.05 to 0.15 of a refresh after the vblank, and a present that lands near it races it: some frames make that tick and some the next, and frames that should be held evenly are held a refresh more or less. A present that lands near the middle of the refresh is clear of the tick on both sides, so start the render that much earlier, at `0.5 − render_time / refresh_period` of the refresh after the vblank.
 
-Measured on a 165 Hz screen, the share of frames shown on the refresh they were meant for, by where in the refresh the render started:
+Measured on one 165 Hz screen, the share of frames shown on the refresh they were meant for, by where in the refresh the render started:
 
 | Render starts at | On the intended refresh |
 | ---------------- | ----------------------- |
@@ -370,6 +370,32 @@ Measured on a 165 Hz screen, the share of frames shown on the refresh they were 
 
 The rule also accounts for what has worked elsewhere: 0.05 for a 3–4 ms render on a 120 Hz Mac, and 0.3 for 2160p HDR frames at 240 Hz. Measure your render time on the machine it runs on, from the start of the render until the present returns, as the loop above does; a fixed start that suits one machine or one video can land on the tick on another.
 
+How much the start matters depends on the machine. At 240 Hz, one user measured 93–97 % of frames on the intended refresh whether the render started at 0.05 or at 0.5 of the refresh. The frames that missed there were lost in DWM, not to the tick; see below.
+
+### Exact frame feedback on Windows (since 0.5)
+
+On Windows, a frame presented in time can still reach the screen a refresh late. DWM starts composing a refresh when the first update for it arrives; when another application's window updated first, a window present that comes later in the same refresh waits for the next one. One user measured 1.7–4.1 % of frames late at 240 Hz, with another application animating at 25 Hz on the same desktop. Those frames are reported `Estimated`, and on the refresh they missed: the vsync thread reads the swap chain's statistics as the vblank wait returns, before DWM has published them for that refresh.
+
+`Builder::exact_frame_feedback(true)` has a thread of its own read each refresh's statistics once DWM has composed it (`DwmFlush`). Then:
+
+- every `Presented` is `Exact`, late frames included;
+- no frame misses its refresh to another application's update;
+- every window present reaches the screen one refresh later: 4.2 ms at 240 Hz, 16.7 ms at 60 Hz. A player can make up for it with `audio-delay`.
+
+Measured by one user with mpv at 240 Hz, on one display:
+
+|                                    | Default        | `exact_frame_feedback` |
+| ---------------------------------- | -------------- | ---------------------- |
+| Late frames, 24, 23.976 and 60 fps | 2.3–4.2 %      | 0 of 8736              |
+| On the intended refresh            | 91.6–95.4 %    | 98.1–100 %             |
+| `Estimated` frames                 | 75–81 %        | 0–0.7 %                |
+| Event after `shown_at`             | 4.2 ms         | 0.15 ms                |
+| Present to the desktop frame       | 0.65 refreshes | 1.55 refreshes         |
+
+DWM keeps time by one display. With several displays that are not in step, a window on another display gained nothing in our tests at 165 Hz: `Estimated` frames stayed at 35–98 % with the option on or off, and no frame came later.
+
+The option is off by default and applies to the whole process. It costs nothing while no frame waits for its event, and macOS and Linux ignore it.
+
 ## Device loss
 
 When the GPU driver resets on Windows, Skathi recreates its device; on macOS the same happens if a window comes up on another GPU. Every surface drops its GPU frame, the elements fire `surfacelost` with `reason: "device"`, `on_change` hears `SurfaceEvent::DeviceLost`, and a present with an old texture returns `SurfaceError::DeviceChanged`. Get the device again, recreate your textures (or reopen shared ones), and present. CPU frames are not affected.
@@ -378,12 +404,12 @@ When the GPU driver resets on Windows, Skathi recreates its device; on macOS the
 
 A driver reset (TDR), a driver update or a GPU that goes away removes the renderer's device. D3D12 makes no new device for that GPU while anything still references the removed one, so Skathi has everything let go of it before it makes the next:
 
-1. At the next refresh, or the next GPU present if the app is idle, every frame still waiting drops as `DeviceLost`, the elements fire `surfacelost`, and `on_change` hears `SurfaceEvent::DeviceLost`.
+1. At the next refresh, or the next GPU present if the app is idle, `on_change` hears `SurfaceEvent::DeviceLost`, the elements fire `surfacelost`, and every frame still waiting drops as `DeviceLost`. Those `Dropped` events can come some tens of milliseconds after `SurfaceEvent::DeviceLost`.
 2. Until there is a new device, a GPU present returns `SurfaceError::DeviceChanged`, and `d3d11_device()`, `d3d12_device()`, `release_fence()` and opening a `SharedTexture` return `SurfaceError::NoDevice`. CPU frames still present.
 3. Drop everything you have from the old device: `D3D11Device`, `D3D12Device`, `D3D12Fence`, and the textures and fences you made on it. Each `SharedTexture` already let go of what Skathi opened, so a present with it returns `DeviceChanged`; open it again later.
 4. When the new device is ready, `on_change` hears `SurfaceEvent::DeviceLost` a second time. Get the device again and present as after any device loss.
 
-A producer with a device of its own (libmpv, another process) keeps its device; only the `SharedTexture` is opened again. A release fence value returned for a frame that dropped is never signalled: wait on it with a timeout.
+A producer with a device of its own (libmpv, another process) keeps its device, but makes new shared fences, and opens each `SharedTexture` again with them. On some systems a fence the removed device had opened reads `u64::MAX` from the removal on, whatever is signalled after, and presents behind it come back `Busy`. A release fence value returned for a frame that dropped is never signalled: wait on it with a timeout.
 
 Skathi keeps trying for about a minute. If no device can be made by then, the app says so (a message box when it runs on its own) and quits: the exe with exit code 1, and an embedded app's `Exit` has `clean: false`.
 

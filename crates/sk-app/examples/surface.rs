@@ -816,9 +816,10 @@ mod gpu {
         }
     }
 
-    /// A player with a device of its own, as libmpv is: one shared texture and a shared fence, the
-    /// texture opened again after the renderer's device went.
+    /// A player with a device of its own, as libmpv is: one shared texture and a shared fence. After
+    /// the renderer's device went, a new fence, and the texture opened again with it.
     pub struct Shared {
+        device5: ID3D11Device5,
         context: ID3D11DeviceContext,
         context4: ID3D11DeviceContext4,
         fence: ID3D11Fence,
@@ -846,9 +847,7 @@ mod gpu {
             let (device, context) = own_device()?;
             let device5: ID3D11Device5 = device.cast().map_err(err)?;
             let context4: ID3D11DeviceContext4 = context.cast().map_err(err)?;
-            let mut fence: Option<ID3D11Fence> = None;
-            unsafe { device5.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence) }.map_err(err)?;
-            let fence = fence.ok_or("no fence")?;
+            let (fence, fence_handle) = shared_fence(&device5)?;
             let misc =
                 (D3D11_RESOURCE_MISC_SHARED.0 | D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0) as u32;
             let (texture, view) = target(&device, 64, 64, misc, DXGI_FORMAT_B8G8R8A8_UNORM)?;
@@ -856,9 +855,8 @@ mod gpu {
             let access = (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0;
             let texture_handle =
                 unsafe { resource.CreateSharedHandle(None, access, None) }.map_err(err)?;
-            let fence_handle =
-                unsafe { fence.CreateSharedHandle(None, GENERIC_ALL.0, None) }.map_err(err)?;
             Ok(Shared {
+                device5,
                 context,
                 context4,
                 fence,
@@ -896,7 +894,17 @@ mod gpu {
             let presented = surface.present_shared_fenced(opened, self.value + 1, self.value + 2);
             self.value += 2;
             match presented {
-                Err(SurfaceError::DeviceChanged | SurfaceError::NoDevice(_)) => self.opened = None,
+                // A fence the removed device opened can read u64::MAX from then on.
+                Err(SurfaceError::DeviceChanged | SurfaceError::NoDevice(_)) => {
+                    if self.opened.take().is_some() {
+                        let (fence, handle) =
+                            shared_fence(&self.device5).map_err(SurfaceError::Platform)?;
+                        unsafe {
+                            let _ = CloseHandle(self.handles.1);
+                        }
+                        (self.fence, self.handles.1, self.value) = (fence, handle, 0);
+                    }
+                }
                 // A removed renderer never signals the release value: a player times out and goes on.
                 Ok(_) => {
                     self.reached(self.value, 100);
@@ -920,6 +928,14 @@ mod gpu {
             }
             reached
         }
+    }
+
+    fn shared_fence(device: &ID3D11Device5) -> Result<(ID3D11Fence, HANDLE)> {
+        let mut fence: Option<ID3D11Fence> = None;
+        unsafe { device.CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut fence) }.map_err(err)?;
+        let fence = fence.ok_or("no fence")?;
+        let handle = unsafe { fence.CreateSharedHandle(None, GENERIC_ALL.0, None) }.map_err(err)?;
+        Ok((fence, handle))
     }
 
     /// Renders at the element's painted size, recreating its texture after a resize or a device loss.

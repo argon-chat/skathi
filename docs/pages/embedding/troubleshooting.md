@@ -122,6 +122,12 @@ order: 10
 
 ### While it runs
 
+- No log lines from Skathi or gpui, even with `RUST_LOG` set
+
+  **Cause:** Skathi reads `SK_LOG`, not `RUST_LOG`. While it is unset, Skathi's and gpui's log records are off.
+
+  **Fix:** Set `SK_LOG` before the program starts: a level (`SK_LOG=info`), or directives by target as `RUST_LOG` takes them (`SK_LOG=gpui_windows=debug`, `SK_LOG=warn,gpui=debug`). The lines go to stderr. If your program installs a `log` logger before `spawn`, the records go to that logger, under its own filter, and `SK_LOG` is not used.
+
 - The window freezes while a native function runs
 
   **Cause:** A module method runs on the Skathi thread, so the frame waits for it.
