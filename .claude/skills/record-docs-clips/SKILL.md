@@ -17,7 +17,9 @@ Clips come from a demo app in `apps/` driven by a plan in `scripts/record/plans/
   no backdrop). The secondary monitor carries the Skathi wallpaper so the acrylic shows it. The
   harness refuses a monitor with a plain-colour wallpaper and a window whose backdrop is `none`;
   never work around those checks, fix the app. This is for feature demos; a finished app or template
-  recorded for the landing page is shown as it ships, an opaque window included.
+  recorded for the landing page is shown as it ships, an opaque window included: its plan sets
+  `backdrop: "opaque"` (no wallpaper or backdrop checks, no margin) and `group: ""`, and can make
+  the app from a template in `prepare` (see `plans/draw.ts`).
 - **Everything in git.** The demo app, its generated assets' generator, the plan and any harness change
   are committed with the media. Nothing a clip depends on lives only in a scratch or capture folder.
 - **Re-record in place.** A new take overwrites the existing files under the same names, so pages need

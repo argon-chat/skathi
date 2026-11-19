@@ -13,8 +13,8 @@
 //   --hold <s>       launch, place and show the first clip, then wait, for poking with devtools
 //
 // Before launching it checks the monitor (never the primary), that the monitor has a wallpaper
-// (the acrylic shows it), and after launching that the window's backdrop is not "none". Every
-// window is moved to the monitor before it is first shown and is never activated; input is
+// (the acrylic shows it), and after launching that the window's backdrop is not "none"; an
+// `opaque` plan skips those two. Every window is moved to the monitor before it is first shown and is never activated; input is
 // synthetic (see driver.ts), and the pointer is drawn by the app.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -34,8 +34,24 @@ export type Clip = {
   settle?: number;
   /** `surface`: run on the `surface` example of sk-app, which presents frames to `<sk-surface>`. */
   host?: "surface";
+  /** Readies the page instead of `__demo.show(id)`. */
+  show?: (app: SkApp) => Promise<void>;
 };
-export type AppPlans = { app: string; group: string; window: [number, number]; clips: Record<string, Clip> };
+export type AppPlans = {
+  /** A name under `apps/`, or an entry module relative to the repo root. */
+  app: string;
+  /** The folder under docs/public/media, "" for the folder itself. */
+  group: string;
+  window: [number, number];
+  /**
+   * `opaque`: a finished app recorded as it ships, for the landing page. No wallpaper or backdrop
+   * checks, and no margin round the window.
+   */
+  backdrop?: "acrylic" | "opaque";
+  /** Makes the app before launch (from a template, say); returns its entry, its environment and a cleanup. */
+  prepare?: () => { app: string; env?: Record<string, string>; dispose(): void };
+  clips: Record<string, Clip>;
+};
 
 const MARGIN_CSS = 48;
 const SURFACE_EXE = join(REPO, "target", TARGET, "debug", "examples", "surface.exe");
@@ -80,11 +96,13 @@ function cargo(args: string[]) {
 function preflight(): Monitor {
   const mon = recordingMonitor(option("--display"));
   log(`monitor ${mon.device}: ${mon.width}x${mon.height} at ${mon.left},${mon.top}, ${mon.dpi} dpi`);
-  const wall = wallpapers().get(`${mon.left},${mon.top},${mon.width},${mon.height}`);
-  if (wall === undefined) log("could not read this monitor's wallpaper; check it shows the one meant for the clips");
-  else if (!wall)
-    throw new Error(`${mon.device} has no wallpaper (a solid colour); the acrylic would have nothing to show`);
-  else log(`wallpaper ${wall}`);
+  if (plans.backdrop !== "opaque") {
+    const wall = wallpapers().get(`${mon.left},${mon.top},${mon.width},${mon.height}`);
+    if (wall === undefined) log("could not read this monitor's wallpaper; check it shows the one meant for the clips");
+    else if (!wall)
+      throw new Error(`${mon.device} has no wallpaper (a solid colour); the acrylic would have nothing to show`);
+    else log(`wallpaper ${wall}`);
+  }
   const needsSurface = clips.some((id) => plans.clips[id]!.host === "surface");
   if (flag("--build")) {
     cargo(["build", "--target", TARGET, "-p", "sk-app"]);
@@ -115,10 +133,10 @@ async function place(app: SkApp, hwnd: bigint, mon: Monitor): Promise<Rect> {
     throw new Error(`the window is at ${client.left},${client.top}, outside ${mon.device}`);
   }
   const backdrop = String(await app.eval("__SK_WINDOW__.appWindow.effectiveBackdrop"));
-  if (backdrop === "none")
+  if (backdrop === "none" && plans.backdrop !== "opaque")
     throw new Error(`the window has no backdrop material; set "backdrop" in apps/${plans.app}/sk.config.json`);
   log(`window ${client.width}x${client.height} at ${client.left},${client.top}, backdrop ${backdrop}`);
-  const m = Math.round(MARGIN_CSS * scale);
+  const m = plans.backdrop === "opaque" ? 0 : Math.round(MARGIN_CSS * scale);
   const left = Math.max(mon.left, client.left - m);
   const top = Math.max(mon.top, client.top - m);
   const right = Math.min(mon.left + mon.width, client.left + client.width + m);
@@ -136,17 +154,21 @@ async function withHost(mon: Monitor, host: "main" | "surface", ids: string[]) {
     copyFileSync(SURFACE_EXE, exe);
   }
   const placer = earlyPlacer(mon, image);
+  const made = plans.prepare?.();
   let app: SkApp;
   try {
     app = await launch({
-      app: plans.app,
+      app: made?.app ?? plans.app,
       ...(exe ? { exe } : {}),
       label: `${plans.app}-record`,
       window: plans.window,
-      env: { SK_WINDOW_FOCUS: "never", SK_LAUNCH_RAISE: "off" },
+      env: { ...made?.env, SK_WINDOW_FOCUS: "never", SK_LAUNCH_RAISE: "off" },
       launchTimeout: 120_000,
       verbose: true,
     });
+  } catch (e) {
+    made?.dispose();
+    throw e;
   } finally {
     placer.stop();
   }
@@ -161,7 +183,8 @@ async function withHost(mon: Monitor, host: "main" | "surface", ids: string[]) {
       const clip = plans.clips[id]!;
       // The synthetic pointer stays where the last clip left it; parked in a corner, it hovers nothing.
       await app.send("mouse", { x: 2, y: plans.window[1] - 2, kind: "move" });
-      await app.eval(`__demo.show(${JSON.stringify(id)})`);
+      if (clip.show) await clip.show(app);
+      else await app.eval(`__demo.show(${JSON.stringify(id)})`);
       await sleep(clip.settle ?? 1500);
       if (option("--hold")) {
         log(`holding ${option("--hold")} s on ${id}; devtools slot ${app.slotDir}`);
@@ -192,6 +215,7 @@ async function withHost(mon: Monitor, host: "main" | "surface", ids: string[]) {
   } finally {
     active.stop();
     await app.close();
+    made?.dispose();
     if (exe) {
       await sleep(500);
       rmSync(exe, { force: true });

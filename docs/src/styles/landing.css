@@ -182,13 +182,13 @@
   }
   .fan {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 28px;
   }
   .fan-card {
     --closed: calc(1 - var(--fan));
     position: relative;
-    z-index: calc(2 - var(--side));
+    z-index: calc(2 - var(--side) * var(--side));
     margin: 0;
     transform-origin: 50% 130%;
     transform: translateX(calc(var(--closed) * var(--side) * -54%)) translateY(calc(var(--closed) * 28px))
