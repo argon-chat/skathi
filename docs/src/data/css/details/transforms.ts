@@ -63,7 +63,7 @@ const open = ref(false);
       "`getBoundingClientRect()`, `getClientRects()` and `IntersectionObserver` report the transformed box. `offsetWidth`, `clientWidth` and `ResizeObserver` keep the layout box, so a `scale()` animation fires no resize.",
       "Clicks hit the element where it is drawn, not where layout put it.",
       "Translate, rotate and scale interpolate separately, even between different function lists, so `none` to `rotate(360deg)` makes one full turn.",
-      "`rotateX(0)` and `rotateY(0)` are accepted as no-ops. Any other 3D function is dropped with an advisory, and the 2D functions around it still apply.",
+      "`rotateZ()` rotates in the plane. `translate3d()` and `scale3d()` keep their X and Y components. `rotateX(0)` and `rotateY(0)` leave the box unchanged. A 3D rotation through a nonzero X or Y angle is dropped, and the surrounding 2D functions still apply.",
       "A non-identity `transform` makes a stacking context.",
     ],
   },

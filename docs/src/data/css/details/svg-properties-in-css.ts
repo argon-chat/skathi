@@ -1,7 +1,7 @@
 import type { Details } from "../../details";
 
 const UNSUPPORTED = (name: string, value: string) =>
-  `In a CSS rule, \`${name}\` is not applied and \`sk dev\` prints an advisory; \`CSS.supports("${name}", "${value}")\` is \`false\`.`;
+  `In an app stylesheet, \`${name}\` has no effect and \`sk dev\` prints an advisory. \`CSS.supports("${name}", "${value}")\` returns \`false\`.`;
 
 export const details: Details = {
   fill: {

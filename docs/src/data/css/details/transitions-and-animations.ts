@@ -43,7 +43,7 @@ const expanded = ref(false);
   max-height: 320px;
   padding: 12px 16px;
 }`,
-        note: "`height: auto` does not animate, so the panel animates `max-height` between two pixel values.",
+        note: "This rule animates between two pixel limits. To animate `height` from a length to `auto`, set `interpolate-size: allow-keywords` (since 0.4).",
       },
       {
         title: "Lift a card on hover",
@@ -64,7 +64,8 @@ const expanded = ref(false);
       "`transition: opacity var(--duration) linear` and transition longhands use the custom properties computed for each element (since 0.6).",
       "Declare `transition` on the base rule. A `transition` inside a `:hover`, `:focus` or other state rule is ignored, with an advisory in `sk dev`.",
       "An element's first style never transitions: a node mounted with a `transition` starts at its declared values. Change a class or a style after mount to animate.",
-      "A change to or from `auto`, a percentage or a `calc()` value snaps to the end value, with an advisory. So does a change between `px` and `rem`, unless one side is `0`.",
+      "With the default `interpolate-size: numeric-only`, a change between a length and `auto` snaps. Set `interpolate-size: allow-keywords` to animate it.",
+      "A change from a pixel width to a percentage snaps with an advisory. A change between pixel and rem endpoints also snaps if they retain different units and both are nonzero.",
       "A property outside the animated set, such as `filter` or `box-shadow`, snaps; naming it in `transition` gives an advisory.",
       "When the OS asks for reduced motion, every transition snaps to its end value and no `transitionend` fires.",
     ],

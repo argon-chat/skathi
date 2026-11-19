@@ -256,7 +256,7 @@ ol.steps ol {
   },
   "image-rendering": {
     edgeCases: [
-      "An `image-rendering` declaration is dropped with an advisory, and `CSS.supports()` returns `false` for it.",
+      "An app stylesheet drops `image-rendering: pixelated` with an advisory. The SVG renderer accepts it in a stylesheet inside the SVG, applied to an `<image>` child.",
     ],
   },
   "image-orientation": {

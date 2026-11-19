@@ -145,13 +145,13 @@ const compact = ref(false);
       },
     ],
     edgeCases: [
-      "`font: 600 12px/16px Inter` logs a `property not mapped` advisory and sets none of the longhands, so the element keeps its inherited font.",
+      "In an app stylesheet, `font: 600 12px/16px Inter` logs an advisory and the element keeps its inherited font. A stylesheet inside an SVG can set the shorthand on its text.",
       '`CSS.supports("font", "12px serif")` returns `false`.',
     ],
   },
   "font-stretch": {
     edgeCases: [
-      '`font-stretch: condensed` logs an advisory and is not applied; `CSS.supports("font-stretch", "condensed")` returns `false`.',
+      'App stylesheets drop `font-stretch: condensed`, and `CSS.supports("font-stretch", "condensed")` returns `false`. On SVG text, set the stretch directly on the element or in a stylesheet inside the SVG.',
     ],
   },
   "font-width": {
@@ -173,7 +173,7 @@ const compact = ref(false);
       },
     ],
     edgeCases: [
-      '`font-variant: small-caps` logs an advisory and is not applied; `CSS.supports("font-variant", "small-caps")` returns `false`.',
+      '`CSS.supports("font-variant", "small-caps")` returns `false` for app stylesheets. An SVG `<text style="font-variant: small-caps">` uses the font’s small capitals when available.',
     ],
   },
   "font-variant-caps": {
@@ -973,7 +973,7 @@ const expanded = ref(false);
   },
   "writing-mode": {
     edgeCases: [
-      '`writing-mode: vertical-rl` logs an advisory and is not applied; `CSS.supports("writing-mode", "vertical-rl")` returns `false`.',
+      '`CSS.supports("writing-mode", "vertical-rl")` returns `false` for app stylesheets. SVG text with `style="writing-mode: vertical-rl"` runs vertically.',
     ],
   },
   "text-orientation": {
@@ -983,7 +983,7 @@ const expanded = ref(false);
   },
   "text-rendering": {
     edgeCases: [
-      '`text-rendering: optimizeLegibility` logs an advisory and is not applied; `CSS.supports("text-rendering", "optimizeLegibility")` returns `false`.',
+      '`CSS.supports("text-rendering", "optimizeLegibility")` returns `false` for app stylesheets. The SVG renderer reads text rendering hints set on its text elements.',
     ],
   },
   "webkit-font-smoothing": {

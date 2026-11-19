@@ -3,6 +3,7 @@
 
 use crate::{catalog, mapper, Engine, InlineStyle, SvgPaint};
 use lightningcss::rules::CssRule;
+use lightningcss::selector::PseudoElement;
 use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 use parcel_selectors::parser::Component;
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,12 @@ pub struct Block {
     pub nodes: Vec<Node>,
     pub tag: Option<String>,
     pub tailwind: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Targets {
+    svg: bool,
+    snapshots: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,7 +90,10 @@ pub fn inspect(block: &Block) -> Vec<Diagnostic> {
         &block.nodes,
         block.tailwind,
         false,
-        block.tag.as_deref() == Some("svg"),
+        Targets {
+            svg: block.tag.as_deref() == Some("svg"),
+            ..Targets::default()
+        },
         &mut out,
     );
     out
@@ -127,7 +137,13 @@ fn declarations(nodes: &[Node]) -> String {
     body
 }
 
-fn visit(nodes: &[Node], tailwind: bool, keyframes: bool, svg: bool, out: &mut Vec<Diagnostic>) {
+fn visit(
+    nodes: &[Node],
+    tailwind: bool,
+    keyframes: bool,
+    targets: Targets,
+    out: &mut Vec<Diagnostic>,
+) {
     let context = if nodes.iter().any(|n| matches!(n, Node::Declaration { name, .. } if matches!(name.as_str(), "filter" | "display" | "position"))) {
         crate::parse_inline_style(&declarations(nodes), &mut Vec::new())
     } else { InlineStyle::default() };
@@ -140,15 +156,19 @@ fn visit(nodes: &[Node], tailwind: bool, keyframes: bool, svg: bool, out: &mut V
                 start,
                 end,
                 ..
-            } => declaration(name, value, &context, svg, (*start, *end), out),
+            } => declaration(name, value, &context, targets, (*start, *end), out),
             Node::Rule {
                 selector,
                 nodes,
                 start,
                 end,
             } => {
-                let svg = !keyframes && selectors(selector, nodes, (*start, *end), out);
-                visit(nodes, tailwind, false, svg, out);
+                let targets = if keyframes {
+                    Targets::default()
+                } else {
+                    selectors(selector, nodes, (*start, *end), out)
+                };
+                visit(nodes, tailwind, false, targets, out);
             }
             Node::At {
                 name,
@@ -163,15 +183,15 @@ fn visit(nodes: &[Node], tailwind: bool, keyframes: bool, svg: bool, out: &mut V
                     // These are consumed by the bundler or carry descriptors instead of CSS properties.
                     "import" | "charset" | "font-face" => {}
                     "layer" if body.is_none() => {}
-                    "layer" if tailwind => visit(nodes, tailwind, false, false, out),
+                    "layer" if tailwind => visit(nodes, tailwind, false, Targets::default(), out),
                     "tailwind" | "apply" | "variants" | "screen" if tailwind => {}
                     "supports" => {
                         if crate::supports_condition_text(params) {
-                            visit(nodes, tailwind, false, false, out);
+                            visit(nodes, tailwind, false, Targets::default(), out);
                         }
                     }
                     "keyframes" | "-webkit-keyframes" | "-moz-keyframes" => {
-                        visit(nodes, tailwind, true, false, out)
+                        visit(nodes, tailwind, true, Targets::default(), out)
                     }
                     _ => {
                         let mut src = format!("@{name} {params}");
@@ -200,7 +220,7 @@ fn visit(nodes: &[Node], tailwind: bool, keyframes: bool, svg: bool, out: &mut V
                             );
                         } else if matches!(name.as_str(), "media" | "container" | "scope" | "layer")
                         {
-                            visit(nodes, tailwind, false, false, out);
+                            visit(nodes, tailwind, false, Targets::default(), out);
                         }
                     }
                 }
@@ -223,23 +243,30 @@ fn selectors(
     nodes: &[Node],
     at: (usize, usize),
     out: &mut Vec<Diagnostic>,
-) -> bool {
+) -> Targets {
     let src = format!("{selector}{{{}}}", declarations(nodes));
     let options = ParserOptions {
         error_recovery: true,
         ..Default::default()
     };
     let Ok(sheet) = StyleSheet::parse(&src, options) else {
-        return false;
+        return Targets::default();
     };
     let [CssRule::Style(style)] = sheet.rules.0.as_slice() else {
-        return false;
+        return Targets::default();
     };
     let common = mapper::convert_block(&style.declarations).diagnostics;
-    let mut svg = true;
+    let mut targets = Targets {
+        svg: true,
+        snapshots: true,
+    };
     let mut single = style.clone();
     for sel in &style.selectors.0 {
-        svg &= sel
+        targets.snapshots &= matches!(
+            sel.pseudo_element(),
+            Some(PseudoElement::ViewTransitionOld { .. } | PseudoElement::ViewTransitionNew { .. })
+        );
+        targets.svg &= sel
             .iter_raw_match_order()
             .take_while(|c| !matches!(c, Component::Combinator(_)))
             .any(|c| matches!(c, Component::LocalName(tag) if tag.lower_name.as_ref() == "svg"));
@@ -286,14 +313,14 @@ fn selectors(
             }
         }
     }
-    svg
+    targets
 }
 
 fn declaration(
     name: &str,
     raw: &str,
     context: &InlineStyle,
-    svg: bool,
+    targets: Targets,
     at: (usize, usize),
     out: &mut Vec<Diagnostic>,
 ) {
@@ -374,8 +401,18 @@ fn declaration(
     }
     let style = context.refinement.as_deref();
     let feature = match base {
+        "mix-blend-mode" if lower == "plus-lighter" && !targets.snapshots => {
+            emit(
+                out,
+                at,
+                COMPAT,
+                "In an app stylesheet, `mix-blend-mode: plus-lighter` blends only the old and new view transition snapshots.",
+                "Apply the blend mode to ::view-transition-old() or ::view-transition-new().",
+            );
+            return;
+        }
         "filter"
-            if !svg
+            if !targets.svg
                 && !style.is_some_and(opaque_background)
                 && crate::parse_inline_style(&format!("{name}:{value}"), &mut Vec::new())
                     .extras

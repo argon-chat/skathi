@@ -1222,7 +1222,7 @@ function onInput(event: Event) {
   },
   "selector-namespace": {
     edgeCases: [
-      "A rule with a namespace prefix, or a namespaced attribute such as `[xlink|href]`, is dropped with an advisory.",
+      "A named prefix such as `svg|a` requires `@namespace`, which the engine drops. Namespaced attributes, including `[*|title]`, are rejected.",
     ],
   },
 };

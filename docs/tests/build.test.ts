@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { entries } from "../src/data/css/entries";
 import type { SearchData } from "../src/lib/search";
 
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
@@ -64,6 +65,30 @@ describe("built documentation (run bun run build first)", () => {
     expect(read("llms.txt")).toContain(`${origin}/introduction.md`);
     expect(existsSync(join(dist, "social.png"))).toBe(true);
     expect(read("404.html")).toContain('name="robots" content="noindex"');
+  });
+
+  test("distinguishes CSS properties from media queries in search and in the Markdown reference", () => {
+    const index = JSON.parse(read("search-index.json")) as SearchData;
+    const titles = new Map(index.records.map(([, title, , url]) => [url, title]));
+    const names = new Set<string>();
+    for (const entry of entries) {
+      expect(names.has(entry.name), entry.name).toBe(false);
+      names.add(entry.name);
+      if (entry.kind !== "media-feature") continue;
+      expect(titles.get(`/css/${entry.slug}/`)).toBe(entry.name);
+      expect(read(`css/${entry.slug}.md`).split("\n")[0]).toBe(`# ${entry.name}`);
+    }
+    expect(titles.get("/css/aspect-ratio/")).toBe("aspect-ratio");
+    expect(titles.get("/css/media-aspect-ratio/")).toBe("@media (aspect-ratio)");
+    expect(read("css/aspect-ratio.md")).toContain("Status in Skathi: Supported since 0.2.0");
+  });
+
+  test("a CSS entry with a working value has an available status", () => {
+    for (const entry of entries) {
+      if (entry.values?.some((v) => v.status === "supported" || v.status === "partial")) {
+        expect(["supported", "partial"], entry.name).toContain(entry.status);
+      }
+    }
   });
 
   test("has no broken internal page, asset, or heading links", async () => {

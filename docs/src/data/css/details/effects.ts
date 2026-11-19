@@ -121,7 +121,7 @@ defineProps<{ src: string; online: boolean }>();
   filter: url(#grayscale);
 }
 </style>`,
-        note: "An SVG `feColorMatrix` stands in for `grayscale()`, which is not applied.",
+        note: "The app stylesheet can apply this matrix to the avatar. An SVG shape can also use `filter: grayscale(1)` in its own inline style.",
       },
       {
         title: "Drop a shadow under an opaque floating panel",
@@ -461,7 +461,9 @@ function reveal() {
     ],
   },
   "mask-type": {
-    edgeCases: ["A declaration prints an advisory and changes nothing."],
+    edgeCases: [
+      'An app rule such as `mask { mask-type: alpha }` is dropped. Use `<mask style="mask-type: alpha">` inside the SVG.',
+    ],
   },
   "mask-border": {
     edgeCases: ["A declaration prints an advisory and changes nothing."],

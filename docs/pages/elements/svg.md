@@ -144,6 +144,8 @@ CSS rules match the children, and the computed `fill`, `stroke`, `fill-opacity`,
 
 Shape geometry (`x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy`, `r`) and gradient `stop-color` and `stop-opacity` can come from CSS (since 0.6). A child's inline style resolves `var()` using its own cascade. For example, `rect { x: 0.5px; width: calc(100% - 1px) }` follows the nearest SVG viewport as it resizes. A percentage circle radius uses the viewport's normalized diagonal.
 
+The SVG renderer also reads styles written directly on a child or in a `<style>` inside the SVG. For example, `<text style="text-anchor: middle">` centers the label on its x coordinate, and `<path style="filter: grayscale(1)">` grays out the path. Both declarations are ignored in an app stylesheet. For path geometry, set the `d` attribute directly. A scaled stroke keeps scaling even with `vector-effect="non-scaling-stroke"`.
+
 Rules with `:hover`, `:focus`, `:active` or a group selector do not set [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above on the children; an advisory says so. Recolor through `currentColor` instead. A transition or animation of `fill` or `stroke` interpolates when the paint is `currentColor`, because it animates `color`; between two concrete colors it jumps.
 
 A paint server from CSS, such as `fill: url(#gradient)`, or `context-fill`, is drawn in `currentColor` with an advisory. Write `fill="url(#gradient)"` as an attribute instead; that works.

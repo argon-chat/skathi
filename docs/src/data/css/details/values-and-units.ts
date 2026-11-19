@@ -299,93 +299,81 @@ watch(size, (px) => (document.documentElement.style.fontSize = px + "px"));
   "unit-in": {
     examples: [
       {
-        title: "Instead: size a ruler tick in px",
+        title: "Show a ruler in a wide viewport",
         lang: "css",
-        code: `.ruler-inch {
-  width: 96px;
-  border-right: 1px solid #ffffff33;
+        code: `@media (min-width: 10in) {
+  .ruler { display: block; }
 }`,
-        note: "`1in` is `96px`.",
+        note: "The breakpoint is 960 CSS pixels.",
       },
-    ],
-    edgeCases: [
-      "In an `@media` width or height test, `in` converts to px and works: `(min-width: 10in)` tests for 960px.",
     ],
   },
 
   "unit-cm": {
     examples: [
       {
-        title: "Instead: size a print preview margin in px",
+        title: "Add a gutter to a wide print preview",
         lang: "css",
-        code: `.page-preview {
-  padding: 75.6px;
-  background-color: #ffffff;
+        code: `@container (min-width: 18cm) {
+  .page-preview { padding: 24px; }
 }`,
-        note: "`2cm` is `75.6px`.",
+        note: "The preview's ancestor must be a size or inline-size container.",
       },
     ],
-    edgeCases: ["In an `@media` width or height test, `cm` converts to px and works."],
   },
 
   "unit-mm": {
     examples: [
       {
-        title: "Instead: space the ticks of a millimeter scale in px",
+        title: "Leave one millimeter including the tick",
         lang: "css",
         code: `.scale-tick {
   width: 1px;
-  margin-right: 2.78px;
+  margin-right: calc(1mm - 1px);
 }`,
         note: "`1mm` is about `3.78px`.",
       },
     ],
-    edgeCases: ["In an `@media` width or height test, `mm` converts to px and works."],
   },
 
   "unit-pt": {
     examples: [
       {
-        title: "Instead: set a 12pt body size in px",
+        title: "Widen the document gutter above 540pt",
         lang: "css",
-        code: `.document {
-  font-size: 16px;
-  line-height: 1.5;
+        code: `@media (min-width: 540pt) {
+  .document { padding-inline: 32px; }
 }`,
-        note: "`12pt` is `16px`.",
+        note: "The breakpoint is 720 CSS pixels.",
       },
     ],
-    edgeCases: ["In an `@media` width or height test, `pt` converts to px and works."],
   },
 
   "unit-pc": {
     examples: [
       {
-        title: "Instead: indent a quote by one pica in px",
+        title: "Keep a one-pica indent including the border",
         lang: "css",
         code: `.quote {
-  padding-left: 16px;
+  padding-left: calc(1pc - 2px);
   border-left: 2px solid #ffffff33;
 }`,
         note: "`1pc` is `16px`.",
       },
     ],
-    edgeCases: ["In an `@media` width or height test, `pc` converts to px and works."],
   },
 
   "unit-q": {
     examples: [
       {
-        title: "Instead: set a 20Q label size in px",
+        title: "Fit a label in a narrow container",
         lang: "css",
-        code: `.label {
-  font-size: 18.9px;
-  font-weight: 600;
+        code: `@container (max-width: 200Q) {
+  .label { font-size: 12px; }
 }`,
         note: "`1Q` is about `0.945px`.",
       },
     ],
-    edgeCases: ["In an `@media` width or height test, `Q` converts to px and works."],
   },
 
   "function-calc": {

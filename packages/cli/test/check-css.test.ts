@@ -68,6 +68,16 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("-moz-appearance", "none")).toBeNull();
   });
 
+  test("plus-lighter blends view transition snapshots", () => {
+    const check = (selector: string, value = "plus-lighter") =>
+      fileFindings("fade.css", `${selector} { mix-blend-mode: ${value} }`, false).map((d) => d.code);
+    expect(check("::view-transition-old(card), ::view-transition-new(card)")).toEqual([]);
+    expect(check("::view-transition-group(card)")).toEqual(["SK4006"]);
+    expect(check(".card, ::view-transition-old(card)")).toEqual(["SK4006"]);
+    expect(check(".card", "normal")).toEqual([]);
+    expect(check(".card", "multiply")).toEqual(["SK4002"]);
+  });
+
   test("@container: only queries the engine cannot evaluate", () => {
     const containerProblem = (prelude: string) =>
       fileFindings("layout.css", `@container ${prelude} { p { color: red } }`, false)[0] ?? null;

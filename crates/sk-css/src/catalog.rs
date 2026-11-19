@@ -382,7 +382,7 @@ pub const CATALOG: &[Entry] = &[
     e("min-height", Partial, &["auto", "10px", "calc-size(min-content, size)"], SIZING_KEYWORDS, SIZING_NOTE),
     e("min-inline-size", Partial, &["auto", "10px", "calc-size(min-content, size)"], SIZING_KEYWORDS, SIZING_NOTE),
     e("min-width", Partial, &["auto", "10px", "calc-size(min-content, size)"], SIZING_KEYWORDS, SIZING_NOTE),
-    e("mix-blend-mode", Unsupported, &[], &["multiply"], ""),
+    e("mix-blend-mode", Partial, &["normal", "plus-lighter"], &["multiply"], "`plus-lighter` blends the old and new view transition images"),
     e("-moz-osx-font-smoothing", Dropped, &[], &["grayscale"], ""),
     e("object-fit", Supported, &["cover", "contain"], &[], ""),
     e("object-position", Supported, &["center", "10px 20%"], &[], ""),

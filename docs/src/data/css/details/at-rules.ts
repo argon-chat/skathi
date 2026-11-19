@@ -86,7 +86,7 @@ document.documentElement.classList.toggle("no-blur", !canBlur);`,
       },
     ],
     edgeCases: [
-      "A declaration passes only if Skathi applies that value: `(width: fit-content)` is false although it parses, and a custom property such as `(--accent: red)` is always true.",
+      "`(width: fit-content)` is false. `(resize: none)` and `(tab-size: 4)` are true, even though boxes have no resize handle and tab sizing is fixed.",
       "`(-webkit-backdrop-filter: blur(2px)) or (backdrop-filter: blur(2px))` is true when either spelling applies.",
       "`selector()` tests what the cascade can run: `selector(:has(a))` is true, while `selector(::first-line)` and `selector(:not(:hover))` are false.",
       "`CSS.supports()` gives the same answers, in its one-argument and two-argument forms.",
@@ -95,6 +95,20 @@ document.documentElement.classList.toggle("no-blur", !canBlur);`,
 
   "at-container": {
     examples: [
+      {
+        title: "Arrange the caption controls in a row on a wide preview",
+        lang: "css",
+        code: `.preview {
+  container-type: size;
+  width: 300px;
+  height: 200px;
+}
+.caption { display: flex; flex-direction: column; }
+@container (aspect-ratio >= 3/2) {
+  .caption { flex-direction: row; }
+}`,
+        note: "The query measures the preview's content box. It also works in a portrait window.",
+      },
       {
         title: "Nested named containers",
         lang: "css",

@@ -45,7 +45,8 @@ export type Category = (typeof categories)[number];
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Transitions and animations":
     "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `corner-shape` and its corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
-  "SVG properties in CSS": "These apply to inline `<svg>`.",
+  "SVG properties in CSS":
+    "App stylesheets use Skathi's cascade. An inline `<svg>` also has its own renderer, which reads presentation attributes, element styles and a `<style>` inside the SVG.",
   "Media features": "A query that uses an unsupported feature drops its whole `@media` block, with an advisory.",
   "Vendor prefixes":
     "Write unprefixed properties. Skathi reads a set of `-webkit-` spellings as the unprefixed property, which then has that property's status. Every other vendor-prefixed property is dropped without an advisory, as Chromium drops what it does not know.",
@@ -177,11 +178,14 @@ function slugFor(d: Draft): string {
 function section(category: Category, drafts: readonly Draft[]): CssEntry[] {
   return drafts.map((d) => {
     const slug = slugFor(d);
+    const status = d.status === OK && d.values?.some((value) => value.status !== OK) ? PART : d.status;
     const e: CssEntry = {
       ...d,
       slug,
+      name: d.kind === "media-feature" ? `@media (${d.name})` : d.name,
       category,
-      platforms: d.platforms ?? { windows: d.status, macos: d.status, linux: d.status },
+      status,
+      platforms: d.platforms ?? { windows: status, macos: status, linux: status },
     };
     if (d.status === OK || d.status === PART) e.since = d.since ?? FIRST_RELEASE;
     const info = bcd[slug];
@@ -277,12 +281,14 @@ const ANIMATIONS = [
   "animation-fill-mode",
   "animation-play-state",
 ];
-const FILTER_ALT = "Write a `--shading` effect.";
+const SVG_FILTER =
+  "Works on a shape inside SVG through its own style or filter attribute. For an app box, use `--shading`.";
 const STATE_LIMIT = "Not supported inside `:not()`, `:is()`, `:where()` or `:has()`.";
 const STATES = ["pseudo-hover", "pseudo-active", "pseudo-focus", "pseudo-focus-visible", "pseudo-focus-within"];
 const FORM_STATE_ALT = "Key the style on an attribute or a class.";
 const SHADOW_DOM_LIMIT = "There is no shadow DOM, so it matches nothing.";
-const SVG_ATTR_ALT = "Write it as an SVG attribute, which renders.";
+const SVG_STYLE_ONLY =
+  "The SVG renderer reads this property from the element's inline style or a stylesheet inside the SVG. An app stylesheet cannot set it.";
 const CONST_MATH = "Supported with constant arguments.";
 const MEDIA_SIZE_LIMIT =
   "Only absolute lengths (`px`, `in`, `cm`, `mm`, `Q`, `pt`, `pc`) work; an `em` length drops the whole `@media` block.";
@@ -294,9 +300,12 @@ const SVG_STATE_LIMIT =
 const ROOT_HALF_EM = (unit: string) =>
   `Not measured from the root element's font: \`1${unit}\` is always half of \`1rem\`.`;
 const ABSOLUTE_UNIT = {
-  limitations: ["Ignored without an advisory today."],
-  workaround: "Use `px`.",
-  related: ["unit-px"],
+  notes: [
+    "Viewport size queries accept physical lengths. Container size queries accept them from 0.4. A constant expression such as `calc(1in + 1px)` also resolves to pixels.",
+  ],
+  limitations: ["A bare physical length in a declaration such as `width: 1in` leaves the previous width in effect."],
+  workaround: "Use CSS pixels for a size declaration. One CSS inch equals 96 CSS pixels.",
+  related: ["unit-px", "media-width", "at-container", "function-calc"],
 } satisfies Extra;
 
 const stylesheets = section("Stylesheets", [
@@ -399,7 +408,9 @@ const stylesheets = section("Stylesheets", [
     PLAN,
     "The CSS-first version of the Tailwind utility framework, configured from the stylesheet.",
     {
-      limitations: ["Its `@layer` and `@property` output does not resolve yet."],
+      limitations: [
+        "The built-in Tailwind compiler requires version 3. Cascade layers emitted by version 4 are dropped by the renderer.",
+      ],
       workaround: "Use Tailwind CSS 3.4.",
       aliases: ["tailwind", "tailwindcss", "tailwind v4"],
       related: ["feature-tailwind-3", "at-layer", "at-property"],
@@ -451,6 +462,7 @@ const boxModel = section("Box model and sizing", [
   }),
   prop("aspect-ratio", OK, "Sets a preferred width-to-height ratio for an element's box.", {
     values: [
+      v("<ratio>", OK, "A number or a pair such as `16 / 9` sets the preferred ratio when a dimension is automatic."),
       v("auto", OK, "Undoes an earlier ratio; a replaced element keeps its natural ratio.", "0.4.0"),
       v(
         "auto <ratio>",
@@ -464,6 +476,7 @@ const boxModel = section("Box model and sizing", [
       "An `<img>` with a relative width, such as `width: 100%`, takes its height from the ratio (since 0.4.0).",
     ],
     animates: "interpolated",
+    related: ["width", "height", "at-container", "media-aspect-ratio"],
   }),
   ...LOGICAL_SIZING.map((name) =>
     prop(
@@ -652,13 +665,13 @@ const layout = section("Layout", [
     aliases: ["grid-column-gap"],
   }),
   ...(["columns", "rows"] as const).map((axis) =>
-    prop(`grid-template-${axis}`, OK, `Defines the sizes of a grid's ${axis}.`, {
+    prop(`grid-template-${axis}`, PART, `Defines the sizes of a grid's ${axis}.`, {
       notes: [
         "Lengths, `%`, `fr`, `auto`, `min-content`, `max-content`, `minmax()` and `repeat()` including `auto-fill` / `auto-fit` are supported.",
       ],
       values: [
         v("fit-content()", NO),
-        v("named lines", NO, "Place items by line number."),
+        v("named lines", PART, "Track sizes are applied. The line names are ignored, so place items by line number."),
         v("subgrid", NO),
         v("masonry", NO),
       ],
@@ -930,20 +943,25 @@ const typography = section("Typography and text", [
     limitations: ["The angle of `oblique <angle>` is ignored."],
     related: ["font"],
   }),
-  sh("font", PLAN, "Sets the font's style, weight, size, line height and family in one declaration.", {
-    workaround: "Use the longhands.",
+  sh("font", PART, "Sets the font's style, weight, size, line height and family in one declaration.", {
+    notes: ["A stylesheet inside an SVG can set `font` on SVG text."],
+    workaround: "In app stylesheets, set the font longhands.",
     related: ["font-family", "font-size", "font-weight", "font-style", "line-height"],
   }),
-  prop("font-stretch", NO, "Selects a condensed or expanded face of the font.", { related: ["font-width"] }),
+  prop("font-stretch", PART, "Selects a condensed or expanded face of the font.", {
+    notes: ["On SVG text, `font-stretch: condensed` selects a condensed face when the family has one.", SVG_STYLE_ONLY],
+    related: ["font-width"],
+  }),
   prop("font-width", NO, "Selects a condensed or expanded face of the font; the newer name of `font-stretch`.", {
     related: ["font-stretch"],
   }),
   sh(
     "font-variant",
-    NO,
+    PART,
     "Selects alternate glyphs such as small capitals, numeral styles and ligatures, in one declaration.",
     {
-      workaround: 'Use `font-feature-settings: "smcp"` where the font has it.',
+      notes: ["SVG text supports `small-caps` when the font provides small capitals.", SVG_STYLE_ONLY],
+      workaround: 'In app stylesheets, use `font-feature-settings: "smcp"` where the font has it.',
       related: ["font-variant-caps", "font-variant-numeric", "font-variant-ligatures", "font-feature-settings"],
     },
   ),
@@ -962,10 +980,16 @@ const typography = section("Typography and text", [
     aliases: ["-webkit-font-feature-settings", "opentype features"],
     related: ["font-variant-numeric", "font-variant-ligatures"],
   }),
-  prop("font-variation-settings", NO, "Sets the axes of a variable font by tag.", {
-    notes: ["`font-weight` and `font-style` reach the matching axes, and `opsz` follows the font size."],
-    related: ["font-weight", "font-style", "font-optical-sizing"],
-  }),
+  prop(
+    "font-variation-settings",
+    PART,
+    "Accepts `normal`. Set the weight and style of a variable font with their longhands.",
+    {
+      values: [v("normal", OK, "Uses the font's usual axis selection."), v("axis tag and value pairs", NO)],
+      notes: ["`font-weight` and `font-style` reach the matching axes, and `opsz` follows the font size."],
+      related: ["font-weight", "font-style", "font-optical-sizing"],
+    },
+  ),
   prop("font-optical-sizing", PART, "Sets whether a variable font's optical-size axis follows the font size.", {
     limitations: ["Always `auto`."],
     related: ["font-variation-settings"],
@@ -1000,7 +1024,8 @@ const typography = section("Typography and text", [
   }),
   prop("text-align-last", NO, "Sets the alignment of the last line of a block.", { related: ["text-align"] }),
   prop("text-justify", NO, "Sets how justified text distributes its spacing.", { related: ["text-align"] }),
-  prop("text-indent", NO, "Indents the first line of a block of text.", {
+  prop("text-indent", PART, "Accepts a zero indent. The first line starts at the block's edge.", {
+    values: [v("0", OK, "Text starts at the edge of the block."), v("nonzero indent", NO)],
     workaround: "`padding-left` indents the whole block.",
   }),
   prop("text-transform", OK, "Changes the case of text: uppercase, lowercase or capitalized."),
@@ -1052,16 +1077,11 @@ const typography = section("Typography and text", [
   prop("text-underline-offset", OK, "Sets how far an underline sits from its text.", {
     related: ["text-decoration", "text-underline-position"],
   }),
-  prop(
-    "text-decoration-skip-ink",
-    NO,
-    "Sets whether underlines and overlines break where they would cross glyph ink.",
-    {
-      values: [v("auto", NO, "The underline is one unbroken line.")],
-      limitations: ["The underline is one unbroken line."],
-      related: ["text-decoration"],
-    },
-  ),
+  prop("text-decoration-skip-ink", PART, "Accepts `none`. Underlines run continuously across glyph ink.", {
+    values: [v("none", OK), v("auto", NO)],
+    limitations: ["The underline is one unbroken line."],
+    related: ["text-decoration"],
+  }),
   prop("text-underline-position", NO, "Sets where an underline is placed relative to its text.", {
     limitations: ["The underline is one unbroken line."],
     related: ["text-underline-offset"],
@@ -1119,7 +1139,9 @@ const typography = section("Typography and text", [
     aliases: ["-webkit-line-clamp"],
     related: ["text-overflow"],
   }),
-  prop("vertical-align", NO, "Sets the vertical alignment of an inline box or table cell.", {
+  prop("vertical-align", PART, "Accepts `baseline`. Other values cannot move an element up or down.", {
+    values: [v("baseline", OK, "Accepted with the default layout."), v("middle, top, bottom and offsets", NO)],
+    limitations: ["The renderer has no inline line boxes in which to shift an element."],
     workaround: "Use `align-items` / `align-self` on a flex parent.",
   }),
   prop("tab-size", NO, "Sets the width of a tab character.", { limitations: ["Ignored without an advisory."] }),
@@ -1139,8 +1161,9 @@ const typography = section("Typography and text", [
     limitations: ["Left-to-right, horizontal text only."],
     related: ["direction"],
   }),
-  prop("writing-mode", NO, "Sets whether lines of text are laid out horizontally or vertically.", {
-    limitations: ["Left-to-right, horizontal text only."],
+  prop("writing-mode", PART, "Sets whether lines of text are laid out horizontally or vertically.", {
+    notes: ["SVG text supports vertical writing with `vertical-rl` and `vertical-lr`.", SVG_STYLE_ONLY],
+    limitations: ["App layout uses horizontal writing."],
     aliases: ["-webkit-writing-mode", "vertical text"],
     related: ["text-orientation", "direction"],
   }),
@@ -1150,9 +1173,12 @@ const typography = section("Typography and text", [
   }),
   prop(
     "text-rendering",
-    NO,
+    PART,
     "Hints what to optimize for when rendering text: speed, legibility or geometric precision.",
-    { limitations: ["Text uses the platform's text rendering."] },
+    {
+      notes: ["On SVG text, `optimizeSpeed` changes glyph rasterization.", SVG_STYLE_ONLY],
+      limitations: ["App text uses the platform's text rendering."],
+    },
   ),
   prop("-webkit-font-smoothing", NO, "Sets the antialiasing of text on macOS.", {
     limitations: ["Text uses the platform's text rendering."],
@@ -1560,10 +1586,10 @@ const effects = section("Effects", [
         "saturate()",
         "hue-rotate()",
         "opacity()",
-      ].map((f) => v(f, NO, FILTER_ALT)),
+      ].map((f) => v(f, PART, SVG_FILTER)),
     ],
     limitations: [
-      "Only `blur()`, `drop-shadow()` and `url(#id)` to an SVG `feColorMatrix` apply, each with the limits listed; the color functions do not.",
+      "App stylesheets support `blur()`, `drop-shadow()` and a local `url(#id)` referencing an SVG `feColorMatrix`. Color filters on SVG shapes must be set inside the SVG.",
     ],
     aliases: [
       "-webkit-filter",
@@ -1585,19 +1611,28 @@ const effects = section("Effects", [
     aliases: ["-webkit-backdrop-filter", "frosted glass"],
     related: ["filter"],
   }),
-  prop("mix-blend-mode", NO, "Sets how an element's content blends with what is behind it.", {
+  prop("mix-blend-mode", PART, "Sets how an element's content blends with what is behind it.", {
     values: [
       v("normal", OK),
-      v("plus-lighter", PART, "Honored on view transition images only."),
-      v("the other blend modes", NO, "Print an advisory and change nothing."),
+      v(
+        "plus-lighter",
+        PART,
+        "Adds the colors of the snapshots painted by `::view-transition-old()` and `::view-transition-new()`.",
+      ),
+      v(
+        "multiply",
+        PART,
+        "A stylesheet inside an SVG can blend overlapping shapes. App stylesheets reject this value.",
+      ),
+      v("other modes in app stylesheets", NO, "Print an advisory and change nothing."),
     ],
-    related: ["background-blend-mode", "isolation"],
+    related: ["background-blend-mode", "isolation", "pseudo-view-transition"],
   }),
   prop("isolation", OK, "Creates a new stacking context, so blending inside it does not reach what is behind it.", {
     related: ["mix-blend-mode"],
   }),
   prop("clip-path", PART, "Clips an element to a shape, hiding what is outside it.", {
-    limitations: ["`url()` references to an SVG `<clipPath>`, `xywh()` and `rect()` are not applied."],
+    limitations: ["App stylesheets cannot use a `url()` clip reference, `xywh()` or `rect()`."],
     values: [
       v("inset()", OK),
       v("circle()", OK),
@@ -1605,7 +1640,11 @@ const effects = section("Effects", [
       v("polygon()", OK),
       v("path()", OK),
       v("a box keyword", OK),
-      v("url()", NO),
+      v(
+        "url(#id)",
+        PART,
+        "On an SVG shape, its inline style, presentation attribute or a stylesheet inside the SVG can reference a local `<clipPath>`.",
+      ),
       v("xywh()", NO),
       v("rect()", NO),
     ],
@@ -1654,7 +1693,10 @@ const effects = section("Effects", [
     ],
     related: ["mask"],
   }),
-  prop("mask-type", NO, "Sets whether an SVG `<mask>` element uses luminance or alpha.", { related: ["mask-mode"] }),
+  prop("mask-type", PART, "Sets whether an SVG `<mask>` element uses luminance or alpha.", {
+    notes: ["Set `mask-type: alpha` on the SVG mask to use opacity, including opaque black.", SVG_STYLE_ONLY],
+    related: ["mask-mode"],
+  }),
   sh("mask-border", NO, "Uses an image as a mask for an element's border area.", {
     aliases: ["mask-border-source", "mask-border-slice"],
   }),
@@ -1683,7 +1725,7 @@ const effects = section("Effects", [
 ]);
 
 const transforms = section("Transforms", [
-  prop("transform", OK, "Moves, rotates, scales or skews an element without changing the layout.", {
+  prop("transform", PART, "Moves, rotates, scales or skews an element without changing the layout.", {
     notes: ["2D transforms are supported."],
     values: [
       v("translate()", OK),
@@ -1691,8 +1733,8 @@ const transforms = section("Transforms", [
       v("scale()", OK),
       v("skew()", OK),
       v("matrix()", OK),
-      v("translate3d()", PART, "With a zero Z."),
-      v("scale3d()", PART, "With a zero Z."),
+      v("translate3d()", PART, "Applies the X and Y offsets. A nonzero Z offset emits an advisory."),
+      v("scale3d()", PART, "Applies the X and Y scale factors. The Z factor has no effect."),
       v("translate() with a calc() mixing % and a length", NO, "Use a length or a percentage."),
       v("perspective()", PLAN),
       v("rotateX()", PLAN),
@@ -1761,7 +1803,9 @@ const transitions = section("Transitions and animations", [
     "Animates changes of property values over time, setting every transition property in one declaration.",
     {
       notes: ["Interrupted transitions retarget from the value on screen."],
-      values: [v("composed with var()", NO, "Write it literally.")],
+      values: [
+        v("composed with var()", OK, "The shorthand and longhands resolve custom properties on each element.", "0.6.0"),
+      ],
       aliases: ["-webkit-transition"],
       related: TRANSITIONS.filter((s) => s !== "transition"),
     },
@@ -2069,7 +2113,8 @@ const interaction = section("Interaction", [
   prop("caret-shape", NO, "Sets the shape of the text insertion caret: bar, block or underscore.", {
     related: ["caret-color"],
   }),
-  prop("resize", NO, "Sets whether the user can resize an element by dragging its corner.", {
+  prop("resize", PART, "Accepts `none`. Native boxes have no resize handle.", {
+    values: [v("none", OK, "Boxes have no resize handle."), v("horizontal, vertical or both", NO)],
     workaround: "Build a drag handle with pointer events.",
   }),
   prop("field-sizing", NO, "Lets form fields such as `<textarea>` size to their content."),
@@ -2157,19 +2202,26 @@ const svgSection = section("SVG properties in CSS", [
       ["clip-rule", "Sets which parts of a self-intersecting SVG clip path are inside."],
       ["flood-color", "Sets the color of the SVG `<feFlood>` and `<feDropShadow>` filter primitives."],
       ["lighting-color", "Sets the light color of SVG lighting filter primitives."],
-      ["d", "Sets the path data of an SVG `<path>`."],
-      ["vector-effect", "Sets how an SVG element's stroke reacts to transforms, for example keeping a fixed width."],
       ["paint-order", "Sets the order the fill, stroke and markers of SVG shapes and text are painted in."],
-      ["marker", "Sets the markers drawn at the vertices of SVG paths, lines and polygons."],
       ["text-anchor", "Aligns SVG text to its start, middle or end point."],
       ["dominant-baseline", "Sets the baseline used to align SVG text."],
     ] as const
   ).map(([name, summary]) =>
-    (name === "marker" ? sh : prop)(name, NO, summary, {
-      workaround: SVG_ATTR_ALT,
-      ...(name === "marker" ? { aliases: ["marker-*", "marker-start", "marker-mid", "marker-end"] } : {}),
+    prop(name, PART, summary, {
+      notes: [SVG_STYLE_ONLY, `The SVG presentation attribute \`${name}\` also works.`],
     }),
   ),
+  sh("marker", PART, "Sets the markers drawn at the vertices of SVG paths, lines and polygons.", {
+    notes: [SVG_STYLE_ONLY],
+    workaround: "For presentation attributes, use `marker-start`, `marker-mid` and `marker-end` on the path.",
+    aliases: ["marker-*", "marker-start", "marker-mid", "marker-end"],
+  }),
+  prop("d", NO, "Sets the path data of an SVG `<path>`.", {
+    workaround: 'Set the SVG attribute with path data, such as `d="M0 0L10 10"`.',
+  }),
+  prop("vector-effect", NO, "Sets how an SVG element's stroke reacts to transforms.", {
+    limitations: ["The stroke scales with the shape even when `non-scaling-stroke` is set as an SVG attribute."],
+  }),
 ]);
 
 const containment = section("Containment and hints", [
@@ -2275,7 +2327,11 @@ const generated = section("Generated content and lists", [
   sh("list-style", OK, "Sets a list item's marker type, position and image in one declaration.", {
     related: ["list-style-type", "list-style-position", "list-style-image"],
   }),
-  prop("list-style-image", NO, "Uses an image as a list item's marker.", {
+  prop("list-style-image", PART, "Accepts `none`. List markers use the shape or numbering from `list-style-type`.", {
+    values: [
+      v("none", OK, "The marker comes from `list-style-type`."),
+      v("<image>", NO, "Marker images are not drawn."),
+    ],
     workaround: 'Use `::before { content: "…" }`.',
     related: ["list-style-type"],
   }),
@@ -2285,7 +2341,10 @@ const generated = section("Generated content and lists", [
   }),
   prop("object-fit", OK, "Sets how an image or video is resized to fit its box.", { related: ["object-position"] }),
   prop("object-position", OK, "Sets where an image or video sits inside its box.", { related: ["object-fit"] }),
-  prop("image-rendering", NO, "Sets the scaling algorithm used for images, such as smooth or pixelated."),
+  prop("image-rendering", PART, "Sets the scaling algorithm used for images, such as smooth or pixelated.", {
+    notes: ["A stylesheet inside an SVG can set `image-rendering: pixelated` on an SVG `<image>`."],
+    limitations: ["App stylesheets cannot change the sampling of an `<img>`."],
+  }),
   prop("image-orientation", NO, "Sets whether an image is rotated according to its EXIF orientation."),
 ]);
 
@@ -2483,7 +2542,12 @@ const selectors = section("Selectors", [
     notes: ["Vue's `:slotted()` in `<style scoped>` is a different feature and works."],
     related: ["feature-scoped-styles"],
   }),
-  sel("selector-namespace", "Namespaced selectors", NO, "Match elements in a given XML namespace, such as `svg|a`.", {
+  sel("selector-namespace", "Namespaced selectors", PART, "Match elements in a given XML namespace, such as `svg|a`.", {
+    values: [
+      v("*|div", OK, "Matches elements named div."),
+      v("|div", PART, "Matches by tag without checking the namespace."),
+      v("named prefixes and namespaced attributes", NO),
+    ],
     aliases: ["svg|a", "|"],
     related: ["at-namespace"],
   }),
@@ -2496,13 +2560,15 @@ const atRules = section("At-rules", [
     related: ["media-width", "media-prefers-color-scheme", "media-types"],
   }),
   at("@supports", OK, "Applies styles only when the engine supports the declarations or selectors tested.", {
-    notes: ["It answers for Skathi: a declaration passes only if Skathi applies it.", "`selector()` is supported too."],
+    notes: [
+      "Uses the same declaration and selector checks as `CSS.supports()`. Some accepted values leave the native layout unchanged.",
+    ],
     aliases: ["CSS.supports()", "feature queries"],
   }),
   at("@container", OK, "Applies styles based on the size of an ancestor query container.", {
     since: "0.4.0",
     notes: [
-      "Size features: `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`, with range syntax, combined with `and`, `or` and `not`. Lengths are `px`, `rem` or `em` (of the container's font size).",
+      "Size queries accept `width`, `height`, `inline-size`, `block-size`, `aspect-ratio` and `orientation`. Combine conditions with `and`, `or` and `not`. Lengths and ratios also support range comparisons. Lengths can use CSS pixels, physical units, `rem` or the container's `em`. Use `container-type: size` to query an ancestor's ratio or orientation.",
       "An optional name picks the nearest ancestor with that `container-name`; otherwise the nearest container that can answer every feature in the query.",
       "Style queries on custom properties: `style(--theme: dark)` and `style(--dense)`.",
       "Nests inside `@media`, `@supports` and another `@container`, and holds `@media` blocks.",
@@ -2513,8 +2579,8 @@ const atRules = section("At-rules", [
       "A query container in a pop-out window settles a frame late after that window's own layout moves it.",
       "Rules are not ordered by `@layer`, which is not supported.",
     ],
-    aliases: ["container queries"],
-    related: ["container-type", "container-name", "container", "unit-container"],
+    aliases: ["container queries", "@container aspect-ratio", "@container orientation"],
+    related: ["container-type", "container-name", "container", "unit-container", "aspect-ratio", "media-aspect-ratio"],
   }),
   at("@layer", PLAN, "Declares cascade layers that control the order of precedence of groups of rules.", {
     limitations: ["The rules inside are dropped for now."],
@@ -2657,12 +2723,17 @@ const mediaFeatures = section("Media features", [
     },
   ),
   mf("orientation", NO, "Tests whether the viewport is in portrait or landscape orientation.", {
-    workaround: "Use `width` and `height`.",
-    related: ["media-width", "media-height"],
+    workaround:
+      "Use viewport width and height breakpoints, or test a size container with `@container (orientation: landscape)`.",
+    related: ["media-width", "media-height", "at-container"],
   }),
   mf("aspect-ratio", NO, "Tests the width-to-height ratio of the viewport.", {
-    workaround: "Use `width` and `height`.",
-    related: ["media-width", "media-height"],
+    notes: [
+      "The viewport query drops the `@media` block. The `aspect-ratio` property sizes an element, and `@container (aspect-ratio > 1/1)` tests an ancestor with `container-type: size`.",
+    ],
+    workaround: "For an exact window ratio, compare `innerWidth` and `innerHeight` on resize.",
+    aliases: ["min-aspect-ratio", "max-aspect-ratio"],
+    related: ["aspect-ratio", "at-container", "media-width", "media-height"],
   }),
   mf("prefers-contrast", NO, "Tests whether the user asked for more or less contrast."),
   mf("prefers-reduced-transparency", PART, "Tests whether the user asked for less transparency.", {
@@ -2767,7 +2838,7 @@ const valuesAndUnits = section("Values and units", [
       ["pc", "An absolute length unit: one pica, 12 points."],
       ["Q", "An absolute length unit: a quarter of a millimeter."],
     ] as const
-  ).map(([name, summary]) => unit(name, PLAN, summary, ABSOLUTE_UNIT)),
+  ).map(([name, summary]) => unit(name, PART, summary, ABSOLUTE_UNIT)),
   unit("lh", NO, "A length equal to the element's computed line height.", {
     limitations: ["Ignored without an advisory."],
     related: ["unit-rlh"],
