@@ -16,7 +16,7 @@ export const RANGES = [
   { from: 1000, to: 1999, what: "breaks under AOT" },
   { from: 2000, to: 2999, what: "works under AOT, but slower" },
   { from: 3000, to: 3999, what: "typing quality: compiles, but AOT gets no type information" },
-  { from: 4000, to: 4999, what: "CSS the native renderer does not apply" },
+  { from: 4000, to: 4999, what: "CSS support and rendering compatibility" },
   { from: 5000, to: 5999, what: "Vue and Svelte features that do not work, or work differently, in Skathi" },
 ] as const;
 
@@ -191,7 +191,7 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "a CSS property Skathi does not support",
     explanation:
-      "Skathi renders CSS natively, without a browser engine, and this property is not implemented: the declaration has no effect, and the app prints an advisory for it while it runs. Declarations inside `@supports` blocks, values from `var()` and CSS-wide keywords are not reported, nor is a value a browser would compute anyway (`float: none`).",
+      "The native renderer does not implement this property. This includes declarations whose value comes from var() (since 0.6). Inactive @supports branches, CSS-wide keywords and inert defaults such as float: none are skipped.",
     example: ".card {\n  float: left;\n}",
     fix: "Use what the help line suggests (flex or grid instead of `float`), or remove the declaration. Keep it for a browser build inside `@supports (float: left) { … }`.",
   },
@@ -218,18 +218,36 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "a CSS at-rule Skathi does not support",
     explanation:
-      "`@layer` (outside Tailwind), `@scope`, `@starting-style`, `@counter-style`, `@font-feature-values` and `@namespace` are not implemented, nor are `@container` scroll-state queries, style queries on standard properties and sizes in `%`, viewport units or `calc()`: the rules inside the block are dropped.",
+      "The native stylesheet collector ignores this at-rule or query. For @property only percentage syntax with a percentage initial value is supported (since 0.6). The diagnostic identifies the relevant rule.",
     example: "@scope (.card) {\n  img { border-radius: 4px; }\n}",
     fix: "Move the rules out of the block, or write the query with what the help line names.",
   },
   {
     code: "SK4005",
     severity: "warning",
-    title: "a dependency's CSS uses what Skathi does not apply",
+    title: "CSS compatibility warnings in a dependency",
     explanation:
-      "Stylesheets the app imports from this package use properties, values, selectors or at-rules the engine does not apply (the SK4001–SK4004 cases). One diagnostic per package; the places are listed as related locations.",
+      "Stylesheets imported from the package have CSS support or compatibility warnings. Their source locations appear together in this diagnostic.",
     example: 'import "some-ui-kit/dist/style.css";',
     fix: "Check that the package's components the app uses look right; allow SK4005 for the package once they do.",
+  },
+  {
+    code: "SK4006",
+    severity: "warning",
+    title: "CSS rendering depends on the surrounding layout or paint",
+    explanation:
+      "The native renderer can draw this pattern differently depending on the computed background, the SVG paint or the display of the parent and siblings (since 0.6). The warning describes the condition. Check the matched element to see whether it applies.",
+    example: ".caption { filter: drop-shadow(0 1px 2px black); }",
+    fix: "Use the alternative in the help line if the computed style meets the condition.",
+  },
+  {
+    code: "SK4007",
+    severity: "warning",
+    title: "this CSS needs a Skathi 0.6 host",
+    explanation:
+      "This declaration or selector relies on rendering introduced in 0.6. Earlier hosts can drop it or draw a different result (since 0.6).",
+    example: ".dialog { width: min(32rem, 100%); }",
+    fix: "Distribute a 0.6 or later host. Once every supported host has the feature, check.allow can silence SK4007 for the covered files.",
   },
   {
     code: "SK5001",

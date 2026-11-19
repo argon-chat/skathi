@@ -1,130 +1,13 @@
 import { sfcCompiler } from "../runtime-path";
+import type { AST } from "svelte/compiler";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import postcss, { type AtRule, type ChildNode, type Container, type Declaration, type Root, type Rule } from "postcss";
+import { dirname, resolve } from "node:path";
+import postcss, { type ChildNode, type Root } from "postcss";
+import { inspectCss, type CssNode } from "./css-engine";
 import { diagnosticsOf, type Finding, type FindingRelated } from "./finding";
 import { Packages } from "./packages";
 import type { Diagnostic, Range } from "./schema";
-
-interface CatalogEntry {
-  name: string;
-  status: "supported" | "partial" | "ignored" | "unsupported" | "dropped";
-  note: string;
-  applied: string[];
-  refused: string[];
-  webkit: boolean;
-}
-
-const catalog = JSON.parse(readFileSync(join(import.meta.dir, "css-catalog.json"), "utf8")) as CatalogEntry[];
-const ENTRIES = new Map(catalog.map((e) => [e.name.toLowerCase(), e]));
-
-const squash = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
-const functionsOf = (value: string) =>
-  [...value.matchAll(/(?<![\w-])([a-z][\w-]*)\(/gi)].map((m) => m[1]!.toLowerCase());
-
-/** `name` when the value is one function call and nothing else. */
-function singleCall(value: string): string | null {
-  const text = value.trim();
-  const m = /^([a-z][\w-]*)\(/i.exec(text);
-  if (!m) return null;
-  let depth = 0;
-  for (let i = m[0].length - 1; i < text.length; i++) {
-    if (text[i] === "(") depth++;
-    else if (text[i] === ")" && --depth === 0) return i === text.length - 1 ? m[1]!.toLowerCase() : null;
-  }
-  return null;
-}
-
-/** Functions a partial property refuses whatever their arguments: a refused sample that is one call, in no applied sample. */
-const REFUSED_FUNCTIONS = new Map(
-  catalog.map((e) => {
-    const applied = new Set(e.applied.flatMap(functionsOf));
-    const refused = e.refused.map(singleCall).filter((f): f is string => f !== null && !applied.has(f));
-    return [e.name.toLowerCase(), new Set(refused)];
-  }),
-);
-
-const CSS_WIDE = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
-/** Unsupported properties set to what a browser would compute anyway: no difference to report. */
-const INERT_DEFAULTS = new Set(["none", "normal", "auto"]);
-const INERT_FOR: Record<string, string> = {
-  direction: "ltr",
-  "writing-mode": "horizontal-tb",
-  "backface-visibility": "visible",
-  "transform-style": "flat",
-  "border-collapse": "separate",
-  "text-orientation": "mixed",
-};
-const SUBSTITUTED = /(?<![\w-])((var|env|theme|screen)|--[\w-]+)\(|#\{|\$[\w-]/i;
-
-const UNSUPPORTED_AT_RULES: Record<string, string> = {
-  layer: "Move the rules out of the `@layer` block; their order in the sheet decides the cascade.",
-  scope: "Scope the rules with a class selector instead.",
-  "starting-style": "Start the transition from script: set the start values, then change them on the next frame.",
-  "counter-style": "Use one of the predefined list styles (`disc`, `decimal`, …) or draw the marker yourself.",
-  "font-feature-values": "Use `font-feature-settings` with the feature tags.",
-  namespace: "Drop the namespace and select by element name or class.",
-};
-const RECURSE_AT_RULES = new Set(["media", "container", "keyframes", "-webkit-keyframes", "-moz-keyframes"]);
-
-/** Why the engine drops a `@container` block whose prelude it cannot evaluate, and what to write instead. */
-export function containerProblem(prelude: string): string | null {
-  const text = prelude.toLowerCase();
-  if (/(^|[\s(])scroll-state\s*\(/.test(text))
-    return "Scroll-state queries are not supported; set a class from a `scroll` listener instead.";
-  for (const m of text.matchAll(/(?<![\w-])style\s*\(\s*([^\s:)]+)/g))
-    if (!m[1]!.startsWith("--"))
-      return "Style queries test custom properties only: query a `--custom-property` the container sets.";
-  const sizes = text.replace(/style\s*\([^)]*\)/g, "");
-  if (/\d(%|vw|vh|vi|vb|vmin|vmax|cq\w*)(?![\w-])|calc\(/.test(sizes)) return "Write the size in `px`, `rem` or `em`.";
-  return null;
-}
-
-const STATE_FIX = "Set a class or data attribute from script and select on that.";
-const PSEUDO_CLASSES: Record<string, string> = Object.fromEntries([
-  ...[
-    "placeholder-shown",
-    "read-only",
-    "read-write",
-    "required",
-    "optional",
-    "default",
-    "autofill",
-    "valid",
-    "invalid",
-    "user-valid",
-    "user-invalid",
-    "in-range",
-    "out-of-range",
-    "blank",
-    "link",
-    "visited",
-    "any-link",
-    "local-link",
-    "target",
-    "target-within",
-    "lang",
-    "dir",
-    "modal",
-    "popover-open",
-    "open",
-    "closed",
-    "defined",
-    "picture-in-picture",
-    "playing",
-    "paused",
-    "seeking",
-    "buffering",
-    "stalled",
-    "muted",
-    "volume-locked",
-    "current",
-    "past",
-    "future",
-  ].map((name) => [name, STATE_FIX]),
-]);
-const LADDER_STATES = /:(hover|active|focus|focus-visible|focus-within)(?![\w-])/i;
-const FUNCTIONAL = /:(not|is|where|matches|any|-webkit-any|-moz-any)\(/gi;
 
 interface Block {
   css: string;
@@ -132,13 +15,15 @@ interface Block {
   offset: number;
   /** Declarations only (a `style` attribute). */
   inline: boolean;
+  tag?: string;
+  scoped?: boolean;
 }
 
 /** The CSS of one file at its own offsets: a stylesheet, the `<style>` blocks of a component or page, its static `style` attributes. */
 export function styleBlocks(path: string, source: string): Block[] {
   if (/\.css$/i.test(path)) return [{ css: source, offset: 0, inline: false }];
   if (/\.vue$/i.test(path)) return vueBlocks(path, source);
-  if (/\.(svelte|html?)$/i.test(path)) return markupBlocks(source, /\.svelte$/i.test(path));
+  if (/\.(svelte|html?)$/i.test(path)) return markupBlocks(source);
   return [];
 }
 
@@ -152,8 +37,9 @@ function vueBlocks(path: string, source: string): Block[] {
       css: s.content,
       offset: s.loc.start.offset,
       inline: false,
+      scoped: s.scoped ?? false,
     }));
-  type Node = { type: number; props?: unknown[]; children?: unknown[] };
+  type Node = { type: number; tag?: string; props?: unknown[]; children?: unknown[] };
   type Attr = {
     type: number;
     name: string;
@@ -172,6 +58,7 @@ function vueBlocks(path: string, source: string): Block[] {
         css: source.slice(start, end),
         offset: start,
         inline: true,
+        ...(node.tag && { tag: node.tag }),
       });
     }
     for (const child of (node.children ?? []) as Node[]) if (child && typeof child === "object") visit(child);
@@ -182,7 +69,7 @@ function vueBlocks(path: string, source: string): Block[] {
 
 const blank = (text: string) => text.replace(/[^\r\n]/g, " ");
 
-function markupBlocks(source: string, attributes: boolean): Block[] {
+function markupBlocks(source: string): Block[] {
   const blocks: Block[] = [];
   let markup = source.replace(/<!--[\s\S]*?-->/g, blank);
   for (const m of markup.matchAll(/<style(\s[^>]*)?>([\s\S]*?)<\/style\s*>/gi)) {
@@ -194,11 +81,15 @@ function markupBlocks(source: string, attributes: boolean): Block[] {
         inline: false,
       });
   }
-  if (!attributes) return blocks;
   markup = markup.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, blank);
-  for (const m of markup.matchAll(/<[a-zA-Z][^\s/>]*\s[^>]*?\bstyle\s*=\s*(["'])([^"'{}]*)\1/g)) {
-    const offset = m.index + m[0].length - 1 - m[2]!.length;
-    blocks.push({ css: m[2]!, offset, inline: true });
+  for (const element of markup.matchAll(/<([a-zA-Z][\w:-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/g)) {
+    const tag = element[1]!;
+    for (const attr of element[2]!.matchAll(/\s+([^\s="'<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+)))?/g)) {
+      const css = attr[2] ?? attr[3];
+      if (attr[1]?.toLowerCase() !== "style" || css === undefined || /[{}]/.test(css)) continue;
+      const offset = element.index + 1 + tag.length + attr.index + attr[0].length - 1 - css.length;
+      blocks.push({ css, offset, inline: true, tag: tag.toLowerCase() });
+    }
   }
   return blocks;
 }
@@ -229,183 +120,84 @@ class Lines {
   }
 }
 
-const sentence = (text: string) => (text && !/[.!?)]$/.test(text) ? `${text}.` : text);
-
-function entryOf(property: string): CatalogEntry | undefined {
-  const own = ENTRIES.get(property);
-  if (own) return own;
-  const base = property.startsWith("-webkit-") ? ENTRIES.get(property.slice(8)) : undefined;
-  return base?.webkit ? base : undefined;
-}
-
-/** What the engine does not apply in one declaration: a code, what is wrong and what to do. */
-export function declarationProblem(
-  property: string,
-  value: string,
-): { code: string; message: string; help: string } | null {
-  const prop = property.trim().toLowerCase();
-  if (prop.startsWith("--")) return null;
-  const entry = entryOf(prop);
-  if (!entry) return null;
-  const v = squash(value);
-  if (!v || CSS_WIDE.has(v) || SUBSTITUTED.test(value)) return null;
-  const keep = `Remove it, or keep it for browsers inside \`@supports (${prop}: ${value.trim()})\`.`;
-  if (entry.status === "unsupported") {
-    if (INERT_DEFAULTS.has(v) || INERT_FOR[prop] === v) return null;
-    return {
-      code: "SK4001",
-      message: `\`${prop}\` is not supported: this declaration has no effect`,
-      help: [sentence(entry.note), keep].filter(Boolean).join(" "),
-    };
+function frameworkSelector(file: string, block: Block, selector: string): string {
+  if (block.scoped && /:(?:v-)?(?:deep|global|slotted)\b|>>>|\/deep\//.test(selector)) {
+    const result = sfcCompiler(dirname(file)).compileStyle({
+      filename: file,
+      id: "data-v-sk",
+      scoped: true,
+      source: `${selector}{color:red}`,
+    });
+    const rule = postcss.parse(result.code).nodes.find((node) => node.type === "rule");
+    return rule?.selector ?? selector;
   }
-  if (entry.status !== "partial") return null;
-  const refused = entry.refused.some((r) => squash(r) === v)
-    ? v
-    : functionsOf(v).find((f) => REFUSED_FUNCTIONS.get(entry.name.toLowerCase())?.has(f));
-  if (!refused) return null;
-  const what = refused === v ? `\`${prop}: ${value.trim()}\`` : `\`${refused}()\` in \`${prop}\``;
-  return {
-    code: "SK4002",
-    message: `${what} is not applied`,
-    help: [sentence(entry.note), keep].filter(Boolean).join(" "),
-  };
-}
-
-/** Selector parts no rule can match here, each with what to do instead. */
-export function selectorProblems(selector: string): { what: string; help: string }[] {
-  const text = selector
-    .replace(/\\./g, "  ")
-    .replace(/\/\*[\s\S]*?\*\//g, blank)
-    .replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, blank)
-    .replace(/\[[^\]]*\]/g, blank);
-  const out = new Map<string, string>();
-  for (const m of text.matchAll(/(?<!:):(?!:)(-webkit-)?([a-z][\w-]*)(\()?/gi)) {
-    const name = m[2]!.toLowerCase();
-    if (m[1] && name !== "autofill") continue;
-    const help = PSEUDO_CLASSES[name];
-    if (help) out.set(`the pseudo-class \`:${name}${m[3] ? "()" : ""}\``, help);
-  }
-  for (const m of text.matchAll(
-    /::?(first-line|first-letter)(?![\w-])|::(marker|-webkit-scrollbar[\w-]*)(?![\w-])/gi,
-  )) {
-    const name = (m[1] ?? m[2]!).toLowerCase();
-    out.set(
-      `the pseudo-element \`::${name}\``,
-      name.startsWith("-webkit-scrollbar")
-        ? "Style scrollbars with `scrollbar-width` and `scrollbar-color`."
-        : "Wrap the part in its own element and style that.",
-    );
-  }
-  if (/:nth-(last-)?child\([^)]*\sof\s/i.test(text))
-    out.set("`:nth-child(… of S)`", "Select the subset with a class and use `:nth-child()` without `of`.");
-  for (const m of text.matchAll(FUNCTIONAL)) {
-    let depth = 1;
-    let i = m.index + m[0].length;
-    const from = i;
-    for (; i < text.length && depth > 0; i++) {
-      if (text[i] === "(") depth++;
-      else if (text[i] === ")") depth--;
+  if (!/\.svelte$/i.test(file) || !selector.includes(":global")) return selector;
+  const compiler = createRequire(resolve(file))("svelte/compiler") as typeof import("svelte/compiler");
+  const prefix = "<style>";
+  const source = prefix + selector + "{}</style>";
+  const rule = compiler.parse(source, { modern: true }).css?.children[0];
+  if (rule?.type !== "Rule") return selector;
+  const remove: [number, number][] = [];
+  const visit = (list: AST.CSS.SelectorList) => {
+    for (const compound of list.children.flatMap((s) => s.children)) {
+      for (const token of compound.selectors) {
+        if (token.type !== "PseudoClassSelector" && token.type !== "PseudoElementSelector") continue;
+        if (token.name === "global") {
+          if (token.args) remove.push([token.start, token.args.start], [token.args.end, token.end]);
+          else remove.push([token.start, token.end]);
+        }
+        if (token.args) visit(token.args);
+      }
     }
-    const state = LADDER_STATES.exec(text.slice(from, i - 1));
-    if (state)
-      out.set(
-        `\`:${state[1]!.toLowerCase()}\` inside \`:${m[1]!.toLowerCase()}()\``,
-        `Put \`:${state[1]!.toLowerCase()}\` on the compound itself, outside the parentheses, or set a class from script.`,
-      );
-  }
-  return [...out].map(([what, help]) => ({ what, help }));
+  };
+  visit(rule.prelude);
+  for (const [start, end] of remove.sort(([a], [b]) => b - a))
+    selector = selector.slice(0, start - prefix.length) + selector.slice(end - prefix.length);
+  return selector.trim() || "*";
 }
 
-interface Context {
-  file: string;
-  lines: Lines;
-  offset: number;
-  tailwind: boolean;
-  out: Finding[];
-}
-
-function push(ctx: Context, code: string, message: string, help: string, start: number, end: number) {
-  ctx.out.push({
-    code,
-    message,
-    file: ctx.file,
-    range: ctx.lines.range(ctx.offset + start, ctx.offset + end),
-    help,
-    related: [],
-  });
-}
-
-const startOf = (node: ChildNode) => node.source?.start?.offset ?? 0;
-
-function visit(ctx: Context, container: Container, keyframes: boolean) {
-  for (const node of container.nodes ?? []) {
-    if (node.type === "decl") declaration(ctx, node);
-    else if (node.type === "rule") rule(ctx, node, keyframes);
-    else if (node.type === "atrule") atRule(ctx, node);
-  }
-}
-
-function declaration(ctx: Context, decl: Declaration) {
-  const problem = declarationProblem(decl.prop, decl.value);
-  if (!problem) return;
-  const start = startOf(decl);
-  push(ctx, problem.code, problem.message, problem.help, start, start + decl.toString().length);
-}
-
-function rule(ctx: Context, node: Rule, keyframes: boolean) {
-  if (!keyframes) {
-    const start = startOf(node);
-    for (const { what, help } of selectorProblems(node.selector))
-      push(
-        ctx,
-        "SK4003",
-        `${what} never matches here, so this rule is dropped`,
-        help,
+function syntax(nodes: ChildNode[], file: string, block: Block): CssNode[] {
+  const result: CssNode[] = [];
+  for (const node of nodes) {
+    const start = node.source?.start?.offset ?? 0;
+    if (node.type === "decl") {
+      result.push({
+        kind: "declaration",
+        name: node.prop.startsWith("--") ? node.prop : node.prop.toLowerCase(),
+        value: node.value,
+        important: node.important === true,
         start,
-        start + node.selector.length,
-      );
+        end: start + node.toString().length,
+      });
+    } else if (node.type === "rule" && !block.inline) {
+      result.push({
+        kind: "rule",
+        selector: frameworkSelector(file, block, node.selector),
+        nodes: syntax(node.nodes, file, block),
+        start,
+        end: start + node.selector.length,
+      });
+    } else if (node.type === "atrule" && !block.inline) {
+      const body =
+        node.nodes
+          ?.filter((n) => n.type === "decl")
+          .map((n) => n.toString())
+          .join(";") ?? null;
+      result.push({
+        kind: "at",
+        name: node.name.toLowerCase(),
+        params: node.params,
+        body,
+        nodes: syntax(node.nodes ?? [], file, block),
+        start,
+        end: start + node.name.length + 1,
+      });
+    }
   }
-  visit(ctx, node, keyframes);
+  return result;
 }
 
-function atRule(ctx: Context, node: AtRule) {
-  const name = node.name.toLowerCase();
-  const query = name === "container" ? containerProblem(node.params) : null;
-  if (query) {
-    const start = startOf(node);
-    push(
-      ctx,
-      "SK4004",
-      "this `@container` query is not supported: the rules inside it are dropped",
-      query,
-      start,
-      start + 10,
-    );
-    return;
-  }
-  if (RECURSE_AT_RULES.has(name)) {
-    visit(ctx, node, name !== "media");
-    return;
-  }
-  // Tailwind consumes `@layer` blocks before the engine sees them; a bare `@layer a, b;` changes nothing.
-  if (name === "layer" && ctx.tailwind) {
-    visit(ctx, node, false);
-    return;
-  }
-  const help = UNSUPPORTED_AT_RULES[name];
-  if (!help || (name === "layer" && node.nodes === undefined)) return;
-  const start = startOf(node);
-  push(
-    ctx,
-    "SK4004",
-    `\`@${name}\` is not supported: ${node.nodes === undefined ? "it is ignored" : "the rules inside it are dropped"}`,
-    help,
-    start,
-    start + name.length + 1,
-  );
-}
-
-/** One file's CSS findings. A block that does not parse is skipped: the build reports it. */
+/** CSS findings at source locations before Vue/Svelte scope rewriting. */
 export function fileFindings(file: string, source: string, tailwind: boolean): Finding[] {
   const out: Finding[] = [];
   const lines = new Lines(source);
@@ -416,9 +208,11 @@ export function fileFindings(file: string, source: string, tailwind: boolean): F
     } catch {
       continue;
     }
-    const ctx: Context = { file, lines, offset: block.offset, tailwind, out };
-    if (block.inline) for (const node of root.nodes) node.type === "decl" && declaration(ctx, node);
-    else visit(ctx, root, false);
+    const nodes = syntax(root.nodes, file, block);
+    if (!nodes.length) continue;
+    for (const { start, end, ...diagnostic } of inspectCss({ nodes, tag: block.tag ?? null, tailwind })) {
+      out.push({ ...diagnostic, file, range: lines.range(block.offset + start, block.offset + end), related: [] });
+    }
   }
   return out;
 }
@@ -503,12 +297,7 @@ export function cssFindings(input: {
   for (const { file, text } of input.sources) {
     const owner = input.packages.ownerOf(file);
     if (owner && !input.deps) continue;
-    let found: Finding[];
-    try {
-      found = fileFindings(file, text, input.tailwind);
-    } catch {
-      continue;
-    }
+    const found = fileFindings(file, text, input.tailwind);
     if (!owner) {
       out.push(...found);
       continue;
@@ -525,7 +314,7 @@ export function cssFindings(input: {
       .map((f) => ({ file: f.file, range: f.range, message: f.message }));
     out.push({
       code: "SK4005",
-      message: `${found.length === 1 ? "1 rule or declaration" : `${found.length} rules and declarations`} in ${name}'s CSS ${found.length === 1 ? "is" : "are"} not applied by Skathi`,
+      message: `${name}'s CSS has ${found.length} rendering or host compatibility warning${found.length === 1 ? "" : "s"}`,
       file: first.file,
       range: first.range,
       help: "Check that the parts of the package the app uses look right; allow SK4005 for the package when they do.",

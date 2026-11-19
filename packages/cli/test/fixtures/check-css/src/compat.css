@@ -1,0 +1,33 @@
+@property --fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.sheet {
+  width: min(200px, 100%);
+}
+.card:hover .poster::after {
+  content: "";
+}
+.fade {
+  --ms: 200ms;
+  transition: opacity var(--ms) ease;
+}
+.shadow {
+  filter: drop-shadow(0 1px 2px black) drop-shadow(0 0 6px black);
+}
+.stop-b {
+  stop-color: var(--b);
+}
+.caption {
+  filter: drop-shadow(0 1px 2px black);
+}
+.icon rect {
+  stroke: url(#g);
+}
+.inline {
+  display: inline-flex;
+}
+.rel {
+  position: relative;
+}

@@ -62,6 +62,7 @@ export function analyzeCss(options: Partial<AnalyzeInput> = {}): CheckReport {
     styles: [
       "index.html",
       "src/main.css",
+      "src/compat.css",
       "src/more.css",
       "src/fine.css",
       "src/legacy/old.css",

@@ -44,6 +44,8 @@ jobs:
       # Downloads the pinned redslangc, which the effect tests then use from the cache.
       - name: Generated effect shaders are current
         run: bun run shaders:check
+      - name: Bundled CSS checker matches the native sources
+        run: bun scripts/css-engine.ts --check
       - name: Tests
         run: bun run test
       - name: Format

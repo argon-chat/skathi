@@ -3,7 +3,7 @@ import { appendFileSync, cpSync, mkdtempSync, rmSync, symlinkSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCheck } from "../check";
-import { containerProblem, declarationProblem, selectorProblems } from "../check/css";
+import { fileFindings } from "../check/css";
 import type { CheckReport } from "../check/schema";
 import { buildApp } from "../cli/build-app";
 import { packageDir } from "../runtime-path";
@@ -54,20 +54,23 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
   });
 
   test("a value is refused only as the catalog refuses it", () => {
-    const code = (property: string, value: string) => declarationProblem(property, value)?.code ?? null;
+    const code = (property: string, value: string) =>
+      fileFindings("sample.css", `.box { ${property}: ${value} }`, false)[0]?.code ?? null;
     expect(code("transform", "translateX(1px) rotateY(3deg)")).toBe("SK4002");
     expect(code("transform", "translate3d(0, 0, 0) scale(2)")).toBeNull();
     expect(code("-webkit-backdrop-filter", "saturate(180%) blur(8px)")).toBe("SK4002");
     expect(code("filter", "url(#shadow)")).toBeNull();
-    expect(code("filter", "drop-shadow(0 1px 2px red)")).toBeNull();
+    expect(code("filter", "drop-shadow(0 1px 2px red)")).toBe("SK4006");
     expect(code("width", "FIT-CONTENT")).toBe("SK4002");
-    expect(code("float", "--side(left)")).toBeNull();
+    expect(code("float", "--side(left)")).toBe("SK4001");
     expect(code("float", "inherit")).toBeNull();
     expect(code("-webkit-text-size-adjust", "100%")).toBeNull();
     expect(code("-moz-appearance", "none")).toBeNull();
   });
 
   test("@container: only queries the engine cannot evaluate", () => {
+    const containerProblem = (prelude: string) =>
+      fileFindings("layout.css", `@container ${prelude} { p { color: red } }`, false)[0] ?? null;
     expect(containerProblem("card (width >= 24rem) and style(--mode: 50%)")).toBeNull();
     expect(containerProblem("(orientation: portrait) or (min-height: 10em)")).toBeNull();
     expect(containerProblem("scroll-state(stuck: top)")).not.toBeNull();
@@ -76,7 +79,7 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
   });
 
   test("selectors: only what the matcher cannot answer", () => {
-    const count = (selector: string) => selectorProblems(selector).length;
+    const count = (selector: string) => fileFindings("selector.css", `${selector} { color: red }`, false).length;
     expect(count(".a:not(:hover)")).toBe(1);
     expect(count("li:nth-child(2 of .x)")).toBe(1);
     expect(count("input:-webkit-autofill")).toBe(1);
@@ -107,10 +110,48 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
       "index.html",
       "node_modules/fancy-ui/style.css",
       "src/App.vue",
+      "src/compat.css",
       "src/main.css",
       "src/more.css",
     ]);
   }, 60_000);
+
+  test("all ten reported patterns point to their source declaration or selector", () => {
+    expect(css(report(), "src/compat.css")).toEqual([
+      "1:1:SK4004",
+      "7:3:SK4007",
+      "9:1:SK4007",
+      "14:3:SK4007",
+      "17:3:SK4002",
+      "20:3:SK4007",
+      "23:3:SK4006",
+      "26:3:SK4006",
+      "29:3:SK4006",
+      "32:3:SK4007",
+    ]);
+  });
+
+  test("source ranges in static Svelte SVG styles count UTF-16 code units", () => {
+    const source = '<p>🌷</p><svg><stop style="stop-color: var(--tone)"/></svg>';
+    const [stop] = fileFindings("Logo.svelte", source, false);
+    expect(stop?.code).toBe("SK4007");
+    expect(stop?.range.start.character).toBe(source.indexOf("stop-color"));
+  });
+
+  test("the conditional advisories respect explicit paint and layout", () => {
+    const source =
+      ".card { filter: drop-shadow(0 1px 2px black); background: red } svg { filter: drop-shadow(0 1px 2px black) } .sized { display:inline-flex; width:10px }";
+    expect(fileFindings("explicit.css", source, false)).toEqual([]);
+    expect(fileFindings("Icon.svelte", '<svg style="filter:drop-shadow(0 1px 2px black)"/>', false)).toEqual([]);
+  });
+
+  test("Svelte global and Vue scoped selectors are checked as the framework emits them", () => {
+    expect(fileFindings("Card.svelte", "<style>:global(.card:hover) .title { color: red }</style>", false)).toEqual([]);
+    expect(fileFindings("Card.vue", "<style scoped>.card :deep(.title) { color: red }</style>", false)).toEqual([]);
+    expect(
+      fileFindings("Card.svelte", "<style>:global(.card:lang(en)) { color: red }</style>", false).map((d) => d.code),
+    ).toEqual(["SK4003"]);
+  });
 });
 
 describe("CSS warnings in sk build and sk dev", () => {
