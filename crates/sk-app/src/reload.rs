@@ -9,8 +9,10 @@
 
 use std::cell::Cell;
 
+use sk_runtime::redjs::api::Value;
+#[cfg(not(feature = "no-interpreter"))]
 use sk_runtime::redjs::{
-    api::{Context, Error, Value},
+    api::{Context, Error},
     glue,
 };
 use sk_runtime::{host_fn, JsRuntime};
@@ -32,9 +34,13 @@ pub fn pump() {
     if !REQUESTED.with(|r| r.replace(false)) {
         return;
     }
+    #[cfg(feature = "no-interpreter")]
+    eprintln!("[sk] location.reload() requires the interpreter to re-run this app; restart the application instead");
+    #[cfg(not(feature = "no-interpreter"))]
     JsRuntime::with(run);
 }
 
+#[cfg(not(feature = "no-interpreter"))]
 fn run(rt: &JsRuntime) {
     eprintln!("[sk] location.reload() — unloading the app and running it again (same JS realm)");
     // `__SK_UNLOAD__` runs the teardown itself, between `pagehide` and the
@@ -54,6 +60,7 @@ fn run(rt: &JsRuntime) {
     crate::boot_mode::reboot(rt);
 }
 
+#[cfg(not(feature = "no-interpreter"))]
 fn unload(context: &Context) -> Result<(), Error> {
     for name in ["__SK_UNLOAD__", "__SK_TEARDOWN__"] {
         let key = context.atom(name);
@@ -78,6 +85,15 @@ fn unload(context: &Context) -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "no-interpreter")]
+    #[test]
+    fn reload_leaves_the_realm_alone_without_an_interpreter() {
+        REQUESTED.with(|request| request.set(true));
+        pump();
+        assert!(!REQUESTED.with(Cell::get));
+    }
+
+    #[cfg(not(feature = "no-interpreter"))]
     #[test]
     fn unload_prefers_the_hook_and_preserves_the_global_receiver() {
         sk_runtime::testing::on_js_thread(|| {

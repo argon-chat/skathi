@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMPILER_FIELDS, type CompilerInfo } from "./pin";
-import { opaqueHost, TRANSFORM } from "./transform";
+import { nativeInput, PRELUDES_TRANSFORM, TRANSFORM, type PreludeScripts } from "./transform";
 import { excerpt, INPUT_MODULE, readUses, usesOf, type Uses } from "./uses";
 
 export class AotError extends Error {}
@@ -75,6 +75,7 @@ export interface CompileOptions {
   /** sk-aot. */
   compiler: string;
   source: string;
+  preludes?: PreludeScripts | undefined;
   /** Holds the transformed input, the IR and the image. */
   work: string;
 }
@@ -87,7 +88,7 @@ export async function compileNative(options: CompileOptions): Promise<NativeImag
   const image = join(work, "app.image");
   const uses = `${ir}.uses.json`;
   for (const stale of [ir, uses, image, `${image}.entries`, `${image}.identity`]) rmSync(stale, { force: true });
-  const wrapped = opaqueHost(source);
+  const wrapped = nativeInput(source, options.preludes).code;
   writeFileSync(input, wrapped);
 
   const compiled = await run([compiler, "compile", input, ir, image], work);
@@ -123,6 +124,7 @@ export function removedFeatureProblem(
   source: string,
   removed: readonly string[],
   workload: string,
+  preludes?: PreludeScripts,
 ): string | null {
   if (!removed.length) return null;
   const list = removed.join(" and ");
@@ -133,24 +135,39 @@ export function removedFeatureProblem(
     );
   }
   const found = usesOf(native.uses, removed);
-  if (!found.length) return null;
-  const wrapped = opaqueHost(source);
-  const offset = wrapped.indexOf(source);
+  const unseen = removed.includes("Interpreter") ? native.uses.unseen : [];
+  if (!found.length && !unseen.length) return null;
+  // sk-aot reports byte offsets in its UTF-8 input. Editor columns count UTF-16 code units.
+  const sections = nativeInput(source, preludes).sections.map((s) => ({ ...s, bytes: Buffer.from(s.source) }));
+  const at = (what: string, module: number, position: number) => {
+    if (module !== INPUT_MODULE) return `${what} in the engine's built-ins`;
+    const section = sections.find((s) => position >= s.byteOffset && position < s.byteOffset + s.bytes.length);
+    return section
+      ? `${what} at ${section.file} ${excerpt(section.source, section.bytes.toString("utf8", 0, position - section.byteOffset).length)}`
+      : `${what} in the generated native input at offset ${position}`;
+  };
   const lines = [
-    ...new Set(
-      found.map((use) => {
-        const what = `${use.builtin ?? use.feature}${use.kind === "FoundByName" ? " (read by name)" : ""}`;
-        if (use.module !== INPUT_MODULE) return `${what} in the engine's built-ins`;
-        return `${what} at app.prod.js ${excerpt(source, use.position - offset)}`;
-      }),
-    ),
+    ...new Set([
+      ...unseen.map((use) => at(`${use.cause} (${use.builtin ?? "code outside the image"})`, use.module, use.position)),
+      ...found.map((use) =>
+        at(
+          `${use.builtin ?? use.feature}${use.kind === "FoundByName" ? " (read by name)" : ""}`,
+          use.module,
+          use.position,
+        ),
+      ),
+    ]),
   ];
   const shown = lines.slice(0, 5).map((line) => `  ${line}`);
   if (lines.length > shown.length) shown.push(`  and ${lines.length - shown.length} more`);
-  const features = [...new Set(found.map((use) => use.feature))].join(" and ");
+  const features = [...new Set([...found.map((use) => use.feature), ...(unseen.length ? ["Interpreter"] : [])])].join(
+    " and ",
+  );
   return (
-    `this app's native image uses ${features}, which the ${workload} workload leaves out:\n${shown.join("\n")}\n` +
-    `Drop that use, or publish on the workload with the JIT: remove "publishJit": false from sk.config.json.`
+    `this app's native image ${removed.includes("Interpreter") ? "can reach" : "uses"} ${features}, which the ${workload} workload leaves out:\n${shown.join("\n")}\n` +
+    (removed.includes("Interpreter")
+      ? "Use a workload that includes the interpreter, or compile an image with no interpreter dependencies."
+      : `Drop that use, or publish on the workload with the JIT: remove "publishJit": false from sk.config.json.`)
   );
 }
 
@@ -161,7 +178,7 @@ export function nativeManifest(
   kind: NativeKind,
   info: CompilerInfo,
   native: NativeImage,
-  options: { image: string; preludeSha256: string },
+  options: { image: string; preludeSha256: string; includesPreludes?: boolean },
 ): Record<string, unknown> {
   return {
     schema: "skathi.native-aot",
@@ -174,7 +191,7 @@ export function nativeManifest(
     imageBytes: native.image.length,
     entry: native.entry,
     identity: native.identity,
-    transform: TRANSFORM,
+    transform: options.includesPreludes ? PRELUDES_TRANSFORM : TRANSFORM,
     sourceBundleSha256: native.sourceBundleSha256,
     preludeSha256: options.preludeSha256,
     nativeInputSha256: native.nativeInputSha256,

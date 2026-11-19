@@ -4,6 +4,8 @@
 import HOST_TABLE from "./host-globals.json";
 
 export const TRANSFORM = "opaque-host-v1";
+export const PRELUDES_TRANSFORM = "opaque-host-preludes-v2";
+export type PreludeScripts = readonly [string, string];
 
 export interface BuiltinEntry {
   holder: string;
@@ -72,6 +74,33 @@ function openHostGlobals(names: readonly string[]): string {
   return `if (__SK_AOT_HOST__ === undefined) {\n${opened.map((name) => `globalThis.${name} = undefined;`).join("\n")}\n}\n`;
 }
 
+function hostPrefix(names: readonly string[]): string {
+  return `// ${TRANSFORM}: stable host API references are opaque inputs.\n${openHostGlobals(names)}(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n`;
+}
+
+const hostSuffix = "\n})(__SK_AOT_HOST__);\n";
+
 export function opaqueHost(source: string, names: readonly string[] = opaqueGlobals()): string {
-  return `// ${TRANSFORM}: stable host API references are opaque inputs.\n${openHostGlobals(names)}(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n${source}\n})(__SK_AOT_HOST__);\n`;
+  return hostPrefix(names) + source + hostSuffix;
+}
+
+/** Each script captures its host globals after the preceding script has installed them. */
+export function nativeInput(source: string, preludes?: PreludeScripts) {
+  const scripts = preludes
+    ? [
+        { file: "sk://prelude.js", source: preludes[0] },
+        { file: "sk://window.js", source: preludes[1] },
+      ]
+    : [];
+  scripts.push({ file: "app.prod.js", source });
+  const prefix = hostPrefix(opaqueGlobals());
+  let code = "";
+  let byteOffset = Buffer.byteLength(prefix);
+  const sections = scripts.map((script) => {
+    const section = { ...script, byteOffset };
+    code += prefix + script.source + hostSuffix;
+    byteOffset += Buffer.byteLength(script.source) + Buffer.byteLength(hostSuffix) + Buffer.byteLength(prefix);
+    return section;
+  });
+  return { code, sections };
 }

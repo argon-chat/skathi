@@ -20,7 +20,10 @@ export interface Uses {
 }
 
 /** The host features (`--sk-host-info`) that leave an engine feature out of the workload. */
-export const REMOVED_BY_HOST_FEATURE: Readonly<Record<string, string>> = { "no-wasm": "WebAssembly" };
+export const REMOVED_BY_HOST_FEATURE: Readonly<Record<string, string>> = {
+  "no-wasm": "WebAssembly",
+  "no-interpreter": "Interpreter",
+};
 
 export const removedFeatures = (hostFeatures: readonly string[]): string[] =>
   hostFeatures.flatMap((f) => (REMOVED_BY_HOST_FEATURE[f] ? [REMOVED_BY_HOST_FEATURE[f]] : []));
@@ -29,11 +32,14 @@ export function readUses(path: string): Uses | null {
   if (!existsSync(path)) return null;
   const uses = JSON.parse(readFileSync(path, "utf8")) as Uses & { schema?: string; version?: number };
   if (uses.schema !== "skathi.aot-uses" || uses.version !== 1) throw Error(`${path} is not a skathi.aot-uses v1 file`);
+  if (!Array.isArray(uses.features) || !Array.isArray(uses.unseen))
+    throw Error(`${path} is missing the feature or unseen-code records`);
   return uses;
 }
 
 /**
- * The uses of `removed` features. Unnamed records (any built-in a dynamic call such as `o[k]()` might
+ * Without Interpreter every possible interpreter entry matters. For namespace features like
+ * WebAssembly, unnamed records (any built-in a dynamic call such as `o[k]()` might
  * reach) do not count, and FoundByName ones count only for the feature's own namespace (a read of
  * `globalThis.WebAssembly`, which the opaque host turns into a read by name): a member's name alone
  * (`exports`, `Module`) matches any object's.
@@ -42,7 +48,8 @@ export function usesOf(uses: Uses, removed: readonly string[]): FeatureUse[] {
   return uses.features.filter(
     (use) =>
       removed.includes(use.feature) &&
-      (use.kind === "Named" ||
+      (use.feature === "Interpreter" ||
+        use.kind === "Named" ||
         use.kind === "NamedAtRunTime" ||
         (use.kind === "FoundByName" && use.builtin === use.feature)),
   );

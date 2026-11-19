@@ -19,6 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/devtools/native_inspector.rs"));
 
 const SCHEMA: &str = "skathi.native-aot";
 const TRANSFORM: &str = "opaque-host-v1";
+const APP_PRELUDES_TRANSFORM: &str = "opaque-host-preludes-v2";
 const TARGET: &str = "x86_64-windows";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +40,7 @@ impl Kind {
 struct Plan {
     entry: u32,
     kind: Kind,
+    includes_preludes: bool,
 }
 thread_local! { static PLAN: RefCell<Option<Plan>> = const { RefCell::new(None) }; }
 
@@ -102,6 +104,13 @@ pub(crate) fn host_identity() -> Json {
         ("compileOptions", Json::s(aot::COMPILE_OPTIONS)),
         ("transform", Json::s(TRANSFORM)),
         ("preludeSha256", Json::s(aot::digest_hex(&preludes()))),
+        (
+            "preludeScripts",
+            Json::arr(vec![
+                Json::s(crate::PRELUDE_JS),
+                Json::s(crate::WINDOW_PRELUDE_JS),
+            ]),
+        ),
     ])
 }
 
@@ -111,7 +120,7 @@ fn validate(
     source: &[u8],
     preludes: &[u8],
     image_digest: &str,
-) -> Result<(u32, [u8; 16]), String> {
+) -> Result<(Plan, [u8; 16]), String> {
     equal(manifest, "schema", SCHEMA)?;
     if manifest.get("version").and_then(Json::as_f64) != Some(1.0) {
         return Err("unsupported AOT manifest version".into());
@@ -123,14 +132,25 @@ fn validate(
     equal(manifest, "engine", aot::ENGINE_VERSION)?;
     equal(manifest, "tableId", aot::BUILD_TABLE_ID)?;
     equal(manifest, "compileOptions", aot::COMPILE_OPTIONS)?;
-    equal(manifest, "transform", TRANSFORM)?;
+    let includes_preludes = match (field(manifest, "transform")?, kind) {
+        (TRANSFORM, _) => false,
+        (APP_PRELUDES_TRANSFORM, Kind::Application) => true,
+        _ => return Err("unsupported native AOT transform for this image kind".into()),
+    };
     equal(manifest, "sourceBundleSha256", &aot::digest_hex(source))?;
     equal(manifest, "preludeSha256", &aot::digest_hex(preludes))?;
     equal(manifest, "imageSha256", image_digest)?;
     let entry =
         positive_integer(manifest, "entry", u32::MAX as f64).ok_or("invalid AOT entry")? as u32;
     let id = identity(field(manifest, "identity")?)?;
-    Ok((entry, id))
+    Ok((
+        Plan {
+            entry,
+            kind,
+            includes_preludes,
+        },
+        id,
+    ))
 }
 
 const MAX_MANIFEST_BYTES: u64 = 65_536;
@@ -224,8 +244,7 @@ fn image_resource(dll: &str) -> Result<&'static [u8], String> {
 fn select(
     mut file: File,
     manifest: &Json,
-    kind: Kind,
-    entry: u32,
+    selected: Plan,
     id: [u8; 16],
     profile: aot::MemoryProfile,
     description: &str,
@@ -250,11 +269,12 @@ fn select(
             settings.initial_image_read_only
         );
     }
-    PLAN.with(|plan| *plan.borrow_mut() = Some(Plan { entry, kind }));
     eprintln!(
-        "[native-aot] selected {} image {description} (entry {entry}, memory {profile:?})",
-        kind.name()
+        "[native-aot] selected {} image {description} (entry {}, memory {profile:?})",
+        selected.kind.name(),
+        selected.entry
     );
+    PLAN.with(|plan| *plan.borrow_mut() = Some(selected));
     Ok(())
 }
 
@@ -305,7 +325,7 @@ fn prepare_inspector() -> Result<(), String> {
     let source =
         crate::inspector::inspector_js().map_err(|e| format!("embedded inspector: {e}"))?;
     let expected = field(&manifest, "imageSha256")?;
-    let (entry, id) = validate(
+    let (plan, id) = validate(
         &manifest,
         Kind::Inspector,
         source.as_bytes(),
@@ -335,15 +355,7 @@ fn prepare_inspector() -> Result<(), String> {
             format!("embedded sha256:{expected}"),
         )
     };
-    select(
-        file,
-        &manifest,
-        Kind::Inspector,
-        entry,
-        id,
-        profile,
-        &description,
-    )
+    select(file, &manifest, plan, id, profile, &description)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,6 +400,9 @@ const WITHOUT_JIT: &str =
 #[cfg(feature = "prod")]
 fn prepare_application() -> Result<(), String> {
     let Some(loaded) = crate::payload::get() else {
+        #[cfg(feature = "no-interpreter")]
+        return Err("this host needs an app payload with native preludes; publish the app with sk build --aot".into());
+        #[cfg(not(feature = "no-interpreter"))]
         return Ok(());
     };
     let engine = app_engine(std::env::var_os("SK_APP_ENGINE").as_deref());
@@ -431,21 +446,23 @@ fn prepare_image(manifest: &Json, compressed: &[u8], script: &str) -> Result<(),
         aot::MemoryProfile::Default,
     )?;
     let expected = field(manifest, "imageSha256")?;
-    let (entry, id) = validate(
+    let (plan, id) = validate(
         manifest,
         Kind::Application,
         script.as_bytes(),
         &preludes(),
         expected,
     )?;
+    if cfg!(feature = "no-interpreter") && !plan.includes_preludes {
+        return Err("the native image requires the host to evaluate its preludes from source, but this host has no interpreter".into());
+    }
     let size = positive_integer(manifest, "imageBytes", cache::MAX_IMAGE_BYTES as f64)
         .ok_or("invalid native image size")? as u64;
     let file = cache::materialize("app.image", compressed, expected, size)?;
     select(
         file,
         manifest,
-        Kind::Application,
-        entry,
+        plan,
         id,
         profile,
         &format!("sha256:{expected}"),
@@ -455,6 +472,11 @@ fn prepare_image(manifest: &Json, compressed: &[u8], script: &str) -> Result<(),
 /// Whether [`prepare`] selected an image of `kind` in this process.
 pub(crate) fn selected(kind: Kind) -> bool {
     PLAN.with(|plan| plan.borrow().as_ref().is_some_and(|p| p.kind == kind))
+}
+
+#[cfg(not(feature = "no-interpreter"))]
+pub(crate) fn includes_preludes() -> bool {
+    PLAN.with(|plan| plan.borrow().as_ref().is_some_and(|p| p.includes_preludes))
 }
 
 /// Runs the selected image's entry. `Ok(false)`: no image of `kind` was selected.
@@ -666,6 +688,42 @@ mod tests {
         .is_err());
     }
     #[test]
+    fn only_the_new_application_transform_includes_the_host_preludes() {
+        for (kind, transform, expected) in [
+            (Kind::Application, TRANSFORM, Some(false)),
+            (Kind::Inspector, TRANSFORM, Some(false)),
+            (Kind::Application, APP_PRELUDES_TRANSFORM, Some(true)),
+            (Kind::Inspector, APP_PRELUDES_TRANSFORM, None),
+        ] {
+            let mut document = valid(kind);
+            change(&mut document, "transform", Json::s(transform));
+            let result = validate(
+                &document,
+                kind,
+                b"bundle",
+                b"preludes",
+                &aot::digest_hex(b"image"),
+            );
+            assert_eq!(
+                result.ok().map(|(plan, _)| plan.includes_preludes),
+                expected
+            );
+        }
+    }
+    #[cfg(feature = "no-interpreter")]
+    #[test]
+    fn legacy_app_image_is_refused_before_loading_a_file_or_starting_jsc() {
+        let mut document = valid(Kind::Application);
+        change(
+            &mut document,
+            "preludeSha256",
+            Json::s(aot::digest_hex(&preludes())),
+        );
+        assert!(prepare_image(&document, &[], "bundle")
+            .unwrap_err()
+            .contains("this host has no interpreter"));
+    }
+    #[test]
     fn entries_are_finite_positive_one_based_ids() {
         for entry in [
             0.0,
@@ -690,6 +748,13 @@ mod tests {
     #[test]
     fn host_identity_names_what_validate_requires() {
         let host = host_identity();
+        assert_eq!(
+            host.get("preludeScripts"),
+            Some(&Json::arr(vec![
+                Json::s(crate::PRELUDE_JS),
+                Json::s(crate::WINDOW_PRELUDE_JS)
+            ]))
+        );
         let mut document = valid(Kind::Application);
         for name in [
             "target",

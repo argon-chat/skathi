@@ -18,7 +18,7 @@ use sk_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 use sk_runtime::{host_fn, with_published, with_published_app, JsRuntime, Phase};
 
 mod background;
-#[cfg(feature = "prod")]
+#[cfg(all(feature = "prod", not(feature = "no-interpreter")))]
 mod bytecode;
 #[cfg(not(feature = "prod"))]
 mod dev;
@@ -1400,20 +1400,21 @@ fn run_app() {
         let mut startup_error: Option<String> = None;
         with_published_app(cx, || {
             JsRuntime::with(|rt| {
-                if let Err(e) = perf::boot_eval("preludes", || rt.eval(PRELUDE_JS, "sk://prelude.js")) {
-                    eprintln!("[js boot] {}\n{}", e.header, e.stack);
-                    #[cfg(all(sk_devtools, feature = "native-aot"))]
-                    if devtools_mode && sk_runtime::redjs::aot::is_active() {
-                        startup_error = Some(format!("native inspector prelude failed: {}", e.header));
-                        return;
-                    }
-                }
-                if let Err(e) = perf::boot_eval("preludes", || rt.eval(WINDOW_PRELUDE_JS, "sk://window.js")) {
-                    eprintln!("[js boot] {}\n{}", e.header, e.stack);
-                    #[cfg(all(sk_devtools, feature = "native-aot"))]
-                    if devtools_mode && sk_runtime::redjs::aot::is_active() {
-                        startup_error = Some(format!("native inspector prelude failed: {}", e.header));
-                        return;
+                #[cfg(all(feature = "native-aot", not(feature = "no-interpreter")))]
+                let image_preludes = native_aot::includes_preludes();
+                #[cfg(not(feature = "native-aot"))]
+                let image_preludes = false;
+                #[cfg(not(feature = "no-interpreter"))]
+                if !image_preludes {
+                    for (script, url) in [(PRELUDE_JS, "sk://prelude.js"), (WINDOW_PRELUDE_JS, "sk://window.js")] {
+                        if let Err(e) = perf::boot_eval("preludes", || rt.eval(script, url)) {
+                            eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                            #[cfg(all(sk_devtools, feature = "native-aot"))]
+                            if devtools_mode && sk_runtime::redjs::aot::is_active() {
+                                startup_error = Some(format!("native inspector prelude failed: {}", e.header));
+                                return;
+                            }
+                        }
                     }
                 }
                 // `SK_SCENARIO` pins a harness app to one screen; sanitised, published as a global.
@@ -1423,9 +1424,9 @@ fn run_app() {
                         .chars()
                         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
                         .collect();
-                    let js = format!("globalThis.__SK_SCENARIO__ = \"{safe}\";");
-                    if let Err(e) = rt.eval(&js, "sk://scenario.js") {
-                        eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                    let ctx = rt.ctx();
+                    if let Err(error) = ctx.global_set("__SK_SCENARIO__", ctx.string(&safe)) {
+                        eprintln!("[js boot] could not set __SK_SCENARIO__: {error}");
                     }
                 }
                 #[cfg(sk_devtools)]

@@ -3,8 +3,6 @@
 //! Enabled by `--features prod`. There is no manifest, module registry, watcher or polling:
 //! [`poll_frame`] is an empty inline function. Everything app-specific reads the payload
 //! ([`crate::payload`]).
-//!
-//! The inspector bundle and the preludes stay `include_str!`: they belong to the host, not the app.
 
 use sk_runtime::JsRuntime;
 
@@ -80,15 +78,21 @@ pub fn boot(rt: &JsRuntime) {
         }
         return;
     }
-    let Some(script) = loaded.payload.script() else {
-        eprintln!("[prod] the payload has no sk/app.js — nothing to run");
-        return;
-    };
-    if let Err(e) = crate::bytecode::eval(rt, script) {
-        eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
+    #[cfg(feature = "no-interpreter")]
+    eprintln!("[prod] the host has no interpreter and no native app image was selected");
+    #[cfg(not(feature = "no-interpreter"))]
+    {
+        let Some(script) = loaded.payload.script() else {
+            eprintln!("[prod] the payload has no sk/app.js — nothing to run");
+            return;
+        };
+        if let Err(e) = crate::bytecode::eval(rt, script) {
+            eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
+        }
     }
 }
 
+#[cfg(not(feature = "no-interpreter"))]
 pub fn reboot(rt: &JsRuntime) {
     let Some(script) = payload::get().and_then(|l| l.payload.script()) else {
         eprintln!("[prod] reload: the payload has no sk/app.js — nothing to run");

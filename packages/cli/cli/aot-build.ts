@@ -6,6 +6,7 @@
 //
 // The host checks the manifest against itself before it loads the image (crates/sk-app/src/native_aot.rs).
 
+import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -73,6 +74,15 @@ export function hostAot(host: ResolvedHost): HostAot {
         "use the sk that matches the workload",
     );
   }
+  const scripts = aot.preludeScripts;
+  if (
+    scripts !== undefined &&
+    (!Array.isArray(scripts) ||
+      scripts.length !== 2 ||
+      !scripts.every((s) => typeof s === "string") ||
+      createHash("sha256").update(scripts.join("\0")).digest("hex") !== aot.preludeSha256)
+  )
+    throw new HostError(`${host.exe} reports invalid AOT prelude scripts or a mismatched preludeSha256`);
   return aot;
 }
 
@@ -170,8 +180,9 @@ export async function buildNative(options: {
   progress.detail(`sk-aot (${compiler.source})`);
   progress.step("native image");
   const source = new TextDecoder().decode(options.source);
-  const native = await compileNative({ compiler: compiler.path, source, work });
-  const problem = removedFeatureProblem(native, source, options.removed, options.workload);
+  const preludes = aot.preludeScripts;
+  const native = await compileNative({ compiler: compiler.path, source, work, preludes });
+  const problem = removedFeatureProblem(native, source, options.removed, options.workload, preludes);
   if (problem) throw new AotError(problem);
   const compressed = deflateRawSync(native.image, { level: 9 });
   progress.detail(
@@ -180,6 +191,7 @@ export async function buildNative(options: {
   const manifest = nativeManifest("application", compiler.info, native, {
     image: NAMES.NATIVE_IMAGE,
     preludeSha256: aot.preludeSha256,
+    includesPreludes: !!preludes,
   });
   const text = JSON.stringify(manifest, null, 2);
   const manifestPath = join(work, "app.native.json");

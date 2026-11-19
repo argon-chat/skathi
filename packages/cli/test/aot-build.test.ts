@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,8 +13,8 @@ import {
   type NativeImage,
 } from "../aot/native";
 import { loadPin, pinnedCompilerInfo } from "../aot/pin";
-import { opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
-import type { FeatureUse, Uses } from "../aot/uses";
+import { nativeInput, opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
+import { removedFeatures, type FeatureUse, type Uses } from "../aot/uses";
 import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
 import { buildApp } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
@@ -105,6 +106,13 @@ describe("the host decides what an image is compiled against", () => {
       expect(compilerMismatch({ ...pinnedCompilerInfo(pin), [name]: "stale" }, aot)).not.toBeNull();
   });
 
+  test("the exact pair of host preludes is bound to its digest", () => {
+    const preludeScripts = ["globalThis.first = 1;", "globalThis.second = 2;"] as const;
+    const preludeSha256 = createHash("sha256").update(preludeScripts.join("\0")).digest("hex");
+    expect(hostAot(host({ aot: { ...aot, preludeScripts, preludeSha256 } })).preludeScripts).toEqual(preludeScripts);
+    expect(() => hostAot(host({ aot: { ...aot, preludeScripts } }))).toThrow("preludeSha256");
+  });
+
   test("a named sk-aot wins and must exist; SK_AOT_COMPILER names one too", async () => {
     const missing = join(tmpdir(), `sk-aot-missing-${process.pid}.exe`);
     await expect(resolveAotCompiler(aot, missing, () => {})).rejects.toThrow(missing);
@@ -171,6 +179,19 @@ describe("the host decides what an image is compiled against", () => {
 });
 
 describe("the opaque-host transform", () => {
+  test("each script sees the globals installed by the preceding one", () => {
+    const preludes = ["globalThis.matchMedia = () => 21;", "globalThis.answer = matchMedia() * 2;"] as const;
+    const app = "globalThis.result = globalThis.answer;";
+    const { code, sections } = nativeInput(app, preludes);
+    const runtime: Record<string, unknown> = {};
+    new Function("__SK_AOT_HOST__", code)(runtime);
+    expect(runtime.result).toBe(42);
+    const input = Buffer.from(code);
+    expect(
+      sections.map((s) => input.toString("utf8", s.byteOffset, s.byteOffset + Buffer.byteLength(s.source))),
+    ).toEqual([...preludes, app]);
+    expect(nativeInput(app).code).toBe(opaqueHost(app));
+  });
   test("its host globals come from the pinned table", () => {
     expect(TABLE_ID).toBe(pin.table.id);
     const names = opaqueGlobals();
@@ -202,7 +223,7 @@ test("the CLI package carries the pin and the transform's table", () => {
   expect(pkg.files).toContain("aot");
 });
 
-describe("a workload without WebAssembly", () => {
+describe("images for reduced workloads", () => {
   const source = "const o = {}; for (const k in o) o[k](); const { Module } = globalThis.WebAssembly;\n";
   const at = (text: string) => opaqueHost(source).indexOf(text);
   const use = (kind: string, builtin: string, position: number): FeatureUse => ({
@@ -242,5 +263,38 @@ describe("a workload without WebAssembly", () => {
 
   test("an sk-aot that records nothing refuses it", () => {
     expect(removedFeatureProblem({ ...image([]), uses: null }, source, ["WebAssembly"], "aot-nojit")).not.toBeNull();
+  });
+
+  test("a use in the host's window prelude points at its own source", () => {
+    const preludes = ["/* 中文 */", "'🦀Я'; WebAssembly.Module"] as const;
+    const atWindow = nativeInput(source, preludes).sections[1]!.byteOffset + Buffer.byteLength("'🦀Я'; ");
+    expect(
+      removedFeatureProblem(
+        image([use("Named", "WebAssembly", atWindow)]),
+        source,
+        ["WebAssembly"],
+        "aot-nojit",
+        preludes,
+      ),
+    ).toContain("at sk://window.js 1:8");
+  });
+
+  test("a host without the interpreter refuses unseen code even without a named feature use", () => {
+    const removed = removedFeatures(["native-aot", "no-interpreter"]);
+    expect(removed).toEqual(["Interpreter"]);
+    for (const cause of ["EvaluatesText", "LoadsModuleByName"]) {
+      const native = image([]);
+      native.uses!.unseen.push({ cause, builtin: null, module: 0, position: at("o[k]") });
+      expect(removedFeatureProblem(native, source, removed, "strict-aot")).toContain(
+        cause + " (code outside the image) at app.prod.js 1:",
+      );
+      expect(removedFeatureProblem(native, source, ["WebAssembly"], "aot-nojit")).toBeNull();
+    }
+  });
+
+  test("a possible interpreter entry refuses only a workload without it", () => {
+    const native = image([{ ...use("Unnamed", "Function", at("o[k]")), feature: "Interpreter", id: 1 }]);
+    expect(removedFeatureProblem(native, source, ["Interpreter"], "strict-aot")).toContain("Function at app.prod.js");
+    expect(removedFeatureProblem(image([]), source, ["Interpreter"], "strict-aot")).toBeNull();
   });
 });
