@@ -36,6 +36,7 @@ import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
 import { currentPlatform, hostsFor, repoHostExe, type Platform } from "./platform";
+import { TEMPLATE_NAME } from "./image-sections";
 import { PAYLOAD_NAME } from "./stamp";
 
 export const PKG_DIR = resolve(import.meta.dir, "..");
@@ -83,7 +84,18 @@ export function icuDataPath(host: { exe: string; info: HostInfo }): string | nul
   return icu?.linked === "root" && icu.package ? join(dirname(host.exe), `${icu.package}.dat`) : null;
 }
 
+/** The empty native image container beside a host (scripts/release-hosts.ts, `cargoBuildHost`). */
+export const imageTemplatePath = (host: { exe: string }): string => join(dirname(host.exe), TEMPLATE_NAME);
+
+/** The native inspector container a host with devtools expects beside itself and beside the apps it runs; null for a host that embeds its inspector image. */
+export function inspectorContainerPath(host: { exe: string; info: HostInfo }): string | null {
+  const name = host.info.aot?.inspectorContainer;
+  return name ? join(dirname(host.exe), name) : null;
+}
+
 export interface HostAot extends CompilerInfo {
+  /** The file name of the native inspector container beside the host. */
+  inspectorContainer?: string;
   closedTransform?: string;
   transform: string;
   preludeSha256: string;
@@ -355,6 +367,12 @@ export function addHost(exe: string, log: (line: string) => void = () => {}): { 
   renameSync(tmp, dest);
   const icu = icuDataPath({ exe: src, info });
   if (icu && existsSync(icu)) copyFileSync(icu, icuDataPath({ exe: dest, info })!);
+  for (const [from, to] of [
+    [imageTemplatePath({ exe: src }), imageTemplatePath({ exe: dest })],
+    [inspectorContainerPath({ exe: src, info }), inspectorContainerPath({ exe: dest, info })],
+  ] as const) {
+    if (from && to && existsSync(from)) copyFileSync(from, to);
+  }
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(info, null, 2) + "\n");
   log(`cached ${info.variant} workload ${info.skathi} (${info.profile}) → ${dest}`);
   return { path: dest, info };
@@ -408,6 +426,26 @@ export function cargoBuildHost(
     env: { ...process.env, ...extras.env },
   });
   if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
+  if (currentPlatform() === "windows") {
+    // Its own workspace (it needs panic = "abort"), built into the same folder as the host.
+    const template = [
+      "build",
+      "--release",
+      "--manifest-path",
+      join(REPO_ROOT, "crates", "sk-image", "Cargo.toml"),
+      "--target",
+      hostsFor("windows").triple,
+      "--target-dir",
+      dirname(dirname(dirname(REPO_RELEASE_EXE))),
+    ];
+    log(`cargo ${template.join(" ")}`);
+    const t = spawnSync(cargo(), template, {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+      env: { ...process.env, ...extras.env },
+    });
+    if (t.status !== 0) throw new HostError(`cargo ${template.join(" ")} failed (exit ${t.status})`);
+  }
   return { exe: REPO_RELEASE_EXE, ms: Math.round(performance.now() - t0) };
 }
 

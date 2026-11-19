@@ -110,10 +110,6 @@ impl AppPayload {
     pub fn native_manifest(&self) -> Option<&str> {
         self.0.borrow_dependent().native_manifest()
     }
-    #[cfg(feature = "native-aot")]
-    pub fn native_image(&self) -> Option<&[u8]> {
-        self.0.borrow_dependent().native_image()
-    }
     pub fn effects(&self) -> Vec<(&str, &[u8])> {
         self.0.borrow_dependent().effects().collect()
     }
@@ -136,6 +132,8 @@ pub struct Loaded {
     pub packs: Vec<Pack>,
     pub meta: Meta,
     pub source: Source,
+    /// The folder of the files `sk build` writes beside the payload: packs, ICU, the native image.
+    pub dir: Option<std::path::PathBuf>,
 }
 
 impl Loaded {
@@ -209,10 +207,30 @@ fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, S
 /// The full ICU data, beside the payload like the asset packs.
 pub const ICU_PACK: &str = "icu.skpk";
 
-/// Hands ICU the full data from [`ICU_PACK`] when this host links only the root locale and the
-/// app did not ask for that alone. Without the pack, Intl runs on the root locale.
-fn install_icu(meta: &Meta, dir: Option<&std::path::Path>) {
+/// The ICU data a payload stamped into this executable carries (`"publishSingleFile"`).
+fn stamped_icu(payload: &AppPayload, source: &Source) -> Option<&'static [u8]> {
+    if !matches!(source, Source::Embedded) {
+        return None;
+    }
+    let data = payload.icu_data()?;
+    // SAFETY: an embedded payload borrows the executable's own image, mapped and never written
+    // for the life of the process.
+    Some(unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) })
+}
+
+/// Hands ICU the full data when this host links only the root locale and the app did not ask
+/// for that alone: from the payload itself, else from [`ICU_PACK`]. Without either, Intl runs
+/// on the root locale.
+fn install_icu(stamped: Option<&'static [u8]>, meta: &Meta, dir: Option<&std::path::Path>) {
     if redjs::icu::LINKED != redjs::icu::Linked::Root || meta.intl == "invariant" {
+        return;
+    }
+    if let Some(data) = stamped {
+        if let Err(e) = redjs::icu::set_common_data(data) {
+            eprintln!(
+                "[payload] the ICU data in the app: {e} — Intl falls back to the root locale"
+            );
+        }
         return;
     }
     let Some(path) = payload_dir(dir).map(|d| d.join(ICU_PACK)) else {
@@ -264,13 +282,14 @@ pub(crate) fn set_external(
         ));
     }
     let packs = open_packs(&meta, dir)?;
-    install_icu(&meta, dir);
+    install_icu(None, &meta, dir);
     LOADED
         .set(Some(Loaded {
             payload,
             packs,
             meta,
             source: Source::Embedder(label),
+            dir: payload_dir(dir),
         }))
         .map_err(|_| "a payload was already resolved in this process".to_string())
 }
@@ -330,12 +349,13 @@ fn load() -> Option<Loaded> {
         Source::Embedded | Source::Embedder(_) => None,
     };
     let packs = open_packs(&meta, dir.as_deref()).unwrap_or_else(|e| fatal(&e));
-    install_icu(&meta, dir.as_deref());
+    install_icu(stamped_icu(&payload, &source), &meta, dir.as_deref());
     Some(Loaded {
         payload,
         packs,
         meta,
         source,
+        dir: payload_dir(dir.as_deref()),
     })
 }
 

@@ -6,8 +6,18 @@
 // when Windows Defender likes to scan it, so the resource transactions and the rename retry on a
 // sharing violation.
 
-import { copyFileSync, existsSync, renameSync, rmSync, statSync, truncateSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { groupIcon, type IconImage } from "./icon";
+import { appendImageSections, type ImageSectionNames } from "./image-sections";
 import {
   ERROR_LOCK_VIOLATION,
   ERROR_SHARING_VIOLATION,
@@ -37,6 +47,8 @@ export interface StampOptions {
   icons?: IconImage[] | undefined;
   versionInfo?: Uint8Array;
   subsystem?: "gui" | "console" | "keep";
+  /** Native images to append as sections of the exe ("publishSingleFile"), after the resources. */
+  images?: { image: Uint8Array; names: ImageSectionNames }[];
   log?: (line: string) => void;
 }
 
@@ -180,6 +192,12 @@ export function stamp(options: StampOptions): StampResult {
 
     if (options.subsystem !== "keep") {
       setSubsystem(partial, options.subsystem === "console" ? SUBSYSTEM.CONSOLE : SUBSYSTEM.GUI);
+    }
+    // Last: a resource update rewrites the sections behind .rsrc.
+    if (options.images?.length) {
+      let bytes: Uint8Array = new Uint8Array(readFileSync(partial));
+      for (const { image, names } of options.images) bytes = appendImageSections(bytes, image, names);
+      writeFileSync(partial, bytes);
     }
     const tRes = performance.now();
 

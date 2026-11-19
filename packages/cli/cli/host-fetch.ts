@@ -1,8 +1,9 @@
 // Prebuilt bare hosts from the Skathi GitHub release of the CLI's own version, so `sk build`
 // needs neither a checkout nor a Rust toolchain. The release (.github/workflows/release.yml,
 // scripts/release-hosts.ts) carries one gzipped host per platform, arch and variant, plus
-// `hosts.json`, which names each with its sha256 and its `--sk-host-info`. A host that links only the root ICU
-// locale comes with the full ICU data, cached beside it.
+// `hosts.json`, which names each with its sha256 and its `--sk-host-info`. Cached beside a host: the full ICU data
+// when it links only the root locale, the empty native image container when it has the AOT loader, and its
+// inspector's container when its inspector runs from one.
 //
 // Assets are read through the GitHub API, so a private repository works with GH_TOKEN or
 // GITHUB_TOKEN set. SK_HOST_REPO (owner/name) and SK_HOST_API point elsewhere, a fork or a mirror.
@@ -17,6 +18,8 @@ import {
   cacheRoot,
   HostError,
   icuDataPath,
+  imageTemplatePath,
+  inspectorContainerPath,
   resolveHost,
   type HostInfo,
   type ResolvedHost,
@@ -39,6 +42,10 @@ export interface HostManifestEntry {
   info: HostInfo;
   /** A host that links only the root ICU locale: the full data, gzipped (`<package>.dat` once cached). */
   icu?: { file: string; sha256: string; size: number };
+  /** A host with the native AOT loader: the empty container native images are written into, gzipped (`skimage.dll` once cached). */
+  imageTemplate?: { file: string; sha256: string; size: number };
+  /** A host whose inspector is a container of its own: that container, gzipped (named by `info.aot.inspectorContainer`). */
+  inspector?: { file: string; sha256: string; size: number };
 }
 
 /** sk-aot (`sk build --aot`), matching the release's hosts. */
@@ -64,6 +71,12 @@ export const hostAssetName = (platform: Platform, arch: string, variant: Variant
   `sk-host-${platform}-${arch}-${variant}${platform === "windows" ? ".exe" : ""}.gz`;
 
 export const icuAssetName = (platform: Platform, arch: string): string => `sk-icu-${platform}-${arch}.dat.gz`;
+
+export const imageTemplateAssetName = (platform: Platform, arch: string): string =>
+  `sk-image-template-${platform}-${arch}.dll.gz`;
+
+export const inspectorAssetName = (platform: Platform, arch: string): string =>
+  `sk-inspector-image-${platform}-${arch}.dll.gz`;
 
 export const aotCompilerAssetName = (platform: Platform, arch: string): string =>
   `sk-aot-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
@@ -200,6 +213,15 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   await cacheAsset(release, entry.file, entry.size, entry.sha256, dest, log, options.onBytes);
   const icu = icuDataPath({ exe: dest, info: entry.info });
   if (icu && entry.icu) await cacheAsset(release, entry.icu.file, entry.icu.size, entry.icu.sha256, icu, log);
+  if (entry.imageTemplate) {
+    const t = entry.imageTemplate;
+    await cacheAsset(release, t.file, t.size, t.sha256, imageTemplatePath({ exe: dest }), log);
+  }
+  const inspector = inspectorContainerPath({ exe: dest, info: entry.info });
+  if (inspector && entry.inspector) {
+    const i = entry.inspector;
+    await cacheAsset(release, i.file, i.size, i.sha256, inspector, log);
+  }
   writeFileSync(join(dirname(dest), "host.json"), JSON.stringify(entry.info, null, 2) + "\n");
   log(`cached ${options.variant} workload ${version} → ${dest}`);
   return { path: dest, info: entry.info };

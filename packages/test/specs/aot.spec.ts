@@ -7,8 +7,8 @@
 // checkout's tools/sk-aot build, or the release's). Without them it skips and says why.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { bareHost, expect, launch, REPO, WORK_DIR, type SkApp } from "../src/index";
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
 import { hostInfo } from "../../cli/cli/host";
@@ -65,7 +65,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
   let build: BuildResult;
 
   test(
-    "apps/hello compiles to a native image that travels in the payload",
+    "apps/hello compiles to a native image in a container beside the exe, its manifest in the payload",
     async () => {
       const { buildApp } = await import("../../cli/cli/build-app");
       build = await buildApp({
@@ -82,30 +82,33 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
       const payload = readSkpk(new Uint8Array(readFileSync(build.skpk)));
       const kinds = payload.entries.map((e) => [e.kind, e.name]);
       bunExpect(kinds).toContainEqual([KIND.NATIVE_MANIFEST, NAMES.NATIVE_MANIFEST]);
-      bunExpect(kinds).toContainEqual([KIND.NATIVE_IMAGE, NAMES.NATIVE_IMAGE]);
+      bunExpect(kinds).not.toContainEqual([KIND.NATIVE_IMAGE, NAMES.NATIVE_IMAGE]);
+      bunExpect(native.container).toBe(join(dirname(build.exe!), "app.image.dll"));
+      bunExpect(existsSync(native.container!)).toBe(true);
       bunExpect(kinds).toContainEqual([KIND.SCRIPT, NAMES.SCRIPT]);
       const manifest = JSON.parse(readFileSync(native.manifest, "utf8")) as Record<string, unknown>;
       bunExpect(manifest.kind).toBe("application");
       bunExpect(manifest.imageBytes).toBe(native.imageBytes);
       console.log(
         `[aot.spec] bundle ${(build.bundleBytes / 1024).toFixed(0)} KiB -> image ${(native.imageBytes / 2 ** 20).toFixed(1)} MiB ` +
-          `(${(native.compressedBytes / 2 ** 20).toFixed(1)} MiB packed), sk-aot ${native.ms} ms`,
+          `in ${native.container ?? "the exe"}, sk-aot ${native.ms} ms`,
       );
     },
     BUILD_T,
   );
 
-  test.each(["cold", "warm"])(
-    "the exe mounts hello from the native image (%s image cache)",
-    async (cache) => {
-      const { app, mounted } = await run(build, `aot-hello-${cache}`, { SK_AOT_CACHE_DIR: join(caches, "native") });
+  test(
+    "the exe mounts hello from the image where it lies, and expands nothing",
+    async () => {
+      const { app, mounted } = await run(build, "aot-hello", { SK_AOT_CACHE_DIR: join(caches, "native") });
       await app.locator(".tab").nth(2).click();
       await expect(app.locator(".card .title")).toContainText("Motion");
       bunExpect(await app.eval("typeof globalThis.__SK_AOT_HOST__")).toBe("object");
-      bunExpect(lines(app, /\[native-aot\] selected application image/)).toHaveLength(1);
+      bunExpect(lines(app, /\[native-aot\] selected application image .*app\.image\.dll/)).toHaveLength(1);
+      bunExpect(existsSync(join(caches, "native"))).toBe(false);
       bunExpect(lines(app, /\[native-aot\] application native entry completed/)).toHaveLength(1);
       bunExpect(lines(app, /\[bytecode\]/)).toEqual([]);
-      report(app, `AOT (${cache} image cache)`, mounted);
+      report(app, "AOT", mounted);
       await app.close();
     },
     T,

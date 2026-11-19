@@ -7,9 +7,11 @@ name: Release
 # Rust crates to crates.io (scripts/publish-crates.ts, whose header has the release order). skathi-gpui, redjs and
 # skathi-taffy are released from their own repositories first: the `vendor` job stops the release before anything
 # is built while crates.io lacks the versions Skathi requires.
-# Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
-# ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the sk-aot
-# that compiled it (.github/workflows/sk-aot.yml) is published beside them for `sk build --aot`. Windows
+# Every Windows host carries the native AOT loader (apps built with --aot run from their image) and comes with
+# the empty image container sk build writes an app's image into (sk-image-template-*.dll.gz); the ones with
+# devtools run the inspector's native image (scripts/aot/prepare-inspector.ts) from a container of its own
+# (sk-inspector-image-*.dll.gz), and the sk-aot that compiled it (.github/workflows/sk-aot.yml) is published
+# beside them for `sk build --aot`. Windows
 # also gets aot-nojit, linked against the JIT- and WebAssembly-free archive of scripts/aot/no-jit.ts.
 
 on:

@@ -132,6 +132,11 @@
       "type": "boolean",
       "default": true
     },
+    "publishSingleFile": {
+      "description": "true: sk publish writes one exe and nothing beside it. The ICU data and every asset (packs included) go into its payload, and with AOT (Windows x64) the native images become sections of the exe, mapped where they lie. Windows and Linux; a macOS app is a bundle and refuses it. Default false: they ship beside the exe. Since 0.6.",
+      "type": "boolean",
+      "default": false
+    },
     "aot": {
       "description": "true: sk build and sk publish compile the app's JavaScript to a native image the exe runs instead of interpreting it (Windows x64 only for now). sk check errors refuse the build. --aot and --no-aot override it; sk dev always runs the JavaScript.",
       "type": "boolean",

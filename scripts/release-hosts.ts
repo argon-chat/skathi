@@ -5,8 +5,10 @@
 //     and describe it in <dir>/hosts-<platform>-<arch>.json. The prod hosts link only the root ICU locale;
 //     the full ICU data they leave out goes beside them, gzipped, for `sk build` to ship as icu.skpk. With --native-inspector (Windows x64: the
 //     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
-//     built with --aot runs from its image), every host with devtools embeds the inspector's native
-//     image, and the sk-aot that compiled it is published beside them (<dir>/aot-<platform>-<arch>.json).
+//     built with --aot runs from its image), every host with devtools runs the inspector's native image
+//     from inspector.image.dll beside it, and the sk-aot that compiled it is published beside them
+//     (<dir>/aot-<platform>-<arch>.json). A host with the loader comes with skimage.dll, the empty container
+//     `sk build` writes an app's image into (crates/sk-image), and the inspector's container is made from it.
 //     With --no-jit too (the directory of scripts/aot/no-jit.ts --out), the aot-nojit workload is built.
 //     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
 //     none of the entry points the inventories of scripts/aot/no-jit.ts list (the JIT's, WebAssembly's)
@@ -21,7 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { NO_JIT_VARIANT, platformVariants } from "../packages/cli/cli/config";
 import { inventoryPath, REMOVED, TRIMMABLE, type Inventory } from "./aot/no-jit";
@@ -30,13 +32,25 @@ import {
   aotCompilerAssetName,
   hostAssetName,
   icuAssetName,
+  imageTemplateAssetName,
+  inspectorAssetName,
   MANIFEST_NAME,
   sha256,
   type AotCompilerEntry,
   type HostManifest,
   type HostManifestEntry,
 } from "../packages/cli/cli/host-fetch";
-import { CLI_VERSION, cargoBuildHost, checkHost, DEV_HOST, hostInfo, icuDataPath } from "../packages/cli/cli/host";
+import {
+  CLI_VERSION,
+  cargoBuildHost,
+  checkHost,
+  DEV_HOST,
+  hostInfo,
+  icuDataPath,
+  imageTemplatePath,
+  inspectorContainerPath,
+} from "../packages/cli/cli/host";
+import { appendImageSections, containerName, INSPECTOR_SECTIONS } from "../packages/cli/cli/image-sections";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -89,7 +103,8 @@ if (values.merge) {
   const hosts = parts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as HostManifestEntry[]);
   const aotParts = readdirSync(dir).filter((n) => /^aot-.+\.json$/.test(n));
   const aot = aotParts.flatMap((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as AotCompilerEntry[]);
-  for (const { file } of [...hosts, ...hosts.flatMap((h) => (h.icu ? [h.icu] : [])), ...aot]) {
+  const beside = hosts.flatMap((h) => [h.icu, h.imageTemplate, h.inspector].filter((a) => a !== undefined));
+  for (const { file } of [...hosts, ...beside, ...aot]) {
     if (!existsSync(join(dir, file))) throw new Error(`${file} is listed but missing from ${dir}`);
   }
   const manifest: HostManifest = { skathi: CLI_VERSION, hosts, ...(aot.length ? { aot } : {}) };
@@ -131,6 +146,7 @@ const inspectorEnv: Record<string, string> = inspector
       SK_DEVTOOLS_BUNDLE: inspector.bundle,
       SK_DEVTOOLS_NATIVE_MANIFEST: inspector.manifest,
       SK_DEVTOOLS_NATIVE_IMAGE_DLL: "",
+      SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER: containerName("inspector", platform),
     }
   : {};
 
@@ -192,6 +208,23 @@ function checkLink(
   return names;
 }
 
+/** A file every host of this platform keeps beside it, gzipped into `out` once. */
+function besideAsset(file: string, bytes: Uint8Array): { file: string; sha256: string; size: number } {
+  const digest = sha256(bytes);
+  const path = join(out, file);
+  if (existsSync(path) && sha256(Bun.gunzipSync(new Uint8Array(readFileSync(path)))) !== digest) {
+    throw new Error(`${file} differs between two hosts of this release`);
+  }
+  if (!existsSync(path)) writeFileSync(path, Bun.gzipSync(new Uint8Array(bytes), { level: 9 }));
+  return { file, sha256: digest, size: bytes.length };
+}
+
+function inspectorImage(receipt: InspectorReceipt): string {
+  const manifest = JSON.parse(readFileSync(receipt.manifest, "utf8")) as { image?: unknown };
+  if (typeof manifest.image !== "string") throw new Error(`${receipt.manifest} names no image`);
+  return join(dirname(receipt.manifest), manifest.image);
+}
+
 const entries: HostManifestEntry[] = [];
 for (const variant of variants) {
   const devtools = variant === "standard" || variant === DEV_HOST;
@@ -223,6 +256,21 @@ for (const variant of variants) {
     const icuFile = icuAssetName(platform, arch);
     if (!existsSync(join(out, icuFile))) writeFileSync(join(out, icuFile), Bun.gzipSync(data, { level: 9 }));
     entry.icu = { file: icuFile, sha256: sha256(data), size: data.length };
+  }
+  if (info.aot) {
+    const template = new Uint8Array(readFileSync(imageTemplatePath({ exe })));
+    entry.imageTemplate = besideAsset(imageTemplateAssetName(platform, arch), template);
+  }
+  const container = inspectorContainerPath({ exe, info });
+  if (container) {
+    if (!inspector) throw new Error(`${exe} runs its inspector from ${container}, but no --native-inspector was given`);
+    const bytes = appendImageSections(
+      new Uint8Array(readFileSync(imageTemplatePath({ exe }))),
+      new Uint8Array(readFileSync(inspectorImage(inspector))),
+      INSPECTOR_SECTIONS,
+    );
+    writeFileSync(container, bytes);
+    entry.inspector = besideAsset(inspectorAssetName(platform, arch), bytes);
   }
   entries.push(entry);
   console.log(`[release] ${file}: ${(bytes.length / 1048576).toFixed(1)} MB, cargo ${(ms / 1000).toFixed(0)} s`);

@@ -106,7 +106,7 @@ function pruneCommand(parent: CommandUnknownOpts, run: Run) {
     .summary("Remove cached workloads this sk does not use")
     .description(
       `Remove what sk ${CLI_VERSION} does not need: other versions' workloads and sk-aot, redslangc builds other than ${PIN.version}, incomplete downloads, ` +
-        "expanded native images (apps expand them again at start) and old toolchains.",
+        "native images expanded by earlier versions or by an inspector that carries a compressed one (expanded again when needed) and old toolchains.",
     )
     .option("--dry-run", "Show what would go, remove nothing")
     .option("--keep <version>", "Keep this version's workloads too; repeatable", collect, [])

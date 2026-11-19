@@ -1,6 +1,7 @@
 // The per-user caches `sk workload list` shows and `sk prune` empties: the workloads and sk-aot of each
 // Skathi version (<cache>/skathi/hosts/<version>/<variant>|aot), the effect shader compiler
-// (<cache>/skathi/redslangc/<version>), the native images AOT apps expand at start (Windows), and caches
+// (<cache>/skathi/redslangc/<version>), the native images earlier versions expanded at start and an inspector
+// with a compressed image still expands (Windows), and caches
 // older versions of sk left behind.
 
 import { existsSync, lstatSync, readdirSync, rmdirSync, rmSync } from "node:fs";

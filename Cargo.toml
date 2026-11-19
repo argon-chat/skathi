@@ -28,7 +28,7 @@ members = [
 ]
 # Vendor crates must resolve against their own workspace roots (gpui's, redjs's).
 # regen-bindings needs bindgen/libclang; excluded to keep that out of the lockfile.
-exclude = ["vendor", "crates/sk-thorvg-sys/tools/regen-bindings"]
+exclude = ["vendor", "crates/sk-image", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
 [workspace.package]
 version = "0.5.0"

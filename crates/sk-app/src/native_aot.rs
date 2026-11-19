@@ -14,6 +14,7 @@ use std::{cell::RefCell, ffi::OsStr, fs::File, path::Path};
 use std::{io::Read, path::PathBuf};
 
 mod cache;
+mod container;
 #[cfg(sk_devtools)]
 include!(concat!(env!("OUT_DIR"), "/devtools/native_inspector.rs"));
 
@@ -98,7 +99,8 @@ fn preludes() -> Vec<u8> {
 
 /// What an image must have been compiled against to run on this host; `--sk-host-info` reports it.
 pub(crate) fn host_identity() -> Json {
-    Json::obj(vec![
+    #[allow(unused_mut)]
+    let mut identity = vec![
         ("target", Json::s(TARGET)),
         ("frontend", Json::s(aot::FRONTEND_REVISION)),
         ("engine", Json::s(aot::ENGINE_VERSION)),
@@ -114,7 +116,13 @@ pub(crate) fn host_identity() -> Json {
                 Json::s(crate::WINDOW_PRELUDE_JS),
             ]),
         ),
-    ])
+    ];
+    // The container `sk build` ships beside an app with devtools, from beside this host.
+    #[cfg(sk_devtools)]
+    if let Some(name) = EMBEDDED_IMAGE_CONTAINER {
+        identity.push(("inspectorContainer", Json::s(name)));
+    }
+    Json::obj(identity)
 }
 
 fn validate(
@@ -245,23 +253,80 @@ fn image_resource(dll: &str) -> Result<&'static [u8], String> {
     Err(format!("native inspector: {dll} is a Windows resource DLL"))
 }
 
-/// Hashes the opened file once more, loads it, and records the entry [`boot`] runs.
-fn select(
-    mut file: File,
+/// Where a selected image's bytes are. None of them can change while the process uses them:
+/// files are opened denying writes, and a mapped image is the running executable's own.
+enum Image {
+    File(File),
+    Range { file: File, offset: u64, size: u64 },
+    Mapped(&'static [u8]),
+}
+impl Image {
+    fn digest(&mut self) -> std::io::Result<String> {
+        use std::io::{Read, Seek, SeekFrom};
+        match self {
+            Image::File(file) => {
+                file.rewind()?;
+                aot::digest_reader(file)
+            }
+            Image::Range { file, offset, size } => {
+                file.seek(SeekFrom::Start(*offset))?;
+                aot::digest_reader(file.take(*size))
+            }
+            Image::Mapped(bytes) => Ok(aot::digest_hex(bytes)),
+        }
+    }
+    fn size(&self) -> std::io::Result<u64> {
+        match self {
+            Image::File(file) => Ok(file.metadata()?.len()),
+            Image::Range { size, .. } => Ok(*size),
+            Image::Mapped(bytes) => Ok(bytes.len() as u64),
+        }
+    }
+    /// # Safety
+    /// The bytes must have been checked against the trusted manifest.
+    unsafe fn load(&self, id: [u8; 16], profile: aot::MemoryProfile) -> Result<(), String> {
+        unsafe {
+            match self {
+                Image::File(file) => aot::load_image_file_with_profile(file, id, profile),
+                Image::Range { file, offset, size } => {
+                    aot::load_image_file_range_with_profile(file, *offset, *size, id, profile)
+                }
+                Image::Mapped(bytes) => aot::load_mapped_image_with_profile(bytes, id, profile),
+            }
+        }
+    }
+}
+
+/// Hashes the image where it lies; the time it took, when it is the one the manifest names.
+fn verify(
+    image: &mut Image,
     manifest: &Json,
+    description: &str,
+) -> Result<std::time::Duration, String> {
+    let started = std::time::Instant::now();
+    let image_digest = image.digest().map_err(|e| format!("{description}: {e}"))?;
+    if field(manifest, "imageSha256")? != image_digest {
+        return Err(format!(
+            "the native image {description} differs from the one this app was built with: it was \
+             changed or damaged after the build"
+        ));
+    }
+    Ok(started.elapsed())
+}
+
+/// Loads a [`verify`]d image where it lies, and records the entry [`boot`] runs.
+fn select(
+    image: Image,
+    hashed: std::time::Duration,
     selected: Plan,
     id: [u8; 16],
     profile: aot::MemoryProfile,
     description: &str,
 ) -> Result<(), String> {
-    let image_digest = aot::digest_reader(&mut file).map_err(|e| format!("{description}: {e}"))?;
-    equal(manifest, "imageSha256", &image_digest)?;
-    use std::io::Seek;
-    file.rewind().map_err(|e| e.to_string())?;
     // The manifest inside a signed executable supplies provenance. A
     // checksum on a manually selected external image is only integrity/ABI.
-    unsafe { aot::load_image_file_with_profile(&file, id, profile) }?;
-    drop(file);
+    unsafe { image.load(id, profile) }?;
+    drop(image);
     if selected.closed && !aot::has_closed_library() {
         return Err(format!(
             "{description} requires a closed image with a compiled library"
@@ -279,9 +344,10 @@ fn select(
         );
     }
     eprintln!(
-        "[native-aot] selected {} image {description} (entry {}, memory {profile:?})",
+        "[native-aot] selected {} image {description} (entry {}, memory {profile:?}, sha256 checked in {:.1} ms)",
         selected.kind.name(),
-        selected.entry
+        selected.entry,
+        hashed.as_secs_f64() * 1000.0
     );
     PLAN.with(|plan| *plan.borrow_mut() = Some(selected));
     Ok(())
@@ -341,30 +407,59 @@ fn prepare_inspector() -> Result<(), String> {
         &preludes(),
         expected,
     )?;
-    let (file, description) = if let Some(path) = external {
+    let (mut image, description) = if let Some(path) = external {
         let image = image_path(&manifest, path.parent().unwrap_or_else(|| Path::new(".")))?;
         let file = open_image(&image).map_err(|e| format!("{}: {e}", image.display()))?;
         let size = file.metadata().map_err(|e| e.to_string())?.len();
         if size == 0 || size > cache::MAX_IMAGE_BYTES {
             return Err("native AOT image exceeds the supported size".into());
         }
-        (file, image.display().to_string())
-    } else {
-        let compressed = match EMBEDDED_IMAGE_DLL {
-            Some(dll) => image_resource(dll)?,
-            None => EMBEDDED_IMAGE_DEFLATE,
-        };
+        (Image::File(file), image.display().to_string())
+    } else if let Some(bytes) = container::in_executable(container::INSPECTOR_SECTION) {
+        (Image::Mapped(bytes), "in this executable".to_string())
+    } else if let Some(dll) = EMBEDDED_IMAGE_DLL {
         (
-            cache::materialize(
+            Image::File(cache::materialize(
                 "inspector.image",
-                compressed,
+                image_resource(dll)?,
                 expected,
                 EMBEDDED_IMAGE_BYTES,
-            )?,
+            )?),
+            format!("{dll} sha256:{expected}"),
+        )
+    } else if let Some(name) = EMBEDDED_IMAGE_CONTAINER {
+        let path = container::beside_executable()
+            .ok_or("the executable has no folder")?
+            .join(name);
+        match container::open(&path, container::INSPECTOR_SECTION) {
+            Ok((file, offset, size)) => (
+                Image::Range { file, offset, size },
+                path.display().to_string(),
+            ),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && policy == EnginePolicy::Auto =>
+            {
+                eprintln!(
+                    "[native-aot] no {} beside the executable: the inspector runs under the JIT",
+                    path.display()
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(format!("{}: {error}", path.display())),
+        }
+    } else {
+        (
+            Image::File(cache::materialize(
+                "inspector.image",
+                EMBEDDED_IMAGE_DEFLATE,
+                expected,
+                EMBEDDED_IMAGE_BYTES,
+            )?),
             format!("embedded sha256:{expected}"),
         )
     };
-    select(file, &manifest, plan, id, profile, &description)
+    let hashed = verify(&mut image, &manifest, &description)?;
+    select(image, hashed, plan, id, profile, &description)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,10 +475,8 @@ fn app_engine(value: Option<&OsStr>) -> Result<AppEngine, String> {
     }
 }
 
-/// The app's image from its payload, checked against the payload's own script and this host.
-fn application_image<'a>(
-    payload: &'a crate::payload::AppPayload,
-) -> Result<Option<(Json, &'a [u8], &'a str)>, String> {
+/// The manifest of the app's image from its payload, and the script it is checked against.
+fn application_image(payload: &crate::payload::AppPayload) -> Result<Option<(Json, &str)>, String> {
     let Some(text) = payload.native_manifest() else {
         return Ok(None);
     };
@@ -391,13 +484,43 @@ fn application_image<'a>(
         return Err("the native AOT manifest is too large".into());
     }
     let manifest = json::parse(text).ok_or("the native AOT manifest is not valid JSON")?;
-    let compressed = payload
-        .native_image()
-        .ok_or("the package has a native AOT manifest but no image")?;
     let script = payload
         .script()
         .ok_or("the package has a native image but no app.prod.js to check it against")?;
-    Ok(Some((manifest, compressed, script)))
+    Ok(Some((manifest, script)))
+}
+
+/// Where the manifest says `sk build` put the image: a container beside the payload, or
+/// sections of this executable.
+fn application_place(manifest: &Json, beside: Option<&Path>) -> Result<(Image, String), String> {
+    match field(manifest, "place")? {
+        "executable" => container::in_executable(container::APP_SECTION)
+            .map(|bytes| (Image::Mapped(bytes), "in this executable".to_string()))
+            .ok_or_else(|| "this executable carries no native image sections".to_string()),
+        "beside" => {
+            let name = field(manifest, "image")?;
+            if name.is_empty() || name.contains(['/', '\\', ':', '\0']) || name.starts_with('.') {
+                return Err(format!(
+                    "the native image container {name:?} is not a plain file name"
+                ));
+            }
+            let path = beside
+                .ok_or("the native image is beside the executable, whose folder is unknown")?
+                .join(name);
+            let (file, offset, size) =
+                container::open(&path, container::APP_SECTION).map_err(|error| {
+                    match error.kind() {
+                        std::io::ErrorKind::NotFound => format!("{} is missing", path.display()),
+                        _ => format!("{}: {error}", path.display()),
+                    }
+                })?;
+            Ok((
+                Image::Range { file, offset, size },
+                path.display().to_string(),
+            ))
+        }
+        other => Err(format!("unsupported native image place {other:?}")),
+    }
 }
 
 /// The aot-nojit workload's engine has no JIT: it runs an app only from its image.
@@ -423,7 +546,7 @@ fn prepare_application() -> Result<(), String> {
         ));
     }
     let image = application_image(&loaded.payload).map_err(cannot_run)?;
-    let Some((manifest, compressed, script)) = image else {
+    let Some((manifest, script)) = image else {
         #[cfg(feature = "no-jit")]
         return Err(format!(
             "the app has no native image, and {WITHOUT_JIT}. Publish it with --aot (\"aot\": true), \
@@ -438,7 +561,7 @@ fn prepare_application() -> Result<(), String> {
         );
         return Ok(());
     }
-    prepare_image(&manifest, compressed, script).map_err(cannot_run)
+    prepare_image(&manifest, script, loaded.dir.as_deref())
 }
 
 fn cannot_run(error: String) -> String {
@@ -448,34 +571,48 @@ fn cannot_run(error: String) -> String {
     )
 }
 
+/// The image the manifest names is missing or not the one built with the app.
+fn damaged(error: String) -> String {
+    format!(
+        "this app cannot start: {error}. Reinstall the app with every file it ships with, \
+         or publish it again."
+    )
+}
+
 #[cfg(feature = "prod")]
-fn prepare_image(manifest: &Json, compressed: &[u8], script: &str) -> Result<(), String> {
+fn prepare_image(manifest: &Json, script: &str, beside: Option<&Path>) -> Result<(), String> {
     let profile = memory_profile(
         std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref(),
         aot::MemoryProfile::Default,
-    )?;
-    let expected = field(manifest, "imageSha256")?;
+    )
+    .map_err(cannot_run)?;
+    let expected = field(manifest, "imageSha256").map_err(cannot_run)?;
     let (plan, id) = validate(
         manifest,
         Kind::Application,
         script.as_bytes(),
         &preludes(),
         expected,
-    )?;
+    )
+    .map_err(cannot_run)?;
     if cfg!(feature = "no-interpreter") && !plan.includes_preludes {
-        return Err("the native image requires the host to evaluate its preludes from source, but this host has no interpreter".into());
+        return Err(cannot_run("the native image requires the host to evaluate its preludes from source, but this host has no interpreter".into()));
     }
     let size = positive_integer(manifest, "imageBytes", cache::MAX_IMAGE_BYTES as f64)
-        .ok_or("invalid native image size")? as u64;
-    let file = cache::materialize("app.image", compressed, expected, size)?;
-    select(
-        file,
-        manifest,
-        plan,
-        id,
-        profile,
-        &format!("sha256:{expected}"),
-    )
+        .ok_or_else(|| cannot_run("invalid native image size".into()))? as u64;
+    let (mut image, description) = application_place(manifest, beside).map_err(damaged)?;
+    if image
+        .size()
+        .map_err(|e| damaged(format!("{description}: {e}")))?
+        != size
+    {
+        return Err(damaged(format!(
+            "the native image {description} differs from the one this app was built with: it was \
+             changed or damaged after the build"
+        )));
+    }
+    let hashed = verify(&mut image, manifest, &description).map_err(damaged)?;
+    select(image, hashed, plan, id, profile, &description).map_err(cannot_run)
 }
 
 /// Whether [`prepare`] selected an image of `kind` in this process.
@@ -733,7 +870,7 @@ mod tests {
             "preludeSha256",
             Json::s(aot::digest_hex(&preludes())),
         );
-        assert!(prepare_image(&document, &[], "bundle")
+        assert!(prepare_image(&document, "bundle", None)
             .unwrap_err()
             .contains("this host has no interpreter"));
     }
@@ -796,7 +933,7 @@ mod tests {
         crate::payload::AppPayload::from_bytes(sk_payload::write_unaligned(entries)).unwrap()
     }
     #[test]
-    fn the_application_image_is_found_beside_its_script_in_the_payload() {
+    fn the_application_manifest_is_found_beside_its_script_in_the_payload() {
         use sk_payload::{kind, name};
         let manifest = valid(Kind::Application).to_json();
         let full = payload(&[
@@ -806,40 +943,52 @@ mod tests {
                 name::NATIVE_MANIFEST,
                 manifest.as_bytes(),
             ),
-            (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, b"deflated"),
         ]);
-        let (found, image, script) = application_image(&full).unwrap().unwrap();
+        let (found, script) = application_image(&full).unwrap().unwrap();
         assert_eq!(field(&found, "kind").unwrap(), "application");
-        assert_eq!(image, b"deflated");
         assert_eq!(script, "bundle");
 
         let plain = payload(&[(kind::SCRIPT, name::SCRIPT, b"bundle")]);
         assert!(application_image(&plain).unwrap().is_none());
 
-        let no_image = payload(&[
-            (kind::SCRIPT, name::SCRIPT, b"bundle"),
-            (
-                kind::NATIVE_MANIFEST,
-                name::NATIVE_MANIFEST,
-                manifest.as_bytes(),
-            ),
-        ]);
-        assert!(application_image(&no_image).is_err());
-        let no_script = payload(&[
-            (
-                kind::NATIVE_MANIFEST,
-                name::NATIVE_MANIFEST,
-                manifest.as_bytes(),
-            ),
-            (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, b"deflated"),
-        ]);
+        let no_script = payload(&[(
+            kind::NATIVE_MANIFEST,
+            name::NATIVE_MANIFEST,
+            manifest.as_bytes(),
+        )]);
         assert!(application_image(&no_script).is_err());
         let broken = payload(&[
             (kind::SCRIPT, name::SCRIPT, b"bundle"),
             (kind::NATIVE_MANIFEST, name::NATIVE_MANIFEST, b"{"),
-            (kind::NATIVE_IMAGE, name::NATIVE_IMAGE, b"deflated"),
         ]);
         assert!(application_image(&broken).is_err());
+    }
+    #[test]
+    fn an_application_container_is_a_plain_file_beside_the_payload() {
+        let mut document = valid(Kind::Application);
+        if let Json::Obj(entries) = &mut document {
+            entries.push(("place".into(), Json::s("beside")));
+        }
+        for name in [
+            "",
+            "../app.image.dll",
+            r"x\app.image.dll",
+            "C:app.image.dll",
+            ".hidden",
+        ] {
+            change(&mut document, "image", Json::s(name));
+            let error = application_place(&document, Some(Path::new("probe")))
+                .err()
+                .unwrap();
+            assert!(error.contains("not a plain file name"), "{name:?}: {error}");
+        }
+        change(&mut document, "image", Json::s("app.image.dll"));
+        let error = application_place(&document, Some(Path::new("probe-missing")))
+            .err()
+            .unwrap();
+        assert!(error.contains("is missing"), "{error}");
+        change(&mut document, "place", Json::s("cache"));
+        assert!(application_place(&document, None).is_err());
     }
     #[cfg(sk_devtools)]
     #[test]

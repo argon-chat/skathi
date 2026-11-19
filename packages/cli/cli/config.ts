@@ -12,6 +12,7 @@
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
 //   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
 //   "publishJit": false          an AOT sk publish for Windows stamps the aot-nojit workload (no JIT, WebAssembly or devtools)
+//   "publishSingleFile": true    sk publish writes one exe: the native images, the ICU data and the packs go inside it
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
@@ -109,6 +110,8 @@ export interface AppConfig {
   publishDevtools: boolean;
   /** False: an AOT `sk publish` for Windows stamps the aot-nojit workload instead of no-devtools. */
   publishJit: boolean;
+  /** True: `sk publish` puts what it would write beside the exe (native images, ICU data, packs) inside it. */
+  publishSingleFile: boolean;
   /** `full`: every ICU locale, shipped as icu.skpk beside the app; `invariant`: the root locale only. */
   intl: IntlMode;
   windows: WindowsConfig;
@@ -184,6 +187,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "devtools",
   "publishDevtools",
   "publishJit",
+  "publishSingleFile",
   "aot",
   "intl",
   "httpCache",
@@ -529,6 +533,9 @@ export function loadAppConfig(
       `sk.config.json "publishJit": false publishes on the ${NO_JIT_VARIANT} workload, which has no devtools — drop one of it and "publishDevtools": true`,
     );
   }
+  if (raw.publishSingleFile !== undefined && typeof raw.publishSingleFile !== "boolean") {
+    throw new ConfigError('sk.config.json "publishSingleFile" must be true or false');
+  }
   if (raw.aot !== undefined && typeof raw.aot !== "boolean") {
     throw new ConfigError('sk.config.json "aot" must be true or false');
   }
@@ -619,6 +626,7 @@ export function loadAppConfig(
     packs,
     publishDevtools,
     publishJit,
+    publishSingleFile: raw.publishSingleFile === true,
     intl,
     aot: raw.aot === true,
     windows,

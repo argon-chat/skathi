@@ -8,10 +8,13 @@
 // without a re-stamp. On macOS (or `--platform macos` with `--host <mac sk-app>`) the last step is
 // macos-bundle.ts: the host is copied into `<exeName>.app`, the SKPK goes in Contents/Resources,
 // and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
-// copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts adds
-// the app's native image to the SKPK. The app's shaders/*.slang go in as `sk/effects/*` (effects.ts), every
+// copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts compiles
+// the app's native image: its manifest goes in the SKPK, the image into `app.image.dll` beside the payload (a copy
+// of the workload's empty skimage.dll, image-sections.ts); a workload whose inspector is a container of its own
+// puts `inspector.image.dll` there too. The app's shaders/*.slang go in as `sk/effects/*` (effects.ts), every
 // renderer's target whatever the OS. A host that links only the root ICU locale gets the rest as `icu.skpk`
-// beside the payload, unless sk.config.json says "intl": "invariant".
+// beside the payload, unless sk.config.json says "intl": "invariant". `sk publish` with "publishSingleFile"
+// writes nothing beside the exe: the ICU data and every asset go in the SKPK, the images into its own sections.
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -36,9 +39,26 @@ import {
 } from "./config";
 import { buildAppEffects, type BuiltEffects } from "./effects";
 import { stampElf, type ElfStampResult } from "./elf";
-import { CLI_VERSION, HostError, icuDataPath, PKG_DIR, type ResolvedHost } from "./host";
+import {
+  CLI_VERSION,
+  HostError,
+  icuDataPath,
+  imageTemplatePath,
+  inspectorContainerPath,
+  PKG_DIR,
+  type ResolvedHost,
+} from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
 import { iconImagesFrom } from "./icon";
+import {
+  APP_SECTIONS,
+  appendImageSections,
+  containerName,
+  INSPECTOR_SECTIONS,
+  readImageSections,
+  TEMPLATE_NAME,
+  type ImageSectionNames,
+} from "./image-sections";
 import {
   entitlements,
   icnsFrom,
@@ -159,7 +179,8 @@ export interface BuildResult {
   native: {
     manifest: string;
     imageBytes: number;
-    compressedBytes: number;
+    /** The container beside the exe that holds the image; null when the image is sections of the exe. */
+    container: string | null;
     entry: number;
     compiler: string;
     ms: number;
@@ -252,19 +273,41 @@ export function writeIcuPack(datPath: string): Uint8Array {
   return skew ? writeSkpk(inputs, { skew }) : unskewed;
 }
 
-/** The asset packs and the ICU pack into `dir`; a stale ICU pack goes when this build has none. */
-function writeSidecars(dir: string, packs: BuiltPack[], icu: Uint8Array | null) {
+/** What `sk build` writes beside the payload. A container this build has none of is null, and goes, like a stale ICU pack. */
+interface Sidecars {
+  packs: BuiltPack[];
+  icu: Uint8Array | null;
+  containers: Map<string, Uint8Array | null>;
+}
+
+function writeSidecars(dir: string, { packs, icu, containers }: Sidecars) {
   for (const p of packs) writeFileSync(join(dir, p.file), p.blob);
   if (icu) writeFileSync(join(dir, ICU_PACK), icu);
   else rmSync(join(dir, ICU_PACK), { force: true });
+  for (const [file, bytes] of containers) {
+    if (bytes) writeFileSync(join(dir, file), bytes);
+    else rmSync(join(dir, file), { force: true });
+  }
+}
+
+function readTemplate(host: ResolvedHost): Uint8Array {
+  const path = imageTemplatePath(host);
+  if (!existsSync(path)) {
+    throw new HostError(
+      `the workload has no ${TEMPLATE_NAME} beside ${host.exe}: the empty container a native image is written into — ` +
+        `reinstall the workload (sk workload install ${host.info.variant})`,
+    );
+  }
+  return new Uint8Array(readFileSync(path));
 }
 
 interface PackageInput {
   config: AppConfig;
   host: ResolvedHost;
   inputs: SkpkInput[];
-  packs: BuiltPack[];
-  icu: Uint8Array | null;
+  sidecars: Sidecars;
+  /** Native images that go into the exe's own sections ("publishSingleFile"). */
+  images: { image: Uint8Array; names: ImageSectionNames }[];
   outDir: string;
   work: string;
   options: BuildOptions;
@@ -280,8 +323,8 @@ interface Packaged {
   elf?: ElfStampResult;
 }
 
-function stampExe({ config, host, inputs, packs, icu, outDir, options, log }: PackageInput): Packaged {
-  writeSidecars(outDir, packs, icu);
+function stampExe({ config, host, inputs, sidecars, images, outDir, options, log }: PackageInput): Packaged {
+  writeSidecars(outDir, sidecars);
   const fv = numericVersion(config.version);
   const exeFile = `${config.exeName}.exe`;
   const exe = join(outDir, exeFile);
@@ -307,6 +350,7 @@ function stampExe({ config, host, inputs, packs, icu, outDir, options, log }: Pa
       },
     }),
     subsystem: options.console || w.console ? "console" : "gui",
+    images,
     log,
   });
   return { exe, payload: stamped.payload, stamp: stamped, bundle: null };
@@ -331,7 +375,7 @@ export function macInfoFor(config: AppConfig, hasIcon: boolean) {
   };
 }
 
-function macBundle({ config, host, inputs, packs, icu, outDir, work, options, warnings, log }: PackageInput): Packaged {
+function macBundle({ config, host, inputs, sidecars, outDir, work, options, warnings, log }: PackageInput): Packaged {
   const m = config.macos;
   if (m.bundleIdFrom === "id" && !m.bundleId.includes(".")) {
     warnings.push(
@@ -363,7 +407,7 @@ function macBundle({ config, host, inputs, packs, icu, outDir, work, options, wa
     infoPlist: plistXml(infoPlist(info)),
     log,
   });
-  writeSidecars(join(written.app, "Contents", "Resources"), packs, icu);
+  writeSidecars(join(written.app, "Contents", "Resources"), sidecars);
 
   const onMac = process.platform === "darwin";
   const plan = signPlan({
@@ -389,8 +433,8 @@ function macBundle({ config, host, inputs, packs, icu, outDir, work, options, wa
   };
 }
 
-function linuxExe({ config, host, inputs, packs, icu, outDir }: PackageInput): Packaged {
-  writeSidecars(outDir, packs, icu);
+function linuxExe({ config, host, inputs, sidecars, outDir }: PackageInput): Packaged {
+  writeSidecars(outDir, sidecars);
   const elf = stampElf({
     host: host.exe,
     out: join(outDir, config.exeName),
@@ -445,6 +489,12 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       throw new ConfigError(
         "--aot compiles against the workload it stamps, so it cannot be combined with --payload-only",
       );
+  }
+  const singleFile = config.publishSingleFile && options.mode === "release" && !options.payloadOnly;
+  if (singleFile && platform === "macos") {
+    throw new ConfigError(
+      '"publishSingleFile": true has no macOS form: a macOS app is a bundle, and its files go in Contents/Resources — drop it for --platform macos',
+    );
   }
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".sk");
@@ -558,7 +608,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     warnings.push(`the assets are ${(collected.totalBytes / 2 ** 20).toFixed(0)} MiB — every byte is inside the exe`);
   }
 
-  const split = splitPacks(collected.files, config.packs);
+  const split = singleFile ? { own: collected.files, packs: [] } : splitPacks(collected.files, config.packs);
   const packs: BuiltPack[] = [];
   for (const p of split.packs) {
     if (!p.files.length) {
@@ -588,7 +638,14 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
           `reinstall the workload (sk workload install ${variant}), or set "intl": "invariant" in sk.config.json to ship without it`,
       );
     }
-    icu = writeIcuPack(icuData);
+    if (singleFile) {
+      inputs.push({
+        name: `${NAMES.ICU_DIR}${basename(icuData)}`,
+        kind: KIND.ICU_DATA,
+        data: new Uint8Array(readFileSync(icuData)),
+        alignLog2: 12,
+      });
+    } else icu = writeIcuPack(icuData);
   } else if (config.intl === "invariant" && host && !icuData) {
     warnings.push(
       host.info.icu?.linked === "system"
@@ -596,9 +653,15 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
         : '"intl": "invariant" ships no ICU data, but this workload links every locale itself, so Intl keeps them all',
     );
   }
-  writeSidecars(work, packs, icu);
   progress.detail(`${collected.files.length} files · ${kib(collected.totalBytes)}`);
 
+  const appContainer = containerName("app", platform);
+  const inspectorContainer = containerName("inspector", platform);
+  const containers = new Map<string, Uint8Array | null>([
+    [appContainer, null],
+    [inspectorContainer, null],
+  ]);
+  const images: PackageInput["images"] = [];
   let native: NativeBuild | null = null;
   const tn = performance.now();
   if (hostNative) {
@@ -609,12 +672,31 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       work: join(work, "aot"),
       removed: removedFeatures(host?.info.features ?? []),
       workload: host?.info.variant ?? variant,
+      place: singleFile ? { place: "executable" } : { place: "beside", file: appContainer },
       progress,
       log,
     });
     inputs.push(...native.inputs);
+    if (singleFile) images.push({ image: native.image, names: APP_SECTIONS });
+    else containers.set(appContainer, appendImageSections(readTemplate(host!), native.image, APP_SECTIONS));
+  }
+  const inspector = host ? inspectorContainerPath(host) : null;
+  if (inspector && host?.info.devtools) {
+    if (!existsSync(inspector)) {
+      throw new HostError(
+        `the ${variant} workload runs its inspector from ${inspector}, which is missing — reinstall the workload (sk workload install ${variant})`,
+      );
+    }
+    const bytes = new Uint8Array(readFileSync(inspector));
+    if (singleFile) {
+      const image = readImageSections(bytes, INSPECTOR_SECTIONS);
+      if (!image) throw new HostError(`${inspector} holds no native inspector image — reinstall the workload`);
+      images.push({ image, names: INSPECTOR_SECTIONS });
+    } else containers.set(inspectorContainer, bytes);
   }
   const msNative = performance.now() - tn;
+  const sidecars: Sidecars = { packs, icu, containers };
+  writeSidecars(work, sidecars);
 
   let packaged: Packaged | null = null;
   const ts = performance.now();
@@ -625,7 +707,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     const skew = packs.length ? skewFor(0, readHeader(unskewed)) : 0;
     writeFileSync(skpk, skew ? writeSkpk(inputs, { skew }) : unskewed);
   } else {
-    packaged = PACKAGERS[platform]({ config, host, inputs, packs, icu, outDir, work, options, warnings, log });
+    packaged = PACKAGERS[platform]({ config, host, inputs, sidecars, images, outDir, work, options, warnings, log });
     writeFileSync(skpk, packaged.payload);
   }
   const msStamp = performance.now() - ts;
@@ -657,7 +739,9 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     native: native && {
       manifest: native.manifestPath,
       imageBytes: native.imageBytes,
-      compressedBytes: native.compressedBytes,
+      container: singleFile
+        ? null
+        : join(packaged?.bundle ? join(packaged.bundle.app, "Contents", "Resources") : outDir, appContainer),
       entry: native.entry,
       compiler: native.compiler.path,
       ms: Math.round(msNative),
@@ -740,7 +824,7 @@ export function summary(r: BuildResult, color = false): string {
     lines.push(
       row(
         "native",
-        `${mib(r.native.imageBytes)} image (${mib(r.native.compressedBytes)} in the payload), entry ${r.native.entry} ` +
+        `${mib(r.native.imageBytes)} image ${r.native.container ? `in ${basename(r.native.container)} beside the exe` : "in the exe"}, entry ${r.native.entry} ` +
           p.dim(r.native.manifest),
       ),
     );

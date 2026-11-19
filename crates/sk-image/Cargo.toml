@@ -1,0 +1,20 @@
+[package]
+name = "sk-image"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "The empty container DLL `sk build` writes a native AOT image into, beside the app or the host"
+
+[lib]
+name = "skimage"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+# Outside the Skathi workspace: no_std needs panic = "abort", which the hosts must not take.
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+debug = false

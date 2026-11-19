@@ -1,5 +1,6 @@
-// `sk build --aot`: the app's production bundle compiled to a native image that travels in the
-// payload beside app.prod.js (which stays: the host checks the image against it, and stacks name it).
+// `sk build --aot`: the app's production bundle compiled to a native image. Its manifest travels in the payload
+// beside app.prod.js (which stays: the host checks the image against it, and stacks name it); the image goes into a
+// container beside the exe, or into the exe's own sections (image-sections.ts).
 //
 //   sk check (errors refuse the build) -> sk-aot matching the host (--aot-compiler, the checkout's
 //   build, or the release asset, cached) -> image + manifest
@@ -7,7 +8,6 @@
 // The host checks the manifest against itself before it loads the image (crates/sk-app/src/native_aot.rs).
 
 import { createHash } from "node:crypto";
-import { deflateRawSync } from "node:zlib";
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -151,16 +151,20 @@ export async function aotCheck(
   return report;
 }
 
+/** Where the image goes: a container file beside the payload, or sections of the exe ("publishSingleFile"). */
+export type ImagePlace = { place: "beside"; file: string } | { place: "executable" };
+
 export interface NativeBuild {
+  /** The payload entry that makes an app native: the manifest. The image itself is never in the payload. */
   inputs: SkpkInput[];
+  image: Uint8Array;
   manifestPath: string;
   imageBytes: number;
-  compressedBytes: number;
   entry: number;
   compiler: CompilerChoice;
 }
 
-/** The two payload entries that make an app native, written also to `work` for inspection. */
+/** The app's image and its manifest, written also to `work` for inspection. */
 export async function buildNative(options: {
   source: Uint8Array;
   aot: HostAot;
@@ -169,6 +173,7 @@ export async function buildNative(options: {
   /** The engine features the workload leaves out, and its name. */
   removed: readonly string[];
   workload: string;
+  place: ImagePlace;
   progress: Progress;
   log: (line: string) => void;
 }): Promise<NativeBuild> {
@@ -187,26 +192,23 @@ export async function buildNative(options: {
   const native = await compileNative({ compiler: compiler.path, source, work, preludes, closed });
   const problem = removedFeatureProblem(native, source, options.removed, options.workload, preludes);
   if (problem) throw new AotError(problem);
-  const compressed = deflateRawSync(native.image, { level: 9 });
-  progress.detail(
-    `${(native.image.length / 2 ** 20).toFixed(1)} MiB, ${(compressed.length / 2 ** 20).toFixed(1)} MiB packed`,
-  );
-  const manifest = nativeManifest("application", compiler.info, native, {
-    image: NAMES.NATIVE_IMAGE,
-    preludeSha256: aot.preludeSha256,
-    includesPreludes: !!preludes,
-  });
+  progress.detail(`${(native.image.length / 2 ** 20).toFixed(1)} MiB`);
+  const manifest = {
+    ...nativeManifest("application", compiler.info, native, {
+      image: options.place.place === "beside" ? options.place.file : "",
+      preludeSha256: aot.preludeSha256,
+      includesPreludes: !!preludes,
+    }),
+    place: options.place.place,
+  };
   const text = JSON.stringify(manifest, null, 2);
   const manifestPath = join(work, "app.native.json");
   writeFileSync(manifestPath, text);
   return {
-    inputs: [
-      { name: NAMES.NATIVE_MANIFEST, kind: KIND.NATIVE_MANIFEST, data: new TextEncoder().encode(text) },
-      { name: NAMES.NATIVE_IMAGE, kind: KIND.NATIVE_IMAGE, data: new Uint8Array(compressed) },
-    ],
+    inputs: [{ name: NAMES.NATIVE_MANIFEST, kind: KIND.NATIVE_MANIFEST, data: new TextEncoder().encode(text) }],
+    image: native.image,
     manifestPath,
     imageBytes: native.image.length,
-    compressedBytes: compressed.length,
     entry: native.entry,
     compiler,
   };
