@@ -225,6 +225,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "color",
     "text-shadow",
     "color-scheme",
+    "image-rendering",
     "aspect-ratio",
     "corner-top-left-shape",
     "corner-top-right-shape",
@@ -456,6 +457,7 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             }
             css_rgb(color.unwrap_or_else(gpui::black))
         }
+        "image-rendering" => sk_css::image_rendering(&cs.vars).into(),
         "color-scheme" => cs
             .vars
             .get(sk_css::COLOR_SCHEME)

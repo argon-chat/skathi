@@ -63,6 +63,18 @@ pub use keyframes::{
     PlayState,
 };
 pub use mapper::COLOR_SCHEME;
+
+/// The inherited sampling keyword for a native surface.
+pub fn image_rendering(vars: &Vars) -> &'static str {
+    if vars
+        .get(mapper::IMAGE_RENDERING)
+        .is_some_and(|v| v.eq_ignore_ascii_case("pixelated"))
+    {
+        "pixelated"
+    } else {
+        "auto"
+    }
+}
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style,
     parse_inline_with_transitions, rem_basis, set_font_metric_source, set_font_source,
@@ -1221,6 +1233,7 @@ impl Engine {
             return false;
         }
         changes.contains(COLOR_SCHEME)
+            || changes.contains(mapper::IMAGE_RENDERING)
             || state
                 .variable_input_rules
                 .iter()
@@ -3702,6 +3715,42 @@ mod tests {
             class: "box",
             attrs: &[],
         }
+    }
+
+    #[test]
+    fn surface_image_rendering_inherits_and_resolves_tokens_on_the_declaring_element() {
+        let sheet =
+            Engine::compile(".box { --sampling: pixelated; image-rendering: var(--sampling) }");
+        let parent = sheet.compute(box_node(), None, &Env::default());
+        let sheet = Engine::compile(".box { --sampling: auto }");
+        let mut diagnostics = vec![];
+        let child = sheet.compute_node(
+            box_node(),
+            None,
+            &parent.vars,
+            None,
+            &Env::default(),
+            &mut diagnostics,
+        );
+        assert_eq!(image_rendering(&child.vars), "pixelated");
+        for (css, expected) in [
+            ("auto", "auto"),
+            ("pixelated", "pixelated"),
+            ("initial", "auto"),
+            ("inherit", "pixelated"),
+        ] {
+            let inline = parse_inline_style(&format!("image-rendering: {css}"), &mut diagnostics);
+            let cs = sheet.compute_node(
+                box_node(),
+                Some(&inline),
+                &parent.vars,
+                None,
+                &Env::default(),
+                &mut diagnostics,
+            );
+            assert_eq!(image_rendering(&cs.vars), expected);
+        }
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]

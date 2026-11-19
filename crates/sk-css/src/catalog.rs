@@ -306,7 +306,7 @@ pub const CATALOG: &[Entry] = &[
     e("hyphenate-character", Unsupported, &[], &["\"-\""], ""),
     e("hyphens", Partial, &["none", "manual"], &["auto"], "`auto` breaks only at soft hyphens"),
     e("image-orientation", Unsupported, &[], &["from-image"], ""),
-    e("image-rendering", Unsupported, &[], &["auto"], ""),
+    e("image-rendering", Partial, &["auto", "pixelated"], &["crisp-edges"], "Sets the sampling filter on native surfaces."),
     e("initial-letter", Unsupported, &[], &["2"], ""),
     e("inline-size", Partial, &["auto", "10px", "calc-size(fit-content, size)"], SIZING_KEYWORDS, SIZING_NOTE),
     e("inset", Supported, &["auto", "0"], &[], ""),

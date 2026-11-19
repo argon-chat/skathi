@@ -234,6 +234,7 @@ The frame is scaled into the box:
 
 - [`object-fit`](/css/object-fit/) defaults to `contain`, as on `<video>`; `cover`, `fill`, `none` and `scale-down` apply too.
 - [`object-position`](/css/object-position/) places the frame in the box.
+- [`image-rendering`](/css/image-rendering/) inherits. Its default, `auto`, uses bounded Catmull–Rom on magnified axes and bilinear sampling at native size or when shrinking. Use `image-rendering: pixelated` for nearest-neighbour sampling. Both modes sample the producer's native frame directly (since 0.6).
 - [`border-radius`](/css/border-radius/) and an ancestor's `overflow` clip it.
 - `transform`, `opacity` and `z-index` apply to the picture like to any other element, because the frame is drawn in the page, not in a window of its own.
 - [`dynamic-range-limit`](/css/dynamic-range-limit/) caps how bright the element may get on an HDR display. The producer reads the result as its content headroom; see [HDR windows](/embedding/native-frames/#hdr-windows).

@@ -103,6 +103,121 @@ const shoot = async () => {
 const near = (got: Rgb, want: Rgb, by = 3) => got.every((c, i) => Math.abs(c - want[i]!) <= by);
 const WHITE: Rgb = [255, 255, 255];
 
+test.skipIf(!SCREENSHOTS)(
+  "native frame sampling inherits, sharpens video and preserves pixel-art edges",
+  async () => {
+    await app.eval(`
+    const wrap = document.createElement("div");
+    wrap.id = "filter-wrap";
+    wrap.style.cssText = "position:absolute;left:4px;top:4px;width:64px;height:16px;background:white;z-index:100";
+    const frame = document.createElement("sk-surface");
+    frame.id = "filter-frame"; frame.setAttribute("name","filter-frame");
+    frame.style.cssText = "width:64px;height:16px;object-fit:fill";
+    wrap.appendChild(frame); document.body.appendChild(wrap);
+  `);
+    try {
+      const levels = [32, 32, 32, 224, 224, 224, 32, 32];
+      await call(
+        "present",
+        "filter-frame",
+        "pixels",
+        levels.flatMap((v) => [v, v, v, 255]),
+        levels.length,
+        1,
+      );
+      const frame = await box("#filter-frame");
+      const row = async () => {
+        const shot = readPng(await app.screenshot());
+        const scale = shot.width / 720;
+        const start = Math.round(frame.x * scale);
+        const width = Math.round((frame.x + frame.w) * scale) - start;
+        const y = Math.round((frame.y + frame.h / 2) * scale);
+        return Array.from({ length: width }, (_, x) => shot.at(start + x, y));
+      };
+      const maxError = (pixels: Rgb[], nearest: boolean) =>
+        Math.max(
+          ...pixels.map(([r], x) => {
+            const p = ((x + 0.5) * levels.length) / pixels.length - 0.5;
+            const i = Math.floor(p),
+              t = p - i;
+            const sample = (j: number) => levels[Math.max(0, Math.min(levels.length - 1, j))]!;
+            const a = sample(i - 1),
+              b = sample(i),
+              c = sample(i + 1),
+              d = sample(i + 2);
+            const cubic = b + 0.5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * b - 3 * c + d - a)));
+            const expected = nearest
+              ? sample(Math.floor(p + 0.5))
+              : Math.min(Math.max(b, c), Math.max(Math.min(b, c), cubic));
+            return Math.abs(r - expected);
+          }),
+        );
+      for (const mode of ["auto", "pixelated"]) {
+        await app.eval(`document.getElementById("filter-wrap").style.setProperty("image-rendering", "${mode}")`);
+        expect(
+          await until(
+            () =>
+              app.eval(`(() => {
+              const cs = getComputedStyle(document.getElementById("filter-frame"));
+              const names = Array.from({ length: cs.length }, (_, i) => cs.item(i));
+              return [cs.getPropertyValue("image-rendering"), cs.imageRendering, names.filter(n => n === "image-rendering").length].join(",");
+            })()`),
+            (v) => v === `${mode},${mode},1`,
+          ),
+        ).toBe(`${mode},${mode},1`);
+        expect(
+          await until(
+            async () => maxError(await row(), mode === "pixelated"),
+            (error) => error <= 3,
+          ),
+        ).toBeLessThanOrEqual(3);
+      }
+      await app.eval('document.getElementById("filter-frame").style.setProperty("image-rendering", "auto")');
+      const width = (await row()).length;
+      const height = Math.round((width * frame.h) / frame.w);
+      const sourceRow = Array.from({ length: width }, (_, x) => (x * 43 + 17) % 256);
+      const nativePixels = Array.from({ length: height }, () => sourceRow.flatMap((v) => [v, v, v, 255])).flat();
+      await call("present", "filter-frame", "pixels", nativePixels, width, height);
+      expect(
+        await until(
+          async () => (await row()).every(([r, g, b], x) => r === sourceRow[x] && g === r && b === r),
+          (ok) => ok,
+        ),
+      ).toBe(true);
+      const wideRow = Array.from({ length: width * 2 }, (_, x) => (x * 73 + 31) % 256);
+      await call(
+        "present",
+        "filter-frame",
+        "pixels",
+        Array.from({ length: height * 2 }, () => wideRow.flatMap((v) => [v, v, v, 255])).flat(),
+        width * 2,
+        height * 2,
+      );
+      const downscaled = (actual: Rgb[]) =>
+        actual.every(([r], x) => Math.abs(r - (wideRow[2 * x]! + wideRow[2 * x + 1]!) / 2) <= 2);
+      expect(
+        await until(
+          async () => downscaled(await row()),
+          (ok) => ok,
+        ),
+      ).toBe(true);
+      // Transparent red beside opaque green must carry no red into the green edge.
+      await call("present", "filter-frame", "pixels", [0, 0, 255, 0, 0, 255, 0, 255], 2, 1);
+      const correctAlpha = (pixels: Rgb[]) =>
+        pixels.some(([r, g, b]) => r > 30 && r < 220 && g >= 250 && Math.abs(r - b) < 4);
+      expect(
+        await until(
+          async () => correctAlpha(await row()),
+          (ok) => ok,
+        ),
+      ).toBe(true);
+    } finally {
+      await app.eval('document.getElementById("filter-wrap")?.remove()');
+    }
+  },
+  T,
+);
+
 // gpui's Linux backend has no render_to_image: there the pixel checks are skipped.
 test.skipIf(!SCREENSHOTS)(
   "frames from each path fill their element under object-fit, radius and z-order",

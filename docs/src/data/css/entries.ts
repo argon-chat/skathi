@@ -2342,7 +2342,14 @@ const generated = section("Generated content and lists", [
   prop("object-fit", OK, "Sets how an image or video is resized to fit its box.", { related: ["object-position"] }),
   prop("object-position", OK, "Sets where an image or video sits inside its box.", { related: ["object-fit"] }),
   prop("image-rendering", PART, "Sets the scaling algorithm used for images, such as smooth or pixelated.", {
-    notes: ["A stylesheet inside an SVG can set `image-rendering: pixelated` on an SVG `<image>`."],
+    values: [
+      v("auto", OK, "Bounded Catmull–Rom for enlargement on native surfaces."),
+      v("pixelated", OK, "Nearest-neighbour on native surfaces."),
+    ],
+    notes: [
+      "Native surfaces use bounded Catmull–Rom for enlargement with `auto` and nearest-neighbour with `pixelated` (since 0.6).",
+      "A stylesheet inside an SVG can set `image-rendering: pixelated` on an SVG `<image>`.",
+    ],
     limitations: ["App stylesheets cannot change the sampling of an `<img>`."],
   }),
   prop("image-orientation", NO, "Sets whether an image is rotated according to its EXIF orientation."),

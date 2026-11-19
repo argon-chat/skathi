@@ -124,6 +124,16 @@ fn main() {
             let reply = call.into_reply();
             std::thread::spawn(move || {
                 let presented = match (mode.as_str(), color) {
+                    ("pixels", _) => serde_json::from_value::<Vec<u8>>(
+                        args.get(2).cloned().unwrap_or(Value::Null),
+                    )
+                    .map_err(|e| e.to_string())
+                    .and_then(|pixels| {
+                        surface
+                            .present_bgra(&pixels, width, height, width as usize * 4)
+                            .map(drop)
+                            .map_err(|e| e.to_string())
+                    }),
                     ("texture", _) => gpu::present_texture(&surface, color, width, height),
                     ("shared", _) => gpu::present_shared(&surface, color, width, height),
                     ("d3d11-fence", _) => gpu::present_d3d11_fenced(&surface, color, width, height),

@@ -932,6 +932,17 @@ pub(crate) fn decl_pairs(block: &DeclarationBlock) -> Vec<(String, String, bool)
 fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
     use lightningcss::properties::custom::CustomPropertyName;
     match p {
+        Property::ImageRendering(lightningcss::properties::svg::ImageRendering::Auto) => {
+            Channel::Custom(IMAGE_RENDERING.into(), "auto".into())
+        }
+        Property::Unparsed(u)
+            if matches!(u.property_id, PropertyId::ImageRendering)
+                && (single_ident_is(&u.value, "pixelated")
+                    || is_css_wide_keyword(&u.value)
+                    || has_substitution(&u.value)) =>
+        {
+            Channel::Custom(IMAGE_RENDERING.into(), value_text(p).unwrap_or_default())
+        }
         Property::Custom(c) => match &c.name {
             CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => {
                 Channel::Static
@@ -1343,6 +1354,11 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
     let mut diagnostics = Vec::new();
     let changed = match p {
         Some(Property::Unparsed(u)) => {
+            if matches!(u.property_id, PropertyId::ImageRendering)
+                && single_ident_is(&u.value, "pixelated")
+            {
+                return Verdict::Applied;
+            }
             if has_substitution(&u.value) || is_css_wide_keyword(&u.value) {
                 return Verdict::Applied;
             }
@@ -1586,6 +1602,7 @@ pub(crate) fn srgb(c: &CssColor) -> Option<[f32; 4]> {
 
 /// The name `color-scheme` is carried under among the inherited custom properties.
 pub const COLOR_SCHEME: &str = "color-scheme";
+pub(crate) const IMAGE_RENDERING: &str = "image-rendering";
 
 thread_local! {
     /// The used color scheme of the element computing; light outside a cascade (a sheet compiling).
@@ -6633,6 +6650,17 @@ fn apply_unparsed(
     x: &mut Extras,
     diagnostics: &mut Vec<String>,
 ) -> bool {
+    if matches!(u.property_id, PropertyId::ImageRendering)
+        && ["crisp-edges", "smooth", "high-quality"]
+            .iter()
+            .any(|v| single_ident_is(&u.value, v))
+    {
+        once(
+            diagnostics,
+            "unsupported image-rendering keyword: use auto or pixelated on a native surface".into(),
+        );
+        return true;
+    }
     if let Some(done) = apply_calc_size(u, r, diagnostics) {
         return done;
     }

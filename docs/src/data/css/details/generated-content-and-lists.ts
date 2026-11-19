@@ -256,7 +256,8 @@ ol.steps ol {
   },
   "image-rendering": {
     edgeCases: [
-      "An app stylesheet drops `image-rendering: pixelated` with an advisory. The SVG renderer accepts it in a stylesheet inside the SVG, applied to an `<image>` child.",
+      "On `<sk-surface>`, `auto` enlarges the native frame using bounded Catmull–Rom and `pixelated` selects its nearest source texel. The property inherits from ancestors (since 0.6).",
+      "Ordinary `<img>` elements and canvases use their own sampling paths. The SVG renderer also accepts `image-rendering: pixelated` on an SVG `<image>` child.",
     ],
   },
   "image-orientation": {

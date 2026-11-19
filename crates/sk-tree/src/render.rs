@@ -5397,10 +5397,19 @@ fn build_surface<V: 'static>(
             .and_then(|cs| cs.extras.object_fit)
             .map(gpui_object_fit)
             .unwrap_or(gpui::ObjectFit::Contain);
+        let sampling = match node
+            .computed
+            .as_ref()
+            .map(|cs| sk_css::image_rendering(&cs.vars))
+        {
+            Some("pixelated") => gpui::ImageSampling::Nearest,
+            _ => gpui::ImageSampling::SmoothUpscale,
+        };
         // Absolute: an in-flow `height: 100%` under an absolutely positioned box resolved to the
         // frame's aspect ratio instead of the box.
         let mut picture = gpui::img(gpui::ImageSource::Render(image))
             .object_fit(fit)
+            .image_sampling(sampling)
             .absolute()
             .size_full();
         picture.style().vn_object_position = Some(object_position_of(d.style()));
