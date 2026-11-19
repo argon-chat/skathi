@@ -315,6 +315,7 @@ pub struct Builder {
     activate: bool,
     inspector_exe: Option<PathBuf>,
     desktop_id: Option<String>,
+    exact_frame_feedback: bool,
 }
 
 impl Default for Builder {
@@ -340,6 +341,7 @@ impl Builder {
             activate: true,
             inspector_exe: None,
             desktop_id: None,
+            exact_frame_feedback: false,
         }
     }
 
@@ -470,6 +472,14 @@ impl Builder {
     /// its windows, which the desktop matches to the entry's icon and dock slot. Ignored elsewhere.
     pub fn desktop_id(mut self, id: impl Into<String>) -> Self {
         self.desktop_id = Some(id.into());
+        self
+    }
+
+    /// On Windows, reports frames once the compositor has finished each refresh (default `false`):
+    /// every `FrameEvent::Presented` is `Exact` and no frame misses its refresh to another
+    /// application's update, but every window present reaches the screen one refresh later.
+    pub fn exact_frame_feedback(mut self, on: bool) -> Self {
+        self.exact_frame_feedback = on;
         self
     }
 
@@ -605,6 +615,7 @@ impl Builder {
             }
         }
         prepare_directory(data_dir.as_deref(), self.prepare_data_dir.take())?;
+        gpui::present_feedback::set_feedback_after_composition(self.exact_frame_feedback);
         let config = Config {
             data_dir,
             #[cfg(feature = "storages")]

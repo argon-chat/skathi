@@ -380,6 +380,8 @@ mod platform {
         output: (bool, f32, f32),
         config: Config,
         polled: Option<Instant>,
+        /// The last periodic read taken.
+        seen: u64,
     }
 
     #[derive(Clone, Copy, Default, PartialEq)]
@@ -411,9 +413,22 @@ mod platform {
             .as_ref()
             .is_none_or(|f| !unsafe { f.IsCurrent() }.as_bool());
         let mut flipped = false;
-        if moved || stale || state.polled.is_none_or(|t| t.elapsed() >= POLL) {
+        // Read on the tick only where the answer is needed now; the periodic read is taken on a
+        // later tick.
+        let config = if moved || stale || state.polled.is_none() {
             state.polled = Some(Instant::now());
-            let config = display_config(monitor).unwrap_or_default();
+            let _ = polled::take(state.monitor, &mut state.seen);
+            Some(display_config(monitor).unwrap_or_default())
+        } else if state.polled.is_some_and(|t| t.elapsed() >= POLL) {
+            state.polled = Some(Instant::now());
+            match polled::ask(state.monitor) {
+                true => polled::take(state.monitor, &mut state.seen),
+                false => Some(display_config(monitor).unwrap_or_default()),
+            }
+        } else {
+            polled::take(state.monitor, &mut state.seen)
+        };
+        if let Some(config) = config {
             flipped = config.advanced_color != state.config.advanced_color;
             state.config = config;
         }
@@ -474,6 +489,50 @@ mod platform {
             size: std::mem::size_of::<T>() as u32,
             adapterId: adapter,
             id,
+        }
+    }
+
+    /// The periodic read of the display configuration, off the tick: it takes tens of microseconds,
+    /// at times most of a millisecond, before the tick takes the surfaces' frames.
+    mod polled {
+        use std::sync::mpsc::{channel, Sender};
+        use std::sync::{Mutex, OnceLock};
+
+        use super::{display_config, Config, HMONITOR};
+
+        /// The latest read of each monitor, numbered.
+        static READ: Mutex<Vec<(isize, u64, Config)>> = Mutex::new(Vec::new());
+
+        /// Asks for `monitor`'s configuration; `false` where there is no thread to read it.
+        pub(super) fn ask(monitor: isize) -> bool {
+            static ASK: OnceLock<Option<Sender<isize>>> = OnceLock::new();
+            let ask = ASK.get_or_init(|| {
+                let (ask, asked) = channel::<isize>();
+                std::thread::Builder::new()
+                    .name("sk-display-config".into())
+                    .spawn(move || {
+                        for (n, monitor) in (1..).zip(asked) {
+                            let config =
+                                display_config(HMONITOR(monitor as *mut _)).unwrap_or_default();
+                            let mut read = READ.lock().unwrap_or_else(|e| e.into_inner());
+                            read.retain(|(m, ..)| *m != monitor);
+                            read.push((monitor, n, config));
+                        }
+                    })
+                    .ok()
+                    .map(|_| ask)
+            });
+            ask.as_ref().is_some_and(|ask| ask.send(monitor).is_ok())
+        }
+
+        /// `monitor`'s configuration if it was read after the one numbered `seen`.
+        pub(super) fn take(monitor: isize, seen: &mut u64) -> Option<Config> {
+            let read = READ.lock().unwrap_or_else(|e| e.into_inner());
+            let &(_, n, config) = read.iter().find(|(m, ..)| *m == monitor)?;
+            (n > *seen).then(|| {
+                *seen = n;
+                config
+            })
         }
     }
 
