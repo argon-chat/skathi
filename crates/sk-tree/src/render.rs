@@ -299,7 +299,7 @@ struct BoundsProbe {
 }
 
 impl gpui::Element for BoundsProbe {
-    type RequestLayoutState = ();
+    type RequestLayoutState = gpui::LayoutId;
     type PrepaintState = ();
 
     fn id(&self) -> Option<gpui::ElementId> {
@@ -316,9 +316,10 @@ impl gpui::Element for BoundsProbe {
         _inspector_id: Option<&gpui::InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (gpui::LayoutId, ()) {
+    ) -> (gpui::LayoutId, gpui::LayoutId) {
         if !self.root {
-            return (self.inner.request_layout(window, cx), ());
+            let layout = self.inner.request_layout(window, cx);
+            return (layout, layout);
         }
         let _profile_window =
             sk_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
@@ -326,7 +327,7 @@ impl gpui::Element for BoundsProbe {
         let span = crate::perf::Span::start();
         let layout = self.inner.request_layout(window, cx);
         crate::perf::note_layout_req(span.ms());
-        (layout, ())
+        (layout, layout)
     }
 
     fn prepaint(
@@ -334,7 +335,7 @@ impl gpui::Element for BoundsProbe {
         _id: Option<&gpui::GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
         bounds: gpui::Bounds<gpui::Pixels>,
-        _request_layout: &mut (),
+        layout: &mut gpui::LayoutId,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -343,6 +344,10 @@ impl gpui::Element for BoundsProbe {
         // prepainted.
         let ancestors = window.element_transform();
         record_bounds(self.id, bounds, ancestors, window);
+        crate::containers::record_percentage_basis(self.id, || {
+            let size = window.vn_percentage_basis(*layout)?;
+            Some((f32::from(size.width), f32::from(size.height)))
+        });
         // Every hitbox gpui inserts below is tagged with this node id until a descendant's probe
         // overrides it; the previous tag is restored on the way out.
         let _profile_window = self
@@ -369,7 +374,7 @@ impl gpui::Element for BoundsProbe {
         _id: Option<&gpui::GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
         _bounds: gpui::Bounds<gpui::Pixels>,
-        _request_layout: &mut (),
+        _request_layout: &mut gpui::LayoutId,
         _prepaint: &mut (),
         window: &mut Window,
         cx: &mut App,
@@ -2109,7 +2114,6 @@ fn build_node<V: 'static>(
     // A context's children are built with it open so a negative z among them is seen
     // (`split_in_flow`).
     let opens = opens || id == root;
-    advise_relative_tree_order(&extras, own_position, layer);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
@@ -3085,13 +3089,7 @@ fn apply_drop_shadow(
     let Some(shadow) = extras.drop_shadow else {
         return;
     };
-    let opaque = style
-        .background
-        .as_ref()
-        .and_then(|fill| fill.color())
-        .and_then(|bg| bg.as_solid())
-        .filter(|c| c.a >= 0.99);
-    if opaque.is_none() {
+    if !sk_css::diagnostics::opaque_background(style) {
         advise_drop_shadow_shape(at);
         return;
     }
@@ -3161,12 +3159,7 @@ fn advise_drop_shadow_shape(at: impl FnOnce() -> String) {
     warn_compat_at(
         "filter-drop-shadow-shape",
         at,
-        "`filter: drop-shadow()` is honoured only on a box with an OPAQUE solid background \
-         (v1), and on an inline <svg>, whose shapes resvg shadows. gpui has no \
-         post-processing pass over an element's own painted output, so on a box the shadow \
-         is drawn as the element's OWN blurred rounded rect. That is exact for an opaque box \
-         and impossible for a silhouette made of glyphs, or of a translucent fill whose alpha \
-         the shadow would have to carry. On a box, `box-shadow` draws the same picture",
+        sk_css::diagnostics::DROP_SHADOW,
     );
 }
 
@@ -3436,13 +3429,7 @@ fn advise_inline_level(
     extras: &sk_css::Extras,
     style: &gpui::StyleRefinement,
 ) {
-    if extras.inline_level != Some(true) {
-        return;
-    }
-    if style.position == Some(gpui::Position::Absolute) {
-        return;
-    }
-    if !matches!(style.size.width, None | Some(gpui::Length::Auto)) {
+    if !sk_css::diagnostics::needs_line_box(extras.inline_level, Some(style)) {
         return;
     }
     let Some(parent) = t.node(node.parent) else {
@@ -3461,7 +3448,7 @@ fn advise_inline_level(
     warn_compat_at(
         "display-inline-level-stretches",
         || node_prefix(t, id),
-        "`display: inline-*` on an in-flow box whose siblings are block-level takes a LINE of          its own and fills the width (v1) — taffy models the inner display type (flex/grid/flow)          but has no line box, so there is nothing for an inline-level box to sit beside. Where          the parent is a flex or grid container, or the box is out of flow, CSS blockifies it          too and nothing diverges; where the parent's children are all inline content, the          renderer makes that parent a wrapping flex row and this does not arise either. Give the          box a width, or put it in a flex row, for the browser's result",
+        sk_css::diagnostics::INLINE_LEVEL,
     );
 }
 
@@ -3821,9 +3808,7 @@ fn group_name(id: u32) -> gpui::SharedString {
 /// key is a path, one `(z, tree-order ordinal)` slot per enclosing context, outermost first; gpui
 /// compares lexicographically, which is CSS 2.1 Appendix E's paint order, and the hit test walks
 /// the same order. A negative z paints between its context's background and in-flow content, so the
-/// context's children are deferred into an in-flow slot ([`IN_FLOW`]). `relative` contexts
-/// keep tree-order paint (advised): lifting them would defer most of a page. `sticky` boxes are
-/// lifted, so a stuck header paints over the content scrolling under it. Effect
+/// context's children are deferred into an in-flow slot ([`IN_FLOW`]). Effect
 /// contexts are read off the declared style, not the animated one.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stacking {
@@ -3889,42 +3874,17 @@ pub(crate) fn layer_of(
     } else {
         None
     };
-    let out_of_flow = position == Some(gpui::Position::Absolute);
-    let sticky = extras.sticky == Some(true);
+    let positioned = position == Some(gpui::Position::Absolute) || extras.positioned == Some(true);
     match z {
         Some(z) if z != 0 => Layer::Context(z),
-        Some(_) if out_of_flow || sticky => Layer::Context(0),
+        Some(_) if positioned => Layer::Context(0),
         Some(_) => Layer::InFlowContext,
-        None if extras.fixed == Some(true) => Layer::Context(0),
-        None if out_of_flow && effect => Layer::Context(0),
-        None if out_of_flow => Layer::Positioned,
-        None if sticky => Layer::Context(0),
+        None if extras.fixed == Some(true) || extras.sticky == Some(true) => Layer::Context(0),
+        None if positioned && effect => Layer::Context(0),
+        None if positioned => Layer::Positioned,
         None if effect => Layer::InFlowContext,
         None => Layer::InFlow,
     }
-}
-
-fn advise_relative_tree_order(
-    extras: &sk_css::Extras,
-    position: Option<gpui::Position>,
-    layer: Layer,
-) {
-    if !matches!(layer, Layer::InFlow | Layer::InFlowContext)
-        || extras.positioned != Some(true)
-        || position == Some(gpui::Position::Absolute)
-        || extras.z().is_some_and(|z| z != 0)
-    {
-        return;
-    }
-    warn_compat(
-        "position-relative-tree-order",
-        "`position: relative` with `z-index: auto` or `0` paints in TREE ORDER (v1). CSS \
-         paints a positioned box after the in-flow content of its stacking context (CSS 2.1 \
-         Appendix E, step 8), so a LATER in-flow sibling that overlaps it paints under it in a \
-         browser and over it here. `position: absolute` boxes are painted in that layer; \
-         `relative` ones are not, because relative wrappers hold whole subtrees and lifting them \
-         would move most of a page into the deferred layer. A positive `z-index` lifts the box",
-    );
 }
 
 fn slot(rank: u64, ordinal: u64) -> u128 {
@@ -3997,8 +3957,7 @@ impl Stacking {
             if !room {
                 warn_compat(
                     "deferred-paint-nesting",
-                    "more than 32 nested out-of-flow layers (`position: absolute` / `fixed` / a \
-                     `z-index`, each inside the last) — the deeper ones paint in tree order \
+                    "more than 32 nested positioned layers — the deeper ones paint in tree order \
                      instead of above their in-flow siblings (each is one more of gpui's deferred \
                      prepaint rounds). A stacking context stays one",
                 );
@@ -4938,14 +4897,7 @@ fn build_svg<V: 'static>(
     }
     let doc = crate::svg::document(t, id);
     if doc.css_paint_server {
-        warn_compat(
-            "svg-css-paint-server",
-            "an inline <svg> takes a `fill`/`stroke` from a CSS rule that is a paint server \
-             (`url(#…)`), `context-fill`/`context-stroke`, or a colour sk-css cannot resolve; \
-             it is drawn in the element's `color` (`currentColor`). Concrete colours and \
-             `var()` are drawn as computed, and a `url(#…)` written on the shapes \
-             (`fill=\"url(#g)\"`) is drawn as written",
-        );
+        warn_compat("svg-css-paint-server", sk_css::diagnostics::PAINT_SERVER);
     }
 
     // No `with_transformation` here: `transform` is a paint-level style property, and setting it
@@ -6395,7 +6347,7 @@ mod tests {
     fn fixed_and_z_zero_are_contexts_and_auto_is_not() {
         assert_eq!(layer(&fixed()), Layer::Context(0));
         let zero_rel = z(0);
-        assert_eq!(layer(&zero_rel), Layer::InFlowContext);
+        assert_eq!(layer(&zero_rel), Layer::Context(0));
         assert_eq!(
             layer_of(&zero_rel, Some(gpui::Position::Absolute), false, None),
             Layer::Context(0)
@@ -6405,7 +6357,7 @@ mod tests {
             positioned: Some(true),
             ..Default::default()
         };
-        assert_eq!(layer(&auto), Layer::InFlow);
+        assert_eq!(layer(&auto), Layer::Positioned);
         let sticky = sk_css::Extras {
             sticky: Some(true),
             ..auto.clone()
@@ -6443,11 +6395,20 @@ mod tests {
                     vec![b("escapes", layer(&z(8)), vec![])],
                 ),
                 b("document-z1", layer(&z(1)), vec![]),
+                b("later-in-flow", Layer::InFlow, vec![]),
             ],
         );
         assert_eq!(
             paint_order(&tree),
-            ["root", "zero", "auto", "inside", "document-z1", "escapes"]
+            [
+                "root",
+                "later-in-flow",
+                "zero",
+                "inside",
+                "auto",
+                "document-z1",
+                "escapes"
+            ]
         );
     }
 
@@ -6510,8 +6471,8 @@ mod tests {
         assert_eq!(layer_of(&absolute, abs, false, None), Layer::Positioned);
         assert_eq!(
             layer_of(&absolute, None, false, None),
-            Layer::InFlow,
-            "relative: the stated limit"
+            Layer::Positioned,
+            "a relative box with z-index auto uses the same paint layer"
         );
 
         let tree = b(

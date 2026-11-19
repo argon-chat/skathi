@@ -61,6 +61,7 @@ const expanded = ref(false);
       },
     ],
     edgeCases: [
+      "`transition: opacity var(--duration) linear` and transition longhands use the custom properties computed for each element (since 0.6).",
       "Declare `transition` on the base rule. A `transition` inside a `:hover`, `:focus` or other state rule is ignored, with an advisory in `sk dev`.",
       "An element's first style never transitions: a node mounted with a `transition` starts at its declared values. Change a class or a style after mount to animate.",
       "A change to or from `auto`, a percentage or a `calc()` value snaps to the end value, with an advisory. So does a change between `px` and `rem`, unless one side is `0`.",

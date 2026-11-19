@@ -146,7 +146,12 @@ pub(crate) fn is_text_field(t: &Tree, id: u32) -> bool {
 
 pub(crate) fn note_modality(window: &Window) {
     let keyboard = window.last_input_was_keyboard();
-    windows::here(window, |w| w.keyboard_input = keyboard);
+    let changed = windows::here(window, |w| {
+        (std::mem::replace(&mut w.keyboard_input, keyboard) != keyboard).then_some(w.focused_node)
+    });
+    if let Some(id) = changed.filter(|id| *id != 0) {
+        tree::with_tree(|t| t.touch_focus_watchers(id, id));
+    }
 }
 
 #[derive(Clone, Copy)]

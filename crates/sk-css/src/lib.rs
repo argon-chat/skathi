@@ -17,6 +17,7 @@ pub mod container;
 #[cfg(test)]
 mod container_tests;
 mod corner_shape;
+pub mod diagnostics;
 mod dynamic_range;
 mod element;
 #[cfg(test)]
@@ -77,6 +78,7 @@ pub use mapper::{
     parse_color, parse_color_in, set_composed_font_families, take_unreached_fonts, text_shadow_css,
     transform_css,
 };
+pub use mapper::{svg_length_text, svg_user_length};
 pub use media::{match_media, DisplayMode, Env};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;
@@ -129,6 +131,9 @@ pub struct ComputedStates {
     pub extras: Extras,
     pub before: Option<Rc<PseudoBox>>,
     pub after: Option<Rc<PseudoBox>>,
+    pub generated_dependencies: Option<Rc<Vec<(u64, Interaction)>>>,
+    /// A sizing comparison read the containing block's percentage basis.
+    pub percentage_sizing: bool,
     pub placeholder: Option<Rc<StyleRefinement>>,
     /// Only `background-color` reaches the widget: gpui's selection is a quad behind the glyphs.
     pub selection: Option<Rc<StyleRefinement>>,
@@ -778,6 +783,7 @@ pub struct Engine {
     condition_text: Vec<String>,
     sibling_combinators: bool,
     group_states: bool,
+    generated_states: bool,
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
     percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
     viewport_blocks: Vec<ViewportBlock>,
@@ -1104,8 +1110,8 @@ impl Engine {
         Engine::compile_sheets(&[css])
     }
 
-    pub fn compile_sheets(sheets: &[&str]) -> Engine {
-        let mut engine = Engine {
+    fn empty() -> Engine {
+        Engine {
             rules: Vec::new(),
             index: RuleIndex {
                 enabled: rule_index_enabled(),
@@ -1115,6 +1121,7 @@ impl Engine {
             condition_text: Vec::new(),
             sibling_combinators: false,
             group_states: false,
+            generated_states: false,
             keyframes: std::collections::HashMap::new(),
             percentage_properties: Vec::new(),
             viewport_blocks: Vec::new(),
@@ -1127,7 +1134,11 @@ impl Engine {
             collecting_container: None,
             uses_containers: false,
             diagnostics: Vec::new(),
-        };
+        }
+    }
+
+    pub fn compile_sheets(sheets: &[&str]) -> Engine {
+        let mut engine = Self::empty();
         // The flag describes THIS sheet: a resize only recompiles when the sheet currently
         // installed actually resolves a viewport unit.
         mapper::reset_viewport_units_seen();
@@ -1183,6 +1194,10 @@ impl Engine {
 
     pub fn uses_group_states(&self) -> bool {
         self.group_states
+    }
+
+    pub fn tracks_state_dependencies(&self) -> bool {
+        self.group_states || self.generated_states
     }
 
     /// Whether a style can depend on a query container: the sheet has `@container` or a `cq*`
@@ -1466,6 +1481,9 @@ impl Engine {
                 } else {
                     None
                 };
+                if !audit_selector(sel, &mut self.diagnostics) {
+                    continue;
+                }
                 if !probe_runnable(sel) {
                     self.diagnostics.push(format!(
                         "selector rejected (matcher cannot run it — :has()/nesting?): {}",
@@ -1473,13 +1491,13 @@ impl Engine {
                     ));
                     continue;
                 }
-                if !audit_selector(sel, &mut self.diagnostics) {
-                    continue;
-                }
-                // A generated box is not in gpui's interactivity ladder — it is a plain child div
-                // with no hitbox of its own — so a `:hover::after` rule has nothing to install
-                // into.
+                let generated =
+                    matches!(pseudo, Some(PseudoElement::Before | PseudoElement::After))
+                        && (states | ancestor.map_or(0, |a| a.states))
+                            & !(STATE_HOVER | STATE_FOCUS_VISIBLE)
+                            == 0;
                 if pseudo.is_some()
+                    && !generated
                     && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none()))
                         || ancestor.is_some())
                 {
@@ -1496,7 +1514,8 @@ impl Engine {
                     .as_deref()
                     .cloned()
                     .unwrap_or_default();
-                if (states != 0 || ancestor.is_some())
+                if !generated
+                    && (states != 0 || ancestor.is_some())
                     && !pseudo.is_some_and(|p| p.control_index().is_some())
                 {
                     // Only fields the author wrote count: some `Extras` are derived
@@ -1521,6 +1540,7 @@ impl Engine {
                 }
                 self.sibling_combinators |= has_sibling_combinator(sel);
                 self.group_states |= ancestor.is_some();
+                self.generated_states |= generated && (states != 0 || ancestor.is_some());
                 self.index.file(sel, self.rules.len() as u32);
                 let specificity = sel.specificity();
                 self.rules.push(RuleEntry {
@@ -1785,11 +1805,13 @@ impl Engine {
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
         let guessed = OWN_COLOR_GUESS.with(std::cell::Cell::take);
+        let percent_basis = container::PercentBasis::enter(node.key().try_into().ok());
         let _functions = functions::Scope::enter(&self.functions, Some(parent_vars));
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
-        let el = element::El(node);
+        let el = element::El(node, false);
         let mut matched: Vec<&RuleEntry> = Vec::new();
+        let mut generated_dependencies = Vec::new();
         let mut tested = 0u64;
         let mut by_bucket = [0u32; 6];
         self.candidates(&node, &mut |i, bucket| {
@@ -1819,6 +1841,40 @@ impl Engine {
                 .container
                 .is_none_or(|q| self.container_queries[q as usize].eval(parent_vars))
             {
+                if matches!(
+                    rule.pseudo,
+                    Some(PseudoElement::Before | PseudoElement::After)
+                ) && (rule.states != 0 || rule.ancestor.is_some())
+                {
+                    let mut watch = |key, states| {
+                        for (bit, interaction) in [
+                            (STATE_HOVER, Interaction::Hover),
+                            (STATE_FOCUS_VISIBLE, Interaction::FocusVisible),
+                        ] {
+                            if states & bit != 0
+                                && !generated_dependencies.contains(&(key, interaction))
+                            {
+                                generated_dependencies.push((key, interaction));
+                            }
+                        }
+                    };
+                    watch(node.key(), rule.states);
+                    if let Some(a) = rule.ancestor {
+                        matching_group_ancestors(&node, &rule.selector, a.offset)
+                            .for_each(|key| watch(key, a.states));
+                    }
+                    let mut live = MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
+                    if !matches_selector(
+                        &rule.selector,
+                        0,
+                        None,
+                        &element::El(node, true),
+                        &mut live,
+                        &mut |_, _| {},
+                    ) {
+                        return;
+                    }
+                }
                 matched.push(rule);
             }
         });
@@ -1830,6 +1886,7 @@ impl Engine {
         let t1 = probe.then(std::time::Instant::now);
 
         let share_key = (self.share
+            && generated_dependencies.is_empty()
             && inline.is_none()
             && !self.functions.uses_containers()
             && !matched.iter().any(|r| r.ancestor.is_some() || r.cq))
@@ -2254,7 +2311,7 @@ impl Engine {
                     &rule.normal_transition_declarations
                 };
                 if let Some(declarations) = declarations {
-                    transition_components.merge(declarations);
+                    transition_components.merge_resolved(declarations, &vars, env, diagnostics);
                 }
                 let patch = if important {
                     &rule.important_animation_patch
@@ -2274,7 +2331,12 @@ impl Engine {
                     };
                     if let Some(motion) = motion {
                         if let Some(declarations) = &motion.transitions {
-                            transition_components.merge(declarations);
+                            transition_components.merge_resolved(
+                                declarations,
+                                &vars,
+                                env,
+                                diagnostics,
+                            );
                         }
                         if let Some(patch) = &motion.animations {
                             patch.apply_over(&mut animation_patch);
@@ -2495,6 +2557,9 @@ impl Engine {
 
         let mut states = ComputedStates {
             base: Rc::new(base),
+            generated_dependencies: (!generated_dependencies.is_empty())
+                .then(|| Rc::new(generated_dependencies)),
+            percentage_sizing: percent_basis.read(),
             hover: any_hover.then(|| Rc::new(hover)),
             active: any_active.then(|| Rc::new(active)),
             focus: any_focus.then(|| Rc::new(focus)),
@@ -2581,7 +2646,7 @@ impl Engine {
                 parent_font,
             )));
         }
-        if let Some(key) = share_key {
+        if let Some(key) = share_key.filter(|_| !states.percentage_sizing) {
             share::insert(key, &states);
         }
         states
@@ -2735,8 +2800,8 @@ fn supports_condition(condition: &lightningcss::rules::supports::SupportsConditi
                     // Two calls, not one rebinding: `Selector` is invariant in its lifetime.
                     fn runs(sel: &Selector<'_>, probe: &mut Vec<String>) -> bool {
                         classify_states(sel, probe).is_some()
-                            && probe_runnable(sel)
                             && audit_selector(sel, probe)
+                            && probe_runnable(sel)
                     }
                     if has::present(&sel_text(sel)) {
                         match has::rewrite(&sel_text(sel)).and_then(|t| reparse_selector(&t)) {
@@ -2780,20 +2845,23 @@ fn nearest_group_ancestor<D: MatchDom>(
     selector: &Selector<'static>,
     offset: usize,
 ) -> Option<u64> {
-    let mut cursor = node.parent();
+    matching_group_ancestors(node, selector, offset).next()
+}
+
+fn matching_group_ancestors<'a, D: MatchDom + 'a>(
+    node: &D,
+    selector: &'a Selector<'static>,
+    offset: usize,
+) -> impl Iterator<Item = u64> + 'a {
+    let ancestors = std::iter::successors(node.parent(), |n| n.parent());
     // A corrupt parent chain must not hang the cascade (same bound the tree's own ancestor walk
     // uses).
-    for _ in 0..1024 {
-        let anc = cursor?;
-        let el = element::El(anc);
+    ancestors.take(1024).filter_map(move |anc| {
+        let el = element::El(anc, false);
         let mut ctx: MatchingContext<'_, '_, element::Impl> =
             MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
-        if matches_selector(selector, offset, None, &el, &mut ctx, &mut |_, _| {}) {
-            return Some(anc.key());
-        }
-        cursor = anc.parent();
-    }
-    None
+        matches_selector(selector, offset, None, &el, &mut ctx, &mut |_, _| {}).then(|| anc.key())
+    })
 }
 
 #[derive(Default)]
@@ -3209,7 +3277,7 @@ pub(crate) fn probe_runnable(sel: &Selector<'_>) -> bool {
         }
     }
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let el = element::El(Probe);
+        let el = element::El(Probe, false);
         let mut ctx: MatchingContext<'_, '_, element::Impl> =
             MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
         matches_selector(sel, 0, None, &el, &mut ctx, &mut |_, _| {});
@@ -3298,7 +3366,7 @@ fn state_name(states: u8) -> &'static str {
 
 impl Engine {
     pub fn matched_rules<D: MatchDom>(&self, node: D, env: &Env) -> Vec<MatchedRule> {
-        let el = element::El(node);
+        let el = element::El(node, false);
         let mut matched: Vec<&RuleEntry> = Vec::new();
         self.candidates(&node, &mut |i, _| {
             let rule = &self.rules[i as usize];
@@ -3430,11 +3498,11 @@ pub fn query_all_in<D: MatchDom>(
     }
     let scope_element = scope.map(|s| {
         use parcel_selectors::Element as _;
-        element::El(s).opaque()
+        element::El(s, false).opaque()
     });
     let mut matched = Vec::new();
     for (i, candidate) in candidates.iter().enumerate() {
-        let el = element::El(*candidate);
+        let el = element::El(*candidate, false);
         let hit = selectors.iter().any(|s| {
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
@@ -3598,6 +3666,48 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].property, TransitionProperty::Opacity);
         assert_eq!(t[0].duration, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn variable_transitions_follow_each_element_and_the_longhand_cascade() {
+        let sheet = Engine::compile(
+            ".box { transition: opacity var(--ms, 20ms) ease; transition-delay: 7ms }",
+        );
+        for (style, expected) in [
+            ("--ms: 150ms", 150),
+            ("--ms: 480ms", 480),
+            ("color: red", 20),
+        ] {
+            let mut diags = Vec::new();
+            let inline = parse_inline_style(style, &mut diags);
+            let cs = sheet.compute_node(
+                box_node(),
+                Some(&inline),
+                &Rc::default(),
+                None,
+                &Env::default(),
+                &mut diags,
+            );
+            assert!(diags.is_empty(), "{diags:?}");
+            assert_eq!(cs.transitions[0].property, TransitionProperty::Opacity);
+            assert_eq!(cs.transitions[0].duration, Duration::from_millis(expected));
+            assert_eq!(cs.transitions[0].delay, Duration::from_millis(7).into());
+        }
+        let t = transitions(".box { --ms: 150ms; transition-duration: 3s; transition: opacity var(--ms); transition-duration: 90ms !important }");
+        assert_eq!(t[0].duration, Duration::from_millis(90));
+        let t = transitions(".box { transition: opacity 1s; transition-duration: var(--missing) }");
+        assert!(t.iter().all(|t| t.duration.is_zero()));
+        let inline = parse_inline_style("transition: width var(--ms); --ms: 63ms", &mut Vec::new());
+        let cs = sheet.compute_node(
+            box_node(),
+            Some(&inline),
+            &Rc::default(),
+            None,
+            &Env::default(),
+            &mut Vec::new(),
+        );
+        assert_eq!(cs.transitions[0].property, TransitionProperty::Width);
+        assert_eq!(cs.transitions[0].duration, Duration::from_millis(63));
     }
 
     #[test]
@@ -5635,6 +5745,32 @@ mod tests {
         let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
         let d = doc();
         assert!(cascade(&engine, &d, &Env::default())[0].after.is_none());
+    }
+
+    #[test]
+    fn generated_boxes_match_live_origin_and_ancestor_states_in_cascade_order() {
+        let engine = Engine::compile(
+            r#".nav:hover .tab::after { content: "hover"; width: 7px }
+            .tab:focus-visible::after { content: "focus" !important }
+            .tab::after { width: 2px }"#,
+        );
+        let d = doc();
+        let r = refs(&d)[1];
+        let after = |hovered, keyboard| {
+            let node = LiveRef {
+                r,
+                hovered,
+                focused: 2,
+                keyboard,
+            };
+            engine.compute(node, None, &Env::default()).after
+        };
+        assert!(after(&[], false).is_none());
+        let hover = after(&[1], false).unwrap();
+        assert_eq!(&*hover.content, "hover");
+        assert_eq!(hover.style.size.width, Some(gpui::px(7.).into()));
+        assert_eq!(&*after(&[1], true).unwrap().content, "focus");
+        assert_eq!(&*after(&[], true).unwrap().content, "focus");
     }
 
     #[test]

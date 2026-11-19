@@ -431,6 +431,7 @@ watch(size, (px) => (document.documentElement.style.fontSize = px + "px"));
     ],
     edgeCases: [
       "`em`, `rem`, `ch` and viewport units mix freely, because each resolves to px before the comparison: `min(2em, 24px)` works.",
+      "`width: min(200px, 100%)` uses the smaller of 200px and the available width of the containing block (since 0.6).",
     ],
   },
 
@@ -445,7 +446,10 @@ watch(size, (px) => (document.documentElement.style.fontSize = px + "px"));
 }`,
       },
     ],
-    edgeCases: ["`em`, `rem`, `ch` and viewport units mix freely, because each resolves to px before the comparison."],
+    edgeCases: [
+      "`em`, `rem`, `ch` and viewport units mix freely, because each resolves to px before the comparison.",
+      "A percentage in `max()` on `width` or `height` follows the corresponding dimension of the containing block (since 0.6).",
+    ],
   },
 
   "function-clamp": {
@@ -459,7 +463,10 @@ watch(size, (px) => (document.documentElement.style.fontSize = px + "px"));
 }`,
       },
     ],
-    edgeCases: ["If the minimum is larger than the maximum, the minimum wins."],
+    edgeCases: [
+      "If the minimum is larger than the maximum, the minimum wins.",
+      "`height: clamp(12px, 50%, 60px)` uses half the containing block's height between the two limits (since 0.6).",
+    ],
   },
 
   "function-round": {
@@ -808,7 +815,7 @@ defineProps<{ percent: number }>();
     ],
     edgeCases: [
       "A `var()` with no fallback whose property is not set makes the declaration invalid without an advisory. `var(--x,)` is an empty fallback, which is valid.",
-      "`transition` and its longhands written with `var()` are not applied, with an advisory: write the transition literally.",
+      "`transition` and its longhands resolve `var()` for each element. For example, `transition: opacity var(--ms) linear` uses the element's computed `--ms` (since 0.6).",
       "Custom properties that refer to each other in a cycle are invalid on that element and its descendants, with an advisory.",
       "A substitution that grows past 64K characters stops with an advisory.",
       "`CSS.supports()` answers `true` for any declaration whose value contains `var()`, without checking what it will become.",

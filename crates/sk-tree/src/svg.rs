@@ -19,6 +19,61 @@ use gpui::{App, Bounds, Pixels, RenderImage, Window};
 use crate::tree::{Kind, Tree};
 use crate::windows::{self, WinKey};
 
+mod geometry;
+
+/// The viewport that supplies user units to a shape serialized inside an SVG leaf.
+pub(crate) fn sizing_viewport(t: &Tree, id: u32) -> Option<u32> {
+    let n = t.node(id)?;
+    if !geometry::has_dimensions(t.name(n.tag)) {
+        return None;
+    }
+    enclosing_viewport(t, n.parent)
+}
+
+fn enclosing_viewport(t: &Tree, mut id: u32) -> Option<u32> {
+    while let Some(n) = t.node(id) {
+        if matches!(t.name(n.tag), "svg" | "symbol") {
+            return Some(id);
+        }
+        id = n.parent;
+    }
+    None
+}
+
+pub(crate) fn viewport_user_size(t: &Tree, mut id: u32) -> Option<(f32, f32)> {
+    let mut inner = Vec::new();
+    let mut size = loop {
+        if let Some([w, h]) = t.prop(id, "viewBox").and_then(geometry::view_box_size) {
+            break (w, h);
+        }
+        let n = t.node(id)?;
+        let Some(parent) = enclosing_viewport(t, n.parent) else {
+            let (_, _, w, h) = crate::render::bounds_of(id)?;
+            break (w, h);
+        };
+        inner.push(id);
+        id = parent;
+    };
+    for id in inner.into_iter().rev() {
+        let cs = t.node(id)?.computed.as_ref();
+        let dimension = |name, css, basis| match css {
+            Some(gpui::Length::Definite(length)) => {
+                f32::from(length.to_pixels(gpui::px(basis).into(), gpui::px(sk_css::rem_basis())))
+            }
+            Some(gpui::Length::Auto) => basis,
+            _ => t
+                .prop(id, name)
+                .and_then(|v| sk_css::svg_user_length(v, basis))
+                .unwrap_or(basis),
+        };
+        size = (
+            dimension("width", cs.and_then(|c| c.base.size.width), size.0),
+            dimension("height", cs.and_then(|c| c.base.size.height), size.1),
+        );
+    }
+    Some(size)
+}
+
 pub(crate) struct SvgDoc {
     pub(crate) bytes: Vec<u8>,
     pub(crate) source: u64,
@@ -26,6 +81,7 @@ pub(crate) struct SvgDoc {
     pub(crate) uses_current: bool,
     /// The cascade gave an element a paint sk-css does not carry (a paint server, `context-fill`); it is drawn in `currentColor`.
     pub(crate) css_paint_server: bool,
+    relative_geometry: Vec<geometry::Attribute>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +252,15 @@ fn build(t: &Tree, id: u32) -> SvgDoc {
     let mut out = String::with_capacity(256);
     let mut class = Class::default();
     write_element(t, id, true, &Inherited::root(), &mut class, &mut out);
+    let mut relative_geometry = std::mem::take(&mut class.relative_geometry);
+    if !relative_geometry.is_empty() {
+        if let Some(size) = t.prop(id, "viewBox").and_then(geometry::view_box_size) {
+            out = geometry::materialize(&out, &relative_geometry, size);
+            relative_geometry.clear();
+        } else {
+            class.colour(NO_VIEWBOX);
+        }
+    }
     let uses_current = out.to_ascii_lowercase().contains("currentcolor");
     let mut h = std::collections::hash_map::DefaultHasher::new();
     out.hash(&mut h);
@@ -205,11 +270,16 @@ fn build(t: &Tree, id: u32) -> SvgDoc {
         paint: class.finish(),
         uses_current,
         css_paint_server,
+        relative_geometry,
         bytes: out.into_bytes(),
     }
 }
 
-fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static, str>)> {
+fn cascaded(
+    n: &crate::tree::Node,
+    tag: &str,
+    root: bool,
+) -> Vec<(&'static str, Cow<'static, str>)> {
     let Some(cs) = &n.computed else {
         return Vec::new();
     };
@@ -223,7 +293,12 @@ fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static
     }
     if let Some(list) = &x.svg_presentation {
         for (name, value) in list.iter() {
-            out.push((name, Cow::Owned(value.to_string())));
+            let attr = if *name == "stop-color" && value.eq_ignore_ascii_case("currentColor") {
+                cs.color.map(|c| sk_css::SvgPaint::Color(c).as_attr())
+            } else {
+                None
+            };
+            out.push((name, attr.unwrap_or_else(|| Cow::Owned(value.to_string()))));
         }
     }
     if root {
@@ -233,6 +308,20 @@ fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static
             None => {}
         }
     } else {
+        if geometry::has_dimensions(tag) {
+            for (name, length) in [
+                ("width", cs.base.size.width),
+                ("height", cs.base.size.height),
+            ] {
+                match length {
+                    Some(gpui::Length::Definite(v)) => {
+                        out.push((name, sk_css::svg_length_text(v).into()))
+                    }
+                    Some(gpui::Length::Auto) => out.push((name, "auto".into())),
+                    _ => {}
+                }
+            }
+        }
         if let Some(o) = cs.base.opacity {
             out.push(("opacity", Cow::Owned(format!("{}", o.clamp(0.0, 1.0)))));
         }
@@ -243,7 +332,7 @@ fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static
     out
 }
 
-fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
+fn hash_cascaded(n: &crate::tree::Node, tag: &str, root: bool, h: &mut impl Hasher) {
     let Some(cs) = &n.computed else {
         0u8.hash(h);
         return;
@@ -253,6 +342,9 @@ fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
     x.fill.hash(h);
     x.stroke.hash(h);
     x.svg_presentation.hash(h);
+    if tag == "stop" {
+        cs.color.hash(h);
+    }
     if root {
         cs.base
             .overflow
@@ -260,6 +352,29 @@ fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
             .map(|o| o == gpui::Overflow::Visible)
             .hash(h);
     } else {
+        if geometry::has_dimensions(tag) {
+            for length in [cs.base.size.width, cs.base.size.height] {
+                match length {
+                    Some(gpui::Length::Definite(v)) => {
+                        std::mem::discriminant(&v).hash(h);
+                        match v {
+                            gpui::DefiniteLength::Absolute(a) => {
+                                f32::from(a.to_pixels(gpui::px(sk_css::rem_basis())))
+                                    .to_bits()
+                                    .hash(h)
+                            }
+                            gpui::DefiniteLength::Fraction(f) => f.to_bits().hash(h),
+                            gpui::DefiniteLength::Calc { fraction, pixels } => {
+                                fraction.to_bits().hash(h);
+                                f32::from(pixels).to_bits().hash(h);
+                            }
+                        }
+                    }
+                    Some(gpui::Length::Auto) => 1u8.hash(h),
+                    _ => 0u8.hash(h),
+                }
+            }
+        }
         cs.base.opacity.map(f32::to_bits).hash(h);
         (cs.base.display == Some(gpui::Display::None)).hash(h);
     }
@@ -325,6 +440,7 @@ impl Inherited {
 
 #[derive(Default)]
 struct Class {
+    relative_geometry: Vec<geometry::Attribute>,
     paints: Vec<String>,
     reason: Option<&'static str>,
     server: bool,
@@ -612,8 +728,15 @@ fn root_source(
     color: Option<[u8; 4]>,
     offset: Option<[f32; 4]>,
 ) -> Vec<u8> {
-    let Ok(text) = std::str::from_utf8(&doc.bytes) else {
+    let Ok(raw) = std::str::from_utf8(&doc.bytes) else {
         return doc.bytes.clone();
+    };
+    let materialized;
+    let text = if doc.relative_geometry.is_empty() {
+        raw
+    } else {
+        materialized = geometry::materialize(raw, &doc.relative_geometry, [css_w, css_h]);
+        &materialized
     };
     let Some(end) = text.find('>') else {
         return doc.bytes.clone();
@@ -916,15 +1039,21 @@ fn hash_node(t: &Tree, id: u32, root: bool, h: &mut impl Hasher) {
     }
     t.name(n.tag).hash(h);
     n.text.hash(h);
-    for (k, v) in &n.props.iter().map(|(k, v, _)| (*k, v)).collect::<Vec<_>>() {
+    for (k, v, _) in &n.props {
         t.name(*k).hash(h);
         v.hash(h);
     }
     for (k, v) in &n.style {
         t.name(*k).hash(h);
         v.hash(h);
+        if v.contains('(') {
+            if let Some(cs) = &n.computed {
+                let env = windows::env_for_node(t, id, &crate::tree::env());
+                cs.vars.resolve_value(v, &env).hash(h);
+            }
+        }
     }
-    hash_cascaded(n, root, h);
+    hash_cascaded(n, t.name(n.tag), root, h);
     for &c in &n.children {
         hash_node(t, c, false, h);
     }
@@ -954,7 +1083,20 @@ fn write_element(
     if !is_name(tag) {
         return;
     }
-    let declared = cascaded(n, root);
+    let declared = cascaded(n, tag, root);
+    let value = |name: &str| {
+        declared
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, v)| v.as_ref())
+            .or_else(|| t.prop(id, name))
+    };
+    if let Some(attr) = geometry::skipped_parameter(tag, value) {
+        let label = t
+            .prop(id, "id")
+            .map_or_else(|| n.classes.join("."), |v| format!("#{v}"));
+        geometry::warn_skipped(id, tag, &label, attr);
+    }
     let here = classify(t, n, tag, root, &declared, parent, class);
     out.push('<');
     out.push_str(tag);
@@ -974,6 +1116,12 @@ fn write_element(
         write_attr(name, v, out);
     }
     for (name, value) in &declared {
+        if geometry::is_length(name) && (value.contains('%') || value.contains('(')) {
+            class.relative_geometry.push(geometry::Attribute {
+                offset: out.len() + 1,
+                node: id,
+            });
+        }
         write_attr(name, value, out);
     }
     if root && !wrote_ns {
@@ -987,17 +1135,28 @@ fn write_element(
         let mut body = String::new();
         for (k, v) in &n.style {
             let name = t.name(*k);
-            if overridden(&declared, name) {
+            if name.starts_with("--") || overridden(&declared, name) {
                 continue;
             }
+            let value = if let Some(cs) = &n.computed {
+                let env = windows::env_for_node(t, id, &crate::tree::env());
+                let Some(v) = cs.vars.resolve_value(v, &env) else {
+                    continue;
+                };
+                v
+            } else {
+                Cow::Borrowed(v.as_str())
+            };
             if !body.is_empty() {
                 body.push(';');
             }
             body.push_str(name);
             body.push(':');
-            body.push_str(v);
+            body.push_str(&value);
         }
-        write_attr("style", &body, out);
+        if !body.is_empty() {
+            write_attr("style", &body, out);
+        }
     }
     out.push('>');
 
@@ -1117,6 +1276,74 @@ mod tests {
     }
 
     const NS: (&str, &str) = ("xmlns", SVG_NS);
+
+    #[test]
+    fn svg_css_geometry_and_stop_styles_reach_resvg() {
+        let doc = doc_of(|tree| {
+            let root = tree.create_root();
+            let svg = el(tree, "svg", &[NS], root);
+            let defs = el(tree, "defs", &[], svg);
+            let grad = el(tree, "linearGradient", &[("id", "g")], defs);
+            let left = el(tree, "stop", &[("offset", "0")], grad);
+            let right = el(tree, "stop", &[("offset", "1")], grad);
+            tree.set_class(right, "end");
+            let stop_color = tree.intern("stop-color");
+            tree.set_style(left, stop_color, "var(--a)".into());
+            let rect = el(tree, "rect", &[("fill", "url(#g)")], svg);
+            tree.set_class(rect, "outline");
+            let sheet = sk_css::Engine::compile("svg { --a: red; --b: blue } .end { stop-color: var(--b); stop-opacity: 100% } .outline { x: .5px; y: .5px; width: calc(100% - 1px); height: calc(100% - 1px); rx: 7.5px }");
+            tree.restyle(Some(&sheet), &sk_css::Env::default());
+            svg
+        });
+        for (w, h) in [(120., 44.), (180., 65.)] {
+            let bytes = raster_source(&doc, w, h, None, None);
+            let src = std::str::from_utf8(&bytes).unwrap();
+            assert!(!src.contains("var(") && !src.contains("calc("), "{src}");
+            let xml = usvg::roxmltree::Document::parse(src).unwrap();
+            let rect = xml.descendants().find(|n| n.has_tag_name("rect")).unwrap();
+            assert_eq!(
+                rect.attribute("width").unwrap().parse::<f32>().unwrap(),
+                w - 1.
+            );
+            assert_eq!(
+                rect.attribute("height").unwrap().parse::<f32>().unwrap(),
+                h - 1.
+            );
+            assert_eq!(rect.attribute("rx"), Some("7.5"));
+            let img = render(&doc, (w, h), 1., None);
+            let a = pixel(&img, 5, h as usize / 2);
+            let b = pixel(&img, w as usize - 6, h as usize / 2);
+            assert!(
+                a[0] > 230 && a[2] < 25 && b[2] > 230 && b[0] < 25,
+                "{a:?} {b:?}: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_css_percentages_follow_the_nested_viewbox_and_normalized_diagonal() {
+        let doc = doc_of(|tree| {
+            let root = tree.create_root();
+            let svg = el(tree, "svg", &[NS, ("viewBox", "0 0 300 160")], root);
+            let nested = el(tree, "svg", &[("viewBox", "0 0 60 80")], svg);
+            el(tree, "circle", &[], nested);
+            let sheet = sk_css::Engine::compile("circle { cx: 50%; cy: 25%; r: 10% }");
+            tree.restyle(Some(&sheet), &sk_css::Env::default());
+            svg
+        });
+        let src = String::from_utf8(doc.bytes).unwrap();
+        let xml = usvg::roxmltree::Document::parse(&src).unwrap();
+        let circle = xml
+            .descendants()
+            .find(|n| n.has_tag_name("circle"))
+            .unwrap();
+        assert_eq!(
+            (circle.attribute("cx"), circle.attribute("cy")),
+            (Some("30"), Some("20"))
+        );
+        let radius = circle.attribute("r").unwrap().parse::<f32>().unwrap();
+        assert!((radius - 7.071068).abs() < 0.001, "{src}");
+    }
 
     #[test]
     fn currentcolor_icons_are_mono() {
@@ -1492,6 +1719,7 @@ mod tests {
             paint: Paint::Colour("t"),
             uses_current,
             css_paint_server: false,
+            relative_geometry: Vec::new(),
         }
     }
 

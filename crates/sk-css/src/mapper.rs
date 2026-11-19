@@ -33,6 +33,10 @@ use crate::rgb_space::RgbSpace;
 use crate::transition::{Collector, TransitionSpec};
 use crate::vars::{self, Vars};
 
+#[path = "svg_values.rs"]
+mod svg_values;
+pub use svg_values::{svg_length_text, svg_user_length};
+
 /// `(name, raw value text)` pairs for what cannot be mapped at sheet-compile time: `--x`
 /// declarations and known properties whose value used `var()`, both resolved per element.
 pub type Decls = Vec<(String, String)>;
@@ -804,7 +808,9 @@ impl Extras {
     /// A superset of what the renderer defers (whether `z-index` applies depends on the parent's
     /// display); safe for a cache that refuses boundaries conservatively.
     pub fn may_defer(&self) -> bool {
-        self.z().is_some_and(|z| z != 0) || self.fixed == Some(true)
+        self.z().is_some_and(|z| z != 0)
+            || self.positioned == Some(true)
+            || self.fixed == Some(true)
     }
 }
 
@@ -876,7 +882,7 @@ enum Channel {
 
 /// `Property`'s own `ToCss` writes `name: value`, and a property name can never contain `:`, so the
 /// split is exact.
-fn value_text(p: &Property) -> Option<String> {
+pub(crate) fn value_text(p: &Property) -> Option<String> {
     let css = p.to_css_string(false, PrinterOptions::default()).ok()?;
     let (_, value) = css.split_once(':')?;
     Some(value.trim().to_string())
@@ -1005,13 +1011,13 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
             if crate::prefix::property_dropped(p) {
                 continue;
             }
+            if transitions.take(p, diagnostics) {
+                continue;
+            }
             match channel(p, diagnostics) {
                 Channel::Custom(name, value) => custom.push((name, value)),
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
                 Channel::Static => {
-                    if transitions.take(p, diagnostics) {
-                        continue;
-                    }
                     if animations.take(p, diagnostics) {
                         continue;
                     }
@@ -1197,25 +1203,6 @@ pub(crate) fn apply_dynamic(
         );
         return;
     };
-    // A `transition` is folded into its own list at sheet-compile time and the list is per rule,
-    // not per element — so a var()-composed one has nowhere to land.
-    if matches!(
-        property,
-        Property::Transition(..)
-            | Property::TransitionProperty(..)
-            | Property::TransitionDuration(..)
-            | Property::TransitionDelay(..)
-            | Property::TransitionTimingFunction(..)
-    ) {
-        once(
-            diagnostics,
-            format!(
-                "`{name}` composed with var() is not honoured (v1) — the transition list is folded \
-                 once per rule, not per element; declare the transition literally"
-            ),
-        );
-        return;
-    }
     apply(&property, r, x, diagnostics);
 }
 
@@ -1439,13 +1426,13 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                     if crate::prefix::property_dropped(p) {
                         continue;
                     }
+                    if transitions.take(p, diagnostics) {
+                        continue;
+                    }
                     match channel(p, diagnostics) {
                         Channel::Custom(name, value) => custom.push((name, value)),
                         Channel::Dynamic(name, value) => dynamic.push((name, value)),
                         Channel::Static => {
-                            if transitions.take(p, diagnostics) {
-                                continue;
-                            }
                             if animations.take(p, diagnostics) {
                                 continue;
                             }
@@ -2213,37 +2200,79 @@ pub(crate) fn lp_linear(lp: &LengthPercentage) -> Option<(f32, f32)> {
 }
 
 fn calc_linear(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<(f32, f32)> {
+    calc_branch(c, None)
+}
+
+fn calc_branch(
+    c: &lightningcss::values::calc::Calc<LengthPercentage>,
+    axis: Option<u8>,
+) -> Option<(f32, f32)> {
     use lightningcss::values::calc::{Calc, MathFunction};
+    let term = |v: &Calc<LengthPercentage>| calc_branch(v, axis);
     match c {
         Calc::Value(v) => match &**v {
             DimensionPercentage::Dimension(d) => Some((0.0, length_value_px(d)?)),
             DimensionPercentage::Percentage(p) => Some((p.0, 0.0)),
-            DimensionPercentage::Calc(inner) => calc_linear(inner),
+            DimensionPercentage::Calc(inner) => term(inner),
         },
         Calc::Number(_) => None,
         Calc::Sum(a, b) => {
-            let (fa, pa) = calc_linear(a)?;
-            let (fb, pb) = calc_linear(b)?;
+            let (fa, pa) = term(a)?;
+            let (fb, pb) = term(b)?;
             Some((fa + fb, pa + pb))
         }
         Calc::Product(n, v) => {
-            let (f, p) = calc_linear(v)?;
+            let (f, p) = term(v)?;
             Some((n * f, n * p))
         }
         Calc::Function(f) => match &**f {
-            MathFunction::Calc(inner) => calc_linear(inner),
+            MathFunction::Calc(inner) => term(inner),
+            MathFunction::Min(list) | MathFunction::Max(list) if axis.is_some() => {
+                let basis = crate::container::percentage_basis(axis?);
+                let minimum = matches!(&**f, MathFunction::Min(_));
+                let mut args = list.iter().map(term);
+                let first = args.next()??;
+                args.try_fold(first, |best, next| {
+                    let next = next?;
+                    let value = |(a, b): (f32, f32)| a * basis + b;
+                    Some(
+                        if (minimum && value(next) < value(best))
+                            || (!minimum && value(next) > value(best))
+                        {
+                            next
+                        } else {
+                            best
+                        },
+                    )
+                })
+            }
+            MathFunction::Clamp(lo, mid, hi) if axis.is_some() => {
+                let basis = crate::container::percentage_basis(axis?);
+                let (lo, mid, hi) = (term(lo)?, term(mid)?, term(hi)?);
+                let value = |(a, b): (f32, f32)| a * basis + b;
+                let capped = if value(mid) > value(hi) { hi } else { mid };
+                Some(if value(lo) > value(capped) {
+                    lo
+                } else {
+                    capped
+                })
+            }
             _ => calc_px(c, &lp_leaf_px).map(|p| (0.0, p)),
         },
     }
 }
 
 pub(crate) fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
+    lp_definite_on(lp, None)
+}
+
+fn lp_definite_on(lp: &LengthPercentage, axis: Option<u8>) -> Option<DefiniteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
         DimensionPercentage::Percentage(p) => Some(relative(p.0)),
         DimensionPercentage::Calc(c) => match calc_px(c, &lp_leaf_px) {
             Some(p) => Some(px(p).into()),
-            None => match calc_linear(c) {
+            None => match calc_branch(c, axis) {
                 Some((fraction, pixels)) if fraction == 0.0 => Some(px(pixels).into()),
                 Some((fraction, pixels)) => Some(DefiniteLength::Calc {
                     fraction,
@@ -2265,19 +2294,19 @@ fn lpa_length(v: &LengthPercentageOrAuto) -> Option<Length> {
     }
 }
 
-fn size_length(v: &CssSize) -> Option<Length> {
+fn size_length(v: &CssSize, axis: u8) -> Option<Length> {
     match v {
         CssSize::Auto => Some(Length::Auto),
-        CssSize::LengthPercentage(lp) => lp_definite(lp).map(Length::Definite),
+        CssSize::LengthPercentage(lp) => lp_definite_on(lp, Some(axis)).map(Length::Definite),
         _ => None,
     }
 }
 
-fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length> {
+fn max_size_length(v: &lightningcss::properties::size::MaxSize, axis: u8) -> Option<Length> {
     use lightningcss::properties::size::MaxSize;
     match v {
         MaxSize::None => Some(Length::Auto),
-        MaxSize::LengthPercentage(lp) => lp_definite(lp).map(Length::Definite),
+        MaxSize::LengthPercentage(lp) => lp_definite_on(lp, Some(axis)).map(Length::Definite),
         _ => None,
     }
 }
@@ -4554,12 +4583,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         once(
             diagnostics,
             format!(
-                "`{}`: this calc() is dropped (v1) — a calc() that mixes a percentage with a \
-                 length is resolved at layout only by the sizing properties (width/height and \
-                 their min/max, inset, margin, padding, gap, flex-basis) and at paint by \
-                 border-radius, and only in its linear form (sums and scalings; min()/max()/clamp() over a percentage are \
-                 not). Here the declaration is ignored, as if it were invalid. Write the \
-                 length or the percentage alone, or move the offset into a sizing property",
+                "`{}`: this calc() is dropped. Width, height and their min/max bounds accept \
+                 percentage comparisons. Insets, margin, padding, gap, flex-basis and border-radius \
+                 accept linear percentage calculations. Simplify the expression or use a sizing property.",
                 p.property_id().name()
             ),
         );
@@ -4750,18 +4776,20 @@ fn apply_property(
         }
         RowGap(v) => r.gap.height = gap_definite(v),
         ColumnGap(v) => r.gap.width = gap_definite(v),
-        Width(v) => r.size.width = size_length(v),
-        Height(v) => r.size.height = size_length(v),
-        MinWidth(v) => r.min_size.width = size_length(v),
-        MinHeight(v) => r.min_size.height = size_length(v),
-        MaxWidth(v) => r.max_size.width = max_size_length(v),
-        MaxHeight(v) => r.max_size.height = max_size_length(v),
-        InlineSize(v) => r.size.width = size_length(v),
-        BlockSize(v) => r.size.height = size_length(v),
-        MinInlineSize(v) => r.min_size.width = size_length(v),
-        MinBlockSize(v) => r.min_size.height = size_length(v),
-        MaxInlineSize(v) => r.max_size.width = max_size_length(v),
-        MaxBlockSize(v) => r.max_size.height = max_size_length(v),
+        Width(v) | InlineSize(v) => r.size.width = size_length(v, crate::container::INLINE),
+        Height(v) | BlockSize(v) => r.size.height = size_length(v, crate::container::BLOCK),
+        MinWidth(v) | MinInlineSize(v) => {
+            r.min_size.width = size_length(v, crate::container::INLINE)
+        }
+        MinHeight(v) | MinBlockSize(v) => {
+            r.min_size.height = size_length(v, crate::container::BLOCK)
+        }
+        MaxWidth(v) | MaxInlineSize(v) => {
+            r.max_size.width = max_size_length(v, crate::container::INLINE)
+        }
+        MaxHeight(v) | MaxBlockSize(v) => {
+            r.max_size.height = max_size_length(v, crate::container::BLOCK)
+        }
         Padding(v) => {
             r.padding.top = lp_definite_of_lpa(&v.top);
             r.padding.right = lp_definite_of_lpa(&v.right);
@@ -5924,6 +5952,17 @@ fn apply_property(
         Filter(list, _) => apply_filter(list, x, diagnostics),
         BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
         Custom(c) => match &c.name {
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if let Some(property) = svg_values::property(name.0.as_ref()) =>
+            {
+                let value = value_text(p).and_then(|value| svg_values::computed(property, &value));
+                if let Some(value) = value {
+                    let list = x.svg_presentation.get_or_insert_with(Default::default);
+                    set_presentation(Rc::make_mut(list), property, value.into());
+                } else {
+                    once(diagnostics, format!("invalid SVG value for `{property}`"));
+                }
+            }
             // `--shading` is the ONE custom property Skathi interprets: a GPU effect has no web
             // equivalent, so it needs a spelling a browser parses, stores and ignores rather than
             // one a browser DROPS.
@@ -8023,8 +8062,6 @@ mod tests {
 
     #[test]
     fn a_calc_that_cannot_be_laid_out_is_dropped() {
-        let (r, _) = map("width: min(100%, 10px)");
-        assert_eq!(r.size.width, None);
         let (r, _) = map("left: clamp(0px, 50%, 100px)");
         assert_eq!(r.inset.left, None);
     }
@@ -8132,7 +8169,7 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         let (x, _) = extras("position: fixed; position: relative");
         assert_eq!(x.fixed, Some(false));
-        assert!(!x.may_defer());
+        assert!(x.may_defer());
     }
 
     #[test]

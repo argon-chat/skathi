@@ -199,7 +199,7 @@ fn any_descendant<D: MatchDom>(node: &D, hit: &dyn Fn(&D) -> bool) -> bool {
 
 fn matches_any<D: MatchDom>(selectors: &[&'static Selector<'static>], node: &D) -> bool {
     use parcel_selectors::matching::{matches_selector, MatchingContext, MatchingMode, QuirksMode};
-    let element = El(*node);
+    let element = El(*node, false);
     selectors.iter().any(|selector| {
         let mut context: MatchingContext<'_, '_, crate::element::Impl> =
             MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);

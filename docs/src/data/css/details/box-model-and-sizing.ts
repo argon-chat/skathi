@@ -42,7 +42,7 @@ const collapsed = ref(false);
     ],
     edgeCases: [
       "A percentage, alone or inside `calc()`, resolves against the containing block's width.",
-      "`min()`, `max()` and `clamp()` over a percentage and a length drop the declaration with an advisory; write `width: 100%; max-width: 640px` instead of `width: min(100%, 640px)`.",
+      "Size comparisons such as `width: min(100%, 640px)` follow the containing block when it resizes (since 0.6).",
       '`CSS.supports("width", "min-content")` answers `false`, as it does for the other ignored sizing keywords.',
     ],
   },

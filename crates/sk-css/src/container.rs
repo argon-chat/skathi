@@ -21,6 +21,8 @@ use crate::Vars;
 pub const INLINE: u8 = 1;
 /// The block (vertical) axis: `container-type: size`.
 pub const BLOCK: u8 = 2;
+/// A percentage comparison uses its containing block, including an ordinary uncontained box.
+pub const PERCENT_BASIS: u8 = 4;
 
 /// A query container among an element's ancestors: an element whose `container-type` is not
 /// `normal` or that has a `container-name`. The chain runs nearest first.
@@ -81,6 +83,49 @@ thread_local! {
     static SOURCE: Cell<Option<SizeSource>> = const { Cell::new(None) };
     static CHAIN: RefCell<Chain> = const { RefCell::new(None) };
     static UNITS_SEEN: Cell<bool> = const { Cell::new(false) };
+    static SIZING_ELEMENT: Cell<Option<u32>> = const { Cell::new(None) };
+    static PERCENT_READ: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) struct PercentBasis(Option<u32>, bool);
+
+impl PercentBasis {
+    pub(crate) fn enter(id: Option<u32>) -> Self {
+        Self(
+            SIZING_ELEMENT.with(|p| p.replace(id)),
+            PERCENT_READ.with(|read| read.replace(false)),
+        )
+    }
+
+    pub(crate) fn read(&self) -> bool {
+        PERCENT_READ.with(Cell::get)
+    }
+}
+
+impl Drop for PercentBasis {
+    fn drop(&mut self) {
+        SIZING_ELEMENT.with(|p| p.set(self.0));
+        PERCENT_READ.with(|read| read.set(self.1));
+    }
+}
+
+pub(crate) fn note_layout_read() {
+    UNITS_SEEN.with(|c| c.set(true));
+}
+
+pub(crate) fn percentage_basis(axis: u8) -> f32 {
+    note_layout_read();
+    PERCENT_READ.with(|read| read.set(true));
+    crate::mapper::note_font_relative();
+    let size = SIZING_ELEMENT
+        .with(Cell::get)
+        .and_then(|id| size_of(id, axis | PERCENT_BASIS))
+        .unwrap_or_else(crate::mapper::viewport_basis);
+    if axis == INLINE {
+        size.0
+    } else {
+        size.1
+    }
 }
 
 pub fn set_size_source(source: SizeSource) {
@@ -104,7 +149,7 @@ fn size_of(id: u32, axes: u8) -> Option<(f32, f32)> {
     SOURCE.with(Cell::get).and_then(|source| source(id, axes))
 }
 
-pub(crate) fn noting_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
+pub fn noting_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
     let before = UNITS_SEEN.with(|c| c.replace(false));
     let out = f();
     let seen = UNITS_SEEN.with(|c| c.replace(before));

@@ -364,6 +364,8 @@ pub(crate) struct Collector {
     durations: Option<Vec<Duration>>,
     delays: Option<Vec<Delay>>,
     easings: Option<Vec<Easing>>,
+    // From the first substitution onward, declaration order matters for shorthand/longhand pairs.
+    deferred: Vec<(String, String)>,
     seen: bool,
 }
 
@@ -400,10 +402,68 @@ impl Collector {
             delays: Some(specs.iter().map(|spec| spec.delay).collect()),
             easings: Some(specs.iter().map(|spec| spec.easing).collect()),
             seen: true,
+            deferred: Vec::new(),
         }
     }
 
     pub(crate) fn take(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
+        let id = p.property_id();
+        if !is_transition_id(&id) {
+            return false;
+        }
+        if !self.deferred.is_empty() || matches!(p, Property::Unparsed(_)) {
+            if let Some(value) = crate::mapper::value_text(p) {
+                self.deferred.push((id.name().to_owned(), value));
+                self.seen = true;
+            }
+            return true;
+        }
+        self.take_literal(p, diagnostics)
+    }
+
+    pub(crate) fn merge_resolved(
+        &mut self,
+        other: &Self,
+        vars: &crate::Vars,
+        env: &crate::Env,
+        diagnostics: &mut Vec<String>,
+    ) {
+        use lightningcss::stylesheet::ParserOptions;
+        self.merge(other);
+        for (name, raw) in &other.deferred {
+            if let Ok(value) = crate::vars::substitute_with(raw, vars, env) {
+                if let Ok(property) = Property::parse_string(
+                    PropertyId::from(name.as_str()),
+                    &value,
+                    ParserOptions::default(),
+                ) {
+                    if self.take_literal(&property, diagnostics) {
+                        continue;
+                    }
+                }
+                crate::mapper::once(
+                    diagnostics,
+                    format!("invalid `{name}: {value}` after substitution"),
+                );
+            }
+            // Invalid at computed-value time: the affected longhands take their initial values.
+            match PropertyId::from(name.as_str()) {
+                PropertyId::Transition(_) => {
+                    *self = Self {
+                        seen: true,
+                        ..Default::default()
+                    }
+                }
+                PropertyId::TransitionProperty(_) => self.properties = None,
+                PropertyId::TransitionDuration(_) => self.durations = None,
+                PropertyId::TransitionDelay(_) => self.delays = None,
+                PropertyId::TransitionTimingFunction(_) => self.easings = None,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn take_literal(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
         match p {
             Property::Transition(list, _) => {
                 self.seen = true;
@@ -463,14 +523,6 @@ impl Collector {
             Property::TransitionTimingFunction(list, _) => {
                 self.seen = true;
                 self.easings = Some(list.iter().map(|e| easing_of(e, diagnostics)).collect());
-                true
-            }
-            Property::Unparsed(u) if is_transition_id(&u.property_id) => {
-                self.seen = true;
-                diagnostics.push(format!(
-                    "unresolved value for {} (var()/env() in transitions is not resolved yet, v1)",
-                    u.property_id.name()
-                ));
                 true
             }
             _ => false,

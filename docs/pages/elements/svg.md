@@ -140,7 +140,9 @@ Only a simple one-color icon, made of `<g>`, `<path>`, `<rect>`, `<circle>`, `<e
 
 ## CSS on the shapes
 
-CSS rules match the children, and the computed `fill`, `stroke`, `fill-opacity`, `fill-rule`, `stroke-opacity`, `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`, `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` are written into the document, along with the children's `opacity` and `display: none`. The `style` attribute is kept.
+CSS rules match the children, and the computed `fill`, `stroke`, `fill-opacity`, `fill-rule`, `stroke-opacity`, `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`, `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` are written into the document, along with the children's `opacity` and `display: none`.
+
+Shape geometry (`x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy`, `r`) and gradient `stop-color` and `stop-opacity` can come from CSS (since 0.6). A child's inline style resolves `var()` using its own cascade. For example, `rect { x: 0.5px; width: calc(100% - 1px) }` follows the nearest SVG viewport as it resizes. A percentage circle radius uses the viewport's normalized diagonal.
 
 Rules with `:hover`, `:focus`, `:active` or a group selector do not set [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above on the children; an advisory says so. Recolor through `currentColor` instead. A transition or animation of `fill` or `stroke` interpolates when the paint is `currentColor`, because it animates `color`; between two concrete colors it jumps.
 

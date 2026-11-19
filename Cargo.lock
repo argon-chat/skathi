@@ -5398,6 +5398,7 @@ version = "0.5.0"
 dependencies = [
  "lightningcss",
  "parcel_selectors",
+ "serde",
  "serde_json",
  "sk-effects",
  "skathi-gpui",
@@ -5569,6 +5570,7 @@ dependencies = [
  "sk-sticker",
  "sk-video",
  "skathi-gpui",
+ "svgtypes",
  "usvg",
  "windows 0.62.2",
  "wuff",

@@ -289,43 +289,15 @@ const offset = computed(() => String(113 * (1 - props.progress)));
   "stop-color": {
     examples: [
       {
-        title: "Instead: color a gradient's stops with attributes",
-        lang: "vue",
-        code: `<template>
-  <svg viewBox="0 0 120 8" width="120" height="8">
-    <defs>
-      <linearGradient id="meter">
-        <stop offset="0" stop-color="#34c759" />
-        <stop offset="1" stop-color="#ff9f0a" />
-      </linearGradient>
-    </defs>
-    <rect width="120" height="8" rx="4" fill="url(#meter)" />
-  </svg>
-</template>`,
+        title: "Color a gradient stop from a theme",
+        lang: "css",
+        code: ".icon stop { stop-color: var(--accent, #34c759); }",
       },
     ],
-    edgeCases: [UNSUPPORTED("stop-color", "red")],
   },
 
   "stop-opacity": {
-    examples: [
-      {
-        title: "Instead: fade a gradient out with an attribute",
-        lang: "vue",
-        code: `<template>
-  <svg viewBox="0 0 200 60" width="200" height="60">
-    <defs>
-      <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#7aa2ff" stop-opacity="0.4" />
-        <stop offset="1" stop-color="#7aa2ff" stop-opacity="0" />
-      </linearGradient>
-    </defs>
-    <path d="M0 40 L50 20 L100 30 L150 10 L200 25 V60 H0 Z" fill="url(#fade)" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("stop-opacity", "0.5")],
+    examples: [{ title: "Fade a gradient stop", lang: "css", code: ".icon stop { stop-opacity: 50%; }" }],
   },
 
   "clip-rule": {
@@ -392,129 +364,31 @@ const offset = computed(() => String(113 * (1 - props.progress)));
   },
 
   x: {
-    examples: [
-      {
-        title: "Instead: place bars of a chart with bound attributes",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ values: number[] }>();
-</script>
-
-<template>
-  <svg class="bars" viewBox="0 0 120 40" width="120" height="40">
-    <rect v-for="(value, i) in values" :key="i" :x="i * 12" :y="40 - value" width="8" :height="value" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("x", "10px")],
+    examples: [{ title: "Inset a rectangle horizontally", lang: "css", code: ".icon rect { x: 0.5px; }" }],
   },
 
   y: {
-    examples: [
-      {
-        title: "Instead: position a label with bound attributes",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ label: string; top: number }>();
-</script>
-
-<template>
-  <svg viewBox="0 0 200 100" width="200" height="100">
-    <text x="8" :y="top" fill="currentColor" font-size="12">{{ label }}</text>
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("y", "10px")],
+    examples: [{ title: "Inset a rectangle vertically", lang: "css", code: ".icon rect { y: 0.5px; }" }],
   },
 
   cx: {
-    examples: [
-      {
-        title: "Instead: move a chart marker with bound attributes",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ point: { x: number; y: number } }>();
-</script>
-
-<template>
-  <svg viewBox="0 0 200 60" width="200" height="60">
-    <circle :cx="point.x" :cy="point.y" r="3" fill="#7aa2ff" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("cx", "10px")],
+    examples: [{ title: "Center a circle horizontally", lang: "css", code: ".icon circle { cx: 50%; }" }],
   },
 
   cy: {
-    examples: [
-      {
-        title: "Instead: drop a pin to a value with a bound attribute",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ level: number }>();
-</script>
-
-<template>
-  <svg viewBox="0 0 20 100" width="20" height="100">
-    <line x1="10" y1="0" x2="10" y2="100" stroke="#ffffff1f" />
-    <circle cx="10" :cy="100 - level" r="4" fill="#ff9f0a" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("cy", "10px")],
+    examples: [{ title: "Center a circle vertically", lang: "css", code: ".icon circle { cy: 50%; }" }],
   },
 
   r: {
-    examples: [
-      {
-        title: "Instead: grow a status dot with a bound attribute",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ active: boolean }>();
-</script>
-
-<template>
-  <svg viewBox="0 0 16 16" width="16" height="16">
-    <circle cx="8" cy="8" :r="active ? 6 : 4" fill="#34c759" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("r", "5px")],
+    examples: [{ title: "Scale a circle with its viewport", lang: "css", code: ".icon circle { r: 25%; }" }],
   },
 
   rx: {
-    examples: [
-      {
-        title: "Instead: round an SVG pill with attributes",
-        lang: "vue",
-        code: `<template>
-  <svg viewBox="0 0 80 24" width="80" height="24">
-    <rect width="80" height="24" rx="12" ry="12" fill="#ffffff14" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("rx", "5px")],
+    examples: [{ title: "Round the horizontal corners", lang: "css", code: ".icon rect { rx: 7.5px; }" }],
   },
 
   ry: {
-    examples: [
-      {
-        title: "Instead: draw an elliptical corner with attributes",
-        lang: "vue",
-        code: `<template>
-  <svg viewBox="0 0 120 40" width="120" height="40">
-    <rect width="120" height="40" rx="20" ry="8" fill="#7aa2ff33" />
-  </svg>
-</template>`,
-      },
-    ],
-    edgeCases: [UNSUPPORTED("ry", "5px")],
+    examples: [{ title: "Round the vertical corners", lang: "css", code: ".icon rect { ry: 4px; }" }],
   },
 
   d: {

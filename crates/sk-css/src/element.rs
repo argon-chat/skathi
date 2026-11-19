@@ -39,6 +39,10 @@ pub trait MatchDom: Copy {
     fn interaction(&self, _state: Interaction) -> Option<bool> {
         None
     }
+    /// Live state for selectors that create or remove a generated box during layout.
+    fn generated_interaction(&self, state: Interaction) -> bool {
+        self.interaction(state).unwrap_or(false)
+    }
     /// A view transition pseudo-element's stand-in ([`crate::VIEW_TRANSITION_TAGS`]): only rules
     /// written for those match it, and it matches no other rule.
     fn is_view_transition_pseudo(&self) -> bool {
@@ -96,7 +100,7 @@ fn indeterminate<D: MatchDom>(node: &D) -> bool {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct El<D: MatchDom>(pub D);
+pub(crate) struct El<D: MatchDom>(pub D, pub bool);
 
 impl<D: MatchDom> PartialEq for El<D> {
     fn eq(&self, other: &Self) -> bool {
@@ -124,7 +128,7 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     }
 
     fn parent_element(&self) -> Option<Self> {
-        self.0.parent().map(El)
+        self.0.parent().map(|n| El(n, self.1))
     }
     fn parent_node_is_shadow_root(&self) -> bool {
         false
@@ -136,10 +140,10 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         false
     }
     fn prev_sibling_element(&self) -> Option<Self> {
-        self.0.prev_sibling().map(El)
+        self.0.prev_sibling().map(|n| El(n, self.1))
     }
     fn next_sibling_element(&self) -> Option<Self> {
-        self.0.next_sibling().map(El)
+        self.0.next_sibling().map(|n| El(n, self.1))
     }
     fn is_html_element_in_html_document(&self) -> bool {
         false
@@ -186,17 +190,19 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     where
         F: FnMut(&Self, ElementSelectorFlags),
     {
-        match pc {
-            PseudoClass::Hover => self.0.interaction(Interaction::Hover).unwrap_or(true),
-            PseudoClass::Active => self.0.interaction(Interaction::Active).unwrap_or(true),
-            PseudoClass::Focus => self.0.interaction(Interaction::Focus).unwrap_or(true),
-            PseudoClass::FocusVisible => self
-                .0
-                .interaction(Interaction::FocusVisible)
-                .unwrap_or(true),
-            PseudoClass::FocusWithin => {
-                self.0.interaction(Interaction::FocusWithin).unwrap_or(true)
+        let holds = |state| {
+            if self.1 {
+                self.0.generated_interaction(state)
+            } else {
+                self.0.interaction(state).unwrap_or(true)
             }
+        };
+        match pc {
+            PseudoClass::Hover => holds(Interaction::Hover),
+            PseudoClass::Active => holds(Interaction::Active),
+            PseudoClass::Focus => holds(Interaction::Focus),
+            PseudoClass::FocusVisible => holds(Interaction::FocusVisible),
+            PseudoClass::FocusWithin => holds(Interaction::FocusWithin),
             PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
             PseudoClass::Checked => checked(&self.0),

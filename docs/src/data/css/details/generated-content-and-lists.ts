@@ -21,12 +21,12 @@ export const details: Details = {
 .presence[data-status="online"]::before {
   background-color: #1e8e3e;
 }`,
-        note: "The dot's colour follows an attribute, because a `:hover` or other state in a pseudo-element selector drops the rule.",
+        note: "Changing the status attribute updates the dot's colour.",
       },
     ],
     edgeCases: [
       "Without a `content` declaration, or with `content: none` or `normal`, no box is generated, whatever its size and background.",
-      "A state anywhere in the selector drops the rule, on an ancestor too: `.row:hover .icon::before` is dropped, with an advisory.",
+      "`:hover` and `:focus-visible` on the originating element or an ancestor update the generated box, including its layout (since 0.6).",
       "`transition` and `animation` do not run on the generated box; animate a real child element instead.",
       "The element's `text-transform` applies to the generated text.",
     ],
@@ -53,7 +53,7 @@ export const details: Details = {
     ],
     edgeCases: [
       "Without a `content` declaration, or with `content: none` or `normal`, no box is generated, whatever its size and background.",
-      "A state anywhere in the selector drops the rule, on an ancestor too: `.menu:hover .item::after` is dropped, with an advisory.",
+      "`.menu:hover .item::after` and `.item:focus-visible::after` can create a box only while their state holds (since 0.6).",
       "`transition` and `animation` do not run on the generated box; animate a real child element instead.",
     ],
   },

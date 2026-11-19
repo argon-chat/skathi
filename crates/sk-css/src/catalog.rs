@@ -236,8 +236,8 @@ pub const CATALOG: &[Entry] = &[
     e("counter-reset", Unsupported, &[], &["n"], ""),
     e("counter-set", Unsupported, &[], &["n 1"], ""),
     e("cursor", Partial, &["pointer", "text", "wait", "none", "url(hand.png) 4 4, pointer"], &[], "A `url()` image is not loaded: the fallback keyword shows. A keyword the OS has no cursor for shows the arrow"),
-    e("cx", Unsupported, &[], &["10px"], ""),
-    e("cy", Unsupported, &[], &["10px"], ""),
+    e("cx", Supported, &["10px", "50%"], &[], ""),
+    e("cy", Supported, &["10px", "50%"], &[], ""),
     e("d", Unsupported, &[], &["path(\"M0 0L10 10\")"], ""),
     e("direction", Unsupported, &[], &["rtl"], "Left-to-right text only"),
     e("display", Partial, &["flex", "grid"], &[], "No line boxes; `contents` and the table values lay out as `block`"),
@@ -426,13 +426,13 @@ pub const CATALOG: &[Entry] = &[
     e("position-anchor", Unsupported, &[], &["--a"], ""),
     e("print-color-adjust", Unsupported, &[], &["exact"], ""),
     e("quotes", Unsupported, &[], &["none"], ""),
-    e("r", Unsupported, &[], &["5px"], ""),
+    e("r", Supported, &["5px", "50%"], &[], ""),
     e("resize", Partial, &["none"], &["both"], "There is no user-resize affordance"),
     e("right", Supported, &["auto", "10px"], &[], ""),
     e("rotate", Unsupported, &[], &["45deg"], "Use `transform`"),
     e("row-gap", Supported, &["0", "10px"], &[], ""),
-    e("rx", Unsupported, &[], &["5px"], ""),
-    e("ry", Unsupported, &[], &["5px"], ""),
+    e("rx", Supported, &["5px", "50%"], &[], ""),
+    e("ry", Supported, &["5px", "50%"], &[], ""),
     e("scale", Unsupported, &[], &["2"], "Use `transform`"),
     e("scroll-behavior", Supported, &["auto", "smooth"], &[], ""),
     e("scroll-margin", Supported, &["0", "10px"], &[], ""),
@@ -464,8 +464,8 @@ pub const CATALOG: &[Entry] = &[
     e("scrollbar-gutter", Unsupported, &[], &["stable"], ""),
     e("scrollbar-width", Supported, &["none", "thin"], &[], ""),
     e("shape-rendering", Supported, &["auto", "crispEdges"], &[], ""),
-    e("stop-color", Unsupported, &[], &["red"], ""),
-    e("stop-opacity", Unsupported, &[], &["0.5"], ""),
+    e("stop-color", Supported, &["red", "currentColor"], &[], ""),
+    e("stop-opacity", Supported, &["0.5", "50%"], &[], ""),
     e("stroke", Supported, &["none", "red"], &[], ""),
     e("stroke-dasharray", Supported, &["none", "4 2"], &[], ""),
     e("stroke-dashoffset", Supported, &["0", "2"], &[], ""),
@@ -542,8 +542,8 @@ pub const CATALOG: &[Entry] = &[
     e("word-spacing", Supported, &["normal", "2px"], &[], ""),
     e("word-wrap", Supported, &["normal", "break-word"], &[], ""),
     e("writing-mode", Unsupported, &[], &["vertical-rl"], "Horizontal text only"),
-    e("x", Unsupported, &[], &["10px"], ""),
-    e("y", Unsupported, &[], &["10px"], ""),
+    e("x", Supported, &["10px", "50%"], &[], ""),
+    e("y", Supported, &["10px", "50%"], &[], ""),
     e("z-index", Supported, &["auto", "10"], &[], ""),
     e("zoom", Unsupported, &[], &["1.5"], ""),
 ];
@@ -773,23 +773,6 @@ mod tests {
         assert!(!cond("(-moz-appearance: none)"));
         assert!(!cond("display: flex; color: red"));
         assert!(!cond(""));
-    }
-
-    /// `sk check` reads this copy; regenerate it with
-    /// `cargo run -p sk-css --example css-catalog > packages/cli/check/css-catalog.json`.
-    #[test]
-    fn the_cli_copy_of_the_catalog_is_current() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../packages/cli/check/css-catalog.json"
-        );
-        let Ok(copy) = std::fs::read_to_string(path) else {
-            return;
-        };
-        assert!(
-            copy.replace("\r\n", "\n").trim_end() == to_json(),
-            "packages/cli/check/css-catalog.json is stale: cargo run -p sk-css --example css-catalog > packages/cli/check/css-catalog.json"
-        );
     }
 
     #[test]

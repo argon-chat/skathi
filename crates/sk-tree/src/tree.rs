@@ -384,6 +384,8 @@ pub struct Tree {
     group_hover_deps: HashMap<u32, Vec<u32>>,
     /// Anchor → elements whose `.a:focus .b`-style rules watch it ([`Tree::touch_focus_watchers`]).
     group_focus_deps: HashMap<u32, Vec<u32>>,
+    generated_hover: HashMap<u32, Vec<u32>>,
+    generated_focus: HashMap<u32, Vec<u32>>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -470,12 +472,23 @@ impl Tree {
         for &dep in &deps {
             self.touch(dep);
         }
-        own || !deps.is_empty()
+        let generated = self.generated_hover.get(&id).cloned().unwrap_or_default();
+        for &dep in &generated {
+            self.mark_restyle_subtree(dep);
+        }
+        own || !deps.is_empty() || !generated.is_empty()
     }
 
     /// Focus moved from `old` to `new`: re-render the elements whose ancestor-focus rules watch
     /// either one or, for `:focus-within`, an element above either.
     pub(crate) fn touch_focus_watchers(&mut self, old: u32, new: u32) {
+        for anchor in [old, new] {
+            if let Some(deps) = self.generated_focus.get(&anchor).cloned() {
+                for dep in deps {
+                    self.mark_restyle_subtree(dep);
+                }
+            }
+        }
         if self.group_focus_deps.is_empty() {
             return;
         }
@@ -1528,6 +1541,7 @@ impl Tree {
             )
         });
         CASCADE_SUBJECT.with(|c| c.set(0));
+        crate::containers::note_percentage_style(self, id, states.percentage_sizing);
         // `None` = nothing declared, so inherit; an explicit `pointer-events: auto` opts a
         // descendant back in (reka's `data-[state=open]:pointer-events-auto` overlay).
         let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
@@ -1662,13 +1676,15 @@ impl Tree {
             let parsed = if body.is_empty() {
                 None
             } else {
-                let style = sk_css::parse_inline_style(&body, &mut diags);
+                let (style, reads_layout) = sk_css::container::noting_units(|| {
+                    sk_css::parse_inline_style(&body, &mut diags)
+                });
+                self.inline_container_units |= reads_layout || body.contains("cq");
                 (!style.is_empty()).then(|| std::rc::Rc::new(style))
             };
             for d in diags {
                 warn_css(&format!("[css inline] {d}"));
             }
-            self.inline_container_units |= parsed.is_some() && body.contains("cq");
             let n = self.node_mut(id).unwrap();
             n.inline = parsed;
             n.inline_dirty = false;
@@ -1680,9 +1696,7 @@ impl Tree {
         let mut diagnostics: Vec<String> = Vec::new();
         let full = self.dirty_all;
         let containers = self.containers_active(engine);
-        if containers {
-            crate::containers::install();
-        }
+        crate::containers::install();
         if full {
             crate::containers::forget_all();
         }
@@ -1806,6 +1820,7 @@ impl Tree {
         let cascade_ms = phase.ms();
         let cascaded = computed.len() as u64;
         let phase = crate::perf::Span::start();
+        let track_layout = containers || crate::containers::watching();
         for d in diagnostics {
             warn_css(&format!("[css] {d}"));
         }
@@ -1856,7 +1871,7 @@ impl Tree {
                     if hidden {
                         animator.cancel_animations(id, now);
                     }
-                    if containers {
+                    if track_layout {
                         crate::containers::note_committed(
                             id,
                             n.parent,
@@ -1865,7 +1880,7 @@ impl Tree {
                         );
                     }
                     if n.computed.as_ref() != Some(&states) {
-                        let before = if containers && crate::containers::born_this_frame(id) {
+                        let before = if track_layout && crate::containers::born_this_frame(id) {
                             None
                         } else {
                             n.computed.as_ref()
@@ -1970,10 +1985,22 @@ impl Tree {
         self.group_anchors.clear();
         self.group_hover_deps.clear();
         self.group_focus_deps.clear();
-        if engine.uses_group_states() {
+        self.generated_focus.clear();
+        self.generated_hover.clear();
+        if engine.tracks_state_dependencies() {
             for (i, slot) in self.nodes.iter().enumerate() {
                 let Some(slot) = slot else { continue };
                 if let Some(cs) = &slot.computed {
+                    if let Some(deps) = &cs.generated_dependencies {
+                        for &(key, state) in deps.iter() {
+                            let map = if state == sk_css::Interaction::Hover {
+                                &mut self.generated_hover
+                            } else {
+                                &mut self.generated_focus
+                            };
+                            map.entry(key as u32).or_default().push(i as u32);
+                        }
+                    }
                     if let Some((key, _)) = &cs.group_hover {
                         self.group_anchors.insert(*key as u32);
                         self.group_hover_deps
@@ -2847,6 +2874,15 @@ impl<'t> NodeRef<'t> {
 }
 
 impl<'t> sk_css::MatchDom for NodeRef<'t> {
+    fn generated_interaction(&self, state: sk_css::Interaction) -> bool {
+        match state {
+            sk_css::Interaction::Hover => is_hovered(self.id),
+            sk_css::Interaction::FocusVisible => {
+                crate::live_state::focus_holds(self.tree, self.id, state)
+            }
+            _ => false,
+        }
+    }
     fn key(&self) -> u64 {
         self.id as u64
     }

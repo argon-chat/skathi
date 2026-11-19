@@ -13,7 +13,7 @@ export type Kind =
   | "media-feature"
   | "unit"
   | "feature";
-export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0";
+export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0";
 /** The release a platform's support arrived in, for the platforms where it differs from the entry's `since`. */
 export type PlatformSince = Partial<Record<Platform, Release>>;
 
@@ -720,7 +720,7 @@ const layout = section("Layout", [
   prop("position", OK, "Sets how an element is positioned: in the flow, offset, or taken out of the flow.", {
     values: [
       v("static", OK),
-      v("relative", OK, "A `relative` box with `z-index: auto` paints in tree order."),
+      v("relative", OK, "With `z-index: auto` or `0`, the box paints above in-flow siblings (since 0.6)."),
       v("absolute", OK),
       v("fixed", PART, 'Placed against the parent: exact at the app root or in a `<Teleport to="body">`.'),
       v(
@@ -2143,9 +2143,6 @@ const svgSection = section("SVG properties in CSS", [
     [
       ["stop-color", "Sets the color of an SVG gradient stop."],
       ["stop-opacity", "Sets the opacity of an SVG gradient stop."],
-      ["clip-rule", "Sets which parts of a self-intersecting SVG clip path are inside."],
-      ["flood-color", "Sets the color of the SVG `<feFlood>` and `<feDropShadow>` filter primitives."],
-      ["lighting-color", "Sets the light color of SVG lighting filter primitives."],
       ["x", "Sets the x coordinate of an SVG element."],
       ["y", "Sets the y coordinate of an SVG element."],
       ["cx", "Sets the x coordinate of the center of an SVG circle or ellipse."],
@@ -2153,6 +2150,13 @@ const svgSection = section("SVG properties in CSS", [
       ["r", "Sets the radius of an SVG circle."],
       ["rx", "Sets the horizontal radius of an SVG ellipse or rounded rectangle."],
       ["ry", "Sets the vertical radius of an SVG ellipse or rounded rectangle."],
+    ] as const
+  ).map(([name, summary]) => prop(name, OK, summary, { since: "0.6.0", limitations: [SVG_STATE_LIMIT] })),
+  ...(
+    [
+      ["clip-rule", "Sets which parts of a self-intersecting SVG clip path are inside."],
+      ["flood-color", "Sets the color of the SVG `<feFlood>` and `<feDropShadow>` filter primitives."],
+      ["lighting-color", "Sets the light color of SVG lighting filter primitives."],
       ["d", "Sets the path data of an SVG `<path>`."],
       ["vector-effect", "Sets how an SVG element's stroke reacts to transforms, for example keeping a fixed width."],
       ["paint-order", "Sets the order the fill, stroke and markers of SVG shapes and text are painted in."],
@@ -2224,12 +2228,16 @@ const containment = section("Containment and hints", [
 const generated = section("Generated content and lists", [
   pe("::before", OK, "Creates a pseudo-element as the first child of an element, rendered from `content`.", {
     notes: ['A string `content` is supported, including `content: ""` boxes.'],
-    values: [v("behind a state (:hover::before)", NO, "Key it on an attribute instead (`[data-state=open]::before`).")],
+    values: [
+      v(":hover / :focus-visible before ::before", OK, "Matches the originating element or an ancestor (since 0.6)."),
+    ],
     related: ["pseudo-after", "content"],
   }),
   pe("::after", OK, "Creates a pseudo-element as the last child of an element, rendered from `content`.", {
     notes: ['A string `content` is supported, including `content: ""` boxes.'],
-    values: [v("behind a state (:hover::after)", NO, "Key it on an attribute instead (`[data-state=open]::after`).")],
+    values: [
+      v(":hover / :focus-visible before ::after", OK, "Matches the originating element or an ancestor (since 0.6)."),
+    ],
     related: ["pseudo-before", "content"],
   }),
   prop("content", PART, "Sets the content of `::before` and `::after` pseudo-elements.", {
@@ -2787,15 +2795,15 @@ const valuesAndUnits = section("Values and units", [
     related: ["function-min", "function-max", "function-clamp"],
   }),
   fn("min()", PART, "Returns the smallest of several values.", {
-    limitations: ["Not supported over a percentage mixed with a length."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
     related: ["function-max", "function-clamp", "function-calc"],
   }),
   fn("max()", PART, "Returns the largest of several values.", {
-    limitations: ["Not supported over a percentage mixed with a length."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
     related: ["function-min", "function-clamp", "function-calc"],
   }),
   fn("clamp()", PART, "Clamps a value between a minimum and a maximum.", {
-    limitations: ["Not supported over a percentage mixed with a length."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
     related: ["function-min", "function-max", "function-calc"],
   }),
   ...(

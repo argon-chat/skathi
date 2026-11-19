@@ -15,6 +15,18 @@ pub struct Vars {
 }
 
 impl Vars {
+    /// Substitutes the element's computed custom properties and window environment values.
+    pub fn resolve_value<'a>(
+        &self,
+        text: &'a str,
+        env: &crate::Env,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        if find_subst(text.as_bytes(), 0).is_none() {
+            return Some(text.into());
+        }
+        substitute_with(text, self, env).ok().map(Into::into)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
