@@ -55,23 +55,50 @@ pub(crate) fn viewport_user_size(t: &Tree, mut id: u32) -> Option<(f32, f32)> {
         id = parent;
     };
     for id in inner.into_iter().rev() {
-        let cs = t.node(id)?.computed.as_ref();
-        let dimension = |name, css, basis| match css {
-            Some(gpui::Length::Definite(length)) => {
-                f32::from(length.to_pixels(gpui::px(basis).into(), gpui::px(sk_css::rem_basis())))
-            }
-            Some(gpui::Length::Auto) => basis,
-            _ => t
-                .prop(id, name)
-                .and_then(|v| sk_css::svg_user_length(v, basis))
-                .unwrap_or(basis),
-        };
         size = (
-            dimension("width", cs.and_then(|c| c.base.size.width), size.0),
-            dimension("height", cs.and_then(|c| c.base.size.height), size.1),
+            used_dimension(t, id, "width", size.0, size.0),
+            used_dimension(t, id, "height", size.1, size.1),
         );
     }
     Some(size)
+}
+
+fn used_dimension(t: &Tree, id: u32, name: &str, basis: f32, auto: f32) -> f32 {
+    let css = t.node(id).and_then(|n| n.computed.as_ref()).and_then(|cs| {
+        if name == "width" {
+            cs.base.size.width
+        } else {
+            cs.base.size.height
+        }
+    });
+    match css {
+        Some(gpui::Length::Definite(length)) => {
+            f32::from(length.to_pixels(gpui::px(basis).into(), gpui::px(sk_css::rem_basis())))
+        }
+        Some(gpui::Length::Auto) => auto,
+        _ => t
+            .prop(id, name)
+            .and_then(|v| sk_css::svg_user_length(v, basis))
+            .unwrap_or(auto),
+    }
+    .max(0.)
+}
+
+/// A rect has SVG geometry even when it has no gpui layout box or its other dimension is zero.
+pub(crate) fn rect_dimension(t: &Tree, id: u32, name: &str) -> Option<f32> {
+    let n = t.node(id)?;
+    if t.name(n.tag) != "rect" {
+        return None;
+    }
+    let viewport = enclosing_viewport(t, n.parent)?;
+    let (w, h) = viewport_user_size(t, viewport).unwrap_or_default();
+    Some(used_dimension(
+        t,
+        id,
+        name,
+        if name == "width" { w } else { h },
+        0.,
+    ))
 }
 
 pub(crate) struct SvgDoc {

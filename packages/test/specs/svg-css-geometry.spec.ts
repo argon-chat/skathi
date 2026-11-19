@@ -8,6 +8,22 @@ const app = await launch({
 });
 afterAll(() => app.close());
 
+test("computed rect dimensions follow cascaded geometry in SVG user units", async () => {
+  await app.locator("#outline").boundingBox();
+  const dimensions = () =>
+    app.eval(`["#outline rect", "#outline-control rect", ".missing-width"].map(sel => {
+    const style = getComputedStyle(document.querySelector(sel));
+    return [style.width, style.getPropertyValue("height")].join(" ");
+  }).join(",")`);
+  expect(await dimensions()).toBe("119px 43px,119px 43px,0px 4px");
+  try {
+    await app.eval(`document.querySelector("#outline").setAttribute("viewBox", "0 0 240 88")`);
+    expect(await dimensions()).toBe("239px 87px,119px 43px,0px 4px");
+  } finally {
+    await app.eval(`document.querySelector("#outline").removeAttribute("viewBox")`);
+  }
+});
+
 test.skipIf(!SCREENSHOTS)(
   "CSS geometry and gradient stops match literal SVG attributes",
   async () => {

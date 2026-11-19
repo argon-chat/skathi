@@ -409,10 +409,12 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "transition-duration" => transitions(&|s| secs(s.duration)),
         "transition-delay" => transitions(&|s| signed_secs(s.delay)),
         "width" | "height" => {
-            let (w, h) = crate::render::bounds_of(id)
-                .map(|(_, _, w, h)| (w, h))
-                .unwrap_or((0.0, 0.0));
-            format!("{}px", if name == "width" { w } else { h })
+            let size = crate::svg::rect_dimension(t, id, name).unwrap_or_else(|| {
+                crate::render::bounds_of(id)
+                    .map(|(_, _, w, h)| if name == "width" { w } else { h })
+                    .unwrap_or_default()
+            });
+            format!("{size}px")
         }
         _ if edge_of(name).is_some() => edge_px(t, id, cs, name)?,
         "direction" => "ltr".into(),
