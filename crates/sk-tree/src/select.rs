@@ -727,6 +727,7 @@ pub(crate) fn popup_child(
             inherit_text: true,
             build: Rc::new(build),
             placed: note_placed,
+            dismiss: close,
         }
         .into_element(),
     )

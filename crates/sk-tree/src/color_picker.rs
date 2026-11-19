@@ -618,6 +618,7 @@ pub(crate) fn layer(t: &Tree, window: &mut Window, cx: &mut App) -> Option<AnyEl
             inherit_text: false,
             build: Rc::new(move || view(&state, &recents, pal)),
             placed: note_placed,
+            dismiss: |window, cx| finish(true, window, cx),
         }
         .into_element(),
     )

@@ -63,7 +63,7 @@ windows = { version = "0.62", features = [
 # `<sk-surface>` copies Metal textures, IOSurfaces and CVPixelBuffers. The versions gpui uses.
 block2 = "0.6"
 objc2 = "0.6"
-objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFString"] }
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "CFCGTypes", "CFString"] }
 objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVReturn", "objc2-io-surface"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSError", "NSString"] }
 objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
@@ -94,6 +94,10 @@ serde_json = "1"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["CFDictionary"] }
 objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLBuffer"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# Popup windows: where the opener is on the root window, the monitor's work area, stacking.
+x11rb = { version = "0.13.1", features = ["randr", "shape"] }
 
 [target.'cfg(not(windows))'.dependencies]
 # No DirectWrite here; Core Text and cosmic-text take only sfnt.

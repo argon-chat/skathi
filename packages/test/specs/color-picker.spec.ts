@@ -1,10 +1,20 @@
 // <input type=color>'s picker. It is no element, so it is found in screenshots: its light surface, 4 px
-// under the input. On Windows it is a popup window of its own, listed by `windows` and driven through
-// its id; elsewhere it is drawn in the window, over a dark blue page.
+// under the input. It is a popup window of its own, listed by `windows` and driven through its id;
+// drawn in the window, over a dark blue page, only when that window cannot be opened.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { artifactPath, type Bounds, launch, MACOS, readPng, SCREENSHOTS, type SkApp, WINDOWS } from "../src/index";
+import {
+  artifactPath,
+  type Bounds,
+  launch,
+  LINUX,
+  MACOS,
+  readPng,
+  SCREENSHOTS,
+  type SkApp,
+  WINDOWS,
+} from "../src/index";
 
 const W = 460;
 const app = await launch({
@@ -39,22 +49,22 @@ const box = async (selector: string): Promise<Bounds> => {
 };
 
 type Win = { id: number; kind: string; focused: boolean; owner?: number; margin?: number; screen: Bounds };
-/** Popups are windows of their own on Windows. */
-const NATIVE = WINDOWS;
+/** Popups are windows of their own. */
+const NATIVE = WINDOWS || MACOS || LINUX;
 /** The transparent room around a popup window's panel, for its shadow. */
 const MARGIN = 24;
 const windows = async (of: SkApp = app) => (await of.send("windows")).windows as Win[];
 const popupOf = async (of: SkApp = app) => (await windows(of)).find((w) => w.kind === "popup");
 
-/** Coordinates are the picker's: its popup window's on Windows, else the main window's. */
+/** Coordinates are the picker's: its popup window's, else the main window's. */
 const shoot = async (path?: string) => {
   const popup = NATIVE ? await popupOf() : undefined;
   if (NATIVE && !popup) return { at: (): Rgb => [0, 0, 0] };
-  const file = popup
-    ? (await app.send("screenshot", { path: path ?? artifactPath("color-picker-popup", "png"), window: popup.id })).path
-    : await app.screenshot(path);
-  const shot = readPng(file as string);
-  const k = popup ? 1 : shot.width / W;
+  const sent = popup
+    ? await app.send("screenshot", { path: path ?? artifactPath("color-picker-popup", "png"), window: popup.id })
+    : undefined;
+  const shot = readPng((sent ? sent.path : await app.screenshot(path)) as string);
+  const k = sent ? Number(sent.scale) || 1 : shot.width / W;
   return { at: (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k)) };
 };
 const near = (c: Rgb, [r, g, b]: Rgb) => Math.abs(c[0] - r) < 6 && Math.abs(c[1] - g) < 6 && Math.abs(c[2] - b) < 6;

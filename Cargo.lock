@@ -5572,6 +5572,7 @@ dependencies = [
  "usvg",
  "windows 0.62.2",
  "wuff",
+ "x11rb",
 ]
 
 [[package]]

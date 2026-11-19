@@ -1,9 +1,9 @@
 // The popup is no element, so it is found in screenshots: it takes the select's own yellow
-// background, on a dark gray page. On Windows it is a window of its own, hanging under the box;
-// elsewhere it is drawn in the window.
+// background, on a dark gray page. It is a window of its own, hanging under the box; drawn in the
+// window only when that window cannot be opened.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { artifactPath, type Bounds, launch, MACOS, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
+import { artifactPath, type Bounds, launch, LINUX, MACOS, readPng, SCREENSHOTS, WINDOWS } from "../src/index";
 
 const W = 460;
 const app = await launch({
@@ -48,8 +48,8 @@ const dark = ([r, g, b]: Rgb) => r + g + b < 300;
 const lit = ([r, g, b]: Rgb) => b > 200 && r < 170 && g > 120;
 
 type Win = { id: number; kind: string; screen: Bounds };
-/** Popups are windows of their own on Windows. */
-const NATIVE = WINDOWS;
+/** Popups are windows of their own. */
+const NATIVE = WINDOWS || MACOS || LINUX;
 const windows = async () => (await app.send("windows")).windows as Win[];
 const popupWindow = async () => (await windows()).find((w) => w.kind === "popup");
 
@@ -208,7 +208,7 @@ describe("the popup", () => {
     T,
   );
 
-  test.skipIf(!NATIVE)(
+  test.skipIf(!SCREENSHOTS || !NATIVE)(
     "near the bottom of the window it opens under the box all the same, past the window's edge",
     async () => {
       const f = await box("#far");

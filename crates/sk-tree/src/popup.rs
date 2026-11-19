@@ -1,11 +1,10 @@
-//! Popups (the color picker, a select's list): on Windows a borderless window of their own, placed
-//! under the anchor's box on its monitor's work area, so they may extend past the app's window;
-//! elsewhere drawn over the window's content, kept inside it. Under its anchor, or above when it
-//! does not fit and fits better there, kept inside sideways (gpui's `anchored` flips around one
-//! point, a popup around a box).
-#![cfg_attr(not(windows), allow(dead_code))]
+//! Popups (the color picker, a select's list): a borderless window of their own, placed under the
+//! anchor's box on its monitor's work area, so they may extend past the app's window (on Wayland
+//! the compositor places it against the box); drawn over the window's content, kept inside it, when
+//! that window cannot be opened. Under its anchor, or above when it does not fit and fits better
+//! there, kept inside sideways (gpui's `anchored` flips around one point, a popup around a box).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,6 +12,16 @@ use gpui::prelude::*;
 use gpui::{div, px, AnyElement, App, Bounds, Hsla, Pixels, Window};
 
 use crate::windows::{self, Rect, WinKey};
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[path = "popup/linux.rs"]
+mod plat;
+#[cfg(target_os = "macos")]
+#[path = "popup/mac.rs"]
+mod plat;
+#[cfg(windows)]
+#[path = "popup/win.rs"]
+mod plat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Slot {
@@ -36,6 +45,8 @@ pub(crate) struct Popup {
     pub build: Build,
     /// Told where an in-window popup went, for hit testing.
     pub placed: fn(WinKey, u32, Bounds<Pixels>),
+    /// Closes it as a press outside it does, in the window that opened it.
+    pub dismiss: fn(&mut Window, &mut App),
 }
 
 impl Popup {
@@ -61,7 +72,7 @@ static FAILED: AtomicBool = AtomicBool::new(false);
 
 /// Whether popups open in windows of their own.
 pub(crate) fn native() -> bool {
-    cfg!(windows) && !FAILED.load(Ordering::Relaxed)
+    !FAILED.load(Ordering::Relaxed)
 }
 
 /// Runs `f` in the window `k`: a popup window's handlers act on the window that opened it.
@@ -270,6 +281,7 @@ impl gpui::Element for Native {
                     build: p.build.clone(),
                     margin: p.margin,
                     text,
+                    dismiss: p.dismiss,
                 },
             },
             window,
@@ -305,6 +317,36 @@ pub(crate) fn place(rect: Rect, gap: f32, (pw, ph): (f32, f32), area: Rect) -> (
     (left, top)
 }
 
+/// The most room a popup under or above `rect` has in `work`, both in screen units, over `scale`.
+fn room_in(rect: Rect, work: Rect, gap: f32, scale: f32) -> f32 {
+    let (_, ay, _, ah) = work;
+    let below = ay + ah - (rect.1 + rect.3 + gap * scale);
+    let above = rect.1 - gap * scale - ay;
+    below.max(above).max(0.0) / scale
+}
+
+/// A popup window's frame in screen units, around content placed against `rect` inside `work`,
+/// with `margin` room on each side: `[x, y, w, h]`, whole device pixels.
+fn frame_in(
+    rect: Rect,
+    work: Rect,
+    gap: f32,
+    (w, h): (f32, f32),
+    margin: f32,
+    scale: f32,
+) -> [i32; 4] {
+    let s = scale;
+    let m = margin * s;
+    let (w, h) = (w * s, h * s);
+    let (x, y) = place(rect, gap * s, (w, h), work);
+    [
+        (x - m).round() as i32,
+        (y - m).round() as i32,
+        (w + 2.0 * m).ceil() as i32,
+        (h + 2.0 * m).ceil() as i32,
+    ]
+}
+
 struct Text {
     font: gpui::Font,
     size: Pixels,
@@ -315,6 +357,7 @@ struct Content {
     build: Build,
     margin: f32,
     text: Option<Text>,
+    dismiss: fn(&mut Window, &mut App),
 }
 
 struct Request {
@@ -334,16 +377,15 @@ struct Host {
     owner_handle: gpui::AnyWindowHandle,
     owner_bounds: Bounds<Pixels>,
     content: Rc<RefCell<Content>>,
-    #[cfg(windows)]
-    hwnd: win::HWND,
-    #[cfg(windows)]
-    spot: [i32; 4],
+    native: plat::Native,
+    place: plat::Place,
 }
 
 thread_local! {
     static HOSTS: RefCell<Vec<Host>> = const { RefCell::new(Vec::new()) };
     /// What each slot's last frame showed; a close after it cancels the window it asked for.
     static WANTED: RefCell<Vec<(Slot, u32)>> = const { RefCell::new(Vec::new()) };
+    static WATCHING: Cell<bool> = const { Cell::new(false) };
 }
 
 fn wanted(slot: Slot) -> Option<u32> {
@@ -360,6 +402,7 @@ fn set_wanted(slot: Slot, anchor: Option<u32>) {
 
 struct Root {
     content: Rc<RefCell<Content>>,
+    owner: WinKey,
 }
 
 impl Render for Root {
@@ -376,6 +419,17 @@ impl Render for Root {
                 .font(t.font.clone())
                 .text_size(t.size)
                 .text_color(t.color);
+        }
+        if c.margin > 0.0 {
+            // A press on the shadow's room is one outside the popup (Windows and X11 pass it on).
+            let (owner, dismiss, m) = (self.owner, c.dismiss, px(c.margin));
+            root = root.on_any_mouse_down(move |e, window, cx| {
+                let v = window.viewport_size();
+                let p = e.position;
+                if p.x < m || p.y < m || p.x >= v.width - m || p.y >= v.height - m {
+                    in_window(owner, window, cx, dismiss);
+                }
+            });
         }
         root.child((c.build)())
     }
@@ -429,72 +483,19 @@ pub(crate) fn owner_moved(slot: Slot, window: &Window) -> bool {
 
 /// The most room a popup window under or above `rect` has on its monitor, in `window`'s px.
 pub(crate) fn room(window: &Window, rect: Rect, gap: f32) -> Option<f32> {
-    #[cfg(windows)]
-    {
-        let owner = win::hwnd(window)?;
-        let scale = window.scale_factor();
-        let (r, m) = win::anchor(owner, scale, rect)?;
-        let (_, ay, _, ah) = m.work;
-        let below = ay + ah - (r.1 + r.3 + gap * m.scale);
-        let above = r.1 - gap * m.scale - ay;
-        Some(below.max(above).max(0.0) / m.scale)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (window, rect, gap);
-        None
-    }
+    plat::room(window, rect, gap)
 }
 
 fn show(req: Request, window: &mut Window, cx: &mut App) {
     set_wanted(req.slot, Some(req.anchor));
-    #[cfg(windows)]
-    {
-        let k = windows::key(window);
-        let Some(owner) = win::hwnd(window) else {
-            return give_up("the window has no HWND", k, cx);
-        };
-        let Some((anchor, monitor)) = win::anchor(owner, window.scale_factor(), req.rect) else {
-            return give_up("no monitor under the anchor", k, cx);
-        };
-        let s = monitor.scale;
-        let m = req.content.margin * s;
-        let (w, h) = (req.size.0 * s, req.size.1 * s);
-        let (x, y) = place(anchor, req.gap * s, (w, h), monitor.work);
-        let spot = [
-            (x - m).round() as i32,
-            (y - m).round() as i32,
-            (w + 2.0 * m).ceil() as i32,
-            (h + 2.0 * m).ceil() as i32,
-        ];
-        let inset = m.round() as i32;
-        let owner_bounds = window.bounds();
-        let owner_handle = window.window_handle();
-        let raw_owner = owner.0 as isize;
-        cx.defer(move |cx| {
-            let owner = win::HWND(raw_owner as *mut core::ffi::c_void);
-            apply(
-                req,
-                k,
-                owner_handle,
-                owner,
-                owner_bounds,
-                spot,
-                inset,
-                monitor,
-                cx,
-            )
-        });
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = req;
-        give_up(
-            "no popup windows on this platform",
-            windows::key(window),
-            cx,
-        );
-    }
+    let k = windows::key(window);
+    let place = match plat::locate(window, req.rect, req.gap, req.size, req.content.margin) {
+        Ok(place) => place,
+        Err(why) => return give_up(why, k, cx),
+    };
+    let owner_bounds = window.bounds();
+    let owner_handle = window.window_handle();
+    cx.defer(move |cx| apply(req, k, owner_handle, owner_bounds, place, cx));
 }
 
 /// Falls back to in-window popups for the rest of the run.
@@ -512,17 +513,12 @@ fn give_up(why: &str, owner: WinKey, cx: &mut App) {
     }
 }
 
-#[cfg(windows)]
-#[allow(clippy::too_many_arguments)]
 fn apply(
     req: Request,
     owner: WinKey,
     owner_handle: gpui::AnyWindowHandle,
-    owner_hwnd: win::HWND,
     owner_bounds: Bounds<Pixels>,
-    spot: [i32; 4],
-    inset: i32,
-    monitor: win::Monitor,
+    place: plat::Place,
     cx: &mut App,
 ) {
     let Request {
@@ -541,55 +537,48 @@ fn apply(
         if h[at].owner != owner {
             return Some(Err(h.remove(at).handle));
         }
-        if !win::alive(h[at].hwnd) {
+        if !plat::alive(&h[at].native) {
             h.remove(at);
             return None;
         }
         let host = &mut h[at];
         host.anchor = anchor;
         *host.content.borrow_mut() = content.take()?;
-        if host.spot != spot {
-            host.spot = spot;
-            win::place(host.hwnd, spot, inset, None);
-        }
-        Some(Ok(host.handle))
+        let from = std::mem::replace(&mut host.place, place.clone());
+        Some(Ok((
+            host.handle,
+            host.native.clone(),
+            from,
+            host.content.clone(),
+        )))
     });
     let content = match current {
-        Some(Ok(handle)) => {
-            // Fails only while a devtools command drives it, which refreshes it after.
-            let _ = handle.update(cx, |_, window, _| window.refresh());
-            return;
+        Some(Ok((handle, native, from, kept))) => {
+            if from == place || plat::update(&native, &from, &place, handle, cx) {
+                // Fails only while a devtools command drives it, which refreshes it after.
+                let _ = handle.update(cx, |_, window, _| window.refresh());
+                return;
+            }
+            HOSTS.with(|h| h.borrow_mut().retain(|h| h.handle != handle));
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            kept
         }
         Some(Err(stale)) => {
             let _ = stale.update(cx, |_, window, _| window.remove_window());
             return;
         }
         None => match content {
-            Some(c) => c,
+            Some(c) => Rc::new(RefCell::new(c)),
             None => return,
         },
     };
-    let content = Rc::new(RefCell::new(content));
-    let s = monitor.scale;
-    let bounds = Bounds {
-        origin: gpui::point(px(spot[0] as f32 / s), px(spot[1] as f32 / s)),
-        size: gpui::size(px(spot[2] as f32 / s), px(spot[3] as f32 / s)),
-    };
-    let display_id = cx
-        .displays()
-        .into_iter()
-        .find(|d| {
-            let o = d.bounds().origin;
-            (f32::from(o.x) - monitor.bounds.0 / s).abs() < 1.0
-                && (f32::from(o.y) - monitor.bounds.1 / s).abs() < 1.0
-        })
-        .map(|d| d.id());
+    let (bounds, kind, display_id) = plat::options(&place, owner_handle, cx);
     let options = gpui::WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
         titlebar: None,
         focus: false,
         show: false,
-        kind: gpui::WindowKind::PopUp,
+        kind,
         is_movable: false,
         is_resizable: false,
         is_minimizable: false,
@@ -601,24 +590,27 @@ fn apply(
         ..Default::default()
     };
     let root = content.clone();
-    let opened = cx.open_window(options, move |_, cx| cx.new(|_| Root { content: root }));
+    let opened = cx.open_window(options, move |_, cx| {
+        cx.new(|_| Root {
+            content: root,
+            owner,
+        })
+    });
     let handle: gpui::AnyWindowHandle = match opened {
         Ok(h) => h.into(),
         Err(e) => return give_up(&format!("opening its window failed: {e}"), owner, cx),
     };
-    let shown = handle
-        .update(cx, |_, window, _| {
-            let hwnd = win::hwnd(window)?;
-            win::configure(hwnd, owner_hwnd);
-            win::place(hwnd, spot, inset, Some(owner_hwnd));
-            Some(hwnd)
-        })
-        .ok()
-        .flatten();
-    let Some(hwnd) = shown else {
-        let _ = handle.update(cx, |_, window, _| window.remove_window());
-        return give_up("the popup window has no HWND", owner, cx);
+    let attached = handle
+        .update(cx, |_, window, _| plat::attach(window, &place))
+        .unwrap_or(Err("the popup window closed as it opened"));
+    let native = match attached {
+        Ok(native) => native,
+        Err(why) => {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+            return give_up(why, owner, cx);
+        }
     };
+    watch_closes(cx);
     HOSTS.with(|h| {
         h.borrow_mut().push(Host {
             slot,
@@ -628,209 +620,52 @@ fn apply(
             owner_handle,
             owner_bounds,
             content,
-            hwnd,
-            spot,
+            native,
+            place,
         })
     });
 }
 
-#[cfg(windows)]
-mod win {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
-    pub(super) use windows::Win32::Foundation::HWND;
-    use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
-    use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-    };
-    use windows::Win32::Graphics::Gdi::{
-        ClientToScreen, GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
-    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, GetWindow, GetWindowLongPtrW, GetWindowRect, IsWindow,
-        SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
-        GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, MA_NOACTIVATE, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, WM_MOUSEACTIVATE,
-        WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WNDPROC, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
-        WS_EX_TOPMOST, WS_POPUP,
-    };
-
-    use crate::windows::Rect;
-
-    pub(super) struct Monitor {
-        /// The work area, device px.
-        pub work: Rect,
-        pub bounds: Rect,
-        pub scale: f32,
+/// Popup windows go with the window that opened them; one closed from outside (a Wayland
+/// compositor dismissing it) closes its popup as a press outside it would.
+fn watch_closes(cx: &mut App) {
+    if WATCHING.with(|w| w.replace(true)) {
+        return;
     }
-
-    pub(super) fn alive(hwnd: HWND) -> bool {
-        // SAFETY: only reads whether the handle names a window.
-        unsafe { IsWindow(Some(hwnd)) }.as_bool()
-    }
-
-    pub(super) fn hwnd(window: &gpui::Window) -> Option<HWND> {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-            RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut _)),
-            _ => None,
-        }
-    }
-
-    /// `r` (client px of `owner`) on the screen in device px, and the monitor it is on.
-    pub(super) fn anchor(owner: HWND, scale: f32, r: Rect) -> Option<(Rect, Monitor)> {
-        let mut p = POINT {
-            x: (r.0 * scale).round() as i32,
-            y: (r.1 * scale).round() as i32,
-        };
-        unsafe { ClientToScreen(owner, &mut p) }.ok().ok()?;
-        let (w, h) = (r.2 * scale, r.3 * scale);
-        let rect = RECT {
-            left: p.x,
-            top: p.y,
-            right: p.x + w.round() as i32,
-            bottom: p.y + h.round() as i32,
-        };
-        let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        unsafe { GetMonitorInfoW(monitor, &mut info) }.ok().ok()?;
-        let (mut dx, mut dy) = (96u32, 96u32);
-        let dpi = match unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) } {
-            Ok(()) => dx,
-            Err(_) => 96,
-        };
-        let of = |r: RECT| {
-            (
-                r.left as f32,
-                r.top as f32,
-                (r.right - r.left) as f32,
-                (r.bottom - r.top) as f32,
-            )
-        };
-        Some((
-            (p.x as f32, p.y as f32, w, h),
-            Monitor {
-                work: of(info.rcWork),
-                bounds: of(info.rcMonitor),
-                scale: dpi as f32 / 96.0,
-            },
-        ))
-    }
-
-    thread_local! {
-        /// A popup window's own procedure, and how far in its content starts, device px.
-        static PROCS: RefCell<HashMap<isize, (isize, i32)>> = RefCell::new(HashMap::new());
-    }
-
-    /// Owned by `owner` (above it, gone with it) and never activated, so `owner` keeps the
-    /// keyboard and looks active; square, borderless corners: the content draws its own.
-    pub(super) fn configure(popup: HWND, owner: HWND) {
-        // SAFETY: both are live windows of this thread; the replaced procedure is kept and called.
-        unsafe {
-            SetWindowLongPtrW(popup, GWL_STYLE, (WS_POPUP | WS_CLIPSIBLINGS).0 as isize);
-            let ex = GetWindowLongPtrW(popup, GWL_EXSTYLE);
-            SetWindowLongPtrW(popup, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
-            SetWindowLongPtrW(popup, GWLP_HWNDPARENT, owner.0 as isize);
-            let previous = SetWindowLongPtrW(popup, GWLP_WNDPROC, procedure as *const () as isize);
-            PROCS.with(|p| p.borrow_mut().insert(popup.0 as isize, (previous, 0)));
-            let corners = DWMWCP_DONOTROUND;
-            let _ = DwmSetWindowAttribute(
-                popup,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                (&raw const corners).cast(),
-                std::mem::size_of_val(&corners) as u32,
-            );
-            let border = DWMWA_COLOR_NONE;
-            let _ = DwmSetWindowAttribute(
-                popup,
-                DWMWA_BORDER_COLOR,
-                (&raw const border).cast(),
-                std::mem::size_of_val(&border) as u32,
-            );
-        }
-    }
-
-    /// Moves `popup`; with `owner`, also shows it right above `owner` in the z-order.
-    pub(super) fn place(popup: HWND, [x, y, w, h]: [i32; 4], inset: i32, owner: Option<HWND>) {
-        PROCS.with(|p| {
-            if let Some(e) = p.borrow_mut().get_mut(&(popup.0 as isize)) {
-                e.1 = inset;
-            }
+    cx.on_window_closed(|cx, id| {
+        let id = id.as_u64();
+        let mut orphans = Vec::new();
+        let mut lost = None;
+        HOSTS.with(|h| {
+            h.borrow_mut().retain(|h| {
+                if h.owner == id {
+                    orphans.push(h.handle);
+                    false
+                } else if h.handle.window_id().as_u64() == id {
+                    lost = Some((h.slot, h.anchor, h.owner, h.content.borrow().dismiss));
+                    false
+                } else {
+                    true
+                }
+            })
         });
-        let (after, flags) = match owner {
-            Some(owner) => {
-                // Behind the window over the owner, which also drops gpui's topmost; at the top of
-                // the ordinary windows when only topmost ones are over it.
-                // SAFETY: reads the z-order.
-                let over = unsafe { GetWindow(owner, GW_HWNDPREV) }.ok().filter(|&w| {
-                    w != popup
-                        && unsafe { GetWindowLongPtrW(w, GWL_EXSTYLE) } & WS_EX_TOPMOST.0 as isize
-                            == 0
-                });
-                (
-                    Some(over.unwrap_or(HWND_NOTOPMOST)),
-                    SWP_SHOWWINDOW | SWP_FRAMECHANGED,
-                )
-            }
-            None => (None, SWP_NOZORDER),
-        };
-        // SAFETY: a live window of this thread.
-        let _ = unsafe {
-            SetWindowPos(
-                popup,
-                after,
-                x,
-                y,
-                w,
-                h,
-                flags | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-            )
-        };
-    }
-
-    unsafe extern "system" fn procedure(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
-        let Some((previous, inset)) = PROCS.with(|p| p.borrow().get(&(hwnd.0 as isize)).copied())
-        else {
-            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-        };
-        match msg {
-            // gpui activates a window on any press.
-            WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
-            // No frame: the whole window is client area.
-            WM_NCCALCSIZE if wparam.0 != 0 => return LRESULT(0),
-            // The shadow's room is not the popup: presses there reach the window under it.
-            WM_NCHITTEST if inset > 0 => {
-                let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
-                let mut r = RECT::default();
-                let outside = unsafe { GetWindowRect(hwnd, &mut r) }.is_ok()
-                    && (x < r.left + inset
-                        || x >= r.right - inset
-                        || y < r.top + inset
-                        || y >= r.bottom - inset);
-                if outside {
-                    return LRESULT(HTTRANSPARENT as isize);
+        for handle in orphans {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+        }
+        if let Some((slot, anchor, owner, dismiss)) = lost {
+            if wanted(slot) == Some(anchor) {
+                set_wanted(slot, None);
+                if let Some(h) = handle_of(owner, cx) {
+                    cx.defer(move |cx| {
+                        let _ = h.update(cx, |_, window, cx| dismiss(window, cx));
+                    });
                 }
             }
-            WM_NCDESTROY => {
-                PROCS.with(|p| p.borrow_mut().remove(&(hwnd.0 as isize)));
-            }
-            _ => {}
         }
-        // SAFETY: `previous` is the procedure `SetWindowLongPtrW` replaced.
-        let previous: WNDPROC = unsafe { std::mem::transmute::<isize, WNDPROC>(previous) };
-        unsafe { CallWindowProcW(previous, hwnd, msg, wparam, lparam) }
-    }
+    })
+    .detach();
 }
 
 #[cfg(test)]
