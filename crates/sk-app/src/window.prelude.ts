@@ -40,10 +40,24 @@
   const ro = (obj: object, name: string, get: () => unknown) =>
     Object.defineProperty(obj, name, { get, configurable: true, enumerable: true });
 
-  const normalizeTitle = (v: unknown) =>
-    String(v)
-      .replace(/[\t\n\f\r ]+/g, " ")
-      .replace(/^ | $/g, "");
+  const normalizeTitle = (v: unknown) => {
+    const text = String(v);
+    let result = "";
+    let start = 0;
+    for (let i = 0; i <= text.length; i++) {
+      if (i < text.length) {
+        const code = text.charCodeAt(i);
+        // HTML ASCII whitespace is TAB, LF, FF, CR and SPACE.
+        if (code !== 9 && code !== 10 && code !== 12 && code !== 13 && code !== 32) continue;
+      }
+      if (start < i) {
+        if (result.length) result += " ";
+        result += text.slice(start, i);
+      }
+      start = i + 1;
+    }
+    return result;
+  };
   let titleSlot = normalizeTitle(S.title);
   Object.defineProperty(document, "title", {
     get: () => titleSlot,

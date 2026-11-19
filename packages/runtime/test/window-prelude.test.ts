@@ -22,9 +22,9 @@ interface Booted {
   observe(kinds: string): boolean;
 }
 
-function boot(): Booted {
+function boot(title = "One"): Booted {
   const state: Record<string, unknown> = {
-    title: "One",
+    title,
     maximized: false,
     minimized: false,
     visible: true,
@@ -65,6 +65,21 @@ function boot(): Booted {
 }
 
 describe("window prelude change notifications", () => {
+  test("title trims and collapses only HTML ASCII whitespace, keeping all other UTF-16 code units", () => {
+    const w = boot("\t  initial\f\n title \r");
+    expect(w.host.appWindow.title).toBe("initial title");
+    for (const [value, expected] of [
+      ["", ""],
+      ["\t\n\f\r ", ""],
+      [" a\tb\nc\fd\re  f ", "a b c d e f"],
+      [" \u00a0\t\u000b ", "\u00a0 \u000b"],
+      ["\ud800\t\ud83d\ude00\n\udfff\u2028", "\ud800 \ud83d\ude00 \udfff\u2028"],
+    ] as const) {
+      w.host.appWindow.title = value;
+      expect(w.host.appWindow.title).toBe(expected);
+    }
+  });
+
   test("onChange runs for a new snapshot, a title change and a refresh that sees new state — and not otherwise", () => {
     const w = boot();
     let changes = 0;
