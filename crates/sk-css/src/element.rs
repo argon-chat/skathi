@@ -36,10 +36,12 @@ pub trait MatchDom: Copy {
     /// nor after it; a dependency-driven restyle must hear of that here.
     fn note_following_sibling_anchor(&self) {}
     const LIVE_STATE: bool = false;
+    /// The host can re-cascade state-dependent values when an interaction changes.
+    const CASCADE_STATE: bool = Self::LIVE_STATE;
     fn interaction(&self, _state: Interaction) -> Option<bool> {
         None
     }
-    /// Live state for selectors that create or remove a generated box during layout.
+    /// Live state for rules that must run during the cascade.
     fn generated_interaction(&self, state: Interaction) -> bool {
         self.interaction(state).unwrap_or(false)
     }
@@ -58,7 +60,7 @@ fn active_view_transition<D: MatchDom>(node: &D) -> Option<&str> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Interaction {
     Hover,
     Active,

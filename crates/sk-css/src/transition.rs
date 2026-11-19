@@ -365,7 +365,7 @@ pub(crate) struct Collector {
     delays: Option<Vec<Delay>>,
     easings: Option<Vec<Easing>>,
     // From the first substitution onward, declaration order matters for shorthand/longhand pairs.
-    deferred: Vec<(String, String)>,
+    pub(crate) deferred: Vec<(String, String)>,
     seen: bool,
 }
 

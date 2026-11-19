@@ -262,9 +262,10 @@ const active = ref("General");
     ],
     edgeCases: [
       "A `transition` declared inside the `:hover` rule is ignored with an advisory. Declare it on the base rule, as in the first example; the change then interpolates both ways.",
+      "A custom property set on hover also updates `var()` in base rules and on descendants that inherit it. Moving the pointer away restores the value from the cascade (since 0.6).",
       "`:hover` is the topmost element under the pointer and its DOM ancestors. An overlay on top takes the hover even if it listens for nothing.",
       "`pointer-events: none` keeps an element from being hit, not from being hovered: it is still `:hover` while a descendant that takes pointer events is under the pointer.",
-      "Several states in one compound, such as `.btn:hover:focus`, are not an AND: the rule applies on the strongest state it names (`:active`, then `:hover`, `:focus-visible`, `:focus`), with an advisory.",
+      "For a custom property in `.btn:hover:focus`, both states must match (since 0.6). Paint and layout declarations use the highest-priority state named by the selector. The priority order is `:active`, `:hover`, `:focus-visible`, `:focus`, then `:focus-within`.",
       "When content moves under a still pointer, `:hover` catches up within about 100 ms.",
     ],
   },

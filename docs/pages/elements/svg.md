@@ -146,7 +146,9 @@ Shape geometry (`x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy`, `r`) and gr
 
 The SVG renderer also reads styles written directly on a child or in a `<style>` inside the SVG. For example, `<text style="text-anchor: middle">` centers the label on its x coordinate, and `<path style="filter: grayscale(1)">` grays out the path. Both declarations are ignored in an app stylesheet. For path geometry, set the `d` attribute directly. A scaled stroke keeps scaling even with `vector-effect="non-scaling-stroke"`.
 
-Rules with `:hover`, `:focus`, `:active` or a group selector do not set [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above on the children; an advisory says so. Recolor through `currentColor` instead. A transition or animation of `fill` or `stroke` interpolates when the paint is `currentColor`, because it animates `color`; between two concrete colors it jumps.
+A custom property can carry hover state into SVG geometry and gradient paint (since 0.6). For example, a button with `--accent: red` and `.button:hover { --accent: blue }` can use `<stop style="stop-color: var(--accent)" />`. A rule such as `.gradient-stop { stop-color: var(--accent) }` reads the same inherited value.
+
+Setting [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above directly in a `:hover`, `:focus`, `:active` or group-state rule on an SVG child emits an advisory. Set `color` on the button and use `currentColor`, or change a custom property that a base rule reads. Animating `color` interpolates `currentColor` paint. A change between two concrete `fill` or `stroke` colors jumps.
 
 A paint server from CSS, such as `fill: url(#gradient)`, or `context-fill`, is drawn in `currentColor` with an advisory. Write `fill="url(#gradient)"` as an attribute instead; that works.
 

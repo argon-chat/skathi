@@ -87,7 +87,7 @@ pub use transition::{
     covered, parse_easing, spec_for, Delay, Easing, StepPosition, TransitionProperty,
     TransitionSpec, ANIMATABLE_COUNT,
 };
-pub use vars::Vars;
+pub use vars::{VarChanges, Vars};
 
 /// These are exactly the states gpui's own interactivity ladder can pick live, in gpui's
 /// application order (later wins — see `Interactivity::compute_style_internal`).
@@ -99,8 +99,7 @@ const STATE_FOCUS_WITHIN: u8 = 16;
 
 const STATE_RUNGS: usize = 5;
 
-/// Mirrors the bucket selection in `compute_node` (a compound naming several states lands on the
-/// strongest): a rung's custom properties must be the ones its declarations read.
+/// Selects the gpui style bucket for a compound naming one or more interaction states.
 fn rung_of(states: u8) -> Option<usize> {
     match states {
         0 => None,
@@ -132,6 +131,10 @@ pub struct ComputedStates {
     pub before: Option<Rc<PseudoBox>>,
     pub after: Option<Rc<PseudoBox>>,
     pub generated_dependencies: Option<Rc<Vec<(u64, Interaction)>>>,
+    /// Interaction changes that can replace this element's custom declarations.
+    pub custom_state_dependencies: Option<Rc<Vec<(u64, Interaction)>>>,
+    #[doc(hidden)]
+    pub variable_input_rules: Option<Rc<Vec<u32>>>,
     /// A sizing comparison read the containing block's percentage basis.
     pub percentage_sizing: bool,
     pub placeholder: Option<Rc<StyleRefinement>>,
@@ -501,6 +504,20 @@ struct RuleEntry {
 }
 
 impl RuleEntry {
+    fn has_variable_inputs(&self) -> bool {
+        self.normal_custom.is_some()
+            || self.important_custom.is_some()
+            || self.normal_dynamic.is_some()
+            || self.important_dynamic.is_some()
+            || [
+                &self.normal_transition_declarations,
+                &self.important_transition_declarations,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|c| !c.deferred.is_empty())
+    }
+
     fn set_declarations(&mut self, c: &mapper::Converted) {
         self.normal = c.normal.clone();
         self.important = c.important.clone();
@@ -784,6 +801,7 @@ pub struct Engine {
     sibling_combinators: bool,
     group_states: bool,
     generated_states: bool,
+    state_custom: bool,
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
     percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
     viewport_blocks: Vec<ViewportBlock>,
@@ -1122,6 +1140,7 @@ impl Engine {
             sibling_combinators: false,
             group_states: false,
             generated_states: false,
+            state_custom: false,
             keyframes: std::collections::HashMap::new(),
             percentage_properties: Vec::new(),
             viewport_blocks: Vec::new(),
@@ -1196,6 +1215,51 @@ impl Engine {
         self.group_states
     }
 
+    /// Whether these inherited names can change this node's resolved declarations.
+    pub fn reads_changed_vars(&self, state: &ComputedStates, changes: &VarChanges) -> bool {
+        if changes.is_empty() {
+            return false;
+        }
+        changes.contains(COLOR_SCHEME)
+            || state
+                .variable_input_rules
+                .iter()
+                .flat_map(|list| list.iter())
+                .any(|&i| changes.affects_rule(i, &self.rules[i as usize]))
+            || !state.animations.is_empty()
+    }
+
+    /// Updates a non-consuming descendant's map while respecting `@property` inheritance.
+    pub fn inherit_changed_vars(
+        &self,
+        changes: &Rc<VarChanges>,
+        own: &Rc<Vars>,
+        old_parent: &Rc<Vars>,
+        new_parent: &Rc<Vars>,
+        env: &Env,
+    ) -> (Rc<Vars>, Rc<VarChanges>) {
+        let filtered = (!self.percentage_properties.is_empty())
+            .then(|| {
+                changes.filter(|name| {
+                    self.percentage_properties
+                        .iter()
+                        .rev()
+                        .find(|(cond, reg)| {
+                            reg.name == name
+                                && cond.is_none_or(|c| self.conditions[c as usize].eval(env))
+                        })
+                        .is_none_or(|(_, reg)| reg.inherits)
+                })
+            })
+            .flatten();
+        let all = filtered.is_none();
+        let inherited = filtered.map(Rc::new).unwrap_or_else(|| changes.clone());
+        (
+            inherited.inherit(own, old_parent, new_parent, all),
+            inherited,
+        )
+    }
+
     pub fn tracks_state_dependencies(&self) -> bool {
         self.group_states || self.generated_states
     }
@@ -1204,6 +1268,16 @@ impl Engine {
     /// unit. Inline styles with a `cq*` unit are the caller's to notice.
     pub fn uses_containers(&self) -> bool {
         self.uses_containers
+    }
+
+    /// Whether a style query can change its result for descendants of a changed variable scope.
+    pub fn container_reads_changed_vars(&self, changes: &VarChanges) -> bool {
+        !changes.is_empty()
+            && (self.functions.uses_containers()
+                || self
+                    .container_queries
+                    .iter()
+                    .any(|q| q.reads_changes(changes)))
     }
 
     /// The last block of that name whose condition holds in `env` (CSS duplicate-name rule). `Rc`
@@ -1515,6 +1589,20 @@ impl Engine {
                     .cloned()
                     .unwrap_or_default();
                 if !generated
+                    && states.count_ones() > 1
+                    && (converted.normal.is_some()
+                        || converted.important.is_some()
+                        || converted.normal_dynamic.is_some()
+                        || converted.important_dynamic.is_some()
+                        || converted.normal_font.is_some()
+                        || converted.important_font.is_some())
+                {
+                    rule_diagnostics.push(format!(
+                        "Paint and layout declarations use the strongest state in gpui's state ladder (active, hover, focus-visible, focus, focus-within). Custom properties require every named state to match: {}",
+                        sel_text(sel)
+                    ));
+                }
+                if !generated
                     && (states != 0 || ancestor.is_some())
                     && !pseudo.is_some_and(|p| p.control_index().is_some())
                 {
@@ -1541,6 +1629,9 @@ impl Engine {
                 self.sibling_combinators |= has_sibling_combinator(sel);
                 self.group_states |= ancestor.is_some();
                 self.generated_states |= generated && (states != 0 || ancestor.is_some());
+                self.state_custom |= pseudo.is_none()
+                    && (states != 0 || ancestor.is_some())
+                    && (converted.normal_custom.is_some() || converted.important_custom.is_some());
                 self.index.file(sel, self.rules.len() as u32);
                 let specificity = sel.specificity();
                 self.rules.push(RuleEntry {
@@ -1812,6 +1903,8 @@ impl Engine {
         let el = element::El(node, false);
         let mut matched: Vec<&RuleEntry> = Vec::new();
         let mut generated_dependencies = Vec::new();
+        let mut custom_dependencies = Vec::new();
+        let mut inactive_custom = Vec::new();
         let mut tested = 0u64;
         let mut by_bucket = [0u32; 6];
         self.candidates(&node, &mut |i, bucket| {
@@ -1841,20 +1934,30 @@ impl Engine {
                 .container
                 .is_none_or(|q| self.container_queries[q as usize].eval(parent_vars))
             {
-                if matches!(
+                let stateful = rule.states != 0 || rule.ancestor.is_some();
+                let generated = matches!(
                     rule.pseudo,
                     Some(PseudoElement::Before | PseudoElement::After)
-                ) && (rule.states != 0 || rule.ancestor.is_some())
-                {
+                );
+                let custom = D::CASCADE_STATE
+                    && rule.pseudo.is_none()
+                    && (rule.normal_custom.is_some() || rule.important_custom.is_some());
+                if stateful && (generated || custom) {
+                    let watchers = if generated {
+                        &mut generated_dependencies
+                    } else {
+                        &mut custom_dependencies
+                    };
                     let mut watch = |key, states| {
                         for (bit, interaction) in [
                             (STATE_HOVER, Interaction::Hover),
+                            (STATE_ACTIVE, Interaction::Active),
+                            (STATE_FOCUS, Interaction::Focus),
                             (STATE_FOCUS_VISIBLE, Interaction::FocusVisible),
+                            (STATE_FOCUS_WITHIN, Interaction::FocusWithin),
                         ] {
-                            if states & bit != 0
-                                && !generated_dependencies.contains(&(key, interaction))
-                            {
-                                generated_dependencies.push((key, interaction));
+                            if states & bit != 0 && !watchers.contains(&(key, interaction)) {
+                                watchers.push((key, interaction));
                             }
                         }
                     };
@@ -1872,7 +1975,10 @@ impl Engine {
                         &mut live,
                         &mut |_, _| {},
                     ) {
-                        return;
+                        if generated {
+                            return;
+                        }
+                        inactive_custom.push(i);
                     }
                 }
                 matched.push(rule);
@@ -1887,6 +1993,7 @@ impl Engine {
 
         let share_key = (self.share
             && generated_dependencies.is_empty()
+            && custom_dependencies.is_empty()
             && inline.is_none()
             && !self.functions.uses_containers()
             && !matched.iter().any(|r| r.ancestor.is_some() || r.cq))
@@ -1932,9 +2039,15 @@ impl Engine {
                     &r.normal_custom
                 };
                 if let Some(list) = declared {
-                    match rung_of(r.states) {
-                        None => own_custom.extend(list.iter()),
-                        Some(rung) => state_custom[rung].extend(list.iter()),
+                    if D::CASCADE_STATE && r.pseudo.is_none() {
+                        if !inactive_custom.contains(&index_of(r)) {
+                            own_custom.extend(list.iter());
+                        }
+                    } else {
+                        match rung_of(r.states) {
+                            None => own_custom.extend(list.iter()),
+                            Some(rung) => state_custom[rung].extend(list.iter()),
+                        }
                     }
                 }
             }
@@ -2247,9 +2360,8 @@ impl Engine {
                         &mut focus_within
                     }
                 };
-                // `hover:shadow-lg` sets and reads `--tw-shadow` in one `:hover` rule;
-                // `focus-visible:ring-2` does the same one rung over, and the two must not see each
-                // other.
+                // Static previews have a map for each rung. A live element has already cascaded
+                // the custom declarations from every matching state into its computed map.
                 if let Some(index) = rung {
                     rung_outline[index].refine(&half.outline);
                 }
@@ -2559,6 +2671,18 @@ impl Engine {
             base: Rc::new(base),
             generated_dependencies: (!generated_dependencies.is_empty())
                 .then(|| Rc::new(generated_dependencies)),
+            custom_state_dependencies: (!custom_dependencies.is_empty())
+                .then(|| Rc::new(custom_dependencies)),
+            variable_input_rules: if !D::CASCADE_STATE || !self.state_custom {
+                None
+            } else {
+                let rules: Vec<_> = matched
+                    .iter()
+                    .filter(|r| r.has_variable_inputs())
+                    .map(|r| index_of(r))
+                    .collect();
+                (!rules.is_empty()).then(|| Rc::new(rules))
+            },
             percentage_sizing: percent_basis.read(),
             hover: any_hover.then(|| Rc::new(hover)),
             active: any_active.then(|| Rc::new(active)),
@@ -2922,17 +3046,6 @@ pub(crate) fn classify_states(
         if let Component::NonTSPseudoClass(pc) = component {
             states |= ladder_state(pc);
         }
-    }
-    if states.count_ones() > 1 {
-        mapper::once(
-            diagnostics,
-            format!(
-                "a selector naming several interaction states at once cannot be an AND in gpui's \
-                 state ladder — it was installed on the strongest rung it names \
-                 (active > hover > focus-visible > focus): {}",
-                sel_text(sel)
-            ),
-        );
     }
     // Past the first compound, a state pseudo is an ancestor-state rule, except across a
     // pseudo-element boundary: in `.nav:hover::after` the `:hover` is in the next sequence but on
@@ -6377,6 +6490,144 @@ mod tests {
         }
         fn is_root(&self) -> bool {
             self.r.is_root()
+        }
+    }
+
+    #[test]
+    fn interaction_custom_properties_reach_base_descendants_and_svg() {
+        let sheet = Engine::compile(
+            ".a { --c: red; color: red; background-color: var(--c) } \
+             .a:hover { --c: blue; color: blue } .child { color: var(--c) } \
+             .end { stop-color: var(--c) } .same:hover { background-color: var(--c) }",
+        );
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "a same", 0, vec![]),
+                ("div", "child", 1, vec![]),
+                ("stop", "", 1, vec![]),
+                ("stop", "end", 1, vec![]),
+            ],
+        };
+        let inline = parse_inline_style("stop-color: var(--c)", &mut Vec::new());
+        for (hovered, name) in [(&[][..], "red"), (&[1][..], "blue"), (&[][..], "red")] {
+            let expected = parse_color(name).unwrap();
+            let color = gpui::Hsla::from(gpui::rgb(if hovered.is_empty() {
+                0xff0000
+            } else {
+                0x0000ff
+            }));
+            let mut states: Vec<ComputedStates> = Vec::new();
+            for r in refs(&doc) {
+                let parent = states.first().map(|s| s.vars.clone()).unwrap_or_default();
+                states.push(sheet.compute_node(
+                    LiveRef {
+                        r,
+                        hovered,
+                        focused: 0,
+                        keyboard: false,
+                    },
+                    (r.i == 3).then_some(&inline),
+                    &parent,
+                    None,
+                    &Env::default(),
+                    &mut Vec::new(),
+                ));
+            }
+            for state in &states {
+                assert_eq!(state.vars.get("--c").and_then(parse_color), Some(expected));
+            }
+            assert_eq!(states[0].base.background, Some(color.into()));
+            assert_eq!(states[1].base.text.color, Some(color));
+            for stop in &states[2..] {
+                let paint = stop
+                    .extras
+                    .svg_presentation
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .find(|(property, _)| *property == "stop-color")
+                    .unwrap();
+                assert_eq!(parse_color(&paint.1), Some(expected));
+            }
+            if !hovered.is_empty() {
+                let rung = states[0].hover.as_ref().unwrap();
+                assert_eq!(rung.background, Some(color.into()));
+                assert_eq!(rung.text.color, Some(color));
+            }
+        }
+    }
+
+    #[test]
+    fn interaction_custom_declarations_keep_the_normal_cascade_order() {
+        let doc = themed_doc();
+        for (sheet, inline, expected) in [
+            (
+                ".btn:hover { --x: .5 } .btn { --x: .3 !important }",
+                "",
+                0.3,
+            ),
+            (".btn:hover { --x: .5 }", "--x: .7", 0.7),
+            (".btn:hover { --x: .5 !important }", "--x: .7", 0.5),
+            (
+                ".btn:hover { --x: .5 !important }",
+                "--x: .7 !important",
+                0.7,
+            ),
+            (".btn:hover { --x: .5 } .btn:focus { --x: .8 }", "", 0.8),
+        ] {
+            let engine = Engine::compile(&format!("{sheet} .btn {{ opacity: var(--x) }}"));
+            let inline = parse_inline_style(inline, &mut Vec::new());
+            let target = LiveRef {
+                r: DocRef { doc: &doc, i: 3 },
+                hovered: &[3],
+                focused: 3,
+                keyboard: true,
+            };
+            let state = engine.compute_node(
+                target,
+                Some(&inline),
+                &Rc::default(),
+                None,
+                &Env::default(),
+                &mut Vec::new(),
+            );
+            assert_eq!(state.base.opacity, Some(expected), "{sheet}");
+        }
+    }
+
+    #[test]
+    fn a_custom_declaration_requires_every_interaction_in_its_compound() {
+        let doc = themed_doc();
+        let engine =
+            Engine::compile(".btn { --x: .2; opacity: var(--x) } .btn:hover:focus { --x: .8 }");
+        for (hovered, focused, expected) in
+            [(&[3][..], 0, 0.2), (&[][..], 3, 0.2), (&[3][..], 3, 0.8)]
+        {
+            let target = LiveRef {
+                r: DocRef { doc: &doc, i: 3 },
+                hovered,
+                focused,
+                keyboard: true,
+            };
+            let mut diagnostics = Vec::new();
+            let state = engine.compute_node(
+                target,
+                None,
+                &Rc::default(),
+                None,
+                &Env::default(),
+                &mut diagnostics,
+            );
+            assert_eq!(state.base.opacity, Some(expected));
+            assert!(
+                engine
+                    .diagnostics
+                    .iter()
+                    .chain(&diagnostics)
+                    .all(|message| !message.contains("strongest")),
+                "{diagnostics:?}"
+            );
         }
     }
 

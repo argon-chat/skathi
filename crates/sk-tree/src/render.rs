@@ -917,15 +917,13 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
 
 fn cancel_press(window: &mut Window, cx: &mut App) {
     let captured = crate::pointer::captured_target(window);
-    let press = windows::here(window, |w| {
-        w.active = None;
-        match &mut w.press {
-            Some(p) if !p.cancelled => {
-                p.cancelled = true;
-                Some((captured.unwrap_or(p.target), p.position))
-            }
-            _ => None,
+    crate::live_state::set_active(window, None);
+    let press = windows::here(window, |w| match &mut w.press {
+        Some(p) if !p.cancelled => {
+            p.cancelled = true;
+            Some((captured.unwrap_or(p.target), p.position))
         }
+        _ => None,
     });
     if let Some((target, position)) = press {
         if tree::read_tree(|t| t.node(target).is_some()) {

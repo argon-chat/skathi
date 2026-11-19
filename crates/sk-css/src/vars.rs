@@ -47,6 +47,142 @@ impl Vars {
     }
 }
 
+/// A change to the inherited map, shared by descendants with the same incoming values.
+#[derive(Default)]
+pub struct VarChanges {
+    entries: Vec<(Rc<str>, Option<Rc<str>>)>,
+    rules: std::cell::RefCell<HashMap<u32, bool>>,
+    forwarded: std::cell::RefCell<HashMap<*const Vars, (Rc<Vars>, Rc<Vars>)>>,
+}
+
+impl VarChanges {
+    pub fn between(old: &Rc<Vars>, new: &Rc<Vars>) -> Self {
+        if Rc::ptr_eq(old, new) {
+            return Self::default();
+        }
+        let mut changes = Vec::new();
+        for (name, value) in &new.entries {
+            if old.get(name) != Some(value.as_ref()) {
+                changes.push((name.clone(), Some(value.clone())));
+            }
+        }
+        changes.extend(
+            old.entries
+                .iter()
+                .filter(|(k, _)| new.get(k).is_none())
+                .map(|(k, _)| (k.clone(), None)),
+        );
+        Self {
+            entries: changes,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.entries.iter().any(|(key, _)| key.as_ref() == name)
+    }
+
+    pub fn affects_declaration(&self, property: &str, raw: &str) -> bool {
+        self.contains(property) || references(raw, |name| name.is_none_or(|s| self.contains(s)))
+    }
+
+    pub(crate) fn filter(&self, keep: impl Fn(&str) -> bool) -> Option<Self> {
+        self.entries.iter().any(|(k, _)| !keep(k)).then(|| Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|(k, _)| keep(k))
+                .cloned()
+                .collect(),
+            ..Self::default()
+        })
+    }
+
+    /// Carries changed names through a node that neither reads nor overrides them.
+    pub(crate) fn inherit(
+        &self,
+        own: &Rc<Vars>,
+        old_parent: &Rc<Vars>,
+        new_parent: &Rc<Vars>,
+        all_inherit: bool,
+    ) -> Rc<Vars> {
+        if all_inherit && Rc::ptr_eq(own, old_parent) {
+            return new_parent.clone();
+        }
+        if self.is_empty() {
+            return own.clone();
+        }
+        let mut forwarded = self.forwarded.borrow_mut();
+        let (_, result) = forwarded.entry(Rc::as_ptr(own)).or_insert_with(|| {
+            let mut vars = (**own).clone();
+            for (name, value) in &self.entries {
+                match (vars.entries.binary_search_by(|(k, _)| k.cmp(name)), value) {
+                    (Ok(i), Some(v)) => vars.entries[i].1 = v.clone(),
+                    (Ok(i), None) => {
+                        vars.entries.remove(i);
+                    }
+                    (Err(i), Some(v)) => vars.entries.insert(i, (name.clone(), v.clone())),
+                    (Err(_), None) => {}
+                }
+            }
+            (own.clone(), Rc::new(vars))
+        });
+        result.clone()
+    }
+    pub(crate) fn affects_rule(&self, index: u32, rule: &crate::RuleEntry) -> bool {
+        *self.rules.borrow_mut().entry(index).or_insert_with(|| {
+            [
+                &rule.normal_custom,
+                &rule.important_custom,
+                &rule.normal_dynamic,
+                &rule.important_dynamic,
+            ]
+            .into_iter()
+            .flatten()
+            .flat_map(|decls| decls.iter())
+            .chain(
+                [
+                    &rule.normal_transition_declarations,
+                    &rule.important_transition_declarations,
+                ]
+                .into_iter()
+                .flatten()
+                .flat_map(|collector| &collector.deferred),
+            )
+            .any(|(name, value)| self.affects_declaration(name, value))
+        })
+    }
+}
+
+fn references(text: &str, mut found: impl FnMut(Option<&str>) -> bool) -> bool {
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while let Some((open, kind)) = find_subst(bytes, cursor) {
+        cursor = open
+            + match kind {
+                Subst::Function(len) => len + 1,
+                _ => 4,
+            };
+        match kind {
+            Subst::Var => {
+                let end = text[cursor..]
+                    .find([',', ')'])
+                    .map_or(text.len(), |i| cursor + i);
+                if found(Some(text[cursor..end].trim())) {
+                    return true;
+                }
+            }
+            Subst::Function(_) if found(None) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 pub(crate) fn resolve_registered(
     parent: &Rc<Vars>,
     own: &[&(String, String)],

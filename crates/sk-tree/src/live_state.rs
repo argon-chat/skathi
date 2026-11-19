@@ -55,6 +55,37 @@ impl LiveStates {
     }
 }
 
+pub(crate) fn active_holds(t: &Tree, anchor: u32) -> bool {
+    let mut holds = false;
+    windows::each(|_, w| {
+        let mut at = w.active.unwrap_or(0);
+        while at != 0 {
+            if at == anchor {
+                holds = true;
+                break;
+            }
+            if at == w.painted_root {
+                break;
+            }
+            at = t.node(at).map_or(0, |n| n.parent);
+        }
+    });
+    holds
+}
+
+pub(crate) fn set_active(window: &Window, target: Option<u32>) {
+    let (old, root) = windows::here(window, |w| {
+        (std::mem::replace(&mut w.active, target), w.painted_root)
+    });
+    if old != target {
+        tree::with_tree(|t| {
+            for id in [old, target].into_iter().flatten() {
+                t.mark_custom_path(id, root, Interaction::Active);
+            }
+        });
+    }
+}
+
 thread_local! {
     /// The focused node and modality gpui paints this frame, read when a window's build starts: the
     /// window's slot catches up only in gpui's focus observers, which run after the draw.

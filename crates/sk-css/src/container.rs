@@ -295,6 +295,18 @@ pub(crate) const SUPPORTED: &str = "supported: an optional container name, then 
 type Unsupported = &'static str;
 
 impl Query {
+    pub(crate) fn reads_changes(&self, changes: &crate::VarChanges) -> bool {
+        fn reads(cond: &Cond, changes: &crate::VarChanges) -> bool {
+            match cond {
+                Cond::Style(name, _) => changes.contains(name),
+                Cond::Not(inner) => reads(inner, changes),
+                Cond::And(items) | Cond::Or(items) => items.iter().any(|c| reads(c, changes)),
+                _ => false,
+            }
+        }
+        self.parts.iter().any(|p| reads(&p.cond, changes))
+    }
+
     pub(crate) fn nest(&self, rule: &ContainerRule<'_>) -> Result<Query, Unsupported> {
         let cond = match &rule.condition {
             Some(c) => condition(c)?,

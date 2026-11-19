@@ -415,15 +415,13 @@ pub(crate) fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx:
 }
 
 pub(crate) fn hit_nothing(kind: VnHitKind, window: &mut Window) {
+    if kind != VnHitKind::Scroll {
+        crate::live_state::set_active(window, None);
+    }
     windows::here(window, |w| {
         w.hit = None;
-        match kind {
-            VnHitKind::Down => {
-                w.down_hit = None;
-                w.active = None;
-            }
-            VnHitKind::Up => w.active = None,
-            VnHitKind::Scroll => {}
+        if kind == VnHitKind::Down {
+            w.down_hit = None;
         }
     });
     window.vn_restrict_mouse_hit(&|_| false, false);

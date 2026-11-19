@@ -185,7 +185,7 @@ export const Markdown = (props: { source: string }) => h("div", render(marked.le
 
 ## Styles
 
-Scoped styles work, with `:deep()`, `:slotted()` and `:global()`, and so does `v-bind()` in `<style>`: the values are custom properties on the component's root element and follow the state.
+Scoped styles support `:deep()`, `:slotted()` and `:global()`. A `v-bind()` in `<style>` becomes a custom property on the component's root element and updates when its Vue expression changes. A CSS interaction can also set a custom property. For example, descendants that use `var(--accent)` pick up the value from `.button:hover { --accent: blue }` while the pointer is over the button (since 0.6).
 
 `<style module>` is planned; until then it is not compiled (`SK5004`, an error). Its rules are added as plain global rules and `$style` is undefined, so a template that reads `$style.red` throws while rendering and the component renders nothing; `useCssModule()` answers `{}`. Use `<style scoped>` with plain class names.
 

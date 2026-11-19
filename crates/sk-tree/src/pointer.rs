@@ -236,15 +236,15 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) 
         r
     });
     let target = resolved.target;
+    match kind {
+        VnHitKind::Down => crate::live_state::set_active(window, Some(target)),
+        VnHitKind::Up => crate::live_state::set_active(window, None),
+        VnHitKind::Scroll => {}
+    }
     windows::here(window, |w| {
         w.hit = Some(target);
-        match kind {
-            VnHitKind::Down => {
-                w.down_hit = Some(target);
-                w.active = Some(target);
-            }
-            VnHitKind::Up => w.active = None,
-            VnHitKind::Scroll => {}
+        if kind == VnHitKind::Down {
+            w.down_hit = Some(target);
         }
     });
     let mut path = resolved.path;

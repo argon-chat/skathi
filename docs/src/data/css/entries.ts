@@ -2908,9 +2908,12 @@ const valuesAndUnits = section("Values and units", [
   }),
   prop("Custom properties (`--*`)", OK, "Properties whose names start with `--`, holding values that `var()` reads.", {
     slug: "custom-properties",
-    notes: ["Fallbacks are supported, and custom properties inherit."],
+    notes: [
+      "Unregistered custom properties inherit. `var(--name, fallback)` uses its fallback when the property is missing or invalid.",
+      'A matching state rule can change a custom property for the element and its descendants. `getComputedStyle(element).getPropertyValue("--name")` returns the value for the current state (since 0.6).',
+    ],
     aliases: ["--*", "css variables"],
-    related: ["function-var", "at-property"],
+    related: ["function-var", "pseudo-hover", "at-property"],
   }),
   kw(
     "dashed-function",

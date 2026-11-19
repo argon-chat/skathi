@@ -386,6 +386,8 @@ pub struct Tree {
     group_focus_deps: HashMap<u32, Vec<u32>>,
     generated_hover: HashMap<u32, Vec<u32>>,
     generated_focus: HashMap<u32, Vec<u32>>,
+    custom_watchers: HashMap<(u32, sk_css::Interaction), std::collections::HashSet<u32>>,
+    custom_marks: std::collections::HashSet<u32>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -458,6 +460,54 @@ impl Tree {
         self.group_anchors.contains(&id)
     }
 
+    fn update_custom_watchers(
+        &mut self,
+        id: u32,
+        old: &[(u64, sk_css::Interaction)],
+        new: &[(u64, sk_css::Interaction)],
+    ) {
+        if old == new {
+            return;
+        }
+        for &(anchor, state) in old {
+            let key = (anchor as u32, state);
+            if let Some(watchers) = self.custom_watchers.get_mut(&key) {
+                watchers.remove(&id);
+                if watchers.is_empty() {
+                    self.custom_watchers.remove(&key);
+                }
+            }
+        }
+        for &(anchor, state) in new {
+            self.custom_watchers
+                .entry((anchor as u32, state))
+                .or_default()
+                .insert(id);
+        }
+    }
+
+    fn mark_custom_watchers(&mut self, anchor: u32, state: sk_css::Interaction) -> bool {
+        if let Some(watchers) = self.custom_watchers.get(&(anchor, state)) {
+            self.custom_marks.extend(watchers);
+            self.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn mark_custom_path(&mut self, mut id: u32, root: u32, state: sk_css::Interaction) {
+        if self.custom_watchers.is_empty() {
+            return;
+        }
+        while id != 0 {
+            self.mark_custom_watchers(id, state);
+            if id == root {
+                break;
+            }
+            id = self.node(id).map_or(0, |n| n.parent);
+        }
+    }
+
     /// `id` joined or left the hover path: touch its `:hover` rung and the `group-hover:` watchers
     /// so cached subtrees render again.
     pub(crate) fn touch_hover_styled(&mut self, id: u32) -> bool {
@@ -476,13 +526,19 @@ impl Tree {
         for &dep in &generated {
             self.mark_restyle_subtree(dep);
         }
-        own || !deps.is_empty() || !generated.is_empty()
+        self.mark_custom_watchers(id, sk_css::Interaction::Hover)
+            || own
+            || !deps.is_empty()
+            || !generated.is_empty()
     }
 
     /// Focus moved from `old` to `new`: re-render the elements whose ancestor-focus rules watch
     /// either one or, for `:focus-within`, an element above either.
     pub(crate) fn touch_focus_watchers(&mut self, old: u32, new: u32) {
         for anchor in [old, new] {
+            self.mark_custom_watchers(anchor, sk_css::Interaction::Focus);
+            self.mark_custom_watchers(anchor, sk_css::Interaction::FocusVisible);
+            self.mark_custom_path(anchor, 0, sk_css::Interaction::FocusWithin);
             if let Some(deps) = self.generated_focus.get(&anchor).cloned() {
                 for dep in deps {
                     self.mark_restyle_subtree(dep);
@@ -798,6 +854,14 @@ impl Tree {
             return;
         };
         self.style_nodes.remove(&id);
+        self.custom_marks.remove(&id);
+        if let Some(deps) = node
+            .computed
+            .as_ref()
+            .and_then(|c| c.custom_state_dependencies.as_deref())
+        {
+            self.update_custom_watchers(id, deps, &[]);
+        }
         for c in node.children {
             self.free_subtree(c);
         }
@@ -1701,8 +1765,25 @@ impl Tree {
             crate::containers::forget_all();
         }
         let settled = self.settle_self_marks(engine, env);
-        let roots = self.restyle_roots();
+        let mut roots = self.restyle_roots();
+        let custom_marks = std::mem::take(&mut self.custom_marks);
+        let selective = !custom_marks.is_empty() && !full && roots.is_empty() && settled.is_empty();
+        let mut marked_paths = std::collections::HashSet::new();
+        if !custom_marks.is_empty() && !full {
+            for &id in roots.iter().chain(&custom_marks) {
+                self.mark_restyle(id);
+                if selective {
+                    let mut at = id;
+                    while at != 0 && marked_paths.insert(at) {
+                        at = self.node(at).map_or(0, |n| n.parent);
+                    }
+                }
+            }
+            roots = self.restyle_roots();
+        }
         let cascaded_anything = !roots.is_empty() || !settled.is_empty();
+        let mut forwarded = Vec::new();
+        let mut container_matches_changed = false;
         let computed: Vec<(u32, sk_css::ComputedStates)> = {
             let this: &Tree = self;
             let root_vars = std::rc::Rc::new(sk_css::Vars::default());
@@ -1718,6 +1799,7 @@ impl Tree {
                 sk_css::InheritedRadii,
                 sk_css::Env,
                 sk_css::container::Chain,
+                CascadeChange,
             )> = Vec::new();
             let multiwindow = crate::windows::any_secondary();
             for r in roots {
@@ -1733,6 +1815,11 @@ impl Tree {
                     inherited_radii,
                     root_env,
                     this.container_chain(r, containers),
+                    if selective {
+                        CascadeChange::Interaction
+                    } else {
+                        CascadeChange::All
+                    },
                 ));
                 while let Some((
                     id,
@@ -1742,12 +1829,39 @@ impl Tree {
                     parent_radii,
                     here_env,
                     chain,
+                    delta,
                 )) = stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
-                    let (child_vars, child_inert, child_text, child_radii, child_chain) =
-                        if n.kind == Kind::Element {
-                            let (states, radii) = this.cascade_one(
+                    if delta
+                        .variables()
+                        .is_some_and(|(_, changes)| changes.is_empty())
+                        && !marked_paths.contains(&id)
+                    {
+                        continue;
+                    }
+                    let (
+                        child_vars,
+                        child_inert,
+                        child_text,
+                        child_radii,
+                        child_chain,
+                        child_delta,
+                    ) = if n.kind == Kind::Element {
+                        let previous = n.computed.as_ref();
+                        let pass_through =
+                            delta
+                                .variables()
+                                .zip(previous)
+                                .filter(|((_, changes), old)| {
+                                    !custom_marks.contains(&id)
+                                        && !engine.reads_changed_vars(old, changes)
+                                        && !n.style.iter().any(|(k, value)| {
+                                            changes.affects_declaration(this.name(*k), value)
+                                        })
+                                });
+                        let computed = pass_through.is_none().then(|| {
+                            this.cascade_one(
                                 engine,
                                 id,
                                 (
@@ -1759,30 +1873,90 @@ impl Tree {
                                 &here_env,
                                 &chain,
                                 &mut diagnostics,
-                            );
-                            let inert = states.extras.pointer_events_none == Some(true);
-                            let vars = states.vars.clone();
-                            let text = Inherited {
-                                color: states.color,
-                                font_size: states.font_size,
-                                font: states.computed_font.clone(),
-                            };
-                            let child_chain = if containers {
-                                sk_css::container::Container::link(
-                                    id,
-                                    &states.extras,
-                                    &states.vars,
-                                    states.font_size,
-                                    &chain,
-                                )
+                            )
+                        });
+                        let (states, vars, radii, forwarded_changes) =
+                            if let Some((states, radii)) = &computed {
+                                (states, states.vars.clone(), *radii, None)
                             } else {
-                                None
+                                let ((old_parent, changes), old) = pass_through.unwrap();
+                                let (vars, inherited) = engine.inherit_changed_vars(
+                                    changes,
+                                    &old.vars,
+                                    old_parent,
+                                    &parent_vars,
+                                    &here_env,
+                                );
+                                if !std::rc::Rc::ptr_eq(&vars, &old.vars) {
+                                    forwarded.push((id, vars.clone()));
+                                }
+                                (
+                                    old,
+                                    vars,
+                                    sk_css::InheritedRadii::of(&old.base),
+                                    Some((old.vars.clone(), inherited)),
+                                )
                             };
-                            out.push((id, states));
-                            (vars, inert, text, radii, child_chain)
-                        } else {
-                            (parent_vars, parent_inert, parent_text, parent_radii, chain)
+                        let inert = states.extras.pointer_events_none == Some(true);
+                        let text = Inherited {
+                            color: states.color,
+                            font_size: states.font_size,
+                            font: states.computed_font.clone(),
                         };
+                        let child_chain = if containers {
+                            sk_css::container::Container::link(
+                                id,
+                                &states.extras,
+                                &vars,
+                                states.font_size,
+                                &chain,
+                            )
+                        } else {
+                            None
+                        };
+                        let child_delta = if let Some((prior, changes)) = forwarded_changes {
+                            CascadeChange::Variables(prior, changes)
+                        } else if let Some(old) =
+                            previous.filter(|_| !matches!(delta, CascadeChange::All))
+                        {
+                            let changes =
+                                std::rc::Rc::new(sk_css::VarChanges::between(&old.vars, &vars));
+                            if containers
+                                && (old.extras.container_type != states.extras.container_type
+                                    || old.extras.container_name != states.extras.container_name
+                                    || old.font_size != states.font_size
+                                    || engine.container_reads_changed_vars(&changes))
+                            {
+                                container_matches_changed = true;
+                                CascadeChange::All
+                            } else if old.color == states.color
+                                && old.font_size == states.font_size
+                                && old.computed_font == states.computed_font
+                                && old.extras.pointer_events_none
+                                    == states.extras.pointer_events_none
+                                && sk_css::InheritedRadii::of(&old.base) == radii
+                            {
+                                CascadeChange::Variables(old.vars.clone(), changes)
+                            } else {
+                                CascadeChange::Interaction
+                            }
+                        } else {
+                            CascadeChange::All
+                        };
+                        if let Some((states, _)) = computed {
+                            out.push((id, states));
+                        }
+                        (vars, inert, text, radii, child_chain, child_delta)
+                    } else {
+                        (
+                            parent_vars,
+                            parent_inert,
+                            parent_text,
+                            parent_radii,
+                            chain,
+                            delta,
+                        )
+                    };
                     for &c in n.children.iter().rev() {
                         // The window boundary: a popped-out node is painted by another window, so
                         // its subtree answers that window's environment, on a full-document pass
@@ -1800,12 +1974,18 @@ impl Tree {
                             child_radii,
                             child_env,
                             child_chain.clone(),
+                            child_delta.clone(),
                         ));
                     }
                 }
             }
             out
         };
+        for (id, vars) in forwarded {
+            if let Some(cs) = self.node_mut(id).and_then(|n| n.computed.as_mut()) {
+                cs.vars = vars;
+            }
+        }
         // Nodes restyled alone, unless a walk this pass reached them too: that result uses what the
         // walk's ancestors hand down now.
         let computed = if settled.is_empty() {
@@ -1838,6 +2018,18 @@ impl Tree {
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
+                let old_watchers = self
+                    .node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|s| s.custom_state_dependencies.clone());
+                self.update_custom_watchers(
+                    id,
+                    old_watchers.as_deref().map_or(&[], Vec::as_slice),
+                    states
+                        .custom_state_dependencies
+                        .as_deref()
+                        .map_or(&[], Vec::as_slice),
+                );
                 let node_env = if multiwindow && (has_keyframes || !states.animations.is_empty()) {
                     crate::windows::env_for_node(self, id, env)
                 } else {
@@ -1978,7 +2170,7 @@ impl Tree {
         for id in restyled {
             self.touch(id);
         }
-        if !cascaded_anything {
+        if !cascaded_anything || (selective && !container_matches_changed) {
             crate::perf::note_restyle(pass.ms(), inline_ms, cascade_ms, phase.ms(), cascaded);
             return;
         }
@@ -2786,6 +2978,22 @@ struct Inherited {
     font: gpui::Font,
 }
 
+#[derive(Clone)]
+enum CascadeChange {
+    All,
+    Interaction,
+    Variables(std::rc::Rc<sk_css::Vars>, std::rc::Rc<sk_css::VarChanges>),
+}
+
+impl CascadeChange {
+    fn variables(&self) -> Option<(&std::rc::Rc<sk_css::Vars>, &std::rc::Rc<sk_css::VarChanges>)> {
+        match self {
+            Self::Variables(old, changes) => Some((old, changes)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct NodeRef<'t> {
     pub tree: &'t Tree,
@@ -2874,13 +3082,12 @@ impl<'t> NodeRef<'t> {
 }
 
 impl<'t> sk_css::MatchDom for NodeRef<'t> {
+    const CASCADE_STATE: bool = true;
     fn generated_interaction(&self, state: sk_css::Interaction) -> bool {
         match state {
             sk_css::Interaction::Hover => is_hovered(self.id),
-            sk_css::Interaction::FocusVisible => {
-                crate::live_state::focus_holds(self.tree, self.id, state)
-            }
-            _ => false,
+            sk_css::Interaction::Active => crate::live_state::active_holds(self.tree, self.id),
+            _ => crate::live_state::focus_holds(self.tree, self.id, state),
         }
     }
     fn key(&self) -> u64 {
@@ -3044,6 +3251,118 @@ mod tests {
         let before = read_tree(|t| t.sub_rev(parent));
         with_tree(|t| t.remove(child));
         assert!(read_tree(|t| t.sub_rev(parent)) > before);
+    }
+
+    #[test]
+    fn hover_variables_restyle_readers_and_forward_the_map_through_idle_branches() {
+        set_stylesheet(
+            r#"
+            @property --locked { syntax: "<percentage>"; inherits: false; initial-value: 2% }
+            .group { --x: 0.25 } .group:hover { --x: 0.75; --locked: 70% }
+            .pad { --other: fixed } .shadow { --x: 0.25 } .read { opacity: var(--x) }
+            .alias { --derived: var(--x) } .derived { opacity: var(--derived) }
+            .group:hover .group-target { --local: var(--x) }
+            .explicit { --locked: inherit }
+            @container (width > 9000px) { .unused { opacity: 0.1 } }
+        "#
+            .into(),
+        );
+        let (owner, pad, read, shadow, masked, derived, group_target, explicit, outside) =
+            with_tree(|t| {
+                let root = t.create_root();
+                let tag = t.intern("div");
+                let mut add = |parent, class| {
+                    let id = t.create_element(tag);
+                    t.set_class(id, class);
+                    t.insert(id, parent, 0);
+                    id
+                };
+                let owner = add(root, "group");
+                let pad = add(owner, "pad");
+                let read = add(pad, "read");
+                let shadow = add(owner, "shadow");
+                let masked = add(shadow, "read");
+                let alias = add(owner, "alias");
+                let derived = add(alias, "derived");
+                (
+                    owner,
+                    pad,
+                    read,
+                    shadow,
+                    masked,
+                    derived,
+                    add(pad, "group-target"),
+                    add(owner, "explicit"),
+                    add(root, "read"),
+                )
+            });
+        restyle_all();
+        let style = |id| read_tree(|t| t.node(id).unwrap().computed.clone().unwrap());
+        let revisions = || read_tree(|t| (t.sub_rev(masked), t.sub_rev(outside)));
+        let untouched = revisions();
+        let pad_style = style(pad).base;
+        assert_eq!(style(group_target).vars.get("--local"), None);
+        for (hovered, expected) in [(true, 0.75), (false, 0.25)] {
+            note_hover(owner, hovered);
+            with_tree(|t| assert!(t.touch_hover_styled(owner)));
+            flush_pending_style();
+            assert_eq!(style(read).base.opacity, Some(expected));
+            assert_eq!(style(derived).base.opacity, Some(expected));
+            assert_eq!(style(pad).vars.get("--x").unwrap().parse(), Ok(expected));
+            assert!(std::rc::Rc::ptr_eq(&pad_style, &style(pad).base));
+            assert_eq!(
+                style(shadow).vars.get("--x").unwrap().parse::<f32>(),
+                Ok(0.25)
+            );
+            assert_eq!(style(masked).base.opacity, Some(0.25));
+            assert_eq!(style(read).vars.get("--locked"), Some("2%"));
+            assert_eq!(
+                style(explicit).vars.get("--locked"),
+                Some(if hovered { "70%" } else { "2%" })
+            );
+            assert_eq!(
+                style(group_target)
+                    .vars
+                    .get("--local")
+                    .map(str::parse::<f32>),
+                hovered.then_some(Ok(expected))
+            );
+            assert_eq!(revisions(), untouched);
+        }
+    }
+
+    #[test]
+    fn hover_updates_a_named_container_style_query_across_a_variable_override() {
+        set_stylesheet(
+            ".owner { container-name: card; --theme: dark } .owner:hover { --theme: light }
+             .shadow { --theme: dark } .leaf { opacity: 0.25 }
+             @container card style(--theme: light) { .leaf { opacity: 0.75 } }"
+                .into(),
+        );
+        let (owner, leaf) = with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("div");
+            let mut add = |parent, class| {
+                let id = t.create_element(tag);
+                t.set_class(id, class);
+                t.insert(id, parent, 0);
+                id
+            };
+            let owner = add(root, "owner");
+            let shadow = add(owner, "shadow");
+            (owner, add(shadow, "leaf"))
+        });
+        restyle_all();
+        for (hovered, expected) in [(true, 0.75), (false, 0.25)] {
+            note_hover(owner, hovered);
+            with_tree(|t| assert!(t.touch_hover_styled(owner)));
+            flush_pending_style();
+            read_tree(|t| {
+                let style = t.node(leaf).unwrap().computed.as_ref().unwrap();
+                assert_eq!(style.vars.get("--theme"), Some("dark"));
+                assert_eq!(style.base.opacity, Some(expected));
+            });
+        }
     }
 
     #[test]

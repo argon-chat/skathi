@@ -813,6 +813,18 @@ defineProps<{ percent: number }>();
   "custom-properties": {
     examples: [
       {
+        title: "Change a button and its SVG gradient on hover",
+        lang: "css",
+        code: `.button {
+  --accent: #384c75;
+  background-color: var(--accent);
+  transition: background-color 150ms ease-out;
+}
+.button:hover { --accent: #557dc7; }
+.button .gradient-stop { stop-color: var(--accent); }`,
+        note: "Give the SVG stop the gradient-stop class. It inherits the hovered button's accent, while the button animates its background (since 0.6).",
+      },
+      {
         title: "Override tokens for one region",
         lang: "css",
         code: `:root {
