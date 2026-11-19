@@ -85,8 +85,13 @@ export function opaqueHost(source: string, names: readonly string[] = opaqueGlob
   return hostPrefix(names) + source + hostSuffix;
 }
 
+/** The host binds globals before the entry that the preludes probe with `typeof`. An open image admits them only
+ * if it may load code it has not seen, which an app that evaluates no text of its own would not; this dead branch
+ * does, as every app that imports the runtime already does. */
+const admitHostCode = "if (__SK_AOT_HOST__ === undefined) Function();\n";
+
 /** Each script captures its host globals after the preceding script has installed them. */
-export function nativeInput(source: string, preludes?: PreludeScripts) {
+export function nativeInput(source: string, preludes?: PreludeScripts, closed = false) {
   const scripts = preludes
     ? [
         { file: "sk://prelude.js", source: preludes[0] },
@@ -95,8 +100,8 @@ export function nativeInput(source: string, preludes?: PreludeScripts) {
     : [];
   scripts.push({ file: "app.prod.js", source });
   const prefix = hostPrefix(opaqueGlobals());
-  let code = "";
-  let byteOffset = Buffer.byteLength(prefix);
+  let code = closed ? "" : admitHostCode;
+  let byteOffset = Buffer.byteLength(code) + Buffer.byteLength(prefix);
   const sections = scripts.map((script) => {
     const section = { ...script, byteOffset };
     code += prefix + script.source + hostSuffix;

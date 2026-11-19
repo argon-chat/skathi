@@ -248,7 +248,7 @@ describe("the opaque-host transform", () => {
     expect(
       sections.map((s) => input.toString("utf8", s.byteOffset, s.byteOffset + Buffer.byteLength(s.source))),
     ).toEqual([...preludes, app]);
-    expect(nativeInput(app).code).toBe(opaqueHost(app));
+    expect(nativeInput(app, undefined, true).code).toBe(opaqueHost(app));
   });
   test("its host globals come from the pinned table", () => {
     expect(TABLE_ID).toBe(pin.table.id);
@@ -283,7 +283,7 @@ test("the CLI package carries the pin and the transform's table", () => {
 
 describe("images for reduced workloads", () => {
   const source = "const o = {}; for (const k in o) o[k](); const { Module } = globalThis.WebAssembly;\n";
-  const at = (text: string) => opaqueHost(source).indexOf(text);
+  const at = (text: string) => nativeInput(source).code.indexOf(text);
   const use = (kind: string, builtin: string, position: number): FeatureUse => ({
     feature: "WebAssembly",
     id: 4,

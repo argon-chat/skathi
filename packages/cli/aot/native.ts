@@ -98,7 +98,7 @@ export async function compileNative(options: CompileOptions): Promise<NativeImag
   const openIr = join(work, "audit.ir");
   for (const stale of [ir, uses, openIr, `${openIr}.uses.json`, image, `${image}.entries`, `${image}.identity`])
     rmSync(stale, { force: true });
-  const wrapped = nativeInput(source, options.preludes);
+  const wrapped = nativeInput(source, options.preludes, options.closed);
   writeFileSync(input, wrapped.code);
 
   const strict = options.closed ? await import("./closed") : null;
@@ -161,7 +161,10 @@ export function removedFeatureProblem(
   const unseen = removed.includes("Interpreter") ? native.uses.unseen : [];
   if (!found.length && !unseen.length) return null;
   // sk-aot reports byte offsets in its UTF-8 input. Editor columns count UTF-16 code units.
-  const sections = nativeInput(source, preludes).sections.map((s) => ({ ...s, bytes: Buffer.from(s.source) }));
+  const sections = nativeInput(source, preludes, native.closed).sections.map((s) => ({
+    ...s,
+    bytes: Buffer.from(s.source),
+  }));
   const at = (what: string, module: number, position: number) => {
     if (module !== INPUT_MODULE) return `${what} in the engine's built-ins`;
     const section = sections.find((s) => position >= s.byteOffset && position < s.byteOffset + s.bytes.length);

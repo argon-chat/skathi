@@ -197,4 +197,49 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
     },
     BUILD_T,
   );
+
+  test(
+    "an app that imports nothing runs from its image and sees the host's functions",
+    async () => {
+      const root = join(WORK_DIR, `aot-bare-${process.pid}`);
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(
+        join(root, "sk.config.json"),
+        JSON.stringify({ name: "aotbare", productName: "AotBare", version: "0.1.0" }),
+      );
+      writeFileSync(
+        join(root, "src", "main.ts"),
+        [
+          "declare const __sk_fullscreen_window: unknown;",
+          'console.log("aot-bare", typeof __sk_fullscreen_window);',
+        ].join("\n"),
+      );
+      const { buildApp } = await import("../../cli/cli/build-app");
+      const bare = await buildApp({
+        target: root,
+        out: join(WORK_DIR, "packaged", `aot-bare-${process.pid}`),
+        host: "host" in ready ? ready.host : undefined,
+        variant: "standard",
+        aot: true,
+        log: (l) => console.log(`[aot.spec] ${l}`),
+      });
+      const app = await launch({
+        app: "aot-bare",
+        exe: bare.exe!,
+        packaged: bare.config.name,
+        label: "aot-bare",
+        window: [400, 300],
+        waitForMount: false,
+        env: { SK_AOT_CACHE_DIR: join(caches, "native") },
+      });
+      opened.push(app);
+      const deadline = Date.now() + 20_000;
+      while (!lines(app, /aot-bare function/).length && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 100));
+      bunExpect(lines(app, /aot-bare function/)).toHaveLength(1);
+      bunExpect(lines(app, /\[native-aot\] application native entry completed/)).toHaveLength(1);
+      await app.close();
+    },
+    BUILD_T,
+  );
 });
