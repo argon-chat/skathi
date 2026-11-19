@@ -7,7 +7,7 @@ order: 10
 status: experimental
 ---
 
-`sk publish --aot` compiles your app's JavaScript to machine code at build time and packs the result, a native image, into the exe. At start the host runs the image instead of evaluating the bundle. AOT is experimental, works on Windows x64 only, and today it is slower than the JIT in Skathi's own benchmark, so treat it as something to try and measure, not a default.
+`sk publish --aot` compiles your app's JavaScript to machine code at build time and ships the result, a native image, beside the exe or (since 0.6, with `"publishSingleFile": true`) inside it. At start the host runs the image instead of evaluating the bundle. AOT is experimental, works on Windows x64 only, and today it is slower than the JIT in Skathi's own benchmark, so treat it as something to try and measure, not a default.
 
 <div class="tradeoffs">
 <div class="tradeoff" data-tone="gain">
@@ -29,7 +29,7 @@ status: experimental
 - **Read-only built-ins.** Code that replaces a member of `Array.prototype` or a global such as `Map` throws a `TypeError`.
 - **No JIT in the process.** `eval`, `new Function` and devtools expressions run in the interpreter.
 - **No fallback.** A host that cannot load the image shows why and exits with code 3.
-- **Size and build time.** The image is added beside `app.prod.js`, and each build adds the check and the compile.
+- **Size and build time.** The uncompressed image ships beside the exe or inside it, and each build adds the check and the compile.
 
 </div>
 </div>
@@ -61,15 +61,15 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
    The image and its manifest. `sk-aot` is pinned to one Bun revision and one JavaScriptCore revision, and only a host built from the same pair can load its images.
 
-6. **Packed exe**
+6. **Container** `app.image.dll`
 
-   The image, deflate-compressed, and the manifest are added to the app's payload. `app.prod.js` stays in the payload: the host checks the image against it and runs it on a reload.
+   Since 0.6, the image ships uncompressed in an executable-module container beside the exe: a DLL with no code of its own whose sections hold the image, page-aligned, which you sign like the exe. With [`"publishSingleFile": true`](#one-file-publishsinglefile-since-06) the same sections go into the exe instead. The manifest goes into the payload, and `app.prod.js` stays there: the host checks the image against it and runs it on a reload.
 
 <p class="pipeline-phase" data-tone="run">On every machine that runs the app, at each start</p>
 
-7. **Host loads the image** `%LOCALAPPDATA%\skathi\native-aot\v1\<sha256>\`
+7. **Host maps the image where it lies**
 
-   Before the JavaScript engine starts, the host checks the manifest against itself (compiler, engine, builtin table, the host's own startup scripts) and against the payload (the SHA-256 of `app.prod.js` and of the image). It expands the image once into a per-user cache keyed by its digest, hashes the cached file again on later starts, loads it, and runs the image's entry instead of evaluating `app.prod.js`.
+   Before the JavaScript engine starts, the host checks the manifest against itself (compiler, engine, builtin table, the host's own startup scripts) and against the payload (the SHA-256 of `app.prod.js` and of the image). It opens the container so that nothing can write it while it runs, hashes the image in it, maps it from there and runs the image's entry instead of evaluating `app.prod.js`. Since 0.6 nothing is expanded or written to disk.
 
 </div>
 
@@ -79,19 +79,20 @@ Since 0.6, workloads carry only the image loader: JavaScriptCore's image compile
 
 ## JIT and AOT compared
 
-|                                              | JIT (default)                                                      | AOT (`--aot`)                                                                |
-| -------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| At start                                     | Parses `app.prod.js` or reads its bytecode from the per-user cache | Checks the manifest, loads the native image and runs its entry               |
-| While running                                | Interprets the bundle and JIT-compiles the hot paths               | Runs the image; the process has no JIT                                       |
-| `eval`, `new Function`, devtools expressions | Run like the rest of the code                                      | Run in the interpreter                                                       |
-| Built-in objects                             | Writable                                                           | Read-only: replacing their members throws a `TypeError`                      |
-| Per-user cache                               | Bytecode                                                           | Expanded images in `%LOCALAPPDATA%\skathi\native-aot\v1\`; no bytecode cache |
-| In the payload                               | `app.prod.js`                                                      | `app.prod.js`, the deflate-compressed image and its manifest                 |
-| Build                                        | Bundle                                                             | Bundle, `sk check`, then `sk-aot`                                            |
-| Development                                  | `sk dev`, with hot reload                                          | None: `sk dev` runs the JavaScript. `sk run --aot` tries the image           |
-| Platforms                                    | Windows, macOS, Linux                                              | Windows x64                                                                  |
-| Benchmark, first round                       | **437 ms**                                                         | 584 ms                                                                       |
-| Benchmark, last round                        | **447 ms**                                                         | 550 ms                                                                       |
+|                                              | JIT (default)                                                      | AOT (`--aot`)                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| At start                                     | Parses `app.prod.js` or reads its bytecode from the per-user cache | Checks the manifest, loads the native image and runs its entry      |
+| While running                                | Interprets the bundle and JIT-compiles the hot paths               | Runs the image; the process has no JIT                              |
+| `eval`, `new Function`, devtools expressions | Run like the rest of the code                                      | Run in the interpreter                                              |
+| Built-in objects                             | Writable                                                           | Read-only: replacing their members throws a `TypeError`             |
+| Per-user cache                               | Bytecode                                                           | None (since 0.6)                                                    |
+| In the payload                               | `app.prod.js`                                                      | `app.prod.js` and the image's manifest                              |
+| Beside the exe                               | `icu.skpk` and packs                                               | Also `app.image.dll`, unless `publishSingleFile` puts it in the exe |
+| Build                                        | Bundle                                                             | Bundle, `sk check`, then `sk-aot`                                   |
+| Development                                  | `sk dev`, with hot reload                                          | None: `sk dev` runs the JavaScript. `sk run --aot` tries the image  |
+| Platforms                                    | Windows, macOS, Linux                                              | Windows x64                                                         |
+| Benchmark, first round                       | **437 ms**                                                         | 584 ms                                                              |
+| Benchmark, last round                        | **447 ms**                                                         | 550 ms                                                              |
 
 ### Where performance stands
 
@@ -101,7 +102,7 @@ The benchmark lives in `benches/aot` in the Skathi repository: a Vue table that 
 
 Measure your own app the same way: build it once with `--aot`, then start that exe with and without `SK_APP_ENGINE=jit`.
 
-Skathi's sample apps give an idea of the other costs. Their uncompressed images are 2.7 to 3.5 MB, and they compile in 1.3 to 2.1 seconds, with `sk-aot` peaking at 104 to 121 MiB of memory, plus the time of `sk check`. `sk prune` removes the expanded images; apps expand them again at their next start.
+Skathi's sample apps give an idea of the other costs. Their uncompressed images are 2.7 to 3.5 MB, and they compile in 1.3 to 2.1 seconds, with `sk-aot` peaking at 104 to 121 MiB of memory, plus the time of `sk check`. Since 0.6 the image ships uncompressed, so the app on disk grows by the image's full size. Apps built before 0.6 expanded their image into `%LOCALAPPDATA%\skathi\native-aot\v1\`; `sk prune` removes those folders.
 
 ## Turn it on
 
@@ -134,7 +135,7 @@ The first AOT build downloads `sk-aot` from the GitHub release of the `sk` versi
 
 ### What the build leaves behind
 
-The build summary has a `native` line with the image size and its size in the payload. With `--json`, the result has a `native` object with the same information. The intermediate files stay in `dist/<debug|release>/.sk/aot/`:
+The build summary has a `native` line with the image size and where it went: `app.image.dll` beside the exe or the exe itself. With `--json`, the result has a `native` object with the same information; its `container` is the path of `app.image.dll`, or `null` for an image in the exe. The intermediate files stay in `dist/<debug|release>/.sk/aot/`:
 
 | File              | What it is                                         |
 | ----------------- | -------------------------------------------------- |
@@ -142,6 +143,43 @@ The build summary has a `native` line with the image size and its size in the pa
 | `app.ir`          | The intermediate representation                    |
 | `app.image`       | The native image                                   |
 | `app.native.json` | The manifest                                       |
+
+### What you ship (since 0.6)
+
+`sk publish --aot` writes the exe and, beside it:
+
+| File                  | What it is                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `app.image.dll`       | The native image, uncompressed, in a DLL that has no code of its own. The host reads it; Windows never loads it as a DLL |
+| `inspector.image.dll` | The devtools inspector's image, when `"publishDevtools": true` and the workload has one                                  |
+| `icu.skpk`            | The ICU data, as without AOT                                                                                             |
+| `*.skpk`              | The asset packs set in `"packs"`, as without AOT                                                                         |
+
+Keep these files together: the exe looks for them in its own folder, so the folder can be moved or installed anywhere as a whole. A missing or changed `app.image.dll` stops the app with a message that names the file. Sign `app.image.dll` with the exe; it is a valid PE file, and signing it does not change the image. The container is rebuilt from the same template on each build, so an unchanged image gives a byte-identical `app.image.dll` and its signature can be reused.
+
+Each part of the image lands in its own section, protected as the engine needs it: `.skapp` (header, read-only), `.skappx` (code, read and execute) and `.skappd` (data, read-only); the inspector's are `.skins`, `.skinsx` and `.skinsd`. `dumpbin /headers app.image.dll` lists them.
+
+### One file: publishSingleFile (since 0.6)
+
+```json title="sk.config.json"
+{
+  "name": "notes",
+  "aot": true,
+  "publishSingleFile": true
+}
+```
+
+With `"publishSingleFile": true`, `sk publish` writes the exe alone. The image's sections, and the inspector's when there is one, are added to the exe, and the ICU data and the packs go into its payload. Windows maps the image as part of the exe, and the engine runs the code where it lies. One signature then covers everything. `sk build` ignores the option.
+
+Measured on one Windows x64 machine with a small Vue app, `icu.skpk` with every locale, 20 runs per variant in alternating order, after one discarded run each. **Start** is process start to the app's first mount, median. **Cold** means a per-user cache folder that is empty at each start, as on a new machine; **warm** one that earlier starts have filled. **On disk** is everything the app puts on disk: the exe, the files beside it and, before 0.6, the expanded image.
+
+| aot-nojit workload, 2.6 MiB image                  | Start, cold | Start, warm | On disk               |
+| -------------------------------------------------- | ----------- | ----------- | --------------------- |
+| Before 0.6: image in the payload, expanded to disk | 410 ms      | 409 ms      | 86.8 MiB + 2.6 MiB    |
+| Since 0.6: `app.image.dll` beside the exe          | 407 ms      | 410 ms      | 88.4 MiB              |
+| Since 0.6: `"publishSingleFile": true`             | 392 ms      | 414 ms      | 88.3 MiB, in one file |
+
+The start times stay within the spread of the runs. Checking the image's SHA-256 takes 5.8 ms of each start for this image, as it did before 0.6. The files you ship grow by the difference between the image and its compressed form, 1.6 MiB here, and nothing is written at the first start.
 
 ## Before the first AOT build: sk check
 
@@ -219,7 +257,7 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 - **Reload.** The image's entry runs once per process. `location.reload()` evaluates `app.prod.js` from the payload instead.
 - **A host that cannot load the image.** See the warning below.
 
-> **Warning:** There is no fallback. When the manifest does not match the host, or the cache cannot be written, the app shows the reason in a message box and exits with code 3.
+> **Warning:** There is no fallback. When the manifest does not match the host, or the image is missing or changed, the app shows the reason in a message box and exits with code 3.
 
 > **Tip:** To run the same exe without its image, set `SK_APP_ENGINE=jit`. The host then evaluates `app.prod.js` under the JIT and logs that it did. This is how you tell whether a bug or a slowdown comes from AOT. An exe on the [`aot-nojit` workload](#ship-without-the-jit) has no JIT and refuses it.
 
@@ -229,7 +267,7 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 - **Read the host log.** `sk run` prints the app's output in the terminal; for `sk build`, `--console` keeps a console window. A run from the image logs two lines:
 
   ```text
-  [native-aot] selected application image sha256:… (entry 1, memory Default)
+  [native-aot] selected application image C:\Program Files\Notes\app.image.dll (entry 1, memory Default, sha256 checked in 5.6 ms)
   [native-aot] application native entry completed in … ms
   ```
 
@@ -302,9 +340,15 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
 - `this app's native image cannot run on this host`
 
-  **Cause:** The image does not match the exe it runs in, or the image cache cannot be created. The message box gives the reason.
+  **Cause:** The image does not match the exe it runs in. The message box gives the reason.
 
-  **Fix:** Rebuild the app with the `sk` that matches the workload. If the reason names `LOCALAPPDATA` or the cache, set `SK_AOT_CACHE_DIR` to an absolute folder the user can write.
+  **Fix:** Rebuild the app with the `sk` that matches the workload.
+
+- `this app cannot start: … app.image.dll is missing` or `… differs from the one this app was built with` (since 0.6)
+
+  **Cause:** `app.image.dll` is not beside the exe, or it, or the image sections of a `publishSingleFile` exe, changed after the build.
+
+  **Fix:** Ship every file `sk publish` wrote, together and unchanged. Signing them is fine: a signature does not touch the image.
 
 - A `TypeError` the JIT build does not throw
 
@@ -374,7 +418,7 @@ The two image columns stay within the spread of the runs. On the normal workload
 | Variable                | Used by             | Effect                                                                                                                                                                                                                     |
 | ----------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SK_APP_ENGINE`         | the app             | `auto` (default) runs the image; `jit` runs `app.prod.js`. Since 0.6, the `aot-nojit` workload refuses `jit`.                                                                                                              |
-| `SK_AOT_CACHE_DIR`      | the app, `sk prune` | Where images are expanded instead of `%LOCALAPPDATA%\skathi\native-aot\v1`. Must be absolute.                                                                                                                              |
+| `SK_AOT_CACHE_DIR`      | the app, `sk prune` | Where images are expanded instead of `%LOCALAPPDATA%\skathi\native-aot\v1`. Must be absolute. Since 0.6 only hosts that embed a compressed inspector image expand one; published apps expand nothing.                      |
 | `SK_AOT_MEMORY_PROFILE` | the app             | `default` or `compact`. `compact` caps two engine capacities: the structure heap at 256 MiB and the object address range at 1 GiB. These are capacities, not a limit on the app's memory; a large app can run out of them. |
 | `SK_AOT_COMPILER`       | `sk`                | The `sk-aot.exe` to compile with, as `--aot-compiler` does.                                                                                                                                                                |
 | `SK_HOST_OFFLINE`       | `sk`                | `1` forbids downloading `sk-aot` and workloads.                                                                                                                                                                            |

@@ -155,7 +155,7 @@ Produce the release build, one executable to ship, in `dist/release`:
 bun run publish
 ```
 
-The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
+The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Files such as `icu.skpk` ship beside the exe; since 0.6, `"publishSingleFile": true` puts them inside it. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
 
 ## Keep exploring
 

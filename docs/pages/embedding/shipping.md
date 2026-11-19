@@ -17,7 +17,7 @@ Your exe is yours to package, sign and update. What Skathi needs from you at rel
 
 - The app updates without rebuilding Rust: replace `app.skpk` (atomically, never in place) and restart.
 - Mapped read-only for the app's lifetime, so a large payload costs no copy.
-- Asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) sit next to it and are found there.
+- Asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) sit next to it and are found there, and so does an AOT payload's native image, `app.image.dll` (since 0.6).
 
 </div>
 <div class="tradeoff" data-tone="gain">
@@ -27,6 +27,7 @@ Your exe is yours to package, sign and update. What Skathi needs from you at rel
 - One file to ship, sign and verify.
 - `payload_static(include_bytes!("../app/dist/release/.sk/app.skpk"))` borrows the bytes with no copy.
 - Every app change means a Rust rebuild, and the payload is part of the exe's signature.
+- An AOT payload's `app.image.dll` ships next to the exe (since 0.6); see [What you ship](/guides/aot/#what-you-ship-since-06).
 
 </div>
 </div>
