@@ -1183,10 +1183,7 @@ fn run_app() {
             let summary = if devtools_mode {
                 format!("native inspector preparation failed: {error}")
             } else {
-                format!(
-                    "this app's native image cannot run on this host ({error}). \
-                     Rebuild the app with `sk build --aot` from the sk that matches this host."
-                )
+                error
             };
             eprintln!("[native-aot] {summary}");
             let embedded =

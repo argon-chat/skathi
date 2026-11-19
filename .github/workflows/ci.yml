@@ -85,6 +85,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      # A JSC pin bump fails here until the aot-nojit workload's JIT entry points are reviewed.
+      - if: runner.os == 'Windows'
+        name: JIT entry points match the pinned engine
+        run: bun scripts/aot/no-jit.ts --check
       # sk-video loads GStreamer at runtime: its end-to-end test needs the plugins, not -dev packages.
       - if: runner.os == 'Linux'
         name: GStreamer runtime

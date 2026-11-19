@@ -14,6 +14,9 @@ build = "build.rs"
 battery = ["sk-runtime/battery"]
 native-aot = ["sk-runtime/native-aot"]
 native-inspector = ["native-aot"]
+# Windows x64, with `prod` and `no-devtools`: the aot-nojit workload. The engine has no JIT, so the
+# host runs only apps with a native image (redjs `no-jit` needs REDJS_NO_JIT_DIR).
+no-jit = ["native-aot", "sk-runtime/no-jit"]
 native-dx12 = ["gpui_windows/native-dx12"]
 # macOS: compile the Metal shaders at app start instead of build time, for a machine without
 # Xcode's Metal toolchain. Shipped builds keep the precompiled library.

@@ -379,38 +379,71 @@ fn application_image<'a>(
     Ok(Some((manifest, compressed, script)))
 }
 
+/// The aot-nojit workload's engine has no JIT: it runs an app only from its image.
+#[cfg(feature = "no-jit")]
+const WITHOUT_JIT: &str =
+    "this exe is built on the aot-nojit workload, whose engine has no JIT, so it runs only \
+    the app's native image";
+
 #[cfg(feature = "prod")]
 fn prepare_application() -> Result<(), String> {
     let Some(loaded) = crate::payload::get() else {
         return Ok(());
     };
-    let Some((manifest, compressed, script)) = application_image(&loaded.payload)? else {
+    let engine = app_engine(std::env::var_os("SK_APP_ENGINE").as_deref());
+    #[cfg(feature = "no-jit")]
+    if engine.clone()? == AppEngine::Jit {
+        return Err(format!(
+            "SK_APP_ENGINE=jit asks for the JIT, but {WITHOUT_JIT}. Unset SK_APP_ENGINE, or publish \
+             the app without \"publishJit\": false (the no-devtools workload) to run it under the JIT."
+        ));
+    }
+    let image = application_image(&loaded.payload).map_err(cannot_run)?;
+    let Some((manifest, compressed, script)) = image else {
+        #[cfg(feature = "no-jit")]
+        return Err(format!(
+            "the app has no native image, and {WITHOUT_JIT}. Publish it with --aot (\"aot\": true), \
+             or without \"publishJit\": false."
+        ));
+        #[cfg(not(feature = "no-jit"))]
         return Ok(());
     };
-    if app_engine(std::env::var_os("SK_APP_ENGINE").as_deref())? == AppEngine::Jit {
+    if engine.map_err(cannot_run)? == AppEngine::Jit {
         eprintln!(
             "[native-aot] SK_APP_ENGINE=jit: running app.prod.js instead of the native image"
         );
         return Ok(());
     }
+    prepare_image(&manifest, compressed, script).map_err(cannot_run)
+}
+
+fn cannot_run(error: String) -> String {
+    format!(
+        "this app's native image cannot run on this host ({error}). \
+         Rebuild the app with `sk build --aot` from the sk that matches this host."
+    )
+}
+
+#[cfg(feature = "prod")]
+fn prepare_image(manifest: &Json, compressed: &[u8], script: &str) -> Result<(), String> {
     let profile = memory_profile(
         std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref(),
         aot::MemoryProfile::Default,
     )?;
-    let expected = field(&manifest, "imageSha256")?;
+    let expected = field(manifest, "imageSha256")?;
     let (entry, id) = validate(
-        &manifest,
+        manifest,
         Kind::Application,
         script.as_bytes(),
         &preludes(),
         expected,
     )?;
-    let size = positive_integer(&manifest, "imageBytes", cache::MAX_IMAGE_BYTES as f64)
+    let size = positive_integer(manifest, "imageBytes", cache::MAX_IMAGE_BYTES as f64)
         .ok_or("invalid native image size")? as u64;
     let file = cache::materialize("app.image", compressed, expected, size)?;
     select(
         file,
-        &manifest,
+        manifest,
         Kind::Application,
         entry,
         id,

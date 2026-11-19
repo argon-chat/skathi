@@ -1,0 +1,6 @@
+{
+  "name": "nojitbench",
+  "productName": "NoJitBench",
+  "version": "0.1.0",
+  "window": { "title": "nojitbench", "width": 900, "height": 700 }
+}

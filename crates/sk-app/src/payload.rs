@@ -608,10 +608,13 @@ pub const OPTIONAL: [(&str, bool); 6] = [
     ("webgpu", cfg!(feature = "webgpu")),
 ];
 
-/// This host's variant: `standard` when nothing optional was left out, else
-/// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order. `sk build` keys its host
+/// This host's variant: `aot-nojit` without the JIT, `standard` when nothing optional was left out,
+/// else what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order. `sk build` keys its host
 /// cache by it, and asks for one by it.
 pub fn host_variant() -> String {
+    if cfg!(feature = "no-jit") {
+        return "aot-nojit".to_string();
+    }
     let off: Vec<String> = OPTIONAL
         .iter()
         .filter(|(_, on)| !on)
@@ -633,6 +636,7 @@ pub fn host_info_json() -> String {
     for (on, name) in [
         (cfg!(feature = "prod"), "prod"),
         (cfg!(feature = "native-aot"), "native-aot"),
+        (cfg!(feature = "no-jit"), "no-jit"),
         (cfg!(feature = "no-devtools"), "no-devtools"),
         (cfg!(feature = "audio"), "audio"),
         (cfg!(feature = "storages"), "storages"),
@@ -870,11 +874,13 @@ mod tests {
             .and_then(crate::json::Json::as_str)
             .unwrap();
         assert_eq!(variant, super::host_variant());
-        assert_eq!(
-            variant == "standard",
-            super::OPTIONAL.iter().all(|(_, on)| *on)
-        );
-        assert_eq!(variant.contains("no-devtools"), !cfg!(sk_devtools));
+        if !cfg!(feature = "no-jit") {
+            assert_eq!(
+                variant == "standard",
+                super::OPTIONAL.iter().all(|(_, on)| *on)
+            );
+            assert_eq!(variant.contains("no-devtools"), !cfg!(sk_devtools));
+        }
         assert_eq!(
             v.get("payloadFormat").and_then(crate::json::Json::as_f64),
             Some(1.0)

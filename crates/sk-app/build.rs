@@ -20,6 +20,7 @@ fn main() {
         suppress_release_pdb();
         identical_code_folding();
         thread_stack_commit();
+        link_map();
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         macos_link();
@@ -39,6 +40,11 @@ fn main() {
     }
     if opted_out && std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_some() {
         panic!("native-inspector and no-devtools are contradictory");
+    }
+    if std::env::var_os("CARGO_FEATURE_NO_JIT").is_some()
+        && !(opted_out && std::env::var_os("CARGO_FEATURE_PROD").is_some())
+    {
+        panic!("no-jit builds the aot-nojit workload, which takes prod and no-devtools too");
     }
     if opted_out {
         return;
@@ -199,6 +205,18 @@ fn identical_code_folding() {
 /// must spell out the commit. Test binaries keep the config's value.
 fn thread_stack_commit() {
     println!("cargo:rustc-link-arg-bins=/STACK:8388608,4096");
+}
+
+/// `SK_HOST_LINK_MAP=<file>`: the linker writes the host's map there, for scripts/release-hosts.ts
+/// to check which parts of the engine the link left out.
+fn link_map() {
+    println!("cargo:rerun-if-env-changed=SK_HOST_LINK_MAP");
+    if let Some(path) = std::env::var_os("SK_HOST_LINK_MAP").filter(|p| !p.is_empty()) {
+        println!(
+            "cargo:rustc-link-arg-bins=/MAP:{}",
+            Path::new(&path).display()
+        );
+    }
 }
 
 /// - `-ObjC`: keeps Objective-C categories from static libraries; a library's own link args never

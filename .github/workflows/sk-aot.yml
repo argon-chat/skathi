@@ -40,6 +40,10 @@ jobs:
       - uses: ./.github/actions/native
         with:
           target: x86_64-pc-windows-msvc
+      # The aot-nojit workload redirects the JIT entry points this inventory lists; a new engine pin
+      # fails here until they are reviewed (bun scripts/aot/no-jit.ts --write).
+      - name: JIT entry points match the pinned engine
+        run: bun scripts/aot/no-jit.ts --check
       - name: Pinned nightly
         shell: bash
         working-directory: tools/sk-aot

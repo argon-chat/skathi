@@ -11,6 +11,7 @@
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
 //   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
+//   "publishJit": false          an AOT sk publish for Windows stamps the aot-nojit workload (no JIT, no devtools)
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
@@ -24,9 +25,19 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Platform } from "./platform";
 import { numericVersion } from "./versioninfo";
 
-/** A prod host's name, the key the host cache and the release find it by: the whole engine, with or without devtools. */
+/** A prod host's name, the key the host cache and the release find it by: the whole engine, with or without devtools, or without the JIT. */
 export type Variant = string;
-export const VARIANTS: readonly Variant[] = ["standard", "no-devtools"];
+export const VARIANTS: readonly Variant[] = ["standard", "no-devtools", "aot-nojit"];
+
+/** The workload without devtools or the JIT (Windows x64): it runs only apps compiled with `--aot`. */
+export const NO_JIT_VARIANT: Variant = "aot-nojit";
+
+export const variantList = (variants: readonly Variant[]): string =>
+  `${variants.slice(0, -1).join(", ")} or ${variants.at(-1)}`;
+
+/** The prod variants a release has for `platform`. */
+export const platformVariants = (platform: Platform): Variant[] =>
+  VARIANTS.filter((v) => v !== NO_JIT_VARIANT || platform === "windows");
 
 /** The cargo features of sk-app every published host carries (crates/sk-app/src/payload.rs `OPTIONAL`, after devtools). */
 export const ENGINE_FEATURES = ["audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
@@ -39,15 +50,18 @@ export const PARTS_NOT_SELECTABLE =
 export function parseVariant(v: unknown, where: string): Variant {
   const name = typeof v === "string" ? v.trim() : "";
   if (VARIANTS.includes(name)) return name;
-  throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a workload variant — ${VARIANTS.join(" or ")}`);
+  throw new ConfigError(`${where}: ${JSON.stringify(v)} is not a workload variant — ${variantList(VARIANTS)}`);
 }
+
+const CARGO_FEATURES: Record<Variant, string> = {
+  standard: "prod,icu-root",
+  "no-devtools": "prod,no-devtools,icu-root",
+  [NO_JIT_VARIANT]: "prod,no-devtools,icu-root,native-aot,no-jit",
+};
 
 /** A published host links only the root ICU locale; `sk build` ships the rest beside the app (`"intl"`). */
 export function cargoFeatureArgs(variant: Variant): string[] {
-  return [
-    "--features",
-    parseVariant(variant, "cargo") === "no-devtools" ? "prod,no-devtools,icu-root" : "prod,icu-root",
-  ];
+  return ["--features", CARGO_FEATURES[parseVariant(variant, "cargo")]!];
 }
 
 export interface WindowsConfig {
@@ -93,6 +107,8 @@ export interface AppConfig {
   aot: boolean;
   /** Whether `sk publish` stamps the standard host (devtools in) instead of no-devtools. */
   publishDevtools: boolean;
+  /** False: an AOT `sk publish` for Windows stamps the aot-nojit workload instead of no-devtools. */
+  publishJit: boolean;
   /** `full`: every ICU locale, shipped as icu.skpk beside the app; `invariant`: the root locale only. */
   intl: IntlMode;
   windows: WindowsConfig;
@@ -167,6 +183,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "window",
   "devtools",
   "publishDevtools",
+  "publishJit",
   "aot",
   "intl",
   "httpCache",
@@ -503,6 +520,15 @@ export function loadAppConfig(
     throw new ConfigError('sk.config.json "publishDevtools" must be true or false');
   }
   const publishDevtools = raw.publishDevtools === true;
+  if (raw.publishJit !== undefined && typeof raw.publishJit !== "boolean") {
+    throw new ConfigError('sk.config.json "publishJit" must be true or false');
+  }
+  const publishJit = raw.publishJit !== false;
+  if (!publishJit && publishDevtools) {
+    throw new ConfigError(
+      `sk.config.json "publishJit": false publishes on the ${NO_JIT_VARIANT} workload, which has no devtools — drop one of it and "publishDevtools": true`,
+    );
+  }
   if (raw.aot !== undefined && typeof raw.aot !== "boolean") {
     throw new ConfigError('sk.config.json "aot" must be true or false');
   }
@@ -592,6 +618,7 @@ export function loadAppConfig(
     publicDir,
     packs,
     publishDevtools,
+    publishJit,
     intl,
     aot: raw.aot === true,
     windows,

@@ -1,6 +1,7 @@
 // Where `sk build` gets the prebuilt bare host it stamps: `cargo build --release -p sk-app
 // --features prod,icu-root` (the whole engine, no app, the root ICU locale), built once per Skathi version and
-// variant: `standard`, or `no-devtools` with the devtools compiled out.
+// variant: `standard`, `no-devtools` with the devtools compiled out, or (Windows x64) `aot-nojit`
+// without devtools or the JIT, which runs only apps built with `--aot`.
 //
 // Resolution, first hit wins: 1. `--workload <exe>` or `SK_HOST`; 2. in-repo
 // target/x86_64-pc-windows-msvc/release/sk-app.exe, when that is a prod host of this variant and
@@ -30,7 +31,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { CompilerInfo } from "../aot/pin";
-import { cargoFeatureArgs, ENGINE_FEATURES, VARIANTS, type Variant } from "./config";
+import { cargoFeatureArgs, ENGINE_FEATURES, variantList, VARIANTS, type Variant } from "./config";
 import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
@@ -206,7 +207,7 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
   if (info.mode !== "prod") return `${exe} is a ${info.mode} workload — sk build needs one built with --features prod`;
   if (variant && info.variant !== variant) return `${exe} is the ${info.variant} variant, not ${variant}`;
   if (!VARIANTS.includes(info.variant)) {
-    return `${exe} is the ${info.variant} variant, which leaves engine parts out — sk build stamps only ${VARIANTS.join(" or ")} workloads`;
+    return `${exe} is the ${info.variant} variant, which leaves engine parts out — sk build stamps only ${variantList(VARIANTS)} workloads`;
   }
   const missing = ENGINE_FEATURES.filter((f) => !info.features?.includes(f));
   if (missing.length) return `${exe} lacks ${missing.join(", ")} — rebuild or replace the cached workload`;

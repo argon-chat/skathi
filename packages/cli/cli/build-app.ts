@@ -24,7 +24,15 @@ import type { BuildStyles } from "../check/graph";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
-import { ConfigError, loadAppConfig, parseVariant, type AppConfig, type PackConfig, type Variant } from "./config";
+import {
+  ConfigError,
+  loadAppConfig,
+  NO_JIT_VARIANT,
+  parseVariant,
+  type AppConfig,
+  type PackConfig,
+  type Variant,
+} from "./config";
 import { buildAppEffects, type BuiltEffects } from "./effects";
 import { stampElf, type ElfStampResult } from "./elf";
 import { CLI_VERSION, HostError, icuDataPath, PKG_DIR, type ResolvedHost } from "./host";
@@ -58,7 +66,7 @@ export interface BuildOptions {
   configPath?: string | undefined;
   out?: string | undefined;
   host?: string | undefined;
-  /** The host variant (standard or no-devtools); overrides the mode's. */
+  /** The host variant (standard, no-devtools or aot-nojit); overrides the mode's. */
   variant?: Variant | undefined;
   console?: boolean;
   payloadOnly?: boolean;
@@ -88,8 +96,9 @@ export interface BuildOptions {
 }
 
 /** The variant a mode builds when `--variant` names none. */
-export function modeVariant(config: AppConfig, mode: BuildOptions["mode"]): Variant {
-  return mode === "release" && !config.publishDevtools ? "no-devtools" : "standard";
+export function modeVariant(config: AppConfig, mode: BuildOptions["mode"], aot = false): Variant {
+  if (mode !== "release" || config.publishDevtools) return "standard";
+  return aot && !config.publishJit ? NO_JIT_VARIANT : "no-devtools";
 }
 
 interface BuilderAsset {
@@ -417,9 +426,17 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   requireAppDependencies(config.appRoot, dirname(config.entry));
   const warnings = [...config.warnings];
-  const variant: Variant =
-    options.variant === undefined ? modeVariant(config, options.mode) : parseVariant(options.variant, "--variant");
   const aot = options.aot ?? config.aot;
+  const variant: Variant =
+    options.variant === undefined ? modeVariant(config, options.mode, aot) : parseVariant(options.variant, "--variant");
+  if (variant === NO_JIT_VARIANT && !aot) {
+    throw new ConfigError(
+      `the ${NO_JIT_VARIANT} workload has no JIT and runs only native images — build with --aot (or "aot": true in sk.config.json)`,
+    );
+  }
+  if (!config.publishJit && options.mode === "release" && !aot) {
+    warnings.push('"publishJit": false applies to AOT builds (--aot or "aot": true); this build keeps the JIT');
+  }
   if (aot) {
     const problem = aotPlatformProblem(platform);
     if (problem) throw new ConfigError(problem);

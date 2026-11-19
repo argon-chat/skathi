@@ -11,6 +11,7 @@ homepage.workspace = true
 # Optional Battery Status API; applications choose whether to expose it.
 battery = ["redjs/battery"]
 native-aot = ["redjs/native-aot"]
+no-jit = ["redjs/no-jit"]
 # Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
 webgpu = ["dep:redjs-webgpu"]
 # On by default: browser APIs an app expects (typeof checks stay truthful either way).

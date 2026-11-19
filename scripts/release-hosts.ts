@@ -1,21 +1,27 @@
 // The hosts a skathi release carries (.github/workflows/release.yml; read by packages/cli/cli/host-fetch.ts).
 //
-//   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>]
+//   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>] [--no-jit <dir>]
 //     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
 //     and describe it in <dir>/hosts-<platform>-<arch>.json. The prod hosts link only the root ICU locale;
 //     the full ICU data they leave out goes beside them, gzipped, for `sk build` to ship as icu.skpk. With --native-inspector (Windows x64: the
 //     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
 //     built with --aot runs from its image), every host with devtools embeds the inspector's native
 //     image, and the sk-aot that compiled it is published beside them (<dir>/aot-<platform>-<arch>.json).
+//     With --no-jit too (the directory of scripts/aot/no-jit.ts --out), the aot-nojit workload is built.
+//     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
+//     none of the JIT entry points in scripts/aot/jit-entries.json, and it exports what no-devtools does.
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
 //     fails unless <tag> is v<version> of every npm package the release publishes
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { VARIANTS } from "../packages/cli/cli/config";
+import { NO_JIT_VARIANT, platformVariants } from "../packages/cli/cli/config";
+import type { Inventory } from "./aot/no-jit";
 import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
   aotCompilerAssetName,
@@ -39,6 +45,7 @@ const { values } = parseArgs({
     merge: { type: "string" },
     variant: { type: "string", multiple: true },
     "native-inspector": { type: "string" },
+    "no-jit": { type: "string" },
     "check-tag": { type: "string" },
   },
 });
@@ -111,13 +118,62 @@ const inspectorEnv: Record<string, string> = inspector
 // Every host must load what this sk-aot makes: `sk build --aot` downloads it to match them.
 const aotCompiler = inspector ? { path: inspector.compiler, info: await compilerInfo(inspector.compiler) } : null;
 
+const noJit = values["no-jit"] ? resolve(values["no-jit"]) : null;
+const variants = values.variant ?? [
+  ...platformVariants(platform).filter((v) => v !== NO_JIT_VARIANT || (inspector && noJit)),
+  DEV_HOST,
+];
+if (variants.includes(NO_JIT_VARIANT) && !(inspector && noJit)) {
+  throw new Error(`the ${NO_JIT_VARIANT} workload needs --native-inspector (its AOT table) and --no-jit <dir>`);
+}
+
+// What a Windows host's link map must show, and what each host exports.
+const maps = platform === "windows" ? mkdtempSync(join(tmpdir(), "sk-host-maps-")) : null;
+const jitEntries = Object.keys(
+  (JSON.parse(readFileSync(join(import.meta.dir, "aot/jit-entries.json"), "utf8")) as Inventory).entries,
+);
+const exportsOf = new Map<string, string[]>();
+function checkLink(variant: string, exe: string, map: string): void {
+  const linked = readFileSync(map, "latin1");
+  const has = (symbol: string) => linked.includes(` ${symbol} `);
+  if (/\s\?compileProgram@AOT@JSC@@/.test(linked)) throw new Error(`${variant}: the host links the image compiler`);
+  const kept = jitEntries.filter(has);
+  if (variant === NO_JIT_VARIANT && kept.length) {
+    throw new Error(`${variant}: the host links ${kept.length} JIT entry points, among them ${kept[0]}`);
+  }
+  if (variant === "no-devtools" && inspector && !kept.length) {
+    throw new Error(
+      `${variant}: none of scripts/aot/jit-entries.json is in the map; it names other symbols than the link`,
+    );
+  }
+  const listing = spawnSync("llvm-readobj", ["--coff-exports", exe], { encoding: "utf8" });
+  if (listing.status !== 0) throw new Error(`llvm-readobj --coff-exports ${exe} failed: ${listing.stderr}`);
+  const names = [...listing.stdout.matchAll(/^\s*Name: (\S+)\s*$/gm)].map((m) => m[1]!).sort();
+  if (names.some((n) => n.startsWith("rjs_aot_compil")))
+    throw new Error(`${variant}: the host exports the image compiler`);
+  exportsOf.set(variant, names);
+  const reference = exportsOf.get("no-devtools");
+  if (variant === NO_JIT_VARIANT && reference && reference.join("\n") !== names.join("\n")) {
+    throw new Error(`${variant}: the host exports other symbols than no-devtools: ${names.join(", ")}`);
+  }
+  console.log(
+    `[release] ${variant}: ${kept.length} of ${jitEntries.length} JIT entry points linked, ${names.length} exports`,
+  );
+}
+
 const entries: HostManifestEntry[] = [];
-for (const variant of values.variant ?? [...VARIANTS, DEV_HOST]) {
-  const devtools = variant !== "no-devtools";
+for (const variant of variants) {
+  const devtools = variant === "standard" || variant === DEV_HOST;
+  const map = maps && join(maps, `${variant}.map`);
   const { exe, ms } = cargoBuildHost(variant, console.log, {
-    env: inspectorEnv,
+    env: {
+      ...inspectorEnv,
+      ...(variant === NO_JIT_VARIANT && noJit ? { REDJS_NO_JIT_DIR: noJit } : {}),
+      ...(map ? { SK_HOST_LINK_MAP: map } : {}),
+    },
     features: inspector ? (devtools ? ["native-aot", "native-inspector"] : ["native-aot"]) : [],
   });
+  if (map) checkLink(variant, exe, map);
   const info = hostInfo(exe);
   const problem = checkHost(exe, info, variant, false);
   if (problem) throw new Error(problem);

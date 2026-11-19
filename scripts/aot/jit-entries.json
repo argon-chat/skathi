@@ -1,0 +1,164 @@
+{
+  "schema": "skathi.no-jit-inventory",
+  "version": 1,
+  "engine": "3bc94211496460feda299ef85eef710eb67fafb3",
+  "archiveSha256": "184a2aed6f833823f19e71885be3ad97924e9d158ff6eaefd5aef9433c1d01ab",
+  "feature": {
+    "name": "JIT",
+    "id": 0
+  },
+  "references": {
+    "definition": 112,
+    "callSite": 25
+  },
+  "entries": {
+    "??$destroyJITData@VBaselineJITData@JSC@@@JSC@@YAXPEAVBaselineJITData@0@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "??$destroyJITData@VJITData@DFG@JSC@@@JSC@@YAXPEAVJITData@DFG@0@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "??3AccessCase@JSC@@SAXPEAV01@Udestroying_delete_t@std@@@Z": {
+      "definition": 39,
+      "callSite": 0
+    },
+    "?compileSync@JIT@JSC@@SA?AW4CompilationResult@2@AEAVVM@2@PEAVCodeBlock@2@W4JITCompilationEffort@2@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?completeAllPlansForVM@JITWorklist@JSC@@QEAAXAEAVVM@2@@Z": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "?computeHash@PolymorphicAccessJITStubRoutine@JSC@@SAIV?$span@$$CBV?$Ref@VAccessCase@JSC@@U?$RawPtrTraits@VAccessCase@JSC@@@WTF@@U?$DefaultRefDerefTraits@VAccessCase@JSC@@@4@@WTF@@$0?0@std@@@Z": {
+      "definition": 8,
+      "callSite": 0
+    },
+    "?create@BBQPlan@Wasm@JSC@@SA?AV?$Ref@VBBQPlan@Wasm@JSC@@U?$RawPtrTraits@VBBQPlan@Wasm@JSC@@@WTF@@U?$DefaultRefDerefTraits@VBBQPlan@Wasm@JSC@@@5@@WTF@@AEAVVM@3@$$QEAV?$Ref@UModuleInformation@Wasm@JSC@@U?$RawPtrTraits@UModuleInformation@Wasm@JSC@@@WTF@@U?$DefaultRefDerefTraits@UModuleInformation@Wasm@JSC@@@5@@5@VFunctionCodeIndex@23@$$QEAV?$Ref@VIPIntCallee@Wasm@JSC@@U?$RawPtrTraits@VIPIntCallee@Wasm@JSC@@@WTF@@U?$DefaultRefDerefTraits@VIPIntCallee@Wasm@JSC@@@5@@5@$$QEAV?$Ref@VModule@Wasm@JSC@@U?$RawPtrTraits@VModule@Wasm@JSC@@@WTF@@U?$DefaultRefDerefTraits@VModule@Wasm@JSC@@@5@@5@$$QEAV?$Ref@VCalleeGroup@Wasm@JSC@@U?$RawPtrTraits@VCalleeGroup@Wasm@JSC@@@WTF@@U?$DefaultRefDerefTraits@VCalleeGroup@Wasm@JSC@@@5@@5@$$QEAV?$RefPtr@V?$SharedTask@$$A6AXAEAVPlan@Wasm@JSC@@@Z@WTF@@U?$RawPtrTraits@V?$SharedTask@$$A6AXAEAVPlan@Wasm@JSC@@@Z@WTF@@@2@U?$DefaultRefDerefTraits@V?$SharedTask@$$A6AXAEAVPlan@Wasm@JSC@@@Z@WTF@@@2@@5@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?enqueueBaselinePlan@LLInt@JSC@@YAXPEAVCodeBlock@2@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?ensureGlobalWorklist@JITWorklist@JSC@@SAAEAV12@XZ": {
+      "definition": 26,
+      "callSite": 0
+    },
+    "?generateSharedCommonThunks@JSC@@YAXAEAV?$array@V?$MacroAssemblerCodeRef@$0GGBB@@JSC@@$0DP@@std@@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "?generatorForLazyCommonThunk@JSC@@YAP6A?AV?$MacroAssemblerCodeRef@$0GGBB@@1@AEAVVM@1@@ZW4CommonJITThunkID@1@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?hostFunctionStubWithThunk@JSC@@YAPEAVNativeExecutable@1@AEAVVM@1@V?$FunctionPtr@$00$$A6A_JPEAVJSGlobalObject@JSC@@PEAVCallFrame@2@@Z$01@WTF@@W4ImplementationVisibility@1@W4Intrinsic@1@1PEBVSignature@DOMJIT@1@IAEBVString@5@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?initialize@JITThunks@JSC@@QEAAXAEAVVM@2@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?initializeUnderlyingAllocator@ExecutableAllocator@JSC@@SAXXZ": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?jitCompile@Yarr@JSC@@YAXAEAUYarrPattern@12@VStringView@WTF@@W4CharSize@12@V?$optional@VStringView@WTF@@@std@@PEAVVM@2@AEAVYarrCodeBlock@12@W4ExecutionMode@12@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?reset@PropertyInlineCache@JSC@@QEAAXAEBVConcurrentJSLockerBase@2@PEAVCodeBlock@2@@Z": {
+      "definition": 14,
+      "callSite": 0
+    },
+    "?resumeAllThreads@JITWorklist@JSC@@QEAAXXZ": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_24>@?0???1CodeBlock@JSC@@QEAA@XZ@@CodeBlock@JSC@@AEAAXV<lambda_24>@?0???123@QEAA@XZ@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_24>@?0???1CodeBlock@JSC@@QEAA@XZ@@CodeBlock@2@AEAAXV<lambda_24>@?0???142@QEAA@XZ@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVAbstractSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@CodeBlock@JSC@@IEAAXXZ@@CodeBlock@JSC@@AEAAXV<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@23@IEAAXXZ@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@CodeBlock@JSC@@IEAAXXZ@@CodeBlock@2@AEAAXV<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@42@IEAAXXZ@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVAbstractSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_52>@?0??getICStatusMap@CodeBlock@JSC@@QEAAXAEBVConcurrentJSLocker@4@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@CodeBlock@JSC@@AEAAXV<lambda_52>@?0??getICStatusMap@23@QEAAXAEBVConcurrentJSLocker@3@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_52>@?0??getICStatusMap@CodeBlock@JSC@@QEAAXAEBVConcurrentJSLocker@4@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@CodeBlock@2@AEAAXV<lambda_52>@?0??getICStatusMap@42@QEAAXAEBVConcurrentJSLocker@2@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_56>@?0??collectProfiledCallees@CodeBlock@JSC@@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@CodeBlock@JSC@@AEAAXV<lambda_56>@?0??collectProfiledCallees@23@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_56>@?0??collectProfiledCallees@CodeBlock@JSC@@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@CodeBlock@2@AEAAXV<lambda_56>@?0??collectProfiledCallees@42@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_83>@?0??findPC@CodeBlock@JSC@@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@CodeBlock@JSC@@AEAAXV<lambda_83>@?0??findPC@23@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$forEachPropertyInlineCache@V<lambda_83>@?0??findPC@CodeBlock@JSC@@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@CodeBlock@2@AEAAXV<lambda_83>@?0??findPC@42@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_24>@?0???1CodeBlock@JSC@@QEAA@XZ@@CodeBlock@JSC@@AEAAXV<lambda_24>@?0???123@QEAA@XZ@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_24>@?0???1CodeBlock@JSC@@QEAA@XZ@@CodeBlock@2@AEAAXV<lambda_24>@?0???142@QEAA@XZ@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VAbstractSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVAbstractSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_3>@?0???$stronglyVisitStrongReferences@VSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@CodeBlock@JSC@@IEAAXXZ@@CodeBlock@JSC@@AEAAXV<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@23@IEAAXXZ@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@CodeBlock@JSC@@IEAAXXZ@@CodeBlock@2@AEAAXV<lambda_48>@?0??reconcileJITInlineCachesAtGCEnd@42@IEAAXXZ@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVAbstractSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_4>@?0???$propagateTransitions@VAbstractSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVAbstractSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@JSC@@AEAAXV<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@23@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@CodeBlock@JSC@@AEAAXAEBVConcurrentJSLocker@3@AEAVSlotVisitor@3@@Z@@CodeBlock@2@AEAAXV<lambda_4>@?0???$propagateTransitions@VSlotVisitor@JSC@@@42@AEAAXAEBVConcurrentJSLocker@2@AEAVSlotVisitor@2@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_52>@?0??getICStatusMap@CodeBlock@JSC@@QEAAXAEBVConcurrentJSLocker@4@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@CodeBlock@JSC@@AEAAXV<lambda_52>@?0??getICStatusMap@23@QEAAXAEBVConcurrentJSLocker@3@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_52>@?0??getICStatusMap@CodeBlock@JSC@@QEAAXAEBVConcurrentJSLocker@4@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@CodeBlock@2@AEAAXV<lambda_52>@?0??getICStatusMap@42@QEAAXAEBVConcurrentJSLocker@2@AEAV?$HashMap@VCodeOrigin@JSC@@UICStatus@2@UCodeOriginApproximateHash@2@U?$HashTraits@VCodeOrigin@JSC@@@WTF@@U?$HashTraits@UICStatus@JSC@@@6@UHashTableTraits@6@$0A@UFastMalloc@6@@WTF@@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_56>@?0??collectProfiledCallees@CodeBlock@JSC@@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@CodeBlock@JSC@@AEAAXV<lambda_56>@?0??collectProfiledCallees@23@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_56>@?0??collectProfiledCallees@CodeBlock@JSC@@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@CodeBlock@2@AEAAXV<lambda_56>@?0??collectProfiledCallees@42@QEAAXAEAV?$Vector@U?$pair@PEAVJSCell@JSC@@W4CodeSpecializationKind@2@@std@@$0BA@VCrashOnOverflow@WTF@@$0BA@UFastMalloc@4@@WTF@@@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$0A@$0A@XV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_83>@?0??findPC@CodeBlock@JSC@@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@CodeBlock@JSC@@AEAAXV<lambda_83>@?0??findPC@23@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@Z@@JSC@@SAXAEAV<lambda_2>@?0???$forEachPropertyInlineCache@V<lambda_83>@?0??findPC@CodeBlock@JSC@@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@CodeBlock@2@AEAAXV<lambda_83>@?0??findPC@42@QEAA?AV?$optional@VCodeOrigin@JSC@@@std@@PEAX@Z@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?setupWithUnlinkedBaselineCode@CodeBlock@JSC@@QEAAXV?$Ref@VBaselineJITCode@JSC@@U?$RawPtrTraits@VBaselineJITCode@JSC@@@WTF@@U?$DefaultRefDerefTraits@VBaselineJITCode@JSC@@@4@@WTF@@@Z": {
+      "definition": 5,
+      "callSite": 0
+    },
+    "?totalOngoingCompilations@JITWorklist@JSC@@QEBA_KXZ": {
+      "definition": 2,
+      "callSite": 0
+    }
+  }
+}

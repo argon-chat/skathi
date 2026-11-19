@@ -6,7 +6,16 @@ import { spawn } from "node:child_process";
 import { Command, CommanderError, Option, type CommandUnknownOpts } from "@commander-js/extra-typings";
 import { aotFlags } from "./aot-build";
 import { buildApp, summary } from "./build-app";
-import { ConfigError, parseVariant, PARTS_NOT_SELECTABLE, VARIANTS, type Variant } from "./config";
+import {
+  ConfigError,
+  NO_JIT_VARIANT,
+  parseVariant,
+  PARTS_NOT_SELECTABLE,
+  platformVariants,
+  variantList,
+  VARIANTS,
+  type Variant,
+} from "./config";
 import { createCommand } from "./create";
 import { dev } from "./dev";
 import { helpFormat, section } from "./help";
@@ -34,7 +43,9 @@ const track = (run: Run) => (_: CommandUnknownOpts, sub: CommandUnknownOpts) => 
 export const colorArg = (args: string[]): boolean | undefined =>
   args.includes("--no-color") ? false : args.includes("--color") ? true : undefined;
 
-const INSTALLABLE: readonly Variant[] = [...VARIANTS, DEV_HOST];
+const INSTALLABLE: readonly Variant[] = [...platformVariants(currentPlatform()), DEV_HOST];
+/** Without names, `sk workload install` and `build` leave out aot-nojit: a build that needs it fetches it. */
+const BY_DEFAULT = (variants: readonly Variant[]) => variants.filter((v) => v !== NO_JIT_VARIANT);
 
 function installable(v: string): Variant {
   const name = v.trim();
@@ -375,12 +386,12 @@ export function cli(run: Run): Command {
 
   workload
     .command("install")
-    .description(`Download this version's workloads (default: ${INSTALLABLE.join(", ")})`)
+    .description(`Download this version's workloads (default: ${BY_DEFAULT(INSTALLABLE).join(", ")})`)
     .argument("[variants...]")
     .action(async (variants) => {
       const progress = progressFor(process.stderr, errColor);
       try {
-        for (const variant of variants.length ? variants.map(installable) : INSTALLABLE) {
+        for (const variant of variants.length ? variants.map(installable) : BY_DEFAULT(INSTALLABLE)) {
           progress.step(`${variant} workload`);
           const { path } = await fetchHost({ variant, onBytes: (done, total) => progress.bytes(done, total) });
           progress.detail(path);
@@ -402,13 +413,16 @@ export function cli(run: Run): Command {
 
   workload
     .command("build")
-    .description(`In a Skathi checkout: build workloads with cargo (default: ${VARIANTS.join(" and ")})`)
+    .description(`In a Skathi checkout: build workloads with cargo (default: ${BY_DEFAULT(VARIANTS).join(" and ")})`)
     .argument("[variants...]")
     .action((variants) => {
       // cargo draws its own progress on the terminal: plain lines around it.
       const lines = lineProgress((line) => console.error(line), errColor);
       try {
-        for (const variant of variants.length ? variants.map((v) => parseVariant(v, "sk workload build")) : VARIANTS) {
+        const chosen = variants.length
+          ? variants.map((v) => parseVariant(v, "sk workload build"))
+          : BY_DEFAULT(VARIANTS);
+        for (const variant of chosen) {
           lines.step(`${variant} workload`);
           lines.detail(buildHost(variant, logTo(lines)).path);
         }
@@ -422,7 +436,7 @@ export function cli(run: Run): Command {
   workload
     .command("path")
     .description("Which workload sk build would use")
-    .option("--variant <name>", `${VARIANTS.join(" or ")} (default: standard)`)
+    .option("--variant <name>", `${variantList(VARIANTS)} (default: standard)`)
     .option("--workload <exe>", "Check this one instead of looking for it")
     .option("--platform <os>", "windows, macos or linux (default: this OS)")
     .option("--json", "Print it with what it says about itself")
@@ -440,7 +454,7 @@ export function cli(run: Run): Command {
     .command("info")
     .description("What a workload says about itself (default: the one sk build would use)")
     .argument("[exe]")
-    .option("--variant <name>", `${VARIANTS.join(" or ")} (default: standard)`)
+    .option("--variant <name>", `${variantList(VARIANTS)} (default: standard)`)
     .action((exe, o) => {
       const variant = o.variant === undefined ? "standard" : parseVariant(o.variant, "--variant");
       // `hostInfo` refuses a stamped exe itself: asking one for its info would launch the app inside it.

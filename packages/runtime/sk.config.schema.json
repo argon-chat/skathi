@@ -127,6 +127,11 @@
       "type": "boolean",
       "default": false
     },
+    "publishJit": {
+      "description": "false: an AOT sk publish for Windows x64 stamps the aot-nojit workload, whose engine has no JIT (about 13 MB smaller, no devtools). The app runs only from its native image, as an AOT app does anyway; SK_APP_ENGINE=jit is refused. Default true. Since 0.6.",
+      "type": "boolean",
+      "default": true
+    },
     "aot": {
       "description": "true: sk build and sk publish compile the app's JavaScript to a native image the exe runs instead of interpreting it (Windows x64 only for now). sk check errors refuse the build. --aot and --no-aot override it; sk dev always runs the JavaScript.",
       "type": "boolean",

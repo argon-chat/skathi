@@ -54,7 +54,19 @@ export const groups: readonly ConfigGroup[] = [
     title: "Build and packaging",
     intro:
       "Read by `sk build`, `sk publish` and `sk check`: what goes into the package, how the bundle is built, and for which OSes.",
-    keys: ["platforms", "assets", "publicDir", "packs", "define", "aliases", "aot", "intl", "publishDevtools", "check"],
+    keys: [
+      "platforms",
+      "assets",
+      "publicDir",
+      "packs",
+      "define",
+      "aliases",
+      "aot",
+      "intl",
+      "publishDevtools",
+      "publishJit",
+      "check",
+    ],
   },
   {
     title: "Windows exe",
@@ -227,6 +239,15 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     since: "0.4.0",
   },
   publishDevtools: { example: true },
+  publishJit: {
+    platforms: "Windows x64, with `aot`.",
+    notes: [
+      "Read by `sk publish --aot`; debug builds and builds without AOT keep the JIT. `false` with `publishDevtools` is an error.",
+      "[AOT compilation](/guides/aot/#ship-without-the-jit) gives the size and speed measured.",
+    ],
+    example: false,
+    since: "0.6.0",
+  },
   check: { example: { allow: { SK2001: ["some-package", "src/legacy/**"] } } },
   "check.allow": {
     notes: ["An unknown code stops `sk check` with exit code 2. `sk explain --list` lists the codes."],

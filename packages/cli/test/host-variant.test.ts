@@ -1,4 +1,4 @@
-// Host variants: a prod host is `standard` or `no-devtools`, both with the whole engine. A variant is the name a host
+// Host variants: a prod host is `standard` or `no-devtools`, both with the whole engine, or `aot-nojit` without the JIT. A variant is the name a host
 // reports in `--sk-host-info` and the key `sk build` finds it by, so the CLI and crates/sk-app/src/payload.rs must
 // agree on the engine's features; the last test reads payload.rs to hold the two lists together.
 
@@ -6,6 +6,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { modeVariant } from "../cli/build-app";
 import { ConfigError, ENGINE_FEATURES, loadAppConfig, parseVariant } from "../cli/config";
 import { checkHost, CLI_VERSION, type HostInfo } from "../cli/host";
 
@@ -22,7 +23,8 @@ function app(body: Record<string, unknown>): string {
 }
 
 describe("variant names", () => {
-  test("standard and no-devtools are the only prod variants", () => {
+  test("standard, no-devtools and aot-nojit are the only prod variants", () => {
+    expect(parseVariant("aot-nojit", "t")).toBe("aot-nojit");
     expect(parseVariant("standard", "t")).toBe("standard");
     expect(parseVariant(" no-devtools ", "t")).toBe("no-devtools");
     expect(() => parseVariant("no-audio", "t")).toThrow(ConfigError);
@@ -35,6 +37,15 @@ describe("sk.config.json", () => {
     expect(loadAppConfig(app({})).publishDevtools).toBe(false);
     expect(loadAppConfig(app({ publishDevtools: true })).publishDevtools).toBe(true);
     expect(() => loadAppConfig(app({ publishDevtools: "yes" }))).toThrow(ConfigError);
+  });
+
+  test('"publishJit": false publishes AOT builds on aot-nojit and cannot keep devtools', () => {
+    const config = loadAppConfig(app({ publishJit: false }));
+    expect(modeVariant(config, "release", true)).toBe("aot-nojit");
+    expect(modeVariant(config, "release", false)).toBe("no-devtools");
+    expect(modeVariant(config, "debug", true)).toBe("standard");
+    expect(modeVariant(loadAppConfig(app({})), "release", true)).toBe("no-devtools");
+    expect(() => loadAppConfig(app({ publishJit: false, publishDevtools: true }))).toThrow(ConfigError);
   });
 
   test("an old engine-part selection is an error that points at publishDevtools and the embedding crate", () => {
