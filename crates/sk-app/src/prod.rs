@@ -131,8 +131,19 @@ pub fn devtools_published() -> bool {
     payload::get().is_none_or(|l| !wants_no_devtools(&l.meta.host_variant))
 }
 
+/// The aot-nojit workload has no devtools, though its name does not say so.
 fn wants_no_devtools(variant: &str) -> bool {
-    variant.split('+').any(|part| part == "no-devtools")
+    variant == "aot-nojit" || variant.split('+').any(|part| part == "no-devtools")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_payload_for_the_aot_nojit_workload_has_no_devtools() {
+        assert!(super::wants_no_devtools("aot-nojit"));
+        assert!(super::wants_no_devtools("no-devtools+no-webgpu"));
+        assert!(!super::wants_no_devtools("standard"));
+    }
 }
 
 /// The payload's `name`, resolved by `sk build` with dev's own chain (`sk.config.json` `"name"`, else
