@@ -69,7 +69,7 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
 7. **Host maps the image where it lies**
 
-   Before the JavaScript engine starts, the host checks the manifest against itself (compiler, engine, builtin table, the host's own startup scripts) and against the payload (the SHA-256 of `app.prod.js` and of the image). It opens the container so that nothing can write it while it runs, hashes the image in it, maps it from there and runs the image's entry instead of evaluating `app.prod.js`. Since 0.6 nothing is expanded or written to disk.
+   Before the JavaScript engine starts, the host checks the manifest against itself (compiler, engine, builtin table, the host's own startup scripts) and against the payload (the SHA-256 of `app.prod.js` and of the image). Since 0.6 it loads the container like any DLL: Windows maps each part with its own protection and applies code integrity policy and signature checks to the file. The host hashes the image where Windows mapped it and runs the image's entry there instead of evaluating `app.prod.js`. Nothing is expanded or written to disk.
 
 </div>
 
@@ -148,16 +148,16 @@ The build summary has a `native` line with the image size and where it went: `ap
 
 `sk publish --aot` writes the exe and, beside it:
 
-| File                  | What it is                                                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `app.image.dll`       | The native image, uncompressed, in a DLL that has no code of its own. The host reads it; Windows never loads it as a DLL |
-| `inspector.image.dll` | The devtools inspector's image, when `"publishDevtools": true` and the workload has one                                  |
-| `icu.skpk`            | The ICU data, as without AOT                                                                                             |
-| `*.skpk`              | The asset packs set in `"packs"`, as without AOT                                                                         |
+| File                  | What it is                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `app.image.dll`       | The native image, uncompressed, in a DLL with no entry point and no imports. The exe loads it at start |
+| `inspector.image.dll` | The devtools inspector's image, when `"publishDevtools": true` and the workload has one                |
+| `icu.skpk`            | The ICU data, as without AOT                                                                           |
+| `*.skpk`              | The asset packs set in `"packs"`, as without AOT                                                       |
 
 Keep these files together: the exe looks for them in its own folder, so the folder can be moved or installed anywhere as a whole. A missing or changed `app.image.dll` stops the app with a message that names the file. Sign `app.image.dll` with the exe; it is a valid PE file, and signing it does not change the image. The container is rebuilt from the same template on each build, so an unchanged image gives a byte-identical `app.image.dll` and its signature can be reused.
 
-Each part of the image lands in its own section, protected as the engine needs it: `.skapp` (header, read-only), `.skappx` (code, read and execute) and `.skappd` (data, read-only); the inspector's are `.skins`, `.skinsx` and `.skinsd`. `dumpbin /headers app.image.dll` lists them.
+Each part of the image lands in its own section, protected as the engine needs it: `.skapp` (header, read-only), `.skappx` (code, read and execute) and `.skappd` (data, read-only); the inspector's are `.skins`, `.skinsx` and `.skinsd`. `dumpbin /headers app.image.dll` lists them. The container also has an exception table over the code, so debuggers and crash dumps walk the stack through the image; its frames show as `app.image.dll+offset`.
 
 ### One file: publishSingleFile (since 0.6)
 
@@ -171,15 +171,17 @@ Each part of the image lands in its own section, protected as the engine needs i
 
 With `"publishSingleFile": true`, `sk publish` writes the exe alone. The image's sections, and the inspector's when there is one, are added to the exe, and the ICU data and the packs go into its payload. Windows maps the image as part of the exe, and the engine runs the code where it lies. One signature then covers everything. `sk build` ignores the option.
 
+The exe has no exception table over the image's code yet: a debugger or a crash dump shows the stack up to the first frame in the image, not past it. Ship `app.image.dll` beside the exe when you need full stacks from crash reports.
+
 Measured on one Windows x64 machine with a small Vue app, `icu.skpk` with every locale, 20 runs per variant in alternating order, after one discarded run each. **Start** is process start to the app's first mount, median. **Cold** means a per-user cache folder that is empty at each start, as on a new machine; **warm** one that earlier starts have filled. **On disk** is everything the app puts on disk: the exe, the files beside it and, before 0.6, the expanded image.
 
 | aot-nojit workload, 2.6 MiB image                  | Start, cold | Start, warm | On disk               |
 | -------------------------------------------------- | ----------- | ----------- | --------------------- |
-| Before 0.6: image in the payload, expanded to disk | 410 ms      | 409 ms      | 86.8 MiB + 2.6 MiB    |
-| Since 0.6: `app.image.dll` beside the exe          | 407 ms      | 410 ms      | 88.4 MiB              |
-| Since 0.6: `"publishSingleFile": true`             | 392 ms      | 414 ms      | 88.3 MiB, in one file |
+| Before 0.6: image in the payload, expanded to disk | 409 ms      | 390 ms      | 86.8 MiB + 2.6 MiB    |
+| Since 0.6: `app.image.dll` beside the exe          | 411 ms      | 421 ms      | 88.4 MiB              |
+| Since 0.6: `"publishSingleFile": true`             | 407 ms      | 420 ms      | 88.4 MiB, in one file |
 
-The start times stay within the spread of the runs. Checking the image's SHA-256 takes 5.8 ms of each start for this image, as it did before 0.6. The files you ship grow by the difference between the image and its compressed form, 1.6 MiB here, and nothing is written at the first start.
+The start times stay within the spread of the runs, whose middle half spans about 50 ms. Checking the image's SHA-256 takes 5.8 ms of each start for this image, as it did before 0.6. The files you ship grow by the difference between the image and its compressed form, 1.6 MiB here, and nothing is written at the first start.
 
 ## Before the first AOT build: sk check
 
