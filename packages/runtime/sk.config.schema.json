@@ -128,7 +128,7 @@
       "default": false
     },
     "publishJit": {
-      "description": "false: an AOT sk publish for Windows x64 stamps the aot-nojit workload, whose engine has no JIT (about 13 MB smaller, no devtools). The app runs only from its native image, as an AOT app does anyway; SK_APP_ENGINE=jit is refused. Default true. Since 0.6.",
+      "description": "false: an AOT sk publish for Windows x64 stamps the aot-nojit workload, whose engine has no JIT and no WebAssembly (about 14 MB smaller, no devtools). The app runs only from its native image, as an AOT app does anyway; SK_APP_ENGINE=jit is refused, and sk publish refuses an image that names WebAssembly. Default true. Since 0.6.",
       "type": "boolean",
       "default": true
     },

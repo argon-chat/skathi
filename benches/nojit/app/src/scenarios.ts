@@ -1,16 +1,8 @@
 // One scenario per process, chosen by SK_SCENARIO. Each prints `NOJITBENCH <json>` and closes the window.
 import { nextTick } from "vue";
 import { offset, ROW_HEIGHT, ROWS } from "./list";
-import { WASM } from "./wasm";
 
 type Result = Record<string, number | string>;
-
-// The engine has WebAssembly; the app's lib (ESNext, no DOM) does not declare it.
-interface WasmApi {
-  Module: new (bytes: Uint8Array) => object;
-  Instance: new (module: object) => { exports: unknown };
-}
-const { Module, Instance } = (globalThis as unknown as { WebAssembly: WasmApi }).WebAssembly;
 
 const frame = () => new Promise<number>((resolve) => requestAnimationFrame(() => resolve(performance.now())));
 const quantile = (xs: number[], q: number) => {
@@ -61,15 +53,6 @@ async function scroll(): Promise<Result> {
     workP95: quantile(work, 0.95),
     workTotal: work.reduce((a, b) => a + b, 0),
   };
-}
-
-function wasm(): Result {
-  const t0 = performance.now();
-  const module = new Module(WASM);
-  const exports = new Instance(module).exports as { mix(n: number): number; sieve(n: number): number };
-  const compile = performance.now() - t0;
-  if (exports.sieve(1_000_000) !== 78_498) throw Error("sieve(1e6) is not 78498");
-  return { compile, ...rounds(5, { mix: () => exports.mix(10_000_000), sieve: () => exports.sieve(4_000_000) }) };
 }
 
 const LEVELS = ["INFO", "WARN", "DEBUG", "ERROR"];
@@ -140,7 +123,6 @@ export async function run(mainAt: number): Promise<void> {
     const firstFrame = performance.now() - mainAt;
     if (scenario === "start") result = { mainToFrame: firstFrame };
     else if (scenario === "scroll") result = await scroll();
-    else if (scenario === "wasm") result = wasm();
     else if (scenario === "regexp") result = regexp();
     else if (scenario === "eval") result = evaluate();
     else throw Error(`unknown scenario ${scenario}`);

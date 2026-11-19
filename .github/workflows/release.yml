@@ -10,7 +10,7 @@ name: Release
 # Every Windows host carries the native AOT loader (apps built with --aot run from their image), the
 # ones with devtools embed the inspector's native image (scripts/aot/prepare-inspector.ts), and the sk-aot
 # that compiled it (.github/workflows/sk-aot.yml) is published beside them for `sk build --aot`. Windows
-# also gets aot-nojit, linked against the JIT-free archive of scripts/aot/no-jit.ts.
+# also gets aot-nojit, linked against the JIT- and WebAssembly-free archive of scripts/aot/no-jit.ts.
 
 on:
   push:
@@ -106,7 +106,7 @@ jobs:
         shell: bash
         run: gzip -dc .tools/sk-aot/sk-aot-windows-x64.exe.gz > .tools/sk-aot/sk-aot.exe
       # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH. no-jit.ts fails when
-      # scripts/aot/jit-entries.json no longer matches the pinned engine; release-hosts.ts checks each link map.
+      # its inventories (scripts/aot/*-entries.json) no longer match the pinned engine; release-hosts.ts checks each link map.
       - if: runner.os == 'Windows'
         name: Build the hosts (with the native AOT loader, inspector, aot-nojit and sk-aot)
         shell: pwsh

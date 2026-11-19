@@ -12,6 +12,7 @@ homepage.workspace = true
 battery = ["redjs/battery"]
 native-aot = ["redjs/native-aot"]
 no-jit = ["redjs/no-jit"]
+no-wasm = ["redjs/no-wasm"]
 # Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
 webgpu = ["dep:redjs-webgpu"]
 # On by default: browser APIs an app expects (typeof checks stay truthful either way).

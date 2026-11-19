@@ -11,7 +11,7 @@
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
 //   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
-//   "publishJit": false          an AOT sk publish for Windows stamps the aot-nojit workload (no JIT, no devtools)
+//   "publishJit": false          an AOT sk publish for Windows stamps the aot-nojit workload (no JIT, WebAssembly or devtools)
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
@@ -56,7 +56,7 @@ export function parseVariant(v: unknown, where: string): Variant {
 const CARGO_FEATURES: Record<Variant, string> = {
   standard: "prod,icu-root",
   "no-devtools": "prod,no-devtools,icu-root",
-  [NO_JIT_VARIANT]: "prod,no-devtools,icu-root,native-aot,no-jit",
+  [NO_JIT_VARIANT]: "prod,no-devtools,icu-root,native-aot,no-jit,no-wasm",
 };
 
 /** A published host links only the root ICU locale; `sk build` ships the rest beside the app (`"intl"`). */

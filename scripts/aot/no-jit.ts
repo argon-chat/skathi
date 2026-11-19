@@ -1,11 +1,19 @@
 /** The JavaScriptCore archive of the aot-nojit workload (Windows x64): the pinned archive with every
- * reference to a JIT entry point redirected to redjs_removed_jit_entry, so the linker leaves the JIT out.
- * JSC lists those entry points itself, in its .bun_removable_entry_points records; jit-entries.json is
- * what they were at the reviewed pin, and every mode fails when the pinned archive says otherwise.
+ * reference to an entry point of the JIT and of WebAssembly redirected to a stub redjs defines, so the
+ * linker leaves both out. JSC lists those entry points itself, in its .bun_removable_entry_points records;
+ * jit-entries.json and webassembly-entries.json are what they were at the reviewed pin, and every mode
+ * fails when the pinned archive says otherwise.
+ *
+ * An entry point the engine marks Abort goes to redjs_removed_<feature>_entry, which aborts. A built-in
+ * the engine marks Throw (WebAssembly's constructors and functions) goes to a host function that throws;
+ * the built-ins a static table holds carry no record, and AOTBuiltinFeatures.h names them instead. A void
+ * function the engine skips once the feature is removed (ReturnDefault) goes to a stub that returns: the
+ * engine still calls it directly while nothing is cut out by address range (isTrimmed is 0).
  *
  *   bun scripts/aot/no-jit.ts --out <dir>   <dir>/JavaScriptCoreNoJIT.lib and the receipt redjs's no-jit feature reads
- *   bun scripts/aot/no-jit.ts --check       fails unless jit-entries.json matches the pinned archive
- *   bun scripts/aot/no-jit.ts --write       rewrites jit-entries.json from the pinned archive, to review after a pin change
+ *   bun scripts/aot/no-jit.ts --check       fails unless the inventories match the pinned archive
+ *   bun scripts/aot/no-jit.ts --write       rewrites the inventories from the pinned archive, to review after a pin change
+ *   --remove JIT                            only the JIT (default: JIT,WebAssembly)
  */
 import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
@@ -13,17 +21,46 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const SDK = resolve(import.meta.dir, "../..");
-const INVENTORY = join(import.meta.dir, "jit-entries.json");
 export const ARCHIVE = "JavaScriptCoreNoJIT.lib";
 export const RECEIPT = ".redjs-no-jit";
-export const REDIRECT = "redjs_removed_jit_entry";
+
+export interface RemovedFeature {
+  name: string;
+  id: number;
+  /** What every Abort entry point is redirected to. */
+  abort: string;
+  /** What every Throw built-in is redirected to: a host function that throws. */
+  throws?: string;
+  /** What every void ReturnDefault entry point is redirected to: a function that returns. */
+  skips?: string;
+  inventory: string;
+}
+
+/** What the aot-nojit workload removes; the ids are AOTBuiltinFeatures.h's. */
+export const REMOVED: readonly RemovedFeature[] = [
+  { name: "JIT", id: 0, abort: "redjs_removed_jit_entry", inventory: "jit-entries.json" },
+  {
+    name: "WebAssembly",
+    id: 4,
+    abort: "redjs_removed_wasm_entry",
+    throws: "redjs_removed_wasm_host_function",
+    skips: "redjs_removed_wasm_skip",
+    inventory: "webassembly-entries.json",
+  },
+];
 
 const GUARD_SECTION = ".bun_removable_entry_points";
 const RECORD_BYTES = 24;
-const FEATURE_JIT = 0;
 const STUB_ABORT = 0;
+const STUB_THROW = 1;
+const STUB_RETURN_DEFAULT = 3;
 const ORIGIN_NATIVE_CODE = 0;
 const ORIGIN_DEFINITION = 2;
+const ORIGIN_BUILTIN_NAMED_BY_ENGINE = 3;
+/** `EncodedJSValue (JSGlobalObject*, CallFrame*)` in namespace JSC: the shape of the throwing stub. */
+const HOST_FUNCTION = /^\?\w+@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z$/;
+/** A free function returning void, which a bare return stands in for whatever its arguments. */
+const VOID_FUNCTION = /^\?\w+(@\w+)*@@YAX/;
 const REL_ADDR64 = 1;
 const REL_REL32 = 4;
 const SCN_LNK_NRELOC_OVFL = 0x01000000;
@@ -39,9 +76,20 @@ export interface Inventory {
   version: 1;
   engine: string;
   archiveSha256: string;
-  feature: { name: "JIT"; id: number };
-  references: { definition: number; callSite: number };
-  entries: Record<string, { definition: number; callSite: number }>;
+  feature: { name: string; id: number };
+  references: References;
+  entries: Record<string, References>;
+  /** The entries that throw instead of aborting. */
+  throwing?: string[];
+  /** The entries that return without doing anything instead of aborting. */
+  skipped?: string[];
+}
+
+/** `table`: from a static table of built-ins, counted only when there are any. */
+interface References {
+  definition: number;
+  callSite: number;
+  table?: number;
 }
 
 const latin1 = new TextDecoder("latin1");
@@ -178,12 +226,13 @@ class CoffObject {
 
 interface EntryRecord {
   feature: number;
+  stub: number;
   origin: number;
   symbol: string;
   guardSection: number;
 }
 
-function removableEntries(object: CoffObject): EntryRecord[] {
+function removableEntries(object: CoffObject, removed: ReadonlyMap<number, RemovedFeature>): EntryRecord[] {
   const records: EntryRecord[] = [];
   for (const section of object.sections) {
     if (section.name !== GUARD_SECTION) continue;
@@ -197,17 +246,33 @@ function removableEntries(object: CoffObject): EntryRecord[] {
       if (guard === undefined || entry === undefined) throw Error("a removable-entry record without its relocations");
       const record = {
         feature: object.data.getUint16(at + 16, true),
+        stub: object.bytes[at + 18]!,
         origin: object.bytes[at + 19]!,
         symbol: object.symbolName(entry),
         guardSection: object.symbolSection(guard),
       };
-      if (record.feature === FEATURE_JIT) {
-        const stub = object.bytes[at + 18]!;
-        if (stub !== STUB_ABORT || ![ORIGIN_NATIVE_CODE, ORIGIN_DEFINITION].includes(record.origin))
-          throw Error(`${record.symbol}: expected an Abort entry recorded at native code or its definition`);
-        if (record.guardSection < 1) throw Error(`${record.symbol}: the guard is not in a section`);
+      const feature = removed.get(record.feature);
+      if (feature) {
+        const { stub, origin, symbol } = record;
+        const aborts = stub === STUB_ABORT && (origin === ORIGIN_NATIVE_CODE || origin === ORIGIN_DEFINITION);
+        const skips =
+          stub === STUB_RETURN_DEFAULT &&
+          origin === ORIGIN_NATIVE_CODE &&
+          feature.skips !== undefined &&
+          VOID_FUNCTION.test(symbol);
+        const throws =
+          stub === STUB_THROW &&
+          origin === ORIGIN_BUILTIN_NAMED_BY_ENGINE &&
+          feature.throws !== undefined &&
+          HOST_FUNCTION.test(symbol);
+        if (!aborts && !skips && !throws)
+          throw Error(
+            `${symbol}: a ${feature.name} entry with stub ${stub} and origin ${origin}, which is not handled`,
+          );
+        if (origin !== ORIGIN_DEFINITION && record.guardSection < 1)
+          throw Error(`${symbol}: the guard is not in a section`);
         if (object.data.getBigUint64(at + 8, true) !== 0n)
-          throw Error(`${record.symbol}: interior entry points are unsupported`);
+          throw Error(`${symbol}: interior entry points are unsupported`);
       }
       records.push(record);
     }
@@ -215,13 +280,14 @@ function removableEntries(object: CoffObject): EntryRecord[] {
   return records;
 }
 
-type Kind = "definition" | "callSite";
+type Kind = "definition" | "callSite" | "table";
 
-/** `object` with each guarded reference to an entry pointing at a new undefined `REDIRECT` symbol; null when it has none. */
+/** `object` with each guarded reference to an entry pointing at a new undefined symbol, its redirect; null when it has none. */
 function redirect(
   object: CoffObject,
-  entries: Set<string>,
+  redirects: ReadonlyMap<string, string>,
   definitions: Set<string>,
+  tables: Set<string>,
   guards: Map<number, Set<string>> | undefined,
   count: (name: string, kind: Kind) => void,
 ): Uint8Array | null {
@@ -231,12 +297,12 @@ function redirect(
     const storage = object.bytes[at + object.symbolSize - 2];
     if (storage === STORAGE_EXTERNAL || storage === STORAGE_STATIC) {
       const name = object.symbolName(index);
-      if (entries.has(name)) targets.set(index, name);
+      if (redirects.has(name)) targets.set(index, name);
     }
     index += 1 + object.bytes[at + object.symbolSize - 1]!;
   }
   if (!targets.size) return null;
-  const patches: number[] = [];
+  const patches: { at: number; to: string }[] = [];
   for (const section of object.sections) {
     if (!REFERENCING_SECTIONS.has(section.name.split("$", 1)[0]!)) continue;
     for (const relocation of object.relocations(section)) {
@@ -245,19 +311,20 @@ function redirect(
       let kind: Kind;
       if (definitions.has(name)) kind = "definition";
       else if (guards?.get(section.number)?.has(name)) kind = "callSite";
-      else throw Error(`an unguarded reference to the JIT entry ${name}`);
+      else if (tables.has(name) && !section.name.startsWith(".text")) kind = "table";
+      else throw Error(`an unguarded reference to the removed entry ${name}`);
       if (relocation.type !== REL_ADDR64 && relocation.type !== REL_REL32)
         throw Error(`an unexpected relocation (type ${relocation.type}) to ${name}`);
       const width = relocation.type === REL_ADDR64 ? 8 : 4;
       const site = object.bytes.subarray(section.raw + relocation.address, section.raw + relocation.address + width);
       if (site.some((b) => b !== 0)) throw Error(`an interior reference to ${name}`);
-      patches.push(relocation.at);
+      patches.push({ at: relocation.at, to: redirects.get(name)! });
       count(name, kind);
     }
   }
   if (!patches.length) return null;
 
-  // The symbol and its name go at the end of the symbol and string tables: nothing may follow them.
+  // The symbols and their names go at the end of the symbol and string tables: nothing may follow them.
   const stringsSize = object.data.getUint32(object.strings, true);
   for (const section of object.sections) {
     if (
@@ -267,21 +334,33 @@ function redirect(
       throw Error("a section lies after the symbol table");
   }
   if (object.strings + stringsSize !== object.bytes.length) throw Error("data after the string table");
-  const name = new TextEncoder().encode(`${REDIRECT}\0`);
-  const out = new Uint8Array(object.bytes.length + object.symbolSize + name.length);
+  const added = [...new Set(patches.map((p) => p.to))];
+  const names = added.map((name) => new TextEncoder().encode(`${name}\0`));
+  const namesSize = names.reduce((n, name) => n + name.length, 0);
+  const symbolsSize = added.length * object.symbolSize;
+  const out = new Uint8Array(object.bytes.length + symbolsSize + namesSize);
   out.set(object.bytes.subarray(0, object.strings));
-  const symbol = out.subarray(object.strings, object.strings + object.symbolSize);
-  const record = view(symbol);
-  record.setUint32(4, stringsSize, true);
-  record.setUint16(object.big ? 16 : 14, 0x20, true);
-  symbol[object.symbolSize - 2] = STORAGE_EXTERNAL;
-  const strings = object.strings + object.symbolSize;
+  let nameAt = stringsSize;
+  for (const [index, name] of names.entries()) {
+    const start = object.strings + index * object.symbolSize;
+    const symbol = out.subarray(start, start + object.symbolSize);
+    const record = view(symbol);
+    record.setUint32(4, nameAt, true);
+    record.setUint16(object.big ? 16 : 14, 0x20, true);
+    symbol[object.symbolSize - 2] = STORAGE_EXTERNAL;
+    nameAt += name.length;
+  }
+  const strings = object.strings + symbolsSize;
   out.set(object.bytes.subarray(object.strings), strings);
-  out.set(name, strings + stringsSize);
+  let at = strings + stringsSize;
+  for (const name of names) {
+    out.set(name, at);
+    at += name.length;
+  }
   const data = view(out);
-  data.setUint32(strings, stringsSize + name.length, true);
-  data.setUint32(object.symbolsField + 4, object.symbolCount + 1, true);
-  for (const at of patches) data.setUint32(at + 4, object.symbolCount, true);
+  data.setUint32(strings, stringsSize + namesSize, true);
+  data.setUint32(object.symbolsField + 4, object.symbolCount + added.length, true);
+  for (const patch of patches) data.setUint32(patch.at + 4, object.symbolCount + added.indexOf(patch.to), true);
   return out;
 }
 
@@ -292,43 +371,75 @@ function pinnedEngine(): string {
   return engine;
 }
 
-function checkPrebuilt(webkit: string, engine: string): void {
+function checkPrebuilt(webkit: string, engine: string, removed: readonly RemovedFeature[]): string {
   const configuration = readFileSync(join(webkit, "include/cmakeconfig.h"), "utf8");
   if (!configuration.includes(`#define BUN_WEBKIT_VERSION "${engine}"`))
     throw Error(`${webkit} is not the pinned prebuilt ${engine}; run vendor/redjs/setup.ps1`);
   const features = readFileSync(join(webkit, "include/JavaScriptCore/AOTBuiltinFeatures.h"), "utf8");
-  if (!features.includes(`macro(JIT, ${FEATURE_JIT})`))
-    throw Error("the engine numbers its removable features differently");
+  for (const { name, id } of removed) {
+    if (!features.includes(`macro(${name}, ${id})`))
+      throw Error("the engine numbers its removable features differently");
+  }
+  return features;
+}
+
+/** The host functions AOTBuiltinFeatures.h names as entry points of a removed feature, by mangled name. */
+function guardedBuiltins(header: string, removed: readonly RemovedFeature[]): Map<string, RemovedFeature> {
+  const start = header.indexOf("#define FOR_EACH_GUARDED_ENGINE_SYMBOL(macro)");
+  if (start < 0) throw Error("AOTBuiltinFeatures.h lists no guarded engine symbols");
+  const end = header.indexOf("\n\n", start);
+  const list = header.slice(start, end < 0 ? undefined : end);
+  const found = new Map<string, RemovedFeature>();
+  for (const [, symbol, name, stub] of list.matchAll(/macro\((\w+), (\w+), (\w+), \d+\)/g)) {
+    const feature = removed.find((f) => f.name === name);
+    if (!feature) continue;
+    if (stub !== "Throw" || !feature.throws)
+      throw Error(`${symbol}: a guarded ${name} built-in with stub ${stub}, which is not handled`);
+    found.set(`?${symbol}@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z`, feature);
+  }
+  return found;
 }
 
 interface Scan {
-  inventory: Inventory;
+  inventories: Inventory[];
   archive: Uint8Array;
   members: Member[];
   replaced: Map<number, Uint8Array>;
+  redirects: Map<string, string>;
 }
 
-function scan(webkit: string): Scan {
+function scan(webkit: string, removed: readonly RemovedFeature[]): Scan {
   const engine = pinnedEngine();
-  checkPrebuilt(webkit, engine);
+  const header = checkPrebuilt(webkit, engine, removed);
   const archive: Uint8Array = readFileSync(join(webkit, "lib/JavaScriptCore.lib"));
   const archiveSha256 = createHash("sha256").update(archive).digest("hex");
   const list = members(archive);
   const objects = list.map((m, index) => ({ index, member: m })).filter(({ member }) => member.kind === "object");
+  const byId = new Map(removed.map((f) => [f.id, f]));
 
-  const entries = new Set<string>();
+  const featureOf = new Map<string, RemovedFeature>();
+  const throwing = new Set<string>();
+  const aborting = new Set<string>();
+  const skipping = new Set<string>();
   const definitions = new Set<string>();
   const others = new Set<string>();
   const guards = new Map<number, Map<number, Set<string>>>();
   for (const { index, member } of objects) {
     const bytes = archive.subarray(member.start, member.start + member.size);
     if (buffer(bytes).indexOf(GUARD_SECTION) < 0) continue;
-    for (const record of removableEntries(new CoffObject(bytes))) {
-      if (record.feature !== FEATURE_JIT) {
+    for (const record of removableEntries(new CoffObject(bytes), byId)) {
+      const feature = byId.get(record.feature);
+      if (!feature) {
         others.add(record.symbol);
         continue;
       }
-      entries.add(record.symbol);
+      const owner = featureOf.get(record.symbol);
+      if (owner && owner !== feature)
+        throw Error(`${record.symbol} is an entry point of ${owner.name} and of ${feature.name}`);
+      featureOf.set(record.symbol, feature);
+      (record.stub === STUB_THROW ? throwing : record.stub === STUB_RETURN_DEFAULT ? skipping : aborting).add(
+        record.symbol,
+      );
       if (record.origin === ORIGIN_DEFINITION) definitions.add(record.symbol);
       else {
         const sections = guards.get(index) ?? new Map<number, Set<string>>();
@@ -339,40 +450,71 @@ function scan(webkit: string): Scan {
       }
     }
   }
-  if (!entries.size) throw Error("the archive records no JIT entry points");
-  for (const name of entries) {
-    if (others.has(name)) throw Error(`${name} is an entry point of the JIT and of another removable feature`);
+  const tables = new Set<string>();
+  for (const [name, feature] of guardedBuiltins(header, removed)) {
+    const owner = featureOf.get(name);
+    if (owner && owner !== feature) throw Error(`${name} is an entry point of ${owner.name} and of ${feature.name}`);
+    featureOf.set(name, feature);
+    throwing.add(name);
+    tables.add(name);
+  }
+  for (const feature of removed) {
+    if (![...featureOf.values()].includes(feature)) throw Error(`the archive records no ${feature.name} entry points`);
+  }
+  for (const name of featureOf.keys()) {
+    if (others.has(name))
+      throw Error(`${name} is an entry point of ${featureOf.get(name)!.name} and of a feature that stays`);
+    if (throwing.has(name) && aborting.has(name)) throw Error(`${name} is recorded both to throw and to abort`);
+    if (throwing.has(name) && definitions.has(name))
+      throw Error(`${name}: a throwing entry recorded at its definition`);
+    if (skipping.has(name) && (throwing.has(name) || definitions.has(name)))
+      throw Error(`${name}: a skipped entry that also throws or is recorded at its definition`);
     if (name.length <= 8) throw Error(`${name}: short symbol names are not searched for`);
   }
+  const redirects = new Map<string, string>();
+  for (const [name, feature] of featureOf)
+    redirects.set(name, throwing.has(name) ? feature.throws! : skipping.has(name) ? feature.skips! : feature.abort);
 
-  const counts = new Map<string, { definition: number; callSite: number }>();
-  for (const name of entries) counts.set(name, { definition: 0, callSite: 0 });
-  const needles = [...entries].map((name) => Buffer.from(`${name}\0`, "latin1"));
+  const counts = new Map<string, References>();
+  for (const name of featureOf.keys()) counts.set(name, { definition: 0, callSite: 0 });
+  const needles = [...featureOf.keys()].map((name) => Buffer.from(`${name}\0`, "latin1"));
   const replaced = new Map<number, Uint8Array>();
   for (const { index, member } of objects) {
     const bytes = archive.subarray(member.start, member.start + member.size);
     const object = new CoffObject(bytes);
     const strings = buffer(bytes.subarray(object.strings));
     if (!needles.some((needle) => strings.indexOf(needle) >= 0)) continue;
-    const out = redirect(object, entries, definitions, guards.get(index), (name, kind) => counts.get(name)![kind]++);
+    const out = redirect(object, redirects, definitions, tables, guards.get(index), (name, kind) => {
+      const c = counts.get(name)!;
+      c[kind] = (c[kind] ?? 0) + 1;
+    });
     if (out) replaced.set(index, out);
   }
-  const sorted = [...counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const total = (kind: Kind) => sorted.reduce((n, [, c]) => n + c[kind], 0);
-  return {
-    inventory: {
+  for (const [name, c] of counts) {
+    if (!c.definition && !c.callSite && !c.table)
+      throw Error(`no reference to ${name} was found: the engine names an entry point the archive lacks`);
+  }
+  const inventories = removed.map((feature): Inventory => {
+    const sorted = [...counts]
+      .filter(([name]) => featureOf.get(name) === feature)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const total = (kind: Kind) => sorted.reduce((n, [, c]) => n + (c[kind] ?? 0), 0);
+    const table = total("table");
+    const thrown = sorted.map(([name]) => name).filter((name) => throwing.has(name));
+    const skipped = sorted.map(([name]) => name).filter((name) => skipping.has(name));
+    return {
       schema: "skathi.no-jit-inventory",
       version: 1,
       engine,
       archiveSha256,
-      feature: { name: "JIT", id: FEATURE_JIT },
-      references: { definition: total("definition"), callSite: total("callSite") },
+      feature: { name: feature.name, id: feature.id },
+      references: { definition: total("definition"), callSite: total("callSite"), ...(table ? { table } : {}) },
       entries: Object.fromEntries(sorted),
-    },
-    archive,
-    members: list,
-    replaced,
-  };
+      ...(thrown.length ? { throwing: thrown } : {}),
+      ...(skipped.length ? { skipped } : {}),
+    };
+  });
+  return { inventories, archive, members: list, replaced, redirects };
 }
 
 function difference(committed: Inventory, found: Inventory): string[] {
@@ -386,18 +528,22 @@ function difference(committed: Inventory, found: Inventory): string[] {
     const is = JSON.stringify(found.entries[name] ?? null);
     if (was !== is) lines.push(`${name}: ${was} -> ${is}`);
   }
-  if (JSON.stringify(committed.references) !== JSON.stringify(found.references))
-    lines.push(`references: ${JSON.stringify(committed.references)} -> ${JSON.stringify(found.references)}`);
+  for (const key of ["references", "throwing", "skipped"] as const) {
+    if (JSON.stringify(committed[key]) !== JSON.stringify(found[key]))
+      lines.push(`${key}: ${JSON.stringify(committed[key])} -> ${JSON.stringify(found[key])}`);
+  }
   return lines;
 }
 
-function checkInventory(found: Inventory): void {
-  const committed = JSON.parse(readFileSync(INVENTORY, "utf8")) as Inventory;
+export const inventoryPath = (feature: RemovedFeature) => join(import.meta.dir, feature.inventory);
+
+function checkInventory(feature: RemovedFeature, found: Inventory): void {
+  const committed = JSON.parse(readFileSync(inventoryPath(feature), "utf8")) as Inventory;
   const lines = difference(committed, found);
   if (lines.length)
     throw Error(
-      `the pinned JavaScriptCore.lib does not match scripts/aot/jit-entries.json:\n  ${lines.join("\n  ")}\n` +
-        "Review the JIT entry points of the new engine, then run bun scripts/aot/no-jit.ts --write.",
+      `the pinned JavaScriptCore.lib does not match scripts/aot/${feature.inventory}:\n  ${lines.join("\n  ")}\n` +
+        `Review the ${feature.name} entry points of the new engine, then run bun scripts/aot/no-jit.ts --write.`,
     );
 }
 
@@ -451,8 +597,8 @@ function writeArchive({ archive, members: list, replaced }: Scan, path: string):
   return hash.digest("hex");
 }
 
-/** Reads the written archive back: the same members in the same order, linker members pointing at them, and only the redirect left. */
-function verifyArchive(path: string, scan: Scan, entries: Set<string>): void {
+/** Reads the written archive back: the same members in the same order, linker members pointing at them, and only redirects left. */
+function verifyArchive(path: string, scan: Scan): void {
   const archive: Uint8Array = readFileSync(path);
   const list = members(archive);
   if (list.length !== scan.members.length || list.some((m, i) => m.name !== scan.members[i]!.name))
@@ -465,16 +611,17 @@ function verifyArchive(path: string, scan: Scan, entries: Set<string>): void {
         throw Error("the written symbol table points between members");
     }
   }
+  const stubs = new Set(scan.redirects.values());
   for (const index of scan.replaced.keys()) {
     const member = list[index]!;
     const object = new CoffObject(archive.subarray(member.start, member.start + member.size));
-    const redirected = object.symbolCount - 1;
-    if (object.symbolName(redirected) !== REDIRECT) throw Error(`${member.name}: the redirect symbol is missing`);
     for (const section of object.sections) {
       if (!REFERENCING_SECTIONS.has(section.name.split("$", 1)[0]!)) continue;
       for (const relocation of object.relocations(section)) {
-        if (relocation.symbol !== redirected && entries.has(object.symbolName(relocation.symbol)))
-          throw Error(`${member.name}: a reference to ${object.symbolName(relocation.symbol)} survived`);
+        const name = object.symbolName(relocation.symbol);
+        if (scan.redirects.has(name)) throw Error(`${member.name}: a reference to ${name} survived`);
+        if (stubs.has(name) && object.symbolSection(relocation.symbol) !== 0)
+          throw Error(`${member.name}: ${name} is defined in the engine archive`);
       }
     }
   }
@@ -487,27 +634,41 @@ if (import.meta.main) {
       check: { type: "boolean" },
       write: { type: "boolean" },
       webkit: { type: "string" },
+      remove: { type: "string" },
     },
   });
   if ([values.out !== undefined, values.check, values.write].filter(Boolean).length !== 1) {
-    console.error("no-jit.ts --out <dir> | --check | --write  [--webkit <bun-webkit prebuilt>]");
+    console.error(
+      "no-jit.ts --out <dir> | --check | --write  [--remove JIT[,WebAssembly]] [--webkit <bun-webkit prebuilt>]",
+    );
     process.exit(2);
   }
   if (process.platform !== "win32" || process.arch !== "x64")
     throw Error("the aot-nojit archive is made on Windows x64, from the Windows prebuilt");
+  const names = values.remove?.split(",").map((n) => n.trim()) ?? REMOVED.map((f) => f.name);
+  const removed = REMOVED.filter((f) => names.includes(f.name));
+  for (const name of names)
+    if (!REMOVED.some((f) => f.name === name))
+      throw Error(`--remove: ${name} is not one of ${REMOVED.map((f) => f.name).join(", ")}`);
+  if (!names.includes("JIT")) throw Error("--remove: the archive always leaves out the JIT");
   const webkit = resolve(values.webkit ?? join(SDK, "vendor/redjs/prebuilt/bun-webkit"));
   const t0 = performance.now();
-  const result = scan(webkit);
-  const { inventory } = result;
-  const summary = `${Object.keys(inventory.entries).length} JIT entry points, ${inventory.references.definition} definition and ${inventory.references.callSite} call-site references`;
+  const result = scan(webkit, removed);
+  const summaries = result.inventories.map(
+    (i) =>
+      `${i.feature.name}: ${Object.keys(i.entries).length} entry points (${i.throwing?.length ?? 0} throw, ${i.skipped?.length ?? 0} skipped), ` +
+      `${i.references.definition} definition, ${i.references.callSite} call-site and ${i.references.table ?? 0} table references`,
+  );
   if (values.write) {
-    writeFileSync(INVENTORY, JSON.stringify(inventory, null, 2) + "\n");
-    console.log(`[no-jit] ${INVENTORY}: ${summary}`);
+    for (const [index, feature] of removed.entries()) {
+      writeFileSync(inventoryPath(feature), JSON.stringify(result.inventories[index], null, 2) + "\n");
+      console.log(`[no-jit] ${inventoryPath(feature)}: ${summaries[index]}`);
+    }
     process.exit(0);
   }
-  checkInventory(inventory);
+  for (const [index, feature] of removed.entries()) checkInventory(feature, result.inventories[index]!);
   if (values.check) {
-    console.log(`[no-jit] jit-entries.json matches ${inventory.engine}: ${summary}`);
+    console.log(`[no-jit] the inventories match ${result.inventories[0]!.engine}:\n  ${summaries.join("\n  ")}`);
     process.exit(0);
   }
   const out = resolve(values.out!);
@@ -515,12 +676,19 @@ if (import.meta.main) {
   rmSync(join(out, RECEIPT), { force: true });
   const path = join(out, ARCHIVE);
   const sha256 = writeArchive(result, path);
-  verifyArchive(path, result, new Set(Object.keys(inventory.entries)));
-  writeFileSync(
-    join(out, RECEIPT),
-    `redjs.no-jit.v1\nwebkit=${inventory.engine}\nsource=${inventory.archiveSha256}\nsha256=${sha256}\nentry=${REDIRECT}\n`,
-  );
+  verifyArchive(path, result);
+  const lines = [
+    "redjs.no-jit.v2",
+    `webkit=${result.inventories[0]!.engine}`,
+    `source=${result.inventories[0]!.archiveSha256}`,
+    `sha256=${sha256}`,
+    `removed=${removed.map((f) => f.name).join(",")}`,
+    ...removed.map((f) => `entry.${f.name}=${f.abort}`),
+    ...removed.flatMap((f) => (f.throws ? [`host-function.${f.name}=${f.throws}`] : [])),
+    ...removed.flatMap((f) => (f.skips ? [`skip.${f.name}=${f.skips}`] : [])),
+  ];
+  writeFileSync(join(out, RECEIPT), `${lines.join("\n")}\n`);
   console.log(
-    `[no-jit] ${path}: ${summary} redirected in ${result.replaced.size} objects, ${((performance.now() - t0) / 1000).toFixed(0)} s`,
+    `[no-jit] ${path}: ${summaries.join("; ")}; redirected in ${result.replaced.size} objects, ${((performance.now() - t0) / 1000).toFixed(0)} s`,
   );
 }

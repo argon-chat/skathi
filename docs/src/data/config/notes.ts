@@ -243,6 +243,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     platforms: "Windows x64, with `aot`.",
     notes: [
       "Read by `sk publish --aot`; debug builds and builds without AOT keep the JIT. `false` with `publishDevtools` is an error.",
+      "The workload has no WebAssembly either: `sk publish` refuses an app whose image names `WebAssembly`, and lists where.",
       "[AOT compilation](/guides/aot/#ship-without-the-jit) gives the size and speed measured.",
     ],
     example: false,

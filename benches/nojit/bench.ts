@@ -1,8 +1,8 @@
 /** The aot-nojit workload against the normal release host, on the same app (benches/nojit/app). Windows only.
  * bun benches/nojit/bench.ts --host <no-devtools host with native-aot> --nojit-host <aot-nojit host>
- *   [--runs 7] [--scenarios start,scroll,wasm,regexp,eval] [--compiler <sk-aot.exe>] [--out <dir>]
+ *   [--runs 7] [--scenarios start,scroll,regexp,eval] [--compiler <sk-aot.exe>] [--out <dir>]
  *
- *   aot    the normal host running the app's native image (JIT on for eval, new Function and Wasm)
+ *   aot    the normal host running the app's native image (JIT on for eval and new Function)
  *   nojit  the aot-nojit host running the same image
  *   jit    the normal host with SK_APP_ENGINE=jit: app.prod.js under the JIT, for reference
  *
@@ -22,7 +22,7 @@ const { values } = parseArgs({
     host: { type: "string" },
     "nojit-host": { type: "string" },
     runs: { type: "string", default: "7" },
-    scenarios: { type: "string", default: "start,scroll,wasm,regexp,eval" },
+    scenarios: { type: "string", default: "start,scroll,regexp,eval" },
     compiler: { type: "string" },
     out: { type: "string" },
   },
@@ -31,7 +31,7 @@ if (process.platform !== "win32") throw Error("the aot-nojit workload is Windows
 if (!values.host || !values["nojit-host"]) throw Error("--host and --nojit-host are required");
 const runs = Number(values.runs);
 if (!Number.isInteger(runs) || runs < 1) throw Error("--runs must be a positive integer");
-const SCENARIOS = ["start", "scroll", "wasm", "regexp", "eval"];
+const SCENARIOS = ["start", "scroll", "regexp", "eval"];
 const scenarios = values.scenarios.split(",");
 for (const s of scenarios) if (!SCENARIOS.includes(s)) throw Error(`unknown scenario ${s}; known: ${SCENARIOS}`);
 

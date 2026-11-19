@@ -215,7 +215,7 @@ The SK3 warnings measure how much of the code is typed: dependencies without dec
 The bundle runs from the image, and nothing falls back to the JIT. Once a process has loaded an image, it has no JIT:
 
 - **Run-time code.** `eval`, `new Function` and expressions evaluated from devtools run in the interpreter.
-- **WebAssembly.** Modules compile and run in the WebAssembly interpreter, many times slower than under the JIT.
+- **WebAssembly.** Modules compile and run in the WebAssembly interpreter, many times slower than under the JIT. The [`aot-nojit` workload](#ship-without-the-jit) has no WebAssembly at all (since 0.6).
 - **Reload.** The image's entry runs once per process. `location.reload()` evaluates `app.prod.js` from the payload instead.
 - **A host that cannot load the image.** See the warning below.
 
@@ -286,6 +286,18 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
   **Fix:** Build with `--aot`, or with another workload.
 
+- `this app's native image uses WebAssembly, which the aot-nojit workload leaves out` (since 0.6)
+
+  **Cause:** The app, or a dependency, names `WebAssembly`. The lines after the message give each place, with its line and column in `app.prod.js`. A test such as `typeof WebAssembly` counts too: the image is compiled for an engine that has it, and may have answered the test ahead of time.
+
+  **Fix:** Drop that use, or the dependency. Otherwise publish on the workload with the JIT: remove `"publishJit": false`.
+
+- `the aot-nojit workload leaves out WebAssembly, and the sk-aot that compiled this app does not record what its image uses` (since 0.6)
+
+  **Cause:** `sk-aot` comes from a Skathi version before 0.6, which does not say what an image uses.
+
+  **Fix:** Use the `sk-aot` of the release that matches the workload: remove `--aot-compiler` and `SK_AOT_COMPILER` and let `sk` fetch it.
+
 ### At start or while running
 
 - `this app's native image cannot run on this host`
@@ -326,7 +338,7 @@ A workload you build yourself with `sk workload build` loads images only when it
 
 ## Ship without the JIT (since 0.6)
 
-A process that runs an image already has no JIT, so the JIT compiler in the exe is code the app never runs. Since 0.6, `"publishJit": false` leaves it out: `sk publish --aot` then stamps the app into the `aot-nojit` workload, a Windows x64 release host whose JavaScriptCore is linked without the JIT.
+A process that runs an image already has no JIT, so the JIT compiler in the exe is code the app never runs. Since 0.6, `"publishJit": false` leaves it out: `sk publish --aot` then stamps the app into the `aot-nojit` workload, a Windows x64 release host whose JavaScriptCore is linked without the JIT and without WebAssembly.
 
 ```json title="sk.config.json"
 {
@@ -336,7 +348,8 @@ A process that runs an image already has no JIT, so the JIT compiler in the exe 
 }
 ```
 
-- **Smaller.** The workload is 74.8 MiB instead of 87.6 MiB, 12.8 MiB less, with the same image and payload.
+- **Smaller.** The workload is 73.9 MiB instead of 87.6 MiB, 13.7 MiB less, with the same image and payload: 12.8 MiB of JIT and 0.9 MiB of WebAssembly.
+- **No WebAssembly.** `WebAssembly` is `undefined`. `sk publish` refuses an app whose image names it, a `typeof WebAssembly` test included, and lists where; see [Troubleshooting](#at-build-time).
 - **Same speed.** Measured below, the app runs as fast as on the normal workload.
 - **No way back to the JIT.** `SK_APP_ENGINE=jit` stops the app with exit code 3 and a message that names the workload, instead of running `app.prod.js` in the interpreter. Compare against the JIT with a build that keeps `"publishJit"` on.
 - **Images only.** `sk build` and `sk publish` refuse the `aot-nojit` workload without `--aot`, and the host refuses a payload that has no image.
@@ -344,19 +357,17 @@ A process that runs an image already has no JIT, so the JIT compiler in the exe 
 
 ### What it costs (since 0.6)
 
-Measured with `benches/nojit` in the Skathi repository, one Windows x64 machine, release builds of the same app compiled once by `sk-aot`. **aot** is the normal workload running the image, **aot-nojit** the new workload running the same image, and **jit** the normal workload with `SK_APP_ENGINE=jit`, for reference. Each cell is the median of 9 runs; each run is a new process, the three variants take turns in alternating order, and one discarded run per variant comes first. Inside a run, the Wasm, RegExp and `eval` parts repeat 5 times after a warm-up and report their median.
+Measured with `benches/nojit` in the Skathi repository, one Windows x64 machine, release builds of the same app compiled once by `sk-aot`. **aot** is the normal workload running the image, **aot-nojit** the new workload running the same image, and **jit** the normal workload with `SK_APP_ENGINE=jit`, for reference. Each cell is the median of 7 runs; each run is a new process, the three variants take turns in alternating order, and one discarded run per variant comes first. Inside a run, the RegExp and `eval` parts repeat 5 times after a warm-up and report their median.
 
 | Median, ms                                                   | aot       | aot-nojit | jit       |
 | ------------------------------------------------------------ | --------- | --------- | --------- |
-| Start: process start to first frame                          | 287.1     | 283.0     | 293.5     |
-| Scroll, 600 frames of a 100,000-row list: frame p50 / p95    | 6.1 / 6.3 | 6.1 / 6.3 | 6.1 / 6.3 |
-| Scroll: Vue update per frame, total                          | 135.4     | 141.1     | 118.4     |
-| Wasm: compile a module                                       | 0.8       | 0.7       | 6.3       |
-| Wasm: integer loop, 10M iterations, plus a 4M sieve          | 417.2     | 423.0     | 19.9      |
-| RegExp: 8 kinds of match, replace and split over 20k lines   | 23.1      | 23.3      | 28.8      |
-| `eval` and `new Function`: a loop, a module, 2,000 templates | 30.5      | 29.6      | 57.5      |
+| Start: process start to first frame                          | 370.3     | 344.4     | 358.8     |
+| Scroll, 600 frames of a 100,000-row list: frame p50 / p95    | 6.1 / 6.2 | 6.1 / 6.3 | 6.1 / 6.3 |
+| Scroll: Vue update per frame, total                          | 132.8     | 135.9     | 117.1     |
+| RegExp: 8 kinds of match, replace and split over 20k lines   | 31.2      | 31.0      | 36.9      |
+| `eval` and `new Function`: a loop, a module, 2,000 templates | 34.0      | 37.0      | 73.6      |
 
-The two image columns stay within a few percent of each other. Without a JIT, WebAssembly runs in its interpreter on both workloads, about 20 times slower than under the JIT: an app whose hot path is Wasm should not use AOT.
+The two image columns stay within the spread of the runs. On the normal workload a process that runs an image has no JIT for WebAssembly either: it runs in its interpreter, about 20 times slower than under the JIT, so an app whose hot path is Wasm should not use AOT.
 
 ## Environment variables
 

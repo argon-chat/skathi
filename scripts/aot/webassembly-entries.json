@@ -1,0 +1,267 @@
+{
+  "schema": "skathi.no-jit-inventory",
+  "version": 1,
+  "engine": "3bc94211496460feda299ef85eef710eb67fafb3",
+  "archiveSha256": "184a2aed6f833823f19e71885be3ad97924e9d158ff6eaefd5aef9433c1d01ab",
+  "feature": {
+    "name": "WebAssembly",
+    "id": 4
+  },
+  "references": {
+    "definition": 52,
+    "callSite": 56,
+    "table": 6
+  },
+  "entries": {
+    "?callJSWebAssemblyCompileError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyException@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyGlobal@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyInstance@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyLinkError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyMemory@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyModule@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyRuntimeError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblySuspendError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyTable@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callJSWebAssemblyTag@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?callWebAssemblySuspending@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?clearJSCallICs@JSWebAssemblyInstance@JSC@@QEAAXAEAVVM@2@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?constructJSWebAssemblyCompileError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyException@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyGlobal@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyInstance@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyLinkError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyMemory@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyModule@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyRuntimeError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblySuspendError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyTable@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructJSWebAssemblyTag@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?constructWebAssemblySuspending@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?destroy@JSWebAssemblyInstance@JSC@@SAXPEAVJSCell@2@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "?destroy@WebAssemblyGCStructure@JSC@@SAXPEAVJSCell@2@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?evaluate@WebAssemblyModuleRecord@JSC@@QEAA?AVJSValue@2@PEAVJSGlobalObject@2@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?initializeExports@WebAssemblyModuleRecord@JSC@@QEAAXPEAVJSGlobalObject@2@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?initializeImports@WebAssemblyModuleRecord@JSC@@QEAAXPEAVJSGlobalObject@2@PEAVJSObject@2@W4CreationMode@Wasm@2@@Z": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "?installWebAssemblyInterpreter@LLInt@JSC@@YAXPEAPEAX00@Z": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "?instantiate@JSWebAssembly@JSC@@SA?AVJSValue@2@PEAVJSGlobalObject@2@PEAVJSPromise@2@PEAVJSModuleLoader@2@$$QEAV?$RefPtr@VSourceProvider@JSC@@U?$RawPtrTraits@VSourceProvider@JSC@@@WTF@@U?$DefaultRefDerefTraits@VSourceProvider@JSC@@@4@@WTF@@AEBVIdentifier@2@V32@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?link@WebAssemblyModuleRecord@JSC@@QEAA?AW4Synchronousness@2@PEAVJSGlobalObject@2@V?$RefPtr@VScriptFetcher@JSC@@U?$RawPtrTraits@VScriptFetcher@JSC@@@WTF@@U?$DefaultRefDerefTraits@VScriptFetcher@JSC@@@4@@WTF@@@Z": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "?range@Callee@Wasm@JSC@@QEBA?AV?$tuple@PEAXPEAX@std@@XZ": {
+      "definition": 5,
+      "callSite": 0
+    },
+    "?run@?$RemovableBody@$03$0A@XV<lambda_1>@?0???$visitAdditionalChildren@VAbstractSlotVisitor@JSC@@@WebAssemblyGCStructure@JSC@@SAXPEAVJSCell@3@AEAVAbstractSlotVisitor@3@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$visitAdditionalChildren@VAbstractSlotVisitor@JSC@@@WebAssemblyGCStructure@2@SAXPEAVJSCell@2@AEAVAbstractSlotVisitor@2@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?run@?$RemovableBody@$03$0A@XV<lambda_1>@?0???$visitAdditionalChildren@VSlotVisitor@JSC@@@WebAssemblyGCStructure@JSC@@SAXPEAVJSCell@3@AEAVSlotVisitor@3@@Z@@JSC@@SAXAEAV<lambda_1>@?0???$visitAdditionalChildren@VSlotVisitor@JSC@@@WebAssemblyGCStructure@2@SAXPEAVJSCell@2@AEAVSlotVisitor@2@@Z@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?updateMatchingCachedMemoriesConcurrently@JSWebAssemblyInstance@JSC@@QEAAXAEBVSharedArrayBufferContents@2@@Z": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "?verifyInitialization@IPInt@JSC@@YAXXZ": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?webAssemblyCompileFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "?webAssemblyCompileStreamingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?webAssemblyInstantiateFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "?webAssemblyInstantiateStreamingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?webAssemblyModuleCustomSections@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "?webAssemblyModuleExports@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "?webAssemblyModuleImports@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "?webAssemblyPromisingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "?webAssemblyValidateFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "operationJSToWasmEntryWrapperBuildFrame": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "operationJSToWasmEntryWrapperBuildReturnFrame": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "operationWasmToJSExitMarshalArguments": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "operationWasmToJSExitMarshalReturnValues": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "operationWasmUnwind": {
+      "definition": 9,
+      "callSite": 0
+    }
+  },
+  "throwing": [
+    "?callJSWebAssemblyCompileError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyException@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyGlobal@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyInstance@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyLinkError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyMemory@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyModule@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyRuntimeError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblySuspendError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyTable@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callJSWebAssemblyTag@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?callWebAssemblySuspending@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyCompileError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyException@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyGlobal@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyInstance@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyLinkError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyMemory@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyModule@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyRuntimeError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblySuspendError@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyTable@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructJSWebAssemblyTag@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?constructWebAssemblySuspending@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyCompileFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyCompileStreamingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyInstantiateFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyInstantiateStreamingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyModuleCustomSections@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyModuleExports@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyModuleImports@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyPromisingFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z",
+    "?webAssemblyValidateFunc@JSC@@YA_JPEAVJSGlobalObject@1@PEAVCallFrame@1@@Z"
+  ],
+  "skipped": ["?installWebAssemblyInterpreter@LLInt@JSC@@YAXPEAPEAX00@Z"]
+}

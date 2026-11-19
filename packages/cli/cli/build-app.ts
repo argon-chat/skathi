@@ -21,6 +21,7 @@ import { cssDiagnostics, readStyleSources } from "../check/css";
 import { diagnosticLine } from "../check/finding";
 import { frameworkBuildLines } from "../check/frameworks";
 import type { BuildStyles } from "../check/graph";
+import { removedFeatures } from "../aot/uses";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
@@ -606,6 +607,8 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       aot: hostNative,
       compilerPath: options.aotCompiler,
       work: join(work, "aot"),
+      removed: removedFeatures(host?.info.features ?? []),
+      workload: host?.info.variant ?? variant,
       progress,
       log,
     });

@@ -9,7 +9,15 @@
 import { deflateRawSync } from "node:zlib";
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { AotError, compileNative, compilerInfo, compilerMismatch, nativeManifest, repoSkAot } from "../aot/native";
+import {
+  AotError,
+  compileNative,
+  compilerInfo,
+  compilerMismatch,
+  nativeManifest,
+  removedFeatureProblem,
+  repoSkAot,
+} from "../aot/native";
 import type { CompilerInfo } from "../aot/pin";
 import { TRANSFORM } from "../aot/transform";
 import { diagnosticLine } from "../check/finding";
@@ -148,6 +156,9 @@ export async function buildNative(options: {
   aot: HostAot;
   compilerPath: string | undefined;
   work: string;
+  /** The engine features the workload leaves out, and its name. */
+  removed: readonly string[];
+  workload: string;
   progress: Progress;
   log: (line: string) => void;
 }): Promise<NativeBuild> {
@@ -158,11 +169,10 @@ export async function buildNative(options: {
   );
   progress.detail(`sk-aot (${compiler.source})`);
   progress.step("native image");
-  const native = await compileNative({
-    compiler: compiler.path,
-    source: new TextDecoder().decode(options.source),
-    work,
-  });
+  const source = new TextDecoder().decode(options.source);
+  const native = await compileNative({ compiler: compiler.path, source, work });
+  const problem = removedFeatureProblem(native, source, options.removed, options.workload);
+  if (problem) throw new AotError(problem);
   const compressed = deflateRawSync(native.image, { level: 9 });
   progress.detail(
     `${(native.image.length / 2 ** 20).toFixed(1)} MiB, ${(compressed.length / 2 ** 20).toFixed(1)} MiB packed`,

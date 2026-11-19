@@ -8,10 +8,12 @@ import {
   compilerMismatch,
   nativeManifest,
   repoSkAot,
+  removedFeatureProblem,
   type NativeImage,
 } from "../aot/native";
 import { loadPin, pinnedCompilerInfo } from "../aot/pin";
-import { opaqueGlobals, TABLE_ID, TRANSFORM } from "../aot/transform";
+import { opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
+import type { FeatureUse, Uses } from "../aot/uses";
 import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
 import { buildApp } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
@@ -147,6 +149,7 @@ describe("the host decides what an image is compiled against", () => {
       nativeInputSha256: "n".repeat(64),
       irSha256: "r".repeat(64),
       diagnostics: "",
+      uses: null,
     };
     const manifest = nativeManifest("application", pinnedCompilerInfo(pin), native, {
       image: "sk/app.image",
@@ -197,4 +200,47 @@ describe("sk check gates an AOT build", () => {
 test("the CLI package carries the pin and the transform's table", () => {
   const pkg = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8")) as { files: string[] };
   expect(pkg.files).toContain("aot");
+});
+
+describe("a workload without WebAssembly", () => {
+  const source = "const o = {}; for (const k in o) o[k](); const { Module } = globalThis.WebAssembly;\n";
+  const at = (text: string) => opaqueHost(source).indexOf(text);
+  const use = (kind: string, builtin: string, position: number): FeatureUse => ({
+    feature: "WebAssembly",
+    id: 4,
+    kind,
+    builtin,
+    module: 0,
+    position,
+  });
+  const image = (features: FeatureUse[]): NativeImage => ({
+    image: new Uint8Array(1),
+    entry: 1,
+    identity: "00".repeat(16),
+    imageSha256: "",
+    sourceBundleSha256: "",
+    nativeInputSha256: "",
+    irSha256: "",
+    diagnostics: "",
+    uses: { entryModules: [1], features, unseen: [], statistics: {} } satisfies Uses,
+  });
+  const dynamicCall = [use("Unnamed", "WebAssembly", at("o[k]")), use("FoundByName", "WebAssembly.Module", at("o[k]"))];
+
+  test("what a dynamic call might reach does not refuse the image", () => {
+    expect(removedFeatureProblem(image(dynamicCall), source, ["WebAssembly"], "aot-nojit")).toBeNull();
+  });
+
+  test("a read of WebAssembly refuses it and names the place", () => {
+    const problem = removedFeatureProblem(
+      image([...dynamicCall, use("FoundByName", "WebAssembly", at("WebAssembly;"))]),
+      source,
+      ["WebAssembly"],
+      "aot-nojit",
+    );
+    expect(problem).toContain("app.prod.js 1:" + (source.indexOf("WebAssembly;") + 1));
+  });
+
+  test("an sk-aot that records nothing refuses it", () => {
+    expect(removedFeatureProblem({ ...image([]), uses: null }, source, ["WebAssembly"], "aot-nojit")).not.toBeNull();
+  });
 });

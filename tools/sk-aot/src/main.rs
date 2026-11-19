@@ -4,6 +4,7 @@ mod frontend;
 mod probe;
 mod types;
 mod unlinked;
+mod uses;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -84,15 +85,18 @@ fn front_end(input: &str, ir: &str, flags: &Flags) -> Result<(), String> {
     };
     let built = frontend::compile(&request, &mut log);
     if std::env::var_os("SK_AOT_TRACE").is_some() {
-        eprintln!("sk-aot: front end returned {built}");
+        eprintln!("sk-aot: front end returned {}", built.is_some());
     }
     let mut text = String::new();
     let _ = log.print(&mut text);
     eprint!("{text}");
-    if !built || !Path::new(ir).is_file() {
+    let Some(built) = built.filter(|_| Path::new(ir).is_file()) else {
         return Err(format!("the front end did not compile {input}"));
-    }
-    Ok(())
+    };
+    let path = format!("{ir}.uses.json");
+    let engine = built.engine.0.get::<bun_aot::engine::EngineResult>();
+    std::fs::write(&path, uses::json(engine))
+        .map_err(|error| format!("cannot write {path}: {error}"))
 }
 
 /// What `aot-image compile` writes: the image, `.identity` and `.entries` beside it.

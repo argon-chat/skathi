@@ -9,7 +9,8 @@
 //     image, and the sk-aot that compiled it is published beside them (<dir>/aot-<platform>-<arch>.json).
 //     With --no-jit too (the directory of scripts/aot/no-jit.ts --out), the aot-nojit workload is built.
 //     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
-//     none of the JIT entry points in scripts/aot/jit-entries.json, and it exports what no-devtools does.
+//     none of the entry points the inventories of scripts/aot/no-jit.ts list (the JIT's, WebAssembly's)
+//     while no-devtools links them, and aot-nojit exports what no-devtools does.
 //   bun scripts/release-hosts.ts --merge <dir>
 //     once, over every OS's output: <dir>/hosts.json
 //   bun scripts/release-hosts.ts --check-tag <tag>
@@ -21,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { NO_JIT_VARIANT, platformVariants } from "../packages/cli/cli/config";
-import type { Inventory } from "./aot/no-jit";
+import { inventoryPath, REMOVED, type Inventory } from "./aot/no-jit";
 import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
   aotCompilerAssetName,
@@ -129,22 +130,25 @@ if (variants.includes(NO_JIT_VARIANT) && !(inspector && noJit)) {
 
 // What a Windows host's link map must show, and what each host exports.
 const maps = platform === "windows" ? mkdtempSync(join(tmpdir(), "sk-host-maps-")) : null;
-const jitEntries = Object.keys(
-  (JSON.parse(readFileSync(join(import.meta.dir, "aot/jit-entries.json"), "utf8")) as Inventory).entries,
-);
+const removedEntries = REMOVED.map((feature) => ({
+  feature,
+  names: Object.keys((JSON.parse(readFileSync(inventoryPath(feature), "utf8")) as Inventory).entries),
+}));
 const exportsOf = new Map<string, string[]>();
 function checkLink(variant: string, exe: string, map: string): void {
   const linked = readFileSync(map, "latin1");
   const has = (symbol: string) => linked.includes(` ${symbol} `);
   if (/\s\?compileProgram@AOT@JSC@@/.test(linked)) throw new Error(`${variant}: the host links the image compiler`);
-  const kept = jitEntries.filter(has);
-  if (variant === NO_JIT_VARIANT && kept.length) {
-    throw new Error(`${variant}: the host links ${kept.length} JIT entry points, among them ${kept[0]}`);
-  }
-  if (variant === "no-devtools" && inspector && !kept.length) {
-    throw new Error(
-      `${variant}: none of scripts/aot/jit-entries.json is in the map; it names other symbols than the link`,
-    );
+  const entryUse = removedEntries.map(({ feature, names }) => ({ feature, names, kept: names.filter(has) }));
+  for (const { feature, names, kept } of entryUse) {
+    if (variant === NO_JIT_VARIANT && kept.length) {
+      throw new Error(`${variant}: the host links ${kept.length} ${feature.name} entry points, among them ${kept[0]}`);
+    }
+    if (variant === "no-devtools" && inspector && kept.length !== names.length) {
+      throw new Error(
+        `${variant}: ${names.length - kept.length} of scripts/aot/${feature.inventory} are not in the map; it names other symbols than the link`,
+      );
+    }
   }
   const listing = spawnSync("llvm-readobj", ["--coff-exports", exe], { encoding: "utf8" });
   if (listing.status !== 0) throw new Error(`llvm-readobj --coff-exports ${exe} failed: ${listing.stderr}`);
@@ -156,9 +160,8 @@ function checkLink(variant: string, exe: string, map: string): void {
   if (variant === NO_JIT_VARIANT && reference && reference.join("\n") !== names.join("\n")) {
     throw new Error(`${variant}: the host exports other symbols than no-devtools: ${names.join(", ")}`);
   }
-  console.log(
-    `[release] ${variant}: ${kept.length} of ${jitEntries.length} JIT entry points linked, ${names.length} exports`,
-  );
+  const counts = entryUse.map(({ feature, names: all, kept }) => `${kept.length} of ${all.length} ${feature.name}`);
+  console.log(`[release] ${variant}: ${counts.join(", ")} entry points linked, ${names.length} exports`);
 }
 
 const entries: HostManifestEntry[] = [];

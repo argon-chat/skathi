@@ -148,6 +148,7 @@ async function compileSplit(script: string, flavor: "js" | "ts", work: string): 
     nativeInputSha256: sha256(input),
     irSha256: sha256(readFileSync(join(work, "app.ir"))),
     diagnostics: child.stdout.toString().trim(),
+    uses: null,
     ms,
   };
 }

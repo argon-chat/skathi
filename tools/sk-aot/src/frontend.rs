@@ -2,7 +2,7 @@ use bun_alloc::Arena;
 use bun_aot::engine::ExecutableIdentity;
 use bun_ast::Log;
 use bun_bundler::Transpiler;
-use bun_bundler::aot::{AotBuildRequest, build};
+use bun_bundler::aot::{AotBuild, AotBuildRequest, build};
 use bun_bundler::options::{AllowUnresolved, CompileMode, CompileTargetBuiltins};
 use bun_dotenv::Loader;
 use bun_options_types::aot_options::AotOptions;
@@ -84,13 +84,13 @@ fn transform_options(
     }
 }
 
-/// Runs the front end. `false`: the build failed, and `log` says why.
-pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
+/// Runs the front end. `None`: the build failed, and `log` says why.
+pub fn compile(request: &Request<'_>, log: &mut Log) -> Option<AotBuild> {
     let Ok(directory) = DirnameStore::instance().append_slice(request.working_directory) else {
-        return false;
+        return None;
     };
     if !set_up_process(directory) {
-        return false;
+        return None;
     }
     FileSystem::get().set_top_level_dir(directory);
     let arena: &'static Arena = Box::leak(Box::new(Arena::new()));
@@ -100,7 +100,7 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
         request.defines,
     );
     let Ok(transpiler) = Transpiler::init(arena, &raw mut *log, options, None) else {
-        return false;
+        return None;
     };
     let transpiler: &'static mut Transpiler<'static> = arena.alloc(transpiler);
     let opts = &mut transpiler.options;
@@ -112,7 +112,7 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
     opts.compile_entry_point_name = Box::from(&b"unused.exe"[..]);
     opts.root_dir = Box::default();
     if transpiler.configure_defines().is_err() {
-        return false;
+        return None;
     }
     transpiler.configure_linker();
     transpiler.options.compile_target_builtins = CompileTargetBuiltins::Host;
@@ -123,7 +123,7 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
             .append_slice(&[b"development" as &[u8]])
             .is_err()
     {
-        return false;
+        return None;
     }
     transpiler.sync_resolver_opts();
     transpiler.resolver.env_loader = NonNull::new(transpiler.env);
@@ -148,5 +148,5 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> bool {
         file_map: None,
         typescript_libs: CheckerLibs::Bundled(typescript_libs::BUNDLED),
     });
-    built.is_ok()
+    built.ok()
 }
