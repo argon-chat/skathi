@@ -270,6 +270,13 @@ fn subscribe(context: &Context, callback: Value) -> js::Result<Value> {
         })?;
     context
         .call(factory, Value::undefined(), &[Value::number(id as f64)])
+        .and_then(|unsubscribe| {
+            let name = context.atom("name");
+            // JSC materializes a bound function's name on the first read.
+            context.get(unsubscribe, &name)?;
+            context.define(unsubscribe, &name, context.string("unsubscribe"), 3)?;
+            Ok(unsubscribe)
+        })
         .inspect_err(|_| remove_listener(context, id))
 }
 
@@ -656,10 +663,11 @@ fn install_roots(context: &Context) -> js::Result<()> {
             }
             Ok(Value::undefined())
         })?;
-    let factory = context.eval("(function(remove){return function(id){let active=true;return function unsubscribe(){if(active){active=false;remove(id);}};};})")?;
-    let unsubscribe = context.call(factory, Value::undefined(), &[remove])?;
-    let is_array = context.eval("Array.isArray")?;
-    let object_keys = context.eval("Object.keys")?;
+    // Capture bind at setup. Each subscription binds one immutable id without allocating a Rust trampoline.
+    let bind = context.get(remove, &context.atom("bind"))?;
+    let unsubscribe = context.call(bind, bind, &[remove, Value::undefined()])?;
+    let is_array = context.get(context.global_get("Array")?, &context.atom("isArray"))?;
+    let object_keys = context.get(context.global_get("Object")?, &context.atom("keys"))?;
     for value in [unsubscribe, is_array, object_keys] {
         context.protect(value);
     }
@@ -963,6 +971,33 @@ mod tests {
                 assert_eq!(text(context, "String(__hotkeyEvents[4])"), "up");
                 clear(context, false);
             })
+        });
+    }
+
+    #[test]
+    fn unsubscribe_uses_the_subscription_id_even_if_bind_is_replaced() {
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|runtime| {
+                let context = runtime.ctx();
+                fresh(context);
+                let result = text(
+                    context,
+                    r#"(() => {
+                    const bind = Function.prototype.bind;
+                    try {
+                        Function.prototype.bind = () => { throw Error("patched bind"); };
+                        const first = __hotkeyProbe.onFired(() => {});
+                        const second = __hotkeyProbe.onFired(() => {});
+                        first.call(second, 999);
+                        first();
+                        return first.name + ":" + first.length;
+                    } finally { Function.prototype.bind = bind; }
+                })()"#,
+                );
+                assert_eq!(result, "unsubscribe:0");
+                assert_eq!(STATE.with(|state| state.borrow().listeners.len()), 1);
+                clear(context, false);
+            });
         });
     }
 
