@@ -1,0 +1,184 @@
+---
+title: Skathi 0.5
+metaTitle: "Skathi 0.5: pens, a drawing app that replays itself, and HDR colours"
+description: Pens and styluses as Pointer Events with predicted points, a draw template that records a session and plays it back, a colour picker with Display P3 and HDR, iframes on macOS, the rest of WebGPU, and a round of fixes from the first embedder.
+date: 2026-11-19
+draft: false
+tags: [release, input, graphics, templates]
+release:
+  version: "0.5.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.5.0 && bun add -d @skathi-native/cli@^0.5.0
+    - label: Rust program
+      command: cargo add skathi@0.5
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+import Demo from "../src/components/Demo.astro";
+import Sample from "../src/components/Sample.astro";
+
+Skathi 0.5 is about the hand on the pen. A stylus reaches the page as it does in a browser, with every reading and a prediction of where the tip goes next, and a new template puts it to work: a drawing app that records how a picture was made and plays it back. Around it, the colour picker learns wide gamut and HDR, `<iframe>` comes to macOS, WebGPU gets its missing half, and native frames got a round of fixes from the first program that embeds Skathi in production.
+
+<FeatureGrid label="What is new in 0.5">
+  <Feature icon="sparkle" title="A drawing app" href="#a-drawing-app-that-replays-itself" tone="pink">The `draw` template: an infinite WebGPU canvas that records a session to a file and replays it.</Feature>
+  <Feature icon="code" title="Pens and styluses" href="#pens-as-pointer-events" tone="blue">Pressure, tilt, twist and the eraser, every reading with its time, and predicted points.</Feature>
+  <Feature icon="shapes" title="Colour picker" href="#a-colour-picker-for-wide-gamut-and-hdr" tone="lilac">Drawn in the window, in sRGB, Display P3 or HDR, as a square, wheel or triangle.</Feature>
+  <Feature icon="monitor" title="iframe on macOS" href="#iframe-on-macos" tone="yellow">`<iframe>` in WKWebView, with the same messaging, focus and input as on Windows.</Feature>
+  <Feature icon="cpu" title="The rest of WebGPU" href="#the-rest-of-webgpu" tone="pink">Render bundles, queries, indirect draws, async pipelines, and the official types.</Feature>
+  <Feature icon="play" title="Native frames, hardened" href="#native-frames-from-a-real-embedder" tone="blue">Device loss, a vblank clock per display, EDR on macOS, and frame feedback that holds up.</Feature>
+  <Feature icon="braces" title="Typed templates" href="#typed-templates" tone="lilac">Every element in a Vue or Svelte template typed, events included.</Feature>
+  <Feature icon="terminal" title="Devtools" href="#devtools" tone="yellow">A virtual pen for tests, and window screenshots on macOS.</Feature>
+</FeatureGrid>
+
+## A drawing app that replays itself
+
+`bun create skathi my-app --template draw` writes a drawing app. It is an infinite canvas drawn with WebGPU, made for a pen and fine with a mouse:
+
+- pens, markers and an eraser with pressure;
+- spray, airbrush, a paint bucket, lasso fill and smudge;
+- shapes, lasso selection with move, scale and rotate, and symmetry;
+- layers with 15 blend modes, clipping and alpha lock;
+- an eyedropper, SVG and PNG export, and window controls drawn to match the app.
+
+What sets it apart is the recording. Open **Recording…** in the menu, give it a title and the artist's name, and start. From then on every stroke is kept with all of its pen readings: position, pressure, tilt and time. So is every change of tool, colour, size, layer or blend mode, and every undo. Stop, and the session saves as a `.skev` file. Drop a `.skev` on the window, or use **Open recording…**, and the app plays it back.
+
+The clip below is one of those files. An artist drew this picture in the template over 68 minutes. The player replays it in 28 seconds, with long pauses cut to one second. It shows the editor itself, not just the canvas: the toolbar follows the recording, picking up the spray or the smudge stick and switching colours as the artist did.
+
+<Demo
+  id="draw"
+  caption="The draw template replaying a 68-minute session in 28 seconds. The toolbar follows the tools and colours the artist picked."
+  label="The draw template replaying a drawing session: an anime girl is sketched, inked and coloured while the toolbar switches between pens, spray and colours on its own"
+  width={1280}
+  height={820}
+/>
+
+The player has a timeline to scrub, a step to the next action, speeds from half to 64 times and instant, and pauses cut to a set length. It can follow the artist's camera, pans and zooms included, or fit the whole picture in the window.
+
+### The `.skev` format
+
+A recording is binary, so a long session stays small and quick to open. The file is a sequence of chunks, each a type, a length and a payload, checked with CRC-32 and compressed with deflate. The events follow a schema the file declares, each one length-prefixed, so a reader skips what it does not know. A stroke's readings are stored by column: all the x values, then all the y values, and so on, which deflate packs well.
+
+Recording writes to a journal as it goes. A host killed in the middle of a session loses nothing that was drawn: on the next start the app picks the recording up again. The template's tests kill the host mid-recording, replay the file and compare it with the canvas pixel for pixel.
+
+The template is plain Vue and TypeScript in your app. Its recorder, player and format are files in `src/`, ready to borrow for an app that records something else.
+
+## Pens as Pointer Events
+
+A stylus is a pointer with `pointerType` `"pen"` now, on Windows through `WM_POINTER`, on macOS through AppKit's tablet events, and on Wayland through the tablet protocol. It reports `pressure`, `tiltX` and `tiltY`, `altitudeAngle` and `azimuthAngle`, `twist`, and on airbrush pens `tangentialPressure`. The tip is button 0, the barrel button 2 and the eraser 5. A pen hovering in range fires `pointermove` with no buttons down. The compatibility mouse events follow, unless the app cancels `pointerdown`.
+
+A pen reads its position far more often than the screen refreshes. `getCoalescedEvents()` returns every reading since the last move, each with its own position, pressure and `timeStamp`, on the `performance.now()` clock:
+
+<Sample src="pen-input/Sketch" focus="stroke" />
+
+`getPredictedEvents()` returns where the tip will be over the next 17 ms at most. The predictions come from a port of the Kalman predictor in Google's ink stroke modeler. It predicts less when it is unsure: early in a stroke, at slow speed, at a sharp turn or when the pen brakes, so the predicted tail does not hook past a corner. On generated pen strokes at 133 and 240 Hz, it cut the error one frame ahead from 6.1 to 2.1 px against the predictor Chromium uses, and the overshoot at sharp turns from 6.7 to 0.4 px.
+
+The mouse gets some of it too: its in-frame positions as coalesced events, and predictions. Along the way, `mouseover` and `mouseout` carry `relatedTarget`, and `offsetX` and `offsetY` are measured from the target's padding edge. They used to read 0.
+
+The [pen input guide](/guides/pen-input/) has the details per platform. The tests drive it with the devtools' new [`pen` command](#devtools).
+
+## A colour picker for wide gamut and HDR
+
+`<input type="color">` opens a picker Skathi draws itself, in the input's `color-scheme`, where it used to open the system dialog. It has a square, a wheel or a triangle, hue and alpha sliders, entry in hex, RGB, HSL, HSV and OKLCH, and recent colours. It opens in a popup window of its own, as the `<select>` list now does, so it can extend past a small window, on Windows, macOS, X11 and Wayland alike.
+
+The attributes follow the HTML standard, plus one of Skathi's own:
+
+- `alpha` adds an alpha slider, and `value` becomes `color(srgb r g b / a)`.
+- `colorspace="display-p3"` makes the picker work in P3, and `value` is `color(display-p3 r g b)`.
+- `hdr` adds an intensity in stops. `value` is then linear light with channels past 1, such as `color(srgb-linear 4 2 0.5)`, which a `style` binding takes as is.
+
+```vue title="Glow.vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const glow = ref("color(srgb-linear 4 2 0.5)");
+</script>
+
+<template>
+  <input v-model="glow" type="color" colorspace="display-p3" alpha hdr />
+  <div class="orb" :style="{ background: glow }" />
+</template>
+```
+
+`showPicker()` opens it from script. A cancelable `showpicker` event fires first, so an app can show its own picker instead, and `"colorPicker": "system"` in `sk.config.json` keeps the system dialog. [Form controls](/elements/form-controls/#color) covers all of it.
+
+## iframe on macOS
+
+`<iframe>` runs on macOS now, in a WKWebView placed in the element's box. It works as on Windows:
+
+- the same `postMessage` relay with the app;
+- `load` and `error` events;
+- clicks, drags and trackpad scrolling with momentum;
+- the keyboard, IME and editing as WebKit does them;
+- Tab moves between the document and the app's own controls.
+
+App files are served from `sk-app://app` as a secure context. A document cannot navigate the top level, open windows or start downloads. `skFeatures.iframe` is `true` on both platforms when the `webview` feature is built in; on Linux it is still `false`. See [iframe](/elements/iframe/#macos).
+
+## The rest of WebGPU
+
+0.4 had the WebGPU most apps draw with. 0.5 adds the rest of what the standard types declare:
+
+- render bundles;
+- occlusion and timestamp queries;
+- `drawIndirect` and `drawIndexedIndirect`;
+- debug groups and labels;
+- `createRenderPipelineAsync` and `createComputePipelineAsync`;
+- `onuncapturederror`, `adapterInfo`, `wgslLanguageFeatures` and the newer limits.
+
+The `timestamp-query` feature is available on Windows. Apps are typed with `@webgpu/types`, which `@skathi-native/runtime` brings along, so `device.createTexture`, depth buffers or `mapAsync` no longer fail the type check. `OffscreenCanvas`, `ImageBitmap` and `createImageBitmap` are typed the same way.
+
+## Typed templates
+
+Every element in a Vue template used to be `any` to `vue-tsc`. The runtime now exports the `jsx-runtime` that `vue-tsc` reads, so attributes are checked and `@click="(e) => …"` gives `e` its event type. `<video>` and `<audio>` get their media events, and `<lottie>`, `<sk-surface>` and `<sk-sticker>` their attributes and events, in Vue and Svelte. Attributes not in the list are still accepted.
+
+## Native frames from a real embedder
+
+The developer of a video player that shows its frames through `<sk-surface>` filed twenty issues the day 0.4 shipped, with repros and logs, many with frame-by-frame measurements. All twenty are fixed, most with a test that reproduces the issue.
+
+- **A removed Direct3D 12 device** is reported at once, and Skathi makes a new one. The window used to freeze after a minute of failed attempts. Producers hear `DeviceLost`, waiting frames drop as `DeviceLost`, and presents return `DeviceChanged` until the new device is ready.
+- **A frame that is not shown says why**, once per reason, in the log and the devtools.
+- **The vblank clock is the window's own display.** On Windows, `last_vblank` and `refresh_period` came from DWM's clock, which follows one display. On a second display it drifted through a whole refresh about every 30 seconds. They now come from vblank waits on the window's display. The vsync tick keeps its place in the refresh at low present rates too.
+- **A restored or uncovered window shows at once.** Frames used to drop as `Hidden` for up to 200 ms after a restore.
+- **A frame that is still copying holds nothing back.** The element shows the newest frame whose copy has finished, so a producer at the refresh rate drops frames instead of stalling.
+- **EDR on macOS** is in the right colour space. The switch shows no garbled or black frame, and the brightness follows macOS's ramp every frame. A window asks for only the headroom its content's `dynamic-range-limit` allows, and `outputHdr` says whether it draws HDR.
+- **Frame feedback holds up** at sparse presents and during a live resize on macOS. On Windows an estimated frame takes the delay the last exact ones had.
+- **Exact feedback on Windows, as an option.** A frame presented in time can still miss its refresh when another app's window updated first, and it is reported `Estimated`. `Builder::exact_frame_feedback(true)` reads each refresh's statistics once DWM has composed it: every `Presented` is `Exact` and no frame misses its refresh, at the cost of every present reaching the screen one refresh later, 4.2 ms at 240 Hz. The reporter wrote the patch and measured it with mpv; it is off by default.
+- **The tick starts earlier in the refresh.** The vsync thread asks the windows to paint before it reads the feedback, and the display configuration is read on a thread of its own. Measured against the scanline, the tick that takes a frame went from 0.11 to 0.08 of the refresh.
+
+[Native frames](/embedding/native-frames/) marks each of these as 0.5. It also has a section on when to render for a present that lands mid-refresh, with a recipe for mpv's display-resample mode.
+
+## Devtools
+
+- **A `pen` command** hovers, presses, moves and lifts a virtual pen with pressure, tilt, twist, the barrel button and the eraser. It goes through the host's input path, so a test drives a drawing app the way a pen would.
+- **Screenshots on macOS** with `--backend print_window` capture the window as the window server shows it, `<iframe>` included. Windows already had them.
+
+## Fixes worth a line
+
+- Text moved by a fractional transform, such as a label centred with `translateX(-50%)`, draws no stray bars from the next glyph's tile, and is as sharp as untransformed text.
+- The `setTitleBarOverlay()` caption buttons paint and take clicks above a positioned page box, such as a full-window canvas or an `<iframe>`.
+- A payload published without devtools keeps them off.
+- `customElements` is a registry that defines nothing, so libraries that check for it load.
+- `<sk-surface>` works without the `video` feature.
+- Closing a window logs no errors.
+- `bun create skathi` asks its questions without a third-party prompt library, which an old `bunx` cache could leave half-updated. `minimal` asks for Vue or Svelte, and `--framework` answers it.
+
+<Aside kind="warning" title="What 0.5 does not do yet">
+
+- **Pens on X11** move the core pointer and arrive as the mouse. Wayland with the tablet protocol, Windows and macOS report the pen.
+- **`<iframe>` on Linux** is not supported; `skFeatures.iframe` is `false` there.
+- **HDR output** is Windows and macOS only, as in 0.4.
+
+</Aside>
+
+## Upgrading
+
+Nothing in 0.5 needs a change in an app. Run the commands at the top of this post and `bunx sk check`. For embedders: `last_vblank` is now always a vblank already past, where in 0.4 on Windows it was usually the coming one, and a producer that kept presenting through a removed Direct3D 12 device now gets `DeviceChanged` until the new device is ready.
+
+```bash
+bun create skathi my-app --template draw
+```

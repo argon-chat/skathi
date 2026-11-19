@@ -1,9 +1,13 @@
 ---
+import type { ImageMetadata } from "astro";
+import { getImage } from "astro:assets";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+const assetPosters = import.meta.glob<{ default: ImageMetadata }>("../assets/media/*-poster.webp", { eager: true });
+
 interface Props {
-  /** `<group>/<name>`: the clip is public/media/<group>/<name>.{webm,mp4} with <name>-poster.webp beside it. */
+  /** `<group>/<name>`: the clip is public/media/<group>/<name>.{webm,mp4} with <name>-poster.webp beside it, or in src/assets/media. */
   id: string;
   caption: string;
   /** What the clip shows, for screen readers; defaults to the caption. */
@@ -15,6 +19,8 @@ interface Props {
 const { id, caption, label = caption, width = 1280, height = 800 } = Astro.props;
 const base = `/media/${id}`;
 const ready = existsSync(join(process.cwd(), "public", `${base}.webm`));
+const asset = assetPosters[`../assets/media/${id}-poster.webp`]?.default;
+const poster = asset ? (await getImage({ src: asset, width: Math.min(asset.width, width), format: "webp" })).src : `${base}-poster.webp`;
 ---
 
 {
@@ -28,7 +34,7 @@ const ready = existsSync(join(process.cwd(), "public", `${base}.webm`));
           preload="none"
           width={width}
           height={height}
-          poster={`${base}-poster.webp`}
+          poster={poster}
           aria-label={label}
           data-demo
         >

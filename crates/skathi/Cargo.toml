@@ -46,10 +46,10 @@ hotkeys = ["sk-app/hotkeys"]
 webview = ["sk-app/webview"]
 
 [dependencies]
-sk-app = { path = "../sk-app", version = "0.4.0", default-features = false }
-skathi-macros = { path = "../skathi-macros", version = "0.4.0" }
+sk-app = { path = "../sk-app", version = "0.5.0", default-features = false }
+skathi-macros = { path = "../skathi-macros", version = "0.5.0" }
 # For its links metadata only (the Windows manifest).
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.4.1", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.5.1", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"
