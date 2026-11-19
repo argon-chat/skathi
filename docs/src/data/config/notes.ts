@@ -255,7 +255,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     notes: [
       "Read by `sk publish` only; `sk build` keeps writing the files beside the exe.",
       "Without it, `sk publish` writes beside the exe `icu.skpk`, the `packs`, and with AOT `app.image.dll` (and `inspector.image.dll` when devtools are in). With it, all of them go inside the exe and nothing is written beside it.",
-      "The native images stay uncompressed in the exe, so the exe grows by their size; nothing is expanded at start. [AOT compilation](/guides/aot/#one-file-publishsinglefile-since-06) has the measurements.",
+      "The native images stay uncompressed in the exe, so the exe grows by their size; nothing is expanded at start. [AOT compilation](/guides/aot/#one-file-publishsinglefile) has the measurements.",
     ],
     example: true,
     since: "0.6.0",

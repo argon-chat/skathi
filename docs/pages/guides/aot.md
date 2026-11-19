@@ -63,7 +63,7 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
 6. **Container** `app.image.dll`
 
-   Since 0.6, the image ships uncompressed in an executable-module container beside the exe: a DLL with no code of its own whose sections hold the image, page-aligned, which you sign like the exe. With [`"publishSingleFile": true`](#one-file-publishsinglefile-since-06) the same sections go into the exe instead. The manifest goes into the payload, and `app.prod.js` stays there: the host checks the image against it and runs it on a reload.
+   Since 0.6, the image ships uncompressed in an executable-module container beside the exe: a DLL with no code of its own whose sections hold the image, page-aligned, which you sign like the exe. With [`"publishSingleFile": true`](#one-file-publishsinglefile) the same sections go into the exe instead. The manifest goes into the payload, and `app.prod.js` stays there: the host checks the image against it and runs it on a reload.
 
 <p class="pipeline-phase" data-tone="run">On every machine that runs the app, at each start</p>
 

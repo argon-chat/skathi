@@ -27,7 +27,7 @@ Your exe is yours to package, sign and update. What Skathi needs from you at rel
 - One file to ship, sign and verify.
 - `payload_static(include_bytes!("../app/dist/release/.sk/app.skpk"))` borrows the bytes with no copy.
 - Every app change means a Rust rebuild, and the payload is part of the exe's signature.
-- An AOT payload's `app.image.dll` ships next to the exe (since 0.6); see [What you ship](/guides/aot/#what-you-ship-since-06).
+- An AOT payload's `app.image.dll` ships next to the exe (since 0.6); see [What you ship](/guides/aot/#what-you-ship).
 
 </div>
 </div>
