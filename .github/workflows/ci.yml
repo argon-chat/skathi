@@ -111,6 +111,12 @@ jobs:
       # The workspace's `profile.dev.package."*"` debug setting outranks CARGO_PROFILE_DEV_DEBUG.
       - name: Tests
         run: cargo test --locked --workspace --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
+      - if: runner.os == 'Linux'
+        name: CSS reference covers native property support
+        shell: bash
+        run: |
+          cargo run --locked --quiet --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0" -p sk-css --example css-catalog |
+            bun scripts/check-css-reference.ts
       - name: sk-tree without video
         run: cargo test --locked -p sk-tree --lib --no-default-features --features webgpu,lottie --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
       - name: Release host builds
@@ -168,6 +174,8 @@ jobs:
           displayplacer list | grep -m1 '^Resolution:'
       - name: Host
         run: cargo build --locked -p sk-app --target ${{ matrix.target }}
+      # Built before the specs: a spec that builds an app would otherwise build it inside its timeout.
+      - uses: ./.github/actions/css-checker
       # -noreset: the server must not reset between two hosts, or the next one cannot connect.
       - if: runner.os == 'Linux'
         name: Specs
