@@ -582,7 +582,7 @@ pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     window.refresh();
 }
 
-fn mods_bits(m: &gpui::Modifiers) -> f64 {
+pub(super) fn mods_bits(m: &gpui::Modifiers) -> f64 {
     let mut bits = 0u32;
     if m.control {
         bits |= 1;
@@ -609,35 +609,6 @@ fn button_code(b: MouseButton) -> f64 {
         MouseButton::Middle => 1.0,
         MouseButton::Right => 2.0,
         MouseButton::Navigate(_) => 3.0,
-    }
-}
-
-fn dom_key(k: &str) -> String {
-    match k {
-        "enter" => "Enter".into(),
-        "escape" => "Escape".into(),
-        "backspace" => "Backspace".into(),
-        "delete" => "Delete".into(),
-        "tab" => "Tab".into(),
-        "space" => " ".into(),
-        "up" => "ArrowUp".into(),
-        "down" => "ArrowDown".into(),
-        "left" => "ArrowLeft".into(),
-        "right" => "ArrowRight".into(),
-        "home" => "Home".into(),
-        "end" => "End".into(),
-        "pageup" => "PageUp".into(),
-        "pagedown" => "PageDown".into(),
-        "insert" => "Insert".into(),
-        // The Menu key is VK_APPS, which gpui names "menu"; the DOM's name is "ContextMenu".
-        "menu" => "ContextMenu".into(),
-        f if f.len() > 1
-            && f.starts_with('f')
-            && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) =>
-        {
-            f.to_ascii_uppercase()
-        }
-        other => other.into(),
     }
 }
 
@@ -4262,13 +4233,8 @@ where
                 return;
             }
             let target = focused_node(window, cx).unwrap_or(id);
-            let key = dom_key(&ev.keystroke.key);
-            let payload = EventPayload {
-                d: mods_bits(&ev.keystroke.modifiers),
-                key: Some(&key),
-                ..Default::default()
-            };
-            if !js_dispatch(target, tree::EV_KEYDOWN, &payload, window, cx) {
+            let key = crate::keyboard::Keyboard::new(&ev.keystroke, ev.native.as_ref(), ev.is_held);
+            if !key.dispatch(target, tree::EV_KEYDOWN, window, cx) {
                 // A cancelled Ctrl+C has no `copy` event: the root's clipboard listener, reached
                 // last, reads this.
                 windows::here(window, |w| w.key_prevented = true);
@@ -4281,13 +4247,8 @@ where
                 return;
             }
             let target = focused_node(window, cx).unwrap_or(id);
-            let key = dom_key(&ev.keystroke.key);
-            let payload = EventPayload {
-                d: mods_bits(&ev.keystroke.modifiers),
-                key: Some(&key),
-                ..Default::default()
-            };
-            if !js_dispatch(target, tree::EV_KEYUP, &payload, window, cx) {
+            let key = crate::keyboard::Keyboard::new(&ev.keystroke, ev.native.as_ref(), false);
+            if !key.dispatch(target, tree::EV_KEYUP, window, cx) {
                 // A cancelled Menu-key keyup has no `contextmenu` (`bind_menu_keys`, the last
                 // listener reached).
                 windows::here(window, |w| w.key_prevented = true);
@@ -5814,13 +5775,9 @@ fn build_input<V: 'static>(
                 if !claim_key_event(window) {
                     return true;
                 }
-                let key = dom_key(&ev.keystroke.key);
-                let payload = EventPayload {
-                    d: mods_bits(&ev.keystroke.modifiers),
-                    key: Some(&key),
-                    ..Default::default()
-                };
-                let proceed = js_dispatch_app(id, tree::EV_KEYDOWN, &payload, window, cx);
+                let key =
+                    crate::keyboard::Keyboard::new(&ev.keystroke, ev.native.as_ref(), ev.is_held);
+                let proceed = key.dispatch(id, tree::EV_KEYDOWN, window, cx);
                 if !proceed {
                     // The root's key listeners (clipboard, Shift+F10) run after the field's and read
                     // this.
@@ -5837,13 +5794,8 @@ fn build_input<V: 'static>(
             if !claim_key_event(window) {
                 return;
             }
-            let key = dom_key(&ev.keystroke.key);
-            let payload = EventPayload {
-                d: mods_bits(&ev.keystroke.modifiers),
-                key: Some(&key),
-                ..Default::default()
-            };
-            if !js_dispatch_app(id, tree::EV_KEYUP, &payload, window, cx) {
+            let key = crate::keyboard::Keyboard::new(&ev.keystroke, ev.native.as_ref(), false);
+            if !key.dispatch(id, tree::EV_KEYUP, window, cx) {
                 windows::here(window, |w| w.key_prevented = true);
             }
         }) as sk_elements::OnKeyUp

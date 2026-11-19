@@ -2419,7 +2419,10 @@ fn send_keystroke(ks: gpui::Keystroke, window: &mut Window, cx: &mut App) {
     // through `dispatch_event` for `@keyup` handlers.
     window.dispatch_keystroke(ks.clone(), cx);
     window.dispatch_event(
-        gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: ks }),
+        gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+            keystroke: ks,
+            native: None,
+        }),
         cx,
     );
 }

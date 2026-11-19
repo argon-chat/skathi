@@ -29,6 +29,7 @@ pub mod iframe;
 mod img;
 mod inherit;
 mod inline_style;
+mod keyboard;
 mod live;
 mod live_state;
 pub mod log;
@@ -1783,8 +1784,8 @@ pub(crate) fn pointer_at_next_dispatch(x: f64, y: f64) {
     POINTER_AT.with(|c| c.set(Some((x, y))));
 }
 
-/// [`dispatch_event`] with an object for the event to carry, passed as the dispatcher's eighth
-/// argument: a ClipboardEvent's `clipboardData` (`crate::clipboard`).
+/// [`dispatch_event`] with an eighth argument carrying the keyboard's physical `code`,
+/// input or composition text, or a clipboard event's `clipboardData`.
 pub fn dispatch_event_with(
     node: u32,
     event: u32,

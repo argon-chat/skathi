@@ -336,6 +336,10 @@ function wheelAt(data: unknown): { clientX: number; clientY: number } {
   };
 }
 
+function keyboardFields(location: number, repeat: number, key: string | undefined, code: unknown) {
+  return { key: key ?? "", code: typeof code === "string" ? code : "", location, repeat: !!repeat };
+}
+
 export function synthesize(
   name: string,
   a: number,
@@ -409,7 +413,8 @@ export function synthesize(
         break;
       case "keydown":
       case "keyup":
-        if (typeof KeyboardEvent === "function") return new KeyboardEvent(name, { ...common, ...M, key: key ?? "" });
+        if (typeof KeyboardEvent === "function")
+          return new KeyboardEvent(name, { ...common, ...M, ...keyboardFields(a, b, key, data) });
         break;
       case "focus":
       case "blur":
@@ -476,7 +481,7 @@ export function synthesize(
     name === "wheel"
       ? { deltaX: a, deltaY: b, ...wheelAt(data), ...M }
       : name === "keydown" || name === "keyup"
-        ? { key: key ?? "", ...M }
+        ? { ...M, ...keyboardFields(a, b, key, data) }
         : name === "input" || name === "beforeinput"
           ? (({ data: d, inputType, isComposing }) => ({ data: d, inputType, isComposing }))(
               inputInit(name, a, b, data),

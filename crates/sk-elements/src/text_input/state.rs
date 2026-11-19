@@ -13,9 +13,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     px, App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable,
-    KeyDownEvent, KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    Subscription, Task, TextInputConfiguration, TransformationMatrix, UTF16Selection, Window,
-    WrappedLine,
+    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription,
+    Task, TextInputConfiguration, TransformationMatrix, UTF16Selection, Window, WrappedLine,
 };
 
 /// GPUI paints affine matrices in device pixels while pointer events and IME queries use logical
@@ -184,17 +183,6 @@ fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
             false
         }
     }
-}
-
-/// The keystroke gpui synthesizes when one modifier is pressed and released with nothing in
-/// between (zed#64537): one of five fixed names, no character, no modifiers held.
-fn is_standalone_modifier(keystroke: &gpui::Keystroke) -> bool {
-    keystroke.key_char.is_none()
-        && keystroke.modifiers == gpui::Modifiers::default()
-        && matches!(
-            keystroke.key.as_str(),
-            "shift" | "control" | "alt" | "platform" | "function"
-        )
 }
 
 #[derive(Clone)]
@@ -462,20 +450,12 @@ impl TextInputState {
         if !self.focus_handle.is_focused(window) {
             return;
         }
-        // The interceptor also receives the keystroke gpui synthesizes for a modifier pressed and
-        // released alone, on the release. A browser fires that `keydown` on the press, so ignore it.
-        if is_standalone_modifier(&event.keystroke) {
-            return;
-        }
-        let Some(on_key_down) = self.on_key_down.clone() else {
+        // A shortcut synthesized on modifier release has no physical key down.
+        let (Some(key_down), Some(on_key_down)) = (&event.key_down, self.on_key_down.clone())
+        else {
             return;
         };
-        let key_down = KeyDownEvent {
-            keystroke: event.keystroke.clone(),
-            is_held: false,
-            prefer_character_input: false,
-        };
-        if on_key_down(&key_down, window, cx) {
+        if on_key_down(key_down, window, cx) {
             self.resync_controlled(cx);
             self.flush_abandoned_composition(window, cx);
             return;
@@ -1735,43 +1715,6 @@ mod tests {
         assert_eq!(utf16_offset_to_utf8("é🙂", 0), 0);
         assert_eq!(utf16_offset_to_utf8("é🙂", 1), "é".len());
         assert_eq!(utf16_offset_to_utf8("é🙂", 3), "é🙂".len());
-    }
-
-    #[test]
-    fn a_released_lone_modifier_is_not_a_keydown() {
-        let stroke =
-            |key: &str, modifiers: gpui::Modifiers, key_char: Option<&str>| gpui::Keystroke {
-                key: key.into(),
-                modifiers,
-                key_char: key_char.map(Into::into),
-            };
-        for key in ["shift", "control", "alt", "platform", "function"] {
-            assert!(is_standalone_modifier(&stroke(
-                key,
-                gpui::Modifiers::default(),
-                None
-            )));
-        }
-        assert!(!is_standalone_modifier(&stroke(
-            "a",
-            gpui::Modifiers::default(),
-            Some("a")
-        )));
-        assert!(!is_standalone_modifier(&stroke(
-            "a",
-            gpui::Modifiers::shift(),
-            Some("A")
-        )));
-        assert!(!is_standalone_modifier(&stroke(
-            "shift",
-            gpui::Modifiers::control(),
-            None
-        )));
-        assert!(!is_standalone_modifier(&stroke(
-            "f12",
-            gpui::Modifiers::default(),
-            None
-        )));
     }
 
     #[test]

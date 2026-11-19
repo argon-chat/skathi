@@ -474,7 +474,8 @@ const domAndEvents = section("DOM and events", [
     },
   ),
   eventIface("KeyboardEvent", "An event from a key press or release.", ["keyboard events"], PART, [
-    'Events from the host carry `key` and the four modifier flags. `code` is `""`, `repeat` is `false`, and there is no `keyCode` or `charCode`.',
+    "Desktop keydown and keyup report the layout's `key`, the physical `code`, and the held modifier flags (since 0.6). `location` distinguishes left (1), right (2), and keypad (3) keys. Other keys use 0. Held keydown events set `repeat`.",
+    "Legacy `keyCode` and `charCode` are unavailable.",
   ]),
   eventIface("WheelEvent", "An event from a mouse wheel or similar input.", ["wheel events"]),
   eventIface("FocusEvent", "An event fired when an element gains or loses focus.", ["focus events"]),

@@ -118,7 +118,7 @@ type SkDispatcher = (
  * | `<img>` load              | naturalWidth | naturalHeight | —         | —          | the src         |
  * | `<img>` error             | —            | —           | —           | —          | the src         |
  * | wheel                     | deltaX       | deltaY      | —           | mods       | —               |
- * | keydown/keyup             | —            | —           | —           | mods       | `KeyboardEvent.key` |
+ * | keydown/keyup             | location     | repeat (1/0) | —          | mods       | `key` (`data` is the physical `code`) |
  * | input                     | —            | —           | —           | —          | the new value   |
  * | scroll                    | scrollLeft   | scrollTop   | —           | —          | —               |
  * | focus / blur              | the move's other node id (`relatedTarget`; 0 none) | — | — | — | —   |
