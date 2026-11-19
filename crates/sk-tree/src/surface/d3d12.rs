@@ -881,6 +881,7 @@ fn copy_in(
     wait: Option<(&ID3D12Fence, u64)>,
     signal: Option<(&ID3D12Fence, u64)>,
 ) -> Result<(u64, u64), SurfaceError> {
+    state.accept_frame()?;
     // Removed since `gpu()`: the surface has let go of its textures, and must not make more.
     if super::removed() {
         return Err(SurfaceError::DeviceChanged);

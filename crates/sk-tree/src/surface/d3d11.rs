@@ -449,6 +449,7 @@ fn copy_in(
     (desc, format): &(D3D11_TEXTURE2D_DESC, SurfaceFormat),
     sync: Guard<'_>,
 ) -> Result<u64, SurfaceError> {
+    state.accept_frame()?;
     // Removed since `gpu()`: the surface has let go of its texture, and must not make another.
     if super::removed() {
         return Err(SurfaceError::DeviceChanged);

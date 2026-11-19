@@ -249,6 +249,7 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 ### What is guaranteed
 
 - **One event per frame.** Each frame presented while a `FrameWatch` is held gets exactly one `FrameEvent`, `Presented` or `Dropped`, never none and never two. Frames presented before `on_frame` or after the last watch dropped are not reported.
+- At app shutdown, Skathi resolves pending frames as `Dropped { reason: Closed }`. Further presents return `Err(SurfaceError::Closed)` without taking a frame or scheduling a copy (since 0.6).
 - **In frame order.** A surface's events arrive in the order of their ids. A frame that is settled early (superseded at once, say) waits for the ones before it.
 - **`Presented` once, on first display.** `shown_at` is the start of the refresh the frame first showed on; a frame left on screen is not reported again. It stayed until the next frame's `shown_at`, so the difference is how long it was held. `refresh_interval` is that refresh's actual distance from the one before, which is not the nominal period on a variable-refresh screen; `info().display.refresh_period` keeps the display's steady one.
 - **`Dropped` says why:**
@@ -424,6 +425,7 @@ Skathi keeps trying for about a minute. If no device can be made by then, the ap
 | `FormatMismatch` | The frame is BGRA8 and the surface is set to `Rgba16Float`, or the other way round                                                                                                       |
 | `Timeout`        | A keyed mutex or fence was not released in time; nothing was presented                                                                                                                   |
 | `Busy`           | Every texture of this surface is still in flight; drop the frame or wait                                                                                                                 |
+| `Closed`         | The app has closed. Stop presenting and release the producer's resources (since 0.6)                                                                                                     |
 | `Platform`       | A system call failed; the message carries its error                                                                                                                                      |
 
 ## Platform support

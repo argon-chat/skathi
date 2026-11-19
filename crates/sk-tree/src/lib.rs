@@ -848,7 +848,7 @@ pub fn set_page_hidden(hidden: bool) {
 
 /// The app is quitting: `<sk-surface>` frames still waiting to be shown are dropped as closed.
 pub fn surface_app_closed() {
-    surface::feedback::app_closed();
+    surface::app_closed();
 }
 
 pub fn set_reduce_motion(on: bool) {

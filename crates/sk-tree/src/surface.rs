@@ -73,14 +73,19 @@ const _: () = {
 
 /// The surface named `name`, created on first use. Every handle and element with that name shares it.
 pub fn surface(name: &str) -> SurfaceHandle {
-    let mut map = lock(registry());
-    let shared = map
+    let mut registry = lock(registry());
+    let closed = registry.closed;
+    let shared = registry
+        .surfaces
         .entry(name.to_string())
         .or_insert_with(|| {
             ANY.store(true, Ordering::Relaxed);
             let shared = Arc::new(Shared {
                 name: name.into(),
-                state: Mutex::new(State::default()),
+                state: Mutex::new(State {
+                    closed,
+                    ..State::default()
+                }),
                 watchers: Mutex::new(Vec::new()),
                 frames: Mutex::new(Vec::new()),
             });
@@ -95,6 +100,8 @@ pub fn surface(name: &str) -> SurfaceHandle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SurfaceError {
+    /// The app has closed and no longer takes frames.
+    Closed,
     /// This platform or renderer has no such path; the message says which one to use.
     /// [`SurfaceHandle::present_bgra`] works everywhere.
     NotSupported(&'static str),
@@ -156,6 +163,7 @@ fn check_format(surface: SurfaceFormat, frame: SurfaceFormat) -> Result<(), Surf
 impl fmt::Display for SurfaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Closed => f.write_str("the app closed and no longer accepts frames"),
             Self::NotSupported(why) => f.write_str(why),
             Self::NoDevice(why) => write!(f, "the renderer has no GPU device: {why}"),
             Self::DeviceChanged => f.write_str(
@@ -418,6 +426,7 @@ impl Shared {
 
 #[derive(Default)]
 pub(crate) struct State {
+    closed: bool,
     pub(crate) seq: u64,
     pub(crate) frame: Option<Frame>,
     /// The id of `frame`, and of the last frame presented.
@@ -476,6 +485,18 @@ impl Frame {
 }
 
 impl State {
+    fn accept_frame(&self) -> Result<(), SurfaceError> {
+        if self.closed {
+            return Err(SurfaceError::Closed);
+        }
+        Ok(())
+    }
+
+    fn put_cpu(&mut self, frame: Frame) -> Result<u64, SurfaceError> {
+        self.accept_frame()?;
+        Ok(self.put(frame))
+    }
+
     fn put(&mut self, frame: Frame) -> u64 {
         self.seq += 1;
         self.presented += 1;
@@ -537,10 +558,26 @@ impl State {
     }
 }
 
-fn registry() -> &'static Mutex<HashMap<String, Arc<Shared>>> {
-    static REGISTRY: std::sync::OnceLock<Mutex<HashMap<String, Arc<Shared>>>> =
-        std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+#[derive(Default)]
+struct Registry {
+    surfaces: HashMap<String, Arc<Shared>>,
+    closed: bool,
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static REGISTRY: std::sync::OnceLock<Mutex<Registry>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+pub(super) fn app_closed() {
+    {
+        let mut registry = lock(registry());
+        registry.closed = true;
+        for shared in registry.surfaces.values() {
+            lock(&shared.state).closed = true;
+        }
+    }
+    feedback::app_closed();
 }
 
 static ANY: AtomicBool = AtomicBool::new(false);
@@ -569,6 +606,7 @@ pub(crate) fn page_hidden() {
 
 pub(crate) fn all() -> Vec<SurfaceHandle> {
     lock(registry())
+        .surfaces
         .values()
         .map(|shared| SurfaceHandle {
             shared: shared.clone(),
@@ -690,12 +728,12 @@ impl SurfaceHandle {
                 .copied()
                 .collect()
         });
-        let frame = self.state().put(Frame::Cpu {
+        let frame = self.state().put_cpu(Frame::Cpu {
             width,
             height,
             bgra: bgra.into(),
             halves,
-        });
+        })?;
         sk_runtime::frames::wake();
         Ok(frame)
     }
@@ -739,12 +777,12 @@ impl SurfaceHandle {
                 *alpha = 255;
             }
         }
-        let frame = self.state().put(Frame::Cpu {
+        let frame = self.state().put_cpu(Frame::Cpu {
             width,
             height,
             bgra: packed.into(),
             halves: None,
-        });
+        })?;
         sk_runtime::frames::wake();
         Ok(frame)
     }

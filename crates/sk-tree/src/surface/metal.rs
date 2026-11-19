@@ -620,6 +620,7 @@ fn copy_in(
     signal: Option<(&SharedEvent, u64)>,
     mut held: Vec<Box<dyn Any>>,
 ) -> Result<(u64, u64), SurfaceError> {
+    state.accept_frame()?;
     let pipeline = match &source {
         Source::Nv12 { .. } => Some(nv12_pipeline(gpu)?),
         Source::Texture(..) => None,
