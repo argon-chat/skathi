@@ -56,6 +56,8 @@ skathi = "0.4"
 embed-resource = "3"
 ```
 
+With a Cargo git dependency, a checkout without a bundled inspector builds with a warning (since 0.6). Set `SK_DEVTOOLS_BUNDLE` to a prebuilt `app.prod.js` to include the inspector, or enable `no-devtools` to opt out explicitly and silence the warning.
+
 The default features give the app everything Skathi's own host has: Web Audio, storage, the clipboard, IndexedDB, WebGPU, the Direct3D 12 renderer, `<video>`, `<lottie>` and stickers, `<iframe>` and global hotkeys. [Features](#features) below lists what to turn off or on, and [Features and size](/embedding/features/) what each one costs.
 
 ## 3. The static CRT (Windows)

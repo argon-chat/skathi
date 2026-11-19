@@ -2,8 +2,8 @@
 //!
 //! `apps/devtools` is bundled by `bun prod.ts` into `$OUT_DIR/devtools/app.prod.js` (plus
 //! `window.json`), deflated, and embedded by `src/inspector.rs`. It is generated rather than checked
-//! in so the embedded bundle can never be older than its sources; without bun the build fails with
-//! the command to run. `SK_DEVTOOLS_BUNDLE=<app.prod.js>` supplies a prebuilt bundle instead, for
+//! in so the embedded bundle can never be older than its sources. Cargo dependencies use prebuilt
+//! bundles. `SK_DEVTOOLS_BUNDLE=<app.prod.js>` supplies a prebuilt bundle instead, for
 //! packaging jobs that build JS and Rust in separate stages. The published crate carries one in
 //! `devtools/`, written by `scripts/package-crates.ts`.
 
@@ -49,19 +49,27 @@ fn main() {
     if opted_out {
         return;
     }
-    println!("cargo:rustc-cfg=sk_devtools");
-
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let repo = manifest.join("..").join("..");
+    let pkg = repo.join("packages/cli");
+    let entry = repo.join("apps/devtools/src/main.ts");
+    let carried = manifest.join("devtools/app.prod.js");
+    let in_repo = entry.is_file() && !cargo_git_checkout(&manifest);
+    let prebuilt = std::env::var_os("SK_DEVTOOLS_BUNDLE")
+        .map(PathBuf::from)
+        .or_else(|| (!in_repo && carried.is_file()).then_some(carried));
+    if !in_repo && prebuilt.is_none() {
+        if std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_some() {
+            panic!("native-inspector requires SK_DEVTOOLS_BUNDLE and its matching native image");
+        }
+        println!("cargo:warning=sk-app is building without the devtools inspector because this dependency has no prebuilt bundle. Set SK_DEVTOOLS_BUNDLE to app.prod.js to include the inspector, or enable `no-devtools` to silence this warning.");
+        return;
+    }
+    println!("cargo:rustc-cfg=sk_devtools");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("devtools");
     std::fs::create_dir_all(&out).expect("cannot create OUT_DIR/devtools");
     let bundle = out.join("app.prod.js");
     let window_json = out.join("window.json");
-    let pkg = repo.join("packages/cli");
-    let entry = repo.join("apps/devtools/src/main.ts");
-    // A packaged sk-app has no repo around it and carries the bundle built when it was packaged.
-    let carried = manifest.join("devtools/app.prod.js");
-    let in_repo = entry.is_file();
 
     if in_repo {
         watch_tree(&repo.join("apps/devtools"));
@@ -71,9 +79,6 @@ fn main() {
         }
     }
 
-    let prebuilt = std::env::var_os("SK_DEVTOOLS_BUNDLE")
-        .map(PathBuf::from)
-        .or_else(|| (!in_repo && carried.is_file()).then_some(carried));
     if let Some(prebuilt) = prebuilt {
         println!("cargo:rerun-if-changed={}", disp(&prebuilt));
         let js = std::fs::read(&prebuilt).unwrap_or_else(|e| {
@@ -90,14 +95,6 @@ fn main() {
         native_inspector::prepare(&repo, &out);
         return;
     }
-    if !in_repo {
-        panic!(
-            "\nthis sk-app has no devtools inspector bundle to embed. Set SK_DEVTOOLS_BUNDLE to an \
-             app.prod.js built from Skathi's apps/devtools, or build without the inspector \
-             (the `no-devtools` feature).\n"
-        );
-    }
-
     let status = Command::new("bun")
         .current_dir(&pkg)
         .arg("prod.ts")
@@ -144,6 +141,19 @@ fn main() {
     }
     deflate_bundle(&bundle);
     native_inspector::prepare(&repo, &out);
+}
+
+fn cargo_git_checkout(manifest: &Path) -> bool {
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|home| home.join(".cargo")));
+    let Some(checkouts) = cargo_home.and_then(|p| p.join("git/checkouts").canonicalize().ok())
+    else {
+        return false;
+    };
+    manifest
+        .canonicalize()
+        .is_ok_and(|p| p.starts_with(checkouts))
 }
 
 /// `<bundle>.deflate`, embedded by `src/inspector.rs`: only the inspector process evaluates the
