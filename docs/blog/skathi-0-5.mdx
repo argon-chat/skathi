@@ -177,7 +177,7 @@ The developer of a video player that shows its frames through `<sk-surface>` fil
 
 ## Upgrading
 
-Nothing in 0.5 needs a change in an app. Run the commands at the top of this post and `bunx sk check`. For embedders: `last_vblank` is now always a vblank already past, where in 0.4 on Windows it was usually the coming one, and a producer that kept presenting through a removed Direct3D 12 device now gets `DeviceChanged` until the new device is ready.
+Nothing in 0.5 needs a change in an app. Run the commands at the top of this post and `bunx sk check`. For embedders: rebuild the payload with `sk` 0.5, since a host runs only a payload built by the same Skathi version: the bundle carries the JS half of the host protocol. Also, `last_vblank` is now always a vblank already past, where in 0.4 on Windows it was usually the coming one, and a producer that kept presenting through a removed Direct3D 12 device now gets `DeviceChanged` until the new device is ready.
 
 ```bash
 bun create skathi my-app --template draw
