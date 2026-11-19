@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::core::Interface;
@@ -76,6 +76,7 @@ const D3D11_RENDERER: &str =
 /// Four copies in flight and the newest copied frame. More means the atlas is not keeping up; the
 /// present is refused.
 const MAX_SLOTS: usize = 5;
+const STEADY_SLOTS: usize = 2;
 
 struct Gpu {
     device: ID3D12Device,
@@ -236,12 +237,13 @@ impl Gpu {
 
 impl Queue {
     /// Takes back the command lists of finished work and lets go of the slots it held.
-    fn reclaim(&self, submit: &mut Submit) {
+    fn reclaim(&self, submit: &mut Submit) -> u64 {
         let completed = unsafe { self.fence.GetCompletedValue() };
         while submit.pending.front().is_some_and(|p| p.value <= completed) {
             let done = submit.pending.pop_front().expect("checked");
             submit.free.push(done.commands);
         }
+        completed
     }
 
     /// A closed command list to reset, once the work that last used it is done.
@@ -433,37 +435,37 @@ pub(super) fn release_fence(state: &Mutex<State>) -> Result<Fence, SurfaceError>
 
 pub(crate) struct SlotTexture {
     texture: ID3D12Resource,
-    mapped: Option<Mapped>,
+    /// Only half-float frames can need an SDR view. HDR uses the original texture.
+    sdr: Option<Mutex<Option<Mapped>>>,
 }
 
 /// A half-float slot's 8-bit picture, the descriptors that draw it, and the release-fence value
-/// its last draw signals (0 until it is drawn for the frame in the slot).
+/// its last draw signals, for the copy identified by `source_value`.
 struct Mapped {
     texture: ID3D12Resource,
     targets: ID3D12DescriptorHeap,
     sources: ID3D12DescriptorHeap,
-    drawn: Mutex<u64>,
+    source_value: u64,
+    drawn: u64,
 }
 
-// SAFETY: D3D12 resources and descriptor heaps are free-threaded; `drawn` is a mutex.
+// SAFETY: D3D12 resources and descriptor heaps are free-threaded; SDR creation and drawing
+// are serialized by the slot's mutex.
 unsafe impl Send for SlotTexture {}
 unsafe impl Sync for SlotTexture {}
 
 impl SlotTexture {
     fn new(gpu: &Gpu, size: (u32, u32), format: SurfaceFormat) -> Result<Self, SurfaceError> {
         let texture = create_texture(gpu, size, dxgi_format(format))?;
-        let mapped = match format {
-            SurfaceFormat::Bgra8 => None,
-            SurfaceFormat::Rgba16Float => {
-                gpu.pipeline()?;
-                Some(Mapped::new(gpu, &texture, size)?)
-            }
-        };
-        Ok(Self { texture, mapped })
+        let sdr = (format == SurfaceFormat::Rgba16Float).then(|| Mutex::new(None));
+        log::trace!(target: "sk_tree::surface::allocation", "slot-create ptr={:p} size={}x{} format={format:?}", texture.as_raw(), size.0, size.1);
+        Ok(Self { texture, sdr })
     }
+}
 
-    fn drawn(&self) -> Option<MutexGuard<'_, u64>> {
-        self.mapped.as_ref().map(|m| lock(&m.drawn))
+impl Drop for SlotTexture {
+    fn drop(&mut self) {
+        log::trace!(target: "sk_tree::surface::allocation", "slot-drop ptr={:p}", self.texture.as_raw());
     }
 }
 
@@ -499,12 +501,20 @@ impl Mapped {
                 sources.GetCPUDescriptorHandleForHeapStart(),
             );
         }
+        log::trace!(target: "sk_tree::surface::allocation", "sdr-create ptr={:p} slot={:p} size={}x{}", texture.as_raw(), frame.as_raw(), size.0, size.1);
         Ok(Self {
             texture,
             targets,
             sources,
-            drawn: Mutex::new(0),
+            source_value: 0,
+            drawn: 0,
         })
+    }
+}
+
+impl Drop for Mapped {
+    fn drop(&mut self) {
+        log::trace!(target: "sk_tree::surface::allocation", "sdr-drop ptr={:p}", self.texture.as_raw());
     }
 }
 
@@ -537,7 +547,7 @@ pub(crate) struct Ready {
     queue: Arc<Queue>,
     value: u64,
     size: (u32, u32),
-    mapped: bool,
+    mapped: Option<ID3D12Resource>,
     seq: u64,
     frame: u64,
 }
@@ -556,31 +566,39 @@ impl Ready {
     /// What the atlas copies: the texture, or for a half-float frame its 8-bit mapping, drawn on
     /// the surface's queue the first time it is asked for. Call once [`Self::done`].
     pub(crate) fn for_atlas(self) -> Result<Ready, SurfaceError> {
-        let Some(mut drawn) = self.texture.drawn() else {
+        let Some(sdr) = self.texture.sdr.as_ref().filter(|_| self.mapped.is_none()) else {
             return Ok(self);
         };
-        if *drawn == 0 {
-            *drawn = draw_mapped(&self.queue, &self.texture, self.size)?;
+        let mut cache = lock(sdr);
+        let mapped = match cache.as_mut() {
+            Some(mapped) => mapped,
+            None => cache.insert(Mapped::new(
+                &self.queue.gpu,
+                &self.texture.texture,
+                self.size,
+            )?),
+        };
+        if mapped.source_value != self.value {
+            mapped.drawn = draw_mapped(&self.queue, &self.texture, mapped, self.size)?;
+            mapped.source_value = self.value;
         }
-        let value = *drawn;
-        drop(drawn);
+        let value = mapped.drawn;
+        let resource = mapped.texture.clone();
+        drop(cache);
         Ok(Ready {
             value,
-            mapped: true,
+            mapped: Some(resource),
             ..self
         })
     }
 
     /// A half-float frame, whose own texture an HDR window copies instead of its mapping.
     pub(crate) fn is_half_float(&self) -> bool {
-        self.texture.mapped.is_some()
+        self.texture.sdr.is_some()
     }
 
     pub(crate) fn handle(&self) -> gpui::D3D12TextureHandle {
-        let resource = match (&self.texture.mapped, self.mapped) {
-            (Some(mapped), true) => &mapped.texture,
-            _ => &self.texture.texture,
-        };
+        let resource = self.mapped.as_ref().unwrap_or(&self.texture.texture);
         gpui::D3D12TextureHandle {
             resource: resource.as_raw(),
             ready_fence: self.queue.fence.as_raw(),
@@ -601,8 +619,9 @@ impl State {
 }
 
 impl SurfaceGpu {
-    pub(super) fn for_tick(&self, latched: Option<Ready>) -> Option<Ready> {
+    pub(super) fn for_tick(&mut self, latched: Option<Ready>) -> Option<Ready> {
         // Clearing the surface or losing its device withdraws even a latched slot.
+        self.trim();
         latched
             .filter(|r| self.slots.iter().any(|slot| slot.seq == r.seq))
             .or_else(|| self.ready())
@@ -624,7 +643,7 @@ impl SurfaceGpu {
             queue,
             value: slot.written,
             size: slot.size,
-            mapped: false,
+            mapped: None,
             seq: slot.seq,
             frame: slot.frame,
         })
@@ -638,6 +657,39 @@ impl SurfaceGpu {
             .filter(|(_, s)| s.seq != 0 && s.written <= completed)
             .max_by_key(|(_, s)| s.written)
             .map(|(i, _)| i)
+    }
+
+    /// An old producer size or burst slot can retire once the copy queue, the latched frame and
+    /// the atlas have all let go. Keep the newest completed picture while its successor waits.
+    fn trim(&mut self) {
+        let Some(current) = self.current.map(|i| &self.slots[i]) else {
+            return;
+        };
+        let (size, format, written) = (current.size, current.format, current.written);
+        let fits = |s: &Slot| s.size == size && s.format == format;
+        if self.slots.len() <= STEADY_SLOTS && self.slots.iter().all(fits) {
+            return;
+        }
+        let queue = self.queue.as_ref().expect("a submitted slot has a queue");
+        let completed = queue.reclaim(&mut lock(&queue.submit));
+        let fallback = self.newest_done(completed).map(|i| self.slots[i].written);
+        let held = |s: &Slot| {
+            s.written == written || Some(s.written) == fallback || Arc::strong_count(&s.texture) > 1
+        };
+        let in_use = self.slots.iter().filter(|s| fits(s) && held(s)).count();
+        // A spare avoids reallocating on the next present while the atlas still reads a slot.
+        let mut spares = STEADY_SLOTS.saturating_sub(in_use).max(1);
+        self.slots.retain(|s| {
+            if held(s) {
+                return true;
+            }
+            if fits(s) && spares > 0 {
+                spares -= 1;
+                return true;
+            }
+            false
+        });
+        self.current = self.slots.iter().position(|s| s.written == written);
     }
 
     /// The frame was withdrawn: no slot's frame may be shown again.
@@ -790,9 +842,9 @@ fn describe(resource: &ID3D12Resource) -> Result<((u32, u32), SurfaceFormat), Su
 fn draw_mapped(
     queue: &Queue,
     slot: &Arc<SlotTexture>,
+    mapped: &Mapped,
     size: (u32, u32),
 ) -> Result<u64, SurfaceError> {
-    let mapped = slot.mapped.as_ref().expect("a half-float slot");
     let pipeline = queue.gpu.pipeline()?;
     let mut submit = lock(&queue.submit);
     let (allocator, commands) = queue.commands(&mut submit)?;
@@ -912,9 +964,6 @@ fn copy_in(
     queue.reclaim(&mut lock(&queue.submit));
     let index = state.gpu12.free_slot(gpu, size, format)?;
     let target = state.gpu12.slots[index].texture.clone();
-    if let Some(mut drawn) = target.drawn() {
-        *drawn = 0;
-    }
     let mut submit = lock(&queue.submit);
     let (allocator, commands) = queue.commands(&mut submit)?;
     transition(
@@ -1004,6 +1053,7 @@ fn copy_in(
         let done = state.gpu12.slots[done].frame;
         state.settle(done);
     }
+    state.gpu12.trim();
     Ok((frame, value))
 }
 
@@ -1152,12 +1202,25 @@ mod tests {
 
     static RENDERER: OnceLock<Arc<Renderer>> = OnceLock::new();
 
-    /// A WARP device and queue installed as the renderer's, the way the host installs its own.
+    /// Install WARP like the host installs its renderer, or use the machine's adapter during
+    /// a hardware regression run.
     fn renderer() -> Arc<Renderer> {
         RENDERER
             .get_or_init(|| {
                 let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.unwrap();
-                let adapter: IDXGIAdapter = unsafe { factory.EnumWarpAdapter() }.unwrap();
+                let adapter: IDXGIAdapter =
+                    if std::env::var("SK_TEST_D3D12_HARDWARE").as_deref() == Ok("1") {
+                        unsafe { factory.EnumAdapters(0) }.unwrap()
+                    } else {
+                        unsafe { factory.EnumWarpAdapter() }.unwrap()
+                    };
+                let name = unsafe { adapter.GetDesc() }.unwrap().Description;
+                eprintln!(
+                    "D3D12 surface tests on {}",
+                    String::from_utf16_lossy(
+                        &name[..name.iter().position(|s| *s == 0).unwrap_or(name.len())]
+                    )
+                );
                 let mut device: Option<ID3D12Device> = None;
                 unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }
                     .unwrap();
@@ -1238,12 +1301,12 @@ mod tests {
     }
 
     /// Copies what the atlas would take for `ready` into a readback buffer, after its fence.
-    fn shown(r: &Renderer, ready: &Ready) -> Vec<[u8; 4]> {
+    fn readback(r: &Renderer, ready: &Ready, format: DXGI_FORMAT, pixel_bytes: usize) -> Vec<u8> {
         let handle = ready.handle();
         let source = unsafe { ID3D12Resource::from_raw_borrowed(&handle.resource) }.unwrap();
         let fence = unsafe { ID3D12Fence::from_raw_borrowed(&handle.ready_fence) }.unwrap();
         let desc = unsafe { source.GetDesc() };
-        assert_eq!(desc.Format, DXGI_FORMAT_B8G8R8A8_UNORM);
+        assert_eq!(desc.Format, format);
         let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut total = 0u64;
         unsafe {
@@ -1338,13 +1401,145 @@ mod tests {
         }
         let mut data = std::ptr::null_mut();
         unsafe { buffer.Map(0, None, Some(&mut data)) }.unwrap();
-        let row = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), desc.Width as usize * 4) };
-        let pixels = row
-            .chunks_exact(4)
-            .map(|p| [p[0], p[1], p[2], p[3]])
-            .collect();
+        let row = unsafe {
+            std::slice::from_raw_parts(data.cast::<u8>(), desc.Width as usize * pixel_bytes)
+        };
+        let pixels = row.to_vec();
         unsafe { buffer.Unmap(0, None) };
         pixels
+    }
+
+    fn shown(r: &Renderer, ready: &Ready) -> Vec<[u8; 4]> {
+        readback(r, ready, DXGI_FORMAT_B8G8R8A8_UNORM, 4)
+            .chunks_exact(4)
+            .map(|p| [p[0], p[1], p[2], p[3]])
+            .collect()
+    }
+
+    #[test]
+    fn hdr_uses_the_original_and_sdr_allocates_and_maps_only_on_demand() {
+        let r = renderer();
+        let s = surface("tests:d3d12-lazy-sdr");
+        s.set_format(SurfaceFormat::Rgba16Float);
+        let release = s.release_fence().unwrap();
+        let texels = [
+            halves(&[f32_to_half(2.0), 0, 0, f32_to_half(1.0)]),
+            halves(&[0, f32_to_half(2.0), 0, f32_to_half(1.0)]),
+        ];
+        let sources = texels
+            .each_ref()
+            .map(|p| texture(&r, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, p));
+        let present = |i: usize| {
+            let p = unsafe {
+                s.present_d3d12(sources[i].as_raw(), D3D12_RESOURCE_STATE_COMMON.0, None)
+            }
+            .unwrap();
+            assert!(release.wait(p.release, Duration::from_secs(5)));
+        };
+        let raw = || s.lock_state().gpu12.for_tick(None).unwrap();
+        for i in [0, 1, 0] {
+            present(i);
+            assert_eq!(
+                readback(&r, &raw(), DXGI_FORMAT_R16G16B16A16_FLOAT, 8),
+                texels[i]
+            );
+        }
+        {
+            let state = s.lock_state();
+            assert_eq!(state.gpu12.slots.len(), 2);
+            assert!(state
+                .gpu12
+                .slots
+                .iter()
+                .all(|s| lock(s.texture.sdr.as_ref().unwrap()).is_none()));
+        }
+        // An SDR and an HDR window can consume the very same frame, in either order.
+        for i in [1, 0, 0, 1] {
+            present(i);
+            let hdr = raw();
+            let sdr = raw().for_atlas().unwrap();
+            let pixel = [[0, 0, 255, 255], [0, 255, 0, 255]][i];
+            assert_eq!(shown(&r, &sdr), [pixel]);
+            assert_eq!(
+                readback(&r, &hdr, DXGI_FORMAT_R16G16B16A16_FLOAT, 8),
+                texels[i]
+            );
+            let again = raw().for_atlas().unwrap();
+            assert_eq!(again.value, sdr.value);
+            assert_eq!(again.handle().resource, sdr.handle().resource);
+        }
+    }
+
+    #[test]
+    fn a_burst_slot_retires_after_its_copy_fence_and_last_reader() {
+        let r = renderer();
+        let s = surface("tests:d3d12-retire-burst");
+        let release = s.release_fence().unwrap();
+        let source = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[1, 2, 3, 255]);
+        let producer: ID3D12Fence =
+            unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let present = |wait| {
+            unsafe { s.present_d3d12(source.as_raw(), D3D12_RESOURCE_STATE_COMMON.0, wait) }
+                .unwrap()
+        };
+        let first = present(None);
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        let last_reader = s.lock_state().gpu12.for_tick(None).unwrap();
+        let gate = Some((producer.as_raw(), 1));
+        present(gate);
+        let last = present(gate);
+        {
+            let mut state = s.lock_state();
+            assert_eq!(state.gpu12.for_tick(None).unwrap().frame, first.frame);
+            assert_eq!(state.gpu12.slots.len(), 3);
+        }
+        unsafe { producer.Signal(1) }.unwrap();
+        assert!(release.wait(last.release, Duration::from_secs(5)));
+        assert_eq!(
+            s.lock_state().gpu12.for_tick(None).unwrap().frame,
+            last.frame
+        );
+        assert_eq!(shown(&r, &last_reader), [[1, 2, 3, 255]]);
+        drop(last_reader);
+        let mut state = s.lock_state();
+        assert_eq!(state.gpu12.for_tick(None).unwrap().frame, last.frame);
+        assert_eq!(state.gpu12.slots.len(), 2, "retire on an idle tick");
+    }
+
+    #[test]
+    fn a_new_producer_size_retires_the_previous_size_after_present_and_readback() {
+        let r = renderer();
+        let s = surface("tests:d3d12-retire-size");
+        let release = s.release_fence().unwrap();
+        let old = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 2, &[13; 8]);
+        let new = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[31; 4]);
+        let present = |source: &ID3D12Resource, wait| {
+            unsafe { s.present_d3d12(source.as_raw(), D3D12_RESOURCE_STATE_COMMON.0, wait) }
+                .unwrap()
+        };
+        let first = present(&old, None);
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        let latched = s.lock_state().latch_d3d12(0, None).unwrap();
+        let old_slot = Arc::downgrade(&latched.texture);
+        let producer: ID3D12Fence =
+            unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let small = present(&new, Some((producer.as_raw(), 1)));
+        let ready = s.lock_state().gpu12.for_tick(None).unwrap();
+        assert_eq!(ready.frame(), (latched.seq, first.frame, (2, 1)));
+        drop(ready);
+        unsafe { producer.Signal(1) }.unwrap();
+        assert!(release.wait(small.release, Duration::from_secs(5)));
+        let old_display = s.lock_state().gpu12.for_tick(Some(latched)).unwrap();
+        assert_eq!(shown(&r, &old_display), [[13; 4]; 2]);
+        let current = s.lock_state().gpu12.for_tick(None).unwrap();
+        assert_eq!(current.size, (1, 1));
+        assert_eq!(shown(&r, &current), [[31; 4]]);
+        assert!(old_slot.upgrade().is_some());
+        drop(old_display);
+        let mut state = s.lock_state();
+        state.gpu12.for_tick(None);
+        assert!(old_slot.upgrade().is_none());
+        assert!(state.gpu12.slots.iter().all(|s| s.size == (1, 1)));
     }
 
     #[test]
