@@ -5,7 +5,13 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMPILER_FIELDS, type CompilerInfo } from "./pin";
-import { nativeInput, PRELUDES_TRANSFORM, TRANSFORM, type PreludeScripts } from "./transform";
+import {
+  CLOSED_PRELUDES_TRANSFORM,
+  nativeInput,
+  PRELUDES_TRANSFORM,
+  TRANSFORM,
+  type PreludeScripts,
+} from "./transform";
 import { excerpt, INPUT_MODULE, readUses, usesOf, type Uses } from "./uses";
 
 export class AotError extends Error {}
@@ -69,6 +75,7 @@ export interface NativeImage {
   diagnostics: string;
   /** What sk-aot found the image to use; null from an sk-aot that does not record it. */
   uses: Uses | null;
+  closed?: boolean;
 }
 
 export interface CompileOptions {
@@ -76,6 +83,7 @@ export interface CompileOptions {
   compiler: string;
   source: string;
   preludes?: PreludeScripts | undefined;
+  closed?: boolean;
   /** Holds the transformed input, the IR and the image. */
   work: string;
 }
@@ -87,11 +95,24 @@ export async function compileNative(options: CompileOptions): Promise<NativeImag
   const ir = join(work, "app.ir");
   const image = join(work, "app.image");
   const uses = `${ir}.uses.json`;
-  for (const stale of [ir, uses, image, `${image}.entries`, `${image}.identity`]) rmSync(stale, { force: true });
-  const wrapped = nativeInput(source, options.preludes).code;
-  writeFileSync(input, wrapped);
+  const openIr = join(work, "audit.ir");
+  for (const stale of [ir, uses, openIr, `${openIr}.uses.json`, image, `${image}.entries`, `${image}.identity`])
+    rmSync(stale, { force: true });
+  const wrapped = nativeInput(source, options.preludes);
+  writeFileSync(input, wrapped.code);
 
-  const compiled = await run([compiler, "compile", input, ir, image], work);
+  const strict = options.closed ? await import("./closed") : null;
+  let openUses: Uses | null = null;
+  if (strict) {
+    if (!options.preludes) throw new AotError("the strict workload requires a host with in-image preludes");
+    const audit = await run([compiler, "ir", input, openIr, "--include-builtins"], work);
+    if (audit.code !== 0 || !(openUses = readUses(`${openIr}.uses.json`)))
+      throw new AotError(
+        `sk-aot could not audit the strict image; use the compiler of this SDK\n${tail(audit.stderr + audit.stdout)}`,
+      );
+  }
+  const flags = strict ? ["--include-builtins", "--option", strict.CLOSED_POLICY] : [];
+  const compiled = await run([compiler, "compile", input, ir, image, ...flags], work);
   if (compiled.code !== 0 || !existsSync(ir) || !existsSync(image)) {
     throw new AotError(
       `sk-aot could not compile the app bundle (exit ${compiled.code}); its input is ${input}\n` +
@@ -105,16 +126,18 @@ export async function compileNative(options: CompileOptions): Promise<NativeImag
   const identity = readFileSync(`${image}.identity`);
   if (identity.length !== 16) throw new AotError("sk-aot wrote an invalid image identity");
   const bytes = new Uint8Array(readFileSync(image));
+  const recorded = readUses(uses);
   return {
     image: bytes,
     entry,
     identity: identity.toString("hex"),
     imageSha256: sha256(bytes),
     sourceBundleSha256: sha256(source),
-    nativeInputSha256: sha256(wrapped),
+    nativeInputSha256: sha256(wrapped.code),
     irSha256: sha256(readFileSync(ir)),
     diagnostics: compiled.stdout.trim(),
-    uses: readUses(uses),
+    uses: strict && recorded && openUses ? strict.closedUses(recorded, openUses, wrapped) : recorded,
+    closed: !!strict,
   };
 }
 
@@ -191,7 +214,7 @@ export function nativeManifest(
     imageBytes: native.image.length,
     entry: native.entry,
     identity: native.identity,
-    transform: options.includesPreludes ? PRELUDES_TRANSFORM : TRANSFORM,
+    transform: native.closed ? CLOSED_PRELUDES_TRANSFORM : options.includesPreludes ? PRELUDES_TRANSFORM : TRANSFORM,
     sourceBundleSha256: native.sourceBundleSha256,
     preludeSha256: options.preludeSha256,
     nativeInputSha256: native.nativeInputSha256,

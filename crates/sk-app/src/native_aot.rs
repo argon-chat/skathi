@@ -20,6 +20,7 @@ include!(concat!(env!("OUT_DIR"), "/devtools/native_inspector.rs"));
 const SCHEMA: &str = "skathi.native-aot";
 const TRANSFORM: &str = "opaque-host-v1";
 const APP_PRELUDES_TRANSFORM: &str = "opaque-host-preludes-v2";
+const CLOSED_APP_TRANSFORM: &str = "opaque-host-closed-preludes-v3";
 const TARGET: &str = "x86_64-windows";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,7 @@ struct Plan {
     entry: u32,
     kind: Kind,
     includes_preludes: bool,
+    closed: bool,
 }
 thread_local! { static PLAN: RefCell<Option<Plan>> = const { RefCell::new(None) }; }
 
@@ -103,6 +105,7 @@ pub(crate) fn host_identity() -> Json {
         ("tableId", Json::s(aot::BUILD_TABLE_ID)),
         ("compileOptions", Json::s(aot::COMPILE_OPTIONS)),
         ("transform", Json::s(TRANSFORM)),
+        ("closedTransform", Json::s(CLOSED_APP_TRANSFORM)),
         ("preludeSha256", Json::s(aot::digest_hex(&preludes()))),
         (
             "preludeScripts",
@@ -132,9 +135,10 @@ fn validate(
     equal(manifest, "engine", aot::ENGINE_VERSION)?;
     equal(manifest, "tableId", aot::BUILD_TABLE_ID)?;
     equal(manifest, "compileOptions", aot::COMPILE_OPTIONS)?;
-    let includes_preludes = match (field(manifest, "transform")?, kind) {
+    let transform = field(manifest, "transform")?;
+    let includes_preludes = match (transform, kind) {
         (TRANSFORM, _) => false,
-        (APP_PRELUDES_TRANSFORM, Kind::Application) => true,
+        (APP_PRELUDES_TRANSFORM | CLOSED_APP_TRANSFORM, Kind::Application) => true,
         _ => return Err("unsupported native AOT transform for this image kind".into()),
     };
     equal(manifest, "sourceBundleSha256", &aot::digest_hex(source))?;
@@ -148,6 +152,7 @@ fn validate(
             entry,
             kind,
             includes_preludes,
+            closed: transform == CLOSED_APP_TRANSFORM,
         },
         id,
     ))
@@ -257,8 +262,12 @@ fn select(
     // checksum on a manually selected external image is only integrity/ABI.
     unsafe { aot::load_image_file_with_profile(&file, id, profile) }?;
     drop(file);
-    // Its typeof and global reads would assume that the preludes and host functions never ran.
-    if !aot::admits_host_files() {
+    if selected.closed && !aot::has_closed_library() {
+        return Err(format!(
+            "{description} requires a closed image with a compiled library"
+        ));
+    }
+    if !selected.closed && !aot::admits_host_files() {
         return Err(format!("{description} was compiled without admitting the host's own code; rebuild it with this SDK's compiler"));
     }
     if let Some(settings) = aot::memory_settings() {
@@ -688,12 +697,14 @@ mod tests {
         .is_err());
     }
     #[test]
-    fn only_the_new_application_transform_includes_the_host_preludes() {
+    fn only_the_application_transforms_can_include_the_host_preludes() {
         for (kind, transform, expected) in [
             (Kind::Application, TRANSFORM, Some(false)),
             (Kind::Inspector, TRANSFORM, Some(false)),
             (Kind::Application, APP_PRELUDES_TRANSFORM, Some(true)),
             (Kind::Inspector, APP_PRELUDES_TRANSFORM, None),
+            (Kind::Application, CLOSED_APP_TRANSFORM, Some(true)),
+            (Kind::Inspector, CLOSED_APP_TRANSFORM, None),
         ] {
             let mut document = valid(kind);
             change(&mut document, "transform", Json::s(transform));
@@ -704,9 +715,12 @@ mod tests {
                 b"preludes",
                 &aot::digest_hex(b"image"),
             );
+            let result = result
+                .ok()
+                .map(|(plan, _)| (plan.includes_preludes, plan.closed));
             assert_eq!(
-                result.ok().map(|(plan, _)| plan.includes_preludes),
-                expected
+                result,
+                expected.map(|preludes| (preludes, transform == CLOSED_APP_TRANSFORM))
             );
         }
     }

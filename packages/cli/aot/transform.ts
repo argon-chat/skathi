@@ -5,6 +5,7 @@ import HOST_TABLE from "./host-globals.json";
 
 export const TRANSFORM = "opaque-host-v1";
 export const PRELUDES_TRANSFORM = "opaque-host-preludes-v2";
+export const CLOSED_PRELUDES_TRANSFORM = "opaque-host-closed-preludes-v3";
 export type PreludeScripts = readonly [string, string];
 
 export interface BuiltinEntry {

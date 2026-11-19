@@ -84,6 +84,7 @@ export function icuDataPath(host: { exe: string; info: HostInfo }): string | nul
 }
 
 export interface HostAot extends CompilerInfo {
+  closedTransform?: string;
   transform: string;
   preludeSha256: string;
   preludeScripts?: readonly [string, string];

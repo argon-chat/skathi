@@ -13,6 +13,7 @@ import {
   type NativeImage,
 } from "../aot/native";
 import { loadPin, pinnedCompilerInfo } from "../aot/pin";
+import { closedUses } from "../aot/closed";
 import { nativeInput, opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
 import { removedFeatures, type FeatureUse, type Uses } from "../aot/uses";
 import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
@@ -21,6 +22,63 @@ import { ConfigError, loadAppConfig } from "../cli/config";
 import { HostError, type HostInfo, type ResolvedHost } from "../cli/host";
 import { quietProgress } from "../cli/term";
 import { RULES } from "./check-fixtures";
+
+describe("strict image reachability", () => {
+  const none = (): Uses => ({ features: [], unseen: [], entryModules: [1], statistics: {} });
+  const inspect = (source: string, witness = "Array.isArray", closed = none()) => {
+    const input = nativeInput(source, ["", ""]);
+    const section = input.sections.at(-1)!;
+    const at = section.byteOffset + Buffer.byteLength(source.slice(0, source.indexOf(witness)));
+    const open = none();
+    open.unseen.push({ cause: "EvaluatesText", builtin: "Function", module: 0, position: at });
+    return closedUses(closed, open, input);
+  };
+  test("a locked predicate reference can be distinguished from calling a constructor after it", () => {
+    const base = "/* 🪟 */ let isArray=Array.isArray; isArray([]);";
+    expect(inspect(base, "isArray=").unseen).toEqual([]);
+    expect(inspect(base + "new Function(window.code)", "isArray=").unseen.length).toBeGreaterThan(0);
+    expect(inspect(base + "(0,eval)(window.code)", "isArray=").unseen.length).toBeGreaterThan(0);
+    expect(inspect(base + "(async()=>{}).constructor(window.code)", "isArray=").unseen.length).toBeGreaterThan(0);
+    expect(inspect(base + "import(window.path)", "isArray=").unseen.length).toBeGreaterThan(0);
+    expect(inspect(base + "globalThis[window.key](window.code)", "isArray=").unseen.length).toBeGreaterThan(0);
+    expect(
+      inspect(base + "let run; run=Reflect.get(window, window.key); Reflect.apply(run,null,[])", "isArray=").unseen
+        .length,
+    ).toBeGreaterThan(0);
+  });
+  test("preserves unknown causes, shadowed globals and unresolved witness locations", () => {
+    const source = "function f(Array) { let pred=Array.isArray; return pred(1) }";
+    expect(inspect(source, "pred=").unseen).toHaveLength(1);
+    expect(inspect("let pred=Array.isArray; pred=other", "pred=").unseen).toHaveLength(1);
+    const closed = none();
+    closed.unseen.push({ cause: "RunsUnseenCode", builtin: null, module: 0xffffffff, position: 0 });
+    expect(inspect("let pred=Array.isArray", "pred=", closed).unseen).toEqual(closed.unseen);
+    expect(inspect("let pred=Array.isArray", "Array.isArray").unseen).toHaveLength(1);
+  });
+  test("ignores unrelated object methods and locally scoped function names", () => {
+    const source = "function f(Function) { return Function(3) } const obj={eval(x) { return x }}; obj.eval(2);";
+    expect(closedUses(none(), none(), nativeInput(source, ["", ""])).unseen).toEqual([]);
+    expect(closedUses(none(), none(), nativeInput('const k="setTimeout"; globalThis[k](()=>{},0)')).unseen).toEqual([]);
+    expect(closedUses(none(), none(), nativeInput('Reflect.get(window,"Function")(window.text)')).unseen).not.toEqual(
+      [],
+    );
+  });
+  test("removes only unnamed Bun services from the closed Interpreter report", () => {
+    const closed = none();
+    const base: FeatureUse = {
+      feature: "Interpreter",
+      id: 1,
+      kind: "Unnamed",
+      builtin: "Bun.Transpiler",
+      module: 0xffffffff,
+      position: 0,
+    };
+    const named = { ...base, kind: "Named" };
+    const unknown = { ...base, builtin: "AnotherBuiltin" };
+    closed.features.push(base, named, unknown);
+    expect(closedUses(closed, none(), nativeInput("0", ["", ""])).features).toEqual([named, unknown]);
+  });
+});
 
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));

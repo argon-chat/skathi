@@ -24,19 +24,19 @@ pub struct Request<'r> {
     pub entry_point: &'r [u8],
     pub ir_path: &'r [u8],
     pub option_words: &'r [String],
+    pub include_builtins: bool,
     /// `NAME=VALUE`, after the platform's.
     pub defines: &'r [String],
 }
 
-/// The options of `bun compile <entry> --no-builtin-modules --aot-out=<ir> --aot-threads=1
-/// --aot-testing=NoExecutable` on the canary build's own template.
-fn aot_options(ir_path: &[u8], option_words: &[String]) -> AotOptions {
+/// A single-threaded IR build. Strict images must carry the library that ordinary hosts can load.
+fn aot_options(ir_path: &[u8], option_words: &[String], include_builtins: bool) -> AotOptions {
     AotOptions {
         option_words: option_words
             .iter()
             .map(|word| Box::from(word.as_bytes()))
             .collect(),
-        omits_builtin_modules: true,
+        omits_builtin_modules: !include_builtins,
         ir_output_path: Some(Box::from(ir_path)),
         thread_count: Some(NonZeroU32::MIN),
         writes_no_executable: true,
@@ -128,7 +128,11 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> Option<AotBuild> {
     transpiler.sync_resolver_opts();
     transpiler.resolver.env_loader = NonNull::new(transpiler.env);
 
-    let aot = aot_options(request.ir_path, request.option_words);
+    let aot = aot_options(
+        request.ir_path,
+        request.option_words,
+        request.include_builtins,
+    );
     let entry_points: [&[u8]; 1] = [request.entry_point];
     let built = build(AotBuildRequest {
         transpiler,

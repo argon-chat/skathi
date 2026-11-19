@@ -14,9 +14,9 @@ const PIN_ENGINE: &str = env!("SK_AOT_PIN_ENGINE");
 const PIN_TABLE: &str = env!("SK_AOT_PIN_TABLE");
 
 const USAGE: &str = "usage: sk-aot info
-       sk-aot ir INPUT OUT.ir [--types FILE.d.ts]... [--define NAME=VALUE]... [--option WORD]...
+       sk-aot ir INPUT OUT.ir [--include-builtins] [--types FILE.d.ts]... [--define NAME=VALUE]... [--option WORD]...
        sk-aot image IN.ir OUT.image [--option WORD]...
-       sk-aot compile INPUT OUT.ir OUT.image [--types FILE.d.ts]... [--define NAME=VALUE]... [--option WORD]...
+       sk-aot compile INPUT OUT.ir OUT.image [--include-builtins] [--types FILE.d.ts]... [--define NAME=VALUE]... [--option WORD]...
        sk-aot run IMAGE [--prelude FILE.js]...";
 
 fn unlinked(name: &str) -> ! {
@@ -81,6 +81,7 @@ fn front_end(input: &str, ir: &str, flags: &Flags) -> Result<(), String> {
         entry_point: entry.as_bytes(),
         ir_path: ir_path.as_bytes(),
         option_words,
+        include_builtins: flags.include_builtins,
         defines,
     };
     let built = frontend::compile(&request, &mut log);
@@ -125,6 +126,7 @@ fn image(ir: &str, out: &str, options: &[String]) -> Result<(), String> {
 
 #[derive(Default)]
 struct Flags {
+    include_builtins: bool,
     types: Vec<String>,
     options: Vec<String>,
     preludes: Vec<String>,
@@ -137,6 +139,10 @@ fn split_flags(args: &[String]) -> Result<(Vec<&String>, Flags), String> {
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let list = match arg.as_str() {
+            "--include-builtins" => {
+                flags.include_builtins = true;
+                continue;
+            }
             "--types" => &mut flags.types,
             "--option" => &mut flags.options,
             "--prelude" => &mut flags.preludes,

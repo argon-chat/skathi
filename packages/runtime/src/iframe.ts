@@ -20,20 +20,20 @@
 //   ["b", base64]                             ArrayBuffer
 //   ["t", "Uint8Array", base64]               a view, by constructor name (DataView too)
 
-const VIEWS = [
-  "Int8Array",
-  "Uint8Array",
-  "Uint8ClampedArray",
-  "Int16Array",
-  "Uint16Array",
-  "Int32Array",
-  "Uint32Array",
-  "Float32Array",
-  "Float64Array",
-  "BigInt64Array",
-  "BigUint64Array",
-  "DataView",
-] as const;
+const viewConstructors = {
+  Int8Array: () => globalThis.Int8Array,
+  Uint8Array: () => globalThis.Uint8Array,
+  Uint8ClampedArray: () => globalThis.Uint8ClampedArray,
+  Int16Array: () => globalThis.Int16Array,
+  Uint16Array: () => globalThis.Uint16Array,
+  Int32Array: () => globalThis.Int32Array,
+  Uint32Array: () => globalThis.Uint32Array,
+  Float32Array: () => globalThis.Float32Array,
+  Float64Array: () => globalThis.Float64Array,
+  BigInt64Array: () => globalThis.BigInt64Array,
+  BigUint64Array: () => globalThis.BigUint64Array,
+  DataView: () => globalThis.DataView,
+};
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_INDEX = (() => {
@@ -130,8 +130,8 @@ export function encodeMessage(value: unknown, isPlatformObject?: (v: object) => 
     }
     if (obj instanceof ArrayBuffer) return ["b", toBase64(new Uint8Array(obj))];
     if (ArrayBuffer.isView(obj)) {
-      const name = (VIEWS as readonly string[]).find((n) => obj.constructor?.name === n);
-      if (!name) throw cloneError(describe(obj));
+      const name = obj.constructor?.name;
+      if (!name || !Object.hasOwn(viewConstructors, name)) throw cloneError(describe(obj));
       return ["t", name, toBase64(new Uint8Array(obj.buffer, obj.byteOffset, obj.byteLength))];
     }
     open.add(obj);
@@ -198,12 +198,14 @@ export function decodeMessage(wire: unknown): unknown {
     case "b":
       return fromBase64(a as string).buffer;
     case "t": {
-      if (!(VIEWS as readonly string[]).includes(a as string)) throw new TypeError("iframe message: unknown view");
+      if (typeof a !== "string" || !Object.hasOwn(viewConstructors, a))
+        throw new TypeError("iframe message: unknown view");
       const bytes = fromBase64(b as string);
-      const Ctor = (
-        globalThis as unknown as Record<string, new (buf: ArrayBufferLike, off?: number, len?: number) => unknown>
-      )[a as string]!;
-      const width = (Ctor as unknown as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 1;
+      const Ctor: {
+        new (buffer: ArrayBufferLike, offset: number, length: number): ArrayBufferView;
+        readonly BYTES_PER_ELEMENT?: number;
+      } = viewConstructors[a as keyof typeof viewConstructors]();
+      const width = "BYTES_PER_ELEMENT" in Ctor ? Ctor.BYTES_PER_ELEMENT : 1;
       return new Ctor(bytes.buffer, 0, bytes.byteLength / width);
     }
   }

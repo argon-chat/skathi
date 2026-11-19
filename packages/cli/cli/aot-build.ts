@@ -20,7 +20,7 @@ import {
   repoSkAot,
 } from "../aot/native";
 import type { CompilerInfo } from "../aot/pin";
-import { TRANSFORM } from "../aot/transform";
+import { CLOSED_PRELUDES_TRANSFORM, TRANSFORM } from "../aot/transform";
 import { diagnosticLine } from "../check/finding";
 import { exitCode, formatPretty, runCheck, type CheckReport } from "../check/index";
 import { ConfigError } from "./config";
@@ -173,6 +173,9 @@ export async function buildNative(options: {
   log: (line: string) => void;
 }): Promise<NativeBuild> {
   const { progress, log, aot, work } = options;
+  const closed = options.removed.includes("Interpreter");
+  if (closed && aot.closedTransform !== CLOSED_PRELUDES_TRANSFORM)
+    throw new AotError("this strict host predates closed application images; rebuild the workload with this SDK");
   progress.step("AOT toolchain");
   const compiler = await resolveAotCompiler(aot, options.compilerPath, log, (done, total) =>
     progress.bytes(done, total),
@@ -181,7 +184,7 @@ export async function buildNative(options: {
   progress.step("native image");
   const source = new TextDecoder().decode(options.source);
   const preludes = aot.preludeScripts;
-  const native = await compileNative({ compiler: compiler.path, source, work, preludes });
+  const native = await compileNative({ compiler: compiler.path, source, work, preludes, closed });
   const problem = removedFeatureProblem(native, source, options.removed, options.workload, preludes);
   if (problem) throw new AotError(problem);
   const compressed = deflateRawSync(native.image, { level: 9 });
