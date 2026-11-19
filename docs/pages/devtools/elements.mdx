@@ -26,7 +26,7 @@ The **rules** view lists every CSS rule that matched the element, the one that w
 - its selector, and the `@media` condition it sits in;
 - its specificity and source order, the two numbers on the right (`2048·18`), which decide which rule wins;
 - the state it applies in, such as `hover` or `active`; a rule that matched through an ancestor's state is shown as `group-hover`;
-- its declarations, with the ones another rule overrides dimmed.
+- its declarations, with the ones another rule overrides dimmed and struck through.
 
 For the 2px: look for the `height`, `padding`, `border` or `margin` the two buttons do not share. A declaration the engine does not support carries its advisory under the rule, so a property Skathi ignores does not go unnoticed.
 
@@ -51,7 +51,7 @@ The values are the engine's own: sizes, edges and corners as the layout and pain
 
 Some elements are hard to click: hidden ones, zero-sized ones, ones under an overlay.
 
-- **Search.** **find** (Ctrl+F) searches the whole tree. A row matches when its tag, class names, id or text contains what you typed, written without `.` or `#`: `primary` finds `button.btn.primary`, `reset` finds the button labelled Reset. Enter and Shift+Enter, or the arrows, step through the hits; each step selects the hit and expands its parents.
+- **Search.** **find** (Ctrl+F) searches the whole tree. A row matches when its tag, class names, id or text contains what you typed: `primary` finds `button.btn.primary`, `reset` finds the button labelled Reset. Since 0.4 a query is also tried as a CSS selector, so `.btn.primary`, `#save` and `.toolbar > button` find what they select. Enter and Shift+Enter, or the arrows, step through the hits; each step selects the hit and expands its parents.
 - **Breadcrumbs.** The bar under the tree lists the selected element's ancestors; click one to select it. It is the fastest way from a label to the flex container that positions it.
 - **Vue fragment anchors.** The `<!---->` toggle shows the empty comment nodes Vue leaves for `v-if` and `v-for`. They paint nothing, so they are hidden by default; turn them on when you count children or debug a list that renders nothing.
 
