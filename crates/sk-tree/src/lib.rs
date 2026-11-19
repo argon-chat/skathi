@@ -754,6 +754,12 @@ pub fn video_device_changed() -> usize {
     video::device_changed()
 }
 
+/// Holds the ready D3D12 frames for this refresh before the UI runs its timers and animation callbacks.
+#[cfg(windows)]
+pub fn latch_surface_frames(window: &gpui::Window) {
+    surface::node::latch_d3d12(window);
+}
+
 /// Per-frame work that needs a `Window`; call once per frame from the pump, before the draw.
 /// Returns `true` when the window must repaint.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {

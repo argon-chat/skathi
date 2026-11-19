@@ -15,11 +15,13 @@
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
-//! - `feedbackStart(name, fps, paced, source, ring)` and `feedbackStop(name)`: frames at `fps`
-//!   (0: as fast as they go) with `on_frame` listening; the stop prints each frame's event and the
-//!   cadence, and answers a summary. `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
+//! - `feedbackStart(name, fps, paced, source, ring, width, height)` and `feedbackStop(name)`: frames at `fps`
+//!   (`0` runs unthrottled, `-1` presents once per measured refresh) with `on_frame` listening.
+//!   The stop prints each frame's event and the cadence, and answers a summary.
+//!   `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
 //!   `"d3d12-rgba16f"` (a ring of `ring` textures on the renderer's D3D12 device, each presented
-//!   behind its fence).
+//!   behind its fence). With `"d3d12-shared"` or `"d3d12-shared-rgba16f"` the ring belongs to a
+//!   separate device and uses a shared fence per texture. D3D12 frames default to 64×64.
 //!   `"shared"` is a player with a device of its own: a shared texture and fence, as libmpv's.
 //! - `removeDevice(name)` removes the renderer's D3D12 device, as a driver reset does, and answers
 //!   when (`monotonic_ns`).
@@ -169,7 +171,9 @@ fn main() {
                 .unwrap_or("bgra")
                 .to_string();
             let ring = args.get(4).and_then(Value::as_u64).unwrap_or(3) as usize;
-            feedback::start(surface_of(&args), fps, paced, source, ring);
+            let width = args.get(5).and_then(Value::as_u64).unwrap_or(64) as u32;
+            let height = args.get(6).and_then(Value::as_u64).unwrap_or(64) as u32;
+            feedback::start(surface_of(&args), fps, paced, source, ring, (width, height));
             call.resolve("true");
         })
         .function("phaseStart", |call| {
@@ -380,7 +384,14 @@ mod feedback {
     /// With `paced`, each frame is presented a refresh and a half before the vblank its time
     /// falls on (the display clock in `info().display`), as a display-synced player would, so
     /// jitter in this thread's wakeups or the window's draw cannot move it to another refresh.
-    pub fn start(surface: SurfaceHandle, fps: f64, paced: bool, source: String, ring: usize) {
+    pub fn start(
+        surface: SurfaceHandle,
+        fps: f64,
+        paced: bool,
+        source: String,
+        ring: usize,
+        size: (u32, u32),
+    ) {
         let half = source.ends_with("-rgba16f");
         surface.set_format(if half {
             SurfaceFormat::Rgba16Float
@@ -423,7 +434,13 @@ mod feedback {
             let mut present: Box<dyn FnMut(usize) -> Result<u64, SurfaceError>> =
                 if source.starts_with("d3d12") {
                     #[cfg(windows)]
-                    match super::gpu::d3d12::Ring::new(&surface, ring, half) {
+                    match super::gpu::d3d12::Ring::new(
+                        &surface,
+                        ring,
+                        half,
+                        source.starts_with("d3d12-shared"),
+                        size,
+                    ) {
                         Ok(mut ring) => {
                             let surface = surface.clone();
                             Box::new(move |n| ring.present(&surface, n))
@@ -431,7 +448,9 @@ mod feedback {
                         Err(e) => return failed(e),
                     }
                     #[cfg(not(windows))]
-                    return failed(format!("{ring} D3D12 textures off Windows"));
+                    return failed(format!(
+                        "{ring} D3D12 textures of size {size:?} off Windows"
+                    ));
                 } else if source == "shared" {
                     #[cfg(windows)]
                     match super::gpu::Shared::new() {
@@ -454,6 +473,7 @@ mod feedback {
             let interval = if fps > 0.0 { (1e9 / fps) as u64 } else { 0 };
             let start = monotonic_ns();
             let mut produced = Produced::default();
+            let mut last_began = None;
             for n in 0.. {
                 if stopping.load(Ordering::Acquire) {
                     break;
@@ -461,8 +481,23 @@ mod feedback {
                 let due = start + n * interval;
                 let info = surface.info();
                 let display = info.display;
-                let at = match (paced, display.last_vblank, display.refresh_period) {
-                    (true, Some(vblank), Some(period)) => {
+                let at = match (display.last_vblank, display.refresh_period) {
+                    (Some(vblank), Some(period)) if fps < 0.0 => {
+                        let p = period.as_nanos() as u64;
+                        let now = monotonic_ns();
+                        let start = vblank + now.saturating_sub(vblank) / p * p;
+                        let half = start + p / 2;
+                        if now > half || last_began.is_some_and(|at| at >= start) {
+                            half + p
+                        } else {
+                            half
+                        }
+                    }
+                    _ if fps < 0.0 => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    (Some(vblank), Some(period)) if paced => {
                         let p = period.as_nanos() as u64;
                         let k = due.saturating_sub(vblank).div_ceil(p);
                         (vblank + k * p).saturating_sub(p + p / 2)
@@ -474,6 +509,7 @@ mod feedback {
                     std::thread::sleep(Duration::from_nanos(wait));
                 }
                 let began = monotonic_ns();
+                last_began = Some(began);
                 let presented = present(n as usize);
                 produced.attempts.push((began, presented.is_ok()));
                 match presented {
@@ -1004,6 +1040,7 @@ mod gpu {
             D3D12_RESOURCE_TRANSITION_BARRIER,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory4};
         use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
         use super::{err, format, Fill, Result};
@@ -1111,22 +1148,7 @@ mod gpu {
                 .map_err(err)?;
                 unsafe { list.ClearRenderTargetView(rtv, &color.clear(), None) };
                 if after != D3D12_RESOURCE_STATE_RENDER_TARGET {
-                    let mut barrier = D3D12_RESOURCE_BARRIER {
-                        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
-                        Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
-                                pResource: ManuallyDrop::new(Some(resource.clone())),
-                                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                                StateBefore: D3D12_RESOURCE_STATE_RENDER_TARGET,
-                                StateAfter: after,
-                            }),
-                        },
-                        ..Default::default()
-                    };
-                    unsafe {
-                        list.ResourceBarrier(std::slice::from_ref(&barrier));
-                        ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
-                    }
+                    transition(&list, resource, D3D12_RESOURCE_STATE_RENDER_TARGET, after);
                 }
                 unsafe { list.Close() }.map_err(err)?;
                 let list: ID3D12CommandList = list.cast().map_err(err)?;
@@ -1203,6 +1225,7 @@ mod gpu {
             heap: ID3D12DescriptorHeap,
             cleared: u64,
             released: u64,
+            shared: Option<(SharedTexture, ID3D12Fence)>,
         }
 
         /// A video player's pipeline on the renderer's device: a ring of textures, each cleared on
@@ -1217,12 +1240,29 @@ mod gpu {
         }
 
         impl Ring {
-            pub fn new(surface: &SurfaceHandle, n: usize, half: bool) -> Result<Self> {
+            pub fn new(
+                surface: &SurfaceHandle,
+                n: usize,
+                half: bool,
+                shared: bool,
+                size: (u32, u32),
+            ) -> Result<Self> {
                 let renderer = surface.d3d12_device().map_err(err)?;
                 let raw = renderer.as_raw();
-                let device = unsafe { ID3D12Device::from_raw_borrowed(&raw) }
-                    .ok_or("null device")?
-                    .clone();
+                let renderer =
+                    unsafe { ID3D12Device::from_raw_borrowed(&raw) }.ok_or("null device")?;
+                let device = if shared {
+                    let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.map_err(err)?;
+                    let adapter: IDXGIAdapter1 =
+                        unsafe { factory.EnumAdapterByLuid(renderer.GetAdapterLuid()) }
+                            .map_err(err)?;
+                    let mut device = None;
+                    unsafe { D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_11_0, &mut device) }
+                        .map_err(err)?;
+                    device.ok_or("no producer device")?
+                } else {
+                    renderer.clone()
+                };
                 let producer = Producer::new(device, false)?;
                 let fill = if half {
                     Fill::Half([0.0; 4])
@@ -1231,7 +1271,21 @@ mod gpu {
                 };
                 let mut textures = Vec::new();
                 for _ in 0..n.max(1) {
-                    let texture = producer.texture(64, 64, D3D12_HEAP_FLAG_NONE, fill)?;
+                    let flags = if shared {
+                        D3D12_HEAP_FLAG_SHARED
+                    } else {
+                        D3D12_HEAP_FLAG_NONE
+                    };
+                    let texture = producer.texture(size.0, size.1, flags, fill)?;
+                    let handoff = if shared {
+                        let fence =
+                            unsafe { producer.device.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }
+                                .map_err(err)?;
+                        let opened = open_shared(&producer.device, &texture, &fence)?;
+                        Some((opened, fence))
+                    } else {
+                        None
+                    };
                     let heap: ID3D12DescriptorHeap = unsafe {
                         producer
                             .device
@@ -1272,6 +1326,7 @@ mod gpu {
                         heap,
                         cleared: 0,
                         released: 0,
+                        shared: handoff,
                     });
                 }
                 Ok(Ring {
@@ -1293,9 +1348,13 @@ mod gpu {
                 let count = self.textures.len();
                 let t = &mut self.textures[n % count];
                 let timeout = std::time::Duration::from_secs(2);
-                if !self.release.wait(t.released, timeout)
-                    || wait(&self.producer.fence, t.cleared).is_err()
-                {
+                let reusable = if let Some((_, fence)) = &t.shared {
+                    wait(fence, t.released.max(t.cleared)).is_ok()
+                } else {
+                    self.release.wait(t.released, timeout)
+                        && wait(&self.producer.fence, t.cleared).is_ok()
+                };
+                if !reusable {
                     return Err(SurfaceError::Timeout);
                 }
                 let shade = (n * 37 % 256) as f32 / 255.0;
@@ -1306,20 +1365,42 @@ mod gpu {
                 };
                 let platform = |e: windows::core::Error| SurfaceError::Platform(e.to_string());
                 self.value += 1;
+                let (fence, ready) = match &t.shared {
+                    Some((_, fence)) => (fence, t.released.max(t.cleared) + 1),
+                    None => (&self.producer.fence, self.value),
+                };
                 unsafe {
                     t.allocator.Reset().map_err(platform)?;
                     t.list.Reset(&t.allocator, None).map_err(platform)?;
                     let rtv = t.heap.GetCPUDescriptorHandleForHeapStart();
+                    if t.shared.is_some() && t.cleared > 0 {
+                        transition(
+                            &t.list,
+                            &t.texture,
+                            D3D12_RESOURCE_STATE_COMMON,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                        );
+                    }
                     t.list.ClearRenderTargetView(rtv, &color, None);
+                    if t.shared.is_some() {
+                        transition(
+                            &t.list,
+                            &t.texture,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_COMMON,
+                        );
+                    }
                     t.list.Close().map_err(platform)?;
                     let list: ID3D12CommandList = t.list.cast().map_err(platform)?;
                     self.producer.queue.ExecuteCommandLists(&[Some(list)]);
-                    self.producer
-                        .queue
-                        .Signal(&self.producer.fence, self.value)
-                        .map_err(platform)?;
+                    self.producer.queue.Signal(fence, ready).map_err(platform)?;
                 }
-                t.cleared = self.value;
+                t.cleared = ready;
+                if let Some((opened, _)) = &t.shared {
+                    let frame = surface.present_shared_fenced(opened, ready, ready + 1)?;
+                    t.released = ready + 1;
+                    return Ok(frame);
+                }
                 let presented = unsafe {
                     surface.present_d3d12(
                         t.texture.as_raw(),
@@ -1340,23 +1421,56 @@ mod gpu {
             let producer = Producer::new(device.ok_or("no device")?, true)?;
             let resource = producer.texture(w, h, D3D12_HEAP_FLAG_SHARED, color)?;
             producer.clear(&resource, color, D3D12_RESOURCE_STATE_COMMON, 1)?;
-            let share = |object: &ID3D12DeviceChild| unsafe {
-                producer
-                    .device
-                    .CreateSharedHandle(object, None, GENERIC_ALL.0, None)
-            };
-            let texture_handle = share(&resource.cast().map_err(err)?).map_err(err)?;
-            let fence_handle = share(&producer.fence.cast().map_err(err)?).map_err(err)?;
-            let pid = std::process::id();
-            let presented = SharedTexture::open_from_process(pid, texture_handle.0 as usize as u64)
-                .and_then(|t| t.with_fence_from_process(pid, fence_handle.0 as usize as u64))
-                .and_then(|t| surface.present_shared_fenced(&t, 1, 2));
-            unsafe {
-                let _ = CloseHandle(texture_handle);
-                let _ = CloseHandle(fence_handle);
-            }
-            presented.map_err(err)?;
+            let opened = open_shared(&producer.device, &resource, &producer.fence)?;
+            surface.present_shared_fenced(&opened, 1, 2).map_err(err)?;
             wait(&producer.fence, 2)
+        }
+
+        fn open_shared(
+            device: &ID3D12Device,
+            resource: &ID3D12Resource,
+            fence: &ID3D12Fence,
+        ) -> Result<SharedTexture> {
+            let share = |object: &ID3D12DeviceChild| unsafe {
+                device.CreateSharedHandle(object, None, GENERIC_ALL.0, None)
+            };
+            let texture = share(&resource.cast().map_err(err)?).map_err(err)?;
+            let pid = std::process::id();
+            let opened = SharedTexture::open_from_process(pid, texture.0 as usize as u64);
+            unsafe {
+                let _ = CloseHandle(texture);
+            }
+            let opened = opened.map_err(err)?;
+            let fence = share(&fence.cast().map_err(err)?).map_err(err)?;
+            let opened = opened.with_fence_from_process(pid, fence.0 as usize as u64);
+            unsafe {
+                let _ = CloseHandle(fence);
+            }
+            opened.map_err(err)
+        }
+
+        fn transition(
+            list: &ID3D12GraphicsCommandList,
+            resource: &ID3D12Resource,
+            before: D3D12_RESOURCE_STATES,
+            after: D3D12_RESOURCE_STATES,
+        ) {
+            let mut barrier = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                        pResource: ManuallyDrop::new(Some(resource.clone())),
+                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        StateBefore: before,
+                        StateAfter: after,
+                    }),
+                },
+                ..Default::default()
+            };
+            unsafe {
+                list.ResourceBarrier(std::slice::from_ref(&barrier));
+                ManuallyDrop::drop(&mut (*barrier.Anonymous.Transition).pResource);
+            }
         }
     }
 }

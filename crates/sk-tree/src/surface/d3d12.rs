@@ -589,7 +589,25 @@ impl Ready {
     }
 }
 
+impl State {
+    pub(super) fn latch_d3d12(&mut self, seen: u64, window: Option<u64>) -> Option<Ready> {
+        if self.seq == seen || !matches!(self.frame, Some(Frame::D3D12 { .. })) {
+            return None;
+        }
+        let ready = self.gpu12.ready().filter(|r| r.seq > seen && r.done())?;
+        self.pin(ready.frame, window);
+        Some(ready)
+    }
+}
+
 impl SurfaceGpu {
+    pub(super) fn for_tick(&self, latched: Option<Ready>) -> Option<Ready> {
+        // Clearing the surface or losing its device withdraws even a latched slot.
+        latched
+            .filter(|r| self.slots.iter().any(|slot| slot.seq == r.seq))
+            .or_else(|| self.ready())
+    }
+
     /// The newest frame whose copy has run; while none has, the newest frame.
     pub(crate) fn ready(&self) -> Option<Ready> {
         let queue = self.queue.clone()?;
@@ -600,6 +618,7 @@ impl SurfaceGpu {
             false => self.newest_done(completed).unwrap_or(current),
         };
         let slot = &self.slots[index];
+        log::trace!(target: "sk_tree::surface::feedback", "{} copy-ready slot={index} frame={} completed={completed} required={}", super::monotonic_ns(), slot.frame, slot.written);
         Some(Ready {
             texture: slot.texture.clone(),
             queue,
@@ -980,6 +999,7 @@ fn copy_in(
     let slot = &mut state.gpu12.slots[index];
     (slot.written, slot.seq, slot.frame) = (value, state.seq, frame);
     let completed = unsafe { queue.fence.GetCompletedValue() };
+    log::trace!(target: "sk_tree::surface::feedback", "{} copy-submit slot={index} frame={frame} value={value} completed={completed}", super::monotonic_ns());
     if let Some(done) = state.gpu12.newest_done(completed) {
         let done = state.gpu12.slots[done].frame;
         state.settle(done);
@@ -1443,5 +1463,52 @@ mod tests {
             Err(SurfaceError::FormatMismatch { .. })
         ));
         assert_eq!(half.stats().presented + plain.stats().presented, 0);
+    }
+
+    #[test]
+    fn one_present_per_refresh_keeps_its_slot_through_a_late_ui_callback() {
+        let r = renderer();
+        let s = surface("tests:d3d12-late-tick");
+        let pixels = [[10, 20, 30, 255], [60, 80, 90, 255]];
+        let sources = pixels.map(|color| texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &color));
+        let release = s.release_fence().unwrap();
+        let mut n = 0;
+        let mut present = || {
+            let source = &sources[n % sources.len()];
+            n += 1;
+            let accepted =
+                unsafe { s.present_d3d12(source.as_raw(), D3D12_RESOURCE_STATE_COMMON.0, None) }
+                    .unwrap();
+            assert!(release.wait(accepted.release, Duration::from_secs(5)));
+            accepted.frame
+        };
+        let mut next = present();
+        let mut seen = 0;
+        for refresh in 1..=46 {
+            let expected = next;
+            let latched = s.lock_state().latch_d3d12(seen, None);
+            if refresh % 15 == 0 {
+                next = present();
+            }
+            let sampled = s.lock_state().gpu12.for_tick(latched).unwrap();
+            assert_eq!(sampled.frame, expected, "refresh {refresh}");
+            assert_eq!(shown(&r, &sampled), [pixels[(refresh - 1) % 2]]);
+            seen = sampled.seq;
+            drop(sampled);
+            if refresh % 15 != 0 {
+                next = present();
+            }
+        }
+        let withdrawn = s.lock_state().latch_d3d12(seen, None).unwrap();
+        s.clear();
+        let after_clear = present();
+        assert_eq!(
+            s.lock_state()
+                .gpu12
+                .for_tick(Some(withdrawn))
+                .unwrap()
+                .frame,
+            after_clear
+        );
     }
 }

@@ -28,14 +28,14 @@ struct Track {
     open: BTreeMap<u64, Option<FrameEvent>>,
     /// The oldest frame the surface may still show: it holds that one and every newer one.
     held: Option<u64>,
-    /// The frame a tick is writing, held until its window says what it carries.
-    pinned: Option<u64>,
     /// The time of the last frame shown, for the display clock.
     last_shown: Option<u64>,
 }
 
 #[derive(Default)]
 struct Win {
+    /// Frames this window latched, held through its UI callbacks until its draw.
+    pinned: HashMap<Key, u64>,
     carrying: HashMap<Key, u64>,
     records: VecDeque<(u64, Vec<(Key, u64)>)>,
 }
@@ -64,6 +64,7 @@ impl Tracker {
             return;
         };
         track.open.insert(frame, None);
+        log::trace!("{} accepted surface={s:x} frame={frame}", monotonic_ns());
         track.held.get_or_insert(frame);
         if !visible || self.page_hidden {
             self.resolve(
@@ -85,7 +86,7 @@ impl Tracker {
         track.held = Some(frame);
         let older: Vec<u64> = track.open.range(held..frame).map(|(&f, _)| f).collect();
         for f in older {
-            self.release(s, f);
+            self.release(s, f, format_args!("newer frame {frame} ready"));
         }
     }
 
@@ -97,19 +98,20 @@ impl Tracker {
         if track.held.take().is_some() {
             let open: Vec<u64> = track.open.keys().copied().collect();
             for f in open {
-                self.release(s, f);
+                self.release(s, f, format_args!("surface cleared"));
             }
         }
     }
 
     /// A tick writes `frame`: a present on another thread must not release it before the
     /// tick's [`Self::carry`].
-    pub(crate) fn pin(&mut self, s: Key, frame: u64) {
-        let Some(track) = self.surfaces.get_mut(&s) else {
+    pub(crate) fn pin(&mut self, s: Key, frame: u64, window: u64) {
+        if !self.surfaces.contains_key(&s) {
             return;
-        };
-        if let Some(old) = track.pinned.replace(frame).filter(|&old| old != frame) {
-            self.release(s, old);
+        }
+        let win = self.windows.entry(window).or_default();
+        if let Some(old) = win.pinned.insert(s, frame).filter(|&old| old != frame) {
+            self.release(s, old, format_args!("tick selected frame {frame}"));
         }
     }
 
@@ -124,17 +126,27 @@ impl Tracker {
             let old = std::mem::replace(&mut win.carrying, carrying);
             for (s, frame) in old {
                 if self.windows[&window].carrying.get(&s) != Some(&frame) {
-                    self.release(s, frame);
+                    let next = self.windows[&window].carrying.get(&s).copied();
+                    self.release(
+                        s,
+                        frame,
+                        format_args!("window {window:x} now carries {next:?}"),
+                    );
                 }
             }
         }
-        let pinned: Vec<(Key, u64)> = self
-            .surfaces
-            .iter_mut()
-            .filter_map(|(&s, t)| Some((s, t.pinned.take()?)))
-            .collect();
-        for (s, frame) in pinned {
-            self.release(s, frame);
+        if let Some(win) = self.windows.get_mut(&window) {
+            let mut pinned = std::mem::take(&mut win.pinned);
+            for (s, frame) in pinned.drain() {
+                self.release(
+                    s,
+                    frame,
+                    format_args!(
+                        "window {window:x} finished its tick without carrying frame {frame}"
+                    ),
+                );
+            }
+            self.windows.get_mut(&window).expect("looked up").pinned = pinned;
         }
     }
 
@@ -149,6 +161,10 @@ impl Tracker {
             .filter(|&(s, f)| self.unresolved(s, f))
             .collect();
         if !frames.is_empty() {
+            log::trace!(
+                "{} queued window={window:x} present={present} frames={frames:?}",
+                monotonic_ns()
+            );
             let win = self.windows.get_mut(&window).expect("looked up");
             win.records.push_back((present, frames));
         }
@@ -188,7 +204,15 @@ impl Tracker {
                 }
                 _ => {
                     for (s, frame) in frames {
-                        self.release(s, frame);
+                        if first == present {
+                            self.release(
+                                s,
+                                frame,
+                                format_args!("window {window:x} discarded present {present}"),
+                            );
+                        } else {
+                            self.release(s, frame, format_args!("window {window:x} reached present {present} after skipping {first}"));
+                        }
                     }
                 }
             }
@@ -222,6 +246,7 @@ impl Tracker {
             return;
         };
         let mut held: Vec<Key> = win.carrying.keys().copied().collect();
+        held.extend(win.pinned.keys().copied());
         held.extend(
             win.records
                 .iter()
@@ -291,7 +316,7 @@ impl Tracker {
             .map(|(&f, _)| f)
             .collect();
         for f in older {
-            self.resolve(s, f, FrameEvent::dropped(f, FrameDropReason::Superseded));
+            self.superseded(s, f, format_args!("newer frame {frame} shown"));
         }
         let precision = if exact {
             FramePrecision::Exact
@@ -311,24 +336,36 @@ impl Tracker {
     }
 
     /// `frame` lost one holder; with none left and never shown, it was superseded.
-    fn release(&mut self, s: Key, frame: u64) {
+    fn release(&mut self, s: Key, frame: u64, reason: std::fmt::Arguments<'_>) {
         if !self.unresolved(s, frame) {
             return;
         }
         let track = &self.surfaces[&s];
         let held = track.held.is_some_and(|held| frame >= held)
-            || track.pinned == Some(frame)
             || self.windows.values().any(|w| {
-                w.carrying.get(&s) == Some(&frame)
+                w.pinned.get(&s) == Some(&frame)
+                    || w.carrying.get(&s) == Some(&frame)
                     || w.records.iter().any(|(_, f)| f.contains(&(s, frame)))
             });
         if !held {
-            self.resolve(
-                s,
-                frame,
-                FrameEvent::dropped(frame, FrameDropReason::Superseded),
+            self.superseded(s, frame, reason);
+        }
+    }
+
+    fn superseded(&mut self, s: Key, frame: u64, reason: std::fmt::Arguments<'_>) {
+        if log::log_enabled!(log::Level::Debug) {
+            let surface = lock(&global().surfaces).get(&s).and_then(Weak::upgrade);
+            let name = surface.as_ref().map_or("?", |shared| shared.name.as_ref());
+            log::debug!(
+                "{} surface={name} frame={frame} Superseded: {reason}",
+                monotonic_ns()
             );
         }
+        self.resolve(
+            s,
+            frame,
+            FrameEvent::dropped(frame, FrameDropReason::Superseded),
+        );
     }
 
     fn resolve(&mut self, s: Key, frame: u64, event: FrameEvent) {
@@ -733,7 +770,7 @@ mod tests {
     fn tick(t: &mut Tracker, carrying: &[(Key, u64)], present: u64) {
         for &(s, frame) in carrying {
             t.settle(s, frame);
-            t.pin(s, frame);
+            t.pin(s, frame, W);
         }
         t.carry(W, carrying.iter().copied().collect());
         t.queued(W, present);
@@ -852,9 +889,10 @@ mod tests {
         let mut t = tracker(&[A]);
         t.put(A, 1, true);
         t.settle(A, 1);
-        t.pin(A, 1);
+        t.pin(A, 1, W);
         t.put(A, 2, true);
         t.settle(A, 2);
+        t.carry(W + 1, HashMap::new());
         assert!(frames(&mut t, A).is_empty());
         t.carry(W, [(A, 1)].into());
         t.queued(W, 1);
@@ -897,7 +935,7 @@ mod tests {
                 presents.push((present, frame));
             } else {
                 t.settle(A, frame);
-                t.pin(A, frame);
+                t.pin(A, frame, W);
                 t.carry(W, [(A, frame)].into());
             }
             t.carry(W, [(A, frame)].into());

@@ -507,6 +507,8 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         idle::rearm_paced(window, pump_frame, Some(idle::CLOAKED_INTERVAL));
         return;
     }
+    #[cfg(windows)]
+    sk_tree::latch_surface_frames(window);
     perf::frame();
     background::note_frame();
     // Before the poison gate: a worker's log is what an agent wants once JS has given up.

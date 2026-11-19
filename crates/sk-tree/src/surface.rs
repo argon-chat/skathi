@@ -540,10 +540,10 @@ impl State {
     }
 
     /// The tick is writing `frame`; called under the lock it read the frame with.
-    pub(crate) fn pin(&mut self, frame: u64) {
-        if self.watched {
+    pub(crate) fn pin(&mut self, frame: u64, window: Option<u64>) {
+        if let Some(window) = window.filter(|_| self.watched) {
             let key = self.key;
-            feedback::with(|t| t.pin(key, frame));
+            feedback::with(|t| t.pin(key, frame, window));
         }
     }
 

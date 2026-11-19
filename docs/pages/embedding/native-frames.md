@@ -263,6 +263,10 @@ let frame = surface.present_bgra(&pixels, w, h, stride)?; // the id that event c
 
 - **No timeout is needed.** A frame resolves when the display shows a window present carrying it, or when one of the above makes that impossible. Only a stalled UI thread, which draws no window, can hold a frame unresolved; a newer present still supersedes it at once.
 
+On Windows the main window holds the newest ready D3D12 frame at the start of its refresh, before timers and animation callbacks run. A copy that finishes during those callbacks can be shown on the next refresh (since 0.6).
+
+With `SK_LOG=sk_tree::surface::feedback=debug`, each `Superseded` frame logs its surface name, frame ID and the reason it lost its last chance to be shown. For per-frame timing, `SK_LOG=sk_tree::surface::feedback=trace,gpui_windows::vsync=trace` also logs D3D12 copies, the frames chosen by each tick, window presents and Windows refreshes in the `monotonic_ns()` clock (since 0.6).
+
 ### Precision
 
 `precision` says how `shown_at` was known:

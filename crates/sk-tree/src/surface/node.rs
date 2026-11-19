@@ -17,6 +17,8 @@ struct Node {
     surface: SurfaceHandle,
     window: WinKey,
     tile: Option<LiveTile>,
+    #[cfg(windows)]
+    latched: Option<super::d3d12::Ready>,
     /// The surface's `seq` the tile holds (or that cleared it).
     seen: u64,
     /// The id of the frame the tile holds.
@@ -80,6 +82,8 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
             surface: super::surface(name),
             window: win,
             tile: None,
+            #[cfg(windows)]
+            latched: None,
             seen: 0,
             frame: 0,
             painted: (0, 0, 1.0),
@@ -300,12 +304,28 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     draw
 }
 
-/// Tells present feedback which frame of each surface `here`'s next present shows.
-fn carry(window: &Window, here: WinKey) {
-    if !feedback::watching() {
+#[cfg(windows)]
+pub(crate) fn latch_d3d12(window: &Window) {
+    if !super::any() {
         return;
     }
-    let Some(key) = PRESENT_KEYS.with(|k| {
+    let here = windows::key(window);
+    let key = present_key(window, here);
+    NODES.with_borrow_mut(|nodes| {
+        for node in nodes
+            .values_mut()
+            .filter(|node| node.window == here && node.visible)
+        {
+            node.latched = node.surface.lock_state().latch_d3d12(node.seen, key);
+        }
+    });
+}
+
+fn present_key(window: &Window, here: WinKey) -> Option<u64> {
+    if !feedback::watching() {
+        return None;
+    }
+    PRESENT_KEYS.with(|k| {
         let mut keys = k.borrow_mut();
         if let Some(&key) = keys.get(&here) {
             return Some(key);
@@ -313,7 +333,12 @@ fn carry(window: &Window, here: WinKey) {
         let key = feedback::window_key(window, here)?;
         keys.insert(here, key);
         Some(key)
-    }) else {
+    })
+}
+
+/// Tells present feedback which frame of each surface `here`'s next present shows.
+fn carry(window: &Window, here: WinKey) {
+    let Some(key) = present_key(window, here) else {
         return;
     };
     let carrying = NODES.with(|m| {
@@ -421,8 +446,10 @@ fn write(
     let locked = {
         let mut st = node.surface.lock_state();
         #[cfg(windows)]
+        let latched = node.latched.take();
+        #[cfg(windows)]
         let texture = match st.frame {
-            Some(Frame::D3D12 { .. }) => st.gpu12.ready().map(Gpu::D3D12),
+            Some(Frame::D3D12 { .. }) => st.gpu12.for_tick(latched).map(Gpu::D3D12),
             // Only a visible node's tick may draw a half-float frame's mapping.
             Some(Frame::Gpu { .. }) if node.visible && st.seq != node.seen => {
                 match st.gpu_texture(hdr) {
@@ -443,6 +470,9 @@ fn write(
         #[cfg(not(any(windows, target_os = "macos")))]
         let texture = ();
         let copied = copied(&texture);
+        if let Some((done, (_, ready, _))) = copied {
+            log::trace!(target: "sk_tree::surface::feedback", "{} tick node={id} latest={} selected={ready} done={done}", feedback::monotonic_ns(), st.frame_id);
+        }
         let showable = match copied {
             Some((done, (_, frame, _))) => done.then_some(frame),
             None => st.frame.is_some().then_some(st.frame_id),
@@ -450,7 +480,7 @@ fn write(
         if let Some(frame) = showable {
             st.settle(frame);
             if node.visible && st.seq != node.seen {
-                st.pin(frame);
+                st.pin(frame, present_key(window, here));
             }
         }
         (
