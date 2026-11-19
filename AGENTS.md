@@ -27,7 +27,7 @@ JS, from the repo root (one bun workspace):
 
 ```
 bun install
-bun run test             # runtime and CLI unit tests; builds sk check's CSS checker (rustup target add wasm32-unknown-unknown)
+bun run test             # runtime and CLI unit tests
 bun run typecheck        # needs Node on PATH: vue-tsc run by bun cannot resolve .vue imports
 bun run preludes         # regenerate crates/sk-app/src/{prelude,window.prelude}.js
 bun run preludes:check

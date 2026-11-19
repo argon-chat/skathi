@@ -209,6 +209,8 @@ jobs:
       - name: Check the tag
         run: bun scripts/release-hosts.ts --check-tag "$TAG"
       - uses: ./.github/actions/css-checker
+        with:
+          release: true
       # bun pm pack writes workspace:* as the real version; the licenses live at the repo root. The CLI
       # downloads the gallery templates at the commit the templates submodule is pinned to.
       - name: Pack

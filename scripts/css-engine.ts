@@ -1,15 +1,17 @@
 // Builds packages/cli/check/sk-css.wasm.br, the CSS checker `sk check` runs: sk-css's css-check example for
-// wasm32-unknown-unknown, trimmed with Binaryen (the root `binaryen` devDependency) and brotli-compressed. A custom
-// section stamps it with a hash of every input, so --ensure rebuilds only a missing or stale module.
+// wasm32-unknown-unknown, brotli-compressed. A --release build (the npm package) is first trimmed with Binaryen (the
+// root `binaryen` devDependency), which takes about a minute; a dev build (tests, `sk check` from a checkout) is an
+// incremental cargo build, used as is. A custom section stamps the module with a hash of every input and the kind of build, so
+// --ensure rebuilds only a missing or stale module, and a dev module never passes for a release one.
 //
-//   bun scripts/css-engine.ts            build
-//   bun scripts/css-engine.ts --ensure   build when missing or stale
+//   bun scripts/css-engine.ts [--release]            build
+//   bun scripts/css-engine.ts --ensure [--release]   build when missing or stale
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants } from "node:zlib";
 
 const root = resolve(import.meta.dir, "..");
 const target = resolve(root, process.env.CARGO_TARGET_DIR ?? "target");
@@ -112,7 +114,7 @@ function binaryen(): { dir: string; version: string } {
   };
 }
 
-function digest(): Buffer {
+function sourceDigest(): Buffer {
   const { manifests, dirs, files } = inputs();
   const all = new Set([...manifests, ...files, "rust-toolchain.toml", ".cargo/config.toml", "scripts/css-engine.ts"]);
   const contents = new Map<string, Buffer>();
@@ -131,7 +133,7 @@ function digest(): Buffer {
     }
   }
   for (const path of contents.keys()) all.add(path);
-  const hash = createHash("sha256").update("binaryen " + binaryen().version + "\0");
+  const hash = createHash("sha256");
   for (const path of [...all].sort()) {
     hash
       .update(path)
@@ -142,15 +144,21 @@ function digest(): Buffer {
   return hash.digest();
 }
 
+const stampOf = (sources: Buffer, release: boolean) =>
+  createHash("sha256")
+    .update(release ? "release, binaryen " + binaryen().version : "dev")
+    .update("\0")
+    .update(sources)
+    .digest();
+
 /** The custom section build() appends last. */
 const stampSection = (stamp: Buffer) =>
   Buffer.concat([Buffer.from([0, section.length + 1 + stamp.length, section.length]), Buffer.from(section), stamp]);
 
-function current(stamp: Buffer): boolean {
+function current(accepted: Buffer[]): boolean {
   try {
-    return brotliDecompressSync(readFileSync(output))
-      .subarray(-stamp.length - section.length - 3)
-      .equals(stampSection(stamp));
+    const module = brotliDecompressSync(readFileSync(output));
+    return accepted.some((stamp) => module.subarray(-stamp.length - section.length - 3).equals(stampSection(stamp)));
   } catch {
     return false;
   }
@@ -167,14 +175,42 @@ function run(command: string, args: string[], quiet: boolean, failure: string) {
   throw new Error(failure + (r.error ? ": " + r.error.message : ""));
 }
 
-function build(stamp: Buffer, quiet: boolean) {
+function build(sources: Buffer, release: boolean, quiet: boolean) {
+  // Release code generation without LTO, incremental, in many units: an sk-css edit rebuilds in seconds, not a minute.
+  const profile = release
+    ? ["--release"]
+    : [
+        "--profile",
+        "css-dev",
+        ...['inherits="release"', "lto=false", "codegen-units=256", "incremental=true"].flatMap((s) => [
+          "--config",
+          "profile.css-dev." + s,
+        ]),
+      ];
   run(
     "cargo",
-    ["build", "--locked", "--release", "--target", "wasm32-unknown-unknown", "-p", "sk-css", "--example", "css-check"],
+    ["build", "--locked", ...profile, "--target", "wasm32-unknown-unknown", "-p", "sk-css", "--example", "css-check"],
     quiet,
     "cargo build of the css-check example failed. It needs the wasm32-unknown-unknown target: rustup target add wasm32-unknown-unknown",
   );
-  const wasm = join(target, "wasm32-unknown-unknown/release/examples/css_check.wasm");
+  const wasm = join(target, "wasm32-unknown-unknown", release ? "release" : "css-dev", "examples/css_check.wasm");
+  const bytes = release ? optimize(wasm, quiet) : readFileSync(wasm);
+  for (const i of WebAssembly.Module.imports(new WebAssembly.Module(bytes))) {
+    if (
+      (i.module === "sk" && ["read", "write"].includes(i.name)) ||
+      (i.module === "__wbindgen_placeholder__" && /^__wbg___wbindgen_throw_[a-f0-9]+$/.test(i.name)) ||
+      (!release && i.module.startsWith("__wbindgen_"))
+    )
+      continue;
+    throw new Error("Unexpected checker import: " + i.module + "." + i.name);
+  }
+  const module = Buffer.concat([bytes, stampSection(stampOf(sources, release))]);
+  const quality = release ? constants.BROTLI_MAX_QUALITY : 4;
+  writeFileSync(output + ".tmp", brotliCompressSync(module, { params: { [constants.BROTLI_PARAM_QUALITY]: quality } }));
+  renameSync(output + ".tmp", output);
+}
+
+function optimize(wasm: string, quiet: boolean) {
   const graph = join(target, "css-check-exports.json");
   const pruned = join(target, "css-check-pruned.wasm");
   const optimized = join(target, "css-check-opt.wasm");
@@ -206,31 +242,22 @@ function build(stamp: Buffer, quiet: boolean) {
     quiet,
     "wasm-opt failed",
   );
-  const bytes = readFileSync(optimized);
-  for (const i of WebAssembly.Module.imports(new WebAssembly.Module(bytes))) {
-    if (
-      (i.module === "sk" && ["read", "write"].includes(i.name)) ||
-      (i.module === "__wbindgen_placeholder__" && /^__wbg___wbindgen_throw_[a-f0-9]+$/.test(i.name))
-    )
-      continue;
-    throw new Error("Unexpected checker import: " + i.module + "." + i.name);
-  }
-  writeFileSync(output + ".tmp", brotliCompressSync(Buffer.concat([bytes, stampSection(stamp)])));
-  renameSync(output + ".tmp", output);
+  return readFileSync(optimized);
 }
 
-/** Builds the checker when it is missing or stale, saying so in one line on stderr. */
-export function ensureCssEngine() {
-  const stamp = digest();
-  if (current(stamp)) return;
-  console.error("Building the CSS checker (sk-css for wasm32-unknown-unknown)");
-  build(stamp, true);
+/** Builds the checker when it is missing or stale, saying so in one line on stderr. A release module serves dev too. */
+export function ensureCssEngine(release = false) {
+  const sources = sourceDigest();
+  if (current(release ? [stampOf(sources, true)] : [stampOf(sources, false), stampOf(sources, true)])) return;
+  console.error(`Building the CSS checker (sk-css for wasm32-unknown-unknown${release ? ", optimized" : ""})`);
+  build(sources, release, true);
 }
 
 if (import.meta.main) {
   try {
-    if (process.argv.includes("--ensure")) ensureCssEngine();
-    else build(digest(), false);
+    const release = process.argv.includes("--release");
+    if (process.argv.includes("--ensure")) ensureCssEngine(release);
+    else build(sourceDigest(), release, false);
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(1);

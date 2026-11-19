@@ -58,13 +58,17 @@ function loadEngine() {
       },
     },
   };
-  const binding = WebAssembly.Module.imports(module).find((i) => i.module === "__wbindgen_placeholder__");
-  if (binding)
-    imports[binding.module] = {
-      [binding.name]: (pointer: number, length: number) => {
-        throw new Error(decode(pointer, length));
-      },
-    };
+  // wasm-bindgen's imports; an unoptimized checkout build still lists the unused ones.
+  for (const { module: from, name } of WebAssembly.Module.imports(module)) {
+    if (from === "sk") continue;
+    (imports[from] ??= {})[name] = /^__wbg___wbindgen_throw_/.test(name)
+      ? (pointer: number, length: number) => {
+          throw new Error(decode(pointer, length));
+        }
+      : () => {
+          throw new Error(`The CSS checker called ${from}.${name}, which it does not provide.`);
+        };
+  }
   const exports = new WebAssembly.Instance(module, imports).exports as unknown as Checker;
   return (block: { nodes: CssNode[]; tag: string | null; tailwind: boolean }) => {
     input = new TextEncoder().encode(JSON.stringify(block));
