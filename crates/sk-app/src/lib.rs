@@ -1314,6 +1314,7 @@ fn run_app() {
                 },
                 // The armed pump must not opt the window into the 33 ms unfocused throttle (JS timers would coarsen).
                 inactive_frame_interval: None,
+                low_latency_surface: cfg.low_latency_surface,
                 // Maps to `SW_SHOWNOACTIVATE`: F12 shows the inspector without taking the caret from the app.
                 show: startup_visible && !defer_reveal,
                 focus: startup_focus,

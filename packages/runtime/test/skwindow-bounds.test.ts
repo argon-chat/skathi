@@ -42,10 +42,12 @@ test("SkWindow applies live and pre-open bounds without remounting or activating
   });
   const bounds = ref({ x: 10, y: 20, width: 300, height: 180 });
   const app = renderer.createApp({
-    render: () => h(SkWindow, { bounds: bounds.value, activate: false, contentProtection: true }),
+    render: () =>
+      h(SkWindow, { bounds: bounds.value, activate: false, contentProtection: true, lowLatencySurface: true }),
   });
   app.mount({ children: [] });
   expect(opened).toHaveLength(1);
+  expect(opened[0]).toEqual([expect.any(Number), expect.objectContaining({ lowLatencySurface: true })]);
   bounds.value.x = 30;
   await nextTick();
   expect(changed).toHaveLength(0);

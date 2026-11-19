@@ -112,6 +112,7 @@ struct Popout {
     backdrop: Backdrop,
     /// Creation-time: changing one only advises.
     resizable: bool,
+    low_latency_surface: bool,
     min_size: (Option<f32>, Option<f32>),
     /// Last `(width, height)` reported to JS, so `resize` fires on change.
     last_metrics: (f32, f32),
@@ -232,6 +233,7 @@ struct Options {
     taskbar: bool,
     /// Images it shows keep their full decode. Live.
     full_resolution: bool,
+    low_latency_surface: bool,
     /// Live.
     ignore_mouse_events: bool,
     /// `false`: never activated, no taskbar button, unknown to the shell. Creation-time.
@@ -277,6 +279,7 @@ fn parse_options(raw: &str) -> Options {
         os_chrome: !matches!(text("chrome").as_deref(), Some("hidden")),
         backdrop,
         always_on_top: flag("alwaysOnTop").unwrap_or(false),
+        low_latency_surface: flag("lowLatencySurface").unwrap_or(false),
         resizable: flag("resizable").unwrap_or(true),
         min_width: num("minWidth").map(|n| n as f32),
         min_height: num("minHeight").map(|n| n as f32),
@@ -387,11 +390,14 @@ host_fn!(fn sk_window_set_options(g, args) {
         let w = &p[i];
         (w.handle, w.title.clone(), w.os_chrome, w.visible, w.cover, w.taskbar, w.focusable)
     });
-    let (old_resizable, old_min_size, old_backdrop, old_title_bar_height) = POPOUTS.with(|p| {
+    let (old_resizable, old_min_size, old_backdrop, old_title_bar_height, old_low_latency_surface) = POPOUTS.with(|p| {
         let w = &p.borrow()[i];
-        (w.resizable, w.min_size, w.backdrop, w.title_bar_height)
+        (w.resizable, w.min_size, w.backdrop, w.title_bar_height, w.low_latency_surface)
     });
     let opts = parse_options(&raw);
+    if opts.low_latency_surface != old_low_latency_surface {
+        crate::window::advise("Reopen the SkWindow to change lowLatencySurface.");
+    }
     if opts.resizable != old_resizable {
         crate::window::advise(
             "<SkWindow resizable>: whether a window can be resized is decided when it is created \
@@ -936,6 +942,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
                 ..Default::default()
             }),
             is_resizable: opts.resizable,
+            low_latency_surface: opts.low_latency_surface,
             focus: activate && !crate::quiet::never_focus(),
             window_min_size: match (opts.min_width, opts.min_height) {
                 (None, None) => None,
@@ -1028,6 +1035,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
                 .backdrop
                 .unwrap_or_else(|| crate::window::config().backdrop),
             resizable: opts.resizable,
+            low_latency_surface: opts.low_latency_surface,
             min_size: (opts.min_width, opts.min_height),
             last_metrics: (0.0, 0.0),
             last_focused: false,
@@ -1512,9 +1520,10 @@ mod tests {
 
     #[test]
     fn options_are_read_off_the_json() {
+        assert!(!parse_options("{}").low_latency_surface);
         let o = parse_options(
             r#"{"title":"Palette","x":100,"y":200,"width":300,"height":150,
-                "chrome":"hidden","alwaysOnTop":true,"resizable":false,
+                "chrome":"hidden","alwaysOnTop":true,"resizable":false,"lowLatencySurface":true,
                 "minWidth":120,"minHeight":90,"backdrop":"acrylic"}"#,
         );
         assert_eq!(o.title, "Palette");
@@ -1523,6 +1532,7 @@ mod tests {
         assert_eq!((o.width, o.height), (300.0, 150.0));
         assert!(!o.os_chrome);
         assert!(o.always_on_top);
+        assert!(o.low_latency_surface);
         assert!(!o.resizable);
         assert_eq!(o.min_width, Some(120.0));
         assert_eq!(o.min_height, Some(90.0));

@@ -259,6 +259,7 @@ pub struct Config {
     pub minimizable: bool,
     pub maximizable: bool,
     pub always_on_top: bool,
+    pub low_latency_surface: bool,
     /// `window.focus()`: `false` = `request_attention` (never steals focus), `true` = `activate_window`.
     pub focus_raise: bool,
     /// `false` means no listener, handshake file or F12, since the port carries `eval`. `SK_DEVTOOLS=1` overrides it.
@@ -288,6 +289,7 @@ impl Default for Config {
             minimizable: true,
             maximizable: true,
             always_on_top: false,
+            low_latency_surface: false,
             focus_raise: false,
             devtools: true,
             devtools_key: true,
@@ -418,6 +420,7 @@ pub fn load_config(raw: Option<String>) -> Config {
             ("minimizable", &mut cfg.minimizable),
             ("maximizable", &mut cfg.maximizable),
             ("alwaysOnTop", &mut cfg.always_on_top),
+            ("lowLatencySurface", &mut cfg.low_latency_surface),
         ] {
             if let Some(b) = bool_of(&v, key) {
                 *slot = b;
@@ -2713,6 +2716,12 @@ mod tests {
             None,
             "focus is independent of visibility"
         );
+    }
+
+    #[test]
+    fn low_latency_surface_is_opt_in_for_the_main_window() {
+        assert!(!load_config(None).low_latency_surface);
+        assert!(load_config(Some(r#"{"lowLatencySurface":true}"#.into())).low_latency_surface);
     }
 
     #[test]

@@ -376,6 +376,12 @@ The rule also accounts for what has worked elsewhere: 0.05 for a 3–4 ms render
 
 How much the start matters depends on the machine. At 240 Hz, one user measured 93–97 % of frames on the intended refresh whether the render started at 0.05 or at 0.5 of the refresh. The frames that missed there were lost in DWM, not to the tick; see below.
 
+### Low-latency presentation on macOS (since 0.6)
+
+Set `"window": { "lowLatencySurface": true }` in `sk.config.json` for the main window. For a separate player window, pass `lowLatencySurface={true}` to the Svelte `<SkWindow>` or `:low-latency-surface="true"` to the Vue component. Each window reads the option when it opens.
+
+The window requests its own Metal drawable on demand and presents with display sync enabled. A seek after a pause can draw immediately. During playback a local timer paces continuous updates at the screen's reported maximum refresh rate. UI animations in that window can look less even on a variable-refresh display. The default uses the platform display link.
+
 ### Exact frame feedback on Windows (since 0.5)
 
 On Windows, a frame presented in time can still reach the screen a refresh late. DWM starts composing a refresh when the first update for it arrives; when another application's window updated first, a window present that comes later in the same refresh waits for the next one. One user measured 1.7–4.1 % of frames late at 240 Hz, with another application animating at 25 Hz on the same desktop. Those frames are reported `Estimated`, and on the refresh they missed: the vsync thread reads the swap chain's statistics as the vblank wait returns, before DWM has published them for that refresh.

@@ -60,6 +60,8 @@ export interface SkWindowOptions {
   taskbar?: boolean | undefined;
   /** Keep the full image decode while shown here (no reduced copy for small draws). Live. */
   fullResolution?: boolean | undefined;
+  /** Uses a local frame timer for this macOS window. Default false. Creation-time only. */
+  lowLatencySurface?: boolean | undefined;
   /** The mouse passes THROUGH the whole window to whatever is under it. Live. */
   ignoreMouseEvents?: boolean | undefined;
   /** Default true. `false`: never activated, no taskbar or Alt-Tab entry, no keyboard. Creation-time only. */
@@ -104,7 +106,16 @@ export interface SkWindowPopout {
 }
 
 /** Props fixed at window creation; changing one on a live window advises and does nothing (close and re-open via `v-if` or a `:key`). */
-const CREATION_TIME_ONLY = ["chrome", "resizable", "minWidth", "minHeight", "cover", "taskbar", "focusable"] as const;
+const CREATION_TIME_ONLY = [
+  "chrome",
+  "resizable",
+  "minWidth",
+  "minHeight",
+  "cover",
+  "taskbar",
+  "focusable",
+  "lowLatencySurface",
+] as const;
 
 /** Symbol prop marking a window's painted root: Vue's `for…in` skips symbols so it never reaches the host, yet `createElement` registers the element before its children mount. */
 export const WINDOW_ROOT: unique symbol = Symbol("sk-window-root");
@@ -147,6 +158,7 @@ interface OpenOptions extends SkWindowBounds {
   cover?: string;
   taskbar: boolean;
   fullResolution: boolean;
+  lowLatencySurface?: boolean;
   ignoreMouseEvents: boolean;
   focusable: boolean;
   contentProtection: boolean;
@@ -181,6 +193,7 @@ export function createSkWindowPopout(
       contentProtection: p.contentProtection ?? DEFAULTS.contentProtection,
     };
     if (p.monitor !== undefined) o.monitor = p.monitor;
+    if (p.lowLatencySurface !== undefined) o.lowLatencySurface = p.lowLatencySurface;
     if (p.backdrop !== undefined) o.backdrop = p.backdrop;
     if (p.minWidth !== undefined) o.minWidth = p.minWidth;
     if (p.minHeight !== undefined) o.minHeight = p.minHeight;

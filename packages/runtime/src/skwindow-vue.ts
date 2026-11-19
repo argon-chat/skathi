@@ -65,6 +65,8 @@ export const SkWindow = /*@__PURE__*/ defineComponent({
     taskbar: { type: Boolean, default: undefined },
     /** Keep the full image decode while shown here (no reduced copy for small draws). Live. */
     fullResolution: { type: Boolean, default: undefined },
+    /** Uses the window's own frame timer on macOS. Creation-time only. */
+    lowLatencySurface: { type: Boolean, default: undefined },
     /** The mouse passes THROUGH the whole window to whatever is under it (Electron `setIgnoreMouseEvents(true)`). Live. */
     ignoreMouseEvents: { type: Boolean, default: undefined },
     /** Default true. `false`: never activated, no taskbar or Alt-Tab entry, no keyboard (Electron `focusable: false`). Creation-time only. */
