@@ -154,7 +154,7 @@ On a standard window every frame is mapped into the window's 8-bit sRGB: each ch
 - **SDR content looks exactly as on the 8-bit path.** Linearise your 8-bit sRGB frames with the sRGB EOTF and they look identical to the BGRA8 path: Skathi's tests put all 256 sRGB code values through half floats and get every one back unchanged, on Direct3D 11, Direct3D 12 and Metal.
 - **Highlights clip.** A producer that has highlights above 1.0 and wants them rolled off rather than clipped tone-maps them itself, to the element's [`content_headroom()`](#a-video-player).
 
-GPU frames stay half float in the surface's own textures; an element maps a frame into an 8-bit texture when it first draws it, on the GPU, so a frame replaced before it is shown is never mapped. CPU frames are mapped when presented, on the producer's thread, through a table. A half-float frame takes twice the memory of an 8-bit one, and the mapping costs one small GPU pass per frame shown.
+GPU frames stay half float in the surface's own textures. An SDR window maps a frame into an 8-bit texture on its first draw. An HDR window copies the half-float frame into its HDR atlas tile. On Windows D3D12, the slot allocates an 8-bit texture only on its first SDR read and keeps it until the slot retires (since 0.6). CPU frames are mapped when presented, on the producer's thread, through a table. A half-float frame takes twice the memory of an 8-bit one. Each GPU frame shown in SDR needs one conversion pass.
 
 ### HDR windows
 
