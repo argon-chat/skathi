@@ -50,7 +50,12 @@ import {
   imageTemplatePath,
   inspectorContainerPath,
 } from "../packages/cli/cli/host";
-import { appendImageSections, containerName, INSPECTOR_SECTIONS } from "../packages/cli/cli/image-sections";
+import {
+  appendImageSections,
+  containerName,
+  INSPECTOR_SECTIONS,
+  withUnwindTable,
+} from "../packages/cli/cli/image-sections";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -264,13 +269,14 @@ for (const variant of variants) {
   const container = inspectorContainerPath({ exe, info });
   if (container) {
     if (!inspector) throw new Error(`${exe} runs its inspector from ${container}, but no --native-inspector was given`);
-    const bytes = appendImageSections(
+    const sections = appendImageSections(
       new Uint8Array(readFileSync(imageTemplatePath({ exe }))),
       new Uint8Array(readFileSync(inspectorImage(inspector))),
       INSPECTOR_SECTIONS,
     );
-    writeFileSync(container, bytes);
-    entry.inspector = besideAsset(inspectorAssetName(platform, arch), bytes);
+    const containerBytes = withUnwindTable(sections, [INSPECTOR_SECTIONS]);
+    writeFileSync(container, containerBytes);
+    entry.inspector = besideAsset(inspectorAssetName(platform, arch), containerBytes);
   }
   entries.push(entry);
   console.log(`[release] ${file}: ${(bytes.length / 1048576).toFixed(1)} MB, cargo ${(ms / 1000).toFixed(0)} s`);

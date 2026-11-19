@@ -1,6 +1,6 @@
-// Native images as PE sections, written into a copy of a signed SYSTEM exe and checked the way Windows reads it:
-// MapFileAndCheckSumW for the checksum, and the image loader's own mapping (LOAD_LIBRARY_AS_IMAGE_RESOURCE) for
-// where each part lands and how it is protected.
+// Native images as PE sections, written into a copy of a signed system exe and of the container template, and checked
+// the way Windows reads them: MapFileAndCheckSumW for the checksum, the loader's own mapping for where each part lands
+// and how it is protected, and the unwinder's lookup for a container's code.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { dlopen, FFIType, ptr, toArrayBuffer } from "bun:ffi";
@@ -14,6 +14,7 @@ import {
   INSPECTOR_SECTIONS,
   PAGE,
   readImageSections,
+  withUnwindTable,
 } from "../cli/image-sections";
 
 const WHOAMI = "C:\\Windows\\System32\\whoami.exe";
@@ -44,6 +45,11 @@ describe.skipIf(!isWindows)("image sections", () => {
         LoadLibraryExW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.ptr },
         FreeLibrary: { args: [FFIType.ptr], returns: FFIType.i32 },
         VirtualQuery: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.u64 },
+      })
+    : null;
+  const ntdll = isWindows
+    ? dlopen("ntdll.dll", {
+        RtlLookupFunctionEntry: { args: [FFIType.u64, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
       })
     : null;
   const imagehlp = isWindows
@@ -147,5 +153,59 @@ describe.skipIf(!isWindows)("image sections", () => {
     expect(() => appendImageSections(new Uint8Array(readFileSync(WHOAMI)), short, APP_SECTIONS)).toThrow(
       /does not describe/,
     );
+  });
+
+  test("a container the loader maps keeps each part's protection and tells the unwinder about its code", () => {
+    const app = image(4, 2, 3);
+    const bytes = withUnwindTable(
+      appendImageSections(new Uint8Array(Buffer.from(TEMPLATE, "base64")), app, APP_SECTIONS),
+      [APP_SECTIONS],
+    );
+    const path = join(dir, "container.dll");
+    writeFileSync(path, bytes);
+    const header = new Uint32Array(1);
+    const computed = new Uint32Array(1);
+    expect(imagehlp!.symbols.MapFileAndCheckSumW(ptr(wide(path)), ptr(header), ptr(computed))).toBe(0);
+    expect(header[0]).toBe(computed[0]!);
+    // A real load, as the host does it: the container has no entry point and no imports.
+    const module = kernel!.symbols.LoadLibraryExW(ptr(wide(path)), null, 0x800); // LOAD_LIBRARY_SEARCH_SYSTEM32
+    expect(module).toBeTruthy();
+    try {
+      const base = Number(module);
+      const pe = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0x3c, true);
+      const table = pe + 24 + new DataView(bytes.buffer, bytes.byteOffset).getUint16(pe + 20, true);
+      const view = new DataView(bytes.buffer, bytes.byteOffset);
+      const address = (name: string) => {
+        for (let i = 0; i < view.getUint16(pe + 6, true); i++) {
+          const at = table + i * 40;
+          if (new TextDecoder().decode(bytes.subarray(at, at + 8)).replace(/ +$/, "") === name)
+            return view.getUint32(at + 12, true);
+        }
+        throw new Error(name);
+      };
+      const protect = (rva: number) => {
+        const info = new BigUint64Array(6);
+        kernel!.symbols.VirtualQuery(base + rva, ptr(info), 48);
+        return Number(info[4]! >> 32n);
+      };
+      expect(protect(address(APP_SECTIONS.header))).toBe(0x02);
+      expect(protect(address(APP_SECTIONS.code))).toBe(0x20);
+      expect(protect(address(APP_SECTIONS.data))).toBe(0x02);
+      expect(new Uint8Array(toArrayBuffer(base + address(APP_SECTIONS.header), 0, app.length))).toEqual(app);
+      const imageBase = new BigUint64Array(1);
+      const entry = ntdll!.symbols.RtlLookupFunctionEntry(
+        BigInt(base + address(APP_SECTIONS.code) + 100),
+        ptr(imageBase),
+        null,
+      );
+      expect(entry).toBeTruthy();
+      expect(Number(imageBase[0])).toBe(base);
+      expect(new Uint32Array(toArrayBuffer(entry!, 0, 12))[0]).toBe(address(APP_SECTIONS.code));
+      expect(
+        ntdll!.symbols.RtlLookupFunctionEntry(BigInt(base + address(APP_SECTIONS.header)), ptr(imageBase), null),
+      ).toBeNull();
+    } finally {
+      kernel!.symbols.FreeLibrary(module);
+    }
   });
 });

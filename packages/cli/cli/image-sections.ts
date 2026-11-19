@@ -1,13 +1,14 @@
 // Native AOT images as PE sections, written without a linker. `sk build --aot` appends the app's image (and, with
 // devtools, the inspector's) to a copy of the workload's empty `skimage.dll` beside the exe, or with
 // "publishSingleFile" to the exe itself. The image stays uncompressed and keeps one contiguous, page-aligned range
-// in the file and in memory, so the host maps it where it lies: the loader maps the exe's sections, and the engine
-// maps a container's range from its file (crates/sk-app/src/native_aot/container.rs).
+// in the file and in memory: the Windows loader maps the exe's sections, or the container's when the host loads it
+// with LoadLibraryExW, and the engine runs the image where it lies (crates/sk-app/src/native_aot/container.rs).
 //
 // Three sections per image, so the loader protects each part as the engine would: the header and tables read-only,
-// the code read-and-execute, the rest read-only. Writing them strips a certificate table (sign afterwards) and
-// rewrites the section table, SizeOfImage, SizeOfCode, SizeOfInitializedData and CheckSum; when the section table
-// has no room, the headers grow and every file offset behind them moves (sections, the debug directory).
+// the code read-and-execute, the rest read-only. A container also gets an exception directory over the code, so stack
+// walks go through it. Writing sections strips a certificate table (sign afterwards) and rewrites the section table,
+// SizeOfImage, SizeOfCode, SizeOfInitializedData and CheckSum; when the section table has no room, the headers grow
+// and every file offset behind them moves (sections, the debug directory).
 
 import type { Platform } from "./platform";
 
@@ -66,6 +67,7 @@ const SCN_INITIALIZED_DATA = 0x00000040;
 const SCN_EXECUTE = 0x20000000;
 const SCN_READ = 0x40000000;
 const SECTION_HEADER = 40;
+const DIRECTORY_EXCEPTION = 3;
 const DIRECTORY_SECURITY = 4;
 const DIRECTORY_DEBUG = 6;
 
@@ -221,16 +223,67 @@ function withoutCertificate(pe: Pe): Pe {
   return new Pe(pe.bytes.slice(0, security.address));
 }
 
-/** A copy of the PE file `bytes` with `image` appended as the three sections `names`. */
-export function appendImageSections(bytes: Uint8Array, image: Uint8Array, names: ImageSectionNames): Uint8Array {
-  const layout = imageLayout(image);
-  let pe = withoutCertificate(new Pe(bytes.slice()));
+interface Part {
+  name: string;
+  start: number;
+  end: number;
+  flags: number;
+}
+
+/** A copy of `pe` with `content` appended, page-aligned in the file and in memory, as the sections `parts` (ranges of it). */
+function appendSections(pe: Pe, content: Uint8Array, parts: Part[]): Pe {
+  pe = makeRoom(pe, parts.length);
+  const sections = pe.sections();
+  const rawStart = alignUp(pe.bytes.length, PAGE);
+  const addressStart = alignUp(
+    Math.max(...sections.map((s) => s.virtualAddress + Math.max(s.virtualSize, s.rawSize))),
+    PAGE,
+  );
+  const file = new Uint8Array(rawStart + alignUp(content.length, PAGE));
+  file.set(pe.bytes);
+  file.set(content, rawStart);
+  const out = new Pe(file);
+  let code = 0;
+  let data = 0;
+  parts.forEach((part, index) => {
+    const at = out.table + (out.count + index) * SECTION_HEADER;
+    const size = part.end - part.start;
+    const rawSize = index === parts.length - 1 ? alignUp(content.length, PAGE) - part.start : size;
+    out.bytes.set(sectionName(part.name), at);
+    out.set32(at + 8, size);
+    out.set32(at + 12, addressStart + part.start);
+    out.set32(at + 16, rawSize);
+    out.set32(at + 20, rawStart + part.start);
+    out.set32(at + 36, part.flags);
+    if (part.flags & SCN_CODE) code += rawSize;
+    else data += rawSize;
+  });
+  out.set16(out.coff + 2, out.count + parts.length);
+  out.set32(out.optional + 4, out.u32(out.optional + 4) + code);
+  out.set32(out.optional + 8, out.u32(out.optional + 8) + data);
+  out.set32(out.optional + 56, addressStart + alignUp(content.length, PAGE));
+  return out;
+}
+
+function withChecksum(pe: Pe): Uint8Array {
+  pe.set32(pe.optional + 64, peChecksum(pe.bytes, pe.optional + 64));
+  return pe.bytes;
+}
+
+function checkAlignment(pe: Pe) {
   if (pe.sectionAlignment !== PAGE || pe.fileAlignment > PAGE) {
     throw new Error(
       `the PE file aligns sections to ${pe.sectionAlignment} bytes in memory and ${pe.fileAlignment} in the file; ` +
         `a native image needs ${PAGE} and at most ${PAGE}`,
     );
   }
+}
+
+/** A copy of the PE file `bytes` with `image` appended as the three sections `names`. */
+export function appendImageSections(bytes: Uint8Array, image: Uint8Array, names: ImageSectionNames): Uint8Array {
+  const layout = imageLayout(image);
+  const pe = withoutCertificate(new Pe(bytes.slice()));
+  checkAlignment(pe);
   if (pe.sections().some((s) => s.name === names.header)) {
     throw new Error(`the PE file already has a ${names.header} section`);
   }
@@ -249,37 +302,50 @@ export function appendImageSections(bytes: Uint8Array, image: Uint8Array, names:
       flags: SCN_INITIALIZED_DATA | SCN_READ,
     },
   ].filter((p) => p.end > p.start);
-  pe = makeRoom(pe, parts.length);
-  const sections = pe.sections();
-  const rawStart = alignUp(pe.bytes.length, PAGE);
-  const addressStart = alignUp(
-    Math.max(...sections.map((s) => s.virtualAddress + Math.max(s.virtualSize, s.rawSize))),
+  return withChecksum(appendSections(pe, image, parts));
+}
+
+/**
+ * A copy of the container `bytes` with an exception directory (`.pdata`) over the code of each image `images` names:
+ * one frame whose prologue is `push rbp; mov rbp, rsp`, as JavaScriptCore registers for its JIT pool. For code in a
+ * loaded module the unwinder reads only that module's table, so without it debuggers, crash dumps and SEH stop at
+ * the first frame of the image.
+ */
+export function withUnwindTable(bytes: Uint8Array, images: ImageSectionNames[]): Uint8Array {
+  const pe = withoutCertificate(new Pe(bytes.slice()));
+  checkAlignment(pe);
+  const exception = pe.directory(DIRECTORY_EXCEPTION);
+  if (!exception) throw new Error("the PE file has no exception directory entry");
+  if (exception.size) throw new Error("the PE file already has an exception directory");
+  const ranges = images
+    .map((names) => pe.sections().find((s) => s.name === names.code))
+    .filter((s) => s !== undefined)
+    .sort((a, b) => a.virtualAddress - b.virtualAddress);
+  if (!ranges.length) throw new Error("the PE file has none of the images' code sections");
+  const unwindAt = ranges.length * 12;
+  const table = new Uint8Array(unwindAt + 8);
+  const view = new DataView(table.buffer);
+  const address = alignUp(
+    Math.max(...pe.sections().map((s) => s.virtualAddress + Math.max(s.virtualSize, s.rawSize))),
     PAGE,
   );
-  const file = new Uint8Array(rawStart + layout.size);
-  file.set(pe.bytes);
-  file.set(image, rawStart);
-  const out = new Pe(file);
-  let code = 0;
-  let data = 0;
-  parts.forEach((part, index) => {
-    const at = out.table + (out.count + index) * SECTION_HEADER;
-    const size = part.end - part.start;
-    out.bytes.set(sectionName(part.name), at);
-    out.set32(at + 8, size);
-    out.set32(at + 12, addressStart + part.start);
-    out.set32(at + 16, size);
-    out.set32(at + 20, rawStart + part.start);
-    out.set32(at + 36, part.flags);
-    if (part.flags & SCN_CODE) code += size;
-    else data += size;
+  ranges.forEach((code, index) => {
+    view.setUint32(index * 12, code.virtualAddress, true);
+    view.setUint32(index * 12 + 4, code.virtualAddress + code.virtualSize, true);
+    view.setUint32(index * 12 + 8, address + unwindAt, true);
   });
-  out.set16(out.coff + 2, out.count + parts.length);
-  out.set32(out.optional + 4, out.u32(out.optional + 4) + code);
-  out.set32(out.optional + 8, out.u32(out.optional + 8) + data);
-  out.set32(out.optional + 56, addressStart + layout.size);
-  out.set32(out.optional + 64, peChecksum(out.bytes, out.optional + 64));
-  return out.bytes;
+  // UNWIND_INFO version 1, no handler; a 4-byte prologue; frame register rbp at offset 0; its codes in reverse
+  // order: UWOP_SET_FPREG at 4, UWOP_PUSH_NONVOL rbp at 1.
+  table.set([1, 4, 2, 5], unwindAt);
+  view.setUint16(unwindAt + 4, 4 | (3 << 8), true);
+  view.setUint16(unwindAt + 6, 1 | ((0 | (5 << 4)) << 8), true);
+  const out = appendSections(pe, table, [
+    { name: ".pdata", start: 0, end: table.length, flags: SCN_INITIALIZED_DATA | SCN_READ },
+  ]);
+  const directory = out.directory(DIRECTORY_EXCEPTION)!;
+  out.set32(directory.at, address);
+  out.set32(directory.at + 4, unwindAt);
+  return withChecksum(out);
 }
 
 /** The image a container or an exe holds in the sections `names`, or null. */

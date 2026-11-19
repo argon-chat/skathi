@@ -254,32 +254,29 @@ fn image_resource(dll: &str) -> Result<&'static [u8], String> {
 }
 
 /// Where a selected image's bytes are. None of them can change while the process uses them:
-/// files are opened denying writes, and a mapped image is the running executable's own.
+/// files are opened denying writes, and the loader keeps a mapped module's file from being written.
 enum Image {
     File(File),
-    Range { file: File, offset: u64, size: u64 },
+    /// Sections of the running executable.
     Mapped(&'static [u8]),
+    /// Sections of a container DLL the loader mapped.
+    Module(&'static [u8]),
 }
 impl Image {
     fn digest(&mut self) -> std::io::Result<String> {
-        use std::io::{Read, Seek, SeekFrom};
         match self {
             Image::File(file) => {
+                use std::io::Seek;
                 file.rewind()?;
                 aot::digest_reader(file)
             }
-            Image::Range { file, offset, size } => {
-                file.seek(SeekFrom::Start(*offset))?;
-                aot::digest_reader(file.take(*size))
-            }
-            Image::Mapped(bytes) => Ok(aot::digest_hex(bytes)),
+            Image::Mapped(bytes) | Image::Module(bytes) => Ok(aot::digest_hex(bytes)),
         }
     }
     fn size(&self) -> std::io::Result<u64> {
         match self {
             Image::File(file) => Ok(file.metadata()?.len()),
-            Image::Range { size, .. } => Ok(*size),
-            Image::Mapped(bytes) => Ok(bytes.len() as u64),
+            Image::Mapped(bytes) | Image::Module(bytes) => Ok(bytes.len() as u64),
         }
     }
     /// # Safety
@@ -288,10 +285,8 @@ impl Image {
         unsafe {
             match self {
                 Image::File(file) => aot::load_image_file_with_profile(file, id, profile),
-                Image::Range { file, offset, size } => {
-                    aot::load_image_file_range_with_profile(file, *offset, *size, id, profile)
-                }
                 Image::Mapped(bytes) => aot::load_mapped_image_with_profile(bytes, id, profile),
+                Image::Module(bytes) => aot::load_module_image_with_profile(bytes, id, profile),
             }
         }
     }
@@ -431,11 +426,8 @@ fn prepare_inspector() -> Result<(), String> {
         let path = container::beside_executable()
             .ok_or("the executable has no folder")?
             .join(name);
-        match container::open(&path, container::INSPECTOR_SECTION) {
-            Ok((file, offset, size)) => (
-                Image::Range { file, offset, size },
-                path.display().to_string(),
-            ),
+        match container::load(&path, container::INSPECTOR_SECTION) {
+            Ok(bytes) => (Image::Module(bytes), path.display().to_string()),
             Err(error)
                 if error.kind() == std::io::ErrorKind::NotFound && policy == EnginePolicy::Auto =>
             {
@@ -507,17 +499,14 @@ fn application_place(manifest: &Json, beside: Option<&Path>) -> Result<(Image, S
             let path = beside
                 .ok_or("the native image is beside the executable, whose folder is unknown")?
                 .join(name);
-            let (file, offset, size) =
-                container::open(&path, container::APP_SECTION).map_err(|error| {
+            let bytes =
+                container::load(&path, container::APP_SECTION).map_err(|error| {
                     match error.kind() {
                         std::io::ErrorKind::NotFound => format!("{} is missing", path.display()),
                         _ => format!("{}: {error}", path.display()),
                     }
                 })?;
-            Ok((
-                Image::Range { file, offset, size },
-                path.display().to_string(),
-            ))
+            Ok((Image::Module(bytes), path.display().to_string()))
         }
         other => Err(format!("unsupported native image place {other:?}")),
     }

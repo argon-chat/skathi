@@ -58,6 +58,7 @@ import {
   readImageSections,
   TEMPLATE_NAME,
   type ImageSectionNames,
+  withUnwindTable,
 } from "./image-sections";
 import {
   entitlements,
@@ -678,7 +679,10 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     });
     inputs.push(...native.inputs);
     if (singleFile) images.push({ image: native.image, names: APP_SECTIONS });
-    else containers.set(appContainer, appendImageSections(readTemplate(host!), native.image, APP_SECTIONS));
+    else {
+      const container = appendImageSections(readTemplate(host!), native.image, APP_SECTIONS);
+      containers.set(appContainer, withUnwindTable(container, [APP_SECTIONS]));
+    }
   }
   const inspector = host ? inspectorContainerPath(host) : null;
   if (inspector && host?.info.devtools) {
