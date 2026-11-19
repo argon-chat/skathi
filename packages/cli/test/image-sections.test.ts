@@ -208,4 +208,52 @@ describe.skipIf(!isWindows)("image sections", () => {
       kernel!.symbols.FreeLibrary(module);
     }
   });
+
+  test("an exe keeps its own unwind entries and gains the images' code", () => {
+    const original = new Uint8Array(readFileSync(WHOAMI));
+    const images: [typeof APP_SECTIONS, Uint8Array][] = [
+      [APP_SECTIONS, image(4, 2, 5)],
+      [INSPECTOR_SECTIONS, image(3, 1, 6)],
+    ];
+    let bytes: Uint8Array = original;
+    for (const [names, bytesOf] of images) bytes = appendImageSections(bytes, bytesOf, names);
+    bytes = withUnwindTable(
+      bytes,
+      images.map(([names]) => names),
+    );
+    const path = join(dir, "whoami-unwind.exe");
+    writeFileSync(path, bytes);
+    const header = new Uint32Array(1);
+    const computed = new Uint32Array(1);
+    expect(imagehlp!.symbols.MapFileAndCheckSumW(ptr(wide(path)), ptr(header), ptr(computed))).toBe(0);
+    expect(header[0]).toBe(computed[0]!);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    const pe = view.getUint32(0x3c, true);
+    const table = pe + 24 + view.getUint16(pe + 20, true);
+    const address = (name: string) => {
+      for (let i = 0; i < view.getUint16(pe + 6, true); i++) {
+        const at = table + i * 40;
+        if (new TextDecoder().decode(bytes.subarray(at, at + 8)).replace(/\0+$/, "") === name)
+          return view.getUint32(at + 12, true);
+      }
+      throw new Error(name);
+    };
+    expect(view.getUint32(pe + 24 + 112 + 3 * 8, true)).toBe(address(".skpdata"));
+    const module = kernel!.symbols.LoadLibraryExW(ptr(wide(path)), null, 0x1); // DONT_RESOLVE_DLL_REFERENCES
+    expect(module).toBeTruthy();
+    try {
+      const base = Number(module);
+      const imageBase = new BigUint64Array(1);
+      const begin = (rva: number) => {
+        const entry = ntdll!.symbols.RtlLookupFunctionEntry(BigInt(base + rva), ptr(imageBase), null);
+        return entry ? new Uint32Array(toArrayBuffer(entry, 0, 12))[0] : null;
+      };
+      for (const [names] of images) expect(begin(address(names.code) + 100)).toBe(address(names.code));
+      const pdata = address(".pdata");
+      const own = new Uint32Array(toArrayBuffer(base + pdata, 0, 12));
+      expect(begin(own[0]!)).toBe(own[0]!);
+    } finally {
+      kernel!.symbols.FreeLibrary(module);
+    }
+  });
 });

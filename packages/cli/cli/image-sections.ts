@@ -5,8 +5,8 @@
 // with LoadLibraryExW, and the engine runs the image where it lies (crates/sk-app/src/native_aot/container.rs).
 //
 // Three sections per image, so the loader protects each part as the engine would: the header and tables read-only,
-// the code read-and-execute, the rest read-only. A container also gets an exception directory over the code, so stack
-// walks go through it. Writing sections strips a certificate table (sign afterwards) and rewrites the section table,
+// the code read-and-execute, the rest read-only. The container or the exe also gets an exception directory over the
+// code, so stack walks go through it. Writing sections strips a certificate table (sign afterwards) and rewrites the section table,
 // SizeOfImage, SizeOfCode, SizeOfInitializedData and CheckSum; when the section table has no room, the headers grow
 // and every file offset behind them moves (sections, the debug directory).
 
@@ -305,34 +305,56 @@ export function appendImageSections(bytes: Uint8Array, image: Uint8Array, names:
   return withChecksum(appendSections(pe, image, parts));
 }
 
+/** The file's exception directory: its RUNTIME_FUNCTION entries, sorted by address. */
+function exceptionEntries(pe: Pe): Uint8Array {
+  const exception = pe.directory(DIRECTORY_EXCEPTION);
+  if (!exception) throw new Error("the PE file has no exception directory entry");
+  if (!exception.size) return new Uint8Array(0);
+  const holder = pe
+    .sections()
+    .find(
+      (s) =>
+        exception.address >= s.virtualAddress && exception.address + exception.size <= s.virtualAddress + s.rawSize,
+    );
+  if (!holder || exception.size % 12) throw new Error("the exception directory lies outside the file's sections");
+  const at = holder.rawOffset + (exception.address - holder.virtualAddress);
+  return pe.bytes.slice(at, at + exception.size);
+}
+
 /**
- * A copy of the container `bytes` with an exception directory (`.pdata`) over the code of each image `images` names:
- * one frame whose prologue is `push rbp; mov rbp, rsp`, as JavaScriptCore registers for its JIT pool. For code in a
- * loaded module the unwinder reads only that module's table, so without it debuggers, crash dumps and SEH stop at
- * the first frame of the image.
+ * A copy of the PE file `bytes` whose exception directory also covers the code of each image `images` names: one frame
+ * whose prologue is `push rbp; mov rbp, rsp`, as JavaScriptCore registers for its JIT pool. For code in a loaded
+ * module the unwinder reads only that module's static table (a dynamic one is not consulted for an address inside a
+ * module that has one), so without it debuggers, crash dumps and SEH stop at the first frame of the image. A file
+ * that already has a table (an exe) gets a copy of it with the image entries after it, in a section of its own: the
+ * image sections come after every other, so the table stays sorted.
  */
 export function withUnwindTable(bytes: Uint8Array, images: ImageSectionNames[]): Uint8Array {
   const pe = withoutCertificate(new Pe(bytes.slice()));
   checkAlignment(pe);
-  const exception = pe.directory(DIRECTORY_EXCEPTION);
-  if (!exception) throw new Error("the PE file has no exception directory entry");
-  if (exception.size) throw new Error("the PE file already has an exception directory");
+  const existing = exceptionEntries(pe);
   const ranges = images
     .map((names) => pe.sections().find((s) => s.name === names.code))
     .filter((s) => s !== undefined)
     .sort((a, b) => a.virtualAddress - b.virtualAddress);
   if (!ranges.length) throw new Error("the PE file has none of the images' code sections");
-  const unwindAt = ranges.length * 12;
+  if (existing.length) {
+    const last = new DataView(existing.buffer).getUint32(existing.length - 8, true);
+    if (last > ranges[0]!.virtualAddress) throw new Error("the exception directory covers code after the image's");
+  }
+  const unwindAt = existing.length + ranges.length * 12;
   const table = new Uint8Array(unwindAt + 8);
+  table.set(existing);
   const view = new DataView(table.buffer);
   const address = alignUp(
     Math.max(...pe.sections().map((s) => s.virtualAddress + Math.max(s.virtualSize, s.rawSize))),
     PAGE,
   );
   ranges.forEach((code, index) => {
-    view.setUint32(index * 12, code.virtualAddress, true);
-    view.setUint32(index * 12 + 4, code.virtualAddress + code.virtualSize, true);
-    view.setUint32(index * 12 + 8, address + unwindAt, true);
+    const at = existing.length + index * 12;
+    view.setUint32(at, code.virtualAddress, true);
+    view.setUint32(at + 4, code.virtualAddress + code.virtualSize, true);
+    view.setUint32(at + 8, address + unwindAt, true);
   });
   // UNWIND_INFO version 1, no handler; a 4-byte prologue; frame register rbp at offset 0; its codes in reverse
   // order: UWOP_SET_FPREG at 4, UWOP_PUSH_NONVOL rbp at 1.
@@ -340,7 +362,12 @@ export function withUnwindTable(bytes: Uint8Array, images: ImageSectionNames[]):
   view.setUint16(unwindAt + 4, 4 | (3 << 8), true);
   view.setUint16(unwindAt + 6, 1 | ((0 | (5 << 4)) << 8), true);
   const out = appendSections(pe, table, [
-    { name: ".pdata", start: 0, end: table.length, flags: SCN_INITIALIZED_DATA | SCN_READ },
+    {
+      name: existing.length ? ".skpdata" : ".pdata",
+      start: 0,
+      end: table.length,
+      flags: SCN_INITIALIZED_DATA | SCN_READ,
+    },
   ]);
   const directory = out.directory(DIRECTORY_EXCEPTION)!;
   out.set32(directory.at, address);

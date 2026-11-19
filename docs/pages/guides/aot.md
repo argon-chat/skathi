@@ -171,7 +171,7 @@ Each part of the image lands in its own section, protected as the engine needs i
 
 With `"publishSingleFile": true`, `sk publish` writes the exe alone. The image's sections, and the inspector's when there is one, are added to the exe, and the ICU data and the packs go into its payload. Windows maps the image as part of the exe, and the engine runs the code where it lies. One signature then covers everything. `sk build` ignores the option.
 
-The exe has no exception table over the image's code yet: a debugger or a crash dump shows the stack up to the first frame in the image, not past it. Ship `app.image.dll` beside the exe when you need full stacks from crash reports.
+`sk publish` also extends the exe's exception table over the image's code: it writes a copy of the table with the image's entries added in a section of its own, `.skpdata`, and points the exe at it. Debuggers and crash dumps walk the stack through the image as they do beside the exe; its frames show as offsets into the exe. The copy adds the size of the host's own table to the exe, about 2 MiB.
 
 Measured on one Windows x64 machine with a small Vue app, `icu.skpk` with every locale, 20 runs per variant in alternating order, after one discarded run each. **Start** is process start to the app's first mount, median. **Cold** means a per-user cache folder that is empty at each start, as on a new machine; **warm** one that earlier starts have filled. **On disk** is everything the app puts on disk: the exe, the files beside it and, before 0.6, the expanded image.
 
@@ -179,9 +179,9 @@ Measured on one Windows x64 machine with a small Vue app, `icu.skpk` with every 
 | -------------------------------------------------- | ----------- | ----------- | --------------------- |
 | Before 0.6: image in the payload, expanded to disk | 409 ms      | 390 ms      | 86.8 MiB + 2.6 MiB    |
 | Since 0.6: `app.image.dll` beside the exe          | 411 ms      | 421 ms      | 88.4 MiB              |
-| Since 0.6: `"publishSingleFile": true`             | 407 ms      | 420 ms      | 88.4 MiB, in one file |
+| Since 0.6: `"publishSingleFile": true`             | 407 ms      | 420 ms      | 90.3 MiB, in one file |
 
-The start times stay within the spread of the runs, whose middle half spans about 50 ms. Checking the image's SHA-256 takes 5.8 ms of each start for this image, as it did before 0.6. The files you ship grow by the difference between the image and its compressed form, 1.6 MiB here, and nothing is written at the first start.
+The start times stay within the spread of the runs, whose middle half spans about 50 ms. Checking the image's SHA-256 takes 5.8 ms of each start for this image, as it did before 0.6. The files you ship grow by the difference between the image and its compressed form, 1.6 MiB here, plus the copy of the exception table in one file, and nothing is written at the first start.
 
 ## Before the first AOT build: sk check
 

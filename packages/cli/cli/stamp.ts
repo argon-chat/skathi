@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { groupIcon, type IconImage } from "./icon";
-import { appendImageSections, type ImageSectionNames } from "./image-sections";
+import { appendImageSections, withUnwindTable, type ImageSectionNames } from "./image-sections";
 import {
   ERROR_LOCK_VIOLATION,
   ERROR_SHARING_VIOLATION,
@@ -197,6 +197,10 @@ export function stamp(options: StampOptions): StampResult {
     if (options.images?.length) {
       let bytes: Uint8Array = new Uint8Array(readFileSync(partial));
       for (const { image, names } of options.images) bytes = appendImageSections(bytes, image, names);
+      bytes = withUnwindTable(
+        bytes,
+        options.images.map((i) => i.names),
+      );
       writeFileSync(partial, bytes);
     }
     const tRes = performance.now();
