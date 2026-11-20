@@ -2282,7 +2282,7 @@ fn build_node<V: 'static>(
                 apply_inline_row(d.style(), t, node, align);
                 apply_inline_item_minimum(d.style(), t, node);
                 apply_inline_align(d.style(), t, node, &extras, align);
-                apply_button_content_box(d.style(), t, node);
+                align_control_content(d.style(), t, node);
                 advise_inline_level(t, id, node, &extras, d.style());
                 // The window is the root (`createApp().mount()`): the root element is the viewport and
                 // fills the host's box unless a rule says otherwise. Otherwise `height: 100%` on its
@@ -2980,10 +2980,9 @@ fn apply_inline_align(
     }
 }
 
-/// HTML's button layout: unless a `<button>` is a flex or grid container, its content sits in an
-/// anonymous box centred vertically while it fits and top-aligned when it overflows.
-fn apply_button_content_box(style: &mut gpui::StyleRefinement, t: &Tree, node: &crate::tree::Node) {
-    if style.align_content.is_some() || t.name(node.tag) != "button" {
+/// In block layout, centre the control's label vertically while it fits in the content box.
+fn align_control_content(style: &mut gpui::StyleRefinement, t: &Tree, node: &crate::tree::Node) {
+    if style.align_content.is_some() || !matches!(t.name(node.tag), "button" | "select") {
         return;
     }
     let declared = node.computed.as_ref().and_then(|cs| cs.base.display);
@@ -6866,9 +6865,8 @@ mod tests {
     }
 
     #[test]
-    fn a_block_button_centres_its_content_safely() {
+    fn block_buttons_and_selects_centre_their_content_safely() {
         with_tree(|t| {
-            let button = t.intern("button");
             let div = t.intern("div");
             let declared = |t: &mut Tree, tag: u32, display: Option<gpui::Display>| {
                 let id = t.create_element(tag);
@@ -6884,31 +6882,29 @@ mod tests {
             let laid = |t: &Tree, id: u32, authored: Option<gpui::AlignContent>| {
                 let mut s = gpui::StyleRefinement::default();
                 s.align_content = authored;
-                apply_button_content_box(&mut s, t, t.node(id).unwrap());
+                align_control_content(&mut s, t, t.node(id).unwrap());
                 s.align_content
             };
             let safe = Some(gpui::AlignContent::SafeCenter);
 
-            let bare = declared(t, button, None);
-            assert_eq!(laid(t, bare, None), safe, "no display: a block container");
-            let block = declared(t, button, Some(gpui::Display::Block));
-            assert_eq!(laid(t, block, None), safe, "block, inline-block, inline");
-            let flex = declared(t, button, Some(gpui::Display::Flex));
-            assert_eq!(
-                laid(t, flex, None),
-                None,
-                "a flex button is a flex container as normal"
-            );
-            let grid = declared(t, button, Some(gpui::Display::Grid));
-            assert_eq!(laid(t, grid, None), None, "and a grid one a grid container");
-            let start = Some(gpui::AlignContent::Start);
-            assert_eq!(
-                laid(t, bare, start),
-                start,
-                "the author's align-content wins"
-            );
+            for tag in [t.intern("button"), t.intern("select")] {
+                let bare = declared(t, tag, None);
+                assert_eq!(laid(t, bare, None), safe);
+                let block = declared(t, tag, Some(gpui::Display::Block));
+                assert_eq!(laid(t, block, None), safe);
+                for display in [gpui::Display::Flex, gpui::Display::Grid] {
+                    let id = declared(t, tag, Some(display));
+                    assert_eq!(laid(t, id, None), None);
+                }
+                let start = Some(gpui::AlignContent::Start);
+                assert_eq!(
+                    laid(t, bare, start),
+                    start,
+                    "the author's align-content wins"
+                );
+            }
             let plain = declared(t, div, None);
-            assert_eq!(laid(t, plain, None), None, "only a button");
+            assert_eq!(laid(t, plain, None), None);
         });
     }
 

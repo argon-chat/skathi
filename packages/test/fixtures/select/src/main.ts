@@ -27,6 +27,7 @@ const App = {
           [[vModelSelect, model.value, undefined, { number: true }]],
         ),
         h("select", { id: "flat", class: "box" }, options(["Everybody", "Contacts", "Nobody at all"])),
+        h("select", { id: "tinted", class: "box" }, options(["Success", "Hover", "Level change"])),
         h("select", { id: "groups", class: "box" }, [
           h("option", { value: "a" }, "Alpha"),
           h("optgroup", { label: "Group" }, [

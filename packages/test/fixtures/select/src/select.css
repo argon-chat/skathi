@@ -26,6 +26,16 @@
   top: 20px;
   appearance: none;
 }
+#tinted {
+  left: 20px;
+  top: 200px;
+  width: 134px;
+  height: 34px;
+  padding: 0 12px;
+  color-scheme: dark;
+  color: white;
+  background-color: #00000040;
+}
 #groups {
   left: 20px;
   top: 104px;

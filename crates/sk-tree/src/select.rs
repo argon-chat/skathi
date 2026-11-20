@@ -674,13 +674,14 @@ pub(crate) fn popup_child(
     let dark = crate::scheme::declared(t, id, window)
         .unwrap_or_else(|| windows::env_of(k).unwrap_or_else(crate::env).dark);
     let pal = palette(dark);
-    let own_background = node
+    // The popup has its own transparent window. The control's tint needs an opaque menu surface.
+    let background = node
         .computed
         .as_ref()
         .and_then(|cs| cs.base.background.as_ref())
         .and_then(gpui::Fill::color)
         .and_then(|b| b.as_solid())
-        .filter(|c| c.a > 0.0);
+        .map_or(pal.background, |color| pal.background.blend(color));
     let rect = windows::peek(k, |w| {
         w.bounds
             .get(&id)
@@ -722,7 +723,7 @@ pub(crate) fn popup_child(
             },
         )
         .min_w(px(width))
-        .bg(own_background.unwrap_or(pal.background))
+        .bg(background)
         .into_any_element()
     };
     Some(

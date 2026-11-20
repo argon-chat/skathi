@@ -107,6 +107,29 @@ const active = () => js<string>("return document.activeElement && document.activ
 
 describe("the closed box", () => {
   test.skipIf(!SCREENSHOTS)(
+    "centres the label of a fixed-height select beside its arrow",
+    async () => {
+      const b = await box("#tinted");
+      const shot = await shoot();
+      const inkMidpoint = (start: number, end: number) => {
+        const rows: number[] = [];
+        for (let y = 2; y < b.h - 2; y++) {
+          for (let x = start; x < end; x++) {
+            if (Math.min(...shot.at(b.x + x, b.y + y)) > 160) {
+              rows.push(y);
+              break;
+            }
+          }
+        }
+        expect(rows.length).toBeGreaterThan(1);
+        return (rows[0]! + rows.at(-1)!) / 2;
+      };
+      expect(Math.abs(inkMidpoint(12, 80) - inkMidpoint(b.w - 15, b.w - 2))).toBeLessThanOrEqual(3);
+    },
+    T,
+  );
+
+  test.skipIf(!SCREENSHOTS)(
     "Chromium's internal padding, arrow and line height, which appearance: none takes away",
     async () => {
       const m = await box("#model");
@@ -133,6 +156,38 @@ describe("the closed box", () => {
 });
 
 describe("the popup", () => {
+  test.skipIf(!SCREENSHOTS)(
+    "paints a translucent control colour over an opaque menu surface",
+    async () => {
+      const control = app.locator("#tinted");
+      for (const [scheme, expected] of [
+        ["dark", 44],
+        ["light", 191],
+      ] as const) {
+        await app.eval(`document.querySelector("#tinted").style.setProperty("color-scheme", "${scheme}")`);
+        await control.click({ real: true });
+        try {
+          const popup = await until(popupWindow, (p) => p !== undefined);
+          if (!popup) throw new Error("missing select popup");
+          const { path } = await app.send("screenshot", {
+            window: popup.id,
+            backend: "render_to_image",
+            path: artifactPath("select-tinted-" + scheme, "png"),
+          });
+          const shot = readPng(path as string);
+          const x = shot.width - 12,
+            y = Math.floor(shot.height / 2);
+          expect(shot.data[(y * shot.width + x) * 4 + 3]).toBe(255);
+          for (const channel of shot.at(x, y)) expect(Math.abs(channel - expected)).toBeLessThanOrEqual(2);
+        } finally {
+          await app.press("Escape");
+          await until(popupWindow, (p) => p === undefined);
+        }
+      }
+    },
+    T,
+  );
+
   test.skipIf(!SCREENSHOTS)(
     "a click opens it under the box, and a click on an option picks it — over another select",
     async () => {
