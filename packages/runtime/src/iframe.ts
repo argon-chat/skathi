@@ -205,7 +205,7 @@ export function decodeMessage(wire: unknown): unknown {
         new (buffer: ArrayBufferLike, offset: number, length: number): ArrayBufferView;
         readonly BYTES_PER_ELEMENT?: number;
       } = viewConstructors[a as keyof typeof viewConstructors]();
-      const width = "BYTES_PER_ELEMENT" in Ctor ? Ctor.BYTES_PER_ELEMENT : 1;
+      const width = Ctor.BYTES_PER_ELEMENT ?? 1;
       return new Ctor(bytes.buffer, 0, bytes.byteLength / width);
     }
   }
