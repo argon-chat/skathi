@@ -449,6 +449,8 @@ pub(crate) struct State {
     gpu12: d3d12::SurfaceGpu,
     #[cfg(target_os = "macos")]
     metal: metal::SurfaceGpu,
+    #[cfg(target_os = "macos")]
+    pacing_windows: HashMap<crate::windows::WinKey, gpui::SurfaceFrameWaker>,
 }
 
 #[derive(Clone)]
@@ -517,6 +519,10 @@ impl State {
         };
         if !copied_later {
             self.settle(id);
+            #[cfg(target_os = "macos")]
+            for wake in self.pacing_windows.values() {
+                wake();
+            }
         }
         id
     }

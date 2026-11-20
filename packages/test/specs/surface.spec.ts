@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   EXE_SUFFIX,
   launch,
@@ -10,6 +11,7 @@ import {
   SCREENSHOTS,
   TARGET,
   WINDOWS,
+  WORK_DIR,
   type Bounds,
   type SkApp,
 } from "../src/index";
@@ -434,6 +436,8 @@ type Feedback = {
   hidden: number;
   exact: number;
   cadence: number[];
+  playbackCadence: number[];
+  pauseToShownMs: number[];
   busy: number;
   shown: number;
   error: string | null;
@@ -468,6 +472,64 @@ async function feedback(
   expect(f.error).toBeNull();
   return f;
 }
+
+test.skipIf(!MACOS)(
+  "macOS surface playback and the first frame after a pause use the window's pacing policy",
+  async () => {
+    async function measure(host: SkApp, lowLatencySurface: boolean) {
+      const info = await until(
+        () => callOn(host, "stats", "feedback") as Promise<Stats>,
+        (value) => value.visible && !!value.display.refreshHz,
+      );
+      expect(info.visible).toBe(true);
+      for (const fps of [24, 60]) {
+        await callOn(host, "feedbackStart", "feedback", fps, true, "bgra", 3, 64, 64, fps / 2);
+        await Bun.sleep(2300);
+        const f = (await callOn(host, "feedbackStop", "feedback")) as Feedback;
+        expect(f.exactlyOnce).toBe(true);
+        expect(f.inOrder).toBe(true);
+        expect(f.playbackCadence.length).toBeGreaterThan(0);
+        const refreshes = info.display.refreshHz! / fps;
+        const onTime = f.playbackCadence.filter((n) => n === Math.floor(refreshes) || n === Math.ceil(refreshes));
+        console.log(
+          JSON.stringify({
+            lowLatencySurface,
+            fps,
+            refreshHz: info.display.refreshHz,
+            onTime: onTime.length,
+            playbackIntervals: f.playbackCadence.length,
+            pauseToShownMs: f.pauseToShownMs,
+          }),
+        );
+      }
+    }
+    await measure(app, false);
+    const copy = mkdtempSync(join(WORK_DIR, "surface-pacing-"));
+    let hybrid: SkApp | undefined;
+    try {
+      cpSync(join(REPO, "packages/test/fixtures/surface"), copy, { recursive: true });
+      const config = join(copy, "sk.config.json");
+      const settings = JSON.parse(readFileSync(config, "utf8")) as { window: { lowLatencySurface?: boolean } };
+      settings.window.lowLatencySurface = true;
+      writeFileSync(config, JSON.stringify(settings));
+      hybrid = await launch({
+        app: relative(REPO, join(copy, "src/main.ts")).replaceAll("\\", "/"),
+        exe: EXE,
+        window: [720, 540],
+        label: "surface-pacing",
+        env: { SK_LOG: "gpui_macos::surface_pacing=trace" },
+      });
+      await measure(hybrid, true);
+      const trace = readFileSync(hybrid.hostLog, "utf8");
+      expect(trace).toContain("ready Immediate");
+      expect(trace).toContain("ready DisplayLink");
+    } finally {
+      await hybrid?.close();
+      rmSync(copy, { recursive: true, force: true });
+    }
+  },
+  T,
+);
 
 test.skipIf(!WINDOWS)(
   "every presented frame resolves exactly once, in order, on the refresh it was shown",

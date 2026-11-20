@@ -380,7 +380,11 @@ How much the start matters depends on the machine. At 240 Hz, one user measured 
 
 Set `"window": { "lowLatencySurface": true }` in `sk.config.json` for the main window. For a separate player window, pass `lowLatencySurface={true}` to the Svelte `<SkWindow>` or `:low-latency-surface="true"` to the Vue component. Each window reads the option when it opens.
 
-The window requests its own Metal drawable on demand and presents with display sync enabled. A seek after a pause can draw immediately. During playback a local timer paces continuous updates at the screen's reported maximum refresh rate. UI animations in that window can look less even on a variable-refresh display. The default uses the platform display link.
+With the option enabled, the first ready surface frame after a pause wakes its window immediately. For a Metal texture or IOSurface, this happens when the GPU copy completes. The window draws with `nextDrawable`, keeps display sync enabled, and resumes its display link. UI animation and continuous video follow `CAMetalDisplayLink` on macOS 14 and later, or `CVDisplayLink` on earlier systems.
+
+The first frame is immediate. Subsequent frames less than 64 ms apart use the display link. After two consecutive gaps below 64 ms, a gap of at least 125 ms starts a new immediate frame. This keeps a single late decoded frame from switching the pacing of the window. Only ready frames from visible surfaces count. An unshown frame replaced by a later redraw still receives `Dropped(Superseded)`, including when both pictures have identical pixels. With the option off, the display link paces every frame.
+
+To compare modes on your display, run the macOS surface example test in `packages/test/specs/surface.spec.ts`. It plays at 24 and 60 fps, pauses for 250 ms and reports playback cadence and exact present-to-`shown_at` times after each pause. For individual frames, `SK_LOG=sk_tree::surface::feedback=trace,gpui_macos::surface_pacing=trace` logs producer frame IDs, pacing decisions and Metal display-link target timestamps on the same monotonic clock.
 
 ### Exact frame feedback on Windows (since 0.5)
 

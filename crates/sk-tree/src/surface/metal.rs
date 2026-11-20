@@ -708,8 +708,12 @@ fn copy_in(
     }
     held.push(Box::new(target.clone()));
     let held = Mutex::new(Some(Held(held)));
+    let wakers: Vec<_> = state.pacing_windows.values().cloned().collect();
     let done = RcBlock::new(move |_: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
         lock(&held).take();
+        for wake in &wakers {
+            wake();
+        }
     });
     // SAFETY: Metal retains the block until it has run.
     unsafe { command.addCompletedHandler(RcBlock::as_ptr(&done)) };

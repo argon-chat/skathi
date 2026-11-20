@@ -2394,7 +2394,7 @@ createApp(App).mount("#app");`,
     syntax: '{ "window": { "lowLatencySurface": true } }',
     notes: [
       CREATION_ONLY,
-      "Defaults to false. A local timer paces continuous updates with display sync enabled. This can reduce seek latency and make UI animation less even.",
+      "Defaults to false. Isolated surface frames wake the window immediately after a pause. The display link paces continuous playback and UI animation. Display sync stays enabled.",
     ],
     related: ["sk-window-low-latency-surface"],
   },

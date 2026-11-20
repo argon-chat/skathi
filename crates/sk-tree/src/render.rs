@@ -5352,6 +5352,8 @@ fn build_surface<V: 'static>(
                 f32::from(bounds.size.width),
                 f32::from(bounds.size.height),
                 window.scale_factor(),
+                #[cfg(target_os = "macos")]
+                window.surface_frame_waker(),
             );
         },
         |_, (), _, _| {},

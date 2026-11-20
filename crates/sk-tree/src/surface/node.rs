@@ -166,7 +166,13 @@ impl gpui::Element for HdrPicture {
 }
 
 /// Called from the paint with the content box in window pixels.
-pub(crate) fn note_painted(id: u32, width: f32, height: f32, scale: f32) {
+pub(crate) fn note_painted(
+    id: u32,
+    width: f32,
+    height: f32,
+    scale: f32,
+    #[cfg(target_os = "macos")] waker: Option<gpui::SurfaceFrameWaker>,
+) {
     NODES.with(|m| {
         if let Some(node) = m.borrow_mut().get_mut(&id) {
             node.painted = (
@@ -174,6 +180,16 @@ pub(crate) fn note_painted(id: u32, width: f32, height: f32, scale: f32) {
                 (height * scale).round().max(0.0) as u32,
                 scale,
             );
+            #[cfg(target_os = "macos")]
+            if let Some(waker) = waker {
+                if width > 0.0 && height > 0.0 && live::visible(id, node.window) {
+                    node.surface
+                        .lock_state()
+                        .pacing_windows
+                        .entry(node.window)
+                        .or_insert(waker);
+                }
+            }
         }
     });
 }
@@ -201,6 +217,10 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 
 pub(crate) fn forget_window(key: WinKey) {
     display::forget(key);
+    #[cfg(target_os = "macos")]
+    for surface in super::all() {
+        surface.lock_state().pacing_windows.remove(&key);
+    }
     if let Some(window) = PRESENT_KEYS.with(|k| k.borrow_mut().remove(&key)) {
         feedback::with(|t| t.window_closed(window));
     }
@@ -292,6 +312,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     live::note(shown);
     display::note_tick(infos.values().any(|info| info.visible));
     finish(touch, &mut draw);
+    #[cfg(target_os = "macos")]
+    update_pacing(window, here);
     for surface in super::all() {
         let info = infos
             .get(&Arc::as_ptr(surface.shared()))
@@ -397,6 +419,8 @@ pub(crate) fn window_tick(window: &mut Window) {
         return;
     }
     let here = windows::key(window);
+    #[cfg(target_os = "macos")]
+    update_pacing(window, here);
     let hdr = update_output(window, here);
     let mut touch = Vec::new();
     NODES.with(|m| {
@@ -411,6 +435,31 @@ pub(crate) fn window_tick(window: &mut Window) {
     let mut draw = false;
     finish(touch, &mut draw);
     carry(window, here);
+}
+
+#[cfg(target_os = "macos")]
+fn update_pacing(window: &Window, here: WinKey) {
+    let Some(waker) = window.surface_frame_waker() else {
+        return;
+    };
+    let visible: std::collections::HashSet<_> = NODES.with_borrow(|nodes| {
+        nodes
+            .values()
+            .filter(|n| n.window == here && n.visible)
+            .map(|n| Arc::as_ptr(n.surface.shared()))
+            .collect()
+    });
+    for surface in super::all() {
+        let mut state = surface.lock_state();
+        if visible.contains(&Arc::as_ptr(surface.shared())) {
+            state
+                .pacing_windows
+                .entry(here)
+                .or_insert_with(|| waker.clone());
+        } else {
+            state.pacing_windows.remove(&here);
+        }
+    }
 }
 
 fn finish(touch: Vec<u32>, draw: &mut bool) {
@@ -739,7 +788,14 @@ mod tests {
     fn a_node_follows_its_name_and_reports_physical_pixels() {
         let id = 0x7ffe_0001;
         assert!(note_build(id, 7, "tests:node-a").is_none(), "no frame yet");
-        note_painted(id, 100.5, 50.0, 1.5);
+        note_painted(
+            id,
+            100.5,
+            50.0,
+            1.5,
+            #[cfg(target_os = "macos")]
+            None,
+        );
         let painted = NODES.with(|m| m.borrow()[&id].painted);
         assert_eq!(painted, (151, 75, 1.5));
         note_build(id, 7, "tests:node-b");

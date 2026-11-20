@@ -15,9 +15,11 @@
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
-//! - `feedbackStart(name, fps, paced, source, ring, width, height)` and `feedbackStop(name)`: frames at `fps`
+//! - `feedbackStart(name, fps, paced, source, ring, width, height, pauseEvery)` and `feedbackStop(name)`: frames at `fps`
 //!   (`0` runs unthrottled, `-1` presents once per measured refresh) with `on_frame` listening.
 //!   The stop prints each frame's event and the cadence, and answers a summary.
+//!   An optional positive `pauseEvery` inserts 250 ms pauses that many frames apart and reports
+//!   exact present-to-shown times for the first frame after each pause.
 //!   `source` is `"bgra"` (CPU frames, the default), `"d3d12"` or
 //!   `"d3d12-rgba16f"` (a ring of `ring` textures on the renderer's D3D12 device, each presented
 //!   behind its fence). With `"d3d12-shared"` or `"d3d12-shared-rgba16f"` the ring belongs to a
@@ -183,7 +185,16 @@ fn main() {
             let ring = args.get(4).and_then(Value::as_u64).unwrap_or(3) as usize;
             let width = args.get(5).and_then(Value::as_u64).unwrap_or(64) as u32;
             let height = args.get(6).and_then(Value::as_u64).unwrap_or(64) as u32;
-            feedback::start(surface_of(&args), fps, paced, source, ring, (width, height));
+            let pause_every = args.get(7).and_then(Value::as_u64).unwrap_or(0);
+            feedback::start(
+                surface_of(&args),
+                fps,
+                paced,
+                source,
+                ring,
+                (width, height),
+                pause_every,
+            );
             call.resolve("true");
         })
         .function("phaseStart", |call| {
@@ -355,6 +366,7 @@ mod feedback {
     #[derive(Default)]
     struct Produced {
         ids: Vec<u64>,
+        resumed: Vec<u64>,
         /// `info().visible` as each of them was presented, and when.
         visible: Vec<(bool, u64)>,
         /// When each present began, and whether it was taken.
@@ -401,6 +413,7 @@ mod feedback {
         source: String,
         ring: usize,
         size: (u32, u32),
+        pause_every: u64,
     ) {
         let half = source.ends_with("-rgba16f");
         surface.set_format(if half {
@@ -484,11 +497,16 @@ mod feedback {
             let start = monotonic_ns();
             let mut produced = Produced::default();
             let mut last_began = None;
-            for n in 0.. {
+            for n in 0_u64.. {
                 if stopping.load(Ordering::Acquire) {
                     break;
                 }
-                let due = start + n * interval;
+                let pauses = if fps > 0.0 {
+                    n.checked_div(pause_every).unwrap_or(0)
+                } else {
+                    0
+                };
+                let due = start + n * interval + pauses * 250_000_000;
                 let info = surface.info();
                 let display = info.display;
                 let at = match (display.last_vblank, display.refresh_period) {
@@ -525,6 +543,9 @@ mod feedback {
                 match presented {
                     Ok(id) => {
                         produced.ids.push(id);
+                        if pauses > 0 && n % pause_every == 0 {
+                            produced.resumed.push(id);
+                        }
                         produced.visible.push((info.visible, monotonic_ns()));
                     }
                     Err(SurfaceError::Busy) => produced.busy += 1,
@@ -562,7 +583,7 @@ mod feedback {
             std::thread::sleep(Duration::from_millis(10));
         }
         let events = run.events.lock().unwrap().clone();
-        let mut summary = summary(name, ids, &events);
+        let mut summary = summary(name, ids, &events, &produced.resumed);
         // Frames presented while `info().visible` still said so, after the frames since the last
         // one shown began to drop as hidden.
         let hidden_at = run.hidden_at.load(Ordering::Relaxed);
@@ -595,11 +616,26 @@ mod feedback {
             })
             .collect();
         summary["hiddenAt"] = json!(hidden_at);
+        let pause_to_shown: Vec<_> = events
+            .iter()
+            .filter_map(|event| match *event {
+                FrameEvent::Presented {
+                    frame,
+                    shown_at,
+                    precision: FramePrecision::Exact,
+                    ..
+                } if produced.resumed.binary_search(&frame).is_ok() => {
+                    Some(shown_at.saturating_sub(*began.get(&frame)?) as f64 / 1e6)
+                }
+                _ => None,
+            })
+            .collect();
+        summary["pauseToShownMs"] = json!(pause_to_shown);
         summary["attempts"] = json!(produced.attempts);
         summary
     }
 
-    fn summary(name: &str, ids: &[u64], events: &[FrameEvent]) -> Value {
+    fn summary(name: &str, ids: &[u64], events: &[FrameEvent], resumed: &[u64]) -> Value {
         let mut count: HashMap<&str, usize> = HashMap::new();
         let mut shown: Vec<(u64, u64, Duration)> = Vec::new();
         let mut exact = 0;
@@ -643,6 +679,17 @@ mod feedback {
             })
             .collect();
         let line: Vec<String> = cadence.iter().map(u64::to_string).collect();
+        let playback: Vec<_> = shown
+            .windows(2)
+            .zip(&cadence)
+            .filter_map(|(pair, &held)| {
+                let next_resume = resumed.partition_point(|&id| id <= pair[0].0);
+                resumed
+                    .get(next_resume)
+                    .is_none_or(|&id| id > pair[1].0)
+                    .then_some(held)
+            })
+            .collect();
         println!("[feedback {name}] cadence: {}", line.join(" "));
         let frames: Vec<u64> = events.iter().map(FrameEvent::frame).collect();
         let mut sorted = frames.clone();
@@ -660,6 +707,7 @@ mod feedback {
             "closed": count.get("closed").copied().unwrap_or(0),
             "exact": exact,
             "cadence": cadence,
+            "playbackCadence": playback,
         })
     }
 }
