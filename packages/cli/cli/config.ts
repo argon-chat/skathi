@@ -400,6 +400,14 @@ export function nativeSvelteRenderer(config: unknown): boolean {
   throw new ConfigError('Set svelte.renderer to "dom" or "native" in sk.config.json.');
 }
 
+export const VITE_CONFIG_FILES = ["js", "mjs", "ts", "cjs", "mts", "cts"].map((ext) => `vite.config.${ext}`);
+
+export function viteConfigFile(appRoot: string): string | undefined {
+  return VITE_CONFIG_FILES.map((name) => join(appRoot, name)).find((path) =>
+    statSync(path, { throwIfNoEntry: false })?.isFile(),
+  );
+}
+
 export function resolveApp(target: string): { appRoot: string; entry: string } {
   const abs = resolve(target);
   if (!existsSync(abs)) throw new ConfigError(`${target}: no such file or directory`);

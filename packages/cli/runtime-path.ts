@@ -5,7 +5,7 @@ import type * as CompilerSfc from "vue/compiler-sfc";
 
 /** The `@skathi-native/runtime` package the builders bundle into every app. */
 export const RUNTIME_DIR = realpathSync(
-  dirname(createRequire(import.meta.path).resolve("@skathi-native/runtime/package.json")),
+  dirname(createRequire(import.meta.url).resolve("@skathi-native/runtime/package.json")),
 );
 export const RUNTIME_SRC_DIR = join(RUNTIME_DIR, "src");
 export const RUNTIME_ENTRY = join(RUNTIME_SRC_DIR, "runtime.ts");
@@ -54,7 +54,7 @@ export function packageDir(name: string, dir: string): string | null {
   }
 }
 
-function declares(appRoot: string, name: string): boolean {
+export function declaresDependency(appRoot: string, name: string): boolean {
   try {
     const pkg = readPackage(join(appRoot, "package.json"));
     return [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies].some((deps) => deps?.[name] !== undefined);
@@ -76,7 +76,7 @@ export function appVue(appRoot: string): AppVue | null {
   const vue = packageDir("vue", appRoot);
   if (!vue) return null;
   const coreDir =
-    (declares(appRoot, "@vue/runtime-core") ? packageDir("@vue/runtime-core", appRoot) : null) ??
+    (declaresDependency(appRoot, "@vue/runtime-core") ? packageDir("@vue/runtime-core", appRoot) : null) ??
     packageDir("@vue/runtime-core", vue);
   if (!coreDir) return null;
   const core = readPackage(join(coreDir, "package.json"));

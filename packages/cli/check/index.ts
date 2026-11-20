@@ -53,6 +53,7 @@ export interface AnalyzeInput {
   bundle?: ModuleGraph["bundle"];
   /** Stylesheets and pages whose CSS the build includes, besides the components in `modules`. */
   styles?: string[];
+  compiledCss?: string | undefined;
   /** The build runs Tailwind over the app's CSS. */
   tailwind?: boolean;
 }
@@ -141,6 +142,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     declarations: graph.declarations,
     bundle: graph.bundle,
     styles: graph.styles ?? [],
+    compiledCss: graph.compiledCss,
     tailwind: graph.tailwind ?? false,
     allow: checkConfig.allow,
     deps: options.deps ?? true,
@@ -206,15 +208,29 @@ export function analyze(input: AnalyzeInput): CheckReport {
 
   const analysed = deps ? units : units.filter((u) => !u.owner);
   const styled = [...input.modules.filter((m) => /\.(vue|svelte)$/i.test(m)), ...(input.styles ?? [])];
-  if (styled.length) {
+  if (styled.length || input.compiledCss) {
     progress.step("CSS");
     findings.push(
-      ...cssFindings({ sources: readStyleSources(styled), packages, deps, tailwind: input.tailwind ?? false }),
+      ...cssFindings({
+        sources: readStyleSources(styled),
+        packages,
+        deps,
+        tailwind: input.tailwind ?? false,
+        compiled: input.compiledCss === undefined ? undefined : { css: input.compiledCss, entry: input.entry },
+      }),
     );
   }
   if (input.modules.length) {
     progress.step("Vue and Svelte features");
-    findings.push(...frameworkFindings({ sources: readFrameworkSources(input.modules), packages, deps, typescript }));
+    findings.push(
+      ...frameworkFindings({
+        sources: readFrameworkSources(input.modules),
+        packages,
+        deps,
+        typescript,
+        viteStyles: input.compiledCss !== undefined,
+      }),
+    );
   }
   if (units.length) {
     progress.step("TypeScript program", units.length);

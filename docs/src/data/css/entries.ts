@@ -13,7 +13,7 @@ export type Kind =
   | "media-feature"
   | "unit"
   | "feature";
-export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0";
+export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0";
 /** The release a platform's support arrived in, for the platforms where it differs from the entry's `since`. */
 export type PlatformSince = Partial<Record<Platform, Release>>;
 
@@ -381,11 +381,13 @@ const stylesheets = section("Stylesheets", [
   feat(
     "feature-preprocessors",
     'Preprocessors (`<style lang="scss">`, `less`, `stylus`)',
-    NO,
+    PART,
     "Style languages that compile to CSS, selected with the `lang` attribute of a `<style>` block.",
     {
-      limitations: ["The content is not preprocessed: it is compiled as plain CSS."],
-      workaround: "Compile it to CSS yourself beforehand.",
+      since: "0.7.0",
+      notes: ["Packaged Vue apps with a root Vite config use the app's installed style preprocessor."],
+      limitations: ["The native hot-reload builder and projects without a Vite config read the block as plain CSS."],
+      workaround: "Import precompiled CSS when sharing styles with the hot-reload builder.",
       aliases: ["scss", "sass", "less", "stylus", 'lang="scss"'],
     },
   ),

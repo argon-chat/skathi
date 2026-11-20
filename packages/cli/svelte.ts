@@ -1,6 +1,8 @@
 // Svelte 5 components (`.svelte`) and rune modules (`.svelte.ts`, `.svelte.js`), compiled with the app's own
 // `svelte/compiler`: the compiled code calls `svelte/internal/client`, which must be the same version.
 
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as SvelteCompiler from "svelte/compiler";
 import { protectHapticPatterns } from "./haptic-patterns";
@@ -33,13 +35,14 @@ export function svelteCompiler(appRoot: string): Promise<Compiler> {
     compiler = (async () => {
       let path: string;
       try {
-        path = Bun.resolveSync("svelte/compiler", appRoot);
+        path = createRequire(resolve(appRoot, "package.json")).resolve("svelte/compiler");
       } catch {
         throw new Error(
           `${appRoot}: a .svelte file needs Svelte 5 installed in the app: add "svelte" to its dependencies`,
         );
       }
-      return (await import(pathToFileURL(path).href)) as Compiler;
+      const module = (await import(pathToFileURL(path).href)) as Compiler & { default?: Compiler };
+      return module.default ?? module;
     })();
     compilers.set(appRoot, compiler);
   }
@@ -52,7 +55,17 @@ export interface SvelteOutput {
   warnings: string[];
 }
 
-const stripTypes = new Bun.Transpiler({ loader: "ts", trimUnusedImports: false });
+const bunTranspiler =
+  typeof Bun === "undefined" ? undefined : new Bun.Transpiler({ loader: "ts", trimUnusedImports: false });
+
+async function stripTypes(source: string, filename: string): Promise<string> {
+  if (bunTranspiler) return bunTranspiler.transformSync(source);
+  const ts = (await import("typescript")).default;
+  return ts.transpileModule(source, {
+    fileName: filename,
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, verbatimModuleSyntax: true },
+  }).outputText;
+}
 
 /**
  * Compiles one Svelte source. `filename` names it in dev diagnostics and seeds the scoped-CSS hash, so it is the
@@ -65,7 +78,8 @@ export async function compileSvelte(
   o: { dev: boolean; filename: string; native?: boolean },
 ): Promise<SvelteOutput> {
   const svelte = await svelteCompiler(appRoot);
-  if (o.native && !Bun.semver.satisfies(svelte.VERSION, "^5.59.0")) {
+  const stableMinor = /^5\.(\d+)\.\d+(?:\+[\w.-]+)?$/.exec(svelte.VERSION)?.[1];
+  if (o.native && (stableMinor === undefined || Number(stableMinor) < 59)) {
     throw new SvelteRendererError(
       "SK5016",
       `Native rendering needs Svelte 5.59.0 or newer in major 5 (found ${svelte.VERSION}). Install svelte@^5.59.0 or set svelte.renderer to "dom".`,
@@ -78,7 +92,7 @@ export async function compileSvelte(
   const describe = (w: SvelteCompiler.Warning) =>
     `${o.filename}${w.start ? `:${w.start.line}:${w.start.column + 1}` : ""}: ${w.message.split("\n")[0]} (${w.code})`;
   if (RUNE_MODULE.test(absPath)) {
-    const js = absPath.endsWith(".ts") ? stripTypes.transformSync(source) : source;
+    const js = absPath.endsWith(".ts") ? await stripTypes(source, o.filename) : source;
     const out = svelte.compileModule(js, { filename: o.filename, generate: "client", dev: o.dev });
     return { js: out.js.code, css: null, warnings: out.warnings.map(describe) };
   }

@@ -15,35 +15,35 @@ A Skathi app runs Vue 3.5's own `@vue/runtime-core` and compiles its components 
 
 **Works** means as in a browser. **Limits** means it works with the difference its section describes, and `sk check` warns where it can see it. **Planned** and **Not supported** mean it does not work, and `sk check` reports an error where it can see it; a planned feature is coming. **Not supported by design** means Skathi will not add it, and its section says what to use instead.
 
-| Feature                                                                              | Status                  | sk check |
-| ------------------------------------------------------------------------------------ | ----------------------- | -------- |
-| Reactivity, Composition and Options API, `nextTick`                                  | Works                   |          |
-| `<script setup>`, `defineProps`, `defineEmits`, `defineModel`, `defineExpose`        | Works                   |          |
-| [`<Suspense>`, async `setup`, top-level `await`](#suspense-and-async-components)     | Works                   |          |
-| [`defineAsyncComponent`, lazy routes](#suspense-and-async-components)                | Works                   |          |
-| [`<Teleport>`](#teleport)                                                            | Works                   |          |
-| `<KeepAlive>`, `onActivated`, `onDeactivated`                                        | Works                   |          |
-| [`<Transition>` with CSS transitions, animations or JavaScript hooks](#transitions)  | Works                   |          |
-| [`<TransitionGroup>`, including moves](#transitions)                                 | Works                   |          |
-| [`v-model` on text fields, `<textarea>`, `<select>`, components](#forms-and-v-model) | Works                   |          |
-| [`v-model.lazy`](#forms-and-v-model)                                                 | Limits: per keystroke   | `SK5010` |
-| [Checkboxes and radio buttons](#checkboxes-and-radio-buttons)                        | Works                   |          |
-| Custom directives, `v-memo`, `v-once`, `v-show`, slots, `<component :is>`            | Works                   |          |
-| [`v-html`, `innerHTML`](#v-html)                                                     | Not supported by design | `SK5003` |
-| Template refs, `useTemplateRef`, `provide`/`inject`, `useId`                         | Works                   |          |
-| [`app.config.errorHandler`, `onErrorCaptured`](#error-handling)                      | Works                   |          |
-| [`<style scoped>`, `:deep`, `:slotted`, `:global`, `v-bind()`](#styles)              | Works                   |          |
-| [`<style module>`, `useCssModule()`](#styles)                                        | Planned                 | `SK5004` |
-| [`<style lang="scss">` and other preprocessors](#styles)                             | Limits: plain CSS       | `SK5011` |
-| Render functions, `h()`                                                              | Works                   |          |
-| [JSX and TSX](#jsx-and-tsx)                                                          | Limits: not in `sk dev` | `SK5012` |
-| [Vapor mode](#vapor-mode)                                                            | Not supported           | `SK5001` |
-| [`defineCustomElement`](#custom-elements)                                            | Not supported           | `SK5002` |
-| [`createSSRApp`, `hydrate`](#ssr-and-hydration)                                      | Limits: no hydration    | `SK5009` |
-| [vue-router with `createMemoryHistory`](#vue-router)                                 | Works                   |          |
-| [vue-router with web or hash history](#vue-router)                                   | Limits: no back         | `SK5008` |
-| Pinia                                                                                | Works                   |          |
-| [Vue Devtools](#devtools)                                                            | Not supported by design |          |
+| Feature                                                                              | Status                      | sk check |
+| ------------------------------------------------------------------------------------ | --------------------------- | -------- |
+| Reactivity, Composition and Options API, `nextTick`                                  | Works                       |          |
+| `<script setup>`, `defineProps`, `defineEmits`, `defineModel`, `defineExpose`        | Works                       |          |
+| [`<Suspense>`, async `setup`, top-level `await`](#suspense-and-async-components)     | Works                       |          |
+| [`defineAsyncComponent`, lazy routes](#suspense-and-async-components)                | Works                       |          |
+| [`<Teleport>`](#teleport)                                                            | Works                       |          |
+| `<KeepAlive>`, `onActivated`, `onDeactivated`                                        | Works                       |          |
+| [`<Transition>` with CSS transitions, animations or JavaScript hooks](#transitions)  | Works                       |          |
+| [`<TransitionGroup>`, including moves](#transitions)                                 | Works                       |          |
+| [`v-model` on text fields, `<textarea>`, `<select>`, components](#forms-and-v-model) | Works                       |          |
+| [`v-model.lazy`](#forms-and-v-model)                                                 | Limits: per keystroke       | `SK5010` |
+| [Checkboxes and radio buttons](#checkboxes-and-radio-buttons)                        | Works                       |          |
+| Custom directives, `v-memo`, `v-once`, `v-show`, slots, `<component :is>`            | Works                       |          |
+| [`v-html`, `innerHTML`](#v-html)                                                     | Not supported by design     | `SK5003` |
+| Template refs, `useTemplateRef`, `provide`/`inject`, `useId`                         | Works                       |          |
+| [`app.config.errorHandler`, `onErrorCaptured`](#error-handling)                      | Works                       |          |
+| [`<style scoped>`, `:deep`, `:slotted`, `:global`, `v-bind()`](#styles)              | Works                       |          |
+| [`<style module>`, `useCssModule()`](#styles)                                        | Planned                     | `SK5004` |
+| [`<style lang="scss">` and other preprocessors](#styles)                             | Via Vite in packaged builds | `SK5011` |
+| Render functions, `h()`                                                              | Works                       |          |
+| [JSX and TSX](#jsx-and-tsx)                                                          | Limits: not in `sk dev`     | `SK5012` |
+| [Vapor mode](#vapor-mode)                                                            | Not supported               | `SK5001` |
+| [`defineCustomElement`](#custom-elements)                                            | Not supported               | `SK5002` |
+| [`createSSRApp`, `hydrate`](#ssr-and-hydration)                                      | Limits: no hydration        | `SK5009` |
+| [vue-router with `createMemoryHistory`](#vue-router)                                 | Works                       |          |
+| [vue-router with web or hash history](#vue-router)                                   | Limits: no back             | `SK5008` |
+| Pinia                                                                                | Works                       |          |
+| [Vue Devtools](#devtools)                                                            | Not supported by design     |          |
 
 A dependency that uses any of these gets one `SK5013` warning per package, with the places listed, as dependencies' CSS gets `SK4005`.
 
@@ -189,7 +189,7 @@ Scoped styles support `:deep()`, `:slotted()` and `:global()`. A `v-bind()` in `
 
 `<style module>` is planned; until then it is not compiled (`SK5004`, an error). Its rules are added as plain global rules and `$style` is undefined, so a template that reads `$style.red` throws while rendering and the component renders nothing; `useCssModule()` answers `{}`. Use `<style scoped>` with plain class names.
 
-`<style lang="scss">`, `lang="less"` and `lang="stylus"` are not preprocessed (`SK5011`): the block is compiled as plain CSS, and the declarations that use variables or mixins are dropped. Write plain CSS (custom properties and nesting cover most of it), or compile the preprocessor's output to a `.css` file and import that. Tailwind CSS 3 works; see [CSS](/css/).
+With a root Vite config, `sk build` and `sk publish` process Vue component styles with Vite. Install the preprocessor used by your app. For example, add `sass-embedded` or `sass` for `<style lang="scss">`. The native CSS engine renders the compiled stylesheet. The native hot-reload builder and projects without a Vite config read these blocks as plain CSS (`SK5011`). To share preprocessed styles with those builds, compile to a `.css` file and import it. See [CSS](/css/).
 
 ## JSX and TSX
 

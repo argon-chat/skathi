@@ -516,7 +516,7 @@ export function workerStubModule(id: string, url = false): string {
 }
 
 /** `new Worker(new URL("./w.ts", import.meta.url))` becomes the same named-error class as `?worker`. */
-export function stubWorkerUrls(src: string, file: string): { code: string; count: number } | null {
+export function stubWorkerUrls(src: string, file: string, keepUrl = true): { code: string; count: number } | null {
   if (!/\bnew\s+(?:Shared)?Worker\s*\(\s*new\s+URL\s*\(/.test(src)) return null;
   let count = 0;
   const code = src.replace(
@@ -524,7 +524,7 @@ export function stubWorkerUrls(src: string, file: string): { code: string; count
     (_m, shared: string | undefined, urlExpr: string, _q: string, spec: string) => {
       count++;
       const what = `new ${shared ? "Shared" : ""}Worker(new URL(${J(spec)}, import.meta.url)) in ${file}`;
-      return `new (class SkWorkerUnavailable { constructor() { throw ${notSupportedError(what, WORKERS_WHY)}; } })(${urlExpr}`;
+      return `new (class SkWorkerUnavailable { constructor() { throw ${notSupportedError(what, WORKERS_WHY)}; } })(${keepUrl ? urlExpr : J(spec)}`;
     },
   );
   return count ? { code, count } : null;

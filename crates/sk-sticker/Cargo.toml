@@ -16,11 +16,11 @@ video = ["dep:sk-vpx-sys", "dep:sk-yuv"]
 [dependencies]
 # Lottie stickers draw through `sk_lottie::Animation` (ThorVG by default):
 # whole frames, straight alpha, on the worker thread.
-sk-lottie = { path = "../sk-lottie", version = "0.6.0" }
+sk-lottie = { path = "../sk-lottie", version = "0.7.0" }
 # The loop cache's frames (`src/cache.rs`): LZ4 block format, safe Rust only (measured 2.3–4.2× on
 # 48 px `.tgs` loops).
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
 # The video track (`src/video/`): libvpx 1.17's VP9 decoder, and the I420 +
 # alpha to straight BGRA kernel (a crate of its own, optimised in dev).
-sk-vpx-sys = { path = "../sk-vpx-sys", version = "0.6.0", optional = true }
-sk-yuv = { path = "../sk-yuv", version = "0.6.0", optional = true }
+sk-vpx-sys = { path = "../sk-vpx-sys", version = "0.7.0", optional = true }
+sk-yuv = { path = "../sk-yuv", version = "0.7.0", optional = true }

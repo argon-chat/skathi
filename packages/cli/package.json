@@ -6,22 +6,34 @@
     "url": "git+https://github.com/argon-chat/skathi.git",
     "directory": "packages/cli"
   },
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
+  "exports": {
+    "./vite": {
+      "types": "./vite/public.d.ts",
+      "bun": "./vite/plugin.ts",
+      "default": "./dist/vite-plugin.mjs"
+    },
+    "./*": "./*"
+  },
   "files": [
     "aot",
     "cli",
     "check",
     "effects",
     "templates",
+    "vite",
     "gallery.json",
     "devtools/apps.ts",
     "devtools/commands.ts",
     "devtools/ctl.ts",
+    "dist/vite-plugin.mjs",
+    "dist/vue-adapter.mjs",
     "aot-inputs.ts",
     "ascii.ts",
     "build.ts",
     "css-prefixes.ts",
+    "haptic-patterns.ts",
     "prod.ts",
     "runtime-path.ts",
     "svelte.ts",
@@ -37,18 +49,24 @@
     "@skathi-native/runtime": "workspace:*",
     "commander": "~15.1.0",
     "postcss": "^8.4.31",
-    "typescript": "6"
+    "typescript": "6",
+    "vite": "^8.3.8"
   },
   "peerDependencies": {
-    "tailwindcss": "^3.4"
+    "tailwindcss": "^3.4",
+    "vite-plus": "^1.7.0"
   },
   "peerDependenciesMeta": {
     "tailwindcss": {
+      "optional": true
+    },
+    "vite-plus": {
       "optional": true
     }
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@vitejs/plugin-vue": "^6.0.11",
     "svelte": "5.59.0",
     "tailwindcss": "3.4.19",
     "vue": "3.5.41"
@@ -57,7 +75,8 @@
     "bun": ">=1.4"
   },
   "scripts": {
-    "prepack": "bun ../../scripts/css-engine.ts --ensure --release",
+    "build:vite-plugin": "bun ../../scripts/build-vite-plugin.ts",
+    "prepack": "bun run build:vite-plugin && bun ../../scripts/css-engine.ts --ensure --release",
     "test": "bun test",
     "build": "bun build.ts",
     "watch": "bun build.ts --watch",
@@ -66,6 +85,7 @@
     "sk": "bun cli/sk.ts"
   },
   "comments": {
+    "@vitejs/plugin-vue": "Bundled at prepack for the default Vue compiler. An installed CLI must not pull the Vue peer into Svelte applications.",
     "tailwindcss": "Optional peer, 3.x only: v3 emits literal declarations that crates/sk-css maps onto gpui; v4 uses var(--tw-*) + calc() + @property, which the engine does not fully resolve yet (see tailwind.ts). Loaded from the app, only when it has a tailwind.config.*.",
     "@modelcontextprotocol/sdk": "devDependency: used only by devtools/mcp.ts. devtools/ctl.ts is dependency-free so an agent can drive the app through Bash without bun install.",
     "typescript": "sk check and the AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly.",

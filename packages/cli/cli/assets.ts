@@ -45,7 +45,7 @@ export function collectAssets(
   appRoot: string,
   patterns: string[],
   declared: boolean,
-  publicDir: string | null = null,
+  publicDir: string | false | null = null,
 ): Collected {
   const warnings: string[] = [];
   const byKey = new Map<string, AssetFile>();
@@ -57,7 +57,11 @@ export function collectAssets(
       const key = toKey(root, abs);
       byKey.set(key, { key, path: abs, size: statSync(abs).size });
     }
-  } else if (existsSync(join(appRoot, "public")) && statSync(join(appRoot, "public")).isDirectory()) {
+  } else if (
+    publicDir !== false &&
+    existsSync(join(appRoot, "public")) &&
+    statSync(join(appRoot, "public")).isDirectory()
+  ) {
     warnings.push(
       'the app has a public/ directory but sk.config.json declares no "publicDir": Vite serves public/x at /x, ' +
         'a package does not unless you set "publicDir": "public"',

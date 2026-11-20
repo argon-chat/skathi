@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { VUE_MISSING, appVue } from "../runtime-path";
 import { findConfig, tailwindProblem } from "../tailwind";
-import { ConfigError } from "./config";
+import { ConfigError, viteConfigFile } from "./config";
 import { PKG_DIR } from "./host";
 
 const VUE_IMPORT = /\bfrom\s*["']vue["']|\bimport\s*\(?\s*["']vue["']|\brequire\(\s*["']vue["']\s*\)/;
@@ -27,10 +27,10 @@ export function usesVue(dir: string): boolean {
 }
 
 /** Throws when the app uses Vue or Tailwind without the package installed, naming the install command. */
-export function requireAppDependencies(appRoot: string, srcDir: string): void {
+export function requireAppDependencies(appRoot: string, srcDir: string, mode: "build" | "dev" = "build"): void {
   const problems: string[] = [];
   if (!appVue(appRoot) && usesVue(srcDir)) problems.push(VUE_MISSING);
-  const tailwind = findConfig(srcDir, resolve(PKG_DIR, "../.."));
+  const tailwind = (mode === "dev" || !viteConfigFile(appRoot)) && findConfig(srcDir, resolve(PKG_DIR, "../.."));
   const problem = tailwind && tailwindProblem(tailwind);
   if (problem) problems.push(problem);
   if (problems.length) throw new ConfigError(problems.join("\n"));

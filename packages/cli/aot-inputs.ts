@@ -88,11 +88,11 @@ export class AotInputs {
     this.inputs.set(`${kind}:${this.key(path)}`, { path: resolve(path), kind, text, loader });
   }
 
-  source(path: string, original: string, transformed = original): void {
+  source(path: string, original: string, transformed = original, typed = transformed): void {
     if (this.virtual.has(this.key(path))) throw new Error(`AOT source ${path} collides with a virtual Vue module`);
     this.add(path, original, "source");
     if (transformed !== original) this.add(path, transformed, "transformed-module");
-    this.modules.set(this.key(path), { path: resolve(path), text: transformed });
+    this.modules.set(this.key(path), { path: resolve(path), text: typed });
   }
 
   private addVirtual(path: string, text: string): void {
@@ -301,8 +301,8 @@ export class AotInputs {
       limitations: [
         "Source archive, not a native AOT image; no host ABI or builtin-effect descriptors are inferred from declarations.",
         "Original paths are app-root-relative or use a named source-root anchor; blob names are content hashes. An AOT frontend needs a resolver that maps these paths to blobs.",
-        "Vue and Svelte modules and TS/JS source rewrites are retained before Bun transpilation. Bun-generated asset/query/HTML modules, CSS installation and module linking still require a frontend adapter.",
-        "TypeScript file-module resolution is recorded in addition to Bun's runtime graph; unresolvedImports also includes ambient module names that have no file mapping. A frontend adapter must handle them. This archive does not assert type-checking or AOT compatibility.",
+        "The archive retains component modules and original typed sources. Generated virtual modules, CSS installation and module linking still require a frontend adapter.",
+        "TypeScript file-module resolution is recorded alongside the runtime graph; unresolvedImports includes ambient and plugin module names with no file mapping. A frontend adapter must handle them.",
       ],
     };
     const manifestPath = join(out, "manifest.json");

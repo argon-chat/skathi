@@ -16,7 +16,7 @@ lightningcss = { version = "1.0.0-alpha.72", default-features = false, features 
 cssparser = "0.37"
 parcel_selectors = "0.28.3"
 serde = { version = "1", features = ["derive"] }
-sk-effects = { path = "../sk-effects", version = "0.6.0" }
+sk-effects = { path = "../sk-effects", version = "0.7.0" }
 
 [dev-dependencies]
 serde_json = "1"

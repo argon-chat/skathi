@@ -376,13 +376,16 @@ export function frameworkFindings(input: {
   packages: Packages;
   deps: boolean;
   typescript: TypeScript | null;
+  viteStyles?: boolean | undefined;
 }): Finding[] {
   const out: Finding[] = [];
   const byPackage = new Map<string, { name: string; found: Finding[] }>();
   for (const { file, text } of input.sources) {
     const owner = input.packages.ownerOf(file);
     if (owner && !input.deps) continue;
-    const found = fileFrameworkFindings(file, text, input.typescript);
+    const found = fileFrameworkFindings(file, text, input.typescript).filter(
+      (finding) => !(input.viteStyles && file.endsWith(".vue") && finding.code === "SK5011"),
+    );
     if (!owner) {
       if (JSX_FILE.test(file))
         found.push({
@@ -433,6 +436,7 @@ export function cliTypeScript(): TypeScript | null {
 
 export interface FrameworkPassOptions {
   root: string;
+  viteStyles?: boolean | undefined;
   /** sk.config.json `check.allow`. */
   allow: Map<string, string[]>;
 }
@@ -443,7 +447,13 @@ export function frameworkDiagnostics(
 ): Diagnostic[] {
   const root = resolve(options.root);
   const packages = options.packages ?? new Packages(root);
-  const findings = frameworkFindings({ sources: options.sources, packages, deps: true, typescript: cliTypeScript() });
+  const findings = frameworkFindings({
+    sources: options.sources,
+    packages,
+    deps: true,
+    typescript: cliTypeScript(),
+    viteStyles: options.viteStyles,
+  });
   return diagnosticsOf(findings, root, packages, options.allow).diagnostics;
 }
 
@@ -481,15 +491,17 @@ export class FrameworkWarnings {
 export function frameworkBuildLines(options: {
   appRoot: string;
   entry: string;
-  stylesJson: string;
+  styles: BuildStyles | undefined;
   allow: Map<string, string[]>;
 }): string[] {
-  let components: string[] = [];
-  try {
-    components = (JSON.parse(readFileSync(options.stylesJson, "utf8")) as BuildStyles).files;
-  } catch {}
-  const sources = readFrameworkSources([...components, ...appScripts(dirname(options.entry))]);
-  return frameworkDiagnostics({ root: options.appRoot, allow: options.allow, sources }).map(diagnosticLine);
+  const styles = options.styles;
+  const sources = readFrameworkSources([...(styles?.files ?? []), ...appScripts(dirname(options.entry))]);
+  return frameworkDiagnostics({
+    root: options.appRoot,
+    allow: options.allow,
+    sources,
+    viteStyles: styles?.compiledCss !== undefined,
+  }).map(diagnosticLine);
 }
 
 function appScripts(dir: string, out: string[] = []): string[] {

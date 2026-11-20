@@ -22,7 +22,7 @@ import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import { SVELTE_SOURCE, compileSvelte, SvelteRendererError } from "./svelte";
-import { nativeSvelteRenderer } from "./cli/config";
+import { nativeSvelteRenderer, viteConfigFile } from "./cli/config";
 import { protectHapticPatterns } from "./haptic-patterns";
 import {
   DOM_ENTRY,
@@ -465,7 +465,11 @@ const AOT_INPUTS = aotInputsDir
       entry: ENTRY_ABS,
       typescript: cliRequire("typescript"),
       aliases: buildAliases(),
-      sourceRoots: { sdk: RUNTIME_DIR, ...(APP_VUE ? { "sdk-modules": APP_VUE.modulesDir } : {}) },
+      sourceRoots: {
+        sdk: RUNTIME_DIR,
+        ...(APP_VUE ? { "sdk-modules": APP_VUE.modulesDir } : {}),
+        "sdk-tooling": dirname(dirname(cliRequire.resolve("typescript/package.json"))),
+      },
       declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: RUNTIME_SRC_DIR, absolute: true })],
     })
   : null;
@@ -786,18 +790,7 @@ async function build() {
     tailwind: TW_CONFIG !== null,
   };
   writeAtomic(STYLES_JSON, JSON.stringify(styles, null, 2) + "\n");
-  if (AOT_INPUTS) {
-    const pinsPath = join(WS_ROOT, "vendor", "redjs", "redjs", "pins.txt");
-    const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);
-    const manifest = AOT_INPUTS.write({
-      script: out,
-      scriptUrl: "sk://app.prod.js",
-      defines: DEFINES,
-      engine,
-      sdkVersion: RUNTIME_VERSION,
-    });
-    console.log(`[prod] typed AOT inputs: ${manifest} (source archive; native AOT compilation not enabled)`);
-  }
+  writeAotInputs(out, DEFINES);
 
   for (const [what, n] of SHAPE_NOTES) console.log(`[prod] ${what}: ${n}`);
   if (LIFTED) {
@@ -820,7 +813,47 @@ async function build() {
   );
 }
 
-await (graphOut ? writeGraph(graphOut) : build()).catch((e) => {
+function writeAotInputs(script: string, defines: Record<string, string>): void {
+  if (!AOT_INPUTS) return;
+  const pinsPath = join(WS_ROOT, "vendor", "redjs", "redjs", "pins.txt");
+  const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);
+  const manifest = AOT_INPUTS.write({
+    script,
+    scriptUrl: "sk://app.prod.js",
+    defines,
+    engine,
+    sdkVersion: RUNTIME_VERSION,
+  });
+  console.log(`[prod] typed AOT inputs: ${manifest}`);
+}
+
+async function run(): Promise<void> {
+  const configFile = viteConfigFile(SK_CONFIG_DIR);
+  if (!configFile) return graphOut ? writeGraph(graphOut) : build();
+
+  // This process is dedicated to one app. Config callbacks and plugins often resolve paths against cwd.
+  process.chdir(SK_CONFIG_DIR);
+  process.env.SKATHI_BUILD = "1";
+  process.env.NODE_ENV = "production";
+  const { buildWithVite } = await import("./vite/backend");
+  await buildWithVite({
+    appRoot: SK_CONFIG_DIR,
+    entry: ENTRY_ABS,
+    outFile: OUT_FILE,
+    configFile,
+    skConfig: SK_CONFIG,
+    aliases: buildAliases(),
+    defines: DEFINES,
+    windowJson: windowConfig(),
+    minify,
+    graphOut,
+    aotInputs: AOT_INPUTS ?? undefined,
+    finishScript: asciiBundle,
+    finishAot: writeAotInputs,
+  });
+}
+
+await run().catch((e) => {
   console.error(e);
   process.exit(1);
 });

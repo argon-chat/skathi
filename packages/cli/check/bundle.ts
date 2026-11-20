@@ -49,6 +49,10 @@ function decode(bundle: Bundle, key: (path: string) => string): Map<string, Segm
     }
   }
   const out = new Map<string, Segment[]>();
+  // A minifier can remove an entire module but leave its original source in the map.
+  if (bySource.size) {
+    for (const path of bundle.sources) if (path) out.set(key(path), []);
+  }
   for (const [index, list] of bySource) {
     const path = bundle.sources[index];
     if (!path) continue;
@@ -81,6 +85,7 @@ export class BundleLiveness {
     this.segments ??= decode(this.bundle, (p) => this.key(p));
     const segments = this.segments.get(this.key(path));
     if (!segments) return true;
+    if (!segments.length) return false;
     const at = this.generated(segments, range);
     if (!at) return true;
     this.parse();

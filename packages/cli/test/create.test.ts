@@ -2,8 +2,9 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import cliPackage from "../package.json";
 import { modeVariant } from "../cli/build-app";
-import { ConfigError, loadAppConfig } from "../cli/config";
+import { ConfigError, loadAppConfig, viteConfigFile } from "../cli/config";
 import {
   create,
   createCommand,
@@ -102,6 +103,23 @@ test("the minimal template is one component, with OS chrome and no router", () =
   expect((config.raw.window as Record<string, unknown>).titleBarStyle).toBe("default");
 });
 
+test("every built-in and gallery template configures Vite+ for the native build", () => {
+  for (const template of TEMPLATES) {
+    const dir = fresh(template);
+    create(dir, { template });
+    const manifest = pkg(dir);
+    const plugin = manifest.dependencies.svelte ? "@sveltejs/vite-plugin-svelte" : "@vitejs/plugin-vue";
+    expect(viteConfigFile(dir)).toBe(join(dir, "vite.config.ts"));
+    expect(read(dir, "vite.config.ts")).toContain('from "vite-plus"');
+    expect(read(dir, "vite.config.ts")).toContain(`from "${plugin}"`);
+    expect(manifest.devDependencies[plugin]).toBeDefined();
+    expect(manifest.devDependencies["vite-plus"]).toBe(cliPackage.peerDependencies["vite-plus"]);
+    expect(manifest.devDependencies["@skathi-native/cli"]).toBe(`^${cliPackage.version}`);
+    expect(manifest.dependencies["@skathi-native/runtime"]).toBe(`^${cliPackage.version}`);
+    expect(manifest.scripts.build).toBe("sk build");
+  }
+});
+
 test("every template points VS Code at the runtime's CSS custom data", () => {
   for (const template of TEMPLATES) {
     const dir = fresh();
@@ -124,7 +142,13 @@ test("vue is a dependency of the Vue templates, pinia and vue-router only of the
   create(minimal, { template: "minimal" });
   expect(Object.keys(pkg(minimal).dependencies).sort()).toEqual(["@skathi-native/runtime", "vue"]);
   for (const dir of [showcase, minimal]) {
-    expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "typescript", "vue-tsc"]);
+    expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual([
+      "@skathi-native/cli",
+      "@vitejs/plugin-vue",
+      "typescript",
+      "vite-plus",
+      "vue-tsc",
+    ]);
     expect(pkg(dir).scripts.typecheck).toBe("vue-tsc --noEmit");
   }
 });
@@ -141,7 +165,13 @@ test("the svelte templates depend on svelte at the version the runtime accepts a
     expect(read(dir, "src/main.ts")).toContain('from "@skathi-native/runtime/svelte"');
     expect(Object.keys(pkg(dir).dependencies).sort()).toEqual(["@skathi-native/runtime", "svelte"]);
     expect(pkg(dir).dependencies.svelte).toBe(svelte);
-    expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual(["@skathi-native/cli", "svelte-check", "typescript"]);
+    expect(Object.keys(pkg(dir).devDependencies).sort()).toEqual([
+      "@skathi-native/cli",
+      "@sveltejs/vite-plugin-svelte",
+      "svelte-check",
+      "typescript",
+      "vite-plus",
+    ]);
     expect(pkg(dir).scripts.typecheck).toBe("svelte-check");
     expect((JSON.parse(read(dir, "tsconfig.json")) as { include: string[] }).include).toEqual([
       "src/**/*.ts",

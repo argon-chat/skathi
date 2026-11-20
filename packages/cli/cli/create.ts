@@ -9,9 +9,10 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve } from "node:path";
+import cliPackage from "../package.json";
 import * as p from "./prompt";
 import { runtimeRequire } from "../runtime-path";
-import { ConfigError, sanitizeExeName } from "./config";
+import { ConfigError, sanitizeExeName, VITE_CONFIG_FILES } from "./config";
 import { fetchGallery, galleryDir } from "./gallery";
 import { CLI_VERSION } from "./host";
 import { currentPlatform, parsePlatform, type Platform } from "./platform";
@@ -49,6 +50,11 @@ const SVELTE_CHECK: Checker = {
   devDependencies: { "svelte-check": "^4" },
   sources: "src/**/*.svelte",
   tsconfig: "@skathi-native/runtime/tsconfig.svelte.json",
+};
+
+const VITE_PLUGINS = {
+  vue: { "@vitejs/plugin-vue": cliPackage.devDependencies["@vitejs/plugin-vue"] },
+  svelte: { "@sveltejs/vite-plugin-svelte": "^7.1.2" },
 };
 
 /** The versions `sk create` gives a template's framework packages: vue and svelte as the runtime accepts them. */
@@ -210,9 +216,14 @@ export function create(target: string, options: CreateOptions = {}): string[] {
   const platforms = options.platforms?.length ? options.platforms : [currentPlatform()];
   const sdk = `^${CLI_VERSION}`;
 
+  const templateContents = templateFiles(template, { name, productName });
+  const hasViteConfig = VITE_CONFIG_FILES.some((name) => Object.hasOwn(templateContents, name));
   const files: Record<string, string | Uint8Array> = {
     "icon.png": readFileSync(join(TEMPLATES_DIR, "icon.png")),
-    ...templateFiles(template, { name, productName }),
+    ...templateContents,
+    ...(!hasViteConfig && {
+      "vite.config.ts": readFileSync(join(TEMPLATES_DIR, "config", info.framework, "vite.config.ts"), "utf8"),
+    }),
     "package.json": json({
       name: slug,
       version: "0.1.0",
@@ -229,7 +240,13 @@ export function create(target: string, options: CreateOptions = {}): string[] {
         "@skathi-native/runtime": sdk,
         ...Object.fromEntries(info.dependencies.map((dep) => [dep, FRAMEWORK_VERSIONS[dep]])),
       },
-      devDependencies: { "@skathi-native/cli": sdk, typescript: "^6", ...info.checker.devDependencies },
+      devDependencies: {
+        "@skathi-native/cli": sdk,
+        "vite-plus": cliPackage.peerDependencies["vite-plus"],
+        ...VITE_PLUGINS[info.framework],
+        typescript: "^6",
+        ...info.checker.devDependencies,
+      },
     }),
     "sk.config.json": json({
       $schema: CONFIG_SCHEMA,

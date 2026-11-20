@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import postcss, { type ChildNode, type Root } from "postcss";
 import { inspectCss, type CssNode } from "./css-engine";
-import { diagnosticsOf, type Finding, type FindingRelated } from "./finding";
+import { diagnosticsOf, ZERO_RANGE, type Finding, type FindingRelated } from "./finding";
 import { Packages } from "./packages";
 import type { Diagnostic, Range } from "./schema";
 
@@ -211,7 +211,12 @@ function syntax(nodes: ChildNode[], file: string, block: Block): CssNode[] {
 }
 
 /** CSS findings at source locations before Vue/Svelte scope rewriting. */
-export function fileFindings(file: string, source: string, tailwind: boolean): Finding[] {
+export function fileFindings(
+  file: string,
+  source: string,
+  tailwind: boolean,
+  emittedMessages?: ReadonlySet<string>,
+): Finding[] {
   const out: Finding[] = [];
   const lines = new Lines(source);
   for (const block of styleBlocks(file, source)) {
@@ -224,6 +229,7 @@ export function fileFindings(file: string, source: string, tailwind: boolean): F
     const nodes = syntax(root.nodes, file, block);
     if (!nodes.length) continue;
     for (const { start, end, ...diagnostic } of inspectCss({ nodes, tag: block.tag ?? null, tailwind })) {
+      if (!block.inline && emittedMessages && !emittedMessages.has(diagnostic.message)) continue;
       out.push({ ...diagnostic, file, range: lines.range(block.offset + start, block.offset + end), related: [] });
     }
   }
@@ -255,6 +261,7 @@ export interface CssPassOptions {
   /** sk.config.json `check.allow`. */
   allow: Map<string, string[]>;
   tailwind: boolean;
+  compiled?: { css: string; entry: string } | undefined;
 }
 
 /** The CSS pass of `sk check` on its own, dependencies included, as sk build and sk dev report it. */
@@ -263,7 +270,13 @@ export function cssDiagnostics(
 ): Diagnostic[] {
   const root = resolve(options.root);
   const packages = options.packages ?? new Packages(root);
-  const findings = cssFindings({ sources: options.sources, packages, deps: true, tailwind: options.tailwind });
+  const findings = cssFindings({
+    sources: options.sources,
+    packages,
+    deps: true,
+    tailwind: options.tailwind,
+    compiled: options.compiled,
+  });
   return diagnosticsOf(findings, root, packages, options.allow).diagnostics;
 }
 
@@ -304,13 +317,23 @@ export function cssFindings(input: {
   packages: Packages;
   deps: boolean;
   tailwind: boolean;
+  compiled?: CssPassOptions["compiled"];
 }): Finding[] {
   const out: Finding[] = [];
   const byPackage = new Map<string, { name: string; found: Finding[] }>();
+  // Scope and PostCSS transforms can remove source warnings or introduce new ones.
+  const emitted = input.compiled && fileFindings(input.compiled.entry + ".css", input.compiled.css, false);
+  const messages = emitted && new Set(emitted.map((finding) => finding.message));
+  const located = new Set<string>();
+  let skippedDependency = false;
   for (const { file, text } of input.sources) {
     const owner = input.packages.ownerOf(file);
-    if (owner && !input.deps) continue;
-    const found = fileFindings(file, text, input.tailwind);
+    if (owner && !input.deps) {
+      skippedDependency = true;
+      continue;
+    }
+    const found = fileFindings(file, text, input.tailwind, messages);
+    if (emitted) for (const finding of found) located.add(finding.message);
     if (!owner) {
       out.push(...found);
       continue;
@@ -318,6 +341,18 @@ export function cssFindings(input: {
     const group = byPackage.get(owner.dir) ?? { name: owner.name, found: [] };
     group.found.push(...found);
     byPackage.set(owner.dir, group);
+  }
+  if (emitted && input.compiled && !skippedDependency) {
+    for (const finding of emitted) {
+      if (located.has(finding.message)) continue;
+      out.push({
+        ...finding,
+        file: input.compiled.entry,
+        range: ZERO_RANGE,
+        message: `In the compiled stylesheet: ${finding.message}`,
+      });
+      located.add(finding.message);
+    }
   }
   for (const { name, found } of byPackage.values()) {
     const first = found[0];

@@ -74,7 +74,7 @@ export async function dev(
   options: { exe?: string | undefined; shaderCompiler?: string | undefined; color?: boolean | undefined } = {},
 ): Promise<number> {
   const config = loadAppConfig(target);
-  requireAppDependencies(config.appRoot, dirname(config.entry));
+  requireAppDependencies(config.appRoot, dirname(config.entry), "dev");
   const c = paint(colorEnabled(process.stdout, options.color));
   const progress = progressFor(process.stderr, colorEnabled(process.stderr, options.color));
   progress.step("dev workload");

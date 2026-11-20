@@ -281,7 +281,7 @@ panel.style.removeProperty("width");`,
   "feature-preprocessors": {
     examples: [
       {
-        title: "Instead: import the CSS your Sass build produced",
+        title: "Import compiled CSS for hot reload",
         lang: "ts",
         code: `import { createApp } from "vue";
 import App from "./App.vue";
@@ -291,9 +291,7 @@ createApp(App).mount();`,
         note: "Run `sass` (or `lessc`) on the source file before `sk dev` or `sk build`, and import its output.",
       },
     ],
-    edgeCases: [
-      "`sk dev` and `sk build` print an advisory naming the component whose `<style lang>` was not preprocessed.",
-    ],
+    edgeCases: ["`sk dev` and packaged builds without a Vite config report SK5011 for preprocessor blocks."],
   },
   "feature-tailwind-3": {
     examples: [

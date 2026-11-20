@@ -16,6 +16,8 @@ export interface ModuleGraph {
   modules: string[];
   /** Absolute paths of the .css files (and index.html, for its `<style>`) whose CSS the build includes. */
   styles?: string[];
+  /** Final stylesheet after the app's Vite plugins and preprocessors. */
+  compiledCss?: string;
   /** The build runs Tailwind over the app's CSS. */
   tailwind?: boolean;
   /** The production bundle and its sourcemap; a source is null when its positions are not the file's own. */
@@ -27,6 +29,7 @@ export interface ModuleGraph {
 export interface BuildStyles {
   /** Absolute paths of the components, stylesheets and pages whose CSS the bundle includes. */
   files: string[];
+  compiledCss?: string;
   tailwind: boolean;
 }
 

@@ -1,6 +1,6 @@
 import { sfcCompiler } from "../runtime-path";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type ts from "typescript";
 import type { PackageInfo, Packages } from "./packages";
 
@@ -192,11 +192,13 @@ export function buildProgram(input: ProgramInput): BuiltProgram {
     );
     return unit.sourceFile;
   };
+  const directoryAliases = Object.entries(aliases).filter(([, path]) => typescript.sys.directoryExists(path));
   host.resolveModuleNames = (names, importer) =>
     names.map((specifier) => {
       // The bundle's aliases win over node_modules, as they do in the build.
+      const directory = directoryAliases.find(([name]) => specifier === name || specifier.startsWith(name + "/"));
       const alias = aliases[specifier];
-      if (alias) {
+      if (alias && !typescript.sys.directoryExists(alias) && !COMPONENT_FILE.test(alias)) {
         if (TS_FILE.test(alias)) return { resolvedFileName: alias, extension: typescript.Extension.Ts };
         // A built .mjs stands in for a package: take that package's own declarations.
         return (
@@ -206,11 +208,13 @@ export function buildProgram(input: ProgramInput): BuiltProgram {
           }
         );
       }
-      const found = typescript.resolveModuleName(specifier, importer, options, host).resolvedModule;
+      const target =
+        alias ?? (directory && resolve(directory[1], specifier.slice(directory[0].length + 1))) ?? specifier;
+      const found = typescript.resolveModuleName(target, importer, options, host).resolvedModule;
       if (found) return found;
-      if (COMPONENT_FILE.test(specifier) && specifier.startsWith(".")) {
+      if (COMPONENT_FILE.test(target) && (target.startsWith(".") || isAbsolute(target))) {
         for (const ext of ["ts", "js"] as const) {
-          const path = resolve(dirname(importer), `${specifier}.${ext}`);
+          const path = resolve(dirname(importer), `${target}.${ext}`);
           if (own.has(key(path)))
             return {
               resolvedFileName: path,

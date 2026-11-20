@@ -139,12 +139,12 @@ function readBuilderAssets(path: string): BuilderAsset[] {
 }
 
 /** SK4001–SK4005 over the CSS the bundle includes, one line each; `--aot` has them from its full check. */
-function cssWarnings(config: AppConfig, stylesJson: string): string[] {
-  if (!existsSync(stylesJson)) return [];
-  const styles = JSON.parse(readFileSync(stylesJson, "utf8")) as BuildStyles;
+function cssWarnings(config: AppConfig, styles: BuildStyles | undefined): string[] {
+  if (!styles) return [];
   return cssDiagnostics({
     root: config.appRoot,
     sources: readStyleSources(styles.files),
+    compiled: styles.compiledCss === undefined ? undefined : { css: styles.compiledCss, entry: config.entry },
     allow: parseCheckConfig(config.raw.check).allow,
     tailwind: styles.tailwind,
   }).map(diagnosticLine);
@@ -565,17 +565,25 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   }
   const script = readFileSync(jsOut);
   const windowJson = readFileSync(join(work, "window.json"));
+  const styles: BuildStyles | undefined = existsSync(stylesJson)
+    ? JSON.parse(readFileSync(stylesJson, "utf8"))
+    : undefined;
   const msBundle = performance.now() - tb;
   if (aot) await aotCheck(options.target, options.configPath, progress, options.color ?? false);
   else {
     const allow = parseCheckConfig(config.raw.check).allow;
-    const framework = frameworkBuildLines({ appRoot: config.appRoot, entry: config.entry, stylesJson, allow });
-    for (const line of [...cssWarnings(config, stylesJson), ...framework]) progress.warn(line);
+    const framework = frameworkBuildLines({ appRoot: config.appRoot, entry: config.entry, styles, allow });
+    for (const line of [...cssWarnings(config, styles), ...framework]) progress.warn(line);
   }
 
   progress.step("assets");
   const ta = performance.now();
-  const collected = collectAssets(config.appRoot, config.assets, config.assetsDeclared, config.publicDir);
+  const collected = collectAssets(
+    config.appRoot,
+    config.assets,
+    config.assetsDeclared,
+    styles?.compiledCss !== undefined ? false : config.publicDir,
+  );
   warnings.push(...collected.warnings);
   // What the bundle's imports referred to (`?url`, image imports): they live under src/ or in a
   // package, which the "assets" walk never packages, so they are added here.
