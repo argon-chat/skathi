@@ -122,6 +122,76 @@ async function until<V>(read: () => Promise<V> | V, ok: (v: V) => boolean, what:
 const sameRect = (a: Rect, b: Rect) =>
   a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
 
+type ButtonRect = { x: number; y: number; width: number; height: number };
+type ButtonFrame = [x: number, y: number, width: number, height: number];
+const buttonRect = (): Promise<ButtonRect | null> =>
+  app.eval("__SK_WINDOW__.refresh(); __SK_WINDOW__.appWindow.getWindowButtonsRect()");
+
+async function expectTrafficLights(x: number, y: number): Promise<ButtonRect> {
+  const rect = await until(
+    buttonRect,
+    (r) => !!r && Math.abs(r.x - x) <= 1 && Math.abs(r.y - y) <= 1,
+    `traffic lights at (${x}, ${y})`,
+  );
+  if (!rect) throw new Error("Visible traffic lights lost their rect");
+  const reply = await app.send("windows", { native: true });
+  const windows = reply.windows as {
+    kind: string;
+    native: { traffic_light_frames: [ButtonFrame, ButtonFrame, ButtonFrame] };
+  }[];
+  const frames = windows.find((w) => w.kind === "main")!.native.traffic_light_frames;
+  expect(frames).toHaveLength(3);
+  const [close, minimize, zoom] = frames;
+  expect(await app.eval("__SK_WINDOW__.appWindow.chrome.trafficLightPosition")).toEqual({ x: close[0], y: close[1] });
+  expect(Math.abs(close[0] - x)).toBeLessThanOrEqual(1);
+  expect(minimize[0]).toBeGreaterThan(close[0] + close[2]);
+  expect(zoom[0]).toBeGreaterThan(minimize[0] + minimize[2]);
+  for (const [, top, width, height] of frames) {
+    expect(Math.abs(top - y)).toBeLessThanOrEqual(1);
+    expect(width).toBeGreaterThan(0);
+    expect(Math.abs(rect.height - height)).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(rect.width - (zoom[0] + zoom[2] - close[0]))).toBeLessThanOrEqual(1);
+  return rect;
+}
+
+test.if(MACOS)("the first window reveal reports the three centred native traffic lights", async () => {
+  // The fixture opens with a 40 px title bar; no geometry setter has run.
+  const rect = await expectTrafficLights(12, 13);
+  const { inner } = await page();
+  expect(rect.x + rect.width).toBeLessThan(inner[0] / 2);
+  expect(rect.y + rect.height).toBeLessThan(inner[1] / 2);
+});
+
+test.if(MACOS)(
+  "showing the traffic lights preserves the current title-bar layout",
+  async () => {
+    const call = (body: string) => app.eval(`__SK_WINDOW__.appWindow.${body}; true`);
+    try {
+      await app.eval("__SK_WINDOW__.defineWindow({titleBarHeight:48}); true");
+      const before = await expectTrafficLights(12, 17);
+      console.log("48 px title bar, native button cluster", before);
+      for (const fade of [0, 150]) {
+        await call(`setWindowButtonsVisible(false,{fade:${fade}})`);
+        expect(await until(buttonRect, (r) => r === null, "hidden buttons")).toBeNull();
+        await call(`setWindowButtonsVisible(true,{fade:${fade}})`);
+        expect(await expectTrafficLights(12, 17)).toEqual(before);
+      }
+      await call("setTrafficLightPosition({x:20,y:11})");
+      const custom = await expectTrafficLights(20, 11);
+      await call("setWindowButtonsVisible(false)");
+      expect(await until(buttonRect, (r) => r === null, "hidden custom-position buttons")).toBeNull();
+      await call("setWindowButtonsVisible(true)");
+      expect(await expectTrafficLights(20, 11)).toEqual(custom);
+    } finally {
+      await call("setTrafficLightPosition(null)");
+      await call("setWindowButtonsVisible(true)");
+      await app.eval("__SK_WINDOW__.defineWindow({titleBarHeight:40}); true");
+    }
+  },
+  T,
+);
+
 async function expectFullscreenCoversTheMonitor(element: string | null) {
   await until(page, (p) => p.fullscreen, "isFullscreen()");
   if (!user32) {

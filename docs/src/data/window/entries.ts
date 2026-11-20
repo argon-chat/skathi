@@ -139,7 +139,7 @@ const mainWindow = section("Main window", [
     since: "0.6.0",
     syntax: "appWindow.setWindowButtonsVisible(visible: boolean, options?: { fade?: number }): void",
     notes: [
-      "On macOS this controls the three AppKit traffic lights. Skathi updates their tracking areas and cursor rects when their visibility changes.",
+      "On macOS this controls the three AppKit traffic lights. Showing them restores their position for the current title-bar height or the coordinates set by setTrafficLightPosition(). Skathi updates their tracking areas and cursor rects after placement.",
       "Pass a nonnegative fade duration in milliseconds to match a CSS opacity transition. The buttons stay interactive during a fade out and disappear from hit testing and geometry when it finishes. Reversing a fade starts at the current opacity. Reduced motion changes visibility immediately.",
       "On Windows and Linux this controls the host-drawn cluster enabled by titleBarOverlay. The desktop controls its own standard title bar. The visibility preference survives a change of title-bar height or a round trip through fullscreen.",
     ],
