@@ -167,6 +167,10 @@ New in 0.4.0. On Windows (Direct3D 12 and Direct3D 11) and macOS, a window whose
 
 Everything else in the window looks as it did. The page is still blended in sRGB-encoded values, as on an 8-bit target, now into a half-float one. On Windows a last pass makes it linear, with 1.0 at the SDR white Windows composes SDR content at (`sdr_white_nits / 80` in scRGB); on macOS the layer takes the encoded values as they are, extended sRGB being sRGB's curve continued past 1.0, and EDR's 1.0 already is SDR white. Skathi's renderer tests draw text, translucent fills, antialiased corners and half-float tiles both ways on Direct3D 11, Direct3D 12, wgpu and Metal: every pixel of the HDR page is within one 8-bit code value of the standard one, and the output at SDR white encodes back to it within one code value. A tile of 4.0 limited to 2.5 shows at 2.5 times SDR white, and under `standard` at SDR white.
 
+Since 0.7, an HDR window preserves negative channels from half-float surfaces. These encode colors outside BT.709 and follow the sign-preserving extended sRGB curve. Tint, grayscale, and translucent elements over the surface operate on the signed, encoded values.
+
+SVG color matrices clamp their output to 0…1. Backdrop blur and `--shading: frost()` clamp the filtered backdrop to the SDR range. `glow()` and `noise()` composite their own colors over the surface. CSS `brightness()`, `contrast()`, `saturate()`, and `invert()` are unsupported. The supported forms of CSS `blur()` and `drop-shadow()` draw box effects without sampling surface pixels.
+
 A switch recreates the swap chain or reconfigures the layer, once each way; on macOS a new headroom tag only retags the layer. On macOS 14 and later the frame that switches was handed a drawable of the old format; since 0.5 it is drawn in that format, so neither side of a switch shows a black or garbled frame. In HDR a window keeps a half-float copy of the page, and its swap chain is half float too, so it takes about three times the memory of an 8-bit one. At 3840×2160 with 96 full-window translucent layers, a Direct3D 12 frame took 23.4 ms in HDR against 23.2 ms standard on an RTX 5070.
 
 On an SDR display, with HDR off, on Linux, and while no element needs it, a window draws exactly as before. The wgpu renderer can switch where its surface offers extended linear sRGB, but Linux windows stay SDR.
@@ -174,6 +178,8 @@ On an SDR display, with HDR off, on Linux, and while no element needs it, a wind
 ### Whether a window draws HDR (since 0.5)
 
 [`output_headroom`](#the-display) and the `(dynamic-range: high)` media query say whether a window can show HDR; [`output_hdr`](#the-display) says whether it does now. A switch either way fires `SurfaceEvent::DisplayChanged` and `surfacedisplaychange` (`outputHdr`), and `SK_LOG=info` logs it. A player that sets `dynamic-range-limit: standard` on SDR content to keep the window out of HDR sees `output_hdr` turn false two seconds later.
+
+When HDR output turns off, the 8-bit path clips negative channels to zero. A producer can use `outputHdr` to switch to an SDR gamut mapping.
 
 On macOS a screen's `headroom` stays 1.0 until some window on it asks for EDR, so a window decides by the screen's `potential_headroom` instead: it asks for EDR as soon as a visible half-float element's `dynamic-range-limit` allows more than 1.0 there, whatever else the screen shows. The same holds after a pause: when nothing has shown EDR for a while the system lets the headroom fall back to 1.0, and an element that needs HDR again, such as one whose limit goes back to `no-limit`, brings the window back into EDR. `output_headroom` is the current `headroom` and follows it as the system raises it, from 1.0 at the switch. Since 0.5 the element is painted with the headroom read on each frame, so highlights already in the frame brighten with the system's ramp, not in the steps it is reported in.
 

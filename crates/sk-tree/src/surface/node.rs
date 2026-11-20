@@ -161,7 +161,7 @@ impl gpui::Element for HdrPicture {
         cx: &mut App,
     ) {
         let headroom = paint_headroom(self.0);
-        window.with_image_headroom(headroom, |window| self.1.paint(window, cx));
+        window.with_signed_image_headroom(headroom, |window| self.1.paint(window, cx));
     }
 }
 

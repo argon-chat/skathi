@@ -11,12 +11,20 @@ on:
       - "docs/**"
       - "**/*.md"
   workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: macOS runner
+        type: choice
+        default: macos-15
+        options:
+          - macos-15
+          - macos-26
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', inputs.macos_runner) || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -70,7 +78,7 @@ jobs:
             os: windows-2025
             target: x86_64-pc-windows-msvc
           - name: macOS arm64
-            os: macos-15
+            os: ${{ inputs.macos_runner || 'macos-15' }}
             target: aarch64-apple-darwin
           - name: Linux x64
             os: ubuntu-24.04
@@ -128,6 +136,14 @@ jobs:
         run: cargo test --locked -p sk-tree --lib --no-default-features --features webgpu,lottie --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
       - name: Release host builds
         run: cargo check --locked -p sk-app --features prod --target ${{ matrix.target }}
+      - if: runner.os == 'macOS'
+        name: Metal HDR preserves signed surface colors
+        working-directory: vendor/gpui
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cargo test --locked -p skathi-gpui-apple --lib --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0" \
+            metal_renderer::tests::hdr_output_preserves_signed_surfaces -- --exact --nocapture
 
   e2e:
     name: E2E (${{ matrix.name }})
@@ -136,7 +152,7 @@ jobs:
       matrix:
         include:
           - name: macOS arm64
-            os: macos-15
+            os: ${{ inputs.macos_runner || 'macos-15' }}
             target: aarch64-apple-darwin
           - name: Linux x64
             os: ubuntu-24.04

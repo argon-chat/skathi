@@ -175,6 +175,10 @@ The values are scRGB, with 1.0 as SDR white: what Windows shows for 1.0 on an SD
 
 The frame stays half float in the surface's textures. A window on a display in HDR mode draws HDR while it shows a visible half-float surface whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 (see [HDR windows](/embedding/native-frames/#hdr-windows)): the element then shows the frame's own values, up to that limit and the display's headroom. In a standard window, when an element draws the frame, the surface first renders it into an 8-bit texture of its own (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)): under the D3D12 renderer on the surface's queue, with the window's copy waiting on the GPU; under Direct3D 11 on the renderer's immediate context. A frame that is never shown is never mapped.
 
+Since 0.7, half-float surfaces preserve negative channels in an HDR window. These channels represent colors outside the BT.709 gamut. The scene carries them through sampling, tint, grayscale, and alpha blending in extended sRGB-encoded values. The upper headroom limit still applies.
+
+The 8-bit path clips negative channels to zero. This applies as soon as a window returns to SDR, for example after the last surface that needs HDR changes its `dynamic-range-limit`, or when HDR is turned off on the display. The current `outputHdr` in `surfacedisplaychange` lets a producer choose an SDR gamut mapping when the window switches. See [HDR windows and filters](/embedding/native-frames/#hdr-windows).
+
 ## Choosing, in short
 
 - **One process, D3D11 renderer of your own?** Render on `d3d11_device()`, present the texture. Fewest moving parts.
