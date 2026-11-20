@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { create } from "../../cli/cli/create";
 import { expect as ui, launch, readPng, REPO, SCREENSHOTS, WORK_DIR } from "../src/index";
@@ -35,6 +35,39 @@ async function recordHaptics() {
     __sk_appHaptics.stop = id => { cues.push(["stop", id]); return true; };`);
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
+
+test("Files accepts disk files and exports both the originals and the current editor text", async () => {
+  const disk = join(dir, "drop-example.txt");
+  writeFileSync(disk, "from disk");
+  await page("files");
+  const zone = { selector: ".drop-zone" };
+  await app.locator(zone.selector).waitFor();
+  await waitFor("document.activeViewTransition === null");
+  expect((await app.send("drag-files", { kind: "enter", ...zone, paths: [disk] })).dropEffect).toBe("copy");
+  await ui(app.locator(zone.selector)).toHaveText("Release to add files");
+  expect((await app.send("drag-files", { kind: "drop", ...zone })).dropEffect).toBe("copy");
+  await ui(app.locator(".dropped-export")).toHaveText("Drag drop-example.txt out");
+
+  async function dragToZone(selector: string) {
+    await app.eval(`globalThis.droppedNote = null;
+      document.querySelector(".drop-zone").addEventListener("drop", async e => {
+        const f = e.dataTransfer.files[0]; globalThis.droppedNote = [f.name, await f.text()];
+      }, {once:true})`);
+    await app.send("drag-document", { kind: "arm" });
+    const down = await app.send("mouse", { kind: "down", selector });
+    await app.send("mouse", { kind: "move", x: Number(down.x) + 9, y: Number(down.y), held: true });
+    await app.send("drag-document", { kind: "enter", ...zone });
+    expect((await app.send("drag-document", { kind: "over", ...zone })).dropEffect).toBe("copy");
+    expect((await app.send("drag-document", { kind: "drop", ...zone })).dropEffect).toBe("copy");
+    await waitFor("droppedNote !== null");
+    return JSON.parse(String(await app.eval("JSON.stringify(droppedNote)")));
+  }
+  expect(await dragToZone(".dropped-export")).toEqual(["drop-example.txt", "from disk"]);
+  await app.eval(`const editor = document.querySelector("textarea.editor");
+    editor.value = "edited in the showcase"; editor.dispatchEvent(new Event("input", {bubbles:true}));`);
+  expect(await dragToZone(".note-export")).toEqual(["notes.txt", "edited in the showcase"]);
+  await ui(app.locator('[role="status"]')).toHaveText("Copy completed");
+}, 30_000);
 
 test("haptics binds individual gestures and lets the app choose the fallback", async () => {
   await app.eval(`globalThis.cues = [];

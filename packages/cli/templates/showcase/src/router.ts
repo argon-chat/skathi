@@ -61,7 +61,7 @@ export const pages: PageEntry[] = [
     title: "Files",
     icon: "files",
     section: "Desktop",
-    blurb: "Open and save dialogs, and the clipboard",
+    blurb: "Drag files between apps, open and save documents, and use the clipboard",
     component: FilesPage,
   },
   {

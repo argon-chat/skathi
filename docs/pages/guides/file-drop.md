@@ -122,6 +122,8 @@ Devtools can deliver a gesture through the same input path. Relative to the targ
 
 ## Drag files out of a window (since 0.6)
 
+To try both directions, run `bun run showcase` in the Skathi repository and open **Desktop → Files**. Drop files from a folder, then drag the group to another folder. Drag **notes.txt** out to export the current editor text.
+
 Mark the source as `draggable` and fill its `DataTransfer` in `dragstart`. A pointer move of four CSS pixels starts a system drag. A destination such as Explorer or Finder can copy an existing file or request the contents of a newly generated file.
 
 ```ts
