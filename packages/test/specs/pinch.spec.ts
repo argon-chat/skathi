@@ -75,6 +75,30 @@ test("successive updates multiply and a cancellation resets the gesture", async 
   ]);
 });
 
+test("a final magnification reaches gestureend before its cancellable wheel", async () => {
+  const at = { selector: "#probe" };
+  await app.locator(at.selector).waitFor();
+  await app.eval(`globalThis.finalPinchEvents = [];
+    const target = document.getElementById("probe");
+    for (const name of ["gesturechange", "gestureend", "wheel"]) {
+      target.addEventListener(name, e => finalPinchEvents.push([name, e.scale ?? e.deltaY]));
+    }`);
+  for (const cancel of [false, true]) {
+    await app.eval("finalPinchEvents.length = 0");
+    await app.send("pinch", { ...at, kind: "start" });
+    if (cancel) {
+      await app.eval(
+        'document.getElementById("probe").addEventListener("gestureend", e => e.preventDefault(), {once:true})',
+      );
+    }
+    expect((await app.send("pinch", { ...at, kind: "end", scale: 1.25 })).defaultPrevented).toBe(cancel);
+    const events = JSON.parse(String(await app.eval("JSON.stringify(finalPinchEvents)"))) as [string, number][];
+    expect(events.map(([name]) => name)).toEqual(cancel ? ["gestureend"] : ["gestureend", "wheel"]);
+    expect(events[0]![1]).toBe(1.25);
+    if (!cancel) expect(events[1]![1]).toBeCloseTo(-100 * Math.log(1.25), 5);
+  }
+});
+
 test("d3-zoom handles pinch and ordinary Ctrl+wheel", async () => {
   await app.locator("#map").waitFor();
   expect((await app.send("pinch", { selector: "#map", scale: 1.2 })).defaultPrevented).toBe(true);

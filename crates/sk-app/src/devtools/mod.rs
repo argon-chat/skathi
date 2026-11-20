@@ -2744,7 +2744,11 @@ fn cmd_pinch(
                 position,
                 modifiers,
                 phase,
-                delta: if phase == Moved { scale - 1.0 } else { 0.0 },
+                delta: if phases.len() == 1 || phase == Moved {
+                    scale - 1.0
+                } else {
+                    0.0
+                },
             };
             prevented |= window
                 .dispatch_event(gpui::PlatformInput::Pinch(event), app)

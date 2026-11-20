@@ -65,30 +65,20 @@ pub(crate) fn handle(event: &PinchEvent, window: &mut Window, cx: &mut App) {
         if started {
             proceed &= send(gesture.target, tree::EV_GESTURESTART, 1.0, 0.0, mods);
         }
-        if let Some(dy) = wheel {
-            proceed &= send(
-                gesture.target,
-                tree::EV_GESTURECHANGE,
-                gesture.scale,
-                0.0,
-                mods,
-            );
-            if proceed {
-                let wheel_mods = gpui::Modifiers {
-                    control: true,
-                    ..event.modifiers
-                };
-                proceed = send(hit, tree::EV_WHEEL, 0.0, dy, render::mods_bits(&wheel_mods));
-            }
+        if ending || wheel.is_some() {
+            let kind = if ending {
+                tree::EV_GESTUREEND
+            } else {
+                tree::EV_GESTURECHANGE
+            };
+            proceed &= send(gesture.target, kind, gesture.scale, 0.0, mods);
         }
-        if ending {
-            proceed &= send(
-                gesture.target,
-                tree::EV_GESTUREEND,
-                gesture.scale,
-                0.0,
-                mods,
-            );
+        if let Some(dy) = wheel.filter(|_| proceed) {
+            let wheel_mods = gpui::Modifiers {
+                control: true,
+                ..event.modifiers
+            };
+            proceed = send(hit, tree::EV_WHEEL, 0.0, dy, render::mods_bits(&wheel_mods));
         }
         proceed
     });

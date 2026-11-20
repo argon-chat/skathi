@@ -484,7 +484,7 @@ const domAndEvents = section("DOM and events", [
     aliases: ["pinch", "gesturestart", "gesturechange", "gestureend"],
     notes: [
       "Desktop trackpad magnification sends gesturestart, gesturechange and gestureend to the element where the gesture began. Read clientX and clientY for the current gesture position.",
-      "Cancelling gesturechange prevents the companion Ctrl+wheel for that update. Otherwise, wheel reaches the element under the gesture centre.",
+      "A scale update sends Ctrl+wheel to the element under the gesture centre. Cancelling the associated gesture event suppresses that wheel, including when gestureend carries the last change in scale.",
     ],
     limitations: ["The native input backends currently report rotation as 0."],
     related: ["wheel-event"],
