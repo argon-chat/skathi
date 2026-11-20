@@ -6,9 +6,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { modeVariant } from "../cli/build-app";
+import { appMeta, modeVariant } from "../cli/build-app";
 import { ConfigError, ENGINE_FEATURES, loadAppConfig, parseVariant } from "../cli/config";
-import { checkHost, CLI_VERSION, type HostInfo } from "../cli/host";
+import { checkHost, CLI_VERSION, type HostInfo, type ResolvedHost } from "../cli/host";
 
 const roots: string[] = [];
 afterAll(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
@@ -23,8 +23,9 @@ function app(body: Record<string, unknown>): string {
 }
 
 describe("variant names", () => {
-  test("standard, no-devtools and aot-nojit are the only prod variants", () => {
+  test("accepts the production workloads", () => {
     expect(parseVariant("aot-nojit", "t")).toBe("aot-nojit");
+    expect(parseVariant("aot-nojit-devtools", "t")).toBe("aot-nojit-devtools");
     expect(parseVariant("standard", "t")).toBe("standard");
     expect(parseVariant(" no-devtools ", "t")).toBe("no-devtools");
     expect(() => parseVariant("no-audio", "t")).toThrow(ConfigError);
@@ -39,13 +40,15 @@ describe("sk.config.json", () => {
     expect(() => loadAppConfig(app({ publishDevtools: "yes" }))).toThrow(ConfigError);
   });
 
-  test('"publishJit": false publishes AOT builds on aot-nojit and cannot keep devtools', () => {
+  test('"publishJit": false selects a no-JIT workload for AOT releases', () => {
     const config = loadAppConfig(app({ publishJit: false }));
     expect(modeVariant(config, "release", true)).toBe("aot-nojit");
     expect(modeVariant(config, "release", false)).toBe("no-devtools");
     expect(modeVariant(config, "debug", true)).toBe("standard");
     expect(modeVariant(loadAppConfig(app({})), "release", true)).toBe("no-devtools");
-    expect(() => loadAppConfig(app({ publishJit: false, publishDevtools: true }))).toThrow(ConfigError);
+    const diagnostics = loadAppConfig(app({ publishJit: false, publishDevtools: true }));
+    expect(modeVariant(diagnostics, "release", true)).toBe("aot-nojit-devtools");
+    expect(modeVariant(diagnostics, "release", false)).toBe("standard");
   });
 
   test("an old engine-part selection is an error that points at publishDevtools and the embedding crate", () => {
@@ -75,6 +78,19 @@ describe("checkHost", () => {
     payloadFormat: 1,
     profile: "release",
   };
+
+  test("a no-JIT payload explicitly authorizes devtools when requested", () => {
+    const variant = "aot-nojit-devtools";
+    const host: ResolvedHost = {
+      exe: "sk-app.exe",
+      source: "--workload",
+      info: { ...info, variant, features: [...info.features, "no-jit"] },
+    };
+    const meta = (publishDevtools: boolean) =>
+      JSON.parse(appMeta(loadAppConfig(app({ publishDevtools })), variant, host, 0));
+    expect(meta(false).publishDevtools).toBe(false);
+    expect(meta(true).publishDevtools).toBe(true);
+  });
 
   test("a host with the whole engine passes", () => {
     expect(checkHost("current.exe", info, "standard", false)).toBeNull();

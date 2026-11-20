@@ -11,7 +11,7 @@
 //   "define", "aliases"          Vite's `define`; a bare module name -> the app's own stand-in file
 //   "publishDevtools": true      sk publish keeps devtools (the standard host instead of no-devtools)
 //   "aot": true                  sk build and sk publish compile the app to a native image (Windows x64)
-//   "publishJit": false          an AOT sk publish for Windows stamps the aot-nojit workload (no JIT, WebAssembly or devtools)
+//   "publishJit": false          an AOT sk publish for Windows uses a host without the JIT or WebAssembly
 //   "publishSingleFile": true    sk publish writes one exe: the native images, the ICU data and the packs go inside it
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "windows": { exeName, icon, company, copyright, description, console }
@@ -28,17 +28,19 @@ import { numericVersion } from "./versioninfo";
 
 /** A prod host's name, the key the host cache and the release find it by: the whole engine, with or without devtools, or without the JIT. */
 export type Variant = string;
-export const VARIANTS: readonly Variant[] = ["standard", "no-devtools", "aot-nojit"];
-
-/** The workload without devtools or the JIT (Windows x64): it runs only apps compiled with `--aot`. */
 export const NO_JIT_VARIANT: Variant = "aot-nojit";
+export const NO_JIT_DEVTOOLS_VARIANT: Variant = "aot-nojit-devtools";
+export const VARIANTS: readonly Variant[] = ["standard", "no-devtools", NO_JIT_VARIANT, NO_JIT_DEVTOOLS_VARIANT];
+
+export const noJitVariant = (variant: Variant): boolean =>
+  variant === NO_JIT_VARIANT || variant === NO_JIT_DEVTOOLS_VARIANT;
 
 export const variantList = (variants: readonly Variant[]): string =>
   `${variants.slice(0, -1).join(", ")} or ${variants.at(-1)}`;
 
 /** The prod variants a release has for `platform`. */
 export const platformVariants = (platform: Platform): Variant[] =>
-  VARIANTS.filter((v) => v !== NO_JIT_VARIANT || platform === "windows");
+  VARIANTS.filter((v) => !noJitVariant(v) || platform === "windows");
 
 /** The cargo features of sk-app every published host carries (crates/sk-app/src/payload.rs `OPTIONAL`, after devtools). */
 export const ENGINE_FEATURES = ["audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
@@ -58,6 +60,7 @@ const CARGO_FEATURES: Record<Variant, string> = {
   standard: "prod,icu-root",
   "no-devtools": "prod,no-devtools,icu-root",
   [NO_JIT_VARIANT]: "prod,no-devtools,icu-root,native-aot,no-jit,no-wasm",
+  [NO_JIT_DEVTOOLS_VARIANT]: "prod,icu-root,native-inspector,no-jit,no-wasm",
 };
 
 /** A published host links only the root ICU locale; `sk build` ships the rest beside the app (`"intl"`). */
@@ -106,9 +109,9 @@ export interface AppConfig {
   packs: PackConfig[];
   /** Whether `sk build` and `sk publish` compile the app to a native image (`--aot` / `--no-aot` win). */
   aot: boolean;
-  /** Whether `sk publish` stamps the standard host (devtools in) instead of no-devtools. */
+  /** Whether `sk publish` includes devtools. */
   publishDevtools: boolean;
-  /** False: an AOT `sk publish` for Windows stamps the aot-nojit workload instead of no-devtools. */
+  /** False: `sk publish` uses a Windows AOT workload without the JIT or WebAssembly. */
   publishJit: boolean;
   /** True: `sk publish` puts what it would write beside the exe (native images, ICU data, packs) inside it. */
   publishSingleFile: boolean;
@@ -551,11 +554,6 @@ export function loadAppConfig(
     throw new ConfigError('sk.config.json "publishJit" must be true or false');
   }
   const publishJit = raw.publishJit !== false;
-  if (!publishJit && publishDevtools) {
-    throw new ConfigError(
-      `sk.config.json "publishJit": false publishes on the ${NO_JIT_VARIANT} workload, which has no devtools — drop one of it and "publishDevtools": true`,
-    );
-  }
   if (raw.publishSingleFile !== undefined && typeof raw.publishSingleFile !== "boolean") {
     throw new ConfigError('sk.config.json "publishSingleFile" must be true or false');
   }

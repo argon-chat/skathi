@@ -41,10 +41,21 @@ fn main() {
     if opted_out && std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_some() {
         panic!("native-inspector and no-devtools are contradictory");
     }
-    if std::env::var_os("CARGO_FEATURE_NO_JIT").is_some()
-        && !(opted_out && std::env::var_os("CARGO_FEATURE_PROD").is_some())
-    {
-        panic!("no-jit builds the aot-nojit workload, which takes prod and no-devtools too");
+    if std::env::var_os("CARGO_FEATURE_NO_JIT").is_some() {
+        assert!(
+            std::env::var_os("CARGO_FEATURE_PROD").is_some(),
+            "no-jit requires prod"
+        );
+        if !opted_out {
+            assert!(
+                std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_some()
+                    && std::env::var_os("SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER").is_some_and(|name| !name.is_empty()),
+                "no-jit with devtools requires native-inspector and SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER; use no-devtools to omit the inspector"
+            );
+        }
+    }
+    if std::env::var_os("CARGO_FEATURE_NO_INTERPRETER").is_some() {
+        assert!(opted_out, "no-interpreter requires no-devtools");
     }
     if opted_out {
         return;

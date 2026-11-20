@@ -33,6 +33,7 @@ pub struct Meta {
     pub version: String,
     pub skathi: String,
     pub host_variant: String,
+    pub publish_devtools: Option<bool>,
     pub launch: Option<String>,
     pub packs: Vec<PackRef>,
     /// `"invariant"`: the app asked for the root locale only; anything else is every locale.
@@ -380,6 +381,9 @@ fn parse_meta(text: &str) -> Meta {
             .and_then(crate::json::Json::as_str)
             .unwrap_or_default()
             .to_string(),
+        publish_devtools: v
+            .get("publishDevtools")
+            .and_then(crate::json::Json::as_bool),
         launch: v.get("launch").map(crate::json::Json::to_json),
         packs: v
             .get("packs")
@@ -628,12 +632,17 @@ pub const OPTIONAL: [(&str, bool); 6] = [
     ("webgpu", cfg!(feature = "webgpu")),
 ];
 
-/// This host's variant: `aot-nojit` without the JIT, `standard` when nothing optional was left out,
+/// This host's variant: `aot-nojit` or `aot-nojit-devtools` without the JIT, `standard` when nothing optional was left out,
 /// else what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order. `sk build` keys its host
 /// cache by it, and asks for one by it.
 pub fn host_variant() -> String {
     if cfg!(feature = "no-jit") {
-        return "aot-nojit".to_string();
+        return if cfg!(sk_devtools) {
+            "aot-nojit-devtools"
+        } else {
+            "aot-nojit"
+        }
+        .to_string();
     }
     let off: Vec<String> = OPTIONAL
         .iter()

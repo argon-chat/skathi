@@ -28,6 +28,8 @@ Two switches decide whether a shipped app has devtools: `"publishDevtools"` in `
 
 `appDevtools` still exists in that build, so code that calls it does not need a check. `appDevtools.available` is `false`, `isEnabled()` returns `false`, and `open()` returns `false` and prints an advisory.
 
+On Windows x64, `sk publish --aot` with `"publishJit": false` and `"publishDevtools": true` uses the `aot-nojit-devtools` workload (since 0.7). It enables devtools only when the payload authorises them and `inspector.image.dll` is present beside the exe. The interpreter runs console expressions. [Ship without the JIT](/guides/aot/#ship-without-the-jit).
+
 ### Embedded hosts (since 0.5)
 
 An app [embedded in your own executable](/embedding/dev-loop/#devtools) runs on whatever host you build. Its devtools are compiled in unless you turn on the `no-devtools` feature of the `skathi` crate. Such a host still honours a payload published without devtools: they start off, as with `"devtools": false`, and no port is opened. The code is still in the executable, though, so `SK_DEVTOOLS=1` or a call to `appDevtools.enable()` turns them on. Build the release exe with `no-devtools` to leave them out entirely.

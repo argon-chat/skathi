@@ -1089,6 +1089,10 @@ fn run_app() {
         let devtools_mode = inspector::is_devtools_host();
         #[cfg(not(sk_devtools))]
         let devtools_mode = false;
+        #[cfg(all(sk_devtools, feature = "no-jit"))]
+        let devtools_available = prod::devtools_allowed(devtools_mode);
+        #[cfg(all(sk_devtools, not(feature = "no-jit")))]
+        let devtools_available = true;
         sk_elements::init(cx);
         publish_app_root();
         // First quit hook (they run in order): a quit no accepted close announced, such as the
@@ -1108,7 +1112,7 @@ fn run_app() {
         // Before any text field's interceptor, so Escape leaves a pointer lock ahead of them all.
         std::mem::forget(cx.intercept_keystrokes(sk_tree::pointer_lock_intercept_escape));
         #[cfg(sk_devtools)]
-        {
+        if devtools_available {
             inspector::install_hotkey(cx);
             // A debugger must not outlive its subject (the child also watches us, for a crash).
             std::mem::forget(cx.on_app_quit(|_| {
@@ -1146,7 +1150,9 @@ fn run_app() {
         shutdown::install_test_delay(cx);
         // Before the runtime exists so the log ring records the first advisory.
         #[cfg(sk_devtools)]
-        devtools::arm();
+        if devtools_available {
+            devtools::arm();
+        }
 
         // The window config is read before `open_window` (creation-time-only options need it to
         // avoid a flash) and before the JS runtime (`"devtools": false` must be answered before a port is bound).
@@ -1163,7 +1169,10 @@ fn run_app() {
 
         // Before `JsRuntime::init` so the bundle's first line sees the settled state.
         #[cfg(sk_devtools)]
-        devtools::boot(window::devtools_config_enabled(), boot_mode::devtools_published());
+        if devtools_available {
+            devtools::boot(window::devtools_config_enabled(),
+                devtools_mode || boot_mode::devtools_published());
+        }
 
         // Seeded before `JsRuntime::init` so the first `navigator.onLine` read queues no event.
         sk_desktop::network::install();
@@ -1267,7 +1276,9 @@ fn run_app() {
                 hotkeys::install(rt)?;
             }
             #[cfg(sk_devtools)]
-            devtools::install(rt);
+            if devtools_available {
+                devtools::install(rt);
+            }
             Ok(())
         });
         if let Err(error) = setup_result {

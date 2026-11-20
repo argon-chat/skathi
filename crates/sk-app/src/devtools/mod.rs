@@ -60,7 +60,7 @@ static TOKEN: Mutex<String> = Mutex::new(String::new());
 // `"devtools": false` in sk.config.json or a payload published without devtools, then
 // `appDevtools.enable()/disable()`; `SK_DEVTOOLS=1` overrides them all and locks (see `resolve_initial`).
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
+static ENABLED: AtomicBool = AtomicBool::new(false);
 static LOCKED: AtomicBool = AtomicBool::new(false);
 /// `0` when not listening; also how [`stop_listener`] wakes a blocked `accept()`.
 static PORT: AtomicU16 = AtomicU16::new(0);

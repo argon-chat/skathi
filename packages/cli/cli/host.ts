@@ -31,7 +31,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { CompilerInfo } from "../aot/pin";
-import { cargoFeatureArgs, ENGINE_FEATURES, variantList, VARIANTS, type Variant } from "./config";
+import { cargoFeatureArgs, ENGINE_FEATURES, NO_JIT_VARIANT, variantList, VARIANTS, type Variant } from "./config";
 import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
@@ -157,7 +157,7 @@ export function crossHostInfo(
       }
     } catch {}
   }
-  const devtools = variant !== "no-devtools";
+  const devtools = variant !== "no-devtools" && variant !== NO_JIT_VARIANT;
   const info: HostInfo = {
     mode: "prod",
     skathi: CLI_VERSION,
@@ -208,11 +208,7 @@ export const cachedHost = (version: string, variant: Variant, platform: Platform
 export const DEV_HOST: Variant = "dev";
 
 export function checkHost(exe: string, info: HostInfo, variant: Variant | null, allowMismatch: boolean): string | null {
-  const mismatch =
-    info.skathi !== CLI_VERSION && !allowMismatch
-      ? `${exe} is Skathi ${info.skathi}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
-        `workload protocol, so the two must match (--allow-workload-mismatch overrides, for maintainers)`
-      : null;
+  const mismatch = versionMismatch(exe, info, allowMismatch);
   if (variant === DEV_HOST) {
     return info.mode === "dev"
       ? mismatch
@@ -226,6 +222,22 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
   const missing = ENGINE_FEATURES.filter((f) => !info.features?.includes(f));
   if (missing.length) return `${exe} lacks ${missing.join(", ")} — rebuild or replace the cached workload`;
   return mismatch;
+}
+
+function versionMismatch(exe: string, info: HostInfo, allowMismatch: boolean): string | null {
+  return info.skathi !== CLI_VERSION && !allowMismatch
+    ? `${exe} is Skathi ${info.skathi}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
+        `workload protocol, so the two must match (--allow-workload-mismatch overrides, for maintainers)`
+    : null;
+}
+
+export function resolveEmbedderHost(path: string, allowMismatch = false): ResolvedHost {
+  const exe = resolve(path);
+  const info = hostInfo(exe);
+  if (info.mode !== "prod") throw new HostError(`${exe} must be built with the Skathi prod feature`);
+  const mismatch = versionMismatch(exe, info, allowMismatch);
+  if (mismatch) throw new HostError(mismatch);
+  return { exe, info, source: "--workload" };
 }
 
 function newestHostSource(): number {

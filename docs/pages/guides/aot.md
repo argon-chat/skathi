@@ -9,6 +9,8 @@ status: experimental
 
 `sk publish --aot` compiles your app's JavaScript to machine code at build time and ships the result, a native image, beside the exe or (since 0.6, with `"publishSingleFile": true`) inside it. At start the host runs the image instead of evaluating the bundle. AOT is experimental, works on Windows x64 only, and today it is slower than the JIT in Skathi's own benchmark, so treat it as something to try and measure, not a default.
 
+If you embed Skathi in your own executable, see [AOT for your own executable](/embedding/shipping/#aot-for-your-own-executable-since-07) (since 0.7).
+
 <div class="tradeoffs">
 <div class="tradeoff" data-tone="gain">
 
@@ -399,7 +401,16 @@ A process that runs an image already has no JIT, so the JIT compiler in the exe 
 - **Same speed.** Measured below, the app runs as fast as on the normal workload.
 - **No way back to the JIT.** `SK_APP_ENGINE=jit` stops the app with exit code 3 and a message that names the workload, instead of running `app.prod.js` in the interpreter. Compare against the JIT with a build that keeps `"publishJit"` on.
 - **Images only.** `sk build` and `sk publish` refuse the `aot-nojit` workload without `--aot`, and the host refuses a payload that has no image.
-- **Release builds without devtools.** `sk build` (debug) keeps the standard workload and the JIT, and so do macOS and Linux builds. `"publishJit": false` with `"publishDevtools": true` is a configuration error. `sk workload install` downloads `aot-nojit` only when you name it; `sk publish` fetches it when it needs it.
+- **Release builds.** `sk build` (debug) keeps the standard workload and the JIT, and so do macOS and Linux builds. `sk publish` fetches the appropriate no-JIT workload as needed, and `sk workload install` downloads it when you name it.
+
+| Windows x64 AOT release workload | `publishJit` | `publishDevtools` |
+| -------------------------------- | ------------ | ----------------- |
+| `no-devtools`                    | `true`       | `false`           |
+| `standard`                       | `true`       | `true`            |
+| `aot-nojit`                      | `false`      | `false`           |
+| `aot-nojit-devtools` (since 0.7) | `false`      | `true`            |
+
+The `aot-nojit-devtools` workload keeps the interpreter for console expressions and runs the inspector from `inspector.image.dll` beside the exe. It needs both `"publishDevtools": true` in the packaged payload and that DLL. Leave `"publishSingleFile"` off for this combination. With the same Windows x64 release profile, devtools adds 1.82 MiB to the exe before the separate inspector image.
 
 ### What it costs (since 0.6)
 

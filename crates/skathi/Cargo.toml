@@ -23,6 +23,14 @@ default = [
 types = ["sk-app/types", "skathi-macros/types"]
 # Runs an app payload built by `sk build`. Without it the host boots the dev output in `SK_DIST`.
 prod = ["sk-app/prod"]
+# Windows x64: load native application images using the pinned AOT builtin table.
+native-aot = ["sk-app/native-aot"]
+# Run the devtools inspector from its own native image. Implies `native-aot`.
+native-inspector = ["sk-app/native-inspector"]
+# Windows x64: link the archive from `bun scripts/aot/no-jit.ts --out <dir>` via REDJS_NO_JIT_DIR.
+no-jit = ["sk-app/no-jit"]
+# Omit WebAssembly as well as the JIT. Use `--remove JIT,WebAssembly` for the archive.
+no-wasm = ["sk-app/no-wasm"]
 audio = ["sk-app/audio"]
 # `panningModel: "spatial"`: Windows Sonic, Dolby Atmos and DTS objects. Implies `audio`.
 spatial-audio = ["sk-app/spatial-audio"]

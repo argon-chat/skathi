@@ -44,6 +44,60 @@ let builder = skathi::Builder::new().payload_static(APP);
 
 `payload_bytes(vec)` takes owned bytes, for a payload you download, decrypt or unpack yourself. With none of the three, a `prod` build reads `SK_PAYLOAD`, and fails with `Error::NoPayload` when that is empty too.
 
+## AOT for your own executable (since 0.7)
+
+On Windows x64, build your embedder with `prod` and `native-aot`. Use a [Skathi source checkout](https://github.com/argon-chat/skathi) at the same version as the CLI and your Rust dependency. From that checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container:
+
+```powershell
+bun install
+pwsh -File vendor/redjs/setup.ps1
+bun tools/sk-aot/setup.ts
+Push-Location tools/sk-aot
+cargo build --release --locked
+Pop-Location
+cargo build --release --manifest-path crates/sk-image/Cargo.toml --target x86_64-pc-windows-msvc
+$env:REDJS_AOT_BUILTIN_TABLE_DIR = (Resolve-Path tools/sk-aot/.cache/table).Path
+$skAot = (Resolve-Path tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe).Path
+```
+
+In your own executable's Cargo manifest, enable the loader along with the features your app uses:
+
+```toml title="Cargo.toml"
+[dependencies]
+skathi = { version = "0.7", default-features = false, features = ["prod", "native-aot", "no-devtools"] }
+```
+
+Build the exe with that environment. Put the built `skimage.dll` next to it for packaging. Then compile the payload for that exact exe:
+
+```powershell
+sk publish .\app --aot --payload-only --workload .\target\x86_64-pc-windows-msvc\release\my-app.exe --aot-compiler $skAot
+```
+
+This writes `app.skpk`, `app.image.dll` and any asset or ICU packs to `app/dist/release/.sk`. The manifest `sk/app.native.json` is inside `app.skpk`. It binds the image to the bundle, the host's AOT ABI and JavaScriptCore pin, the builtin table, and the host preludes. The CLI queries your exe with `--sk-host-info` before compiling. `skathi::Builder` answers that flag before loading a payload. Keep the image and payload from the same build, and rebuild both when you upgrade Skathi.
+
+Ship `app.image.dll` and the packs beside `app.skpk` when using `Builder::payload_file`, or beside your exe when using `Builder::payload_static`. `skimage.dll` is a build input. If you use `payload_static`, build a host with `payload_file` first to produce the payload, then rebuild with `include_bytes!`.
+
+### Leave out the JIT and WebAssembly
+
+From the same Skathi checkout, generate the trimmed archive and set `REDJS_NO_JIT_DIR` before building the embedder:
+
+```powershell
+bun scripts/aot/no-jit.ts --out .\target\aot-no-jit --remove JIT,WebAssembly
+$env:REDJS_NO_JIT_DIR = (Resolve-Path .\target\aot-no-jit).Path
+```
+
+Add `no-wasm` to your `skathi` features for that archive. It implies `no-jit` and `native-aot`. For a host that keeps WebAssembly, use `no-jit` with an archive generated using `--remove JIT`. Both hosts require an AOT payload and retain the interpreter. The experimental `no-interpreter` feature is for engine qualification and is not exposed by `skathi`.
+
+To include devtools, use `native-inspector` in place of `no-devtools`. In the Skathi checkout, run `bun scripts/aot/prepare-inspector.ts --out target/inspector --cache target/aot-cache --table tools/sk-aot/.cache/table --container <path-to-skimage.dll>`. Set `SK_DEVTOOLS_BUNDLE` and `SK_DEVTOOLS_NATIVE_MANIFEST` to the `bundle` and `manifest` paths in `target/inspector/build.json`, and set `SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER=inspector.image.dll` before rebuilding. Put the generated `inspector.image.dll` beside your exe and set `"publishDevtools": true` in the app configuration. For F12, point `Builder::inspector_exe` to that exe and delegate the leading `--devtools` flag to `skathi::run_exe()`.
+
+On macOS, set `JSC_useJIT=false` or `JSC_useWebAssembly=false` in the environment before JavaScriptCore starts to disable either feature at runtime. Windows x64 is the only AOT target.
+
+## Startup graphics memory on macOS
+
+On an Apple M4 with macOS 26.4, a headless Metal probe loaded the same renderer shaders from source and from a precompiled library, then created the seven render pipelines. Footprint at that point was about 5–6 MiB in either case. The first clear and present of a 3456 × 2234 BGRA8 drawable raised both builds to about 97–98 MiB. `vmmap -summary` reported about 49 MiB resident as `owned unmapped (graphics)`; about 48 MiB of the footprint dropped after the frame settled.
+
+This measures the Metal work in isolation. The 229 MiB whole-app peak reported on the M3 Max still needs a matched windowed measurement. Leaving `runtime-shaders` off moves library compilation to the build, while the renderer still allocates its drawables and submits a first frame at startup.
+
 ## The native modules' types (since 0.4)
 
 A release exe answers `--sk-host-types` like a debug one: it prints the TypeScript of its [native modules](/embedding/native-modules/) and exits, which is how `sk types` reads them. Commit the generated `src/native-modules.d.ts` with the app, so the payload builds on a machine without your Rust build. Anyone can read those declarations out of your exe, as they could read the names in its strings: leave secrets out of module and type names.

@@ -33,7 +33,10 @@ pub fn boot(rt: &JsRuntime) {
         loaded.payload.len() / 1024,
         loaded.asset_count()
     );
-    if !meta.host_variant.is_empty() && wants_no_devtools(&meta.host_variant) == cfg!(sk_devtools) {
+    if !cfg!(feature = "no-jit")
+        && !meta.host_variant.is_empty()
+        && wants_no_devtools(meta) == cfg!(sk_devtools)
+    {
         let line = if cfg!(sk_devtools) {
             "[skathi compat] this app was published without devtools and runs on a host built with \
              them: they start off, but SK_DEVTOOLS=1 or appDevtools.enable() can turn them on. \
@@ -128,21 +131,42 @@ pub fn launch_config() -> Option<String> {
 /// False for a payload published for the no-devtools host (`"publishDevtools"` unset or false).
 #[cfg(sk_devtools)]
 pub fn devtools_published() -> bool {
-    payload::get().is_none_or(|l| !wants_no_devtools(&l.meta.host_variant))
+    payload::get().is_none_or(|l| !wants_no_devtools(&l.meta))
 }
 
-/// The aot-nojit workload has no devtools, though its name does not say so.
-fn wants_no_devtools(variant: &str) -> bool {
-    variant == "aot-nojit" || variant.split('+').any(|part| part == "no-devtools")
+fn wants_no_devtools(meta: &payload::Meta) -> bool {
+    if let Some(published) = meta.publish_devtools {
+        return !published;
+    }
+    meta.host_variant == "aot-nojit"
+        || meta
+            .host_variant
+            .split('+')
+            .any(|part| part == "no-devtools")
+}
+
+#[cfg(all(sk_devtools, feature = "no-jit"))]
+pub fn devtools_allowed(inspecting: bool) -> bool {
+    (inspecting || payload::get().is_some_and(|l| l.meta.publish_devtools == Some(true)))
+        && crate::native_aot::inspector_sidecar().is_some_and(|file| file.is_file())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn a_payload_for_the_aot_nojit_workload_has_no_devtools() {
-        assert!(super::wants_no_devtools("aot-nojit"));
-        assert!(super::wants_no_devtools("no-devtools+no-webgpu"));
-        assert!(!super::wants_no_devtools("standard"));
+        let denied = |variant: &str, publish_devtools| {
+            super::wants_no_devtools(&super::payload::Meta {
+                host_variant: variant.to_string(),
+                publish_devtools,
+                ..Default::default()
+            })
+        };
+        assert!(denied("aot-nojit", None));
+        assert!(denied("no-devtools+no-webgpu", None));
+        assert!(!denied("standard", None));
+        assert!(denied("aot-nojit-devtools", Some(false)));
+        assert!(!denied("aot-nojit-devtools", Some(true)));
     }
 }
 

@@ -12,7 +12,7 @@
 //     With --no-jit too (the directory of scripts/aot/no-jit.ts --out), the aot-nojit workload is built.
 //     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
 //     none of the entry points the inventories of scripts/aot/no-jit.ts list (the JIT's, WebAssembly's)
-//     while no-devtools links them, and aot-nojit exports what no-devtools does.
+//     while no-devtools links them. The two no-JIT hosts export what their JIT counterparts do.
 //   bun scripts/release-hosts.ts --check-no-interpreter <exe> --map <link.map>
 //     verify a Windows x64 experimental no-interpreter build locally.
 //   bun scripts/release-hosts.ts --merge <dir>
@@ -25,7 +25,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { NO_JIT_VARIANT, platformVariants } from "../packages/cli/cli/config";
+import { NO_JIT_DEVTOOLS_VARIANT, NO_JIT_VARIANT, noJitVariant, platformVariants } from "../packages/cli/cli/config";
 import { inventoryPath, REMOVED, TRIMMABLE, type Inventory } from "./aot/no-jit";
 import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
@@ -160,11 +160,11 @@ const aotCompiler = inspector ? { path: inspector.compiler, info: await compiler
 
 const noJit = values["no-jit"] ? resolve(values["no-jit"]) : null;
 const variants = values.variant ?? [
-  ...platformVariants(platform).filter((v) => v !== NO_JIT_VARIANT || (inspector && noJit)),
+  ...platformVariants(platform).filter((v) => !noJitVariant(v) || (inspector && noJit)),
   DEV_HOST,
 ];
-if (variants.includes(NO_JIT_VARIANT) && !(inspector && noJit)) {
-  throw new Error(`the ${NO_JIT_VARIANT} workload needs --native-inspector (its AOT table) and --no-jit <dir>`);
+if (variants.some(noJitVariant) && !(inspector && noJit)) {
+  throw new Error("the no-JIT workloads need --native-inspector and --no-jit <dir>");
 }
 
 // What a Windows host's link map must show, and what each host exports.
@@ -191,7 +191,7 @@ function checkLink(
         if (stub && !has(stub)) throw new Error(`${variant}: ${map} does not contain ${stub}`);
       }
     }
-    if (variant === NO_JIT_VARIANT && kept.length) {
+    if (noJitVariant(variant) && kept.length) {
       throw new Error(`${variant}: the host links ${kept.length} ${feature.name} entry points, among them ${kept[0]}`);
     }
     if (variant === "no-devtools" && verifyFull && kept.length !== names.length) {
@@ -205,8 +205,8 @@ function checkLink(
   const names = [...listing.stdout.matchAll(/^\s*Name: (\S+)\s*$/gm)].map((m) => m[1]!).sort();
   if (names.some((n) => n.startsWith("rjs_aot_compil")))
     throw new Error(`${variant}: the host exports the image compiler`);
-  if (variant === NO_JIT_VARIANT && reference && reference.join("\n") !== names.join("\n")) {
-    throw new Error(`${variant}: the host exports other symbols than no-devtools: ${names.join(", ")}`);
+  if (reference && reference.join("\n") !== names.join("\n")) {
+    throw new Error(`${variant}: the host exports different symbols than its JIT counterpart: ${names.join(", ")}`);
   }
   const counts = entryUse.map(({ feature, names: all, kept }) => `${kept.length} of ${all.length} ${feature.name}`);
   console.log(`[release] ${variant}: ${counts.join(", ")} entry points linked, ${names.length} exports`);
@@ -232,18 +232,23 @@ function inspectorImage(receipt: InspectorReceipt): string {
 
 const entries: HostManifestEntry[] = [];
 for (const variant of variants) {
-  const devtools = variant === "standard" || variant === DEV_HOST;
+  const devtools = variant === "standard" || variant === DEV_HOST || variant === NO_JIT_DEVTOOLS_VARIANT;
   const map = maps && join(maps, `${variant}.map`);
   const { exe, ms } = cargoBuildHost(variant, console.log, {
     env: {
       ...inspectorEnv,
-      ...(variant === NO_JIT_VARIANT && noJit ? { REDJS_NO_JIT_DIR: noJit } : {}),
+      ...(noJitVariant(variant) && noJit ? { REDJS_NO_JIT_DIR: noJit } : {}),
       ...(map ? { SK_HOST_LINK_MAP: map } : {}),
     },
     features: inspector ? (devtools ? ["native-aot", "native-inspector"] : ["native-aot"]) : [],
   });
   const info = hostInfo(exe);
-  if (map) exportsOf.set(variant, checkLink(variant, exe, map, false, !!inspector, exportsOf.get("no-devtools")));
+  const counterpart = variant === NO_JIT_DEVTOOLS_VARIANT ? "standard" : "no-devtools";
+  if (map)
+    exportsOf.set(
+      variant,
+      checkLink(variant, exe, map, false, !!inspector, noJitVariant(variant) ? exportsOf.get(counterpart) : undefined),
+    );
   const problem = checkHost(exe, info, variant, false);
   if (problem) throw new Error(problem);
   if (aotCompiler) {

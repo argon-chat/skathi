@@ -2,11 +2,12 @@
  * the ordinary host executable. Heavy subprocesses run only from this CLI.
  * bun scripts/aot/prepare-inspector.ts --out DIR --cache DIR
  * Optional verified local inputs: --compiler <sk-aot.exe> (default: tools/sk-aot's release build)
- * --bun-source DIR --table DIR.
+ * --bun-source DIR --table DIR. --container <skimage.dll> also writes inspector.image.dll.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compilerInfo, repoSkAot } from "../../packages/cli/aot/native";
+import { appendImageSections, INSPECTOR_SECTIONS, withUnwindTable } from "../../packages/cli/cli/image-sections";
 import {
   fileDigest,
   loadPin,
@@ -129,8 +130,14 @@ export async function prepare(): Promise<void> {
   const manifest = join(out, "inspector.native.json");
   const document = JSON.parse(readFileSync(manifest, "utf8"));
   verifyCompilerInfo(document, pin);
-  await verifyFile(join(out, document.image), document.imageSha256);
+  const image = join(out, document.image);
+  await verifyFile(image, document.imageSha256);
   await verifyFile(join(out, "app.prod.js"), document.sourceBundleSha256);
+  const template = argument("--container", true);
+  if (template) {
+    const container = appendImageSections(readFileSync(template), readFileSync(image), INSPECTOR_SECTIONS);
+    writeFileSync(join(out, "inspector.image.dll"), withUnwindTable(container, [INSPECTOR_SECTIONS]));
+  }
   const receipt = {
     schema: "skathi.embedded-native-inspector",
     version: 1,

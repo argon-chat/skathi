@@ -31,7 +31,9 @@ import { collectAssets, type AssetFile } from "./assets";
 import {
   ConfigError,
   loadAppConfig,
+  NO_JIT_DEVTOOLS_VARIANT,
   NO_JIT_VARIANT,
+  noJitVariant,
   parseVariant,
   type AppConfig,
   type PackConfig,
@@ -46,6 +48,7 @@ import {
   imageTemplatePath,
   inspectorContainerPath,
   PKG_DIR,
+  resolveEmbedderHost,
   type ResolvedHost,
 } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
@@ -88,7 +91,7 @@ export interface BuildOptions {
   configPath?: string | undefined;
   out?: string | undefined;
   host?: string | undefined;
-  /** The host variant (standard, no-devtools or aot-nojit); overrides the mode's. */
+  /** The host variant; overrides the mode's for a stamped workload. */
   variant?: Variant | undefined;
   console?: boolean;
   payloadOnly?: boolean;
@@ -119,8 +122,9 @@ export interface BuildOptions {
 
 /** The variant a mode builds when `--variant` names none. */
 export function modeVariant(config: AppConfig, mode: BuildOptions["mode"], aot = false): Variant {
-  if (mode !== "release" || config.publishDevtools) return "standard";
-  return aot && !config.publishJit ? NO_JIT_VARIANT : "no-devtools";
+  if (mode !== "release") return "standard";
+  if (aot && !config.publishJit) return config.publishDevtools ? NO_JIT_DEVTOOLS_VARIANT : NO_JIT_VARIANT;
+  return config.publishDevtools ? "standard" : "no-devtools";
 }
 
 interface BuilderAsset {
@@ -208,6 +212,7 @@ export function appMeta(
     version: config.version,
     skathi: CLI_VERSION,
     host: { version: host?.info.skathi ?? CLI_VERSION, variant },
+    ...(host?.info.features.includes("no-jit") && { publishDevtools: config.publishDevtools }),
     entry,
     assets: assetCount,
     launch: config.launch,
@@ -473,11 +478,11 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   requireAppDependencies(config.appRoot, dirname(config.entry));
   const warnings = [...config.warnings];
   const aot = options.aot ?? config.aot;
-  const variant: Variant =
+  let variant: Variant =
     options.variant === undefined ? modeVariant(config, options.mode, aot) : parseVariant(options.variant, "--variant");
-  if (variant === NO_JIT_VARIANT && !aot) {
+  if (noJitVariant(variant) && !aot) {
     throw new ConfigError(
-      `the ${NO_JIT_VARIANT} workload has no JIT and runs only native images — build with --aot (or "aot": true in sk.config.json)`,
+      `the ${variant} workload has no JIT and runs only native images — build with --aot (or "aot": true in sk.config.json)`,
     );
   }
   if (!config.publishJit && options.mode === "release" && !aot) {
@@ -486,9 +491,9 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   if (aot) {
     const problem = aotPlatformProblem(platform);
     if (problem) throw new ConfigError(problem);
-    if (options.payloadOnly)
+    if (options.payloadOnly && !options.host)
       throw new ConfigError(
-        "--aot compiles against the workload it stamps, so it cannot be combined with --payload-only",
+        "--aot --payload-only needs --workload <exe> to compile against your embedder's native AOT loader",
       );
   }
   const singleFile = config.publishSingleFile && options.mode === "release" && !options.payloadOnly;
@@ -502,22 +507,39 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   mkdirSync(work, { recursive: true });
 
   // The host first: a missing or mismatched host should fail before a bundle is spent on it.
-  if (!options.payloadOnly) progress.step("workload");
-  const host = options.payloadOnly
-    ? null
-    : await resolveOrFetchHost({
-        host: options.host,
-        variant,
-        allowMismatch: options.allowHostMismatch,
-        platform,
-        log,
-        onBytes: (done, total) => progress.bytes(done, total),
-      });
+  if (!options.payloadOnly || aot) progress.step("workload");
+  const host =
+    aot && options.payloadOnly && options.host
+      ? resolveEmbedderHost(options.host, options.allowHostMismatch)
+      : options.payloadOnly
+        ? null
+        : await resolveOrFetchHost({
+            host: options.host,
+            variant,
+            allowMismatch: options.allowHostMismatch,
+            platform,
+            log,
+            onBytes: (done, total) => progress.bytes(done, total),
+          });
   if (host) {
+    if (options.payloadOnly) variant = host.info.variant;
     progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
     if (host.unverified) warnings.push(host.unverified);
   }
   const hostNative = aot && host ? hostAot(host) : null;
+  const noJit = host?.info.features.includes("no-jit") ?? false;
+  if (noJit && config.publishDevtools) {
+    if (!host?.info.devtools || !inspectorContainerPath(host)) {
+      throw new HostError(
+        'this no-JIT host has no native inspector — use a devtools workload or set "publishDevtools": false',
+      );
+    }
+    if (singleFile) {
+      throw new ConfigError(
+        'devtools on a no-JIT host need an inspector DLL beside the exe — set "publishSingleFile": false',
+      );
+    }
+  }
 
   const effects: BuiltEffects | null = await buildAppEffects({
     appRoot: config.appRoot,
@@ -665,7 +687,9 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   progress.detail(`${collected.files.length} files · ${kib(collected.totalBytes)}`);
 
   const appContainer = containerName("app", platform);
-  const inspectorContainer = containerName("inspector", platform);
+  const inspector = host ? inspectorContainerPath(host) : null;
+  const inspectorContainer =
+    options.payloadOnly && inspector ? basename(inspector) : containerName("inspector", platform);
   const containers = new Map<string, Uint8Array | null>([
     [appContainer, null],
     [inspectorContainer, null],
@@ -692,8 +716,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       containers.set(appContainer, withUnwindTable(container, [APP_SECTIONS]));
     }
   }
-  const inspector = host ? inspectorContainerPath(host) : null;
-  if (inspector && host?.info.devtools) {
+  if (inspector && host?.info.devtools && (!noJit || config.publishDevtools)) {
     if (!existsSync(inspector)) {
       throw new HostError(
         `the ${variant} workload runs its inspector from ${inspector}, which is missing — reinstall the workload (sk workload install ${variant})`,
@@ -716,7 +739,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   if (options.payloadOnly || !host) {
     // An app split into packs ships app.skpk as a file mapped from offset 0: page-align its data.
     const unskewed = writeSkpk(inputs);
-    const skew = packs.length ? skewFor(0, readHeader(unskewed)) : 0;
+    const skew = packs.length || aot ? skewFor(0, readHeader(unskewed)) : 0;
     writeFileSync(skpk, skew ? writeSkpk(inputs, { skew }) : unskewed);
   } else {
     packaged = PACKAGERS[platform]({ config, host, inputs, sidecars, images, outDir, work, options, warnings, log });
@@ -753,7 +776,10 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       imageBytes: native.imageBytes,
       container: singleFile
         ? null
-        : join(packaged?.bundle ? join(packaged.bundle.app, "Contents", "Resources") : outDir, appContainer),
+        : join(
+            packaged?.bundle ? join(packaged.bundle.app, "Contents", "Resources") : packaged ? outDir : work,
+            appContainer,
+          ),
       entry: native.entry,
       compiler: native.compiler.path,
       ms: Math.round(msNative),

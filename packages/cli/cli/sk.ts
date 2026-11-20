@@ -8,7 +8,7 @@ import { aotFlags } from "./aot-build";
 import { buildApp, summary } from "./build-app";
 import {
   ConfigError,
-  NO_JIT_VARIANT,
+  noJitVariant,
   parseVariant,
   PARTS_NOT_SELECTABLE,
   platformVariants,
@@ -44,8 +44,7 @@ export const colorArg = (args: string[]): boolean | undefined =>
   args.includes("--no-color") ? false : args.includes("--color") ? true : undefined;
 
 const INSTALLABLE: readonly Variant[] = [...platformVariants(currentPlatform()), DEV_HOST];
-/** Without names, `sk workload install` and `build` leave out aot-nojit: a build that needs it fetches it. */
-const BY_DEFAULT = (variants: readonly Variant[]) => variants.filter((v) => v !== NO_JIT_VARIANT);
+const BY_DEFAULT = (variants: readonly Variant[]) => variants.filter((v) => !noJitVariant(v));
 
 function installable(v: string): Variant {
   const name = v.trim();
@@ -220,8 +219,8 @@ export function cli(run: Run): Command {
       .addOption(hidden("--no-aot"))
       .option("--json", "Print the result as JSON")
       .optionsGroup("Advanced")
-      .option("--workload <exe>", "Stamp this workload instead of the cached one")
-      .option("--payload-only", "Write only the app payload (dist/<mode>/.sk/app.skpk) and stop")
+      .option("--workload <exe>", "Stamp this workload, or use it to target an embedder with --aot --payload-only")
+      .option("--payload-only", "Write app.skpk and any sidecars to dist/<mode>/.sk without stamping an executable")
       .option("--aot-inputs", "Keep the typed sources for a later AOT compile")
       .option("--aot-compiler <exe>", "Compile native images with this sk-aot.exe (or SK_AOT_COMPILER)")
       .option("--shader-compiler <exe>", "Compile effect shaders with this redslangc (or SK_REDSLANGC)")

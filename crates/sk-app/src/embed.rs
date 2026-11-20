@@ -495,7 +495,7 @@ impl Builder {
     /// is ready wait for it. On macOS this returns `Error::MainThreadRequired`: use
     /// `Self::run_on_main_thread` instead.
     pub fn spawn(self) -> Result<Handle, Error> {
-        self.answer_host_types();
+        self.answer_host_query();
         #[cfg(target_os = "macos")]
         {
             Err(Error::MainThreadRequired)
@@ -522,7 +522,7 @@ impl Builder {
     where
         F: FnOnce(Exit) -> i32 + Send + 'static,
     {
-        self.answer_host_types();
+        self.answer_host_query();
         require_main_thread()?;
         let handle = self.prepare()?;
         std::thread::Builder::new()
@@ -541,15 +541,16 @@ impl Builder {
         Ok(())
     }
 
-    /// `<exe> --sk-host-types` (what `sk types` and `sk dev --exe` run): prints the modules'
-    /// declarations and ends the process before anything starts.
-    fn answer_host_types(&self) {
-        if std::env::args_os()
-            .nth(1)
-            // `sk types` looks for the flag's bytes in the exe before it runs it; without
-            // black_box an optimised build compares immediates and the bytes are gone.
-            .is_none_or(|a| a != std::hint::black_box(HOST_TYPES_FLAG))
-        {
+    fn answer_host_query(&self) {
+        let Some(arg) = std::env::args_os().nth(1) else {
+            return;
+        };
+        if arg == "--sk-host-info" {
+            println!("{}", crate::payload::host_info_json());
+            std::process::exit(0);
+        }
+        // `sk types` looks for the flag's bytes in the exe before it runs it.
+        if arg != std::hint::black_box(HOST_TYPES_FLAG) {
             return;
         }
         let result = self

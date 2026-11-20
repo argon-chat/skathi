@@ -362,8 +362,24 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
 }
 
 #[cfg(sk_devtools)]
+pub(crate) fn inspector_sidecar() -> Option<PathBuf> {
+    Some(container::beside_executable()?.join(EMBEDDED_IMAGE_CONTAINER?))
+}
+
+#[cfg(sk_devtools)]
 fn prepare_inspector() -> Result<(), String> {
     let policy = engine_policy(std::env::var_os("SK_DEVTOOLS_ENGINE").as_deref())?;
+    #[cfg(feature = "no-jit")]
+    {
+        if policy == EnginePolicy::Jit {
+            return Err(
+                "this host has no JIT; unset SK_DEVTOOLS_ENGINE to use the native inspector".into(),
+            );
+        }
+        if !inspector_sidecar().is_some_and(|file| file.is_file()) {
+            return Err("this host needs its native inspector image beside the executable".into());
+        }
+    }
     if policy == EnginePolicy::Jit {
         if aot::is_active() {
             return Err("cannot switch an initialized native inspector to JIT".into());
@@ -422,14 +438,13 @@ fn prepare_inspector() -> Result<(), String> {
             )?),
             format!("{dll} sha256:{expected}"),
         )
-    } else if let Some(name) = EMBEDDED_IMAGE_CONTAINER {
-        let path = container::beside_executable()
-            .ok_or("the executable has no folder")?
-            .join(name);
+    } else if let Some(path) = inspector_sidecar() {
         match container::load(&path, container::INSPECTOR_SECTION) {
             Ok(bytes) => (Image::Module(bytes), path.display().to_string()),
             Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound && policy == EnginePolicy::Auto =>
+                if !cfg!(feature = "no-jit")
+                    && error.kind() == std::io::ErrorKind::NotFound
+                    && policy == EnginePolicy::Auto =>
             {
                 eprintln!(
                     "[native-aot] no {} beside the executable: the inspector runs under the JIT",

@@ -67,12 +67,6 @@ pub fn prepare(repo: &Path, out: &Path) {
     let selected = std::env::var_os("SK_DEVTOOLS_NATIVE_MANIFEST")
         .map(PathBuf::from).expect("native-inspector requires SK_DEVTOOLS_NATIVE_MANIFEST; run scripts/aot/prepare-inspector.ts first");
     let (manifest_text, manifest) = watched_json(&selected);
-    let (_, pin) = watched_json(&repo.join("packages/cli/aot/toolchain.lock.json"));
-    require(&pin, "schema", "skathi.native-aot-toolchain");
-    assert_eq!(
-        pin.get("version").and_then(serde_json::Value::as_u64),
-        Some(1)
-    );
     require(&manifest, "schema", "skathi.native-aot");
     assert_eq!(
         manifest.get("version").and_then(serde_json::Value::as_u64),
@@ -86,11 +80,19 @@ pub fn prepare(repo: &Path, out: &Path) {
     ] {
         require(&manifest, name, expected);
     }
-    let frontend = text(&pin["frontend"], "revision");
-    let engine = text(&pin["engine"], "revision");
-    require(&manifest, "frontend", frontend);
-    require(&manifest, "engine", engine);
-    require(&manifest, "tableId", text(&pin["table"], "id"));
+    let engine = std::env::var("DEP_REDJS_WEBKIT_VERSION").expect("redjs reports its engine pin");
+    require(&manifest, "engine", &engine);
+    let lock = repo.join("packages/cli/aot/toolchain.lock.json");
+    if lock.is_file() {
+        let (_, pin) = watched_json(&lock);
+        require(&pin, "schema", "skathi.native-aot-toolchain");
+        assert_eq!(
+            pin.get("version").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        require(&manifest, "frontend", text(&pin["frontend"], "revision"));
+        require(&manifest, "tableId", text(&pin["table"], "id"));
+    }
     require(
         &manifest,
         "compileOptions",
@@ -103,20 +105,10 @@ pub fn prepare(repo: &Path, out: &Path) {
             File::open(out.join("app.prod.js")).expect("cannot open embedded inspector source"),
         ),
     );
-    let mut preludes = std::fs::read(repo.join("crates/sk-app/src/prelude.js"))
-        .expect("cannot read inspector prelude");
+    let mut preludes = include_bytes!("src/prelude.js").to_vec();
     preludes.push(0);
-    preludes.extend(
-        std::fs::read(repo.join("crates/sk-app/src/window.prelude.js"))
-            .expect("cannot read window prelude"),
-    );
+    preludes.extend_from_slice(include_bytes!("src/window.prelude.js"));
     require(&manifest, "preludeSha256", &digest(preludes.as_slice()));
-    for name in ["prelude.js", "window.prelude.js"] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo.join("crates/sk-app/src").join(name).display()
-        );
-    }
     let entry = manifest.get("entry").and_then(serde_json::Value::as_u64);
     assert!(
         entry.is_some_and(|entry| entry > 0 && entry <= u32::MAX as u64),

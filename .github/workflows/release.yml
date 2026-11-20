@@ -12,7 +12,7 @@ name: Release
 # devtools run the inspector's native image (scripts/aot/prepare-inspector.ts) from a container of its own
 # (sk-inspector-image-*.dll.gz), and the sk-aot that compiled it (.github/workflows/sk-aot.yml) is published
 # beside them for `sk build --aot`. Windows
-# also gets aot-nojit, linked against the JIT- and WebAssembly-free archive of scripts/aot/no-jit.ts.
+# also gets aot-nojit and aot-nojit-devtools, both linked against the JIT- and WebAssembly-free archive of scripts/aot/no-jit.ts.
 
 on:
   push:
@@ -110,7 +110,7 @@ jobs:
       # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH. no-jit.ts fails when
       # its inventories (scripts/aot/*-entries.json) no longer match the pinned engine; release-hosts.ts checks each link map.
       - if: runner.os == 'Windows'
-        name: Build the hosts (with the native AOT loader, inspector, aot-nojit and sk-aot)
+        name: Build the hosts (with the native AOT loader, inspector, no-JIT variants and sk-aot)
         shell: pwsh
         run: >-
           bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot.exe &&

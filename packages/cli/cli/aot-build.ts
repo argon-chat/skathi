@@ -74,6 +74,9 @@ export function hostAot(host: ResolvedHost): HostAot {
         "use the sk that matches the workload",
     );
   }
+  if (aot.engine !== host.info.jscPin) {
+    throw new HostError(`${host.exe} reports different JavaScriptCore pins in jscPin and its native AOT identity`);
+  }
   const scripts = aot.preludeScripts;
   if (
     scripts !== undefined &&
