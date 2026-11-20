@@ -171,6 +171,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.WheelEvent",
     mdn: "https://developer.mozilla.org/docs/Web/API/WheelEvent",
   },
+  "gesture-event": {
+    key: "api.GestureEvent",
+    mdn: "https://developer.mozilla.org/docs/Web/API/GestureEvent",
+  },
   "focus-event": {
     key: "api.FocusEvent",
     mdn: "https://developer.mozilla.org/docs/Web/API/FocusEvent",
