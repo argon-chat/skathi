@@ -47,7 +47,7 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
 2. **Bundle** `app.prod.js`
 
-   The production bundle, tree-shaken and minified, built as it is without AOT.
+   The production bundle, tree-shaken and minified, built as it is without AOT. Since 0.7, both builds write ASCII source so JavaScriptCore can keep one byte per character. Unicode text, regular expression patterns and tagged template strings retain their values. Set `SK_BUNDLE_UTF8=1` to keep the original source encoding.
 
 3. **Check** `sk check`
 

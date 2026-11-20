@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { asciiOnly, checkAscii, nonAsciiCount } from "../ascii";
+import { preserveLiteralText } from "../ascii-literals";
 
 /** Runs `body` as a function both ways: the escaped one must be ASCII, give
  * the same answer, and pass the parser check. */
@@ -83,6 +84,36 @@ describe("asciiOnly", () => {
 });
 
 describe("checkAscii", () => {
+  test("the production prepass preserves raw strings, frozen site identities and regexp source", () => {
+    const code = [
+      '"use strict";',
+      "const samples = [];",
+      "const owner = { tag(s, n) { samples.push(s); return [this === owner, s[0], s.raw[0], n, Object.isFrozen(s), Object.isFrozen(s.raw)]; } };",
+      "function run(n) { return owner.tag`ж\\ü${n}ё`; }",
+      "const first = run(2), second = run(3);",
+      "function C() { this.v = 42; }",
+      "const factory = () => C;",
+      "return [first, second, samples[0] === samples[1], new factory`ж`().v, owner.tag`ж\\unicode`, /[Ёё]/u.source, /[Ёё]/u.test('ё')];",
+    ].join("\n");
+    const before = preserveLiteralText(code);
+    const escaped = asciiOnly(before);
+    expect(nonAsciiCount(escaped.code)).toBe(0);
+    expect(checkAscii(before, escaped.code)).toBeNull();
+    expect(new Function(escaped.code)()).toEqual(new Function(code)());
+  });
+  test("literal lowering supports a shadowed Object and RegExp constructors used after new", () => {
+    const code = [
+      "const Object = null;",
+      "const \\u005f_skLiteralRegExp = 7;",
+      "const raw = strings => strings.raw[0];",
+      "let error; try { new /ж/; } catch (e) { error = e.name; }",
+      "function match(){return/ё/.source}",
+      "return [raw`ю`, error, new /ж/.constructor('я').source, match()];",
+    ].join("\n");
+    const output = asciiOnly(preserveLiteralText(code)).code;
+    expect(nonAsciiCount(output)).toBe(0);
+    expect(new Function(output)()).toEqual(new Function(code)());
+  });
   test("says when an escape changed what the program reads", () => {
     const before = "var t = (s) => s.raw[0]; t`é`;";
     expect(checkAscii(before, "var t = (s) => s.raw[0]; t`\\u00E9`;")).not.toBeNull();

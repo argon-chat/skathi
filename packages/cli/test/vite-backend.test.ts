@@ -365,6 +365,36 @@ test("sk check distinguishes a live built-in write from Svelte's removed develop
   }
 }, 60_000);
 
+test.each([false, true])(
+  "Unicode source stays ASCII in the packaged script and AOT input (Vite: %s)",
+  (vite) => {
+    const app = appWith({
+      "main.ts": [
+        "/*! Привет */",
+        "const слово = 'ёж'; const re = /[ёж]+/u;",
+        "globalThis.answer = [re.test(слово), re.source, `текст: ${слово}`, String.raw`пароль\\ж`];",
+      ].join("\n"),
+      ...(vite ? { "vite.config.mjs": "export default {};" } : {}),
+    });
+    const out = join(scratch, "unicode-aot-" + vite);
+    const result = run("build", app, "--out", out, "--payload-only", "--aot-inputs");
+    expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
+    const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+    const bytes = payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!);
+    expect(bytes.every((b) => b < 0x80)).toBe(true);
+    const script = new TextDecoder().decode(bytes);
+    expect(new Function("globalThis", script + "\nreturn globalThis.answer;")({})).toEqual([
+      true,
+      "[ёж]+",
+      "текст: ёж",
+      "пароль\\ж",
+    ]);
+    const manifest = JSON.parse(readFileSync(join(out, ".sk", "aot-inputs", "manifest.json"), "utf8"));
+    expect(manifest.script.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+  },
+  60_000,
+);
+
 test("sk check and --aot-inputs see a typed source imported only by a Vite plugin", () => {
   const app = appWith({
     "sk.config.json": JSON.stringify({ name: "vite-graph-test", version: "1.0.0" }),

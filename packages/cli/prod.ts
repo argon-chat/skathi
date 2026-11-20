@@ -18,6 +18,7 @@ import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
+import { preserveLiteralText } from "./ascii-literals";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
@@ -590,27 +591,18 @@ const entryPlugin = {
 };
 
 /**
- * The bundle with every non-ASCII character escaped (ascii.ts): one such character makes
- * JavaScriptCore keep the whole source as UTF-16. Never fails the build: if the result does not
- * lex or parse the same, the bundle is written as is with an advisory. `SK_BUNDLE_UTF8=1` skips it.
+ * JavaScriptCore uses UTF-16 for the whole source if even one character needs it.
  */
 function asciiBundle(code: string): string {
   const before = nonAsciiCount(code);
   if (!before || process.env.SK_BUNDLE_UTF8 === "1") return code;
-  const extraMB = (chars: number) => (chars / 1048576).toFixed(1);
-  const r = asciiOnly(code);
-  const problem = r.failed ?? checkAscii(code, r.code);
+  const prepared = preserveLiteralText(code);
+  const r = asciiOnly(prepared);
+  const problem =
+    r.failed ?? (nonAsciiCount(r.code) ? "some characters could not be escaped" : checkAscii(prepared, r.code));
   if (problem) {
-    advise(
-      `the bundle stays UTF-8 with ${before} non-ASCII characters, so the host holds its source as UTF-16 ` +
-        `(~${extraMB(code.length)} MB more): the ASCII pass ${r.failed ? "could not lex it" : "was refused"} - ${problem}`,
-    );
-    return code;
-  }
-  if (r.kept) {
-    advise(
-      `${r.kept} non-ASCII characters in tagged templates are kept as written (a tag can read \`raw\`), so the ` +
-        `host still holds the bundle's source as UTF-16 (~${extraMB(r.code.length)} MB more)`,
+    throw new Error(
+      `Could not emit the bundle as ASCII (${problem}). Set SK_BUNDLE_UTF8=1 to build with the original source encoding.`,
     );
   }
   return r.code;
