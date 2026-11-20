@@ -41,7 +41,7 @@ An `Err` or a panic in `setup` stops startup; `spawn` then never shows a window.
 
 > **Warning**
 >
-> Use `unsafe_window_handle()` and `unsafe_window_handle_for(id)` at your own risk. Skathi does not accept issues related to either method.
+> Use `unsafe_window_handle()` and `unsafe_window_handle_for(id)` at your own risk. Skathi does not accept issues related to either method. Rust emits a `deprecated` warning at each call to make this risk visible.
 >
 > Use a native handle only when the [window API](/window-api/) cannot express the operation. Changing the frame, style, delegate, level or lifecycle behind Skathi’s back can invalidate its state and crash the process.
 

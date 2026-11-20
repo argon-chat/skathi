@@ -150,7 +150,8 @@ fn main() {
     let handle_checked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if self_test {
         let checked = handle_checked.clone();
-        builder = builder.setup(move |host| {
+        #[allow(deprecated)]
+        let check_handles = move |host: &sk_app::embed::HostContext<'_>| {
             let raw = host
                 .unsafe_window_handle()
                 .ok_or("no main window during setup")?;
@@ -163,7 +164,8 @@ fn main() {
                 );
             });
             Ok(())
-        });
+        };
+        builder = builder.setup(check_handles);
     }
     if let Some(p) = &payload {
         builder = builder.payload_file(p);
@@ -198,9 +200,11 @@ fn main() {
             .emit_to("demo", "tick", &Tick { n: 3 })
             .err()
             .map(|e| e.to_string());
+        #[allow(deprecated)]
+        let worker_has_handle = ui.unsafe_window_handle().is_some();
         let line = json!({
             "uiHandleMatched": handle_checked.load(std::sync::atomic::Ordering::Relaxed),
-            "workerHasHandle": ui.unsafe_window_handle().is_some(),
+            "workerHasHandle": worker_has_handle,
             "first": first,
             "second": second,
             "third": third,

@@ -271,7 +271,10 @@ impl std::fmt::Display for Error {
                 "no app: give the builder a payload (`sk publish --payload-only` writes dist/release/.sk/app.skpk)"
             ),
             Error::PayloadNeedsProd => {
-                write!(f, "a payload needs sk-app's `prod` feature; a dev build boots the dev dist instead")
+                write!(
+                    f,
+                    "a payload needs sk-app's `prod` feature; a dev build boots the dev dist instead"
+                )
             }
             Error::Payload(e) => write!(f, "{e}"),
             Error::ArgsAlreadyRead => write!(f, "Skathi's arguments were read before spawn"),
@@ -279,7 +282,10 @@ impl std::fmt::Display for Error {
             Error::DataDirectory(e) => write!(f, "data directory: {e}"),
             Error::Module(e) => write!(f, "{e}"),
             Error::Spawn(e) => write!(f, "the Skathi thread did not start: {e}"),
-            Error::MainThreadRequired => write!(f, "AppKit requires the process main thread; call Builder::run_on_main_thread from main"),
+            Error::MainThreadRequired => write!(
+                f,
+                "AppKit requires the process main thread; call Builder::run_on_main_thread from main"
+            ),
         }
     }
 }
@@ -745,11 +751,17 @@ pub struct Handle {
 impl Handle {
     /// Borrow the main window’s raw handle on its UI thread. Closing or recreating the window invalidates it.
     /// Changing native styles, frame, level, delegate or lifecycle can break the host or crash the process.
+    #[deprecated(
+        note = "Use appWindow when possible. Raw window handles are used at your own risk. Skathi does not accept issues related to their use."
+    )]
     pub fn unsafe_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
         crate::window::native_window(None)
     }
 
     /// Same lifetime and thread restrictions as [`Self::unsafe_window_handle`], for an open window’s Skathi ID.
+    #[deprecated(
+        note = "Use appWindow when possible. Raw window handles are used at your own risk. Skathi does not accept issues related to their use."
+    )]
     pub fn unsafe_window_handle_for(&self, id: u64) -> Option<raw_window_handle::RawWindowHandle> {
         crate::window::native_window(Some(id))
     }

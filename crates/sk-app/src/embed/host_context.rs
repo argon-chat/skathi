@@ -77,13 +77,19 @@ impl<'a> HostContext<'a> {
 
     /// Borrow the main window’s raw handle on its UI thread. Closing or recreating the window invalidates it.
     /// Changing its native styles, frame, level, delegate or lifecycle can break Skathi or cause a crash.
+    #[deprecated(
+        note = "Use appWindow when possible. Raw window handles are used at your own risk. Skathi does not accept issues related to their use."
+    )]
     pub fn unsafe_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
-        self.handle().unsafe_window_handle()
+        crate::window::native_window(None)
     }
 
     /// Same lifetime and thread restrictions as [`Self::unsafe_window_handle`], for an open window’s Skathi ID.
+    #[deprecated(
+        note = "Use appWindow when possible. Raw window handles are used at your own risk. Skathi does not accept issues related to their use."
+    )]
     pub fn unsafe_window_handle_for(&self, id: u64) -> Option<raw_window_handle::RawWindowHandle> {
-        self.handle().unsafe_window_handle_for(id)
+        crate::window::native_window(Some(id))
     }
 
     /// The engine's runtime, for an extension built against the same `sk-runtime` that registers
