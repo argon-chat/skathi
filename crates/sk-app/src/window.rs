@@ -16,6 +16,9 @@ use sk_runtime::{host_fn, with_commit, JsRuntime};
 
 use crate::json::{self, Json};
 
+#[path = "window_controls.rs"]
+mod controls;
+
 const UNDEF: u64 = 0xa;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,6 +262,8 @@ pub struct Config {
     pub minimizable: bool,
     pub maximizable: bool,
     pub always_on_top: bool,
+    pub all_workspaces: bool,
+    pub initial_opacity: f32,
     pub low_latency_surface: bool,
     /// `window.focus()`: `false` = `request_attention` (never steals focus), `true` = `activate_window`.
     pub focus_raise: bool,
@@ -289,6 +294,8 @@ impl Default for Config {
             minimizable: true,
             maximizable: true,
             always_on_top: false,
+            all_workspaces: false,
+            initial_opacity: 1.,
             low_latency_surface: false,
             focus_raise: false,
             devtools: true,
@@ -403,6 +410,9 @@ pub fn load_config(raw: Option<String>) -> Config {
                     .into(),
             ),
         }
+        if let Some(alpha) = f32_of(&v, "opacity") {
+            cfg.initial_opacity = alpha.clamp(0., 1.);
+        }
         if let Some(s) = v.get("backdrop").and_then(Json::as_str) {
             match Backdrop::from_str(s) {
                 Some((b, note)) => {
@@ -420,6 +430,7 @@ pub fn load_config(raw: Option<String>) -> Config {
             ("minimizable", &mut cfg.minimizable),
             ("maximizable", &mut cfg.maximizable),
             ("alwaysOnTop", &mut cfg.always_on_top),
+            ("visibleOnAllWorkspaces", &mut cfg.all_workspaces),
             ("lowLatencySurface", &mut cfg.low_latency_surface),
         ] {
             if let Some(b) = bool_of(&v, key) {
@@ -509,8 +520,7 @@ host_fn!(fn sk_window_advise(g, args) {
     UNDEF
 });
 
-// gpui has no `set_position`, runtime min/max size or non-toggling restore, so these verbs reach the
-// HWND directly. gpui's bounds cache refreshes from the resulting `WM_MOVE`/`WM_SIZE`: reads lag a frame.
+// Win32 operations that need the outer frame or a specific HWND.
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -560,36 +570,29 @@ mod win {
         true
     }
 
-    pub fn set_position(x: f32, y: f32) {
-        if let Some(h) = hwnd() {
-            let _ = unsafe {
-                SetWindowPos(
-                    h,
-                    None,
-                    x.round() as i32,
-                    y.round() as i32,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                )
-            };
+    pub fn set_frame(position: Option<(f32, f32)>, size: Option<(f32, f32)>) -> bool {
+        let Some(h) = hwnd() else { return false };
+        let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+        if position.is_none() {
+            flags |= SWP_NOMOVE;
         }
-    }
-
-    pub fn set_outer_size(w: f32, h_: f32) {
-        if let Some(h) = hwnd() {
-            let _ = unsafe {
-                SetWindowPos(
-                    h,
-                    None,
-                    0,
-                    0,
-                    w.round().max(1.0) as i32,
-                    h_.round().max(1.0) as i32,
-                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-                )
-            };
+        if size.is_none() {
+            flags |= SWP_NOSIZE;
         }
+        let (x, y) = position.unwrap_or_default();
+        let (w, height) = size.unwrap_or_default();
+        unsafe {
+            SetWindowPos(
+                h,
+                None,
+                x.round() as i32,
+                y.round() as i32,
+                w.round() as i32,
+                height.round() as i32,
+                flags,
+            )
+        }
+        .is_ok()
     }
 
     pub fn set_always_on_top(on: bool) {
@@ -753,8 +756,9 @@ mod win {
     pub fn hide() -> bool {
         false
     }
-    pub fn set_position(_x: f32, _y: f32) {}
-    pub fn set_outer_size(_w: f32, _h: f32) {}
+    pub fn set_frame(_position: Option<(f32, f32)>, _size: Option<(f32, f32)>) -> bool {
+        false
+    }
     pub fn set_always_on_top(_on: bool) {}
     pub fn set_always_on_top_for(_raw: isize, _on: bool) {}
     pub fn set_dark_mode_for(_raw: isize, _dark: bool) {}
@@ -828,7 +832,26 @@ pub fn primary_scale() -> f32 {
     }
 }
 
+thread_local! {
+    // A window handle belongs to the UI thread; other threads see an empty map.
+    static NATIVE_WINDOWS: RefCell<std::collections::HashMap<u64, RawWindowHandle>> = RefCell::default();
+}
+pub(crate) fn remember_native_window(window: &Window) {
+    if let Ok(handle) = <Window as HasWindowHandle>::window_handle(window) {
+        NATIVE_WINDOWS.with(|windows| {
+            windows
+                .borrow_mut()
+                .insert(sk_tree::windows::key(window), handle.as_raw())
+        });
+    }
+}
+pub(crate) fn native_window(id: Option<u64>) -> Option<RawWindowHandle> {
+    let key = id.unwrap_or_else(|| PRIMARY_WINDOW.with(Cell::get));
+    NATIVE_WINDOWS.with(|windows| windows.borrow().get(&key).copied())
+}
+
 pub fn forget_window(key: sk_tree::WinKey) {
+    NATIVE_WINDOWS.with(|windows| windows.borrow_mut().remove(&key));
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
     #[cfg(target_os = "macos")]
     NS_WINDOW_CACHE.with(|m| m.borrow_mut().remove(&key));
@@ -916,6 +939,9 @@ pub struct Snapshot {
     pub effective_backdrop: Backdrop,
     pub theme: Theme,
     pub always_on_top: bool,
+    pub opacity: f32,
+    pub traffic_light: Option<(f32, f32)>,
+    pub all_workspaces: bool,
     pub title_bar_height: f32,
     pub fallback_titlebar: bool,
     pub overlay: Option<Overlay>,
@@ -947,6 +973,9 @@ impl Default for Snapshot {
             effective_backdrop: Backdrop::Mica,
             theme: Theme::System,
             always_on_top: false,
+            opacity: 1.,
+            traffic_light: None,
+            all_workspaces: false,
             title_bar_height: 32.0,
             fallback_titlebar: true,
             overlay: None,
@@ -972,6 +1001,9 @@ thread_local! {
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
     /// So the frame funnel re-applies a backdrop only when `appWindow.backdrop` moves.
     static APPLIED_BACKDROP: Cell<Option<Backdrop>> = const { Cell::new(None) };
+    static FULLSCREEN_TARGET: Cell<Option<bool>> = const { Cell::new(None) };
+    static FULLSCREEN_WANTED: Cell<Option<bool>> = const { Cell::new(None) };
+    static NATIVE_FULLSCREEN_EVENTS: RefCell<Vec<gpui::WindowFullscreenTransition>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Clone, Debug)]
@@ -1018,10 +1050,32 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             fallback_titlebar: cfg.title_bar_fallback,
         }
     });
+    controls::init(cfg);
+    if cfg.initial_opacity != 1. {
+        controls::apply(controls::Action::Opacity(cfg.initial_opacity), window, cx);
+    }
+    if cfg.all_workspaces {
+        controls::apply(controls::Action::Workspaces(true), window, cx);
+    }
+    let app = cx.to_async();
+    let foreground = cx.foreground_executor().clone();
+    let handle = Window::window_handle(window);
+    window.vn_on_fullscreen_transition(move |event| {
+        NATIVE_FULLSCREEN_EVENTS.with(|events| events.borrow_mut().push(event));
+        let mut app = app.clone();
+        foreground
+            .spawn(async move {
+                let _ = handle.update(&mut app, |_, window, cx| platform_changed(window, cx));
+            })
+            .detach();
+    });
     APPLIED_BACKDROP.with(|a| a.set(Some(cfg.backdrop)));
     // Before anything per-window is published: `set_os_chrome` and `set_env` address "the primary window".
     let key = sk_tree::windows::key(window);
     PRIMARY_WINDOW.with(|c| c.set(key));
+    remember_native_window(window);
+    cx.on_window_closed(|_, id| forget_window(id.as_u64()))
+        .detach();
     sk_tree::windows::set_primary(key);
     capture_hwnd(window);
     #[cfg(target_os = "macos")]
@@ -1304,6 +1358,15 @@ pub(crate) fn begin_startup_reveal() {
     STARTUP_REVEAL_PENDING.with(|pending| pending.set(true));
 }
 
+pub(crate) fn prepare_startup_reveal(window: &mut Window, cx: &mut gpui::App) {
+    drain_pending(window, cx);
+}
+pub(crate) fn startup_should_show() -> bool {
+    !crate::shutdown::is_closing()
+        && !sk_runtime::bridge::poisoned()
+        && !APP_HIDDEN.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub(crate) fn cancel_startup_reveal() {
     STARTUP_REVEAL_PENDING.with(|pending| pending.set(false));
 }
@@ -1361,7 +1424,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         scale,
         maximized: win::is_zoomed() || window.is_maximized(),
         minimized: win::is_iconic(),
-        visible: startup_visibility(win::is_visible()),
+        visible: cfg!(target_os = "windows") && startup_visibility(win::is_visible()),
         fullscreen,
         focused: window.is_window_active(),
         cloaked: win::is_cloaked(),
@@ -1376,6 +1439,11 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         ),
         theme: live.theme,
         always_on_top: live.always_on_top,
+        opacity: controls::window_alpha(),
+        traffic_light: window
+            .vn_traffic_light_position()
+            .map(|p| (p.x.as_f32(), p.y.as_f32())),
+        all_workspaces: controls::all_workspaces(),
         title_bar_height: live.title_bar_height,
         fallback_titlebar: live.fallback_titlebar,
         overlay: live.overlay,
@@ -1416,7 +1484,7 @@ fn titlebar_rect(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     let (visible, (x, y, w, h)) = titlebar_area(s);
     #[cfg(not(target_os = "windows"))]
     if visible {
-        let left = posix::titlebar_inset();
+        let left = posix::titlebar_inset() + s.traffic_light.map_or(0., |(x, _)| x - 12.);
         return (true, (x + left, y, (w - left).max(0.0), h));
     }
     (visible, (x, y, w, h))
@@ -1577,6 +1645,14 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("minimized", Json::Bool(s.minimized)),
         ("visible", Json::Bool(s.visible)),
         ("fullscreen", Json::Bool(s.fullscreen)),
+        ("opacity", Json::n(s.opacity)),
+        (
+            "trafficLightPosition",
+            s.traffic_light.map_or(Json::Null, |(x, y)| {
+                Json::obj(vec![("x", Json::n(x)), ("y", Json::n(y))])
+            }),
+        ),
+        ("visibleOnAllWorkspaces", Json::Bool(s.all_workspaces)),
         ("focused", Json::Bool(s.focused)),
         ("cloaked", Json::Bool(s.cloaked)),
         ("occluded", Json::Bool(s.occluded)),
@@ -1730,7 +1806,12 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             if p.minimized != s.minimized {
                 kinds.push(if s.minimized { "minimize" } else { "restore" });
             }
-            if p.fullscreen != s.fullscreen {
+            if !cfg!(target_os = "macos") && p.fullscreen != s.fullscreen {
+                kinds.push(if s.fullscreen {
+                    "will-enter-fullscreen"
+                } else {
+                    "will-exit-fullscreen"
+                });
                 kinds.push("fullscreenchange");
             }
             if backdrop_moved(p, &s) {
@@ -1748,10 +1829,42 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
                 || p.fullscreen != s.fullscreen
                 || p.title_bar_height != s.title_bar_height
                 || p.fallback_titlebar != s.fallback_titlebar
+                || p.traffic_light != s.traffic_light
                 || p.overlay.is_some() != s.overlay.is_some()
             {
                 kinds.push("geometrychange");
             }
+        }
+    }
+    for event in NATIVE_FULLSCREEN_EVENTS.take() {
+        use gpui::WindowFullscreenTransition::*;
+        match event {
+            Will(on) => {
+                FULLSCREEN_TARGET.set(Some(on));
+                kinds.push(if on {
+                    "will-enter-fullscreen"
+                } else {
+                    "will-exit-fullscreen"
+                });
+            }
+            Did(_) => {
+                FULLSCREEN_TARGET.set(None);
+                kinds.push("fullscreenchange");
+            }
+            Cancelled(on) => {
+                FULLSCREEN_TARGET.set(None);
+                kinds.push(if on {
+                    "cancel-enter-fullscreen"
+                } else {
+                    "cancel-exit-fullscreen"
+                });
+            }
+        }
+    }
+    if FULLSCREEN_TARGET.get().is_none() {
+        if let Some(wanted) = FULLSCREEN_WANTED.take() {
+            PENDING.with(|ops| ops.borrow_mut().push_back(Op::Fullscreen(wanted)));
+            window.refresh();
         }
     }
     PREV.with(|p| *p.borrow_mut() = Some(s.clone()));
@@ -1844,7 +1957,9 @@ pub fn should_close() -> bool {
     notify("close-requested", &json)
 }
 
+#[derive(Clone)]
 enum Op {
+    Control(controls::Action),
     Title(String),
     Minimize,
     Maximize,
@@ -1893,11 +2008,21 @@ pub(crate) fn close_primary(why: &'static str, window: &mut Window, cx: &mut gpu
 }
 
 fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
+    if matches!(op, Op::Activate(true)) {
+        controls::restore_alpha_on_show(window);
+    }
+    if matches!(
+        op,
+        Op::Center | Op::Fullscreen(_) | Op::Minimize | Op::Maximize | Op::Bounds { .. }
+    ) {
+        controls::cancel_glide();
+    }
     #[cfg(not(target_os = "windows"))]
     let Some(op) = posix::apply(op, window, cx) else {
         return;
     };
     match op {
+        Op::Control(action) => controls::apply(action, window, cx),
         Op::Title(t) => {
             window.set_window_title(&t);
             LIVE.with(|l| l.borrow_mut().title = t);
@@ -1925,7 +2050,12 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         }
         // `toggle_fullscreen` toggles, so guard with the live state.
         Op::Fullscreen(on) => {
-            if window.is_fullscreen() != on {
+            if let Some(target) = FULLSCREEN_TARGET.get() {
+                FULLSCREEN_WANTED.set((target != on).then_some(on));
+            } else if window.is_fullscreen() != on {
+                if cfg!(target_os = "macos") {
+                    FULLSCREEN_TARGET.set(Some(on));
+                }
                 window.toggle_fullscreen();
             }
         }
@@ -1955,14 +2085,17 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             w,
             h,
             content,
-        } => apply_bounds(window, cx, x, y, w, h, content),
+        } => write_bounds(window, cx, x, y, w, h, content),
         Op::Center => {
             let s = SNAPSHOT.with(|s| s.borrow().clone());
             let (_, _, ow, oh) = s.outer;
             let (_, _, aw, ah, al, at) = s.screen;
-            win::set_position(
-                (al + (aw - ow) / 2.0) * s.scale,
-                (at + (ah - oh) / 2.0) * s.scale,
+            win::set_frame(
+                Some((
+                    (al + (aw - ow) / 2.0) * s.scale,
+                    (at + (ah - oh) / 2.0) * s.scale,
+                )),
+                None,
             );
             resync_bounds(window, cx);
         }
@@ -2023,12 +2156,24 @@ fn work_area_at(x: f32, y: f32, w: f32, h: f32) -> Option<(f32, f32, f32, f32)> 
     ))
 }
 
-#[cfg(not(target_os = "windows"))]
-fn work_area_at(_x: f32, _y: f32, _w: f32, _h: f32) -> Option<(f32, f32, f32, f32)> {
-    None
+fn write_bounds(
+    window: &mut Window,
+    cx: &mut gpui::App,
+    x: Option<f32>,
+    y: Option<f32>,
+    w: Option<f32>,
+    h: Option<f32>,
+    content: bool,
+) {
+    let (w, h) = controls::limit_request(window, cx, w, h, content);
+    #[cfg(target_os = "windows")]
+    apply_bounds(window, cx, x, y, w, h, content);
+    #[cfg(not(target_os = "windows"))]
+    posix::set_bounds(window, x, y, w, h, content);
 }
 
-/// Best-effort, clamped to the target monitor's work area so an app cannot park behind the taskbar.
+/// Clamps to the target monitor's work area and applies the whole frame in one Win32 call.
+#[cfg(target_os = "windows")]
 fn apply_bounds(
     window: &mut Window,
     cx: &mut gpui::App,
@@ -2038,8 +2183,7 @@ fn apply_bounds(
     h: Option<f32>,
     content: bool,
 ) {
-    let mut moved_synchronously = false;
-    let s = SNAPSHOT.with(|s| s.borrow().clone());
+    let s = snapshot(window, cx);
     let scale = s.scale;
     let cur = if content { s.content } else { s.outer };
     let (ox, oy, ow, oh) = s.outer;
@@ -2069,35 +2213,27 @@ fn apply_bounds(
         .map(|(l, t, w, h)| (l / scale, t / scale, w / scale, h / scale))
         .unwrap_or((s.screen.4, s.screen.5, s.screen.2, s.screen.3));
 
-    if sized {
-        if aw > 0.0 {
-            nw = nw.min(aw - frame.0).max(1.0);
-            nh = nh.min(ah - frame.1).max(1.0);
-        }
-        // Without an OS outer rect (`getBounds()` is the client rect there) the client is resized.
-        if content || win::window_rect().is_none() {
-            window.resize(gpui::size(gpui::px(nw), gpui::px(nh)));
-        } else {
-            win::set_outer_size(nw * scale, nh * scale);
-            moved_synchronously = true;
-        }
+    if sized && aw > 0.0 {
+        nw = nw.min(aw - frame.0).max(1.0);
+        nh = nh.min(ah - frame.1).max(1.0);
     }
-    if x.is_some() || y.is_some() {
-        let (tw, th) = if sized {
-            (nw + frame.0, nh + frame.1)
-        } else {
-            (ow, oh)
-        };
+    let (tw, th) = if sized {
+        (nw + frame.0, nh + frame.1)
+    } else {
+        (ow, oh)
+    };
+    let position = (x.is_some() || y.is_some()).then(|| {
         if aw > 0.0 {
             nx = nx.clamp(al, (al + aw - tw).max(al));
             ny = ny.clamp(at, (at + ah - th).max(at));
         }
-        win::set_position(nx * scale, ny * scale);
-        moved_synchronously = true;
-    }
-    // `Window::resize` spawns its `SetWindowPos`; the Win32 calls send `WM_SIZE` re-entrantly and need [`resync_bounds`].
-    if moved_synchronously {
+        (nx * scale, ny * scale)
+    });
+    let outer_size = sized.then_some((tw * scale, th * scale));
+    if win::set_frame(position, outer_size) {
         resync_bounds(window, cx);
+    } else if sized {
+        window.resize(gpui::size(gpui::px(nw), gpui::px(nh)));
     }
 }
 
@@ -2107,7 +2243,15 @@ fn submit(op: Op) {
         PENDING.with(|p| p.borrow_mut().push_back(op));
         return;
     }
-    let applied = with_commit(|window, cx| apply(op_take(&op), window, cx)).is_some();
+    let applied = with_commit(|window, cx| {
+        if sk_tree::windows::key(window) != PRIMARY_WINDOW.with(Cell::get) {
+            cx.defer(crate::refresh_main);
+            return false;
+        }
+        apply(op.clone(), window, cx);
+        true
+    })
+    .unwrap_or(false);
     if !applied {
         PENDING.with(|p| p.borrow_mut().push_back(op));
     }
@@ -2163,39 +2307,6 @@ static APP_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 pub(crate) fn revealed() -> bool {
     REVEALED.load(std::sync::atomic::Ordering::Acquire)
-}
-
-fn op_take(op: &Op) -> Op {
-    match op {
-        Op::Title(t) => Op::Title(t.clone()),
-        Op::Minimize => Op::Minimize,
-        Op::Maximize => Op::Maximize,
-        Op::Unmaximize => Op::Unmaximize,
-        Op::ToggleMaximize => Op::ToggleMaximize,
-        Op::Close => Op::Close,
-        Op::UserClose => Op::UserClose,
-        Op::Fullscreen(b) => Op::Fullscreen(*b),
-        Op::Activate(b) => Op::Activate(*b),
-        Op::Bounds {
-            x,
-            y,
-            w,
-            h,
-            content,
-        } => Op::Bounds {
-            x: *x,
-            y: *y,
-            w: *w,
-            h: *h,
-            content: *content,
-        },
-        Op::Center => Op::Center,
-        Op::AlwaysOnTop(b) => Op::AlwaysOnTop(*b),
-        Op::SetBackdrop(b) => Op::SetBackdrop(*b),
-        Op::SetTheme(t) => Op::SetTheme(*t),
-        Op::StartDragging => Op::StartDragging,
-        Op::Hide => Op::Hide,
-    }
 }
 
 fn drain_pending(window: &mut Window, cx: &mut gpui::App) {
@@ -2320,6 +2431,7 @@ host_fn!(fn sk_window_set_overlay(g, args) {
     // `height` alone (arg 1 absent) keeps the live cluster, `false` retires it, an object installs or updates it.
     if let Some(h) = arg_f32(args.arg(0)) {
         LIVE.with(|l| l.borrow_mut().title_bar_height = h.max(0.0));
+        submit(Op::Control(controls::Action::RefreshTraffic));
         if fallback_titlebar() {
             sk_runtime::with_app(|cx| cx.defer(crate::refresh_main));
         }
@@ -2335,7 +2447,9 @@ host_fn!(fn sk_window_set_overlay(g, args) {
                 return UNDEF;
             }
             if cfg!(target_os = "macos") {
-                advise(NO_OVERLAY_MACOS);
+                if arg_f32(args.arg(0)).is_none() || !read(2).is_empty() || !read(3).is_empty() {
+                    advise(NO_OVERLAY_MACOS);
+                }
                 return UNDEF;
             }
             let mut adv = Vec::new();
@@ -2463,6 +2577,11 @@ host_fn!(fn sk_window_control_click(_g, args) {
 
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const std::ffi::c_void)] = &[
+        (
+            "__sk_window_install_controls",
+            1,
+            controls::install as *const _,
+        ),
         ("__sk_window_state", 0, sk_window_state as *const _),
         ("__sk_window_observe", 1, sk_window_observe as *const _),
         ("__sk_window_set_title", 1, sk_window_set_title as *const _),

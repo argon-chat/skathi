@@ -50,13 +50,6 @@ pub(super) fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) -> Option<O
         }
         Op::ToggleMaximize => window.vn_set_maximized(!window.vn_is_zoomed()),
         Op::Center => center(window),
-        Op::Bounds {
-            x,
-            y,
-            w,
-            h,
-            content,
-        } => set_bounds(window, x, y, w, h, content),
         Op::AlwaysOnTop(on) => set_always_on_top(window, on),
         Op::StartDragging => window.start_window_move(),
         Op::Hide => {
@@ -79,7 +72,7 @@ pub(super) fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) -> Option<O
 pub(super) fn refine(mut s: Snapshot, window: &Window) -> Snapshot {
     s.maximized = window.vn_is_zoomed();
     s.minimized = window.vn_is_minimized();
-    s.visible = window.vn_is_shown();
+    s.visible = super::startup_visibility(window.vn_is_shown());
     s
 }
 
@@ -106,7 +99,7 @@ fn center(window: &Window) {
 
 /// CSS px are gpui's logical px. The size is clamped to the work area; the position is not, so a
 /// window can move to another display (the platform keeps it reachable).
-fn set_bounds(
+pub(super) fn set_bounds(
     window: &mut Window,
     x: Option<f32>,
     y: Option<f32>,

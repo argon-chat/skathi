@@ -42,11 +42,17 @@ export interface SkWindowOptions {
   backdrop?: string | undefined;
   /** `HWND_TOPMOST`. Live. */
   alwaysOnTop?: boolean | undefined;
+  maxWidth?: number | undefined;
+  maxHeight?: number | undefined;
+  aspectRatio?: number | undefined;
+  opacity?: number | undefined;
+  visibleOnAllWorkspaces?: boolean | undefined;
+  trafficLightPosition?: { x: number; y: number } | undefined;
   /** Default true. Creation-time only. */
   resizable?: boolean | undefined;
-  /** Minimum client width, CSS px. Creation-time only. */
+  /** Minimum client width, CSS px. Live. */
   minWidth?: number | undefined;
-  /** Minimum client height, CSS px. Creation-time only. */
+  /** Minimum client height, CSS px. Live. */
   minHeight?: number | undefined;
   /** `env(titlebar-area-height)` inside this window, for `chrome: "hidden"`. Default 32. Live. */
   titleBarHeight?: number | undefined;
@@ -106,16 +112,7 @@ export interface SkWindowPopout {
 }
 
 /** Props fixed at window creation; changing one on a live window advises and does nothing (close and re-open via `v-if` or a `:key`). */
-const CREATION_TIME_ONLY = [
-  "chrome",
-  "resizable",
-  "minWidth",
-  "minHeight",
-  "cover",
-  "taskbar",
-  "focusable",
-  "lowLatencySurface",
-] as const;
+const CREATION_TIME_ONLY = ["chrome", "resizable", "cover", "taskbar", "focusable", "lowLatencySurface"] as const;
 
 /** Symbol prop marking a window's painted root: Vue's `for…in` skips symbols so it never reaches the host, yet `createElement` registers the element before its children mount. */
 export const WINDOW_ROOT: unique symbol = Symbol("sk-window-root");
@@ -150,6 +147,12 @@ interface OpenOptions extends SkWindowBounds {
   backdrop?: string;
   alwaysOnTop: boolean;
   resizable: boolean;
+  maxWidth?: number;
+  maxHeight?: number;
+  aspectRatio?: number;
+  opacity?: number;
+  visibleOnAllWorkspaces?: boolean;
+  trafficLightPosition?: { x: number; y: number };
   minWidth?: number;
   minHeight?: number;
   titleBarHeight: number;
@@ -195,6 +198,12 @@ export function createSkWindowPopout(
     if (p.monitor !== undefined) o.monitor = p.monitor;
     if (p.lowLatencySurface !== undefined) o.lowLatencySurface = p.lowLatencySurface;
     if (p.backdrop !== undefined) o.backdrop = p.backdrop;
+    if (p.maxWidth !== undefined) o.maxWidth = p.maxWidth;
+    if (p.maxHeight !== undefined) o.maxHeight = p.maxHeight;
+    if (p.aspectRatio !== undefined) o.aspectRatio = p.aspectRatio;
+    if (p.opacity !== undefined) o.opacity = p.opacity;
+    if (p.visibleOnAllWorkspaces !== undefined) o.visibleOnAllWorkspaces = p.visibleOnAllWorkspaces;
+    if (p.trafficLightPosition !== undefined) o.trafficLightPosition = p.trafficLightPosition;
     if (p.minWidth !== undefined) o.minWidth = p.minWidth;
     if (p.minHeight !== undefined) o.minHeight = p.minHeight;
     if (p.cover !== undefined) o.cover = p.cover;

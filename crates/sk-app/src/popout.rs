@@ -36,7 +36,9 @@ impl Render for PopoutShell {
         // Before the env: an env for an unregistered painted root would mark nothing for re-cascade.
         sk_tree::windows::set_painted_root(id, self.node);
         publish_env(id, self.node, window, cx);
-        report_metrics(id, self.node, window);
+        let node = self.node;
+        // The painted root gets its new bounds during layout, after this render returns.
+        window.defer(cx, move |window, _| report_metrics(id, node, window));
         frame_drawn(id, window, cx);
         let backdrop = POPOUTS
             .with(|p| {
@@ -113,7 +115,7 @@ struct Popout {
     /// Creation-time: changing one only advises.
     resizable: bool,
     low_latency_surface: bool,
-    min_size: (Option<f32>, Option<f32>),
+    controls: Controls,
     /// Last `(width, height)` reported to JS, so `resize` fires on change.
     last_metrics: (f32, f32),
     last_focused: bool,
@@ -207,7 +209,90 @@ pub fn ids() -> Vec<sk_tree::WinKey> {
     POPOUTS.with(|p| p.borrow().iter().map(|w| w.id.as_u64()).collect())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Controls {
+    limits: gpui::WindowSizeConstraints,
+    opacity: f32,
+    all_workspaces: bool,
+    traffic: Option<gpui::Point<gpui::Pixels>>,
+}
+
+impl Default for Controls {
+    fn default() -> Self {
+        Self {
+            limits: Default::default(),
+            opacity: 1.,
+            all_workspaces: false,
+            traffic: None,
+        }
+    }
+}
+
+impl Controls {
+    fn apply(
+        self,
+        old: Self,
+        window: &mut gpui::Window,
+        custom: bool,
+        height: f32,
+        height_changed: bool,
+    ) {
+        if self.limits != old.limits {
+            window.vn_set_size_constraints(self.limits);
+            let current = window.viewport_size();
+            let fitted = self.limits.fit(current, true);
+            if !window.is_fullscreen() && !window.is_maximized() && fitted != current {
+                window.resize(fitted);
+            }
+        }
+        if self.opacity != old.opacity {
+            window.vn_set_opacity(self.opacity);
+        }
+        if self.all_workspaces != old.all_workspaces {
+            window.vn_set_all_workspaces(self.all_workspaces);
+        }
+        if self.traffic != old.traffic || height_changed {
+            #[cfg(target_os = "macos")]
+            if let Some(pos) = self
+                .traffic
+                .or_else(|| crate::window::traffic_light_position(custom, height))
+            {
+                window.set_traffic_light_position(pos);
+            } else {
+                window.vn_restore_traffic_light_position();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (custom, height);
+    }
+
+    fn fit_bounds(
+        self,
+        bounds: [Option<f32>; 4],
+        current: gpui::Size<gpui::Pixels>,
+    ) -> [Option<f32>; 4] {
+        let [x, y, w, h] = bounds;
+        if self.limits == Default::default() || w.is_none() && h.is_none() {
+            return bounds;
+        }
+        let fitted = self.limits.fit(
+            gpui::size(
+                w.map_or(current.width, gpui::px),
+                h.map_or(current.height, gpui::px),
+            ),
+            w.is_some(),
+        );
+        [
+            x,
+            y,
+            Some(fitted.width.as_f32()),
+            Some(fitted.height.as_f32()),
+        ]
+    }
+}
+
 struct Options {
+    controls: Controls,
     bounds: [Option<f32>; 4],
     title: String,
     x: Option<f32>,
@@ -269,7 +354,35 @@ fn parse_options(raw: &str) -> Options {
             .map(|n| n as f32)
             .filter(|n| n.is_finite() && (matches!(key, "x" | "y") || *n > 0.0))
     });
+    let dim = |key: &str| {
+        num(key)
+            .map(|v| v as f32)
+            .filter(|v| v.is_finite() && *v > 0.)
+    };
+    let limit = |w: Option<f32>, h: Option<f32>, other: f32| {
+        (w.is_some() || h.is_some())
+            .then(|| gpui::size(gpui::px(w.unwrap_or(other)), gpui::px(h.unwrap_or(other))))
+    };
+    let traffic = j
+        .as_ref()
+        .and_then(|j| j.get("trafficLightPosition"))
+        .and_then(|p| {
+            Some(gpui::point(
+                gpui::px(p.get("x")?.as_f64()? as f32),
+                gpui::px(p.get("y")?.as_f64()? as f32),
+            ))
+        });
     Options {
+        controls: Controls {
+            limits: gpui::WindowSizeConstraints {
+                min: limit(dim("minWidth"), dim("minHeight"), 0.),
+                max: limit(dim("maxWidth"), dim("maxHeight"), f32::MAX),
+                aspect: dim("aspectRatio"),
+            },
+            all_workspaces: flag("visibleOnAllWorkspaces").unwrap_or(false),
+            opacity: num("opacity").unwrap_or(1.).clamp(0., 1.) as f32,
+            traffic,
+        },
         bounds,
         title: text("title").unwrap_or_else(|| "Skathi".to_string()),
         x: num("x").map(|n| n as f32),
@@ -390,9 +503,9 @@ host_fn!(fn sk_window_set_options(g, args) {
         let w = &p[i];
         (w.handle, w.title.clone(), w.os_chrome, w.visible, w.cover, w.taskbar, w.focusable)
     });
-    let (old_resizable, old_min_size, old_backdrop, old_title_bar_height, old_low_latency_surface) = POPOUTS.with(|p| {
+    let (old_resizable, old_controls, old_backdrop, old_title_bar_height, old_low_latency_surface) = POPOUTS.with(|p| {
         let w = &p.borrow()[i];
-        (w.resizable, w.min_size, w.backdrop, w.title_bar_height, w.low_latency_surface)
+        (w.resizable, w.controls, w.backdrop, w.title_bar_height, w.low_latency_surface)
     });
     let opts = parse_options(&raw);
     if opts.low_latency_surface != old_low_latency_surface {
@@ -403,13 +516,6 @@ host_fn!(fn sk_window_set_options(g, args) {
             "<SkWindow resizable>: whether a window can be resized is decided when it is created \
              (a window STYLE and its hit test), so changing it does nothing to a window that is \
              already open — close and re-open it, for example with a `:key` that includes the value",
-        );
-    }
-    if (opts.min_width, opts.min_height) != old_min_size {
-        crate::window::advise(
-            "<SkWindow minWidth/minHeight>: the minimum size is decided when the window is created, \
-             so changing it does nothing to a window that is already open — close and re-open it, \
-             for example with a `:key` that includes the value",
         );
     }
     let backdrop = opts
@@ -462,6 +568,7 @@ host_fn!(fn sk_window_set_options(g, args) {
     let (hwnd, click_through, protection, monitor_moved, bounds_moved) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
         let w = &mut p[i];
+        w.controls = opts.controls;
         w.always_on_top = always_on_top;
         w.backdrop = backdrop;
         w.title_bar_height = opts.title_bar_height;
@@ -474,23 +581,30 @@ host_fn!(fn sk_window_set_options(g, args) {
         w.monitor = opts.monitor;
         let bounds_moved = w.requested_bounds != opts.bounds && !w.cover;
         w.requested_bounds = opts.bounds;
-        if bounds_moved {
-            if let Some((x, y, width, height)) = w.first_place.as_mut() {
+        if let Some((x, y, width, height)) = w.first_place.as_mut() {
+            if bounds_moved {
                 *x = opts.bounds[0].or(*x);
                 *y = opts.bounds[1].or(*y);
                 *width = opts.bounds[2].unwrap_or(*width);
                 *height = opts.bounds[3].unwrap_or(*height);
+            }
+            if bounds_moved || old_controls.limits != opts.controls.limits {
+                let fitted = opts.controls.limits.fit(size(px(*width), px(*height)), opts.bounds[2].is_some() || opts.bounds[3].is_none());
+                *width = fitted.width.as_f32();
+                *height = fitted.height.as_f32();
             }
         }
         (w.hwnd, click_through, protection, monitor_moved, bounds_moved)
     });
     let replace = monitor_moved && old_cover && old_visible && visible && hwnd != 0;
     let monitor = opts.monitor;
-    let bounds_request = bounds_moved.then_some(opts.bounds);
+    let mut bounds_request = bounds_moved.then_some(opts.bounds);
     let id = handle.window_id();
     with_app(|cx| {
         cx.defer(move |cx| {
             let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
+                opts.controls.apply(old_controls, window, !old_chrome, opts.title_bar_height, opts.title_bar_height != old_title_bar_height);
+                bounds_request = bounds_request.map(|r| opts.controls.fit_bounds(r, window.viewport_size()));
                 if title_moved {
                     window.set_window_title(&opts.title);
                 }
@@ -897,12 +1011,18 @@ pub fn with_window<R>(
         .ok()
 }
 
-fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App) {
+fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut App) {
     // The node may have been unmounted between the call and this defer.
     if !sk_tree::with_tree(|t| t.node(node).is_some()) {
         sk_tree::set_popped_out(node, false);
         return;
     }
+    let fitted = opts.controls.limits.fit(
+        size(px(opts.width), px(opts.height)),
+        opts.bounds[2].is_some() || opts.bounds[3].is_none(),
+    );
+    opts.width = fitted.width.as_f32();
+    opts.height = fitted.height.as_f32();
     let opened_at = Instant::now();
     let (bounds, display_id) = match (opts.x, opts.y) {
         (Some(x), Some(y)) => placed_bounds(x, y, opts.width, opts.height, cx),
@@ -976,6 +1096,14 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     let mut hwnd = 0;
     let mut first_frame = (1.0, (0.0, 0.0));
     let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
+        opts.controls.apply(
+            Controls::default(),
+            window,
+            !opts.os_chrome,
+            opts.title_bar_height,
+            false,
+        );
+        crate::window::remember_native_window(window);
         hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
         let client = window.viewport_size();
         first_frame = (
@@ -1036,7 +1164,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
                 .unwrap_or_else(|| crate::window::config().backdrop),
             resizable: opts.resizable,
             low_latency_surface: opts.low_latency_surface,
-            min_size: (opts.min_width, opts.min_height),
+            controls: opts.controls,
             last_metrics: (0.0, 0.0),
             last_focused: false,
             fullscreen: false,
@@ -1435,7 +1563,6 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
     sk_tree::set_popped_out(popout.node, false);
     // Its atlas is destroyed, so owed tiles must not reach another window's `drop_image`, which could remove keys a live window re-inserted.
     sk_tree::forget_window(id.as_u64());
-    crate::window::forget_window(id.as_u64());
     let msg = format!(
         "[window] the pop-out window for node {} closed — the subtree is back in the primary \
          window",

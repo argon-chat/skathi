@@ -411,6 +411,7 @@ interface SkWindowRect {
 
 /** `appWindow.chrome`: `client` is the client area; `contentInset` is how far host-drawn chrome insets the viewport in it (`inner* === client* - inset`; zero in custom-chrome mode). */
 interface SkWindowChrome {
+  readonly trafficLightPosition: { x: number; y: number } | null;
   titleBarStyle: string;
   displayMode: string;
   /** The Window Controls Overlay area's height (`env(titlebar-area-height)`): 0 while the area is not visible (OS chrome, fullscreen, minimized, or the fallback title bar still up). */
@@ -440,9 +441,9 @@ interface SkAppWindow extends EventTarget {
   close(): void;
   center(): void;
   /** Shows and raises the window, including one that started hidden or was `hide()`n (a tray click). */
-  show(): void;
+  show(options?: { fade?: number }): void;
   /** Hides the window and its taskbar button; the app keeps running. Where hiding is unsupported, minimizes. */
-  hide(): void;
+  hide(options?: { fade?: number }): void;
   isVisible(): boolean;
   startDragging(): void;
   startResizeDragging(): void;
@@ -453,7 +454,16 @@ interface SkAppWindow extends EventTarget {
   isFocused(): boolean;
   getBounds(): SkWindowRect;
   getContentBounds(): SkWindowRect;
-  setBounds(rect: Partial<SkWindowRect>): void;
+  setBounds(
+    rect: Partial<SkWindowRect>,
+    options?: { animate?: boolean | { duration?: number; easing?: "linear" | "ease-in" | "ease-out" | "ease-in-out" } },
+  ): void;
+  setMinSize(size: { width: number; height: number } | null): void;
+  setMaxSize(size: { width: number; height: number } | null): void;
+  setAspectRatio(ratio: number | null): void;
+  setTrafficLightPosition(position: { x: number; y: number } | null): void;
+  opacity: number;
+  visibleOnAllWorkspaces: boolean;
   setContentBounds(rect: Partial<SkWindowRect>): void;
   setTitleBarOverlay(overlay: boolean | null | Record<string, unknown>): void;
   title: string;

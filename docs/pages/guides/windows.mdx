@@ -31,7 +31,7 @@ Every `appWindow` verb is synchronous and returns `undefined`. There are no prom
 ## The lifecycle, from launch to quit
 
 1. **Launch.** With [`"singleInstance": true`](/window-api/config-single-instance/), a second launch hands its arguments to the running copy and exits without opening a window.
-2. **Create.** The host reads the `window` block of `sk.config.json` and creates the window at that size and in its place: centred on the primary display unless [`x`, `y` and `monitor`](#start-position-and-monitor) say otherwise. On Windows the window is created hidden. On macOS and Linux it is shown at once.
+2. **Create.** The host reads the `window` block of `sk.config.json` and creates the window at that size and in its place: centred on the primary display unless [`x`, `y` and `monitor`](#start-position-and-monitor) say otherwise. On Windows, macOS and X11, the host keeps the window hidden during setup. Wayland maps the window when the compositor receives its first buffer.
 3. **Run your bundle.** `appWindow` already works at the top level of `main.ts`. Reads return the initial state; verbs are queued and applied at the top of the first frame. [`DOMContentLoaded` and `load`](/window-api/event-load/) fire once, after the bundle has run.
 4. **First frame.** The queued verbs are applied and window `resize` fires once. On Windows the host paints the first styled frame and only then shows the window, so there is no blank flash.
 5. **Running.** State changes arrive as events and as reactive reads, covered in [Reactive reads and events](#reactive-reads-and-events).
@@ -48,7 +48,7 @@ There are three places to shape the window. They are not interchangeable: some s
 
 ### sk.config.json
 
-The [`window` block](/window-api/config-window/) is read once, before the window exists. It is the only place to set the size, the minimum size, the title bar style and whether the window can be resized, minimized or maximized. Changing it takes a restart.
+The [`window` block](/window-api/config-window/) is read once, before the window exists. It sets the initial size and minimum, the title bar style and whether the window can be resized, minimized or maximized. Changing it takes a restart.
 
 ```json
 {
@@ -114,7 +114,7 @@ Everything else is a property or method of `appWindow`, plus the web globals. Ch
 | ----------------------------------- | ----------------------------------------- | -------------- | ------------------------------------------------------------ |
 | Title                               | `title`                                   | yes            | [`appWindow.title`](/window-api/title/), `document.title`    |
 | Initial size                        | `width`, `height`                         | no             | [`setContentBounds()`](/window-api/set-content-bounds/)      |
-| Minimum size                        | `minWidth`, `minHeight`                   | no             | no                                                           |
+| Minimum size                        | `minWidth`, `minHeight`                   | no             | [`setMinSize()`](/window-api/set-min-size/)                  |
 | Resizable, minimizable, maximizable | `resizable`, `minimizable`, `maximizable` | no             | no                                                           |
 | Title bar style and fallback strip  | `titleBarStyle`, `titleBarFallback`       | no             | no                                                           |
 | Title bar height and host buttons   | `titleBarHeight`, `titleBarOverlay`       | yes            | [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/) |
@@ -363,6 +363,22 @@ By default `window.focus()` does not steal focus: it asks for attention instead.
 - [Custom title bar](/guides/custom-title-bar/): draw your own title bar, drag regions and caption buttons, and the Windows 11 snap layouts.
 - [Pop-out windows](/guides/pop-out-windows/): open more OS windows with `<SkWindow>` that share your app's state.
 - [Closing, hiding and quitting](/guides/closing-and-background/): ask before closing, keep running in the background, and save data on quit.
+
+## A mini player (since 0.6)
+
+Set the minimum and aspect ratio on the native content area, in CSS pixels. Passing `null` to either setter clears the constraint. A new minimum that exceeds the current size grows the window. `setMaxSize()` applies the upper bound.
+
+```ts
+appWindow.setMinSize({ width: 240, height: 135 });
+appWindow.setAspectRatio(16 / 9);
+appWindow.alwaysOnTop = true;
+appWindow.visibleOnAllWorkspaces = true;
+appWindow.setBounds({ width: 420 }, { animate: { duration: 180, easing: "ease-out" } });
+```
+
+On macOS the two pinning properties together let the player float over another app’s fullscreen Space. Windows keeps it topmost on its current desktop. X11 delegates both requests to the window manager. Wayland assigns stacking and workspace membership itself.
+
+Use `hide({ fade: 150 })` and `show({ fade: 150 })` to fade to or from the window’s configured opacity. An animated bounds change lays out the content on each frame. Observe `move` and `resize` for intermediate and final bounds.
 
 ## See also
 

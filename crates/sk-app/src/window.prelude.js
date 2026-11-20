@@ -408,6 +408,7 @@
   }
   globalThis.__skStickyActivation = markSticky;
   const appWindow = new EventTarget;
+  __sk_window_install_controls(appWindow);
   const verb = (name) => () => __sk_window_verb(name);
   appWindow.minimize = verb("minimize");
   appWindow.maximize = verb("maximize");
@@ -416,8 +417,6 @@
   appWindow.restore = verb("unmaximize");
   appWindow.close = closeWindow;
   appWindow.center = verb("center");
-  appWindow.show = verb("show");
-  appWindow.hide = verb("hide");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __sk_window_set_fullscreen(!!on);
   appWindow.isMaximized = () => refresh().maximized;
@@ -427,7 +426,6 @@
   appWindow.isVisible = () => refresh().visible;
   appWindow.getBounds = () => ({ ...S.outer });
   appWindow.getContentBounds = () => ({ ...S.content });
-  appWindow.setBounds = (r) => setBounds(r, false);
   appWindow.setContentBounds = (r) => setBounds(r, true);
   const setOverlay = (height, mode, color, symbolColor) => {
     __sk_window_set_overlay(typeof height === "number" ? height : NaN, mode, String(color || ""), String(symbolColor || ""));
@@ -483,6 +481,7 @@
   });
   ro(appWindow, "scaleFactor", () => S.devicePixelRatio);
   ro(appWindow, "chrome", () => ({
+    trafficLightPosition: S.trafficLightPosition ? { ...S.trafficLightPosition } : null,
     titleBarStyle: S.titleBarStyle,
     displayMode: S.displayMode,
     titleBarHeight: S.titleBarArea.height,
@@ -507,7 +506,16 @@
     "titleBarFallback",
     "focus"
   ];
-  const RUNTIME_KEYS = ["title", "backdrop", "theme", "alwaysOnTop", "titleBarHeight", "titleBarOverlay"];
+  const RUNTIME_KEYS = [
+    "title",
+    "backdrop",
+    "theme",
+    "alwaysOnTop",
+    "visibleOnAllWorkspaces",
+    "opacity",
+    "titleBarHeight",
+    "titleBarOverlay"
+  ];
   const STYLE_ONLY = ["frame", "titleBarStyle"];
   const defineWindow = (opts) => {
     if (!opts || typeof opts !== "object")
@@ -523,6 +531,14 @@
       }
       if (key === "theme") {
         appWindow.theme = opts.theme;
+        continue;
+      }
+      if (key === "visibleOnAllWorkspaces" && typeof opts.visibleOnAllWorkspaces === "boolean") {
+        appWindow.visibleOnAllWorkspaces = opts.visibleOnAllWorkspaces;
+        continue;
+      }
+      if (key === "opacity" && typeof opts.opacity === "number") {
+        appWindow.opacity = opts.opacity;
         continue;
       }
       if (key === "alwaysOnTop") {
@@ -613,6 +629,14 @@
         case "blur":
           emit(globalThis, kind);
           emit(appWindow, kind);
+          break;
+        case "will-enter-fullscreen":
+        case "will-exit-fullscreen":
+        case "cancel-enter-fullscreen":
+        case "cancel-exit-fullscreen":
+          appWindow.dispatchEvent(new CustomEvent(kind.startsWith("will") ? "fullscreenwillchange" : "fullscreencancel", {
+            detail: { fullscreen: kind.includes("enter") }
+          }));
           break;
         case "fullscreenchange":
           onFullscreenWindowChanged(S.fullscreen);

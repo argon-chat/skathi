@@ -15,6 +15,7 @@ declare function __sk_window_state(): string;
  */
 declare function __sk_window_observe(fn: (kinds: string, json: string) => boolean): void;
 
+declare function __sk_window_install_controls(window: SkAppWindow): void;
 declare function __sk_window_set_title(title: string): void;
 
 /**
@@ -80,6 +81,7 @@ interface SkWindowState {
   displayMode: string;
   titleBarStyle: "default" | "hidden";
   titleBarOverlayVisible: boolean;
+  trafficLightPosition: { x: number; y: number } | null;
   /** The area left to APP CONTENT, not the titlebar's own box. */
   titleBarArea: SkWindowRect;
   fallbackTitleBar: boolean;

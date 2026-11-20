@@ -376,7 +376,7 @@ impl Builder {
         self
     }
 
-    /// Runs once on the Skathi thread after storage install, before any app JS or window. An
+    /// Runs once on the Skathi thread after storage and the main window exist, before any app JS. An
     /// error or panic prevents startup. Keep it short.
     pub fn setup<F>(mut self, setup: F) -> Self
     where
@@ -743,6 +743,17 @@ pub struct Handle {
 }
 
 impl Handle {
+    /// Borrow the main window’s raw handle on its UI thread. Closing or recreating the window invalidates it.
+    /// Changing native styles, frame, level, delegate or lifecycle can break the host or crash the process.
+    pub fn unsafe_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        crate::window::native_window(None)
+    }
+
+    /// Same lifetime and thread restrictions as [`Self::unsafe_window_handle`], for an open window’s Skathi ID.
+    pub fn unsafe_window_handle_for(&self, id: u64) -> Option<raw_window_handle::RawWindowHandle> {
+        crate::window::native_window(Some(id))
+    }
+
     /// Delivers `data` to the `on(event)` handlers of `native:<module>` in the app's next frame.
     /// The event must be declared with [`Module::event`].
     pub fn emit_to<T: serde::Serialize + ?Sized>(

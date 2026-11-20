@@ -18,7 +18,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Main window":
     "`appWindow` and the window globals (`innerWidth`, `screen`, `document.title`, the Fullscreen API) always address the primary window, also when the code runs from a pop-out's event handler. Every number is in CSS px. Verbs return at once: inside an input handler they apply in the same frame, otherwise at the top of the next one. On Linux under Wayland, the compositor does not let an app place, hide or pin its window; each entry lists what it does there instead. See [Windows](/guides/windows/).",
   "Window events":
-    "Host events are plain `Event`s with no payload: read the new state from `appWindow` in the handler, where the getters are already current. In one frame they fire in a fixed order: `resize`, `visibilitychange`, then `maximize` or `unmaximize`, `minimize` or `restore`, `fullscreenchange`, `backdropchange`, `focus` or `blur`, `move`, `geometrychange`, and last the media query `change` events. Verbs called inside a handler apply on the next frame. See [Closing and running in the background](/guides/closing-and-background/).",
+    "Most host events are plain `Event`s. The transition events `fullscreenwillchange` and `fullscreencancel` include the destination in `detail.fullscreen`. For the other events, read the new state from `appWindow` in the handler, where the getters are already current. In one frame they fire in a fixed order: `resize`, `visibilitychange`, then `maximize` or `unmaximize`, `minimize` or `restore`, `fullscreenchange`, `backdropchange`, `focus` or `blur`, `move`, `geometrychange`, and last the media query `change` events. Verbs called inside a handler apply on the next frame. See [Closing and running in the background](/guides/closing-and-background/).",
   "Startup configuration":
     "The `window` block of `sk.config.json` is read once, before the main window opens, and a change needs a restart. It is the only place to set the size, the minimum size, `titleBarStyle`, `resizable`, `minimizable` and `maximizable`. A key the host does not know is ignored without a warning. `defineWindow()` applies the keys that can change at run time, after the window exists.",
   "Title bar and chrome":
@@ -92,6 +92,83 @@ const MAC_LINUX_SAME_AS_CONTENT =
   "On macOS and Linux, it equals the content bounds. On macOS, `x` and `y` are relative to the screen the window is on, and the frame includes the title bar.";
 
 const mainWindow = section("Main window", [
+  {
+    slug: "set-min-size",
+    name: "appWindow.setMinSize()",
+    kind: "method",
+    summary: "Sets the minimum client size in CSS pixels while the main window is open.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: "appWindow.setMinSize({ width, height } | null): void",
+    notes: [
+      "A larger minimum immediately grows a windowed client. Use zero for an unconstrained axis. The same limit applies to dragging and programmatic bounds. Passing null clears the startup or runtime minimum.",
+      "Windows 11 snap layouts can reject windows whose minimum width exceeds 500 effective pixels.",
+    ],
+  },
+  {
+    slug: "set-max-size",
+    name: "appWindow.setMaxSize()",
+    kind: "method",
+    summary: "Sets the maximum client size in CSS pixels while the main window is open.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: "appWindow.setMaxSize({ width, height } | null): void",
+    notes: [
+      "A smaller maximum shrinks a windowed client. Pass null to clear it. The minimum takes priority when two limits conflict.",
+    ],
+  },
+  {
+    slug: "set-aspect-ratio",
+    name: "appWindow.setAspectRatio()",
+    kind: "method",
+    summary: "Locks the width-to-height ratio of the native client area.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: "appWindow.setAspectRatio(ratio: number | null): void",
+    notes: [
+      "Use 16 / 9 for a widescreen player. A width in setBounds or setContentBounds drives the height. A height-only request drives the width. The native window frame and caption are accounted for separately.",
+      "The constraint applies during live resize on Windows and macOS, through geometry hints on X11 and during interactive xdg-shell resize on Wayland. Fullscreen and maximization use the compositor’s dimensions. Pass null to release the lock.",
+    ],
+  },
+  {
+    slug: "set-traffic-light-position",
+    name: "appWindow.setTrafficLightPosition()",
+    kind: "method",
+    summary: "Places the macOS caption buttons in the title bar.",
+    platforms: os(NO, OK, NO),
+    since: "0.6.0",
+    syntax: "appWindow.setTrafficLightPosition(position: { x: number; y: number } | null): void",
+    notes: [
+      "The coordinates are the close button’s origin in its AppKit title-bar container, in points from the left and bottom. The other two buttons follow at their native spacing.",
+      "In a custom title bar, null restores automatic centering from its current height. A standard title bar restores the AppKit positions. The setting survives native fullscreen. Read the windowed position from appWindow.chrome.trafficLightPosition.",
+    ],
+  },
+  {
+    slug: "opacity",
+    name: "appWindow.opacity",
+    kind: "property",
+    summary: "Sets the opacity of the entire native window.",
+    platforms: os(OK, OK, PART),
+    since: "0.6.0",
+    syntax: "appWindow.opacity: number",
+    notes: [
+      "Use 0 for transparent and 1 for opaque. A fade restores this target opacity when the window is shown again. Direct writes cancel an active fade.",
+      "Windows uses layered window alpha, macOS uses AppKit alphaValue and X11 requests compositor opacity. Wayland uses the compositor’s normal opacity.",
+    ],
+  },
+  {
+    slug: "visible-on-all-workspaces",
+    name: "appWindow.visibleOnAllWorkspaces",
+    kind: "property",
+    summary: "Requests that the window join every workspace.",
+    platforms: os(NO, OK, PART),
+    since: "0.6.0",
+    syntax: "appWindow.visibleOnAllWorkspaces: boolean",
+    notes: [
+      "For a macOS mini player, enable both alwaysOnTop and visibleOnAllWorkspaces. AppKit combines a floating window level with CanJoinAllSpaces and FullScreenAuxiliary so the player can appear over another app’s fullscreen Space.",
+      "Windows topmost applies to the current virtual desktop. On X11 the window manager handles the all-desktops request. Wayland delegates workspace membership to the compositor.",
+    ],
+  },
   {
     slug: "app-window",
     name: "appWindow",
@@ -375,9 +452,10 @@ onMounted(() =>
     kind: "method",
     summary: "Shows the main window and brings it to the front, also after `hide()`.",
     platforms: os(OK, OK, PART),
-    syntax: "appWindow.show(): void",
+    syntax: "appWindow.show(options?: { fade?: number }): void",
     returns: "`undefined`.",
     notes: [
+      "Pass { fade: 180 } to show a hidden window at zero alpha and fade to its configured opacity over 180 ms (since 0.6). A new fade can reverse an active one.",
       "On a hidden window it shows the window, then activates it. On a shown window it activates it.",
       "It always raises the window, whatever `window.focus` says in `sk.config.json`. On macOS, it brings the app to the front as well.",
       "It cancels the 10 s fallback that shows a window started hidden with no tray icon.",
@@ -410,10 +488,11 @@ if (appTray.available) {
     summary: "Hides the main window and its taskbar button while the app keeps running.",
     platforms: os(OK, OK, PART),
     platformSince: MAC_LINUX_0_3,
-    syntax: "appWindow.hide(): void",
+    syntax: "appWindow.hide(options?: { fade?: number }): void",
     returns: "`undefined`.",
     notes: [
       "`document.hidden` becomes `true`, `isVisible()` returns `false` and `visibilitychange` fires. No `minimize` event fires.",
+      "Pass { fade: 180 } to fade out over 180 ms before hiding (since 0.6). Wayland falls back to its ordinary hide behavior.",
       "Call `show()` to bring the window back.",
       "Like Electron's `win.hide()`.",
     ],
@@ -711,7 +790,8 @@ export function windowInfo() {
     summary: "Moves or resizes the main window, frame included, in CSS px.",
     platforms: os(OK, OK, PART),
     platformSince: MAC_LINUX_0_3,
-    syntax: "appWindow.setBounds(rect: Partial<SkWindowRect>): void",
+    syntax:
+      'appWindow.setBounds(rect: Partial<SkWindowRect>, options?: { animate?: boolean | { duration?: number; easing?: "linear" | "ease-in" | "ease-out" | "ease-in-out" } }): void',
     params: [
       { name: "rect.x", type: "number", description: "Left edge of the outer window.", optional: true },
       { name: "rect.y", type: "number", description: "Top edge of the outer window.", optional: true },
@@ -725,7 +805,7 @@ export function windowInfo() {
       "The size is kept at 1 px or more and within the work area.",
       "On Windows, the position is clamped into the work area of the monitor the new rectangle lands on, so the window can move to another monitor but not behind the taskbar.",
       "On macOS and Linux, the position is not clamped. On macOS, `x` and `y` are relative to the screen the window is on, as `getBounds()` reports them.",
-      "Like Electron's `win.setBounds()`.",
+      "An animated change lays out the content at each intermediate size. Use animate: true for 180 ms with ease-in-out, or provide duration in milliseconds and easing (since 0.6). Move and resize events reflect actual changes during the glide and at its final rectangle. A new bounds request replaces the running glide.",
     ],
     examples: [
       {
@@ -960,7 +1040,7 @@ function pick(theme: string) {
     syntax: "appWindow.alwaysOnTop: boolean",
     notes: [
       "The window stays above other windows without being activated.",
-      "The initial value is `window.alwaysOnTop` from `sk.config.json`. It is reactive.",
+      "The initial value is `window.alwaysOnTop` from `sk.config.json`. It is reactive. Pair it with visibleOnAllWorkspaces for a player over fullscreen Spaces on macOS (since 0.6).",
     ],
     examples: [
       {
@@ -1661,6 +1741,30 @@ const HOST_EVENT =
 
 const windowEvents = section("Window events", [
   {
+    slug: "event-fullscreenwillchange",
+    name: "fullscreenwillchange (appWindow)",
+    kind: "event",
+    summary: "Reports the direction of a fullscreen transition before its completion.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: 'appWindow.addEventListener("fullscreenwillchange", handler)',
+    notes: [
+      "Read event.detail.fullscreen for the destination. On macOS the source is AppKit’s will-enter or will-exit notification, including transitions initiated by the green button. On Windows and Linux the host publishes it before fullscreenchange in the same state update.",
+    ],
+  },
+  {
+    slug: "event-fullscreencancel",
+    name: "fullscreencancel (appWindow)",
+    kind: "event",
+    summary: "Reports a native fullscreen transition cancelled by AppKit.",
+    platforms: os(NO, OK, NO),
+    since: "0.6.0",
+    syntax: 'appWindow.addEventListener("fullscreencancel", handler)',
+    notes: [
+      "event.detail.fullscreen is the requested destination. The existing windowed or fullscreen state remains in effect.",
+    ],
+  },
+  {
     slug: "event-close-requested",
     name: "close-requested",
     kind: "event",
@@ -2032,7 +2136,7 @@ appWindow.addEventListener("move", () => {
     syntax: 'appWindow.addEventListener("fullscreenchange", (event: Event) => void)',
     notes: [
       HOST_EVENT,
-      "It covers `setFullscreen()`, element fullscreen and the macOS green button.",
+      "It covers `setFullscreen()`, element fullscreen and the macOS green button. On macOS, AppKit’s did-enter or did-exit notification marks completion (since 0.6).",
       "It fires after `resize`, as the Fullscreen spec orders them.",
     ],
     examples: [
@@ -2173,7 +2277,7 @@ export function poll(fetchStatus: () => void) {
 
 const CREATION_ONLY = "It is read once when the window opens; a change needs a restart.";
 const OVERLAY_LIMITS = [
-  "On macOS, it is ignored with an advisory: the traffic lights are the window's buttons, and `appWindow.chrome.hostControls` stays `false`.",
+  "On macOS the height repositions the native traffic lights (since 0.6). Custom button colours and host-drawn controls are unavailable.",
 ];
 const HEX_ONLY =
   "Only hex colors are accepted: `#rgb`, `#rrggbb` or `#rrggbbaa`. Another form, such as a color name or `rgb()`, is refused with an advisory.";
@@ -2187,7 +2291,7 @@ const startup = section("Startup configuration", [
       "Sets the main window's run-time options from JS: title, backdrop, theme, always on top and the title bar overlay.",
     platforms: os(OK, PART, PART),
     syntax:
-      'import { defineWindow } from "@skathi-native/runtime";\n\ndefineWindow(options: { title?: string; backdrop?: string; theme?: string; alwaysOnTop?: boolean; titleBarHeight?: number; titleBarOverlay?: boolean | object }): void',
+      'import { defineWindow } from "@skathi-native/runtime";\n\ndefineWindow(options: { title?: string; backdrop?: string; theme?: string; alwaysOnTop?: boolean; visibleOnAllWorkspaces?: boolean; opacity?: number; titleBarHeight?: number; titleBarOverlay?: boolean | object }): void',
     params: [
       { name: "options.title", type: "string", description: "Sets `document.title`.", optional: true },
       { name: "options.backdrop", type: "string", description: "Sets `appWindow.backdrop`.", optional: true },
@@ -2247,7 +2351,7 @@ createApp(App).mount("#app");`,
     summary: "The block of `sk.config.json` that describes the main window as it opens.",
     platforms: all(OK),
     syntax:
-      '{\n  "window": {\n    "title": string,\n    "width": number,\n    "height": number,\n    "minWidth": number,\n    "minHeight": number,\n    "x": number,\n    "y": number,\n    "center": boolean,\n    "monitor": "primary" | "cursor" | number,\n    "titleBarStyle": "hidden" | "default" | "hiddenInset",\n    "titleBarHeight": number,\n    "titleBarFallback": boolean,\n    "titleBarOverlay": boolean | { "height"?: number, "color"?: string, "symbolColor"?: string },\n    "backdrop": string,\n    "resizable": boolean,\n    "minimizable": boolean,\n    "alwaysOnTop": boolean,\n    "focus": "raise",\n    "devtools": boolean\n  }\n}',
+      '{\n  "window": {\n    "title": string,\n    "width": number,\n    "height": number,\n    "minWidth": number,\n    "minHeight": number,\n    "x": number,\n    "y": number,\n    "center": boolean,\n    "monitor": "primary" | "cursor" | number,\n    "titleBarStyle": "hidden" | "default" | "hiddenInset",\n    "titleBarHeight": number,\n    "titleBarFallback": boolean,\n    "titleBarOverlay": boolean | { "height"?: number, "color"?: string, "symbolColor"?: string },\n    "backdrop": string,\n    "resizable": boolean,\n    "minimizable": boolean,\n    "alwaysOnTop": boolean,\n    "visibleOnAllWorkspaces": boolean,\n    "opacity": number,\n    "focus": "raise",\n    "devtools": boolean\n  }\n}',
     notes: [
       CREATION_ONLY,
       "The window opens centered on the primary display, unless `x`, `y` and `monitor` place it elsewhere. No key sets a maximized, fullscreen or hidden start, or the theme.",
@@ -2376,6 +2480,26 @@ createApp(App).mount("#app");`,
     related: ["config-window-width", "config-window-min-height"],
   },
   {
+    slug: "config-window-visible-on-all-workspaces",
+    name: "window.visibleOnAllWorkspaces",
+    kind: "option",
+    summary: "Sets initial workspace membership for the main window.",
+    since: "0.6.0",
+    platforms: os(NO, OK, PART),
+    syntax: '{ "window": { "alwaysOnTop": true, "visibleOnAllWorkspaces": true } }',
+    related: ["visible-on-all-workspaces", "always-on-top"],
+  },
+  {
+    slug: "config-window-opacity",
+    name: "window.opacity",
+    kind: "option",
+    summary: "Sets native window opacity before the main window is shown.",
+    since: "0.6.0",
+    platforms: os(OK, OK, PART),
+    syntax: '{ "window": { "opacity": 0.85 } }',
+    related: ["opacity", "show", "hide"],
+  },
+  {
     slug: "config-window-min-width",
     name: "window.minWidth",
     kind: "option",
@@ -2385,7 +2509,7 @@ createApp(App).mount("#app");`,
     params: [{ name: "minWidth", type: "number >= 0", description: "Minimum width in CSS px.", optional: true }],
     notes: [
       CREATION_ONLY,
-      "It works alone; the height is then not limited.",
+      "It sets the initial width. setMinSize() changes or clears the limit at runtime (since 0.6).",
       "On Windows, a value above 500 prints an advisory: the Windows 11 snap layouts reject such a window.",
     ],
     examples: [
@@ -2397,7 +2521,7 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    edgeCases: ["There is no maximum size option."],
+    edgeCases: ["Use appWindow.setMaxSize() for a live maximum (since 0.6)."],
     related: ["config-window-min-height", "sk-window-min-width"],
   },
   {
@@ -2408,7 +2532,7 @@ createApp(App).mount("#app");`,
     platforms: all(OK),
     syntax: '{ "window": { "minHeight": number } }',
     params: [{ name: "minHeight", type: "number >= 0", description: "Minimum height in CSS px.", optional: true }],
-    notes: [CREATION_ONLY, "It works alone; the width is then not limited."],
+    notes: ["It sets the initial minimum height. setMinSize() changes or clears the limit at runtime (since 0.6)."],
     examples: [
       {
         title: "Leave room for a toolbar and a status bar",
@@ -2651,7 +2775,9 @@ createApp(App).mount("#app");`,
 }`,
       },
     ],
-    limitations: ["On macOS, it places the traffic lights when the window opens; a later change does not move them."],
+    limitations: [
+      "On macOS, automatic traffic light placement follows height changes (since 0.6). An explicit position takes precedence.",
+    ],
     related: ["env-titlebar-area", "config-window-title-bar-overlay-height", "get-titlebar-area-rect"],
   },
   {
@@ -3113,7 +3239,8 @@ createApp(App).mount("#app");`,
   },
 ]);
 
-const MAC_TITLEBAR_X = "On macOS, the area starts past the traffic lights: `x` is `78` and the width is 78 px less.";
+const MAC_TITLEBAR_X =
+  "On macOS, the area starts past the traffic lights. The default inset is 78 px and follows a custom horizontal position (since 0.6).";
 
 const titleBar = section("Title bar and chrome", [
   {
@@ -3176,7 +3303,7 @@ ${IMPORT}
     kind: "method",
     summary:
       "Installs, restyles or removes the minimize, maximize and close buttons the host draws over the title bar.",
-    platforms: os(OK, NO, OK),
+    platforms: os(OK, PART, OK),
     syntax:
       "appWindow.setTitleBarOverlay(overlay: boolean | null | { height?: number; color?: string; symbolColor?: string }): void",
     params: [
@@ -3483,7 +3610,7 @@ onUnmounted(() => overlay.removeEventListener("geometrychange", update));
       },
     ],
     edgeCases: [
-      "`titlebar-area-y` is always `0px`. In the main window, `titlebar-area-x` is `0px` on Windows and Linux, and `78px` on macOS, past the traffic lights, with `titlebar-area-width` 78 px less.",
+      "`titlebar-area-y` is always `0px`. In the main window, `titlebar-area-x` is `0px` on Windows and Linux, and starts past the traffic lights on macOS. The default 78 px inset follows a custom button position (since 0.6).",
     ],
     related: ["get-titlebar-area-rect", "config-window-title-bar-height", "sk-window-title-bar-height", "display-mode"],
     aliases: ["titlebar-area-height", "titlebar-area-width"],
@@ -3601,6 +3728,66 @@ const CREATION =
 const POPOUT_HWND_ONLY = "On macOS and Linux, it does nothing.";
 
 const popouts = section("Pop-out windows", [
+  {
+    slug: "sk-window-max-width",
+    name: "<SkWindow maxWidth>",
+    kind: "prop",
+    summary: "Limits the pop-out’s client width in CSS pixels.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: '<SkWindow :max-width="640" />',
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
+  {
+    slug: "sk-window-max-height",
+    name: "<SkWindow maxHeight>",
+    kind: "prop",
+    summary: "Limits the pop-out’s client height in CSS pixels.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: '<SkWindow :max-height="360" />',
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
+  {
+    slug: "sk-window-aspect-ratio",
+    name: "<SkWindow aspectRatio>",
+    kind: "prop",
+    summary: "Locks the pop-out’s client aspect ratio during resize.",
+    platforms: all(OK),
+    since: "0.6.0",
+    syntax: '<SkWindow :aspect-ratio="16 / 9" />',
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
+  {
+    slug: "sk-window-opacity",
+    name: "<SkWindow opacity>",
+    kind: "prop",
+    summary: "Applies native window alpha between 0 and 1.",
+    platforms: os(OK, OK, PART),
+    since: "0.6.0",
+    syntax: '<SkWindow :opacity="0.8" />',
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
+  {
+    slug: "sk-window-visible-on-all-workspaces",
+    name: "<SkWindow visibleOnAllWorkspaces>",
+    kind: "prop",
+    summary: "Lets a floating mini player join fullscreen Spaces on macOS. X11 requests all desktops.",
+    platforms: os(NO, OK, PART),
+    since: "0.6.0",
+    syntax: "<SkWindow always-on-top visible-on-all-workspaces />",
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
+  {
+    slug: "sk-window-traffic-light-position",
+    name: "<SkWindow trafficLightPosition>",
+    kind: "prop",
+    summary: "Overrides the close button’s title-bar position on macOS.",
+    platforms: os(NO, OK, NO),
+    since: "0.6.0",
+    syntax: '<SkWindow :traffic-light-position="{ x: 14, y: 8 }" />',
+    notes: ["Live. Omitting the prop restores the window’s default."],
+  },
   {
     slug: "sk-window",
     name: "<SkWindow>",
@@ -3904,7 +4091,7 @@ ${SK_IMPORT}
     platforms: all(OK),
     syntax: '<SkWindow :min-width="240" />',
     params: [{ name: "minWidth", type: "number", description: "Minimum client width.", optional: true }],
-    notes: [CREATION, "It works alone; the missing side is `0`. A change prints an advisory."],
+    notes: ["Applies at creation and live (since 0.6). The missing side is unconstrained."],
     examples: [
       {
         title: "Keep the palette's swatches readable",
@@ -3930,7 +4117,7 @@ ${SK_IMPORT}
     platforms: all(OK),
     syntax: '<SkWindow :min-height="200" />',
     params: [{ name: "minHeight", type: "number", description: "Minimum client height.", optional: true }],
-    notes: [CREATION, "It works alone. A change prints an advisory."],
+    notes: ["Applies at creation and live (since 0.6). The missing side is unconstrained."],
     examples: [
       {
         title: "Leave room for a player's controls",
@@ -3961,7 +4148,7 @@ ${SK_IMPORT}
     notes: [
       LIVE,
       'It is `env(titlebar-area-height)` inside the pop-out when `chrome` is `"hidden"`.',
-      "On macOS, it also centers the traffic lights when the window opens; a later change does not move them.",
+      "On macOS the lights follow height changes while automatic positioning is active (since 0.6).",
     ],
     examples: [
       {
@@ -4825,7 +5012,7 @@ const spot = computed(() => overlay.value?.mapFromMain(props.target) ?? null);
     summary: "Lists the `<SkWindow>` props that only take effect when the window opens.",
     platforms: all(OK),
     syntax:
-      'import { SK_WINDOW_CREATION_TIME_PROPS } from "@skathi-native/runtime";\n\nconst SK_WINDOW_CREATION_TIME_PROPS: readonly string[]; // chrome, resizable, minWidth, minHeight, cover, taskbar, focusable',
+      'import { SK_WINDOW_CREATION_TIME_PROPS } from "@skathi-native/runtime";\n\nconst SK_WINDOW_CREATION_TIME_PROPS: readonly string[]; // chrome, resizable, cover, taskbar, focusable, lowLatencySurface',
     notes: [
       "A change of any of them on an open window prints an advisory and does nothing.",
       "Every other prop is live.",

@@ -71,25 +71,30 @@ A pop-out cannot refuse to close: it has no `close-requested` event. When the ma
 
 Some props are read once, when the window is created. Others are applied to the open window when they change. Live changes apply asynchronously, after `@open`.
 
-| Prop                                                                                             | Default           | Applies              | Effective on                             |
-| ------------------------------------------------------------------------------------------------ | ----------------- | -------------------- | ---------------------------------------- |
-| [`title`](/window-api/sk-window-title/)                                                          | `"Skathi"`        | Live                 | All                                      |
-| [`bounds`](/window-api/sk-window-bounds/)                                                        | 420 × 320         | Live                 | All; position not on Wayland             |
-| [`backdrop`](/window-api/sk-window-backdrop/)                                                    | Config `backdrop` | Live                 | All, resolved per OS                     |
-| [`alwaysOnTop`](/window-api/sk-window-always-on-top/)                                            | `false`           | Live                 | All but Wayland                          |
-| [`titleBarHeight`](/window-api/sk-window-title-bar-height/)                                      | 32                | Live                 | All                                      |
-| [`activate`](/window-api/sk-window-activate/)                                                    | `false`           | Live, read each show | All                                      |
-| [`visible`](/window-api/sk-window-visible/)                                                      | `true`            | Live                 | All; Wayland minimizes instead of hiding |
-| [`fullResolution`](/window-api/sk-window-full-resolution/)                                       | `false`           | Live                 | All                                      |
-| [`ignoreMouseEvents`](/window-api/sk-window-ignore-mouse-events/)                                | `false`           | Live                 | Windows, macOS, Wayland                  |
-| [`contentProtection`](/window-api/sk-window-content-protection/)                                 | `false`           | Live                 | Windows, macOS                           |
-| [`monitor`](/window-api/sk-window-monitor/)                                                      | Main's monitor    | Live, with `cover`   | Windows                                  |
-| [`chrome`](/window-api/sk-window-chrome/)                                                        | `"default"`       | Creation; advises    | All                                      |
-| [`cover`](/window-api/sk-window-cover/)                                                          | none              | Creation; advises    | Windows; display-sized elsewhere         |
-| [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises    | Windows                                  |
-| [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises    | Windows                                  |
-| [`resizable`](/window-api/sk-window-resizable/)                                                  | `true`            | Creation; advises    | All                                      |
-| [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Creation; advises    | All                                      |
+| Prop                                                                                             | Default           | Applies              | Effective on                                   |
+| ------------------------------------------------------------------------------------------------ | ----------------- | -------------------- | ---------------------------------------------- |
+| [`title`](/window-api/sk-window-title/)                                                          | `"Skathi"`        | Live                 | All                                            |
+| [`bounds`](/window-api/sk-window-bounds/)                                                        | 420 × 320         | Live                 | All; position not on Wayland                   |
+| [`backdrop`](/window-api/sk-window-backdrop/)                                                    | Config `backdrop` | Live                 | All, resolved per OS                           |
+| [`alwaysOnTop`](/window-api/sk-window-always-on-top/)                                            | `false`           | Live                 | All but Wayland                                |
+| [`titleBarHeight`](/window-api/sk-window-title-bar-height/)                                      | 32                | Live                 | All                                            |
+| [`activate`](/window-api/sk-window-activate/)                                                    | `false`           | Live, read each show | All                                            |
+| [`visible`](/window-api/sk-window-visible/)                                                      | `true`            | Live                 | All; Wayland minimizes instead of hiding       |
+| [`fullResolution`](/window-api/sk-window-full-resolution/)                                       | `false`           | Live                 | All                                            |
+| [`ignoreMouseEvents`](/window-api/sk-window-ignore-mouse-events/)                                | `false`           | Live                 | Windows, macOS, Wayland                        |
+| [`contentProtection`](/window-api/sk-window-content-protection/)                                 | `false`           | Live                 | Windows, macOS                                 |
+| [`monitor`](/window-api/sk-window-monitor/)                                                      | Main's monitor    | Live, with `cover`   | Windows                                        |
+| [`chrome`](/window-api/sk-window-chrome/)                                                        | `"default"`       | Creation; advises    | All                                            |
+| [`cover`](/window-api/sk-window-cover/)                                                          | none              | Creation; advises    | Windows; display-sized elsewhere               |
+| [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises    | Windows                                        |
+| [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises    | Windows                                        |
+| [`resizable`](/window-api/sk-window-resizable/)                                                  | `true`            | Creation; advises    | All                                            |
+| [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Live (since 0.6)     | All                                            |
+| [`maxWidth`](/window-api/sk-window-max-width/), [`maxHeight`](/window-api/sk-window-max-height/) | none              | Live (since 0.6)     | All                                            |
+| [`aspectRatio`](/window-api/sk-window-aspect-ratio/)                                             | none              | Live (since 0.6)     | All                                            |
+| [`opacity`](/window-api/sk-window-opacity/)                                                      | `1`               | Live (since 0.6)     | Windows, macOS and composited X11              |
+| [`visibleOnAllWorkspaces`](/window-api/sk-window-visible-on-all-workspaces/)                     | `false`           | Live (since 0.6)     | macOS and X11 with a supporting window manager |
+| [`trafficLightPosition`](/window-api/sk-window-traffic-light-position/)                          | automatic         | Live (since 0.6)     | macOS                                          |
 
 "Advises" means a change on an open window prints an advisory and does nothing. To change a creation-time prop, remount the window, for example with a `:key`, or a `{#key}` block in Svelte, that includes the value. [`SK_WINDOW_CREATION_TIME_PROPS`](/window-api/sk-window-creation-time-props/) lists exactly the creation-time props.
 
@@ -221,7 +226,7 @@ For code that must run everywhere, open and close with `v-if` or `{#if}` and kee
 ## Pitfalls
 
 - **Forgetting `@close`, `onclose` in Svelte.** Without it, a closed pop-out's content reappears inline in the main window.
-- **Changing a creation-time prop.** `chrome`, `resizable`, `minWidth`, `minHeight`, `cover`, `taskbar` and `focusable` print an advisory and keep their first value. Remount with a new `:key` (`{#key}` in Svelte).
+- **Changing a creation-time prop.** `chrome`, `resizable`, `cover`, `taskbar`, `focusable` and `lowLatencySurface` print an advisory and keep their first value. Remount with a new `:key` (`{#key}` in Svelte).
 - **Calling `matchMedia()` for the pop-out.** It answers for the main window. Use CSS `@media`, or the pop-out's `@resize` and exposed `width`.
 - **Popping out the same node twice.** A second `<SkWindow>` on a node that is already popped out is refused.
 - **No position getter.** You can set `bounds`, but nothing reports where the user moved the pop-out. Only its size comes back, through `@resize`.

@@ -11,6 +11,7 @@
 
   let count = $state(0);
   let palette = $state(false);
+  let mini = $state(false);
   let shown = $state(0);
   let closed = $state(0);
   let openedId = $state(0);
@@ -47,6 +48,7 @@
   <div class="anchor" bind:this={anchor}></div>
   <button class="pop" onclick={() => (palette = true)}>pop out</button>
   <button class="back" onclick={() => (palette = false)}>bring it back</button>
+  <button class="mini-size" onclick={() => (mini = !mini)}>toggle mini player</button>
   <button class="inc-a" onclick={() => count++}>+1</button>
 
   {#if palette}
@@ -58,7 +60,10 @@
       bounds={{ x: 60, y: 470, width: 380, height: 320 }}
       alwaysOnTop
       minWidth={240}
-      minHeight={200}
+      minHeight={mini ? 140 : 200}
+      maxWidth={mini ? 320 : undefined}
+      aspectRatio={mini ? 2 : undefined}
+      opacity={mini ? 0.8 : 1}
       onopen={(id) => (openedId = id)}
       onshow={() => shown++}
       onresize={metrics}

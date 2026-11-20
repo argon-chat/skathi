@@ -116,6 +116,21 @@ describe.skipIf(!WINDOWS)("svelte <SkWindow> under sk dev", () => {
   );
 
   test(
+    "live size limits and aspect ratio apply to the child window",
+    async () => {
+      const before = await outerWidth(app);
+      await app.locator(".mini-size").click();
+      await expect(app.locator(".pal-size")).toHaveText("320x160");
+      bunExpect(await outerWidth(app)).toBe(before);
+      const [child] = await popouts(app);
+      bunExpect(child?.windowId).toBe(palette.windowId);
+      await app.locator(".mini-size").click();
+      await expect(app.locator(".pal-size")).toHaveText("320x200");
+    },
+    T,
+  );
+
+  test(
     "unmounting closes the window and calls onclose once, before the component is gone",
     async () => {
       await app.locator(".back").click();

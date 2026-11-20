@@ -147,6 +147,24 @@ fn main() {
             m.function("sum", |a: i32, b: i32| a + b).params(["a", "b"]);
         });
     builder = legacy(builder);
+    let handle_checked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if self_test {
+        let checked = handle_checked.clone();
+        builder = builder.setup(move |host| {
+            let raw = host
+                .unsafe_window_handle()
+                .ok_or("no main window during setup")?;
+            let handle = host.handle();
+            host.on_frame(move || {
+                checked.store(
+                    handle.unsafe_window_handle() == Some(raw)
+                        && handle.unsafe_window_handle_for(u64::MAX).is_none(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            });
+            Ok(())
+        });
+    }
     if let Some(p) = &payload {
         builder = builder.payload_file(p);
     }
@@ -181,6 +199,8 @@ fn main() {
             .err()
             .map(|e| e.to_string());
         let line = json!({
+            "uiHandleMatched": handle_checked.load(std::sync::atomic::Ordering::Relaxed),
+            "workerHasHandle": ui.unsafe_window_handle().is_some(),
             "first": first,
             "second": second,
             "third": third,

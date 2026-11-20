@@ -420,19 +420,15 @@ fn reveal_startup_window(cx: &mut App, activate: bool) {
         }
         let shown = cx.update(|cx| {
             handle.update(cx, |_, window, _| {
-                window.show_window(
-                    activate,
-                    || !shutdown::is_closing() && !sk_runtime::bridge::poisoned(),
-                    move |shown| {
-                        window::cancel_startup_reveal();
-                        if shown {
-                            quiet::send_hwnd_to_back(hwnd);
-                        }
-                        if !shown && !shutdown::is_closing() {
-                            eprintln!("[window] the prepared startup window could not be shown");
-                        }
-                    },
-                )
+                window.show_window(activate, window::startup_should_show, move |shown| {
+                    window::cancel_startup_reveal();
+                    if shown {
+                        quiet::send_hwnd_to_back(hwnd);
+                    }
+                    if !shown && !shutdown::is_closing() {
+                        eprintln!("[window] the prepared startup window could not be shown");
+                    }
+                })
             })
         });
         if !matches!(shown, Ok(true)) {
@@ -1266,12 +1262,9 @@ fn run_app() {
                 tray::install(rt)?;
                 #[cfg(feature = "hotkeys")]
                 hotkeys::install(rt)?;
-                embed::setup(rt)?;
             }
             #[cfg(sk_devtools)]
             devtools::install(rt);
-            embed::install(rt);
-            unsafe { sk_runtime::standins::install_missing(rt.raw()) };
             Ok(())
         });
         if let Err(error) = setup_result {
@@ -1285,8 +1278,7 @@ fn run_app() {
         let (bounds, display_id) = placement::initial_bounds(&cfg, cx);
         let startup_visible = embed::visible();
         let startup_focus = !devtools_mode && !quiet::never_focus() && embed::activates();
-        let defer_reveal = cfg!(target_os = "windows") && startup_visible;
-        if defer_reveal {
+        if startup_visible {
             window::begin_startup_reveal();
         }
         cx.open_window(
@@ -1316,7 +1308,7 @@ fn run_app() {
                 inactive_frame_interval: None,
                 low_latency_surface: cfg.low_latency_surface,
                 // Maps to `SW_SHOWNOACTIVATE`: F12 shows the inspector without taking the caret from the app.
-                show: startup_visible && !defer_reveal,
+                show: false,
                 focus: startup_focus,
                 #[cfg(target_os = "linux")]
                 window_decorations: Some(gpui::WindowDecorations::Client),
@@ -1366,6 +1358,21 @@ fn run_app() {
         )
         .map(|handle| MAIN_WINDOW.with(|w| w.set(Some(handle.into()))))
         .unwrap();
+        let installed = JsRuntime::with(|rt| -> Result<(), String> {
+            if !devtools_mode {
+                embed::setup(rt)?;
+            }
+            embed::install(rt);
+            unsafe { sk_runtime::standins::install_missing(rt.raw()) };
+            Ok(())
+        });
+        if let Err(error) = installed {
+            let summary = format!("host setup failed: {error}");
+            eprintln!("[embed] {summary}");
+            embed::finished(false, summary);
+            cx.quit();
+            return;
+        }
         background::start(cx);
         #[cfg(target_os = "windows")]
         sk_runtime::frames::set_waker(|| {
@@ -1457,9 +1464,22 @@ fn run_app() {
             return;
         }
         refresh_main(cx);
-        #[cfg(target_os = "windows")]
-        if defer_reveal {
-            reveal_startup_window(cx, startup_focus);
+        if startup_visible {
+            if let Some(handle) = MAIN_WINDOW.with(|w| w.get()) {
+                let _ = handle.update(cx, |_, window, cx| window::prepare_startup_reveal(window, cx));
+                if window::startup_should_show() {
+                    #[cfg(target_os="windows")]
+                    reveal_startup_window(cx, startup_focus);
+                    #[cfg(not(target_os="windows"))]
+                    let _ = handle.update(cx, |_,window,_| {
+                        if !window.show_window(startup_focus, window::startup_should_show, |_| window::cancel_startup_reveal()) {
+                            window::cancel_startup_reveal();
+                        }
+                    });
+                } else {
+                    window::cancel_startup_reveal();
+                }
+            }
         }
         // A hidden window has no frame callback to own the boot wave: start its background clock.
         if !embed::visible() {

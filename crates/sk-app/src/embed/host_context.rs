@@ -75,6 +75,17 @@ impl<'a> HostContext<'a> {
         super::Handle { _private: () }
     }
 
+    /// Borrow the main window’s raw handle on its UI thread. Closing or recreating the window invalidates it.
+    /// Changing its native styles, frame, level, delegate or lifecycle can break Skathi or cause a crash.
+    pub fn unsafe_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        self.handle().unsafe_window_handle()
+    }
+
+    /// Same lifetime and thread restrictions as [`Self::unsafe_window_handle`], for an open window’s Skathi ID.
+    pub fn unsafe_window_handle_for(&self, id: u64) -> Option<raw_window_handle::RawWindowHandle> {
+        self.handle().unsafe_window_handle_for(id)
+    }
+
     /// The engine's runtime, for an extension built against the same `sk-runtime` that registers
     /// `__sk_*` host fns, which [`Self::expose`] refuses on purpose. Prefer `expose`.
     pub fn runtime(&self) -> &'a sk_runtime::JsRuntime {

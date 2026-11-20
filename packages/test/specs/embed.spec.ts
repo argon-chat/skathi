@@ -34,6 +34,8 @@ test.skipIf(!WINDOWS)(
     const out = JSON.parse(r.stdout.trim().split("\n").pop()!);
     const first = out.first;
 
+    expect(out.uiHandleMatched).toBe(true);
+    expect(out.workerHasHandle).toBe(false);
     expect(first.available).toBe(true);
     expect(first.point).toEqual({ ok: { x: 2, y: 3 } });
     expect(first.refuse).toEqual({ error: "Error", message: "no such luck" });

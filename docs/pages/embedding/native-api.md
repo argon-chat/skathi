@@ -8,7 +8,7 @@ order: 3
 
 [Native modules](/embedding/native-modules/) carry serde values between Rust and the app, read and built straight from the engine's values, with bytes passed in place. That is the right default, and fast enough for a call per frame or a thousand a second. Its limit is its shape: values in, a value out, and every event a separate delivery. When Rust holds on to an app's callback, has a stream to deliver, or you want a JS object that behaves like a browser API, you build it directly in the engine.
 
-That happens in `Builder::setup`. It runs **once**, on the Skathi thread, after storage is ready and before any app code or window, and gets a `HostContext`:
+That happens in `Builder::setup`. It runs **once**, on the Skathi thread, after storage and the native main window are ready, before application code and the first reveal, and gets a `HostContext`:
 
 ```rust
 let builder = skathi::Builder::new()
@@ -36,6 +36,15 @@ An `Err` or a panic in `setup` stops startup; `spawn` then never shows a window.
 | `set_cookie(cookie)`                             | Put a cookie, HttpOnly included, in the jar before the first request                                        |
 | `read_secret(name)`, `write_secret(name, value)` | Strings sealed by the OS (DPAPI, the Keychain, the Secret Service), never written in plain text             |
 | `storage_dir()`, `random_bytes(buf)`             | Where the profile's storage lives; cryptographically random bytes                                           |
+
+## Unsafe native window handles (since 0.6)
+
+> [!WARNING]
+> Use a native handle only when the [window API](/window-api/) cannot express the operation. Changing the frame, style, delegate, level or lifecycle behind Skathi’s back can invalidate its state and crash the process.
+
+`HostContext::unsafe_window_handle()` and `Handle::unsafe_window_handle()` return `Option<raw_window_handle::RawWindowHandle>` for the main window on the Skathi UI thread. Use `unsafe_window_handle_for(id: u64)` on either object for the window ID from a pop-out’s `open` event. A closed or unknown window and a call on a worker thread return `None`. Obtain a fresh handle for each native operation. Closing or recreating the window invalidates the previous handle.
+
+On macOS the AppKit variant carries the content `NSView`. Obtain its `window` on the main thread for the owning `NSWindow`. Windows supplies a Win32 `HWND`, X11 an XCB window ID and Wayland a `wl_surface`. Rust embedders can use `host.dispatcher()` to post work to the UI thread.
 
 ## A native namespace
 

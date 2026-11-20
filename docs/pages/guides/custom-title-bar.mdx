@@ -78,8 +78,8 @@ If a drag region is not enough, for example on a custom canvas, [`appWindow.star
 
 The host publishes the title bar area as [`env(titlebar-area-x | -y | -width | -height)`](/css/function-env/) and through [`navigator.windowControlsOverlay`](/web-platform/navigator-window-controls-overlay/):
 
-- `y` is 0. `x` is 0 on Windows and Linux, and 78 px on macOS, past the traffic lights.
-- `width` is the window width minus the host's caption buttons when they are installed (138 px; see [`titleBarOverlay`](#use-the-host-caption-buttons)), and on macOS minus the 78 px of the traffic lights.
+- `y` is 0. `x` is 0 on Windows and Linux, and by default 78 px on macOS, past the traffic lights.
+- `width` is the window width minus the host's caption buttons when they are installed (138 px; see [`titleBarOverlay`](#use-the-host-caption-buttons)), and on macOS minus the current traffic light inset (78 px by default).
 - `height` is `titleBarHeight`.
 
 The values are defined only while the overlay is visible: `titleBarStyle` is `"hidden"`, the window is neither fullscreen nor minimized, and the [fallback title bar](#the-fallback-title-bar) has retired. At other times `env()` takes its fallback. Always write one, as in `height: env(titlebar-area-height, 36px)`.
@@ -194,7 +194,7 @@ With `"hidden"` the title bar is transparent and your content runs under it. App
 
 Your `app-region` areas move the window and `--window-control` elements act on mouse-up, as on Linux. The band at the top where AppKit's own title bar would be does not drag the window; only your drag regions do. The host caption cluster from `titleBarOverlay` is ignored with an advisory: the traffic lights are the window's buttons.
 
-`env(titlebar-area-x)` is 78 px, past the traffic lights, and `env(titlebar-area-width)` is 78 px less than the window, so a bar laid out with them clears the lights on every OS:
+`env(titlebar-area-x)` starts past the traffic lights (78 px by default), and `env(titlebar-area-width)` subtracts the current inset from the window width, so a bar laid out with them clears the lights on every OS:
 
 <Sample src="custom-title-bar/MacTitleBar" focus="clear" />
 

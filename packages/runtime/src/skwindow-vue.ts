@@ -47,11 +47,17 @@ export const SkWindow = /*@__PURE__*/ defineComponent({
     backdrop: { type: String, default: undefined },
     /** `HWND_TOPMOST`. Live. */
     alwaysOnTop: { type: Boolean, default: undefined },
+    maxWidth: { type: Number, default: undefined },
+    maxHeight: { type: Number, default: undefined },
+    aspectRatio: { type: Number, default: undefined },
+    opacity: { type: Number, default: undefined },
+    visibleOnAllWorkspaces: { type: Boolean, default: undefined },
+    trafficLightPosition: { type: Object as PropType<{ x: number; y: number }>, default: undefined },
     /** Default true. Creation-time only. */
     resizable: { type: Boolean, default: undefined },
-    /** Minimum client width, CSS px. Creation-time only. */
+    /** Minimum client width, CSS px. Live. */
     minWidth: { type: Number, default: undefined },
-    /** Minimum client height, CSS px. Creation-time only. */
+    /** Minimum client height, CSS px. Live. */
     minHeight: { type: Number, default: undefined },
     /** `env(titlebar-area-height)` inside this window, for `chrome: "hidden"`. Default 32. Live. */
     titleBarHeight: { type: Number, default: undefined },

@@ -39,6 +39,14 @@ function boot(title = "One"): Booted {
   const global = Object.assign(new EventTarget(), { innerWidth: 0 }) as EventTarget & { __SK_WINDOW__?: unknown };
   const document = Object.assign(new EventTarget(), { documentElement: null });
   const host: Record<string, unknown> = {
+    __sk_window_install_controls: (window: SkAppWindow) => {
+      window.show = () => {
+        verbs.push("show");
+      };
+      window.hide = () => {
+        verbs.push("hide");
+      };
+    },
     __sk_window_state: () => JSON.stringify(state),
     __sk_window_observe: (fn: typeof observer) => {
       observer = fn;
