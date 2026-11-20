@@ -4,13 +4,27 @@ import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
 const video = ref<HTMLVideoElement | null>(null);
-const playing = ref(true);
-const toggleVideo = () => {
-  if (!video.value) return;
-  if (video.value.paused) video.value.play();
-  else video.value.pause();
-  playing.value = !video.value.paused;
-};
+const playing = ref(false);
+const playbackError = ref("");
+const lastKey = ref("");
+async function toggleVideo() {
+  const player = video.value;
+  if (!player) return;
+  playbackError.value = "";
+  try {
+    if (player.paused) await player.play();
+    else player.pause();
+  } catch (error) {
+    playbackError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+function videoKey(event: KeyboardEvent) {
+  const location = ["", "left", "right", "numpad"][event.location];
+  lastKey.value = [event.code, location, event.shiftKey && "Shift", event.repeat && "held"].filter(Boolean).join(" · ");
+  if (event.code !== "Space" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  if (!event.repeat) void toggleVideo();
+}
 
 const stickerPlaying = ref(true);
 const speed = ref(1);
@@ -34,11 +48,26 @@ const focals = [
       </Card>
 
       <Card class="tile" title="Video" api="<video>">
-        <video ref="video" class="shot" src="assets/media/clip.mp4" autoplay loop muted />
+        <video
+          ref="video"
+          class="shot player"
+          src="assets/media/clip.mp4"
+          tabindex="0"
+          aria-label="Video playback"
+          autoplay
+          loop
+          muted
+          @keydown="videoKey"
+          @play="playing = true"
+          @pause="playing = false"
+          @ended="playing = false"
+        />
         <div class="row">
           <button class="btn" @click="toggleVideo">{{ playing ? "Pause" : "Play" }}</button>
-          <span class="faint">Decoded by the OS media stack.</span>
+          <span class="muted">Focus the video and press Space.</span>
         </div>
+        <p v-if="lastKey" class="muted mono">{{ lastKey }}</p>
+        <p v-if="playbackError" class="muted">{{ playbackError }}</p>
       </Card>
 
       <Card class="tile" title="Lottie sticker" api="<lottie>">
@@ -82,6 +111,9 @@ const focals = [
   height: 160px;
   border-radius: 10px;
   object-fit: cover;
+}
+.player:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .zoom {
   transition: transform 300ms ease;

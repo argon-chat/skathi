@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef } from "vue";
+import { appHaptics } from "@skathi-native/runtime";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
@@ -39,7 +40,30 @@ const step = () => {
   const first = strip.value?.children[0] as HTMLElement | undefined;
   return first ? first.offsetWidth + 12 : 1;
 };
-const onScroll = () => (current.value = Math.round((strip.value?.scrollLeft ?? 0) / step()));
+let lastSnap = 0;
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => clearTimeout(settleTimer));
+function onScroll() {
+  const rail = strip.value;
+  if (!rail) return;
+  const max = rail.scrollWidth - rail.clientWidth;
+  current.value = max > 0 && rail.scrollLeft >= max - 1 ? slides.length - 1 : Math.round(rail.scrollLeft / step());
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(onScrollEnd, 150);
+}
+function onScrollEnd() {
+  const rail = strip.value;
+  if (!rail) return;
+  const index = current.value;
+  const first = rail.children[0];
+  const slide = rail.children[index];
+  if (!first || !slide || index === lastSnap) return;
+  const offset = slide.getBoundingClientRect().left - first.getBoundingClientRect().left;
+  const target = Math.min(offset, rail.scrollWidth - rail.clientWidth);
+  if (Math.abs(rail.scrollLeft - target) > 1) return;
+  lastSnap = index;
+  appHaptics.perform("alignment", { when: "next-frame" });
+}
 const go = (i: number) => strip.value?.scrollTo({ left: i * step(), behavior: "smooth" });
 
 const flows = ["row wrap", "row-reverse wrap", "column wrap"];
@@ -107,7 +131,16 @@ const ratioLabel = computed(() => ratio.value.replace(" / ", ":"));
       </div>
       <div class="row">
         <button class="btn" :disabled="current === 0" @click="go(current - 1)">Previous</button>
-        <span v-for="(slide, i) in slides" :key="slide.name" class="dot" :class="{ on: i === current }" @click="go(i)" />
+        <button
+          v-for="(slide, i) in slides"
+          :key="slide.name"
+          class="dot"
+          :aria-label="'Go to ' + slide.name"
+          :aria-pressed="i === current"
+          @click="go(i)"
+        >
+          <span />
+        </button>
         <button class="btn" :disabled="current === slides.length - 1" @click="go(current + 1)">Next</button>
         <label class="toggle">
           <input v-model="stop" type="checkbox" />
@@ -116,7 +149,7 @@ const ratioLabel = computed(() => ratio.value.replace(" / ", ":"));
       </div>
       <p class="faint">
         Scroll with the wheel or the scrollbar, or click the strip and use the arrow keys. Every way of scrolling comes
-        to rest on a slide.
+        to rest on a slide. A haptic device gives one pulse when a different slide settles.
       </p>
     </Card>
 
@@ -302,14 +335,27 @@ const ratioLabel = computed(() => ratio.value.replace(" / ", ":"));
   text-shadow: 0 2px 10px #00000066;
 }
 .dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.dot:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.dot span {
   width: 8px;
   height: 8px;
   border-radius: 4px;
-  background: var(--surface-strong);
-  cursor: pointer;
-  transition: background-color 160ms ease;
+  background: var(--text-faint);
 }
-.dot.on {
+.dot[aria-pressed="true"] span {
   background: var(--accent);
 }
 .toggle {

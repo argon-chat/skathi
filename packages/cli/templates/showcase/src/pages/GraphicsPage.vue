@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref, shallowRef } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
+import PressurePad from "../components/PressurePad.vue";
 import { describe, everyFrame } from "../engine";
 import { icons, type IconName } from "../icons";
 
@@ -15,49 +16,6 @@ const iconMask = (name: IconName) =>
 const W = 640;
 const H = 220;
 const dpr = devicePixelRatio;
-
-const pad = shallowRef<HTMLCanvasElement | null>(null);
-let ctx: CanvasRenderingContext2D | null = null;
-let last: { x: number; y: number } | null = null;
-let hue = 220;
-
-function clear() {
-  if (!ctx) return;
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#14141c");
-  bg.addColorStop(1, "#1c1630");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = "#ffffff40";
-  ctx.font = "13px Segoe UI";
-  ctx.fillText("Drag to draw", 16, 26);
-}
-
-const at = (e: MouseEvent) => {
-  const rect = pad.value!.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-};
-const down = (e: MouseEvent) => (last = at(e));
-const up = () => (last = null);
-function move(e: MouseEvent) {
-  if (!ctx || !last) return;
-  const next = at(e);
-  hue = (hue + 2) % 360;
-  ctx.strokeStyle = `hsl(${hue}, 90%, 68%)`;
-  ctx.lineWidth = 6;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(last.x, last.y);
-  ctx.lineTo(next.x, next.y);
-  ctx.stroke();
-  last = next;
-}
-
-onMounted(() => {
-  ctx = pad.value?.getContext("2d") ?? null;
-  ctx?.scale(dpr, dpr);
-  clear();
-});
 
 const SHADER = /* wgsl */ `
 struct Uniforms { time: f32, aspect: f32 }
@@ -155,21 +113,7 @@ onUnmounted(() => {
 
 <template>
   <Page title="Graphics" lead="Canvas 2D and WebGPU draw into the same GPU-composited tree as the rest of the page.">
-    <Card title="Canvas 2D" api="getContext('2d')">
-      <canvas
-        ref="pad"
-        class="canvas"
-        :width="W * dpr"
-        :height="H * dpr"
-        @mousedown="down"
-        @mousemove="move"
-        @mouseup="up"
-        @mouseleave="up"
-      />
-      <div class="row">
-        <button class="btn" @click="clear">Clear</button>
-      </div>
-    </Card>
+    <PressurePad />
 
     <Card title="WebGPU" :api="adapterName || 'navigator.gpu'">
       <canvas ref="surface" class="canvas" :width="W * dpr" :height="H * dpr" />
@@ -210,8 +154,9 @@ onUnmounted(() => {
 
 <style scoped>
 .canvas {
-  width: 640px;
-  height: 220px;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 32 / 11;
   border-radius: 10px;
 }
 .mask-icon {

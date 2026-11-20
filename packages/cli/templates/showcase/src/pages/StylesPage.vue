@@ -4,6 +4,8 @@ import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 
 const hot = ref(false);
+const bandWidth = ref(180);
+const warm = ref(false);
 
 const shapes = ["squircle", "bevel", "scoop", "notch", "superellipse"];
 
@@ -47,6 +49,33 @@ const cursors = [
         <div class="swatch g3">conic</div>
         <div class="swatch lifted">layered</div>
         <div class="swatch ring">ring</div>
+      </div>
+    </Card>
+
+    <Card title="Inline SVG" api="var() · stop-color · rect">
+      <svg
+        class="band-preview"
+        width="240"
+        height="30"
+        viewBox="0 0 240 30"
+        role="img"
+        aria-label="Gradient width and palette preview"
+        :style="{ '--band-width': bandWidth + 'px', '--end-color': warm ? '#f0b45a' : '#5ad1a8' }"
+      >
+        <defs>
+          <linearGradient id="showcase-band">
+            <stop class="band-start" offset="0" />
+            <stop class="band-end" offset="1" />
+          </linearGradient>
+        </defs>
+        <rect class="band" fill="url(#showcase-band)" />
+      </svg>
+      <div class="row">
+        <label class="row muted">
+          Width <input v-model.number="bandWidth" type="range" min="24" max="240" step="12" aria-label="SVG width" />
+          {{ bandWidth }} px
+        </label>
+        <label class="row muted"><input v-model="warm" type="checkbox" aria-label="Warm end color" /> Warm end color</label>
       </div>
     </Card>
 
@@ -182,6 +211,21 @@ const cursors = [
 </template>
 
 <style scoped>
+.band-preview {
+  background: var(--surface-strong);
+  border-radius: 6px;
+}
+.band {
+  width: var(--band-width);
+  height: 30px;
+  rx: 6px;
+}
+.band-start {
+  stop-color: var(--accent);
+}
+.band-end {
+  stop-color: var(--end-color);
+}
 .gap {
   gap: 14px;
 }

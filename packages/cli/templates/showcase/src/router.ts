@@ -36,7 +36,7 @@ export const pages: PageEntry[] = [
     title: "Window",
     icon: "window",
     section: "Desktop",
-    blurb: "Title, size, backdrop, always on top and pop-out windows",
+    blurb: "Animated resizing and a pop-out with live size limits, proportions and opacity",
     component: WindowPage,
   },
   {
@@ -92,7 +92,7 @@ export const pages: PageEntry[] = [
     title: "Media",
     icon: "media",
     section: "Media",
-    blurb: "Images, video and Lottie stickers from an asset pack",
+    blurb: "Images, keyboard-controlled video and Lottie stickers from an asset pack",
     component: MediaPage,
   },
   {
@@ -108,7 +108,7 @@ export const pages: PageEntry[] = [
     title: "Graphics",
     icon: "graphics",
     section: "Media",
-    blurb: "Canvas 2D drawing and a WebGPU shader",
+    blurb: "Pressure-sensitive drawing, haptic guides and a WebGPU shader",
     component: GraphicsPage,
   },
   {
@@ -132,7 +132,7 @@ export const pages: PageEntry[] = [
     title: "Styles",
     icon: "styles",
     section: "Interface",
-    blurb: "Gradients, shadows, modern colour and the engine's own shading",
+    blurb: "Gradients, CSS-driven inline SVG, shadows and engine shading",
     component: StylesPage,
   },
   {
@@ -140,7 +140,7 @@ export const pages: PageEntry[] = [
     title: "Layout",
     icon: "layout",
     section: "Interface",
-    blurb: "Container queries, sticky headers and scrollers that snap",
+    blurb: "Container queries, sticky headers and tactile scroll snapping",
     component: LayoutPage,
   },
   {
