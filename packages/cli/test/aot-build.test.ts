@@ -17,7 +17,7 @@ import { closedUses } from "../aot/closed";
 import { nativeInput, opaqueGlobals, opaqueHost, TABLE_ID, TRANSFORM } from "../aot/transform";
 import { removedFeatures, type FeatureUse, type Uses } from "../aot/uses";
 import { aotCheck, aotFlags, aotPlatformProblem, hostAot, resolveAotCompiler } from "../cli/aot-build";
-import { buildApp } from "../cli/build-app";
+import { buildApp, PROD_TS } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
 import { HostError, type HostInfo, type ResolvedHost } from "../cli/host";
 import { quietProgress } from "../cli/term";
@@ -237,6 +237,67 @@ describe("the host decides what an image is compiled against", () => {
 });
 
 describe("the opaque-host transform", () => {
+  test("a bundled app reads the observers and style API installed by its runtime", () => {
+    const root = app(
+      {},
+      `
+      Object.assign(globalThis, {
+        ResizeObserver: class { value = "resize" },
+        MutationObserver: class { value = "mutation" },
+        IntersectionObserver: class { value = "intersection" },
+        getComputedStyle: () => "style"
+      });
+      function local(ResizeObserver) { return new ResizeObserver().value; }
+      globalThis.readObservers = () => [
+        new ResizeObserver().value, new MutationObserver().value, new IntersectionObserver().value,
+        getComputedStyle(), local(class { value = "local" })
+      ];
+    `,
+    );
+    const output = join(root, "app.prod.js");
+    const result = Bun.spawnSync([process.execPath, PROD_TS, join(root, "src", "main.ts"), output]);
+    expect(result.exitCode).toBe(0);
+    const browser = { Object, readObservers: undefined as (() => string[]) | undefined };
+    new Function("__SK_AOT_HOST__", opaqueHost(readFileSync(output, "utf8")))(browser);
+    expect(browser.readObservers?.()).toEqual(["resize", "mutation", "intersection", "style", "local"]);
+  });
+
+  test("browser bundles resolve CommonJS from their embedding realm", async () => {
+    const root = app(
+      {},
+      `
+      import answer from "./answer.cjs";
+      globalThis.answer = answer;
+      globalThis.lookup = () => require("host-extension");
+    `,
+    );
+    writeFileSync(join(root, "src", "answer.cjs"), "module.exports = 42;");
+    const build = await Bun.build({
+      entrypoints: [join(root, "src", "main.ts")],
+      target: "browser",
+      format: "iife",
+      minify: true,
+      external: ["host-extension"],
+    });
+    expect(build.success).toBe(true);
+    const prelude = "globalThis.commonjs = [typeof require, typeof module, typeof exports];";
+    const { code } = nativeInput(await build.outputs[0]!.text(), [prelude, ""]);
+    const evaluate = new Function("__SK_AOT_HOST__", "require", "module", "exports", code);
+    const browser: { Object: ObjectConstructor; commonjs?: string[]; answer?: number; lookup?: () => string } = {
+      Object,
+    };
+    const ambientRequire = () => "outer module loader";
+    evaluate(browser, ambientRequire, {}, {});
+    expect(browser.commonjs).toEqual(["undefined", "undefined", "undefined"]);
+    expect(browser.answer).toBe(42);
+    expect(() => browser.lookup?.()).toThrow("Dynamic require");
+
+    const provided = { ...browser, require: (name: string) => name, module: {}, exports: {} };
+    evaluate(provided, ambientRequire, {}, {});
+    expect(provided.commonjs).toEqual(["function", "object", "object"]);
+    expect(provided.lookup?.()).toBe("host-extension");
+  });
+
   test("each script sees the globals installed by the preceding one", () => {
     const preludes = ["globalThis.matchMedia = () => 21;", "globalThis.answer = matchMedia() * 2;"] as const;
     const app = "globalThis.result = globalThis.answer;";

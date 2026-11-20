@@ -202,6 +202,12 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
 const PROD_CONDITIONS = NATIVE_SVELTE ? ["production", "svelte-custom-renderer"] : ["production"];
 
 const DEFINES: Record<string, string> = {
+  // The runtime installs these APIs in the same bundle as the app. A bare reference in a
+  // native image would capture the host's pre-install value at entry; look it up when used.
+  ResizeObserver: "globalThis.ResizeObserver",
+  MutationObserver: "globalThis.MutationObserver",
+  IntersectionObserver: "globalThis.IntersectionObserver",
+  getComputedStyle: "globalThis.getComputedStyle",
   __DEV__: "false",
   __SK_SVELTE_NATIVE__: String(NATIVE_SVELTE),
   "process.env.NODE_ENV": '"production"',

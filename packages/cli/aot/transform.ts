@@ -61,10 +61,15 @@ const BROWSER_GLOBALS = [
   "getComputedStyle",
 ];
 
+// Browser bundles can probe CommonJS, including Bun's own helper for dynamic require().
+// Resolve those probes on the embedding realm. A bare require in the native frontend
+// selects Bun's ModuleRequire builtin, whose module loader a browser host does not install.
+const COMMONJS_GLOBALS = ["require", "module", "exports"];
+
 export const TABLE_ID: string = HOST_TABLE.table;
 
 export function opaqueGlobals(tableGlobals: readonly string[] = HOST_TABLE.names): string[] {
-  return [...new Set([...tableGlobals, ...BROWSER_GLOBALS])].sort();
+  return [...new Set([...tableGlobals, ...BROWSER_GLOBALS, ...COMMONJS_GLOBALS])].sort();
 }
 
 /** A builtin global stays read-only unless the image spells out an assignment to it; writes through
