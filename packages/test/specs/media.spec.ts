@@ -145,10 +145,11 @@ test(
       const map = { "1": [697, 1209], "2": [697, 1336], "3": [697, 1477], "4": [770, 1209], "5": [770, 1336],
         "6": [770, 1477], "7": [852, 1209], "8": [852, 1336], "9": [852, 1477], "*": [941, 1209],
         "0": [941, 1336], "#": [941, 1477] };
+      const starts = [];
+      const duration = 0.12, attack = 0.008, release = 0.02;
       const playDTMF = (key) => {
         const freqs = map[key];
         const now = ctx.currentTime;
-        const duration = 0.12, attack = 0.008, release = 0.02;
         const oscLow = ctx.createOscillator(), oscHigh = ctx.createOscillator();
         const panLow = ctx.createStereoPanner(), panHigh = ctx.createStereoPanner();
         const gain = ctx.createGain(), filter = ctx.createBiquadFilter();
@@ -166,30 +167,35 @@ test(
         filter.connect(bus);
         oscLow.start(now); oscHigh.start(now);
         oscLow.stop(now + duration); oscHigh.stop(now + duration);
+        starts.push(now);
       };
       const buf = new Float32Array(4096);
       const presses = 60, every = 50;
-      let peak = 0, loud = 0, polls = 0, silent = 0, gap = 0, n = 0;
-      let last = performance.now(), first = 0;
+      const rate = ctx.sampleRate;
+      const tail = Math.min(buf.length, Math.round(rate * 0.01));
+      let peak = 0, loud = 0, polls = 0, checked = 0, silent = 0, gap = 0, n = 0;
+      let last = performance.now();
       const poll = setInterval(() => {
         const t = performance.now(); gap = Math.max(gap, t - last); last = t;
+        const windowStart = ctx.currentTime - tail / rate;
         meter.getFloatTimeDomainData(buf);
+        const windowEnd = ctx.currentTime;
         let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; }
         if (p > peak) peak = p;
         if (p > 0.6) loud++;
-        // The newest 10 ms: inside the burst, past its first tone and before
-        // its last one ends, the mix is never silent.
-        const since = t - first;
-        if (first && since > 250 && since < (presses - 1) * every) {
-          let e = 0; for (let i = buf.length - 480; i < buf.length; i++) e += buf[i] * buf[i];
-          if (Math.sqrt(e / 480) < 0.005) silent++;
+        // A delayed JS timer can leave a real gap between presses. Check the newest
+        // 10 ms only when a scheduled tone covers the window at its sustained gain.
+        if (starts.length && windowStart > starts[0] + 0.25 &&
+            starts.some(start => start + attack <= windowStart && windowEnd <= start + duration - release)) {
+          checked++;
+          let e = 0; for (let i = buf.length - tail; i < buf.length; i++) e += buf[i] * buf[i];
+          if (Math.sqrt(e / tail) < 0.005) silent++;
         }
         polls++;
       }, 10);
       const t0 = ctx.currentTime;
       const keys = "123456789*0#";
       await new Promise(r => { const id = setInterval(() => {
-        if (!first) first = performance.now();
         playDTMF(keys[n++ % 12]);
         if (n >= presses) { clearInterval(id); r(); }
       }, every); });
@@ -197,7 +203,7 @@ test(
       clearInterval(poll);
       const moved = ctx.currentTime - t0 > 1;
       ctx.close();
-      return { moved, presses: n, peak: Math.round(peak * 1000) / 1000, loud, silent, polls, gapMs: Math.round(gap) };
+      return { moved, presses: n, peak: Math.round(peak * 1000) / 1000, loud, checked, silent, polls, gapMs: Math.round(gap) };
     })().then(v => { globalThis.__dial = JSON.stringify({ ok: v }); },
               e => { globalThis.__dial = JSON.stringify({ err: String(e && e.message) }); });
     'started'`);
@@ -212,7 +218,9 @@ test(
     }
     const got = JSON.parse(raw || "{}");
     console.log(`[media] dialpad ${JSON.stringify(got)}, ${collections} forced collections`);
-    const r = (got as { ok: { moved: boolean; presses: number; peak: number; loud: number; silent: number } }).ok;
+    const r = (
+      got as { ok: { moved: boolean; presses: number; peak: number; loud: number; checked: number; silent: number } }
+    ).ok;
     expect(r.presses).toBe(60);
     // With no output device the clock does not run and nothing plays; the envelope and the node
     // lifetimes are then pinned by redjs's own tests.
@@ -220,6 +228,7 @@ test(
       expect(r.peak).toBeGreaterThan(0.05);
       expect(r.peak).toBeLessThan(0.6);
       expect(r.loud).toBe(0);
+      expect(r.checked).toBeGreaterThan(r.presses / 2);
       expect(r.silent).toBe(0);
     }
   },
