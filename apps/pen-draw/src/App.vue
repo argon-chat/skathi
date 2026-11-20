@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { appHaptics } from "@skathi-native/runtime";
 
+const GRID = 32;
 const BARREL = 2;
 const ERASER = 32;
 
@@ -28,6 +30,12 @@ interface TraceStroke {
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const overlay = ref<HTMLCanvasElement | null>(null);
+const gridCanvas = ref<HTMLCanvasElement | null>(null);
+const snapEnabled = ref(true);
+const brushWidth = ref(4);
+let lastSnap: string | null = null;
+let sliderPointer: number | null = null;
+let strokePointer: number | null = null;
 const coalesced = ref(true);
 const predicted = ref(true);
 const rec = reactive({ on: false, strokes: 0, status: "" });
@@ -55,7 +63,24 @@ let tool: Tool = "ink";
 let trace: TraceStroke[] = [];
 let stroke: TraceStroke | null = null;
 
+function drawGrid() {
+  const grid = gridCanvas.value;
+  const el = canvas.value;
+  if (!el || !grid) return;
+  const dpr = devicePixelRatio || 1;
+  grid.width = Math.round(el.clientWidth * dpr);
+  grid.height = Math.round(el.clientHeight * dpr);
+  const context = grid.getContext("2d");
+  if (!context || !snapEnabled.value) return;
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.fillStyle = "rgba(99, 88, 116, 0.35)";
+  for (let y = GRID; y < el.clientHeight; y += GRID) {
+    for (let x = GRID; x < el.clientWidth; x += GRID) context.fillRect(x - 1, y - 1, 2, 2);
+  }
+}
+
 function fit() {
+  drawGrid();
   const el = canvas.value;
   if (!el) return;
   const dpr = devicePixelRatio || 1;
@@ -107,17 +132,52 @@ function toolFor(e: PointerEvent): Tool {
   return "ink";
 }
 
-function dotFor(e: PointerEvent): Dot {
-  // A mouse reports 0.5 while pressed, so it draws a medium line.
+function dotFor(e: PointerEvent, cue: boolean): Dot {
   const p = e.pressure;
-  const size = tool === "eraser" ? 8 + 28 * p : tool === "marker" ? 14 : 0.6 + 7 * p * p;
-  return { x: e.offsetX, y: e.offsetY, size };
+  const size = ((tool === "eraser" ? 8 + 28 * p : tool === "marker" ? 14 : 0.6 + 7 * p * p) * brushWidth.value) / 4;
+  const x = Math.round(e.offsetX / GRID) * GRID;
+  const y = Math.round(e.offsetY / GRID) * GRID;
+  const cell = x + "," + y;
+  const snapped =
+    snapEnabled.value && x > 0 && y > 0 && Math.hypot(x - e.offsetX, y - e.offsetY) <= (cell === lastSnap ? 9 : 6);
+  if (cue) {
+    if (snapped && cell !== lastSnap) appHaptics.perform("alignment", { pointerId: e.pointerId, when: "next-frame" });
+    lastSnap = snapped ? cell : null;
+  }
+  return { x: snapped ? x : e.offsetX, y: snapped ? y : e.offsetY, size };
+}
+
+function beginSlider(event: PointerEvent) {
+  sliderPointer = event.pointerId;
+}
+
+function endSlider() {
+  sliderPointer = null;
+}
+
+function setWidth(event: Event) {
+  const value = Number((event.currentTarget as HTMLInputElement).value);
+  if (value === brushWidth.value) return;
+  brushWidth.value = value;
+  if (sliderPointer !== null) {
+    appHaptics.perform(value === 1 || value === 8 ? "generic" : "level-change", {
+      pointerId: sliderPointer,
+      when: "next-frame",
+    });
+  }
 }
 
 function segment(a: Dot, b: Dot) {
   if (!ctx) return;
   ctx.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
   ctx.strokeStyle = tool === "marker" ? "rgba(255, 196, 0, 0.35)" : "#1d1b26";
+  if (a.x === b.x && a.y === b.y) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.size / 2, 0, Math.PI * 2);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+    return;
+  }
   ctx.lineWidth = (a.size + b.size) / 2;
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
@@ -205,7 +265,10 @@ function down(e: PointerEvent) {
   e.preventDefault();
   canvas.value?.setPointerCapture(e.pointerId);
   tool = hud.tool = toolFor(e);
-  last = dotFor(e);
+  lastSnap = null;
+  strokePointer = e.pointerId;
+  if (e.pointerType === "pen" && tool === "ink") appHaptics.perform("ink-continuous", { pointerId: e.pointerId });
+  last = dotFor(e, true);
   segment(last, last);
   show(e, 1);
   if (rec.on) stroke = { pointerType: e.pointerType, down: reading(e), moves: [], up: null };
@@ -216,9 +279,9 @@ function move(e: PointerEvent) {
   const samples = coalesced.value && events.length > 0 ? events : [e];
   show(e, samples.length);
   stroke?.moves.push({ t: e.timeStamp, readings: (events.length > 0 ? events : [e]).map(reading) });
-  if (!last) return;
-  for (const s of samples) {
-    const next = dotFor(s);
+  if (!last || strokePointer !== e.pointerId) return;
+  for (const [i, s] of samples.entries()) {
+    const next = dotFor(s, i === samples.length - 1);
     segment(last, next);
     last = next;
   }
@@ -226,6 +289,10 @@ function move(e: PointerEvent) {
 }
 
 function up(e: PointerEvent) {
+  if (strokePointer !== e.pointerId) return;
+  if (e.pointerType === "pen") appHaptics.stop(e.pointerId);
+  strokePointer = null;
+  lastSnap = null;
   show(e, 1);
   last = null;
   clearTail();
@@ -237,12 +304,14 @@ function up(e: PointerEvent) {
   }
 }
 
+watch(snapEnabled, drawGrid);
 onMounted(() => {
   fit();
   addEventListener("resize", fit);
   addEventListener("keydown", key);
 });
 onBeforeUnmount(() => {
+  if (strokePointer !== null) appHaptics.stop(strokePointer);
   removeEventListener("resize", fit);
   removeEventListener("keydown", key);
 });
@@ -260,6 +329,25 @@ onBeforeUnmount(() => {
       </button>
       <button type="button" @click="clear">Clear</button>
     </header>
+    <div class="brush-controls">
+      <label class="toggle"><input v-model="snapEnabled" type="checkbox" /> Snap to grid</label>
+      <label class="toggle"
+        >Brush width
+        <input
+          type="range"
+          min="1"
+          max="8"
+          step="1"
+          :value="brushWidth"
+          @input="setWidth"
+          @pointerdown="beginSlider"
+          @pointerup="endSlider"
+          @pointercancel="endSlider"
+          @lostpointercapture="endSlider"
+        />
+        {{ brushWidth }}
+      </label>
+    </div>
     <div class="sheet">
       <canvas
         ref="canvas"
@@ -270,6 +358,7 @@ onBeforeUnmount(() => {
         @pointercancel="up"
         @contextmenu.prevent
       />
+      <canvas ref="gridCanvas" class="tail" />
       <canvas ref="overlay" class="tail" />
     </div>
     <footer class="hud">
@@ -321,6 +410,12 @@ body,
 .hint {
   flex: 1;
   color: #a9a3b8;
+}
+.brush-controls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 6px 16px 10px;
 }
 .toggle {
   display: flex;
