@@ -853,42 +853,32 @@ pub(crate) fn native_window(id: Option<u64>) -> Option<RawWindowHandle> {
 pub fn forget_window(key: sk_tree::WinKey) {
     NATIVE_WINDOWS.with(|windows| windows.borrow_mut().remove(&key));
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
-    #[cfg(target_os = "macos")]
-    NS_WINDOW_CACHE.with(|m| m.borrow_mut().remove(&key));
-}
-
-#[cfg(target_os = "macos")]
-thread_local! {
-    /// A stale pointer is harmless: sk-desktop only uses one found in `[NSApp windows]`.
-    static NS_WINDOW_CACHE: RefCell<std::collections::HashMap<sk_tree::WinKey, isize>> =
-        RefCell::new(std::collections::HashMap::new());
 }
 
 /// The native window a file dialog is owned by: the HWND, or on macOS the `NSWindow`.
 pub fn dialog_parent(window: &Window) -> Option<isize> {
     #[cfg(target_os = "macos")]
-    return capture_ns_window(window);
+    return appkit_parent(
+        <Window as HasWindowHandle>::window_handle(window)
+            .ok()?
+            .as_raw(),
+    );
     #[cfg(not(target_os = "macos"))]
     return capture_hwnd(window);
 }
 
 #[cfg(target_os = "macos")]
-fn capture_ns_window(window: &Window) -> Option<isize> {
-    let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
-    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+fn appkit_parent(handle: RawWindowHandle) -> Option<isize> {
+    let RawWindowHandle::AppKit(h) = handle else {
         return None;
     };
-    let ns_window = sk_desktop::dialog::ns_window_of_view(h.ns_view.as_ptr())?;
-    let key = sk_tree::windows::key(window);
-    NS_WINDOW_CACHE.with(|m| m.borrow_mut().insert(key, ns_window));
-    Some(ns_window)
+    // A mini player can reparent this view to a nonactivating panel.
+    sk_desktop::dialog::ns_window_of_view(h.ns_view.as_ptr())
 }
 
 pub fn dialog_parent_of(key: sk_tree::WinKey) -> Option<isize> {
     #[cfg(target_os = "macos")]
-    return NS_WINDOW_CACHE
-        .with(|m| m.borrow().get(&key).copied())
-        .filter(|&w| w != 0);
+    return appkit_parent(native_window(Some(key))?);
     #[cfg(not(target_os = "macos"))]
     return hwnd_of(key);
 }
@@ -941,6 +931,8 @@ pub struct Snapshot {
     pub always_on_top: bool,
     pub opacity: f32,
     pub traffic_light: Option<(f32, f32)>,
+    pub native_buttons: Option<[f32; 4]>,
+    pub buttons_visible: bool,
     pub all_workspaces: bool,
     pub title_bar_height: f32,
     pub fallback_titlebar: bool,
@@ -975,6 +967,8 @@ impl Default for Snapshot {
             always_on_top: false,
             opacity: 1.,
             traffic_light: None,
+            native_buttons: None,
+            buttons_visible: true,
             all_workspaces: false,
             title_bar_height: 32.0,
             fallback_titlebar: true,
@@ -1002,7 +996,7 @@ thread_local! {
     /// So the frame funnel re-applies a backdrop only when `appWindow.backdrop` moves.
     static APPLIED_BACKDROP: Cell<Option<Backdrop>> = const { Cell::new(None) };
     static FULLSCREEN_TARGET: Cell<Option<bool>> = const { Cell::new(None) };
-    static FULLSCREEN_WANTED: Cell<Option<bool>> = const { Cell::new(None) };
+    static FULLSCREEN_WANTED: Cell<Option<(bool, bool)>> = const { Cell::new(None) };
     static NATIVE_FULLSCREEN_EVENTS: RefCell<Vec<gpui::WindowFullscreenTransition>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -1078,8 +1072,6 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         .detach();
     sk_tree::windows::set_primary(key);
     capture_hwnd(window);
-    #[cfg(target_os = "macos")]
-    dialog_parent(window);
     // OS chrome: a stray `move` region would hand the OS `HTCAPTION` over client area and swallow clicks.
     sk_tree::set_os_chrome(cfg.title_bar_style == TitleBarStyle::Default);
     if cfg.always_on_top {
@@ -1443,10 +1435,19 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         traffic_light: window
             .vn_traffic_light_position()
             .map(|p| (p.x.as_f32(), p.y.as_f32())),
+        native_buttons: window.vn_window_buttons_rect().map(|b| {
+            [
+                b.origin.x.as_f32(),
+                b.origin.y.as_f32(),
+                b.size.width.as_f32(),
+                b.size.height.as_f32(),
+            ]
+        }),
+        buttons_visible: controls::buttons_visible(),
         all_workspaces: controls::all_workspaces(),
         title_bar_height: live.title_bar_height,
         fallback_titlebar: live.fallback_titlebar,
-        overlay: live.overlay,
+        overlay: live.overlay.filter(|_| controls::buttons_visible()),
     };
     #[cfg(not(target_os = "windows"))]
     let snapshot = posix::refine(snapshot, window);
@@ -1483,11 +1484,25 @@ fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
 fn titlebar_rect(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     let (visible, (x, y, w, h)) = titlebar_area(s);
     #[cfg(not(target_os = "windows"))]
-    if visible {
+    if visible && s.buttons_visible {
         let left = posix::titlebar_inset() + s.traffic_light.map_or(0., |(x, _)| x - 12.);
         return (true, (x + left, y, (w - left).max(0.0), h));
     }
     (visible, (x, y, w, h))
+}
+
+fn window_buttons_rect(s: &Snapshot) -> Option<[f32; 4]> {
+    if !s.buttons_visible || s.minimized {
+        return None;
+    }
+    if let Some(rect) = s.native_buttons {
+        return Some(rect);
+    }
+    if s.fullscreen || s.overlay.is_none() {
+        return None;
+    }
+    let width = Overlay::width().min(s.client.0);
+    Some([s.client.0 - width, 0., width, s.title_bar_height])
 }
 
 fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
@@ -1830,6 +1845,8 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
                 || p.title_bar_height != s.title_bar_height
                 || p.fallback_titlebar != s.fallback_titlebar
                 || p.traffic_light != s.traffic_light
+                || p.native_buttons != s.native_buttons
+                || p.buttons_visible != s.buttons_visible
                 || p.overlay.is_some() != s.overlay.is_some()
             {
                 kinds.push("geometrychange");
@@ -1862,8 +1879,8 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         }
     }
     if FULLSCREEN_TARGET.get().is_none() {
-        if let Some(wanted) = FULLSCREEN_WANTED.take() {
-            PENDING.with(|ops| ops.borrow_mut().push_back(Op::Fullscreen(wanted)));
+        if let Some((on, fade)) = FULLSCREEN_WANTED.take() {
+            PENDING.with(|ops| ops.borrow_mut().push_back(Op::Fullscreen(on, fade)));
             window.refresh();
         }
     }
@@ -1967,7 +1984,7 @@ enum Op {
     ToggleMaximize,
     Close,
     UserClose,
-    Fullscreen(bool),
+    Fullscreen(bool, bool),
     Activate(bool),
     Bounds {
         x: Option<f32>,
@@ -2013,7 +2030,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
     }
     if matches!(
         op,
-        Op::Center | Op::Fullscreen(_) | Op::Minimize | Op::Maximize | Op::Bounds { .. }
+        Op::Center | Op::Fullscreen(..) | Op::Minimize | Op::Maximize | Op::Bounds { .. }
     ) {
         controls::cancel_glide();
     }
@@ -2049,14 +2066,18 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             }
         }
         // `toggle_fullscreen` toggles, so guard with the live state.
-        Op::Fullscreen(on) => {
+        Op::Fullscreen(on, fade) => {
             if let Some(target) = FULLSCREEN_TARGET.get() {
-                FULLSCREEN_WANTED.set((target != on).then_some(on));
+                FULLSCREEN_WANTED.set((target != on).then_some((on, fade)));
             } else if window.is_fullscreen() != on {
                 if cfg!(target_os = "macos") {
                     FULLSCREEN_TARGET.set(Some(on));
                 }
-                window.toggle_fullscreen();
+                if fade && !cx.reduce_motion() {
+                    window.vn_toggle_fullscreen_faded();
+                } else {
+                    window.toggle_fullscreen();
+                }
             }
         }
         Op::Activate(raise)
@@ -2261,7 +2282,7 @@ fn submit(op: Op) {
 pub(crate) fn element_fullscreen(on: Option<bool>) -> bool {
     let current = SNAPSHOT.with(|snapshot| snapshot.borrow().fullscreen);
     if let Some(on) = on {
-        PENDING.with(|pending| pending.borrow_mut().push_back(Op::Fullscreen(on)));
+        PENDING.with(|pending| pending.borrow_mut().push_back(Op::Fullscreen(on, false)));
     }
     current
 }
@@ -2368,8 +2389,18 @@ host_fn!(fn sk_window_verb(g, args) {
     UNDEF
 });
 
-host_fn!(fn sk_window_set_fullscreen(_g, args) {
-    submit(Op::Fullscreen(arg_bool(args.arg(0))));
+host_fn!(fn sk_window_set_fullscreen(g, args) {
+    let mode = args.arg(1);
+    let fade = if mode.is_undefined() {
+        false
+    } else {
+        match unsafe { read_string(g, mode.0) }.as_deref() {
+            Some("fade") => true,
+            Some("system") => false,
+            _ => return unsafe { sk_runtime::host::throw(g, "TypeError", "Use fade or system for the fullscreen transition.") },
+        }
+    };
+    submit(Op::Fullscreen(arg_bool(args.arg(0)), fade));
     UNDEF
 });
 
@@ -2488,12 +2519,13 @@ const NO_OVERLAY_MACOS: &str =
      your own on macOS.";
 
 /// `None` in fullscreen or while minimised.
-pub fn overlay() -> Option<(f32, Overlay)> {
+pub fn overlay() -> Option<(f32, Overlay, f32)> {
     let s = SNAPSHOT.with(|s| s.borrow().clone());
     if s.fullscreen || s.minimized {
         return None;
     }
-    s.overlay.map(|o| (s.title_bar_height, o))
+    s.overlay
+        .map(|o| (s.title_bar_height, o, controls::button_opacity()))
 }
 
 host_fn!(fn sk_window_match_media(g, args) {

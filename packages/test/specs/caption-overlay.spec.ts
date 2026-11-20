@@ -50,6 +50,51 @@ if (process.platform !== "win32") {
     return Number(user32.symbols.SendMessageW(hwnd, WM_NCHITTEST, 0n, BigInt(sx | (sy << 16))));
   }
 
+  test(
+    "hiding the caption buttons removes their Win32 hitboxes and showing restores their current height",
+    async () => {
+      const scale = Number(await app.eval("devicePixelRatio"));
+      const width = Number(await app.eval("innerWidth"));
+      const query = "__SK_WINDOW__.appWindow.getWindowButtonsRect()";
+      await app.eval("__SK_WINDOW__.appWindow.setWindowButtonsVisible(false); true");
+      try {
+        await until(
+          "hidden caption buttons",
+          async () => (await app.eval(query)) === null && hitTest(width - 20, 20, scale) !== HTCLOSE,
+        );
+        await app.eval(
+          "__SK_WINDOW__.appWindow.setTitleBarOverlay({height:52}); __SK_WINDOW__.appWindow.setWindowButtonsVisible(true); true",
+        );
+        await until("caption hitbox with new height", async () => {
+          const rect = await app.eval(query);
+          return (
+            rect?.x === width - 3 * BUTTON &&
+            rect.width === 3 * BUTTON &&
+            rect.height === 52 &&
+            hitTest(width - 20, 26, scale) === HTCLOSE
+          );
+        });
+        await app.eval("__SK_WINDOW__.appWindow.setWindowButtonsVisible(false,{fade:180}); true");
+        await until(
+          "the end of the caption fade",
+          async () => (await app.eval(query)) === null && hitTest(width - 20, 26, scale) !== HTCLOSE,
+        );
+        await app.eval("__SK_WINDOW__.appWindow.setWindowButtonsVisible(true,{fade:180}); true");
+        await until("the returning caption buttons", async () => (await app.eval(query))?.width === 3 * BUTTON);
+        await app.eval(
+          "__SK_WINDOW__.appWindow.setWindowButtonsVisible(false,{fade:180}); __SK_WINDOW__.appWindow.setWindowButtonsVisible(true); true",
+        );
+        await Bun.sleep(210);
+        expect(hitTest(width - 20, 26, scale)).toBe(HTCLOSE);
+      } finally {
+        await app.eval(
+          "__SK_WINDOW__.appWindow.setTitleBarOverlay({height:40}); __SK_WINDOW__.appWindow.setWindowButtonsVisible(true); true",
+        );
+      }
+    },
+    T,
+  );
+
   for (const kind of ["webgpu", "2d", "iframe"] as const) {
     test(
       `the buttons show and answer the hit test above a full-window ${kind}`,

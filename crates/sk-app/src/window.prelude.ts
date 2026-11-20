@@ -467,7 +467,7 @@
   appWindow.close = closeWindow;
   appWindow.center = verb("center");
   appWindow.startDragging = verb("startDragging");
-  appWindow.setFullscreen = (on) => __sk_window_set_fullscreen(!!on);
+  appWindow.setFullscreen = (on, options) => __sk_window_set_fullscreen(!!on, options?.transition);
   appWindow.isMaximized = () => refresh().maximized;
   appWindow.isMinimized = () => refresh().minimized;
   appWindow.isFullscreen = () => refresh().fullscreen;

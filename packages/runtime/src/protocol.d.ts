@@ -450,7 +450,7 @@ interface SkAppWindow extends EventTarget {
   isVisible(): boolean;
   startDragging(): void;
   startResizeDragging(): void;
-  setFullscreen(on: boolean): void;
+  setFullscreen(on: boolean, options?: { transition?: "system" | "fade" }): void;
   isMaximized(): boolean;
   isMinimized(): boolean;
   isFullscreen(): boolean;
@@ -465,6 +465,8 @@ interface SkAppWindow extends EventTarget {
   setMaxSize(size: { width: number; height: number } | null): void;
   setAspectRatio(ratio: number | null): void;
   setTrafficLightPosition(position: { x: number; y: number } | null): void;
+  setWindowButtonsVisible(visible: boolean, options?: { fade?: number }): void;
+  getWindowButtonsRect(): SkWindowRect | null;
   opacity: number;
   visibleOnAllWorkspaces: boolean;
   setContentBounds(rect: Partial<SkWindowRect>): void;

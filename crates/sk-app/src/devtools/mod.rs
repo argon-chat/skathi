@@ -1288,7 +1288,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("label").as_deref(),
             num("cap"),
         ),
-        "windows" => cmd_windows(),
+        "windows" => cmd_windows(req.get("native").and_then(Json::as_bool) == Some(true)),
         "raise" => cmd_raise(),
         "storage" => cmd_storage(
             arg("area").as_deref(),
@@ -2761,7 +2761,7 @@ fn cmd_pinch(
     }
 }
 
-fn cmd_windows() -> String {
+fn cmd_windows(native: bool) -> String {
     let main = crate::main_window_id();
     let popouts = crate::popout::list();
     let mut out: Vec<Json> = Vec::new();
@@ -2816,6 +2816,13 @@ fn cmd_windows() -> String {
                 ]),
             ),
         ];
+        if native {
+            if let Some(platform) = with_window_id(id, |w, _| w.platform_debug_state())
+                .and_then(|v| json::parse(&v.to_string()))
+            {
+                entry.push(("native", platform));
+            }
+        }
         if let Some((_, owner, margin)) = popup {
             entry.push(("owner", Json::n(owner as f64)));
             entry.push(("margin", Json::n(f64::from(margin))));

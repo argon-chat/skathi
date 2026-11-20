@@ -742,7 +742,7 @@ fn inspector_overlay() -> Option<gpui::Div> {
 /// `window_control_area` makes `WM_NCHITTEST` answer HTMINBUTTON/HTMAXBUTTON/HTCLOSE, so the OS
 /// performs the action and HTMAXBUTTON arms the Windows 11 snap-layouts flyout.
 fn window_controls_overlay(window: &Window) -> Option<gpui::Deferred> {
-    let (height, overlay) = window::overlay()?;
+    let (height, overlay, opacity) = window::overlay()?;
     let dark = window::effective_dark(window);
     // Win10 has these code points in Segoe MDL2 Assets; `fallbacks` is DirectWrite's per-code-point chain.
     const MIN: &str = "\u{e921}";
@@ -782,6 +782,7 @@ fn window_controls_overlay(window: &Window) -> Option<gpui::Deferred> {
         .absolute()
         .top_0()
         .right_0()
+        .opacity(opacity)
         .h(px(height))
         .flex()
         .flex_row();

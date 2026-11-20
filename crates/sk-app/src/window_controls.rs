@@ -19,6 +19,7 @@ pub(super) enum Action {
     Max(Option<Size<Pixels>>),
     Aspect(Option<f32>),
     Traffic(Option<Point<Pixels>>),
+    Buttons { visible: bool, ms: f32 },
     RefreshTraffic,
     Workspaces(bool),
     Opacity(f32),
@@ -67,9 +68,26 @@ struct Fade {
     hide: bool,
 }
 
+impl Fade {
+    fn sample(self) -> (f32, bool) {
+        let (progress, done) = self.timing.progress(self.start);
+        (
+            if done {
+                self.to
+            } else {
+                self.from + (self.to - self.from) * progress
+            },
+            done,
+        )
+    }
+}
+
 thread_local! {
     static LIMITS: Cell<WindowSizeConstraints> = Cell::default();
     static TRAFFIC: Cell<Option<Point<Pixels>>> = const { Cell::new(None) };
+    static BUTTONS_VISIBLE: Cell<bool> = const { Cell::new(true) };
+    static BUTTON_ALPHA: Cell<f32> = const { Cell::new(1.) };
+    static BUTTON_FADE: Cell<Option<Fade>> = const { Cell::new(None) };
     static WORKSPACES: Cell<bool> = const { Cell::new(false) };
     static OPACITY: Cell<f32> = const { Cell::new(1.) };
     static TARGET_ALPHA: Cell<f32> = const { Cell::new(1.) };
@@ -96,6 +114,12 @@ pub(super) fn window_alpha() -> f32 {
 }
 pub(super) fn all_workspaces() -> bool {
     WORKSPACES.get()
+}
+pub(super) fn buttons_visible() -> bool {
+    BUTTONS_VISIBLE.get()
+}
+pub(super) fn button_opacity() -> f32 {
+    BUTTON_ALPHA.get()
 }
 pub(super) fn restore_alpha_on_show(window: &Window) {
     if FADE.get().is_none() && OPACITY.get() != TARGET_ALPHA.get() {
@@ -195,6 +219,13 @@ fn schedule(window: &Window) {
     }
 }
 
+fn paint_buttons(window: &mut Window, visible: bool, opacity: f32) {
+    BUTTONS_VISIBLE.set(visible);
+    BUTTON_ALPHA.set(opacity);
+    window.vn_set_window_buttons(visible, opacity);
+    window.refresh();
+}
+
 fn tick(window: &mut Window, cx: &mut App) {
     FRAME_SCHEDULED.set(false);
     if let Some(g) = GLIDE.get() {
@@ -214,15 +245,8 @@ fn tick(window: &mut Window, cx: &mut App) {
         }
     }
     if let Some(f) = FADE.get() {
-        let (p, done) = f.timing.progress(f.start);
-        set_alpha(
-            window,
-            if done {
-                f.to
-            } else {
-                f.from + (f.to - f.from) * p
-            },
-        );
+        let (alpha, done) = f.sample();
+        set_alpha(window, alpha);
         if done {
             FADE.set(None);
             if f.hide {
@@ -230,7 +254,14 @@ fn tick(window: &mut Window, cx: &mut App) {
             }
         }
     }
-    if GLIDE.get().is_some() || FADE.get().is_some() {
+    if let Some(fade) = BUTTON_FADE.get() {
+        let (alpha, done) = fade.sample();
+        paint_buttons(window, !done || !fade.hide, alpha);
+        if done {
+            BUTTON_FADE.set(None);
+        }
+    }
+    if GLIDE.get().is_some() || FADE.get().is_some() || BUTTON_FADE.get().is_some() {
         schedule(window);
     }
 }
@@ -243,6 +274,27 @@ pub(super) fn apply(action: Action, window: &mut Window, cx: &mut App) {
         Action::Traffic(pos) => {
             TRAFFIC.set(pos);
             apply(Action::RefreshTraffic, window, cx);
+        }
+        Action::Buttons { visible, ms } => {
+            let from = BUTTON_ALPHA.get();
+            let to = if visible { 1. } else { 0. };
+            if ms > 0. && from != to && !cx.reduce_motion() {
+                BUTTON_FADE.set(Some(Fade {
+                    start: Instant::now(),
+                    from,
+                    to,
+                    timing: Timing {
+                        ms,
+                        easing: Easing::Linear,
+                    },
+                    hide: !visible,
+                }));
+                paint_buttons(window, true, from);
+                schedule(window);
+            } else {
+                BUTTON_FADE.set(None);
+                paint_buttons(window, visible, to);
+            }
         }
         Action::RefreshTraffic => {
             #[cfg(target_os = "macos")]
@@ -406,6 +458,26 @@ host_fn!(fn traffic(g, args) {
 host_fn!(fn get_opacity(_g, _args) {
     Value::number(f64::from(OPACITY.get())).0
 });
+host_fn!(fn set_buttons(g, args) {
+    let Some(visible) = args.arg(0).as_bool() else { return invalid(g, "Window button visibility must be a boolean.") };
+    match fade_duration(g, args.arg(1)) {
+        Ok(ms) => command(Action::Buttons { visible, ms }),
+        Err(exception) => exception,
+    }
+});
+host_fn!(fn button_rect(_g, _args) {
+    let Some(rect) = SNAPSHOT.with(|s| window_buttons_rect(&s.borrow())) else {
+        return Value::null().0;
+    };
+    JsRuntime::with(|rt| {
+        let ctx = rt.ctx();
+        let obj = ctx.object();
+        for (key, value) in ["x", "y", "width", "height"].into_iter().zip(rect) {
+            let _ = ctx.set(obj, &ctx.atom(key), Value::number(f64::from(value)));
+        }
+        obj.0
+    })
+});
 host_fn!(fn set_opacity(g, args) {
     if let Some(n) = number(args.arg(0)).filter(|n| (0.0..=1.0).contains(n)) {
         command(Action::Opacity(n))
@@ -420,16 +492,21 @@ host_fn!(fn set_spaces(_g, args) {
     command(Action::Workspaces(args.arg(0).as_bool() == Some(true)))
 });
 
-fn visibility(g: Global, options: Value, show: bool) -> u64 {
+fn fade_duration(g: Global, options: Value) -> Result<f32, u64> {
     let fade = prop(g, options, "fade");
-    let ms = if fade.is_undefined() {
-        0.
-    } else if let Some(n) = number(fade).filter(|n| *n >= 0.) {
-        n
+    if fade.is_undefined() {
+        Ok(0.)
     } else {
-        return invalid(g, "fade must be a nonnegative duration in milliseconds.");
-    };
-    command(Action::Visibility { show, ms })
+        number(fade)
+            .filter(|n| *n >= 0.)
+            .ok_or_else(|| invalid(g, "fade must be a nonnegative duration in milliseconds."))
+    }
+}
+fn visibility(g: Global, options: Value, show: bool) -> u64 {
+    match fade_duration(g, options) {
+        Ok(ms) => command(Action::Visibility { show, ms }),
+        Err(exception) => exception,
+    }
 }
 host_fn!(fn show(g, args) {
     visibility(g, args.arg(0), true)
@@ -497,6 +574,8 @@ host_fn!(pub(super) fn install(g, args) {
             ("setMaxSize", 1, max_size),
             ("setAspectRatio", 1, aspect),
             ("setTrafficLightPosition", 1, traffic),
+            ("setWindowButtonsVisible", 2, set_buttons),
+            ("getWindowButtonsRect", 0, button_rect),
             ("setBounds", 2, bounds),
             ("show", 1, show),
             ("hide", 1, hide),

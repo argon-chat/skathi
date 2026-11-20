@@ -25,7 +25,7 @@ declare function __sk_window_set_title(title: string): void;
  */
 declare function __sk_window_verb(verb: string): void;
 
-declare function __sk_window_set_fullscreen(on: boolean): void;
+declare function __sk_window_set_fullscreen(on: boolean, transition?: "system" | "fade"): void;
 
 declare function __sk_window_activate(raise: boolean): void;
 

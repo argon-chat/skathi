@@ -14,6 +14,8 @@ const user32 = WINDOWS
       GetClientRect: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
       GetLayeredWindowAttributes: { args: [FFIType.u64, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
       SendMessageW: { args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.ptr], returns: FFIType.i64 },
+      GetWindowLongPtrW: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i64 },
+      GetWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.u64 },
     })
   : null;
 afterAll(async () => {
@@ -122,15 +124,113 @@ test("the mini player can request topmost and macOS Spaces independently", async
   await until("!w.alwaysOnTop && !w.visibleOnAllWorkspaces");
 }, 30000);
 
+test.if(MACOS)(
+  "both pinning flags move the same content to a real nonactivating panel",
+  async () => {
+    type Native = {
+      window_class: string;
+      window_number: number;
+      nonactivating_panel: boolean;
+      can_become_main: boolean;
+      can_become_key: boolean;
+      collection_behavior: number;
+      level: number;
+    };
+    const native = async () => {
+      const reply = await app.send("windows", { native: true });
+      return (reply.windows as { kind: string; native: Native }[]).find((w) => w.kind === "main")!.native;
+    };
+    const original = await native();
+    await run(
+      "globalThis.__miniInput = document.createElement('input'); __miniInput.id = 'mini-input'; __miniInput.style.cssText='position:fixed;left:0;top:0;width:120px;height:30px'; document.body.appendChild(__miniInput); __miniInput.value = 'before'",
+    );
+    try {
+      for (const order of [
+        ["visibleOnAllWorkspaces", "alwaysOnTop"],
+        ["alwaysOnTop", "visibleOnAllWorkspaces"],
+      ]) {
+        await run(`w.${order[0]} = true`);
+        await until(`w.${order[0]}`);
+        expect((await native()).window_number).toBe(original.window_number);
+        await run(`w.setBounds({width: 386}); w.${order[1]} = true`);
+        await until("w.visibleOnAllWorkspaces && w.alwaysOnTop");
+        const panel = await native();
+        expect(panel.window_class).toBe("GPUIWorkspacePanel");
+        expect(panel.nonactivating_panel && panel.can_become_key && !panel.can_become_main).toBe(true);
+        expect(panel.window_number).not.toBe(original.window_number);
+        expect(panel.collection_behavior & 257).toBe(257);
+        expect(panel.level).toBe(3);
+        await until("Math.abs(w.getBounds().width - 386) <= 1");
+        await app.locator("#mini-input").type("x");
+        expect(String(await run("return __miniInput.value")).includes("x")).toBe(true);
+        if (order[0] === "visibleOnAllWorkspaces") {
+          await run("w.setFullscreen(true, {transition: 'fade'})");
+          await until("w.isFullscreen()");
+          expect((await native()).window_number).toBe(original.window_number);
+          await run("w.setFullscreen(false, {transition: 'fade'})");
+          await until("!w.isFullscreen()");
+          const deadline = Date.now() + 8000;
+          while ((await native()).window_number !== panel.window_number) {
+            if (Date.now() >= deadline) throw new Error("The mini player did not return to its panel after fullscreen");
+            await Bun.sleep(35);
+          }
+        }
+        await run(`w.${order[0]} = false; w.${order[1]} = false`);
+        await until("!w.visibleOnAllWorkspaces && !w.alwaysOnTop");
+        expect((await native()).window_number).toBe(original.window_number);
+      }
+    } finally {
+      await run("w.alwaysOnTop=false; w.visibleOnAllWorkspaces=false; __miniInput.remove()");
+    }
+  },
+  30000,
+);
+
+test.if(WINDOWS)(
+  "topmost is above a normal borderless fullscreen window on the same desktop",
+  async () => {
+    if (!user32) return;
+    const other = await launch({
+      app: "packages/test/fixtures/call-timer/src/main.ts",
+      label: "fullscreen-under-mini",
+    });
+    try {
+      await other.eval("__SK_WINDOW__.appWindow.setFullscreen(true); true");
+      const deadline = Date.now() + 8000;
+      while (!(await other.eval("__SK_WINDOW__.appWindow.isFullscreen()"))) {
+        if (Date.now() >= deadline) throw new Error("Borderless window did not enter fullscreen");
+        await Bun.sleep(35);
+      }
+      await run("w.alwaysOnTop=true");
+      await until("w.alwaysOnTop");
+      const top = await app.hwnd(),
+        lower = await other.hwnd();
+      expect(Number(user32.symbols.GetWindowLongPtrW(top, -20)) & 8).toBe(8);
+      let cursor = top;
+      const visited = new Set<bigint>();
+      while (cursor && cursor !== lower && !visited.has(cursor)) {
+        visited.add(cursor);
+        cursor = BigInt(user32.symbols.GetWindow(cursor, 2));
+      }
+      expect(cursor).toBe(lower);
+    } finally {
+      await run("w.alwaysOnTop=false");
+      await other.close();
+    }
+  },
+  30000,
+);
+
 test("fullscreen events bracket the transition and preserve the traffic light override", async () => {
   await run(`w.setTitleBarOverlay({height:46}); w.setTrafficLightPosition({x:22,y:10});
     globalThis.__fsEdges=[];
     w.addEventListener('fullscreenwillchange', e=>__fsEdges.push('will:'+e.detail.fullscreen));
     w.addEventListener('fullscreenchange', ()=>__fsEdges.push('did:'+w.isFullscreen()));`);
   if (MACOS) await until("w.chrome.trafficLightPosition?.x === 22 && w.chrome.trafficLightPosition?.y === 10");
-  await run("w.setFullscreen(true)");
+  await run("w.setWindowButtonsVisible(false); w.setFullscreen(true, {transition:'fade'})");
   await until("__fsEdges.includes('did:true')");
-  await run("w.setFullscreen(false)");
+  await until("w.getWindowButtonsRect() === null");
+  await run("w.setFullscreen(false, {transition:'fade'})");
   await until("__fsEdges.includes('did:false')");
   expect(JSON.parse(await run("return JSON.stringify(__fsEdges)"))).toEqual([
     "will:true",
@@ -139,6 +239,10 @@ test("fullscreen events bracket the transition and preserve the traffic light ov
     "did:false",
   ]);
   if (MACOS) await until("w.chrome.trafficLightPosition?.x === 22 && w.chrome.trafficLightPosition?.y === 10");
+  await until("w.getWindowButtonsRect() === null");
+  await run("w.setWindowButtonsVisible(true); w.setTitleBarOverlay({height:50})");
+  if (MACOS || WINDOWS) await until("w.getWindowButtonsRect()?.width > 0 && w.getWindowButtonsRect()?.height > 0");
+  await run("w.setTitleBarOverlay({height:46})");
   await run("w.setTrafficLightPosition(null)");
   if (MACOS) await until("w.chrome.trafficLightPosition?.x === 12 && w.chrome.trafficLightPosition?.y === 16");
 }, 30000);

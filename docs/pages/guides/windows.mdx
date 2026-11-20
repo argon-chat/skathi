@@ -376,7 +376,21 @@ appWindow.visibleOnAllWorkspaces = true;
 appWindow.setBounds({ width: 420 }, { animate: { duration: 180, easing: "ease-out" } });
 ```
 
-On macOS the two pinning properties together let the player float over another app’s fullscreen Space. Windows keeps it topmost on its current desktop. X11 delegates both requests to the window manager. Wayland assigns stacking and workspace membership itself.
+On macOS both pinning properties together move the existing content into a nonactivating panel above other apps’ fullscreen Spaces. Clicking a field can give it keyboard focus while the other app keeps its menu bar. Clearing either property returns the content to its original window. Windows keeps the player above ordinary borderless fullscreen windows on its current desktop. Exclusive display modes, secure desktops and other topmost windows have their own ordering. X11 delegates both requests to the window manager. Wayland assigns stacking and workspace membership itself.
+
+For a player that hides its controls when idle, use the caption-button rectangle before hiding the cursor. This example assumes a custom title bar extending across the viewport.
+
+```ts
+function hideControlsAt(x: number, y: number) {
+  const r = appWindow.getWindowButtonsRect();
+  if (r && x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) return;
+  appWindow.setWindowButtonsVisible(false, { fade: 150 });
+}
+```
+
+Pass `PointerEvent.clientX` and `clientY` to this function. Call `setWindowButtonsVisible(true)` when the controls return. On Windows and Linux these methods address the Skathi caption overlay. On macOS they address the traffic lights and their current AppKit layout. [Caption button geometry](/window-api/get-window-buttons-rect/)
+
+Use `appWindow.setFullscreen(true, { transition: "fade" })` to cover the content in black before macOS takes its fullscreen snapshot. Skathi reveals the content after AppKit completes or cancels the transition. The same option applies on exit. The existing `fullscreenwillchange`, `fullscreenchange` and `fullscreencancel` events report progress. Windows, Linux and reduced motion use the system transition. [Fullscreen options](/window-api/set-fullscreen/)
 
 Use `hide({ fade: 150 })` and `show({ fade: 150 })` to fade to or from the window’s configured opacity. An animated bounds change lays out the content on each frame. Observe `move` and `resize` for intermediate and final bounds.
 
