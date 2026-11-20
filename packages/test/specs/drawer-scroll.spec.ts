@@ -29,18 +29,21 @@ describe("settings drawer", () => {
     "the row is the drawer's height, not its content's, and the page scrolls",
     async () => {
       await sleep(500);
+      const viewport = (await box("root")).height;
+      const drawerHeight = Math.round(viewport * 0.95);
+      const contentHeight = drawerHeight - 32;
       const drawer = await box("drawer");
-      expect(drawer).toEqual({ top: 40, height: 760 });
-      expect((await box("layout")).height).toBe(728);
-      expect((await box("content")).height).toBe(728);
+      expect(drawer).toEqual({ top: viewport - drawerHeight, height: drawerHeight });
+      expect((await box("layout")).height).toBe(contentHeight);
+      expect((await box("content")).height).toBe(contentHeight);
       const [scrollHeight, clientHeight] = await scroll();
-      expect(clientHeight).toBe(728);
+      expect(clientHeight).toBe(contentHeight);
       expect(scrollHeight).toBe(3424);
 
       await app.eval(`document.getElementById("content").scrollTop = 1e6`);
       await sleep(300);
       const [, , top] = await scroll();
-      expect(top).toBe(3424 - 728);
+      expect(top).toBe(scrollHeight - contentHeight);
     },
     T,
   );
