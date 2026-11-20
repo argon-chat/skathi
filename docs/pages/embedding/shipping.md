@@ -46,7 +46,7 @@ let builder = skathi::Builder::new().payload_static(APP);
 
 ## AOT for your own executable (since 0.7)
 
-On Windows x64, build your embedder with `prod` and `native-aot`. Use a [Skathi source checkout](https://github.com/argon-chat/skathi) at the same version as the CLI and your Rust dependency. From that checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container:
+On Windows x64, build your embedder with `prod` and `native-aot`. Use a [Skathi source checkout](https://github.com/argon-chat/skathi) with its submodules initialized, at the same version as the CLI and your Rust dependency. From that checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container:
 
 ```powershell
 bun install
@@ -58,6 +58,7 @@ Pop-Location
 cargo build --release --manifest-path crates/sk-image/Cargo.toml --target x86_64-pc-windows-msvc
 $env:REDJS_AOT_BUILTIN_TABLE_DIR = (Resolve-Path tools/sk-aot/.cache/table).Path
 $skAot = (Resolve-Path tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe).Path
+$skImage = (Resolve-Path crates/sk-image/target/x86_64-pc-windows-msvc/release/skimage.dll).Path
 ```
 
 In your own executable's Cargo manifest, enable the loader along with the features your app uses:
@@ -67,10 +68,13 @@ In your own executable's Cargo manifest, enable the loader along with the featur
 skathi = { version = "0.7", default-features = false, features = ["prod", "native-aot", "no-devtools"] }
 ```
 
-Build the exe with that environment. Put the built `skimage.dll` next to it for packaging. Then compile the payload for that exact exe:
+Build the exe with that environment and use the embedder's [static CRT configuration](/embedding/first-embedder/#3-the-static-crt-windows) and [build script](/embedding/first-embedder/#4-the-build-script) to apply Skathi's Windows linker arguments and resources. Put the built `skimage.dll` next to it for packaging. Then compile the payload for that exact exe:
 
 ```powershell
-sk publish .\app --aot --payload-only --workload .\target\x86_64-pc-windows-msvc\release\my-app.exe --aot-compiler $skAot
+cargo build --release --target x86_64-pc-windows-msvc
+$release = '.\target\x86_64-pc-windows-msvc\release'
+Copy-Item $skImage $release
+sk publish .\app --aot --payload-only --workload "$release\my-app.exe" --aot-compiler $skAot
 ```
 
 This writes `app.skpk`, `app.image.dll` and any asset or ICU packs to `app/dist/release/.sk`. The manifest `sk/app.native.json` is inside `app.skpk`. It binds the image to the bundle, the host's AOT ABI and JavaScriptCore pin, the builtin table, and the host preludes. The CLI queries your exe with `--sk-host-info` before compiling. `skathi::Builder` answers that flag before loading a payload. Keep the image and payload from the same build, and rebuild both when you upgrade Skathi.
@@ -94,9 +98,9 @@ On macOS, set `JSC_useJIT=false` or `JSC_useWebAssembly=false` in the environmen
 
 ## Startup graphics memory on macOS
 
-On an Apple M4 with macOS 26.4, a headless Metal probe loaded the same renderer shaders from source and from a precompiled library, then created the seven render pipelines. Footprint at that point was about 5–6 MiB in either case. The first clear and present of a 3456 × 2234 BGRA8 drawable raised both builds to about 97–98 MiB. `vmmap -summary` reported about 49 MiB resident as `owned unmapped (graphics)`; about 48 MiB of the footprint dropped after the frame settled.
+On an Apple M4 with macOS 26.4, a headless Metal probe loaded the same renderer shaders from source and from a precompiled library, then created the seven render pipelines. Footprint at that point was about 5–6 MiB in either case. The first clear and present of a 3456 × 2234 BGRA8 drawable raised both builds to about 97–98 MiB. `vmmap -summary` reported about 49 MiB resident as `owned unmapped (graphics)`. About 48 MiB of the footprint dropped after the frame settled.
 
-This measures the Metal work in isolation. The 229 MiB whole-app peak reported on the M3 Max still needs a matched windowed measurement. Leaving `runtime-shaders` off moves library compilation to the build, while the renderer still allocates its drawables and submits a first frame at startup.
+In a separate windowed test on macOS 26.7.2, two release hosts ran the same minimal payload in a 600 × 400 window on a virtual 60 Hz SDR display. Across three launches each, the median peak process footprint was 38.2 MiB with precompiled shaders and 38.1 MiB with runtime shaders. These runs did not reproduce the 229 MiB whole-app peak reported on the M3 Max. Leaving `runtime-shaders` off moves library compilation to the build. The first frame still allocates GPU resources.
 
 ## The native modules' types (since 0.4)
 
