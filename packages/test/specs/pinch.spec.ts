@@ -86,3 +86,32 @@ test("d3-zoom handles pinch and ordinary Ctrl+wheel", async () => {
   expect(afterWheel).toBeLessThan(zoomed);
   expect(await app.eval("document.getElementById('scrollbox').scrollTop")).toBe(0);
 });
+
+test("a moving pinch tracks its centre and keeps each window's gesture independent", async () => {
+  await app.locator("#child").waitFor();
+  await app.eval(`globalThis.routes = [];
+    for (const id of ["probe", "map", "child"]) {
+      const node = document.getElementById(id);
+      for (const type of ["gesturestart", "gesturechange", "gestureend", "wheel"]) {
+        node.addEventListener(type, e => routes.push([type, e.target.id, e.scale ?? null, e.clientX, e.clientY]), true);
+      }
+    }`);
+  await app.send("pinch", { kind: "start", selector: "#probe" });
+  await app.send("pinch", { kind: "start", selector: "#child" });
+  const moved = await app.send("pinch", { kind: "change", selector: "#map", scale: 2 });
+  await app.send("pinch", { kind: "change", selector: "#child", scale: 0.5 });
+  await app.send("pinch", { kind: "end", selector: "#child" });
+  await app.send("pinch", { kind: "end", x: moved.x, y: moved.y });
+  const routes = JSON.parse(String(await app.eval("JSON.stringify(routes)"))) as unknown[][];
+  expect(routes.map((row) => row.slice(0, 3))).toEqual([
+    ["gesturestart", "probe", 1],
+    ["gesturestart", "child", 1],
+    ["gesturechange", "probe", 2],
+    ["wheel", "map", null],
+    ["gesturechange", "child", 0.5],
+    ["wheel", "child", null],
+    ["gestureend", "child", 0.5],
+    ["gestureend", "probe", 2],
+  ]);
+  for (const index of [2, 3, 7]) expect(routes[index]!.slice(3)).toEqual([moved.x, moved.y]);
+});

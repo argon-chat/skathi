@@ -1,4 +1,4 @@
-import { createApp, h, onMounted } from "@skathi-native/runtime";
+import { createApp, h, onMounted, SkWindow } from "@skathi-native/runtime";
 import { select } from "d3-selection";
 import { type D3ZoomEvent, zoom } from "d3-zoom";
 
@@ -20,6 +20,9 @@ createApp({
           h("div", { id: "map", style: { width: "160px", height: "64px", background: "#867048" } }, "d3-zoom"),
         ]),
         h("div", { style: { height: "700px", flexShrink: 0 } }),
+        h(SkWindow, { title: "Pinch pop-out", bounds: { width: 220, height: 150 } }, () =>
+          h("div", { id: "child", style: { height: "90px" } }, "Second gesture target"),
+        ),
       ]);
   },
 }).mount();
