@@ -1,0 +1,164 @@
+---
+title: Skathi 0.6
+metaTitle: "Skathi 0.6: apps without a JIT, haptics, and drag and drop with the desktop"
+description: An AOT workload with no JIT, images beside the exe or in one file, haptic feedback and trackpad pressure, files dragged in from and out to the desktop, pinch gestures, window controls for media players, an opt-in native Svelte renderer, and fixes from embedders.
+date: 2026-11-20
+draft: false
+tags: [release, aot, input, window]
+release:
+  version: "0.6.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.6.0 && bun add -d @skathi-native/cli@^0.6.0
+    - label: Rust program
+      command: cargo add skathi@0.6
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+
+Skathi 0.6 is about what an app ships and what it can feel. An app compiled ahead of time can run on a workload with no JIT at all, and its image now ships beside the exe as a DLL or inside it as one file. The window learns to answer the hand: haptic feedback on trackpads, mice and pens, pressure from a Force Touch trackpad, pinch gestures, and files dragged in from the desktop and back out to it. Around that, a video player ported from Tauri got the window controls it used to write in AppKit, Svelte can render straight into the native tree, and embedders sent another round of fixes.
+
+<FeatureGrid label="What is new in 0.6">
+  <Feature icon="cpu" title="No JIT" href="#ship-without-the-jit" tone="pink">
+    The `aot-nojit` workload: native images only, 13.7 MiB smaller.
+  </Feature>
+  <Feature icon="code" title="Images beside the exe" href="#images-beside-the-exe" tone="blue">
+    `app.image.dll` next to the exe, or one exe with `publishSingleFile`.
+  </Feature>
+  <Feature icon="sparkle" title="Haptics" href="#haptics-and-pressure" tone="lilac">
+    `appHaptics`, the `haptic` CSS property, and Force Touch pressure.
+  </Feature>
+  <Feature icon="shapes" title="Drag and drop" href="#drag-and-drop-with-the-desktop" tone="yellow">
+    Files in from the file manager, files and text out to other apps.
+  </Feature>
+  <Feature icon="monitor" title="Window controls" href="#window-controls-for-players" tone="pink">
+    Size limits, aspect lock, fades, a mini player above fullscreen apps.
+  </Feature>
+  <Feature icon="play" title="Native frames" href="#native-frames" tone="blue">
+    Frames latched at the refresh, low-latency pacing on macOS, better scaling.
+  </Feature>
+  <Feature icon="braces" title="CSS and sk check" href="#css-and-sk-check" tone="lilac">
+    `sk check` runs the host's own CSS code; hover variables, SVG geometry.
+  </Feature>
+  <Feature icon="terminal" title="Svelte, keys, pinch" href="#svelte" tone="yellow">
+    A native Svelte renderer, `KeyboardEvent.code`, and pinch as browsers send it.
+  </Feature>
+</FeatureGrid>
+
+## Ship without the JIT
+
+`sk publish` has compiled apps ahead of time since 0.3. In 0.6 the hosts drop what such an app does not need. Every workload now carries only JavaScriptCore's image loader; the image compiler lives in `sk-aot` alone.
+
+The new `aot-nojit` workload goes further: no JIT and no WebAssembly, so the exe runs only native images. Set `"publishJit": false` to publish on it. It is 73.9 MiB instead of 87.6 MiB with the same image and payload: 12.8 MiB of JIT and 0.9 MiB of WebAssembly gone. `eval`, `new Function` and devtools expressions still run in the interpreter, and `SK_APP_ENGINE=jit` stops with a message that names the workload instead of falling back. If an app's image uses WebAssembly, `sk publish` refuses it on this workload and says where.
+
+Under the hood, the host's own JavaScript — its preludes and bootstrap — now compiles into the app's image, and Streams, `WebSocketStream` and `MediaStream` moved to Rust. That is groundwork for platforms that allow neither a JIT nor an interpreter.
+
+## Images beside the exe
+
+Before 0.6 the image was packed into the payload and expanded into `%LOCALAPPDATA%` on the first start. Now `sk publish` writes it beside the exe as `app.image.dll`, plus `inspector.image.dll` when devtools are in. The host loads it with `LoadLibraryExW` and maps it where it is: nothing is unpacked, nothing is cached, and the DLLs sign like any other. Republishing an unchanged app writes byte-identical files. `sk prune` removes the folders older apps left behind.
+
+`"publishSingleFile": true` puts everything in one exe instead. Either way, debuggers and crash dumps walk the stack through AOT code: `sk publish` writes unwind data over the image, into the DLL, or into a copy of the exe's exception table (about 2 MiB) for a single file.
+
+| aot-nojit workload, 2.6 MiB image  | Start, cold | Start, warm | On disk            |
+| ---------------------------------- | ----------- | ----------- | ------------------ |
+| Before 0.6: image expanded to disk | 409 ms      | 390 ms      | 86.8 MiB + 2.6 MiB |
+| `app.image.dll` beside the exe     | 411 ms      | 421 ms      | 88.4 MiB           |
+| `publishSingleFile`                | 407 ms      | 420 ms      | 90.3 MiB, one file |
+
+Start times stay within the spread of the runs.
+
+## Haptics and pressure
+
+[`appHaptics`](/app-api/app-haptics/) plays tactile feedback where the hardware has it: a Force Touch trackpad on macOS, and haptic touchpads, mice and pens such as Surface Slim Pen 2 on Windows 11.
+
+```ts
+import { appHaptics } from "@skathi-native/runtime";
+
+canvas.addEventListener("pointermove", (event) => {
+  if (snappedToGrid(event)) appHaptics.perform("alignment", { pointerId: event.pointerId, when: "next-frame" });
+});
+```
+
+`when: "next-frame"` lines the pulse up with the frame that shows the snap. A pen in contact can also play continuous ink, pencil, brush and eraser textures. Most feedback needs no script at all: the Skathi-only `haptic` property binds it to a control's gestures, and `@haptic-pattern` defines your own.
+
+```css
+.checkbox {
+  haptic: change var(--selection);
+}
+.scale {
+  haptic:
+    step var(--selection),
+    boundary edge 0.7;
+}
+```
+
+On a Mac trackpad, `PointerEvent.pressure` now follows how hard you press: the click stage covers 0 to 0.5 and force click 0.5 to 1, and pressing harder without moving fires `pointermove`. `apps/pen-draw` uses both: it draws with pressure and lets you feel grid snaps and brush-width steps.
+
+## Drag and drop with the desktop
+
+Files dragged from Explorer, Finder or a file manager reach the page through the usual HTML drag events: `dragenter`, `dragover`, `dragleave` and `drop` on the element under the pointer, in each window, with `dataTransfer.files` and `items` in the drop and only MIME types while hovering. Directories come through `webkitGetAsEntry()` and `getAsFileSystemHandle()`.
+
+A dropped file is read lazily, so a large video plays from `URL.createObjectURL(file)` at once without being read into memory. When the app needs the path rather than the bytes, [`appFiles.getPathForFile()`](/guides/file-drop/#choose-how-to-access-a-drop) returns it for a dropped file, entry or handle, and `null` for a `new File(...)`.
+
+It works the other way too. A `draggable` element starts a system drag after four pixels, and what it puts in `dataTransfer` goes to other apps: text, links and files. A file from a drop or a picker goes out by its path; a file made in memory, such as a PNG from a canvas, goes out as a Windows OLE stream, a macOS file promise or a private temporary file on Linux, written only when the receiver asks. `DownloadURL` exports a blob URL, a data URL or an app asset. The [file drop guide](/guides/file-drop/) has the details, and devtools can drive it all with `drag-files`.
+
+## Window controls for players
+
+A video player ported from Tauri had about 3,000 lines of AppKit for its window. In 0.6 they are `appWindow` calls:
+
+- `setMinSize()` and `setMaxSize()` at run time, and `setAspectRatio()` for the live-resize lock;
+- `show()` and `hide()` with a `fade`, and `setBounds()` with `animate`;
+- `setTrafficLightPosition()`, buttons that follow the title-bar height, and `setWindowButtonsVisible()` with `getWindowButtonsRect()` for idle chrome;
+- `setFullscreen(on, { transition: "fade" })`, which goes through black instead of zooming a stretched snapshot;
+- a mini player that stays above other apps' fullscreen Spaces: with `alwaysOnTop` and `visibleOnAllWorkspaces`, the window becomes a non-activating panel on macOS.
+
+The native window is still reachable from `HostContext` as a `raw-window-handle`, as an explicitly unsafe escape hatch that logs a warning.
+
+## Native frames
+
+- **Latched at the refresh.** On Windows the window takes the newest ready Direct3D 12 frame at the start of each refresh, before timers and animation callbacks, so slow UI work no longer drops a frame that was ready in time. At `debug`, each `Superseded` frame logs what replaced it.
+- **Low latency on macOS.** `"lowLatencySurface": true` shows the first frame after a pause at once with `nextDrawable`, about 17 ms sooner on a 120 Hz display, and returns to the display link while frames keep coming, so playback and UI animation stay even.
+- **Scaling.** `<sk-surface>` honours `image-rendering`: `auto` upscales with Catmull-Rom and clamps highlights, `pixelated` uses the nearest texel, and 1:1 stays exact.
+- **Memory.** An HDR window no longer keeps an unused 8-bit copy of each frame slot: 62 MiB less for 4K frames.
+- **Shutdown.** After the app quits, a present returns `SurfaceError::Closed` instead of a frame that never resolves.
+
+## CSS and sk check
+
+`sk check` now runs the host's own CSS code, compiled to WebAssembly and shipped with the CLI, so it warns about exactly what the runtime drops or draws differently. In the runtime:
+
+- custom properties set by `:hover` reach `var()` on the element, its children and SVG gradient stops;
+- `transition` with `var()`, state selectors before `::before` and `::after`, and `min()`, `max()` and `clamp()` over percentages;
+- `position: relative` with `z-index: auto` paints and hit-tests in CSS order;
+- inline SVG takes `x`, `y`, `width`, `height`, `rx`, `cx`, `r` and gradient stops from CSS, and `getComputedStyle()` reports them.
+
+## Svelte
+
+Svelte 5.59 shipped an experimental custom renderer API, and Skathi has an optional native renderer on it: components render straight into the native tree through the same node operations as Vue. Turn it on with `{ "svelte": { "renderer": "native" } }`. The DOM renderer stays the default, because the native compiler does not allow `bind:` on elements, transitions or `<svelte:window>` yet; `<svelte:options customRenderer={null} />` keeps a DOM component, such as a form, inside a native app. `sk check` reports what the native compiler rejects (`SK5015`) and a Svelte too old for it (`SK5016`). See [Svelte support](/guides/svelte-support/#choose-a-renderer).
+
+## Keyboard and pinch
+
+- **Keys.** `KeyboardEvent.code`, `location` and `repeat` are filled in, and `shiftKey` reflects the key held, so shortcuts bound to physical keys work in any layout and `!event.repeat` toggles once per press.
+- **Pinch.** A trackpad pinch arrives as browsers send it: a cancelable `wheel` with `ctrlKey`, keeping the real Alt, Shift and Meta, plus `gesturestart`, `gesturechange` and `gestureend` with the scale. Unchanged `d3-zoom` zooms with it.
+
+## Other fixes
+
+- A git dependency on `skathi` builds without a prebuilt devtools bundle, with a warning.
+- An app that imports nothing runs from its AOT image.
+- `<select>` menus paint opaque, with their labels centred.
+
+<Aside kind="warning" title="What 0.6 does not do yet">
+
+- **Haptics on Linux** do nothing; `appHaptics` reports that.
+- **The native Svelte renderer** gives up `bind:` on elements, transitions and the `<svelte:*>` globals until Svelte's renderer API allows them.
+- **Low-latency pacing** is macOS only.
+
+</Aside>
+
+## Upgrading
+
+Run the commands at the top of this post and `bunx sk check`. An app published with AOT now ships `app.image.dll` beside the exe: copy it with the exe, or publish with `"publishSingleFile": true`. For embedders: rebuild the payload with `sk` 0.6, since a host runs only a payload built by the same Skathi version, and a present after the app quits now returns `SurfaceError::Closed`.
