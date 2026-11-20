@@ -2067,7 +2067,76 @@ const scrolling = section("Scrolling", [
   }),
 ]);
 
+const hapticCss = { since: "0.6.0", skathiOnly: true, platforms: { windows: OK, macos: OK, linux: NO } } as const;
+const penCss = { ...hapticCss, platforms: { windows: OK, macos: NO, linux: NO } } as const;
 const interaction = section("Interaction", [
+  sh("haptic", OK, "Binds a gesture to tactile feedback on a pointing device.", {
+    ...hapticCss,
+    notes: [
+      "`haptic: press tick .4` sets the trigger, effect and intensity. Separate multiple bindings with commas. Theme variables can supply an effect and strength together.",
+      "The closest styled control handles the interaction, including a click on a child icon. Use `none` to silence a binding. Explicitly setting `haptic: none` suppresses ancestor bindings for this subtree.",
+    ],
+    related: [
+      "haptic-trigger",
+      "haptic-effect",
+      "haptic-intensity",
+      "haptic-target",
+      "haptic-min-interval",
+      "at-haptic-pattern",
+    ],
+  }),
+  prop("haptic-trigger", OK, "Chooses the interaction that requests feedback.", {
+    ...hapticCss,
+    notes: [
+      "press fires on primary pointer down. activate fires after an uncancelled activation, including Enter or Space on a native button. hover fires on entry.",
+      "change follows a committed checkbox, radio, select or range value. step follows a change to a discrete range value. A boundary binding takes precedence at either reachable end.",
+      "snap follows a new native scroll-snap destination reached by user input. A custom guide or drag control signals its own transition with appHaptics.trigger(element, 'snap', pointerId).",
+    ],
+  }),
+  prop("haptic-effect", OK, "Selects tick, hint, align, edge, success, error, none or a named pattern.", {
+    ...hapticCss,
+    notes: [
+      "Lists pair by trigger position. A shorter list repeats. If an event appears twice, its last binding wins.",
+      "tick prefers a step waveform, hint prefers hover, align prefers alignment and edge prefers a collision. Compatible devices can use a basic pulse as fallback.",
+    ],
+  }),
+  prop("haptic-intensity", PART, "Sets a strength between zero and one.", {
+    ...hapticCss,
+    platforms: { windows: PART, macos: PART, linux: NO },
+    notes: [
+      "Zero silences feedback on every device. Windows applies positive values on controllers that support intensity. Other controllers use their normal strength.",
+    ],
+  }),
+  prop("haptic-target", OK, "Routes feedback to auto, mouse or pen.", {
+    ...hapticCss,
+    notes: [
+      "auto follows the interaction. For keyboard activation the platform selects the current device. mouse includes touchpads.",
+    ],
+  }),
+  prop("haptic-min-interval", OK, "Spaces repeated requests from the same gesture, element and target.", {
+    ...hapticCss,
+    notes: [
+      "Defaults to 0ms. The interval applies to the entire sequence and leaves the timing between its pulses intact.",
+    ],
+  }),
+  prop("haptic-sharpness", PART, "Stores a waveform sharpness hint between zero and one.", {
+    ...hapticCss,
+    platforms: { windows: PART, macos: PART, linux: NO },
+    limitations: [
+      "AppKit and Windows SimpleHapticsController use preset waveforms. Their public pointing-device APIs expose no sharpness adjustment.",
+    ],
+  }),
+  prop("haptic-texture", OK, "Plays an advertised pen texture during contact.", {
+    ...penCss,
+    notes: [
+      "Use ink, pencil, brush or eraser. The texture stops on lift, exit, cancellation or focus loss. none disables it.",
+    ],
+  }),
+  prop("haptic-texture-intensity", PART, "Sets the strength of a continuous pen texture.", {
+    ...penCss,
+    platforms: { windows: PART, macos: NO, linux: NO },
+    notes: ["Defaults to one. Zero is silent. Positive values scale on pens with adjustable intensity."],
+  }),
   prop("cursor", PART, "Sets the mouse cursor shown over an element.", {
     notes: ["Native cursors are used."],
     values: [
@@ -2594,6 +2663,14 @@ const atRules = section("At-rules", [
     notes: ["Tailwind's `@layer` is resolved by its build pass."],
     aliases: ["cascade layers"],
     related: ["feature-tailwind-4"],
+  }),
+  at("@haptic-pattern", OK, "Defines a sequence of timed tactile pulses (since 0.6).", {
+    ...hapticCss,
+    notes: [
+      "Name the sequence with a dashed identifier. Each time in ms or s specifies one pulse with optional intensity and sharpness. The binding's intensity multiplies each pulse.",
+      "A trigger captures the device for the whole sequence. Retriggering the binding replaces its pending pulses. When the platform cannot prepare a generic pulse, the fallback descriptor requests one semantic effect.",
+    ],
+    related: ["haptic", "haptic-intensity", "haptic-sharpness"],
   }),
   at("@keyframes", OK, "Defines the intermediate steps of a CSS animation.", {
     aliases: ["-webkit-keyframes"],

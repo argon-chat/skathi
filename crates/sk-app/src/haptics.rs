@@ -80,6 +80,19 @@ host_fn!(fn stop(_g, args) {
     enc_bool(target(args.arg(0).0).and_then(|target| with_commit(|w, _| w.vn_stop_haptic(target))).unwrap_or(false))
 });
 
+host_fn!(fn trigger(g, args) {
+    unsafe {
+        let element = args.arg(0).0;
+        let Some(name) = read_string(g, args.arg(1).0) else { return throw_type_error(g,"Expected a haptic trigger") };
+        let Some(gesture) = sk_css::haptics::Trigger::from_name(&name) else { return throw_type_error(g,"Unknown haptic trigger") };
+        if !is_cell(element) { return throw_type_error(g,"Expected an element"); }
+        let Some(id) = dec_f64(get(g,element,"__skId")).filter(|n| *n > 0.) else { return FALSE };
+        let input = args.arg(2).0;
+        let source = if input == UNDEF { HapticTarget::Current } else if let Some(t) = target(input) { t } else { return FALSE };
+        enc_bool(with_commit(|w,cx| sk_tree::haptics::trigger(id as u32,gesture,source,w,cx)).unwrap_or(false))
+    }
+});
+
 pub(crate) fn install(runtime: &JsRuntime) {
     unsafe {
         let g = runtime.raw();
@@ -93,6 +106,7 @@ pub(crate) fn install(runtime: &JsRuntime) {
                 methods: &[
                     ("supportsPointer", 1, supports_pointer),
                     ("getSupportedPatterns", 0, supported_patterns),
+                    ("trigger", 2, trigger),
                     ("perform", 1, perform),
                     ("stop", 1, stop),
                 ],

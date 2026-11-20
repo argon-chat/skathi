@@ -300,20 +300,20 @@ fn click_target_in_tree(
     root: u32,
     capture: Option<u32>,
 ) -> Option<u32> {
-    // A fieldset itself must not suppress the enabled first legend.
-    let enabled_path = |id| {
-        let path = capture_path(t, id, root)?;
-        (!path.iter().any(|&id| {
-            t.node(id).is_some_and(|n| {
-                t.name(n.tag) != "fieldset" && crate::render::actually_disabled(t, id)
-            })
-        }))
-        .then_some(())
-    };
-    enabled_path(down)?;
+    enabled_path(t, down, root)?;
     let up = capture.unwrap_or(up);
-    enabled_path(up)?;
+    enabled_path(t, up, root)?;
     capture.or_else(|| common_ancestor(t, down, up))
+}
+
+pub(crate) fn enabled_path(t: &Tree, id: u32, root: u32) -> Option<()> {
+    let path = capture_path(t, id, root)?;
+    // A fieldset itself must not suppress the enabled first legend.
+    (!path.iter().any(|&id| {
+        t.node(id)
+            .is_some_and(|n| t.name(n.tag) != "fieldset" && crate::render::actually_disabled(t, id))
+    }))
+    .then_some(())
 }
 
 fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
@@ -593,8 +593,10 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
     }
     // `mouseenter` and `mouseleave` fire at every element that joins or leaves the path and listens
     // for them, `pointer-events` notwithstanding: it decides what is hit, not who hears about it.
-    let has =
-        |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
+    let has = |t: &Tree, id: u32, ev: u32| {
+        t.node(id)
+            .is_some_and(|n| (n.listeners | crate::haptics::mask(n)) & (1u64 << ev) != 0)
+    };
     // `mouseover`/`mouseout` bubble, so anything on the path may be the one listening.
     let (from, to) = (old.first().copied(), new.first().copied());
     let (leaves, enters, out_at, over_at) = tree::read_tree(|t| {

@@ -72,6 +72,7 @@ import { CssWarnings } from "./check/css";
 import { FrameworkWarnings } from "./check/frameworks";
 import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
+import { protectHapticPatterns } from "./haptic-patterns";
 
 const C = paint(colorEnabled(process.stdout));
 const styled = (rest: (text: string) => string) => (text: string) => {
@@ -527,14 +528,15 @@ async function compileVue(
     }
     // `isProd` left at its default (false) on both this and compileScript:
     // they hash a `v-bind()` variable's name from it and must agree.
+    const patterns = protectHapticPatterns(text);
     const out = compileStyle({
-      source: text,
+      source: patterns.css,
       filename: absPath,
       id: scopeId,
       scoped: style.scoped ?? false,
     });
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
-    cssChunks.push(out.code);
+    cssChunks.push(patterns.restore(out.code));
   }
   if (captureCss) capturedCss = cssChunks.length ? pruneVendorPrefixes(cssChunks.join("\n")) : null;
 

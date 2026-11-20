@@ -3,6 +3,7 @@
 
 import { pathToFileURL } from "node:url";
 import type * as SvelteCompiler from "svelte/compiler";
+import { protectHapticPatterns } from "./haptic-patterns";
 
 type Compiler = typeof SvelteCompiler;
 
@@ -62,6 +63,21 @@ export async function compileSvelte(
     const out = svelte.compileModule(js, { filename: o.filename, generate: "client", dev: o.dev });
     return { js: out.js.code, css: null, warnings: out.warnings.map(describe) };
   }
+  let restore = (css: string) => css;
+  if (/@haptic-pattern\b/i.test(source)) {
+    const prepared = await svelte.preprocess(
+      source,
+      {
+        style({ content }) {
+          const patterns = protectHapticPatterns(content);
+          restore = patterns.restore;
+          return { code: patterns.css };
+        },
+      },
+      { filename: o.filename },
+    );
+    source = prepared.code;
+  }
   const out = svelte.compile(source, {
     filename: o.filename,
     generate: "client",
@@ -72,5 +88,5 @@ export async function compileSvelte(
     // svelte-dom-shim: fragments: "tree" builds templates with createElement, since Skathi's DOM has no HTML parser for the default <template> innerHTML; goes with the custom renderer (sveltejs/svelte#18042)
     fragments: "tree",
   });
-  return { js: out.js.code, css: out.css?.code ?? null, warnings: out.warnings.map(describe) };
+  return { js: out.js.code, css: out.css ? restore(out.css.code) : null, warnings: out.warnings.map(describe) };
 }

@@ -223,6 +223,22 @@ fn update(id: u32, next: f64, committed: bool, window: &mut Window, cx: &mut App
         changed
     });
     if changed || committed {
+        use sk_css::haptics::Trigger;
+        let source = crate::haptics::input_target(window);
+        if changed {
+            let spec = tree::read_tree(|t| Spec::read(t, id));
+            let edge =
+                next == spec.sanitize(Some(spec.min)) || next == spec.sanitize(Some(spec.max));
+            if edge {
+                crate::haptics::trigger(id, Trigger::Boundary, source, window, cx);
+            }
+            if spec.step.is_some() && (!edge || !crate::haptics::has_boundary(id, window)) {
+                crate::haptics::trigger(id, Trigger::Step, source, window, cx);
+            }
+        }
+        if committed {
+            crate::haptics::trigger(id, Trigger::Change, source, window, cx);
+        }
         let text = next.to_string();
         crate::render::js_dispatch_app(
             id,

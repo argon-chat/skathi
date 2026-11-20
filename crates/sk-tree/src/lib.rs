@@ -24,6 +24,7 @@ mod font_api;
 mod fonts;
 mod fullscreen;
 mod geometry_js;
+pub mod haptics;
 mod idmap;
 pub mod iframe;
 mod img;
@@ -786,6 +787,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     surface::node::sample_display(window);
     let surfaces_moved = surface::node::tick(window, cx);
     let snapped = snap::tick();
+    haptics::tick(window, cx);
     let gliding = scroll::tick() | snapped;
     let scrolled = scroll::dispatch_pending(window, cx) | gliding;
     let fonts_moved = fonts::tick(window, cx);
@@ -819,6 +821,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 /// Per-frame work a SECONDARY window does from its own `render()`: its atlas resources and focus.
 /// The JS-facing half stays in [`frame_tick`] (one JS realm, once per frame group).
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    haptics::tick(window, cx);
     pointer::arm_hover_tick(window);
     img::evict_pending(window, cx);
     lottie::window_tick(window, cx);

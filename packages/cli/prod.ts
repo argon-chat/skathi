@@ -22,6 +22,7 @@ import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
+import { protectHapticPatterns } from "./haptic-patterns";
 import {
   DOM_ENTRY,
   FRAMEWORK_LIBS,
@@ -383,8 +384,9 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
     if (style.module) {
       advise(`${id}: <style module> — CSS modules are not supported yet; useCssModule() answers {}`);
     }
+    const patterns = protectHapticPatterns(text);
     const out = compileStyle({
-      source: text,
+      source: patterns.css,
       filename: absPath,
       id: scopeId,
       scoped: style.scoped ?? false,
@@ -393,7 +395,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
       isProd: true,
     });
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
-    cssChunks.push(out.code);
+    cssChunks.push(patterns.restore(out.code));
   }
   if (cssChunks.length) cssById.set(id, cssChunks.join("\n"));
 

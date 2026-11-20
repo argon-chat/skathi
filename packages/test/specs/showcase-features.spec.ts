@@ -126,6 +126,47 @@ test("the device palette follows a pen and stops its texture on lift", async () 
   }
 }, 30_000);
 
+test("CSS feedback follows native activation, value changes, range limits and application snap points", async () => {
+  await page("haptics");
+  const show = async (selector: string) => {
+    await app.eval(`document.querySelector("${selector}").scrollIntoView({block:"center",behavior:"instant"})`);
+    await app.locator(selector).waitFor();
+  };
+  const next = async () => (await app.logs()).next;
+  const gestures = async (since: number) =>
+    (await app.logs(since)).entries.filter((e) => e.kind === "haptic").map((e) => e.text.split(" ")[0]);
+  await show(".double");
+  expect(await app.eval("getComputedStyle(document.querySelector('.double')).getPropertyValue('haptic-effect')")).toBe(
+    "pattern(--double-tap)",
+  );
+  const property = () =>
+    app.eval("getComputedStyle(document.querySelector('.press')).getPropertyValue('haptic-intensity')");
+  expect(await property()).toBe("0.4");
+  let since = await next();
+  await app.locator(".press").click({ real: true });
+  expect(await gestures(since)).toEqual(["press"]);
+  since = await next();
+  await app.locator(".activate").press("Enter");
+  expect(await gestures(since)).toEqual(["activate"]);
+  since = await next();
+  await app.eval("document.querySelector('.activate').addEventListener('click', e => e.preventDefault(), {once:true})");
+  await app.locator(".activate").click({ real: true });
+  expect(await gestures(since)).toEqual([]);
+  since = await next();
+  await app.locator(".toggle").click({ real: true });
+  expect(await gestures(since)).toEqual(["change"]);
+  await waitFor("getComputedStyle(document.querySelector('.press')).getPropertyValue('haptic-intensity') === '0.15'");
+  since = await next();
+  await app.locator(".scale").press("ArrowRight");
+  await app.locator(".scale").press("End");
+  await app.locator(".scale").press("End");
+  expect(await gestures(since)).toEqual(["step", "boundary"]);
+  since = await next();
+  await app.eval(`{ const g = document.querySelector('.guides'); g.style.setProperty('haptic-min-interval','10s'); getComputedStyle(g).getPropertyValue('haptic-min-interval');
+    __sk_appHaptics.trigger(g, 'snap', 1); __sk_appHaptics.trigger(g, 'snap', 1); }`);
+  expect(await gestures(since)).toEqual(["snap"]);
+}, 30_000);
+
 test("the haptics button requests a pulse from the current device without a pointer ID", async () => {
   await page("graphics");
   await recordHaptics();

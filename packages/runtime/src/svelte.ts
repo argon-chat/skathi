@@ -45,6 +45,7 @@ export type {
   AppHaptics,
   HapticOptions,
   HapticPattern,
+  HapticTrigger,
   AppHotkeys,
   AppLocale,
   AppTray,

@@ -2,6 +2,7 @@
 import { appHaptics, type HapticOptions, type HapticPattern } from "@skathi-native/runtime";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import Card from "../components/Card.vue";
+import HapticCss from "../components/HapticCss.vue";
 import Page from "../components/Page.vue";
 
 const effects = [
@@ -214,6 +215,7 @@ onBeforeUnmount(() => stopTexture());
           </div>
         </template>
       </Card>
+      <HapticCss />
     </div>
   </Page>
 </template>

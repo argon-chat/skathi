@@ -221,6 +221,10 @@ crate::host_fn!(fn answer_false(_g, _args) {
     FALSE
 });
 
+crate::host_fn!(fn haptic_patterns(g, _args) {
+    unsafe { new_array(g) }
+});
+
 unsafe fn absent(g: *mut c_void, name: &str) -> bool {
     !is_cell(get(g, global(g), name))
 }
@@ -277,6 +281,8 @@ pub unsafe fn install_missing(g: *mut c_void) {
         let o = host::install_object(g, "__sk_appHaptics", UNDEF);
         define(g, o, "supported", FALSE, 1);
         host::method(g, o, "supportsPointer", 1, answer_false);
+        host::method(g, o, "getSupportedPatterns", 0, haptic_patterns);
+        host::method(g, o, "trigger", 2, answer_false);
         host::method(g, o, "perform", 1, answer_false);
         host::method(g, o, "stop", 1, answer_false);
     }

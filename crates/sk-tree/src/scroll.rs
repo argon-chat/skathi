@@ -276,7 +276,7 @@ fn snapped(
         user: false,
         prefer,
     };
-    let (x, y) = crate::snap::settle(id, handle, aim);
+    let (x, y) = crate::snap::settle(id, handle, aim, None);
     Point {
         x: px(-x),
         y: px(-y),
@@ -629,7 +629,7 @@ fn key_scroll(id: u32, step: KeyStep) -> bool {
         user: toward,
         prefer: None,
     };
-    let (x, y) = crate::snap::settle(id, &handle, aim);
+    let (x, y) = crate::snap::settle(id, &handle, aim, Some(gpui::HapticTarget::Current));
     let smooth = !tree::env().reduce_motion;
     apply(
         id,

@@ -178,6 +178,19 @@ function syntax(nodes: ChildNode[], file: string, block: Block): CssNode[] {
         end: start + node.selector.length,
       });
     } else if (node.type === "atrule" && !block.inline) {
+      if (node.name.toLowerCase() === "haptic-pattern") {
+        const text = node.toString();
+        result.push({
+          kind: "at",
+          name: "haptic-pattern",
+          params: node.params,
+          body: node.nodes ? text.slice(text.indexOf("{") + 1, text.lastIndexOf("}")) : null,
+          nodes: [],
+          start,
+          end: start + node.name.length + 1,
+        });
+        continue;
+      }
       const body =
         node.nodes
           ?.filter((n) => n.type === "decl")

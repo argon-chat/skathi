@@ -187,7 +187,11 @@ host_fn!(fn toggle_end(_g, args) {
     let id = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let token = args.arg(1).as_number().unwrap_or(NONE);
     let cancelled = args.arg(2).as_bool().unwrap_or(false);
-    enc_bool(tree::with_tree(|t| end(t, id, token, cancelled)))
+    let changed = tree::with_tree(|t| end(t, id, token, cancelled));
+    if changed && crate::haptics::in_native_click() {
+        sk_runtime::with_commit(|w,cx| crate::haptics::trigger(id, sk_css::haptics::Trigger::Change, crate::haptics::input_target(w), w,cx));
+    }
+    enc_bool(changed)
 });
 
 /// The input `this` mirrors, or `None` for any other receiver.

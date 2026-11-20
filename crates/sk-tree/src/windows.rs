@@ -70,6 +70,7 @@ pub struct WindowState {
     pub hover: crate::pointer::Hover,
     pub active: Option<u32>,
     pub keyboard_input: bool,
+    pub(crate) haptics: crate::haptics::State,
     pub activation: Option<Subscription>,
     pub key_prevented: bool,
     pub key_event_claimed: u64,

@@ -23,6 +23,7 @@ mod element;
 #[cfg(test)]
 mod em_tests;
 mod functions;
+pub mod haptics;
 mod has;
 mod keyframes;
 mod mapper;
@@ -815,6 +816,7 @@ pub struct Engine {
     generated_states: bool,
     state_custom: bool,
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
+    haptic_patterns: std::collections::HashMap<String, Vec<(Option<u32>, Rc<haptics::Pattern>)>>,
     percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
     viewport_blocks: Vec<ViewportBlock>,
     viewport_unkept: bool,
@@ -1115,10 +1117,19 @@ fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
     };
     if sheet.is_some() {
         if let Ok(skipped) = warnings.read() {
-            // lightningcss keeps an `@function` as an unknown at-rule, which the engine reads.
+            // These rules are kept as tokens for the engine's own parsers.
             let skipped: Vec<_> = skipped
                 .iter()
-                .filter(|e| !e.to_string().starts_with("Unknown at rule: @function"))
+                .filter(|e| {
+                    let text = e.to_string();
+                    let name = text
+                        .strip_prefix("Unknown at rule: @")
+                        .and_then(|v| v.split_whitespace().next());
+                    !name.is_some_and(|n| {
+                        n.eq_ignore_ascii_case("function")
+                            || n.eq_ignore_ascii_case("haptic-pattern")
+                    })
+                })
                 .collect();
             const SHOWN: usize = 20;
             for e in skipped.iter().take(SHOWN) {
@@ -1154,6 +1165,7 @@ impl Engine {
             generated_states: false,
             state_custom: false,
             keyframes: std::collections::HashMap::new(),
+            haptic_patterns: Default::default(),
             percentage_properties: Vec::new(),
             viewport_blocks: Vec::new(),
             viewport_unkept: false,
@@ -1304,6 +1316,15 @@ impl Engine {
                 Some(c) if !self.conditions[c as usize].eval(env) => None,
                 _ => Some(entry.block.clone()),
             })
+    }
+
+    pub fn haptic_pattern(&self, name: &str, env: &Env) -> Option<Rc<haptics::Pattern>> {
+        self.haptic_patterns
+            .get(name)?
+            .iter()
+            .rev()
+            .find(|(condition, _)| condition.is_none_or(|c| self.conditions[c as usize].eval(env)))
+            .map(|(_, pattern)| pattern.clone())
     }
 
     pub fn keyframes_for(
@@ -1484,6 +1505,19 @@ impl Engine {
                                 container::SUPPORTED
                             ),
                         ),
+                    }
+                    continue;
+                }
+                CssRule::Unknown(u) if u.name.eq_ignore_ascii_case("haptic-pattern") => {
+                    use lightningcss::traits::ToCss as _;
+                    let css = rule.to_css_string(Default::default()).unwrap_or_default();
+                    match haptics::pattern_rule(&css) {
+                        Ok((name, pat)) => self
+                            .haptic_patterns
+                            .entry(name)
+                            .or_default()
+                            .push((condition, pat)),
+                        Err(message) => mapper::once(&mut self.diagnostics, message),
                     }
                     continue;
                 }
@@ -3715,6 +3749,60 @@ mod tests {
             class: "box",
             attrs: &[],
         }
+    }
+
+    #[test]
+    fn haptic_bindings_cascade_in_order_and_resolve_theme_tokens() {
+        use haptics::{Cue, Effect, Trigger};
+        let engine = Engine::compile(".box { --tap: tick .4; haptic: press var(--tap), activate success; haptic-intensity: .5 } .box { haptic-effect: hint, error !important; haptic-target: pen; haptic-min-interval: 30ms }");
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let h = cs.extras.haptics.as_ref().unwrap();
+        let press = h.binding(Trigger::Press).unwrap();
+        assert_eq!(press.effect, &Effect::Cue(Cue::Hint));
+        assert_eq!(press.intensity, 0.5);
+        assert_eq!(press.interval.as_millis(), 30);
+        assert_eq!(
+            h.binding(Trigger::Activate).unwrap().effect,
+            &Effect::Cue(Cue::Error)
+        );
+        let e = Engine::compile(".box { --tap: tick .3; haptic-intensity: .8; haptic: press var(--tap); haptic-effect: align }");
+        let cs = e.compute(box_node(), None, &Env::default());
+        let press = cs
+            .extras
+            .haptics
+            .as_ref()
+            .unwrap()
+            .binding(Trigger::Press)
+            .unwrap();
+        assert_eq!(
+            (press.effect, press.intensity),
+            (&Effect::Cue(Cue::Align), 0.3)
+        );
+    }
+
+    #[test]
+    fn haptic_pattern_time_and_fallback_survive_stylesheet_parsing() {
+        let e = Engine::compile("@haptic-pattern --Tap { fallback: tick; 70ms { intensity:.65; sharpness:.9; } 0ms { intensity:.3; } }");
+        assert!(e.diagnostics.is_empty(), "{:?}", e.diagnostics);
+        let pat = e.haptic_pattern("--Tap", &Env::default()).unwrap();
+        assert_eq!(pat.fallback, haptics::Cue::Tick);
+        assert_eq!(pat.pulses[0].intensity, 0.3);
+        assert_eq!(pat.pulses[1].at.as_millis(), 70);
+        assert_eq!(pat.pulses[1].sharpness, Some(0.9));
+        let scaled: Vec<_> = pat
+            .scaled_pulses(0.5)
+            .map(|(t, v)| (t.as_millis(), v))
+            .collect();
+        assert_eq!(scaled, [(0, 0.15), (70, 0.325)]);
+        assert_eq!(pat.scaled_pulses(0.).count(), 0);
+        assert!(e.haptic_pattern("--tap", &Env::default()).is_none());
+        assert!(
+            !Engine::compile("@haptic-pattern --x { 0ms {intensity:2} }")
+                .diagnostics
+                .is_empty()
+        );
+        assert!(!accepts_declaration("haptic", "step tick 2"));
+        assert!(!accepts_declaration("haptic-min-interval", "-1ms"));
     }
 
     #[test]

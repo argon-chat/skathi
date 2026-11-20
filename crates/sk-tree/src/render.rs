@@ -441,6 +441,7 @@ pub(crate) fn gc_node_state() {
         w.transformed.retain(|&id, _| live(id));
         w.prev_transformed.retain(|&id, _| live(id));
         w.focus_subs.retain(|&id, _| live(id));
+        w.haptics.gc(&live);
         if w.pointer_capture
             .is_some_and(|id| !live(id) || !tree::read_tree(|t| reaches_root(t, id)))
         {
@@ -912,6 +913,7 @@ fn watch_activation<V: 'static>(window: &mut Window, cx: &mut Context<V>) {
     }
     let sub = cx.observe_window_activation(window, |_, window, cx| {
         if !window.is_window_active() {
+            crate::haptics::blur(window);
             cancel_press(window, cx);
         }
     });
@@ -969,7 +971,9 @@ pub(crate) fn js_dispatch_app(
     cx: &mut App,
 ) -> bool {
     crate::pen::arm(window, event);
-    js_wave_app(window, cx, || crate::dispatch_event(id, event, payload))
+    let proceed = js_wave_app(window, cx, || crate::haptics::dispatch(id, event, payload));
+    crate::haptics::event(id, event, payload, proceed, window, cx);
+    proceed
 }
 
 pub(crate) fn js_wave_app(window: &mut Window, cx: &mut App, wave: impl FnOnce() -> bool) -> bool {
@@ -1024,8 +1028,9 @@ fn js_dispatch<V: 'static>(
     crate::live_state::note_modality(window);
     crate::pen::arm(window, event);
     let proceed = with_published(window, &mut **cx, Phase::Commit, || {
-        crate::dispatch_event(id, event, payload)
+        crate::haptics::dispatch(id, event, payload)
     });
+    crate::haptics::event(id, event, payload, proceed, window, cx);
     settle_owed_later(window, &mut **cx);
     if crate::flush_changes() {
         cx.notify();
@@ -3567,11 +3572,11 @@ const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
 /// listeners hear its events bubble, so it takes their bits. `pointer-events: none` never takes a
 /// root's away: a modal layer sets it on `body`.
 fn root_mask(t: &Tree, node: &crate::tree::Node) -> u64 {
-    let mut mask = node.listeners;
+    let mut mask = node.listeners | crate::haptics::mask(node);
     let mut cur = node.parent;
     for _ in 0..4096 {
         let Some(n) = t.node(cur) else { break };
-        mask |= n.listeners;
+        mask |= n.listeners | crate::haptics::mask(n);
         if n.parent == 0 {
             break;
         }
@@ -3581,19 +3586,20 @@ fn root_mask(t: &Tree, node: &crate::tree::Node) -> u64 {
 }
 
 fn pointer_mask(node: &crate::tree::Node) -> u64 {
+    let mask = node.listeners | crate::haptics::mask(node);
     // Not on the root: dismissable layers set `body.style.pointerEvents = "none"` while a modal is
     // open, and the root is the keystroke path, so honouring it would kill Escape-to-dismiss.
     if node.parent == 0 {
-        return node.listeners;
+        return mask;
     }
     let inert = node
         .computed
         .as_ref()
         .is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
     if inert {
-        node.listeners & !POINTER_BITS
+        mask & !POINTER_BITS
     } else {
-        node.listeners
+        mask
     }
 }
 

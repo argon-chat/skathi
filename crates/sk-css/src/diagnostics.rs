@@ -208,7 +208,7 @@ fn visit(
                                 "property" => "Skathi registers custom properties with percentage syntax and a percentage initial value. Use an ordinary custom property for other syntaxes.",
                                 "layer" => "Move the rules out of the layer, preserving their cascade order.",
                                 "scope" => "Scope these rules with a class selector.",
-                                "container" | "media" => reason.as_str(),
+                                "container" | "media" | "haptic-pattern" => reason.as_str(),
                                 _ => "Move the styling into a supported rule.",
                             };
                             emit(

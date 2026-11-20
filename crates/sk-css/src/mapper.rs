@@ -228,6 +228,7 @@ pub struct Extras {
     /// blend.
     pub plus_lighter: Option<bool>,
     pub snap: crate::snap::SnapPatch,
+    pub haptics: Option<Rc<crate::haptics::Haptics>>,
     /// `interpolate-size` as declared (`Some(true)` is `allow-keywords`); it inherits, so the
     /// renderer reads it through the ancestors.
     pub interpolate_size: Option<bool>,
@@ -602,6 +603,12 @@ impl Extras {
             self.plus_lighter = other.plus_lighter;
         }
         self.snap.refine(&other.snap);
+        if let Some(patch) = &other.haptics {
+            match &mut self.haptics {
+                Some(current) => Rc::make_mut(current).refine(patch),
+                None => self.haptics = Some(patch.clone()),
+            }
+        }
         if other.interpolate_size.is_some() {
             self.interpolate_size = other.interpolate_size;
         }
@@ -929,7 +936,14 @@ pub(crate) fn decl_pairs(block: &DeclarationBlock) -> Vec<(String, String, bool)
     out
 }
 
-fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
+fn variable_haptics(props: &[Property]) -> bool {
+    props.iter().any(|p| {
+        matches!(p, Property::Custom(c)
+        if crate::haptics::property(p.property_id().name()) && has_substitution(&c.value))
+    })
+}
+
+fn channel(p: &Property, defer_haptics: bool, diagnostics: &mut Vec<String>) -> Channel {
     use lightningcss::properties::custom::CustomPropertyName;
     match p {
         Property::ImageRendering(lightningcss::properties::svg::ImageRendering::Auto) => {
@@ -963,6 +977,18 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
                     Channel::Static
                 }
             },
+            CustomPropertyName::Unknown(name)
+                if defer_haptics && crate::haptics::property(&name.0) =>
+            {
+                let value = value_text(p).unwrap_or_default();
+                if !has_substitution(&c.value)
+                    && crate::haptics::declaration(&name.0, &value).is_err()
+                {
+                    Channel::Static
+                } else {
+                    Channel::Dynamic(name.0.to_string(), value)
+                }
+            }
             CustomPropertyName::Unknown(name)
                 if has_substitution(&c.value) || has_current_color_function(&c.value) =>
             {
@@ -1016,6 +1042,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         let mut dynamic: Decls = Vec::new();
         let mut font: Option<Vec<Property<'static>>> = None;
         let mut styled = false;
+        let defer_haptics = variable_haptics(props);
         for p in props {
             // `-moz-osx-font-smoothing`, `-webkit-touch-callout`: dropped without a word, as
             // Chromium drops them (`crate::prefix`).
@@ -1025,7 +1052,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
             if transitions.take(p, diagnostics) {
                 continue;
             }
-            match channel(p, diagnostics) {
+            match channel(p, defer_haptics, diagnostics) {
                 Channel::Custom(name, value) => custom.push((name, value)),
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
                 Channel::Static => {
@@ -1438,6 +1465,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                 } else {
                     &mut normal_animations
                 };
+                let defer_haptics = variable_haptics(declarations);
                 for p in declarations {
                     if crate::prefix::property_dropped(p) {
                         continue;
@@ -1445,7 +1473,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                     if transitions.take(p, diagnostics) {
                         continue;
                     }
-                    match channel(p, diagnostics) {
+                    match channel(p, defer_haptics, diagnostics) {
                         Channel::Custom(name, value) => custom.push((name, value)),
                         Channel::Dynamic(name, value) => dynamic.push((name, value)),
                         Channel::Static => {
@@ -6216,6 +6244,16 @@ fn apply_property(
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(name.0.as_ref(), "touch-action" | "will-change") => {}
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if crate::haptics::property(&name.0) =>
+            {
+                match crate::haptics::declaration(&name.0, &value_text(p).unwrap_or_default()) {
+                    Ok(patch) => {
+                        Rc::make_mut(x.haptics.get_or_insert_with(Default::default)).refine(&patch)
+                    }
+                    Err(reason) => once(diagnostics, reason),
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "scroll-behavior" =>
             {

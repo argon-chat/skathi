@@ -5426,6 +5426,7 @@ dependencies = [
 name = "sk-css"
 version = "0.5.0"
 dependencies = [
+ "cssparser",
  "lightningcss",
  "parcel_selectors",
  "serde",

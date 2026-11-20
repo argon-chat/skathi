@@ -2,6 +2,51 @@
   "version": 1.1,
   "properties": [
     {
+      "name": "haptic",
+      "description": "Skathi gesture, effect and optional strength. Use commas for multiple bindings.",
+      "syntax": "none | [ <trigger> <effect> <number>? ]#"
+    },
+    {
+      "name": "haptic-trigger",
+      "description": "Gestures that request feedback on this element.",
+      "syntax": "none | [ press | activate | change | hover | step | boundary | snap ]#"
+    },
+    {
+      "name": "haptic-effect",
+      "description": "Waveform or named sequence paired with each trigger.",
+      "syntax": "[ none | tick | hint | align | edge | success | error | pattern(<dashed-ident>) ]#"
+    },
+    {
+      "name": "haptic-intensity",
+      "description": "Pulse strength from zero (silent) to one.",
+      "syntax": "<number [0,1]>#"
+    },
+    {
+      "name": "haptic-target",
+      "description": "Device that receives the pulse. Auto follows the interaction.",
+      "syntax": "[ auto | mouse | pen ]#"
+    },
+    {
+      "name": "haptic-min-interval",
+      "description": "Minimum time between requests for the same gesture and device.",
+      "syntax": "<time>#"
+    },
+    {
+      "name": "haptic-sharpness",
+      "description": "A waveform hint. Current desktop backends use the device's preset shape.",
+      "syntax": "auto | <number [0,1]>#"
+    },
+    {
+      "name": "haptic-texture",
+      "description": "Continuous feedback while the pen tip touches the element.",
+      "syntax": "none | ink | pencil | brush | eraser"
+    },
+    {
+      "name": "haptic-texture-intensity",
+      "description": "Strength of a pen stroke texture.",
+      "syntax": "<number [0,1]>"
+    },
+    {
       "name": "window-drag",
       "description": "Skathi: whether pressing on this element moves the window, as on a title bar. Inherited: mark the bar with `move` and its buttons and inputs with `none`. The CSSWG spelling of Electron's `-webkit-app-region`.",
       "syntax": "move | none",
@@ -60,7 +105,9 @@
       ]
     }
   ],
-  "atDirectives": [],
+  "atDirectives": [
+    { "name": "@haptic-pattern", "description": "Name a sequence of timed pulses and its single-effect fallback." }
+  ],
   "pseudoClasses": [],
   "pseudoElements": []
 }

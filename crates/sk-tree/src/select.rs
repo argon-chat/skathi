@@ -340,11 +340,21 @@ fn pick(select: u32, index: usize, window: &mut Window, cx: &mut App) {
 }
 
 fn commit(select: u32, index: usize, window: &mut Window, cx: &mut App) {
+    let changed = tree::read_tree(|t| shown(t, select) != Some(index));
     let payload = EventPayload {
         a: index as f64,
         ..Default::default()
     };
     crate::render::js_dispatch_app(select, tree::EV_INPUT, &payload, window, cx);
+    if changed {
+        crate::haptics::trigger(
+            select,
+            sk_css::haptics::Trigger::Change,
+            crate::haptics::input_target(window),
+            window,
+            cx,
+        );
+    }
 }
 
 fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut App) {

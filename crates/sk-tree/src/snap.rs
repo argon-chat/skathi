@@ -215,6 +215,7 @@ struct State {
     pending: Option<Pending>,
     held: bool,
     snapped: [Option<u32>; 2],
+    feedback_at: Option<((f32, f32), gpui::HapticTarget)>,
     seen: Option<Seen>,
 }
 
@@ -271,6 +272,7 @@ pub(crate) fn note_gesture(id: u32, handle: &ScrollHandle, gesture: sk_elements:
     STATES.with(|s| {
         let mut s = s.borrow_mut();
         let Some(state) = s.get_mut(&id) else { return };
+        state.feedback_at = None;
         match gesture {
             sk_elements::Gesture::Wheel { discrete } => {
                 let from = state.pending.map(|p| p.from).unwrap_or_else(|| {
@@ -305,7 +307,12 @@ pub(crate) fn note_gesture(id: u32, handle: &ScrollHandle, gesture: sk_elements:
 
 /// Where a scroll of `id` aimed at `aim.to` comes to rest; `aim.to` itself when it does not snap.
 /// Remembers the areas it lands on, for [`tick`]'s re-snap.
-pub(crate) fn settle(id: u32, handle: &ScrollHandle, aim: Aim) -> (f32, f32) {
+pub(crate) fn settle(
+    id: u32,
+    handle: &ScrollHandle,
+    aim: Aim,
+    feedback: Option<gpui::HapticTarget>,
+) -> (f32, f32) {
     let Some(kind) = snap_type(id) else {
         return aim.to;
     };
@@ -340,6 +347,7 @@ pub(crate) fn settle(id: u32, handle: &ScrollHandle, aim: Aim) -> (f32, f32) {
     }
     STATES.with(|s| {
         if let Some(state) = s.borrow_mut().get_mut(&id) {
+            let changed = snapped != state.snapped && snapped.iter().any(Option::is_some);
             for (slot, (pick, on)) in state
                 .snapped
                 .iter_mut()
@@ -350,6 +358,7 @@ pub(crate) fn settle(id: u32, handle: &ScrollHandle, aim: Aim) -> (f32, f32) {
                 }
             }
             state.seen = None;
+            state.feedback_at = feedback.filter(|_| changed).map(|target| (out, target));
         }
     });
     out
@@ -485,11 +494,23 @@ pub(crate) fn tick() -> bool {
                     user: p.user,
                     prefer: None,
                 },
+                Some(gpui::HapticTarget::Mouse),
             );
             scroll::glide_to(id, &handle, to);
-            continue;
         }
         if scroll::glide_target(id).is_none() {
+            let destination = STATES.with(|s| {
+                s.borrow_mut()
+                    .get_mut(&id)
+                    .and_then(|st| st.feedback_at.take())
+            });
+            if let Some((to, target)) = destination {
+                let at = css(handle.offset());
+                if (to.0 - at.0).abs() <= EPS && (to.1 - at.1).abs() <= EPS {
+                    let window = crate::windows::window_of_node(id);
+                    crate::windows::of(window, |w| w.haptics.snaps.push((id, target)));
+                }
+            }
             moved |= resnap(id, &handle);
         }
     }

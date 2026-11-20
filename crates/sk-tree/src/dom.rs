@@ -181,6 +181,15 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "overflow-y",
     "overflow",
     "scrollbar-gutter",
+    "haptic",
+    "haptic-trigger",
+    "haptic-effect",
+    "haptic-intensity",
+    "haptic-target",
+    "haptic-min-interval",
+    "haptic-sharpness",
+    "haptic-texture",
+    "haptic-texture-intensity",
     "opacity",
     "z-index",
     "pointer-events",
@@ -282,6 +291,14 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
     let cs = t.node(id)?.computed.as_ref().unwrap_or(&default);
     if name.starts_with("--") {
         return cs.vars.get(name).map(str::to_string);
+    }
+    if sk_css::haptics::property(name) {
+        return cs
+            .extras
+            .haptics
+            .as_deref()
+            .unwrap_or(&Default::default())
+            .css(name);
     }
     let animations = |f: &dyn Fn(&sk_css::AnimationSpec) -> String| {
         cs.animations.iter().map(f).collect::<Vec<_>>().join(", ")
