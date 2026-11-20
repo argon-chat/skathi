@@ -127,6 +127,8 @@ On Windows and macOS the frame can stay on the GPU. Pick the path by what the pr
 
 Metal and D3D12 keep up to five copy slots during a burst and trim back to at most two in steady use. They retire slots of the previous size or format once the GPU and compositor release them. After `clear()`, the surface releases all its copy slots once it has stayed clear for 50 ms (three refreshes at 60 Hz) and any outstanding copies and reads have finished. A GPU present during that grace period can reuse the slots (since 0.7).
 
+On macOS, `footprint -v` lists the window's presentation buffers as `CAMetalLayer Display Drawable`. Core Animation can supply more distinct IOSurfaces over a window's lifetime than the layer's `maximumDrawableCount`. On a macOS 26.7.2 virtual 60 Hz display, one unchanged BGRA8 layer had three resident drawables with `nextDrawable`, four with `CAMetalDisplayLink`, and four or five when alternating the two paths. The display link still supplied four with the maximum set to two or preferred latency set to one. Clearing a surface releases its copy slots independently of these window buffers.
+
 ## Half-float frames
 
 A surface takes 8-bit BGRA unless it is told otherwise. A producer that renders in linear light, such as a video player tone-mapping HDR video or a renderer with an FP16 framebuffer, can hand over half floats instead. Set the surface's format once, from native code, before presenting:
