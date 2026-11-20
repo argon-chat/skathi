@@ -150,9 +150,11 @@ fi
 
 xcrun clang -O2 -fobjc-arc .github/scripts/macos26-drawables.m -framework AppKit -framework CoreGraphics \
   -framework QuartzCore -framework Metal -framework IOSurface -o "$scratch/drawables"
-for test in 'next 3 2' 'link 3 2' 'link 3 1' 'link 2 2' 'hybrid 3 2' 'idle 3 2'; do
-  read -r mode count latency <<< "$test"
-  measure "control-$mode-$count-$latency" "$scratch/drawables" "" "$mode" "$count" "$latency" || status=1
+for run in 1 2; do
+  for test in 'next 3 2' 'link 3 2' 'link 3 1' 'link 2 2' 'link 2 1' 'hybrid 3 2' 'idle 3 2'; do
+    read -r mode count latency <<< "$test"
+    measure "control-$mode-$count-$latency-$run" "$scratch/drawables" "" "$mode" "$count" "$latency" || status=1
+  done
 done
 
 if [[ "$measurements" == controls ]]; then exit "$status"; fi
