@@ -39,7 +39,10 @@ An `Err` or a panic in `setup` stops startup; `spawn` then never shows a window.
 
 ## Unsafe native window handles (since 0.6)
 
-> [!WARNING]
+> **Warning**
+>
+> Use `unsafe_window_handle()` and `unsafe_window_handle_for(id)` at your own risk. Skathi does not accept issues related to either method.
+>
 > Use a native handle only when the [window API](/window-api/) cannot express the operation. Changing the frame, style, delegate, level or lifecycle behind Skathi’s back can invalidate its state and crash the process.
 
 `HostContext::unsafe_window_handle()` and `Handle::unsafe_window_handle()` return `Option<raw_window_handle::RawWindowHandle>` for the main window on the Skathi UI thread. Use `unsafe_window_handle_for(id: u64)` on either object for the window ID from a pop-out’s `open` event. A closed or unknown window and a call on a worker thread return `None`. Obtain a fresh handle for each native operation. Closing or recreating the window invalidates the previous handle.
