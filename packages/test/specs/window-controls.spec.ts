@@ -130,6 +130,8 @@ test.if(MACOS)(
     type Native = {
       window_class: string;
       window_number: number;
+      workspace_panel: boolean;
+      content_window_number: number;
       nonactivating_panel: boolean;
       can_become_main: boolean;
       can_become_key: boolean;
@@ -139,6 +141,26 @@ test.if(MACOS)(
     const native = async () => {
       const reply = await app.send("windows", { native: true });
       return (reply.windows as { kind: string; native: Native }[]).find((w) => w.kind === "main")!.native;
+    };
+    const waitForWindow = async (number: number) => {
+      const deadline = Date.now() + 8000;
+      let current = await native();
+      while (current.window_number !== number || current.content_window_number !== number) {
+        if (Date.now() >= deadline)
+          throw new Error(`Expected window and content on ${number}, got ${JSON.stringify(current)}`);
+        await Bun.sleep(35);
+        current = await native();
+      }
+      return current;
+    };
+    const checkPanel = (panel: Native) => {
+      expect(panel.window_class).toBe("GPUIWorkspacePanel");
+      expect(panel.workspace_panel && panel.nonactivating_panel && panel.can_become_key && !panel.can_become_main).toBe(
+        true,
+      );
+      expect(panel.content_window_number).toBe(panel.window_number);
+      expect(panel.collection_behavior & 257).toBe(257);
+      expect(panel.level).toBe(3);
     };
     const original = await native();
     await run(
@@ -155,27 +177,26 @@ test.if(MACOS)(
         await run(`w.setBounds({width: 386}); w.${order[1]} = true`);
         await until("w.visibleOnAllWorkspaces && w.alwaysOnTop");
         const panel = await native();
-        expect(panel.window_class).toBe("GPUIWorkspacePanel");
-        expect(panel.nonactivating_panel && panel.can_become_key && !panel.can_become_main).toBe(true);
+        checkPanel(panel);
         expect(panel.window_number).not.toBe(original.window_number);
-        expect(panel.collection_behavior & 257).toBe(257);
-        expect(panel.level).toBe(3);
         await until("Math.abs(w.getBounds().width - 386) <= 1");
         await app.locator("#mini-input").type("x");
         expect(String(await run("return __miniInput.value")).includes("x")).toBe(true);
         if (order[0] === "visibleOnAllWorkspaces") {
           await run("w.setFullscreen(true, {transition: 'fade'})");
           await until("w.isFullscreen()");
-          expect((await native()).window_number).toBe(original.window_number);
+          const primary = await waitForWindow(original.window_number);
+          expect(primary.workspace_panel).toBe(false);
           await run("w.setFullscreen(false, {transition: 'fade'})");
           await until("!w.isFullscreen()");
-          const deadline = Date.now() + 8000;
-          while ((await native()).window_number !== panel.window_number) {
-            if (Date.now() >= deadline) throw new Error("The mini player did not return to its panel after fullscreen");
-            await Bun.sleep(35);
-          }
+          checkPanel(await waitForWindow(panel.window_number));
         }
-        await run(`w.${order[0]} = false; w.${order[1]} = false`);
+        await run(`w.${order[0]} = false`);
+        await until(`!w.${order[0]} && w.${order[1]}`);
+        const restored = await waitForWindow(original.window_number);
+        expect(restored.workspace_panel).toBe(false);
+        expect(restored.level).toBe(order[1] === "alwaysOnTop" ? 3 : 0);
+        await run(`w.${order[1]} = false`);
         await until("!w.visibleOnAllWorkspaces && !w.alwaysOnTop");
         expect((await native()).window_number).toBe(original.window_number);
       }
