@@ -76,6 +76,7 @@ mod waapi;
 pub mod windows;
 
 pub mod devtools;
+mod drag_source;
 mod file_drop;
 
 pub use containers::settle_frame as settle_container_queries;
@@ -496,6 +497,11 @@ pub fn install(rt: &JsRuntime) {
             "__sk_fullscreen_element",
             1,
             sk_fullscreen_element as *const _,
+        ),
+        (
+            "__sk_document_drag",
+            2,
+            drag_source::sk_document_drag as *const _,
         ),
         ("__sk_set_dispatcher", 1, sk_set_dispatcher as *const _),
         ("__sk_query", 3, sk_query as *const _),

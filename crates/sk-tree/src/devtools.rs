@@ -4,6 +4,8 @@
 //! It lives here because the node slab and side maps are private to this crate; sk-app owns the
 //! transport. Nothing is dev-gated here: sk-app compiles its callers out under `--features prod`.
 
+pub use crate::drag_source::{arm_document_drag, document_drag_offer, finish_document_drag};
+
 use gpui::{App, Window};
 
 use crate::tree::{self, Kind, NodeRef, Tree};

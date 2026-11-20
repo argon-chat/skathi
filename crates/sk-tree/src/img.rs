@@ -1191,7 +1191,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// The bytes a percent-encoded string stands for (a `data:` payload is bytes, not text).
-fn percent_decode_bytes(s: &str) -> Vec<u8> {
+pub(super) fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -1477,7 +1477,7 @@ fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
 }
 
 /// Standard base64 with optional padding; whitespace is skipped.
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
+pub(super) fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let mut acc: u32 = 0;
     let mut bits = 0u32;

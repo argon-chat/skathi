@@ -1171,7 +1171,8 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
             },
         ),
-        "drag-files" => cmd_drag_files(req),
+        "drag-files" => cmd_drag_files(req, false),
+        "drag-document" => cmd_drag_files(req, true),
         "pen" => {
             let tilt = |name: &str| num(name).unwrap_or(0.0) as f32;
             cmd_pen(
@@ -2218,16 +2219,40 @@ fn cmd_pen(
     }
 }
 
-fn cmd_drag_files(req: &Json) -> String {
+fn cmd_drag_files(req: &Json, document: bool) -> String {
     let s = |key: &str| req.get(key).and_then(Json::as_str);
     let n = |key: &str| req.get(key).and_then(Json::as_f64);
     let flag = |key: &str| req.get(key).and_then(Json::as_bool).unwrap_or(false);
+    let kind = s("kind").unwrap_or("drop");
+    let driven = if document {
+        match kind {
+            "arm" => {
+                return if sk_tree::devtools::arm_document_drag() {
+                    ok(Json::Bool(true))
+                } else {
+                    err("another document drag is pending")
+                }
+            }
+            "cancel" => {
+                return if sk_tree::devtools::finish_document_drag(gpui::DropOperation::None) {
+                    ok(Json::Bool(true))
+                } else {
+                    err("no document drag to cancel")
+                }
+            }
+            _ => match sk_tree::devtools::document_drag_offer() {
+                Some(offer) => Some(offer),
+                None => return err("no document drag has started"),
+            },
+        }
+    } else {
+        None
+    };
     let (node, (x, y)) = match aim(s("selector"), n("index"), n("x"), n("y"), "drag-files") {
         Ok(v) => v,
         Err(e) => return err(e),
     };
     let at = gpui::point(gpui::px(x), gpui::px(y));
-    let kind = s("kind").unwrap_or("drop");
     let paths = req
         .get("paths")
         .and_then(Json::as_arr)
@@ -2251,7 +2276,7 @@ fn cmd_drag_files(req: &Json) -> String {
         "drop" => vec![submit],
         _ => return err("drag-files kind must be enter, over, leave or drop"),
     };
-    let offer = gpui::DragOffer {
+    let offer = driven.unwrap_or_else(|| gpui::DragOffer {
         allowed: n("allowed").map_or(7, |mask| mask.clamp(0., 7.) as u8),
         modifiers: gpui::Modifiers {
             control: flag("ctrl"),
@@ -2264,7 +2289,7 @@ fn cmd_drag_files(req: &Json) -> String {
             .into_iter()
             .filter_map(|(key, mime)| Some((mime.into(), s(key)?.into())))
             .collect(),
-    };
+    });
     in_window(node, |window, cx| {
         let mut op = gpui::DropOperation::None;
         for event in sequence {
@@ -2272,6 +2297,9 @@ fn cmd_drag_files(req: &Json) -> String {
                 .dispatch_event(gpui::PlatformInput::ExternalDrop(event, offer.clone()), cx)
                 .drop_operation
                 .unwrap_or_default();
+        }
+        if document && kind == "drop" {
+            sk_tree::devtools::finish_document_drag(op);
         }
         let effect = match op {
             gpui::DropOperation::None => "none",

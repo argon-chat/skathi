@@ -95,7 +95,7 @@ declare function __sk_layout_watch(observing: boolean): void;
 /** `(nodeId, code, a, b, c, d, key, data, x, y, pen) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`; `pen` is `[flags, count, ...readings, ...predicted]` for an event a pen caused, or a mouse move's positions since the last one (`pointerSource`). */
 type SkDispatcher = (
   node: SkNodeId,
-  code: SkEventCode | 64,
+  code: SkEventCode | 64 | 65,
   a: number,
   b: number,
   c: number,

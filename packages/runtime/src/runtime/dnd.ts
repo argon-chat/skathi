@@ -31,17 +31,17 @@ import { isSelectEl, pickOption } from "./select";
 import { isRangeInput, rangeValue } from "./controls";
 import { withCause } from "./perf-advice";
 
-// HTML drag and drop: gpui has none, so the runtime runs the gesture off the host's mouse events: a left press on a
-// `draggable="true"` element then a move past 4 px starts a drag; each move fires `drag`, `dragenter` / `dragleave`
-// and `dragover` (cancelled: a drop target); release fires `drop` then `dragend` and swallows its `click`; Escape
-// cancels. Divergences: DataTransfer stays read/write for the whole drag; no drag image; a drag ends at the window's
-// edge.
+// A left press and a four-pixel move start the DOM gesture. The host exports
+// the data store after a successful dragstart. Synthetic or unsupported
+// native input can still complete the gesture inside the document.
+
+declare const __sk_document_drag: (node: number, store: DataTransferLike) => boolean;
 
 const DRAG_THRESHOLD = 4;
 
 export interface DndGesture {
   /** `pressed`: pressed on a draggable, not yet moved far enough. `done`: cancelled while the button is still down; its release is swallowed. */
-  phase: "pressed" | "dragging" | "done";
+  phase: "pressed" | "dragging" | "system" | "done";
   source: MirrorElement;
   x: number;
   y: number;
@@ -165,7 +165,7 @@ function dndStart(g: DndGesture, x: number, y: number, d: number): boolean {
     dndFinish(false);
     return false;
   }
-  g.phase = "dragging";
+  g.phase = typeof __sk_document_drag === "function" && __sk_document_drag(g.source.__skId, dt) ? "system" : "dragging";
   g.dt = dt;
   dndRearm();
   return true;
@@ -247,11 +247,12 @@ function dndDispatch(
     if (name === "mouseup" || (name === "mousemove" && !held)) dndFinish(false);
     else if (name === "mousemove" && (Math.abs(x - g.x) > DRAG_THRESHOLD || Math.abs(y - g.y) > DRAG_THRESHOLD)) {
       if (!dndStart(g, x, y, d)) return undefined;
-      dndMove(g, nodeById(nodeId), x, y, d);
+      if (!systemDrag(g)) dndMove(g, nodeById(nodeId), x, y, d);
       return true;
     }
     return undefined;
   }
+  if (g.phase === "system") return name === "mouseup" || name === "mousemove" ? true : undefined;
   if (g.phase === "done") {
     if (name === "mouseup") dndFinish(true);
     else if (name === "mousemove" && !held) dndFinish(false);
@@ -273,7 +274,18 @@ function dndDispatch(
   return undefined;
 }
 
+function systemDrag(g: DndGesture): boolean {
+  return g.phase === "system";
+}
+
 const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y, pen) => {
+  if (evCode === 65 && (key === "drag" || key === "dragend")) {
+    const g = dndState.gesture;
+    if (!g || g.phase !== "system" || !g.dt) return true;
+    const ev = dragEvent(key, a, b, d, g.dt, null, x, y);
+    if (key === "dragend") dndFinish(true);
+    return propagate(g.source, key, ev);
+  }
   // Protocol-only event; the DOM listener table uses its 64 bits for actual host event types.
   if (evCode === 64 && typeof key === "string" && data) {
     const target = nodeById(nodeId) as MirrorElement | undefined;

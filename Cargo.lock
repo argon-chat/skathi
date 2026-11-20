@@ -5849,6 +5849,7 @@ dependencies = [
  "skathi-gpui-wgpu",
  "smallvec",
  "smol",
+ "tempfile",
  "url",
  "uuid",
  "wayland-backend",

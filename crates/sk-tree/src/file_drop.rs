@@ -16,6 +16,7 @@ use crate::{pointer, render, windows, EventPayload};
 pub(crate) struct Session {
     paths: Vec<PathBuf>,
     strings: Vec<(String, String)>,
+    source_token: Option<String>,
     over: u32,
     op: DropOperation,
     position: Point<Pixels>,
@@ -71,22 +72,27 @@ impl Session {
             preferred(offer)
         };
         let store = JsRuntime::with(|rt| unsafe {
-            let dt = Value(external_drag_data(
-                rt.raw(),
-                &self.paths,
-                &self.strings,
-                mode,
-                EFFECTS[(offer.allowed & 7) as usize],
-                |path| {
-                    render::warn_compat(
-                        "drop:unreadable",
-                        &format!(
+            let dt = Value(
+                crate::drag_source::target_store(rt.raw(), self.source_token.as_deref(), mode)
+                    .unwrap_or_else(|| {
+                        external_drag_data(
+                            rt.raw(),
+                            &self.paths,
+                            &self.strings,
+                            mode,
+                            EFFECTS[(offer.allowed & 7) as usize],
+                            |path| {
+                                render::warn_compat(
+                                    "drop:unreadable",
+                                    &format!(
                             "Could not open dropped path '{}'; delivering the remaining files.",
                             path.display()
                         ),
-                    );
-                },
-            ));
+                                );
+                            },
+                        )
+                    }),
+            );
             rt.ctx().protect(dt);
             let _ = rt.ctx().set(
                 dt,
@@ -165,7 +171,17 @@ pub(crate) fn handle(
             }
             session = Some(Session {
                 paths: paths.to_vec(),
-                strings: offer.strings.clone(),
+                strings: offer
+                    .strings
+                    .iter()
+                    .filter(|(mime, _)| mime != crate::drag_source::SESSION_FORMAT)
+                    .cloned()
+                    .collect(),
+                source_token: offer
+                    .strings
+                    .iter()
+                    .find(|(mime, _)| mime == crate::drag_source::SESSION_FORMAT)
+                    .map(|(_, token)| token.clone()),
                 id: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
                 ..Default::default()
             });

@@ -326,6 +326,18 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "drag-document",
+    description: "Drive a document drag between windows with synthetic mouse input.",
+    usage: ["  drag-document arm|cancel", "  drag-document enter|over|leave|drop <selector>"],
+    args: { kind: str("arm, enter, over, leave, drop or cancel"), selector: SELECTOR, window: int("window id") },
+    cli: (rest, flags) => {
+      const kind = rest[0];
+      if (!kind || !["arm", "enter", "over", "leave", "drop", "cancel"].includes(kind))
+        die("drag-document needs a valid stage");
+      return compact({ kind, selector: rest[1], window: num(flags.window) });
+    },
+  },
+  {
     cmd: "mouse",
     description:
       "A REAL pointer event at a window coordinate, through gpui's own hit test — so z-order, " +
@@ -917,7 +929,8 @@ export interface McpTool {
   build: (args: Record<string, unknown>) => Record<string, unknown>;
 }
 
-export const toolName = (cmd: string): string => (cmd === "drag-files" ? "sk_drag_files" : `sk_${cmd}`);
+export const toolName = (cmd: string): string =>
+  cmd === "drag-files" || cmd === "drag-document" ? `sk_${cmd.replace("-", "_")}` : `sk_${cmd}`;
 
 export function mcpTools(): McpTool[] {
   return COMMANDS.map((spec) => {

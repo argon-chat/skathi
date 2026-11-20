@@ -134,6 +134,24 @@ test("Svelte receives drops in the correct native window", async () => {
     await expectLocator(svelte.locator("#svelte-main")).toHaveText("idle");
     await svelte.send("drag-files", { kind: "drop", selector: "#svelte-main", paths: [folder] });
     await expectLocator(svelte.locator("#svelte-main")).toHaveText("clips");
+
+    async function startDocumentDrag() {
+      await svelte.send("drag-document", { kind: "arm" });
+      const down = await svelte.send("mouse", { kind: "down", selector: "#drag-source" });
+      await svelte.send("mouse", { kind: "move", x: Number(down.x) + 9, y: Number(down.y), held: true });
+    }
+    const target = { selector: "#svelte-child", window: child!.id };
+    await startDocumentDrag();
+    await svelte.send("drag-document", { kind: "enter", ...target });
+    expect((await svelte.send("drag-document", { kind: "over", ...target })).dropEffect).toBe("move");
+    await expectLocator(svelte.locator("#drag-preview")).toHaveText("0//copyMove");
+    expect((await svelte.send("drag-document", { kind: "drop", ...target })).dropEffect).toBe("move");
+    await expectLocator(svelte.locator("#svelte-child")).toHaveText("private/public/true/drawing.png");
+    await expectLocator(svelte.locator("#svelte-main")).toHaveText("move");
+
+    await startDocumentDrag();
+    await svelte.send("drag-document", { kind: "cancel" });
+    await expectLocator(svelte.locator("#svelte-main")).toHaveText("none");
   } finally {
     await svelte.close();
   }

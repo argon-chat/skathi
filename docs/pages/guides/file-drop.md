@@ -119,3 +119,27 @@ A dropped directory has a zero-length placeholder in `files`. Use its entry or h
 An enabled `<input type="file">` accepts drops by default and fires `input` followed by `change`. A single-file input takes the first file. The picker filter in `accept` does not restrict dropped files. Other elements require an accepting `dragover` listener. Dropping on an unhandled area leaves the current document open. Each native window targets the elements painted in its own client area. Embedded iframe documents receive the event on their iframe element.
 
 Devtools can deliver a gesture through the same input path. Relative to the target window, `drag-files --paths /absolute/path/to/clip.mp4 --at 120,80` performs a full drop. Use `drag-files enter`, `over`, `leave` or `drop` to test each stage, with `--ctrl`, `--alt`, `--shift` or `--meta` as needed.
+
+## Drag files out of a window (since 0.6)
+
+Mark the source as `draggable` and fill its `DataTransfer` in `dragstart`. A pointer move of four CSS pixels starts a system drag. A destination such as Explorer or Finder can copy an existing file or request the contents of a newly generated file.
+
+```ts
+const source = document.querySelector("#export")!;
+source.setAttribute("draggable", "true");
+source.addEventListener("dragstart", (event) => {
+  const store = (event as DragEvent).dataTransfer!;
+  store.effectAllowed = "copy";
+  store.items.add(new File(["Hello\n"], "note.txt", { type: "text/plain" }));
+  store.setData("text/plain", "Hello");
+  store.setDragImage(source, 12, 8);
+});
+```
+
+A host-created file from a drop or file picker uses its original path. For a generated file, Windows provides indexed OLE streams, macOS provides an AppKit file promise and Linux materializes private temporary files when the receiver requests their URIs. Use `DownloadURL` with `mime:filename:url` to export a blob URL, a data URL or an application asset. For a remote resource, fetch it in your app before dragging and supply the resulting `File`.
+
+Other applications can receive `text/plain`, `text/uri-list` and `text/html`. Windows of the same Skathi application can also exchange custom MIME types and the original `File` objects. During `dragover`, inspect `types` or `items`. Read the values in `drop`.
+
+The source receives periodic `drag` events. In `dragend`, read `event.dataTransfer.dropEffect` to learn the destination's final operation. Escape and rejected drops yield `none`. X11, Windows and macOS can negotiate links. Wayland negotiates copy and move. Windows, macOS and Wayland display a snapshot of the visible source or the element supplied to `setDragImage`. X11 uses its native pointer.
+
+To test a transfer between two application windows, run `drag-document arm`, send a mouse press and a move with the left button held, then send `drag-document enter`, `over` and `drop` to the target selector. `drag-document cancel` ends the source session with `none`.
