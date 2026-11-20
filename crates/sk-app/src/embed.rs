@@ -24,12 +24,14 @@ use sk_runtime::{host_fn, JsRuntime};
 
 pub mod bytes;
 mod host_context;
+mod host_file;
 mod marshal;
 mod module;
 #[cfg(feature = "types")]
 mod types;
 pub use bytes::Bytes;
 pub use host_context::{HostContext, HostCookie, SameSite};
+pub use host_file::HostFile;
 pub use module::{Declared, Function, IntoModule, Job, Module, Task, Typed};
 pub use serde;
 

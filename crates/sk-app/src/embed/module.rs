@@ -1139,6 +1139,9 @@ mod tests {
                     Ok(u8),
                 }
                 m.function("status", || Status::Ok(1));
+                m.function("nativePath", |f: crate::embed::HostFile| {
+                    f.0.to_string_lossy().into_owned()
+                });
                 m.function("shout", |s: marshal::Str, n: u8| {
                     // SAFETY: used inside the call.
                     unsafe { s.get() }.to_uppercase().repeat(n as usize)
@@ -1166,6 +1169,26 @@ mod tests {
                      globalThis.__seen = [];
                      globalThis.__off = __nm.on('moved', (p) => __seen.push(p.x + p.y));
                      ''",
+                );
+                let disk = std::env::current_exe().unwrap();
+                let f = unsafe {
+                    sk_runtime::redjs::webapi::file::file_from_path(context.raw(), &disk, "")
+                        .unwrap()
+                };
+                context
+                    .set(context.global(), &context.atom("__moduleFile"), Value(f))
+                    .unwrap();
+                assert_eq!(
+                    eval("__nm.nativePath(__moduleFile)"),
+                    disk.to_string_lossy()
+                );
+                assert_eq!(
+                    eval("try { __nm.nativePath(new File([], 'made-up')); } catch(e) { 'denied' }"),
+                    "denied"
+                );
+                assert_eq!(
+                    eval("try { __nm.nativePath({path:'/made-up'}); } catch(e) { 'denied' }"),
+                    "denied"
                 );
                 let settle = || {
                     let deadline = std::time::Instant::now() + Duration::from_secs(10);

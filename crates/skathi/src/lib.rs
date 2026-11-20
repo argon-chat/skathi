@@ -154,7 +154,7 @@ pub use sk_app::embed::DynamicRangeLimit;
 pub use sk_app::embed::{
     bytes, encrypt_local_storage_at, surface, Builder, Bytes, Call, D3D11Device, D3D12Device,
     D3D12Fence, Declared, EmitError, Error, Exit, Function, Handle, Handler, HostContext,
-    HostCookie, IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError,
+    HostCookie, HostFile, IntoModule, Job, Module, Reply, SameSite, SharedTexture, SurfaceError,
     SurfaceEvent, SurfaceHandle, SurfaceInfo, SurfaceStats, SurfaceWatch, Task, Typed,
 };
 pub use sk_app::embed::{

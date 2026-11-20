@@ -76,6 +76,8 @@ plain! {
     String, (), serde_json::Value, crate::embed::Bytes,
 }
 
+impl FromJs for crate::embed::HostFile {}
+
 impl IntoJs for str {}
 
 impl<T: IntoJs + ?Sized> IntoJs for &T {

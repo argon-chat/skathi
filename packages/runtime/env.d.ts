@@ -1453,8 +1453,48 @@ declare global {
     readonly type: string;
     getAsString(callback: ((data: string) => void) | null): void;
     getAsFile(): File | null;
+    webkitGetAsEntry(): FileSystemEntry | null;
     getAsFileSystemHandle?(): Promise<FileSystemHandle | null>;
   }
+  interface FileSystem {
+    readonly name: string;
+    readonly root: FileSystemDirectoryEntry;
+  }
+  interface FileSystemEntry {
+    readonly filesystem: FileSystem;
+    readonly fullPath: string;
+    readonly name: string;
+    readonly isFile: boolean;
+    readonly isDirectory: boolean;
+    getParent(success?: (entry: FileSystemDirectoryEntry) => void, error?: (error: DOMException) => void): void;
+  }
+  interface FileSystemFileEntry extends FileSystemEntry {
+    file(success: (file: File) => void, error?: (error: DOMException) => void): void;
+  }
+  interface FileSystemDirectoryEntry extends FileSystemEntry {
+    createReader(): FileSystemDirectoryReader;
+    getFile(
+      path?: string,
+      options?: { create?: boolean; exclusive?: boolean },
+      success?: (entry: FileSystemFileEntry) => void,
+      error?: (error: DOMException) => void,
+    ): void;
+    getDirectory(
+      path?: string,
+      options?: { create?: boolean; exclusive?: boolean },
+      success?: (entry: FileSystemDirectoryEntry) => void,
+      error?: (error: DOMException) => void,
+    ): void;
+  }
+  interface FileSystemDirectoryReader {
+    readEntries(success: (entries: FileSystemEntry[]) => void, error?: (error: DOMException) => void): void;
+  }
+  var FileSystem: { new (): FileSystem; prototype: FileSystem };
+  var FileSystemEntry: { new (): FileSystemEntry; prototype: FileSystemEntry };
+  var FileSystemFileEntry: { new (): FileSystemFileEntry; prototype: FileSystemFileEntry };
+  var FileSystemDirectoryEntry: { new (): FileSystemDirectoryEntry; prototype: FileSystemDirectoryEntry };
+  var FileSystemDirectoryReader: { new (): FileSystemDirectoryReader; prototype: FileSystemDirectoryReader };
+
   interface DataTransferItemList extends Iterable<DataTransferItem> {
     readonly length: number;
     readonly [index: number]: DataTransferItem;

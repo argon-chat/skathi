@@ -175,7 +175,7 @@ unsafe fn to_undefined(_g: *mut c_void, _t: u32, _v: &Json, _m: u64) -> Result<u
     Ok(UNDEF)
 }
 
-unsafe fn to_made(_g: *mut c_void, _t: u32, _v: &Json, made: u64) -> Result<u64, u64> {
+pub(super) unsafe fn to_made(_g: *mut c_void, _t: u32, _v: &Json, made: u64) -> Result<u64, u64> {
     Ok(made)
 }
 
@@ -1037,6 +1037,16 @@ host_fn!(fn download(g, args) {
     }
 });
 
+host_fn!(fn get_native_path(g, args) {
+    unsafe {
+        let value = args.arg(0).0;
+        let path = file::path_of(g, value)
+            .or_else(|| super::entries::path_of(g, value))
+            .or_else(|| handle(g, value).and_then(|h| fs::path_of(h.id)).map(|(p, _)| p).filter(|p| fs::is_granted(p)));
+        path.map_or(NULL, |p| js_string(g, &p.to_string_lossy()))
+    }
+});
+
 // Drops and structured clone
 
 unsafe fn drop_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool) -> Result<u64, u64> {
@@ -1206,6 +1216,9 @@ pub(super) unsafe fn install(g: *mut c_void) {
     );
     serialize::refuse_platform_prototype(g, writable.proto, "FileSystemWritableFileStream");
     uievents::set_file_system_handle_hook(g, Some(drop_hook));
+    super::entries::install(g);
+    let files = host::install_object(g, "__sk_appFiles", UNDEF);
+    host::method(g, files, "getPathForFile", 1, get_native_path);
 
     let obj = host::install_object(g, "__SK_FS__", UNDEF);
     host::method(g, obj, "pickForInput", 4, pick_for_input);

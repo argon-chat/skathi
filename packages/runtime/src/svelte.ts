@@ -25,6 +25,7 @@ export {
   appCapture,
   appDevtools,
   appHost,
+  appFiles,
   appHaptics,
   appHotkeys,
   appLaunch,

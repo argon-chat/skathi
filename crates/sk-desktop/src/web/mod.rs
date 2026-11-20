@@ -19,6 +19,7 @@ mod app_shell;
 mod badge;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod credentials;
+mod entries;
 mod fsa;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media_session;

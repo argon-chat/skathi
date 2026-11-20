@@ -1348,6 +1348,13 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Error> {
+        if name == super::host_file::TOKEN {
+            let path = unsafe {
+                sk_runtime::redjs::webapi::file::path_of(self.context().raw(), self.value.0)
+            }
+            .ok_or_else(|| de::Error::custom("expected a File backed by a native path"))?;
+            return visitor.visit_byte_buf(super::host_file::path_bytes(path));
+        }
         if name == STR_TOKEN {
             let node: Node<'de> = self.require()?;
             if let Node::Str(Cow::Borrowed(s)) = node {
