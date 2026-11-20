@@ -8,7 +8,7 @@ target=aarch64-apple-darwin
 profile="target/$target/release"
 features=prod,storages,clipboard,no-devtools
 measurements="${MEASUREMENTS:-all}"
-[[ "$measurements" == all || "$measurements" == surface ]]
+[[ "$measurements" == all || "$measurements" == surface || "$measurements" == controls ]]
 
 {
   sw_vers
@@ -56,7 +56,7 @@ measure() (
     export SK_LOG=gpui_macos::surface_pacing=trace
   fi
   printf '%s: %s\n' "$name" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee "$dir/launched.txt"
-  SK_PAYLOAD="$payload" SK_DATA_DIR="$scratch/data/$name" SK_WINDOW_FOCUS=raise SK_PERF=1 "$host" "$@" +    > "$dir/host.log" 2>&1 &
+  SK_PAYLOAD="$payload" SK_DATA_DIR="$scratch/data/$name" SK_WINDOW_FOCUS=raise SK_PERF=1 "$host" "$@" > "$dir/host.log" 2>&1 &
   pid=$!
   "$scratch/measure" sample "$pid" > "$dir/footprint-samples.tsv" 2>"$dir/sampler-errors.txt" &
   sampler=$!
@@ -154,6 +154,8 @@ for test in 'next 3 2' 'link 3 2' 'link 3 1' 'link 2 2' 'hybrid 3 2' 'idle 3 2';
   read -r mode count latency <<< "$test"
   measure "control-$mode-$count-$latency" "$scratch/drawables" "" "$mode" "$count" "$latency" || status=1
 done
+
+if [[ "$measurements" == controls ]]; then exit "$status"; fi
 
 cargo rustc --locked -p sk-app --example surface --no-default-features --features "$features" --target "$target" \
   --config "profile.dev.package.'*'.debug=0" -- \

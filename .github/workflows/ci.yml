@@ -10,6 +10,7 @@ on:
         options:
           - all
           - surface
+          - controls
 
 permissions:
   contents: read
