@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { launch } from "../src/index";
+import { expect as ui, launch } from "../src/index";
 
 test("the drawing app requests one detent per snap and feedback at brush-width stops", async () => {
   const app = await launch({ app: "pen-draw", label: "pen-draw-haptics", window: [960, 680] });
@@ -14,11 +14,12 @@ test("the drawing app requests one detent per snap and feedback at brush-width s
     const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues.splice(0))"))) as unknown[];
     const x = Math.round(paper.x) + 64;
     const y = Math.round(paper.y) + 64;
+    const hud = app.locator(".hud");
     await mouse("down", x + 3, y);
+    await ui(hud).toContainText("buttons 1");
+    await app.send("mouse_pressure", { stage: 2, pressure: 0.6, x: x + 3, y });
+    await ui(hud).toContainText("pressure 0.80");
     await mouse("move", x + 2, y, true);
-    await app.send("mouse_pressure", { stage: 2, pressure: 0.6, x: x + 2, y });
-    await Bun.sleep(100);
-    expect(await app.eval("document.querySelector('.hud').textContent.includes('pressure 0.80')")).toBe(true);
     await mouse("move", x + 16, y, true);
     await mouse("move", x + 31, y, true);
     await mouse("up", x + 31, y);

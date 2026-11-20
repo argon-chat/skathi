@@ -2,10 +2,11 @@
 // user's second double-click (or the shell, for a `myapp://` link) would start it.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { stagedExe } from "../src/dist";
 import { expect, killTree, launch, REPO, WINDOWS } from "../src/index";
 
@@ -60,6 +61,17 @@ async function untilEvents(n: number, ms = 5_000): Promise<Record_> {
   }
 }
 
+const run = promisify(execFile);
+async function forward(args: string[], cwd: string, env = secondEnv(), windowsVerbatimArguments = false) {
+  const before = (await rec()).events.length;
+  const started = performance.now();
+  await run(exe, args, { cwd, env, windowsVerbatimArguments, timeout: 15_000 });
+  const elapsed = performance.now() - started;
+  const got = await untilEvents(before + 1);
+  bunExpect(got.events.length).toBe(before + 1);
+  return { got, event: got.events[before]!, elapsed };
+}
+
 describe("the first instance", () => {
   test(
     "holds the lock and reports its own launch",
@@ -78,31 +90,26 @@ describe("a second launch", () => {
   test(
     "forwards argv, cwd and existing paths to the first, exits 0 fast, and opens no window",
     async () => {
-      const t0 = Date.now();
-      const r = spawnSync(exe, ["--foo", doc, "missing.txt"], {
-        cwd: scratch,
-        env: secondEnv({ SK_WINDOW_FOCUS: "" }),
-        timeout: 15_000,
-      });
-      const ms = Date.now() - t0;
-      bunExpect(r.status).toBe(0);
-      bunExpect(ms).toBeLessThan(5_000);
-      const got = await untilEvents(1);
-      bunExpect(got.events.length).toBe(1);
-      const ev = got.events[0]!;
+      const previousLines = (await forwardedLines()).length;
+      const {
+        got,
+        event: ev,
+        elapsed,
+      } = await forward(["--foo", doc, "missing.txt"], scratch, secondEnv({ SK_WINDOW_FOCUS: "" }));
+      bunExpect(elapsed).toBeLessThan(5_000);
       bunExpect(ev.source).toBe("second-instance");
       bunExpect(ev.argv.slice(1)).toEqual(["--foo", doc, "missing.txt"]);
       bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
       bunExpect(ev.paths).toEqual([doc]);
       bunExpect(ev.url).toBe(null);
       bunExpect(got.params.at(-1)).toEqual({ targetURL: null, files: 1 });
-      await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
+      await expect(app.locator(".fixture")).toHaveText(`forwarded launches: ${got.events.length}`);
       // The primary is quiet, so it stayed where it was, and its log says why (the harness's
       // SK_LAUNCH_RAISE=off is named as well).
-      const lines = await forwardedLines();
+      const lines = (await forwardedLines()).slice(previousLines);
       bunExpect(lines.length).toBe(1);
       bunExpect(lines[0]).toContain("not raised: this instance is quiet (SK_WINDOW_FOCUS=never)");
-      bunExpect(lines[0]).not.toContain("the second launch was quiet");
+      bunExpect(lines[0]).not.toContain("the second launch did not request activation");
     },
     T,
   );
@@ -113,15 +120,12 @@ describe("a second launch", () => {
       const url = 'sktest-launch://open?b="c d"&e=%22';
       // Quoted the way the Windows shell quotes %1; elsewhere argv arrives as it is.
       const arg = process.platform === "win32" ? `"${url}"` : url;
-      const r = spawnSync(exe, ["--devtools", "--sk-protocol-launch", "--", arg], {
-        cwd: REPO,
-        env: secondEnv(),
-        windowsVerbatimArguments: true,
-        timeout: 15_000,
-      });
-      bunExpect(r.status).toBe(0);
-      const got = await untilEvents(2);
-      const ev = got.events[1]!;
+      const { got, event: ev } = await forward(
+        ["--devtools", "--sk-protocol-launch", "--", arg],
+        REPO,
+        secondEnv(),
+        true,
+      );
       bunExpect(ev.source).toBe("open-url");
       bunExpect(ev.url).toBe(url);
       bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
@@ -133,30 +137,21 @@ describe("a second launch", () => {
   test(
     "a `--devtools` AFTER an app argument is data, and the launch is still forwarded",
     async () => {
-      const r = spawnSync(exe, ["report.txt", "--devtools"], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
-      bunExpect(r.status).toBe(0);
-      const got = await untilEvents(3);
-      bunExpect(got.events[2]!.argv.slice(1)).toEqual(["report.txt", "--devtools"]);
+      const { event } = await forward(["report.txt", "--devtools"], scratch);
+      bunExpect(event.argv.slice(1)).toEqual(["report.txt", "--devtools"]);
     },
     T,
   );
 
-  // Fails everywhere, Windows included: the log names the instance's quiet mode, not the launch's.
-  test.skipIf(!!process.env.CI)(
+  test(
     "a quiet second launch is still delivered, and asks for no raise",
     async () => {
       // An agent's or a test's launch (SK_WINDOW_FOCUS=never) hands on no foreground right and says
       // so in its message: it never pulls the running window to the front, whoever is using it.
-      const r = spawnSync(exe, ["quiet"], {
-        cwd: scratch,
-        env: secondEnv({ SK_WINDOW_FOCUS: "never" }),
-        timeout: 15_000,
-      });
-      bunExpect(r.status).toBe(0);
-      const got = await untilEvents(4);
-      bunExpect(got.events[3]!.argv.slice(1)).toEqual(["quiet"]);
+      const { event } = await forward(["quiet"], scratch, secondEnv({ SK_WINDOW_FOCUS: "never" }));
+      bunExpect(event.argv.slice(1)).toEqual(["quiet"]);
       const lines = await forwardedLines();
-      bunExpect(lines.at(-1)).toContain("the second launch was quiet (SK_WINDOW_FOCUS=never)");
+      bunExpect(lines.at(-1)).toContain("the second launch did not request activation");
     },
     T,
   );
