@@ -127,6 +127,15 @@ type ButtonFrame = [x: number, y: number, width: number, height: number];
 const buttonRect = (): Promise<ButtonRect | null> =>
   app.eval("__SK_WINDOW__.refresh(); __SK_WINDOW__.appWindow.getWindowButtonsRect()");
 
+async function trafficLightFrames(): Promise<[ButtonFrame, ButtonFrame, ButtonFrame]> {
+  const reply = await app.send("windows", { native: true });
+  const windows = reply.windows as {
+    kind: string;
+    native: { traffic_light_frames: [ButtonFrame, ButtonFrame, ButtonFrame] };
+  }[];
+  return windows.find((w) => w.kind === "main")!.native.traffic_light_frames;
+}
+
 async function expectTrafficLights(x: number, y: number): Promise<ButtonRect> {
   const rect = await until(
     buttonRect,
@@ -134,12 +143,7 @@ async function expectTrafficLights(x: number, y: number): Promise<ButtonRect> {
     `traffic lights at (${x}, ${y})`,
   );
   if (!rect) throw new Error("Visible traffic lights lost their rect");
-  const reply = await app.send("windows", { native: true });
-  const windows = reply.windows as {
-    kind: string;
-    native: { traffic_light_frames: [ButtonFrame, ButtonFrame, ButtonFrame] };
-  }[];
-  const frames = windows.find((w) => w.kind === "main")!.native.traffic_light_frames;
+  const frames = await trafficLightFrames();
   expect(frames).toHaveLength(3);
   const [close, minimize, zoom] = frames;
   expect(await app.eval("__SK_WINDOW__.appWindow.chrome.trafficLightPosition")).toEqual({ x: close[0], y: close[1] });
@@ -171,18 +175,28 @@ test.if(MACOS)(
       await app.eval("__SK_WINDOW__.defineWindow({titleBarHeight:48}); true");
       const before = await expectTrafficLights(12, 17);
       console.log("48 px title bar, native button cluster", before);
-      for (const fade of [0, 150]) {
-        await call(`setWindowButtonsVisible(false,{fade:${fade}})`);
+      for (const explicit of [false, true]) {
+        if (explicit) await call("setTrafficLightPosition({x:20,y:11})");
+        const layout = explicit ? await expectTrafficLights(20, 11) : before;
+        const frames = await trafficLightFrames();
+        const [x, y] = frames[0];
+        for (const visible of [false, true]) {
+          await call(`setWindowButtonsVisible(${visible},{fade:150})`);
+          const start = performance.now();
+          for (const ms of [0, 60, 300]) {
+            await Bun.sleep(Math.max(0, ms - (performance.now() - start)));
+            expect(await trafficLightFrames()).toEqual(frames);
+            expect(
+              await app.eval("__SK_WINDOW__.refresh(); __SK_WINDOW__.appWindow.chrome.trafficLightPosition"),
+            ).toEqual({ x, y });
+          }
+          expect(await buttonRect()).toEqual(visible ? layout : null);
+        }
+        await call("setWindowButtonsVisible(false)");
         expect(await until(buttonRect, (r) => r === null, "hidden buttons")).toBeNull();
-        await call(`setWindowButtonsVisible(true,{fade:${fade}})`);
-        expect(await expectTrafficLights(12, 17)).toEqual(before);
+        await call("setWindowButtonsVisible(true)");
+        expect(await expectTrafficLights(x, y)).toEqual(layout);
       }
-      await call("setTrafficLightPosition({x:20,y:11})");
-      const custom = await expectTrafficLights(20, 11);
-      await call("setWindowButtonsVisible(false)");
-      expect(await until(buttonRect, (r) => r === null, "hidden custom-position buttons")).toBeNull();
-      await call("setWindowButtonsVisible(true)");
-      expect(await expectTrafficLights(20, 11)).toEqual(custom);
     } finally {
       await call("setTrafficLightPosition(null)");
       await call("setWindowButtonsVisible(true)");
