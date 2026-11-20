@@ -76,6 +76,7 @@ mod waapi;
 pub mod windows;
 
 pub mod devtools;
+mod file_drop;
 
 pub use containers::settle_frame as settle_container_queries;
 pub use img::{

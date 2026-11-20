@@ -1,5 +1,5 @@
 import type { MirrorElement, MirrorNode } from "./types";
-import { fileEvent, isColorInput, isFileInput, isTextWidget } from "./file-input";
+import { fileEvent, fileStates, isColorInput, isFileInput, isTextWidget } from "./file-input";
 import {
   ACTIVATING_EVENTS,
   CODE_TO_NAME,
@@ -13,6 +13,7 @@ import {
   propagateClick,
   synthesize,
   withProps,
+  withOffsets,
 } from "./events";
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
@@ -23,7 +24,7 @@ import { DERIVED, DERIVED_OF } from "./event-names";
 import type { DerivedEventName } from "./event-names";
 import { activate } from "./links";
 import { warnCompat } from "../compat";
-import { blocksImplicitSubmission, implicitSubmit } from "./forms";
+import { blocksImplicitSubmission, implicitSubmit, isDisabledControl } from "./forms";
 import { noteActivation } from "./activation";
 import { theGlobal } from "./interfaces";
 import { isSelectEl, pickOption } from "./select";
@@ -54,6 +55,12 @@ interface DataTransferLike {
   effectAllowed: string;
 }
 
+interface ExternalTransfer extends DataTransferLike {
+  readonly files: ArrayLike<unknown>;
+  readonly types: readonly string[];
+  readonly items: { add(file: unknown): unknown };
+}
+
 function draggableAt(n: MirrorNode | null | undefined): MirrorElement | null {
   // A press in a text field selects text in it, whatever is around it.
   if (!n || isTextWidget(n)) return null;
@@ -72,11 +79,15 @@ function dragEvent(
   d: number,
   dt: DataTransferLike,
   related: MirrorNode | null,
+  screenX = 0,
+  screenY = 0,
 ): Event {
   const init = {
     bubbles: true,
     cancelable: DRAG_CANCELABLE.has(name),
     composed: true,
+    screenX,
+    screenY,
     ...mods(d),
     clientX: x,
     clientY: y,
@@ -99,7 +110,7 @@ function dragEvent(
       dataTransfer: dt,
     });
   }
-  return withRelatedTarget(ev, related);
+  return withOffsets(withRelatedTarget(ev, related), x, y);
 }
 
 function initialDropEffect(effectAllowed: string): string {
@@ -263,6 +274,38 @@ function dndDispatch(
 }
 
 const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y, pen) => {
+  // Protocol-only event; the DOM listener table uses its 64 bits for actual host event types.
+  if (evCode === 64 && typeof key === "string" && data) {
+    const target = nodeById(nodeId) as MirrorElement | undefined;
+    if (!target) return true;
+    const dt = data as ExternalTransfer;
+    const related = c ? (nodeById(c) ?? null) : null;
+    const proceed = propagate(target, key, dragEvent(key, a, b, d, dt, related, x, y));
+    if (!proceed || !isFileInput(target) || isDisabledControl(target) || !Array.from(dt.types).includes("Files"))
+      return proceed;
+    if (key === "dragover" && dropAllowed("copy", dt.effectAllowed)) {
+      dt.dropEffect = "copy";
+      return false;
+    }
+    if (key === "drop" && dt.files.length > 0) {
+      const state = fileStates.get(target);
+      if (!state) return true;
+      if ((target.attrs.multiple != null && target.attrs.multiple !== "false") || dt.files.length === 1) {
+        state.files = dt.files;
+      } else {
+        const Transfer = theGlobal("DataTransfer") as new () => ExternalTransfer;
+        const first = new Transfer();
+        first.items.add(dt.files[0]);
+        state.files = first.files;
+      }
+      state.changed();
+      propagate(target, "input", fileEvent("input"));
+      propagate(target, "change", fileEvent("change"));
+      dt.dropEffect = "copy";
+      return false;
+    }
+    return true;
+  }
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
   if (name === "pointerlockchange" || name === "pointerlockerror")

@@ -30,6 +30,7 @@ const PRESS_BITS: u64 = (1 << tree::EV_CLICK)
 pub(crate) fn arm(window: &mut Window) {
     if !window.vn_picks_every_box() {
         window.set_vn_pick_every_box(true);
+        window.set_external_drop_handler(crate::file_drop::handle);
     }
     if !window.has_vn_hit_refiner() {
         window.set_vn_hit_refiner(Some(std::rc::Rc::new(refine)));

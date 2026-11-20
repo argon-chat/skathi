@@ -44,7 +44,8 @@ const integerFlag = (
 const stringFlag = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 export interface ArgSpec {
-  type: "string" | "number" | "boolean";
+  type: "string" | "number" | "boolean" | "array";
+  items?: { type: "string" };
   description: string;
   required?: boolean;
 }
@@ -278,6 +279,50 @@ export const COMMANDS: CommandSpec[] = [
     cli: (rest, flags) => {
       if (!rest[0]) die("key needs a key name: ctl key Enter [selector]");
       return withIndex(compact({ key: rest[0], selector: rest[1] || undefined }), flags);
+    },
+  },
+  {
+    cmd: "drag-files",
+    description: "Simulate an OS drag at a selector or client coordinates. Returns the negotiated dropEffect.",
+    usage: ["  drag-files [enter|over|leave|drop] --paths <path> ... --at <x,y> [--ctrl|--shift|--alt|--meta]"],
+    args: {
+      kind: str("enter, over, leave or drop (default)"),
+      paths: { type: "array", items: { type: "string" }, description: "absolute paths to files and directories" },
+      selector: SELECTOR,
+      x: int("client X in pixels"),
+      y: int("client Y in pixels"),
+      index: INDEX,
+      text: str("text/plain item"),
+      url: str("text/uri-list item"),
+      allowed: int("source actions bitmask: copy=1, move=2, link=4"),
+      ctrl: bool("Control pressed"),
+      shift: bool("Shift pressed"),
+      alt: bool("Alt pressed"),
+      meta: bool("Meta pressed"),
+    },
+    cli: (rest, flags) => {
+      const parts = [...rest];
+      const kind = parts.length && ["drop", "enter", "over", "leave"].includes(parts[0]!) ? parts.shift() : undefined;
+      const first = stringFlag(flags.paths);
+      if (parts.length && !first) die("drag-files expects --paths before file names");
+      const at = stringFlag(flags.at)?.split(",");
+      if (at && (at.length !== 2 || at.some((v) => v.trim() === "" || !Number.isFinite(Number(v)))))
+        die("--at needs x,y");
+      return compact({
+        kind: kind ?? stringFlag(flags.kind),
+        paths: first ? [first, ...parts] : undefined,
+        selector: stringFlag(flags.selector),
+        x: at ? Number(at[0]) : num(flags.x),
+        y: at ? Number(at[1]) : num(flags.y),
+        index: num(flags.index),
+        allowed: integerFlag(flags.allowed, "allowed", 0, 7),
+        text: stringFlag(flags.text),
+        url: stringFlag(flags.url),
+        ctrl: flags.ctrl || undefined,
+        shift: flags.shift || undefined,
+        alt: flags.alt || undefined,
+        meta: flags.meta || undefined,
+      });
     },
   },
   {
@@ -866,22 +911,22 @@ export interface McpTool {
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<string, { type: string; description: string }>;
+    properties: Record<string, { type: string; description: string; items?: { type: "string" } }>;
     required?: string[];
   };
   build: (args: Record<string, unknown>) => Record<string, unknown>;
 }
 
-export const toolName = (cmd: string): string => `sk_${cmd}`;
+export const toolName = (cmd: string): string => (cmd === "drag-files" ? "sk_drag_files" : `sk_${cmd}`);
 
 export function mcpTools(): McpTool[] {
   return COMMANDS.map((spec) => {
     const names = Object.keys(spec.args);
     const required = names.filter((n) => spec.args[n]!.required);
-    const properties: Record<string, { type: string; description: string }> = {};
+    const properties: McpTool["inputSchema"]["properties"] = {};
     for (const n of names) {
       const arg = spec.args[n]!;
-      properties[n] = { type: arg.type, description: arg.description };
+      properties[n] = { type: arg.type, description: arg.description, ...(arg.items ? { items: arg.items } : {}) };
     }
     properties.window = { type: WINDOW_ARG.type, description: WINDOW_ARG.description };
     return {

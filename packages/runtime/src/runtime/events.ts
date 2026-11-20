@@ -240,7 +240,7 @@ function predictedMoves(init: MoveInit, src: PointerSource): PointerEvent[] {
  * `offsetX` / `offsetY`: from the target's padding edge, measured when first read. Coalesced events
  * measure from the event's target.
  */
-function withOffsets(ev: Event, x: number, y: number, of: () => unknown = () => ev.target): Event {
+export function withOffsets(ev: Event, x: number, y: number, of: () => unknown = () => ev.target): Event {
   const edge = (): { left: number; top: number } => {
     const t = of() as Partial<MirrorElement> | null | undefined;
     if (!t || typeof t.getBoundingClientRect !== "function") return { left: 0, top: 0 };

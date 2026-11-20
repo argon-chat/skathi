@@ -32,6 +32,7 @@ pub struct PressFocus {
 
 #[derive(Default)]
 pub struct WindowState {
+    pub(crate) file_drop: Option<crate::file_drop::Session>,
     /// The node this window paints as its root: `0` for the primary window, the popped-out node for a pop-out.
     pub painted_root: u32,
 

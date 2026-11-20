@@ -1171,6 +1171,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
             },
         ),
+        "drag-files" => cmd_drag_files(req),
         "pen" => {
             let tilt = |name: &str| num(name).unwrap_or(0.0) as f32;
             cmd_pen(
@@ -2215,6 +2216,72 @@ fn cmd_pen(
             ("kind", Json::s(kind.to_string())),
         ])),
     }
+}
+
+fn cmd_drag_files(req: &Json) -> String {
+    let s = |key: &str| req.get(key).and_then(Json::as_str);
+    let n = |key: &str| req.get(key).and_then(Json::as_f64);
+    let flag = |key: &str| req.get(key).and_then(Json::as_bool).unwrap_or(false);
+    let (node, (x, y)) = match aim(s("selector"), n("index"), n("x"), n("y"), "drag-files") {
+        Ok(v) => v,
+        Err(e) => return err(e),
+    };
+    let at = gpui::point(gpui::px(x), gpui::px(y));
+    let kind = s("kind").unwrap_or("drop");
+    let paths = req
+        .get("paths")
+        .and_then(Json::as_arr)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Json::as_str)
+        .map(std::path::PathBuf::from)
+        .collect();
+    let enter = gpui::FileDropEvent::Entered {
+        position: at,
+        paths: gpui::ExternalPaths(paths),
+    };
+    let submit = gpui::FileDropEvent::Submit { position: at };
+    let sequence = match kind {
+        "drop" if req.get("paths").is_some() || s("text").is_some() || s("url").is_some() => {
+            vec![enter, submit]
+        }
+        "enter" => vec![enter],
+        "over" => vec![gpui::FileDropEvent::Pending { position: at }],
+        "leave" => vec![gpui::FileDropEvent::Exited],
+        "drop" => vec![submit],
+        _ => return err("drag-files kind must be enter, over, leave or drop"),
+    };
+    let offer = gpui::DragOffer {
+        allowed: n("allowed").map_or(7, |mask| mask.clamp(0., 7.) as u8),
+        modifiers: gpui::Modifiers {
+            control: flag("ctrl"),
+            shift: flag("shift"),
+            alt: flag("alt"),
+            platform: flag("meta"),
+            ..Default::default()
+        },
+        strings: [("text", "text/plain"), ("url", "text/uri-list")]
+            .into_iter()
+            .filter_map(|(key, mime)| Some((mime.into(), s(key)?.into())))
+            .collect(),
+    };
+    in_window(node, |window, cx| {
+        let mut op = gpui::DropOperation::None;
+        for event in sequence {
+            op = window
+                .dispatch_event(gpui::PlatformInput::ExternalDrop(event, offer.clone()), cx)
+                .drop_operation
+                .unwrap_or_default();
+        }
+        let effect = match op {
+            gpui::DropOperation::None => "none",
+            gpui::DropOperation::Move => "move",
+            gpui::DropOperation::Link => "link",
+            gpui::DropOperation::Copy => "copy",
+        };
+        ok(Json::obj(vec![("dropEffect", Json::s(effect))]))
+    })
+    .unwrap_or_else(|| err("drag-files has no active window"))
 }
 
 fn cmd_mouse_pressure(
