@@ -42,6 +42,21 @@ describe("pen input", () => {
       expect([type, pointer, queued, continuous, stopped]).toEqual(["boolean", false, false, false, false]);
       if (LINUX || process.env.SK_TEST_NO_HAPTICS === "1") expect(supported).toBe(false);
       if (!supported) expect(played).toBe(false);
+      const capabilities = JSON.parse(
+        String(
+          await app.eval(`JSON.stringify((() => {
+        const h = __SK_TEST_PEN__.haptics;
+        let invalid = "";
+        try { h.perform("hover", { fallback: "missing-pattern" }); } catch (e) { invalid = e.name; }
+        return [h.getSupportedPatterns(999), h.getSupportedPatterns(), invalid,
+          h.perform("success", { pointerId: 999, fallback: "generic" })];
+      })())`),
+        ),
+      );
+      expect(capabilities[0]).toEqual([]);
+      expect(Array.isArray(capabilities[1])).toBe(true);
+      if (LINUX || !supported) expect(capabilities[1]).toEqual([]);
+      expect(capabilities.slice(2)).toEqual(["TypeError", false]);
     },
     T,
   );

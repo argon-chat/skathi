@@ -36,6 +36,96 @@ async function recordHaptics() {
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
 
+test("haptics binds individual gestures and lets the app choose the fallback", async () => {
+  await app.eval(`globalThis.cues = [];
+    const supported = ["generic", "hover", "success", "level-change"];
+    __sk_appHaptics.getSupportedPatterns = () => supported.slice();
+    __sk_appHaptics.perform = (pattern, options) => {
+      cues.push([pattern, options.pointerId, options.when, options.fallback]);
+      return supported.includes(pattern) || supported.includes(options.fallback);
+    };`);
+  const change = (name: string, value: string, event = "change") =>
+    app.eval(`{ const el = document.querySelector('[aria-label="${name}"]'); el.value = ${JSON.stringify(value)};
+      el.dispatchEvent(new Event(${JSON.stringify(event)}, {bubbles: true})); }`);
+  try {
+    await page("haptics");
+    const status = ui(app.locator(".receipt"));
+    const button = app.locator('[aria-label="Try the button gesture"]');
+    await ui(app.locator(".device")).toContainText("4 available");
+    await button.click();
+    await status.toContainText("Accepted · success");
+    await change("Button activation effect", "click");
+    await change("Fallback effect", "off");
+    await button.click();
+    await status.toContainText("click unavailable");
+    await change("Fallback effect", "generic");
+    await change("Feedback timing", "next-frame");
+    await button.click();
+    await status.toContainText("Queued for next frame · generic");
+
+    const hover = await app.locator('[aria-label="Try the hover gesture"]').boundingBox();
+    const x = Math.round(hover.x + hover.w / 2),
+      y = Math.round(hover.y + hover.h / 2);
+    await app.send("mouse", { kind: "move", x, y });
+    await status.toContainText("Pointer entry");
+    await app.send("mouse", { kind: "move", x: x + 1, y });
+    await change("Haptic sample level", "4", "input");
+    await change("Haptic sample level", "4", "input");
+    await status.toContainText("Slider step");
+    await change("Button activation effect", "off");
+    await button.click();
+    await status.toContainText("Feedback off");
+    await app.locator('[aria-label="Play hover"]').click();
+    await status.toContainText("Device effect · Accepted · hover");
+    expect(await cues()).toEqual([
+      ["success", null, "now", "generic"],
+      ["click", null, "now", false],
+      ["click", null, "next-frame", "generic"],
+      ["hover", 1, "next-frame", "generic"],
+      ["level-change", null, "next-frame", "generic"],
+      ["hover", 1, null, false],
+    ]);
+  } finally {
+    await app.eval("delete __sk_appHaptics.getSupportedPatterns; delete __sk_appHaptics.perform;");
+  }
+}, 30_000);
+
+test("the device palette follows a pen and stops its texture on lift", async () => {
+  await app.eval(`globalThis.cues = [];
+    __sk_appHaptics.getSupportedPatterns = id => id === 2 ? ["ink-continuous"] : ["hover"];
+    __sk_appHaptics.perform = (pattern, opts) => { cues.push([pattern, opts.pointerId, opts.fallback]); return true; };
+    __sk_appHaptics.stop = id => { cues.push(["stop", id]); return true; };`);
+  try {
+    await page("haptics");
+    const device = app.locator(".device");
+    const status = ui(app.locator(".receipt"));
+    const label = await app.locator(".device span").boundingBox();
+    const location = { x: Math.round(label.x + 8), y: Math.round(label.y + label.h / 2) };
+    await app.send("pen", { kind: "down", ...location, pressure: 0.5 });
+    await ui(device).toContainText("Pen · 1 available");
+    await app.send("pen", { kind: "up", ...location });
+    const texture = await app.locator('[aria-label="Hold ink-continuous"]').boundingBox();
+    const tip = { x: Math.round(texture.x + texture.w / 2), y: Math.round(texture.y + texture.h / 2) };
+    await app.send("pen", { kind: "down", ...tip, pressure: 0.5 });
+    await status.toContainText("Accepted · ink-continuous");
+    await app.send("pen", { kind: "up", ...location });
+    await status.toContainText("Texture stopped");
+    expect(await cues()).toEqual([
+      ["ink-continuous", 2, false],
+      ["stop", 2],
+    ]);
+
+    await app.send("mouse", { kind: "click", ...location });
+    await ui(device).toContainText("Mouse or trackpad · 1 available");
+    await app.locator('[aria-label="Play hover"]').waitFor();
+    expect(await app.locator('[aria-label="Hold ink-continuous"]').count()).toBe(0);
+  } finally {
+    await app.eval(
+      "delete __sk_appHaptics.getSupportedPatterns; delete __sk_appHaptics.perform; delete __sk_appHaptics.stop;",
+    );
+  }
+}, 30_000);
+
 test("the haptics button requests a pulse from the current device without a pointer ID", async () => {
   await page("graphics");
   await recordHaptics();

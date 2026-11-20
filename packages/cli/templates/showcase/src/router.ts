@@ -6,6 +6,7 @@ import AudioPage from "./pages/AudioPage.vue";
 import FilesPage from "./pages/FilesPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
 import GraphicsPage from "./pages/GraphicsPage.vue";
+import HapticsPage from "./pages/HapticsPage.vue";
 import HomePage from "./pages/HomePage.vue";
 import LayoutPage from "./pages/LayoutPage.vue";
 import LocalePage from "./pages/LocalePage.vue";
@@ -38,6 +39,14 @@ export const pages: PageEntry[] = [
     section: "Desktop",
     blurb: "Animated resizing and a pop-out with live size limits, proportions and opacity",
     component: WindowPage,
+  },
+  {
+    path: "/haptics",
+    title: "Haptics",
+    icon: "haptics",
+    section: "Desktop",
+    blurb: "Try device waveforms and choose the feedback for each gesture",
+    component: HapticsPage,
   },
   {
     path: "/tray",

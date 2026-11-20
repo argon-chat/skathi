@@ -53,7 +53,7 @@ export { appHost } from "./apphost";
 export { appTray } from "./tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";
 export { appHaptics } from "./haptics";
-export type { AppHaptics, HapticPattern } from "./haptics";
+export type { AppHaptics, HapticOptions, HapticPattern } from "./haptics";
 export { appHotkeys } from "./hotkeys";
 export type { AppHotkeys, HotkeyBinding, HotkeyButton, HotkeyChord, HotkeyEvent, HotkeyStatus } from "./hotkeys";
 export { appLocale } from "./locale";

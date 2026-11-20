@@ -2,6 +2,15 @@
 use gpui::{HapticPattern, HapticTarget};
 use sk_runtime::redjs::webapi::util::*;
 use sk_runtime::{host_fn, with_commit, JsRuntime};
+use std::ffi::c_void;
+
+unsafe fn pattern(g: *mut c_void, value: u64) -> Option<HapticPattern> {
+    let name = unsafe { read_string(g, value) }?;
+    HapticPattern::NAMED
+        .iter()
+        .find(|&&(key, _)| key == name)
+        .map(|&(_, p)| p)
+}
 
 fn target(value: u64) -> Option<HapticTarget> {
     match dec_f64(value)? {
@@ -19,18 +28,25 @@ host_fn!(fn supports_pointer(_g, args) {
     enc_bool(target(args.arg(0).0).and_then(|target| with_commit(|w, _| w.vn_haptics_supported(target))).unwrap_or(false))
 });
 
+host_fn!(fn supported_patterns(g, args) {
+    let id = args.arg(0).0;
+    let device = if id == UNDEF { Some(HapticTarget::Current) } else { target(id) };
+    let available = device.and_then(|d| with_commit(|w, _| w.vn_haptic_patterns(d))).unwrap_or_default();
+    unsafe {
+        let result = new_array(g);
+        for (i, (name, _)) in HapticPattern::NAMED.iter().filter(|(_, p)| available.contains(p)).enumerate() {
+            set_i(g, result, i as u32, js_string(g, name));
+        }
+        result
+    }
+});
+
 host_fn!(fn perform(g, args) {
     unsafe {
-        let pattern = match read_string(g, args.arg(0).0).as_deref() {
-            Some("generic") => HapticPattern::Generic,
-            Some("alignment") => HapticPattern::Alignment,
-            Some("level-change") => HapticPattern::LevelChange,
-            Some("ink-continuous") => HapticPattern::InkContinuous,
-            Some("pencil-continuous") => HapticPattern::PencilContinuous,
-            _ => return throw_type_error(g, "Unknown haptic pattern"),
-        };
+        let Some(requested) = pattern(g, args.arg(0).0) else { return throw_type_error(g, "Unknown haptic pattern") };
         let options = args.arg(1).0;
         let (mut device, mut deferred) = (HapticTarget::Current, false);
+        let mut fallback = UNDEF;
         if options != UNDEF && options != NULL {
             if !is_cell(options) { return throw_type_error(g, "Expected haptic options"); }
             let id = get(g, options, "pointerId");
@@ -46,8 +62,17 @@ host_fn!(fn perform(g, args) {
                     _ => return throw_type_error(g, "Expected now or next-frame"),
                 };
             }
+            fallback = get(g, options, "fallback");
         }
-        enc_bool(with_commit(|w, _| w.vn_perform_haptic(pattern, device, deferred)).unwrap_or(false))
+        let accepted = match fallback {
+            UNDEF => with_commit(|w, _| w.vn_perform_haptic(requested, device, deferred)),
+            FALSE => with_commit(|w, _| w.vn_perform_first_haptic(&[requested], device, deferred)),
+            value => {
+                let Some(alternate) = pattern(g, value) else { return throw_type_error(g, "Expected a haptic fallback pattern or false") };
+                with_commit(|w, _| w.vn_perform_first_haptic(&[requested, alternate], device, deferred))
+            }
+        };
+        enc_bool(accepted.unwrap_or(false))
     }
 });
 
@@ -67,6 +92,7 @@ pub(crate) fn install(runtime: &JsRuntime) {
                 parent_proto: 0,
                 methods: &[
                     ("supportsPointer", 1, supports_pointer),
+                    ("getSupportedPatterns", 0, supported_patterns),
                     ("perform", 1, perform),
                     ("stop", 1, stop),
                 ],

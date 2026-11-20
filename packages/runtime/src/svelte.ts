@@ -43,6 +43,7 @@ export type {
   AppHost,
   AppHostError,
   AppHaptics,
+  HapticOptions,
   HapticPattern,
   AppHotkeys,
   AppLocale,
