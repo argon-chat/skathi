@@ -120,10 +120,12 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
       const line = Math.max(0, (error.line ?? 1) - 1);
       const character = Math.max(0, error.column ?? 0);
       findings.push({
-        code: "SK0004",
-        message: error.specifier
-          ? `\`${error.specifier}\` does not resolve, so the bundle cannot be built: ${error.message}`
-          : `the production build fails: ${error.message}`,
+        code: error.code ?? "SK0004",
+        message: error.code
+          ? error.message
+          : error.specifier
+            ? `\`${error.specifier}\` does not resolve, so the bundle cannot be built: ${error.message}`
+            : `the production build fails: ${error.message}`,
         file: error.file ?? config.entry,
         range: { start: { line, character }, end: { line, character } },
         related: [],

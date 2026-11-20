@@ -19,6 +19,18 @@
       "type": "string",
       "minLength": 1
     },
+    "svelte": {
+      "description": "Svelte compiler options (since 0.6).",
+      "type": "object",
+      "properties": {
+        "renderer": {
+          "description": "The DOM renderer supports the full Skathi feature set. The experimental native renderer requires Svelte 5.59.0 or later in major 5.",
+          "enum": ["dom", "native"],
+          "default": "dom"
+        }
+      },
+      "additionalProperties": false
+    },
     "version": {
       "description": "The app's version: semver (\"1.2.3\", \"1.2.3-beta.1\"), up to four numeric parts of at most 65535. Default: package.json \"version\", else 0.0.0 with a warning.",
       "type": "string",

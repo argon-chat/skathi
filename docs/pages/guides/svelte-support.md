@@ -7,9 +7,41 @@ order: 9
 since: "0.4"
 ---
 
-A Svelte app on Skathi is compiled by the app's own `svelte/compiler` (Svelte 5) and runs Svelte's own client runtime. Svelte talks to the DOM directly, and in Skathi that DOM is a native element tree with its own CSS engine. So runes, blocks, snippets, bindings, transitions and stores work as they do in a browser. The differences are where Svelte needs browser machinery Skathi does not have: an HTML parser and custom elements.
+A Skathi app uses its own Svelte 5 compiler and client runtime. By default Svelte talks to Skathi's DOM, which represents the native element tree and uses Skathi's CSS engine. Runes, blocks, snippets, bindings, transitions and stores work on this path. Features that depend on an HTML parser or registered custom elements have the limits described below.
 
 `sk check` reports every feature on this page that does not work (an error) or works differently (a warning), with codes in the `SK5xxx` range. `sk build`, `sk publish` and `sk dev` print the same lines while they build. `sk explain SK5003` explains a code with an example and a fix. The [quick start](/quick-start/#coming-from-vue-what-differs-in-svelte) covers how a Svelte app mounts and what differs from a Vue app.
+
+## Choose a renderer (since 0.6)
+
+Existing applications and new templates use the **DOM renderer**. It implements the feature table below, including form bindings, transitions and global events. The optional **native renderer** uses Svelte's experimental renderer API and the same native node operations as Skathi's Vue renderer. Both paths draw into the Skathi window.
+
+To try the native renderer, install Svelte 5.59 or later in major 5 and set this option in `sk.config.json`. Keep the existing `mount(App)` entry. Development, hot reload, production bundles and Windows native AOT builds use the setting.
+
+```json
+{ "svelte": { "renderer": "native" } }
+```
+
+| Feature                                                                     | DOM                  | Native                                                     |
+| --------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------- |
+| Runes, stores, context, blocks, keyed lists and Svelte snippets             | Supported            | Supported                                                  |
+| Props, component bindings, attachments, actions and callback events         | Supported            | Supported                                                  |
+| Scoped CSS, class and style directives                                      | Supported            | Supported through the app stylesheet                       |
+| `bind:` on elements, including `bind:this`, dimensions and form controls    | Supported            | Svelte rejects the directive (SK5015)                      |
+| Transitions, intros, outros and `animate:flip`                              | Supported            | Svelte rejects the directive (SK5015)                      |
+| `<svelte:window>`, `<svelte:document>`, `<svelte:body>` and `<svelte:head>` | Supported            | Svelte rejects the element (SK5015)                        |
+| Legacy `on:` on elements                                                    | Supported            | Use an event attribute such as `onclick` (SK5015)          |
+| `<svelte:element>`, `<svelte:boundary>`, mounting into a pop-out            | Supported            | Supported                                                  |
+| Raw HTML, HTML-string snippets, hydration and registered custom elements    | See the limits below | Raw snippets cannot render, and the same host limits apply |
+
+The CLI collects scoped CSS in the app stylesheet. Native components that request `<svelte:options css="injected" />` receive `SK5015`.
+
+To keep a DOM-based form inside a native application, add `<svelte:options customRenderer={null} />` to its component. Each crossing creates a `<sk-svelte-host>` layout element. Style that element when its dimensions or its place in a flex/grid layout matter. A snippet passed across the boundary must come from a component compiled with the experimental renderer option. Enable the compiler option in the app's `svelte.config.js` when the editor or `svelte-check` reports `svelte_options_customrenderer_disabled`.
+
+```js
+export default { compilerOptions: { experimental: { customRenderer: true } } };
+```
+
+`SK5015` points to markup the native compiler rejects. `SK5016` means the installed compiler predates this API. Set `svelte.renderer` to `"dom"` or remove the setting to restore the full DOM mode. Skathi pins its compatibility tests to Svelte 5.59.0 and also runs them against the latest 5.59 patch. When upgrading Svelte, run the application's tests with the chosen renderer. [Svelte custom renderers](https://svelte.dev/docs/svelte/custom-renderers)
 
 ## At a glance
 

@@ -21,6 +21,7 @@
   "exports": {
     ".": "./src/runtime.ts",
     "./svelte": "./src/svelte.ts",
+    "./svelte-renderer": "./src/svelte-renderer.ts",
     "./jsx-runtime": {
       "types": "./jsx-runtime.d.ts"
     },

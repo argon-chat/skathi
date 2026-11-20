@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { effectFindings, runCheck } from "../check";
 import { ALL_CODES, REGISTRY, RETIRED } from "../check/codes";
@@ -39,6 +39,35 @@ describe("the code registry", () => {
     add(analyzeUnit(["broken.ts", "missing.ts"]).diagnostics);
     for (const app of ["check-badconfig", "check-unresolved"]) {
       add((await runCheck({ target: join(FIXTURES, app), toolVersion: "test" })).diagnostics);
+    }
+    const native = mkdtempSync(join(FIXTURES, "check-native-"));
+    try {
+      mkdirSync(join(native, "src"));
+      writeFileSync(join(native, "sk.config.json"), '{"svelte":{"renderer":"native"}}');
+      writeFileSync(join(native, "src/main.ts"), 'import App from "./App.svelte"; console.log(App)');
+      writeFileSync(join(native, "src/App.svelte"), '<script>let x = $state("");</script>\n<input bind:value={x} />');
+      const check = () => runCheck({ target: native, toolVersion: "test" });
+      const incompatible = (await check()).diagnostics;
+      expect(incompatible).toContainEqual(
+        expect.objectContaining({
+          code: "SK5015",
+          file: "src/App.svelte",
+          range: expect.objectContaining({ start: { line: 1, character: 7 } }),
+        }),
+      );
+      add(incompatible);
+      const old = join(native, "node_modules/svelte");
+      mkdirSync(old, { recursive: true });
+      writeFileSync(
+        join(old, "package.json"),
+        '{"name":"svelte","type":"module","exports":{"./compiler":"./compiler.js"}}',
+      );
+      writeFileSync(join(old, "compiler.js"), 'export const VERSION = "5.58.0"');
+      const version = (await check()).diagnostics;
+      expect(version).toContainEqual(expect.objectContaining({ code: "SK5016" }));
+      add(version);
+    } finally {
+      rmSync(native, { recursive: true, force: true });
     }
     const shaders = join(FIXTURES, "check-shaders");
     add(await effectFindings(shaders));

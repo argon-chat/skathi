@@ -189,6 +189,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "publishJit",
   "publishSingleFile",
   "aot",
+  "svelte",
   "intl",
   "httpCache",
   "colorPicker",
@@ -386,6 +387,19 @@ const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts
 
 export class ConfigError extends Error {}
 
+export function nativeSvelteRenderer(config: unknown): boolean {
+  if (config === undefined) return false;
+  if (config && typeof config === "object" && !Array.isArray(config)) {
+    for (const key of Object.keys(config)) {
+      if (key !== "renderer") throw new ConfigError(`Unknown sk.config.json setting svelte.${key}.`);
+    }
+    const mode = (config as { renderer?: unknown }).renderer;
+    if (mode === undefined || mode === "dom") return false;
+    if (mode === "native") return true;
+  }
+  throw new ConfigError('Set svelte.renderer to "dom" or "native" in sk.config.json.');
+}
+
 export function resolveApp(target: string): { appRoot: string; entry: string } {
   const abs = resolve(target);
   if (!existsSync(abs)) throw new ConfigError(`${target}: no such file or directory`);
@@ -446,6 +460,7 @@ export function loadAppConfig(
   const has = existsSync(configPath);
   if (options.configPath !== undefined && !has) throw new ConfigError(`${configPath}: no such config file`);
   const raw = has ? readJson(configPath) : {};
+  nativeSvelteRenderer(raw.svelte);
   const where = (k: string) => `sk.config.json ${k}`;
   const warnings: string[] = [];
 

@@ -72,6 +72,7 @@ import { CssWarnings } from "./check/css";
 import { FrameworkWarnings } from "./check/frameworks";
 import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
+import { nativeSvelteRenderer } from "./cli/config";
 import { protectHapticPatterns } from "./haptic-patterns";
 
 const C = paint(colorEnabled(process.stdout));
@@ -99,7 +100,12 @@ const SOURCE_EXT = /\.(vue|svelte|js|ts|mjs)$/;
 
 // The window block of sk.config.json is copied verbatim into the manifest: the host reads it
 // before the window opens, the only time creation-time options can be set without a flash.
-const SK_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
+const appRootArg = argv.find((arg) => arg.startsWith("--app-root="))?.slice("--app-root=".length);
+const SK_CONFIG_DIR = appRootArg
+  ? resolve(appRootArg)
+  : APP_SRC_DIR.endsWith(`${sep}src`)
+    ? dirname(APP_SRC_DIR)
+    : APP_SRC_DIR;
 const SK_CONFIG_PATH = join(SK_CONFIG_DIR, "sk.config.json");
 
 function readSkConfig(): Record<string, unknown> | undefined {
@@ -197,7 +203,6 @@ function findAppRoot(startDir: string, stopDir: string): string {
     dir = parent;
   }
 }
-const appRootArg = argv.find((arg) => arg.startsWith("--app-root="))?.slice("--app-root=".length);
 const APP_ROOT = appRootArg ? resolve(appRootArg) : findAppRoot(APP_SRC_DIR, WS_ROOT);
 if (appRootArg && !existsSync(join(APP_ROOT, "package.json"))) {
   throw new Error(`--app-root must name an application with package.json: ${APP_ROOT}`);
@@ -216,6 +221,8 @@ const FRAMEWORK = new Map(
   }),
 );
 const APP_VUE = appVue(APP_ROOT);
+const NATIVE_SVELTE = nativeSvelteRenderer(readSkConfig()?.svelte);
+const SVELTE_CONDITIONS = NATIVE_SVELTE ? ["svelte-custom-renderer"] : [];
 
 /** Resolves a bare specifier from the app root with browser/ESM conditions; createRequire cannot see ESM-only `exports` maps. */
 function resolveFromApp(spec: string): string {
@@ -255,6 +262,7 @@ async function bundlerResolve(spec: string, from: string, kind: "require" | "imp
   await Bun.build({
     entrypoints: [probe],
     target: "browser",
+    conditions: SVELTE_CONDITIONS,
     format: "cjs",
     plugins: [
       {
@@ -329,6 +337,7 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
 
 const DEFINES: Record<string, string> = {
   __DEV__: "true",
+  __SK_SVELTE_NATIVE__: String(NATIVE_SVELTE),
   "process.env.NODE_ENV": '"development"',
   __FEATURE_SUSPENSE__: "true",
   __COMPAT__: "false",
@@ -556,6 +565,7 @@ const vuePlugin = {
       const id = toId(args.path);
       const out = await compileSvelte(APP_ROOT, args.path, await Bun.file(args.path).text(), {
         dev: false,
+        native: NATIVE_SVELTE,
         filename: id,
       });
       for (const w of out.warnings) devAdvise(w);
@@ -605,6 +615,7 @@ const appModulePlugin = {
       const id = toId(args.path);
       const out = await compileSvelte(APP_ROOT, args.path, await Bun.file(args.path).text(), {
         dev: true,
+        native: NATIVE_SVELTE,
         filename: id,
       });
       for (const w of out.warnings) devAdvise(w);
@@ -1021,6 +1032,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
       entrypoints: [candidate],
       format: "cjs",
       target: "browser", // picks the browser/ESM conditions, not node builtins
+      conditions: SVELTE_CONDITIONS,
       // Pre-seeded ids plus every other package entry stay external. A dependency can ship raw .vue
       // source: without the SFC plugin Bun treats it as an asset and the import silently renders
       // nothing.
@@ -1082,6 +1094,7 @@ async function buildNpmGroup(root: string, members: string[]): Promise<{ built: 
       entrypoints: [probe],
       format: "cjs",
       target: "browser",
+      conditions: SVELTE_CONDITIONS,
       plugins: [
         {
           name: "sk-npm-group-entry",

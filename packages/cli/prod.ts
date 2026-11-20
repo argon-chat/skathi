@@ -21,7 +21,8 @@ import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import type { BuildStyles, ModuleGraph } from "./check/graph";
 import { pruneVendorPrefixes } from "./css-prefixes";
-import { SVELTE_SOURCE, compileSvelte } from "./svelte";
+import { SVELTE_SOURCE, compileSvelte, SvelteRendererError } from "./svelte";
+import { nativeSvelteRenderer } from "./cli/config";
 import { protectHapticPatterns } from "./haptic-patterns";
 import {
   DOM_ENTRY,
@@ -113,6 +114,7 @@ function readSkConfig(): Record<string, unknown> {
   }
 }
 const SK_CONFIG = readSkConfig();
+const NATIVE_SVELTE = nativeSvelteRenderer(SK_CONFIG.svelte);
 
 function windowConfig(): string {
   const cfg = SK_CONFIG;
@@ -197,10 +199,11 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
 }
 
 // As Vite's production build: a package's `production` export (esm-env's DEV is `false`, not a NODE_ENV probe).
-const PROD_CONDITIONS = ["production"];
+const PROD_CONDITIONS = NATIVE_SVELTE ? ["production", "svelte-custom-renderer"] : ["production"];
 
 const DEFINES: Record<string, string> = {
   __DEV__: "false",
+  __SK_SVELTE_NATIVE__: String(NATIVE_SVELTE),
   "process.env.NODE_ENV": '"production"',
   __VUE_PROD_DEVTOOLS__: "false",
   __FEATURE_SUSPENSE__: "true",
@@ -463,6 +466,7 @@ const AOT_INPUTS = aotInputsDir
 
 /** `--graph`: every .js/.ts/.vue/.svelte file the build loaded, by absolute path. */
 const GRAPH_LOADED = new Set<string>();
+const RENDERER_ERRORS: ModuleGraph["errors"] = [];
 const SHAPE_NOTES = new Map<string, number>();
 const SHAPES = {
   sourceLoaded:
@@ -529,7 +533,23 @@ const vuePlugin = {
       const id = toId(args.path);
       if (graphOut) GRAPH_LOADED.add(args.path);
       const source = await Bun.file(args.path).text();
-      const out = await compileSvelte(APP_ROOT, args.path, source, { dev: false, filename: id });
+      const out = await compileSvelte(APP_ROOT, args.path, source, {
+        dev: false,
+        filename: id,
+        native: NATIVE_SVELTE,
+      }).catch((e: unknown) => {
+        if (!graphOut || !(e instanceof SvelteRendererError)) throw e;
+        RENDERER_ERRORS.push({
+          code: e.code,
+          message: e.detail,
+          file: e.file,
+          line: e.line,
+          column: e.column,
+          specifier: null,
+        });
+        return null;
+      });
+      if (!out) return { contents: "export default function() {}", loader: "js" };
       AOT_INPUTS?.svelte(args.path, source, out.js);
       for (const w of out.warnings) advise(w);
       STYLED_COMPONENTS.add(args.path);
@@ -649,15 +669,18 @@ async function writeGraph(out: string) {
     styles: [...STYLE_FILES].sort(),
     tailwind: TW_CONFIG !== null,
     ...(bundle ? { bundle } : {}),
-    errors: result.logs
-      .filter((log) => log.level === "error")
-      .map((log) => ({
-        message: log.message,
-        file: log.position?.file ? resolve(log.position.file) : null,
-        line: log.position && log.position.line > 0 ? log.position.line : null,
-        column: log.position && log.position.column >= 0 ? log.position.column : null,
-        specifier: log.name === "ResolveMessage" ? log.specifier : null,
-      })),
+    errors: [
+      ...RENDERER_ERRORS,
+      ...result.logs
+        .filter((log) => log.level === "error")
+        .map((log) => ({
+          message: log.message,
+          file: log.position?.file ? resolve(log.position.file) : null,
+          line: log.position && log.position.line > 0 ? log.position.line : null,
+          column: log.position && log.position.column >= 0 ? log.position.column : null,
+          specifier: log.name === "ResolveMessage" ? log.specifier : null,
+        })),
+    ],
   };
   writeAtomic(out, JSON.stringify(graph) + "\n");
 }

@@ -1,29 +1,33 @@
 // `sk create --template svelte`, run as `sk dev` runs it: the dev build, the app's own asset fetch, clicks, and an edit
 // on disk that the watcher rebuilds and the host hot-updates.
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { afterAll, describe, expect as bunExpect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect as bunExpect, test } from "bun:test";
 import { create } from "../../cli/cli/create";
 import { expect, launch, REPO, WORK_DIR } from "../src/index";
 
 const T = 60_000;
-const dir = join(WORK_DIR, `svelte-template-${process.pid}`);
-rmSync(dir, { recursive: true, force: true });
 mkdirSync(WORK_DIR, { recursive: true });
-create(dir, { name: "svelte-template", template: "svelte", platforms: ["windows"] });
-const entry = relative(REPO, join(dir, "src/main.ts")).split("\\").join("/");
-
-const app = await launch({ app: entry, window: [760, 520], label: "svelte-template" });
-let watcher: { kill(): void; exited: Promise<number> } | null = null;
-afterAll(async () => {
-  watcher?.kill();
-  await watcher?.exited;
-  await app.close();
-  rmSync(dir, { recursive: true, force: true });
-});
-
-describe("the svelte template", () => {
+describe.each(["dom", "native"] as const)("the Svelte template (%s renderer)", (mode) => {
+  const dir = mkdtempSync(join(WORK_DIR, "svelte-template-"));
+  const entry = relative(REPO, join(dir, "src/main.ts")).split("\\").join("/");
+  let app: Awaited<ReturnType<typeof launch>>;
+  let watcher: { kill(): void; exited: Promise<number> } | null = null;
+  beforeAll(async () => {
+    create(dir, { name: "svelte-template", template: "svelte", platforms: ["windows"] });
+    if (mode === "native") {
+      const file = join(dir, "sk.config.json");
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), svelte: { renderer: mode } }));
+    }
+    app = await launch({ app: entry, window: [760, 520], label: `svelte-template-${mode}` });
+  }, T);
+  afterAll(async () => {
+    watcher?.kill();
+    await watcher?.exited;
+    await app?.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
   test(
     "mounts, fetches its asset and counts clicks",
     async () => {

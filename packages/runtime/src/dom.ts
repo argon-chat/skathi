@@ -5,6 +5,9 @@
 import "./apphost";
 import type { MirrorElement } from "./runtime/types";
 import { ensureDocumentRoot, teardownDocumentRoot } from "./runtime/root";
+import { nodeOps } from "./runtime/node-ops";
+import { detachNode, looseCreated } from "./runtime/nodes";
+import { patchProp } from "./runtime/patch-prop";
 import { installStylesheet } from "./runtime/stylesheet";
 import { watchDomWrites } from "./runtime/perf-advice";
 import "./runtime/reflect";
@@ -12,6 +15,8 @@ import "./runtime/dnd";
 import "./runtime/document";
 
 export { appRoot, ensureDocumentRoot } from "./runtime/root";
+/** @internal The Svelte renderer shares native node registries with the host's runtime module. */
+export const svelteNodeOps = { nodeOps, detachNode, looseCreated, patchProp };
 export { appCapture, appLaunch, appPermissions, appShell, appStorage } from "./appapi";
 export type { AppDesktopError, CapturePermission, CaptureSource, ScreenCaptureSource, SkLaunchEvent } from "./appapi";
 export { appWindow, defineWindow, getCurrentWindow, trackWindowReads } from "./runtime/window";

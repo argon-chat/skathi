@@ -12,8 +12,10 @@ import {
 } from "svelte";
 import type { HTMLAttributes } from "svelte/elements";
 import { createSubscriber } from "svelte/reactivity";
+import type nativeRenderer from "./svelte-renderer";
 import {
   mountDocument,
+  ensureDocumentRoot,
   trackWindowReads,
   type SkWindowEvents,
   type SkWindowOptions,
@@ -201,6 +203,9 @@ export type MountOptions<Props extends object> = Omit<SvelteMountOptions<Props>,
 const mounted: object[] = [];
 let appMounted = false;
 
+declare const __SK_SVELTE_NATIVE__: boolean;
+declare function require(id: "@skathi-native/runtime/svelte-renderer"): { default: typeof nativeRenderer };
+
 function unmountAll(): void {
   appMounted = false;
   for (const app of mounted.splice(0).reverse()) void svelteUnmount(app);
@@ -215,8 +220,15 @@ export function mount<Props extends object, Exports extends object>(
   options?: MountOptions<Props>,
 ): Exports {
   const run = (target: object): Exports => {
-    // svelte-dom-shim: Svelte's DOM mount() renders into the mirror root through the emulated DOM; the custom renderer's mount replaces it (sveltejs/svelte#18042)
-    const exports = svelteMount(component, { ...options, target } as SvelteMountOptions<Props>) as Exports;
+    // svelte-dom-shim: default DOM apps mount into Skathi's document mirror.
+    const exports =
+      typeof __SK_SVELTE_NATIVE__ !== "undefined" && __SK_SVELTE_NATIVE__
+        ? svelteMount(component, {
+            ...options,
+            target: target === globalThis.document ? ensureDocumentRoot() : target,
+            renderer: require("@skathi-native/runtime/svelte-renderer").default,
+          } as SvelteMountOptions<Props, typeof nativeRenderer>)
+        : svelteMount(component, { ...options, target } as SvelteMountOptions<Props>);
     mounted.push(exports);
     return exports;
   };

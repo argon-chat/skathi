@@ -10,6 +10,19 @@ type Compiler = typeof SvelteCompiler;
 /** Files the Svelte compiler owns, components and rune modules both. */
 export const SVELTE_SOURCE = /\.svelte(?:\.[jt]s)?$/;
 const RUNE_MODULE = /\.svelte\.[jt]s$/;
+export const SVELTE_RENDERER = "@skathi-native/runtime/svelte-renderer";
+
+export class SvelteRendererError extends Error {
+  constructor(
+    readonly code: "SK5015" | "SK5016",
+    readonly detail: string,
+    readonly file: string,
+    readonly line = 1,
+    readonly column = 0,
+  ) {
+    super(`${file}:${line}:${column + 1}: ${code} ${detail}`);
+  }
+}
 
 const compilers = new Map<string, Promise<Compiler>>();
 
@@ -26,11 +39,7 @@ export function svelteCompiler(appRoot: string): Promise<Compiler> {
           `${appRoot}: a .svelte file needs Svelte 5 installed in the app: add "svelte" to its dependencies`,
         );
       }
-      const mod = (await import(pathToFileURL(path).href)) as Compiler;
-      if (!/^5\./.test(mod.VERSION)) {
-        throw new Error(`${appRoot}: svelte ${mod.VERSION} is installed; Skathi compiles Svelte 5 components`);
-      }
-      return mod;
+      return (await import(pathToFileURL(path).href)) as Compiler;
     })();
     compilers.set(appRoot, compiler);
   }
@@ -53,9 +62,19 @@ export async function compileSvelte(
   appRoot: string,
   absPath: string,
   source: string,
-  o: { dev: boolean; filename: string },
+  o: { dev: boolean; filename: string; native?: boolean },
 ): Promise<SvelteOutput> {
   const svelte = await svelteCompiler(appRoot);
+  if (o.native && !Bun.semver.satisfies(svelte.VERSION, "^5.59.0")) {
+    throw new SvelteRendererError(
+      "SK5016",
+      `Native rendering needs Svelte 5.59.0 or newer in major 5 (found ${svelte.VERSION}). Install svelte@^5.59.0 or set svelte.renderer to "dom".`,
+      absPath,
+    );
+  }
+  if (!/^5\./.test(svelte.VERSION)) {
+    throw new Error(`${appRoot}: svelte ${svelte.VERSION} is installed; Skathi compiles Svelte 5 components`);
+  }
   const describe = (w: SvelteCompiler.Warning) =>
     `${o.filename}${w.start ? `:${w.start.line}:${w.start.column + 1}` : ""}: ${w.message.split("\n")[0]} (${w.code})`;
   if (RUNE_MODULE.test(absPath)) {
@@ -78,15 +97,28 @@ export async function compileSvelte(
     );
     source = prepared.code;
   }
-  const out = svelte.compile(source, {
-    filename: o.filename,
-    generate: "client",
-    dev: o.dev,
-    hmr: o.dev,
-    // The builders route component CSS into the app stylesheet, as they do an SFC's <style>.
-    css: "external",
-    // svelte-dom-shim: fragments: "tree" builds templates with createElement, since Skathi's DOM has no HTML parser for the default <template> innerHTML; goes with the custom renderer (sveltejs/svelte#18042)
-    fragments: "tree",
-  });
+  let out: SvelteCompiler.CompileResult;
+  try {
+    out = svelte.compile(source, {
+      filename: o.filename,
+      generate: "client",
+      dev: o.dev,
+      hmr: o.dev,
+      css: "external",
+      // svelte-dom-shim: DOM components, including DOM guests in native apps, need templates without an HTML parser.
+      fragments: "tree",
+      ...(o.native && { experimental: { customRenderer: SVELTE_RENDERER } }),
+    });
+  } catch (e) {
+    const err = e as SvelteCompiler.CompileError;
+    if (!o.native || err?.code !== "incompatible_with_custom_renderer") throw e;
+    throw new SvelteRendererError(
+      "SK5015",
+      `${err.message.split("\n")[0]}. Set svelte.renderer to "dom" to use this feature.`,
+      absPath,
+      err.start?.line,
+      err.start?.column,
+    );
+  }
   return { js: out.js.code, css: out.css ? restore(out.css.code) : null, warnings: out.warnings.map(describe) };
 }

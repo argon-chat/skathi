@@ -21,6 +21,8 @@ crates/sk-lottie/tests/fixtures/
 packages/cli/test/fixtures/
 packages/runtime/test/fixtures/
 packages/test/fixtures/**/public/
+# Bun 1.4.4's bundled Svelte parser predates the customRenderer component option.
+packages/test/fixtures/svelte-renderer/src/DomField.svelte
 !bunfig.toml
 
 # Its own repository (argon-chat/skathi-templates).

@@ -31,6 +31,7 @@ export interface BuildStyles {
 }
 
 export interface GraphError {
+  code?: "SK5015" | "SK5016";
   message: string;
   file: string | null;
   /** One-based. */

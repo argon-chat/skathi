@@ -341,6 +341,24 @@ const CODES: CodeInfo[] = [
     example: "a UI kit that renders markdown with `v-html`",
     fix: "Check that the parts of the package the app uses work; allow SK5013 for the package when they do.",
   },
+  {
+    code: "SK5015",
+    title: "feature unavailable in Svelte's native renderer",
+    severity: "error",
+    explanation:
+      "Svelte's experimental custom renderer rejects markup that depends on the DOM renderer, including bindings on elements, transitions and global elements.",
+    example: "<input bind:value={name} />",
+    fix: 'Set svelte.renderer to "dom", or implement the interaction with event attributes and application state.',
+  },
+  {
+    code: "SK5016",
+    title: "Svelte version lacks custom renderers",
+    severity: "error",
+    explanation:
+      "The native renderer uses the experimental API introduced in Svelte 5.59.0. The compiler and runtime come from the app's Svelte installation.",
+    example: 'An app with svelte 5.57 and svelte.renderer set to "native".',
+    fix: 'Install svelte@^5.59.0, or set svelte.renderer to "dom".',
+  },
 ];
 
 export const REGISTRY: ReadonlyMap<string, CodeInfo> = new Map(CODES.map((c) => [c.code, c]));
