@@ -320,6 +320,8 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             .copied()
             .unwrap_or_default();
         surface.set_info(info);
+        #[cfg(any(windows, target_os = "macos"))]
+        surface.lock_state().trim_slots(std::time::Instant::now());
     }
     carry(window, here);
     dispatch(events, window, cx);

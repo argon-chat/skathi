@@ -125,6 +125,8 @@ On Windows and macOS the frame can stay on the GPU. Pick the path by what the pr
 
 [GPU frames on Windows](/embedding/gpu-frames/) and [GPU frames on macOS](/embedding/gpu-frames-macos/) walk through each, with code. Every GPU present copies the frame into a texture the surface owns, so the producer gets its texture back as soon as that copy has run.
 
+Metal and D3D12 keep up to five copy slots during a burst and trim back to at most two in steady use. They retire slots of the previous size or format once the GPU and compositor release them. After `clear()`, the surface releases all its copy slots once it has stayed clear for 50 ms (three refreshes at 60 Hz) and any outstanding copies and reads have finished. A GPU present during that grace period can reuse the slots (since 0.7).
+
 ## Half-float frames
 
 A surface takes 8-bit BGRA unless it is told otherwise. A producer that renders in linear light, such as a video player tone-mapping HDR video or a renderer with an FP16 framebuffer, can hand over half floats instead. Set the surface's format once, from native code, before presenting:

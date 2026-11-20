@@ -54,6 +54,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
+#[cfg(any(windows, target_os = "macos"))]
+use std::time::Instant;
 
 /// The largest frame side accepted, the renderer's texture limit.
 const MAX_SIDE: u32 = 16384;
@@ -429,6 +431,8 @@ pub(crate) struct State {
     closed: bool,
     pub(crate) seq: u64,
     pub(crate) frame: Option<Frame>,
+    #[cfg(any(windows, target_os = "macos"))]
+    trim_cleared_at: Option<Instant>,
     /// The id of `frame`, and of the last frame presented.
     pub(crate) frame_id: u64,
     key: feedback::Key,
@@ -487,6 +491,25 @@ impl Frame {
 }
 
 impl State {
+    #[cfg(any(windows, target_os = "macos"))]
+    fn trim_slots(&mut self, now: Instant) {
+        #[cfg(windows)]
+        let gpu = &mut self.gpu12;
+        #[cfg(target_os = "macos")]
+        let gpu = &mut self.metal;
+        if let Some(at) = self.trim_cleared_at {
+            if now < at {
+                sk_runtime::frames::wake_at(at);
+            } else if gpu.trim_withdrawn() {
+                sk_runtime::frames::wake_at(now + Duration::from_millis(250));
+            } else {
+                self.trim_cleared_at = None;
+            }
+        } else if gpu.trim() {
+            sk_runtime::frames::wake_at(now + Duration::from_millis(250));
+        }
+    }
+
     fn accept_frame(&self) -> Result<(), SurfaceError> {
         if self.closed {
             return Err(SurfaceError::Closed);
@@ -517,6 +540,10 @@ impl State {
             Some(Frame::Metal { .. }) => true,
             _ => false,
         };
+        #[cfg(any(windows, target_os = "macos"))]
+        if copied_later {
+            self.trim_cleared_at = None;
+        }
         if !copied_later {
             self.settle(id);
             #[cfg(target_os = "macos")]
@@ -803,6 +830,10 @@ impl SurfaceHandle {
             st.gpu12.withdraw();
             #[cfg(target_os = "macos")]
             st.metal.withdraw();
+            #[cfg(any(windows, target_os = "macos"))]
+            {
+                st.trim_cleared_at = Some(Instant::now() + Duration::from_millis(50));
+            }
             if st.watched {
                 let key = st.key;
                 feedback::with(|t| t.cleared(key));

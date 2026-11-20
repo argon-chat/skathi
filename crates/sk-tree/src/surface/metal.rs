@@ -38,6 +38,7 @@ use super::{check_format, check_size, lock, Frame, State, SurfaceError, SurfaceF
 /// Four copies in flight and the newest copied frame. More means the atlas is not keeping up; the
 /// present is refused.
 const MAX_SLOTS: usize = 5;
+const STEADY_SLOTS: usize = 2;
 
 const BGRA: u32 = kCVPixelFormatType_32BGRA;
 const NV12_VIDEO: u32 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -362,8 +363,46 @@ impl SurfaceGpu {
             .map(|(i, _)| i)
     }
 
+    pub(super) fn trim(&mut self) -> bool {
+        let Some(current) = self.current.map(|i| &self.slots[i]) else {
+            return false;
+        };
+        let (size, format, written) = (current.size, current.format, current.written);
+        let fits = |s: &Slot| s.size == size && s.format == format;
+        if self.slots.len() <= STEADY_SLOTS && self.slots.iter().all(fits) {
+            return false;
+        }
+        let queue = self.queue.as_ref().expect("a submitted slot has a queue");
+        let fallback = self
+            .newest_done(queue.event.signaledValue())
+            .map(|i| self.slots[i].written);
+        let held = |s: &Slot| {
+            s.written == written || Some(s.written) == fallback || Arc::strong_count(&s.texture) > 1
+        };
+        let in_use = self.slots.iter().filter(|s| fits(s) && held(s)).count();
+        let mut spares = STEADY_SLOTS.saturating_sub(in_use).max(1);
+        self.slots.retain(|s| {
+            if held(s) {
+                return true;
+            }
+            if fits(s) && spares > 0 {
+                spares -= 1;
+                return true;
+            }
+            false
+        });
+        self.current = self.slots.iter().position(|s| s.written == written);
+        self.slots.len() > STEADY_SLOTS || self.slots.iter().any(|s| !fits(s))
+    }
+
+    pub(super) fn trim_withdrawn(&mut self) -> bool {
+        self.slots.retain(|s| Arc::strong_count(&s.texture) > 1);
+        !self.slots.is_empty()
+    }
+
     /// The frame was withdrawn: no slot's frame may be shown again.
     pub(crate) fn withdraw(&mut self) {
+        self.current = None;
         for slot in &mut self.slots {
             slot.seq = 0;
         }
@@ -731,6 +770,7 @@ fn copy_in(
         let done = state.metal.slots[done].frame;
         state.settle(done);
     }
+    state.metal.trim();
     Ok((frame, value))
 }
 
@@ -1377,6 +1417,114 @@ mod tests {
         event.setSignaledValue(1);
         eventually("a free slot", || present().is_ok());
         assert!(all_near(&shown(&s), [1, 2, 3, 255], 0));
+    }
+
+    #[test]
+    fn burst_and_old_size_slots_retire_after_their_copy_and_last_reader() {
+        let Some(device) = renderer() else { return };
+        let s = surface("tests:metal-retire-slots");
+        let source = filled(&device, [1, 2, 3, 255]);
+        let small = written(&device, MTLPixelFormat::BGRA8Unorm, (1, 1), &[4, 5, 6, 255]);
+        let event = device.newSharedEvent().unwrap();
+        let release = s.release_event().unwrap();
+        let present = |source: &Texture, ready| unsafe {
+            s.present_metal_texture(raw(source), ready).unwrap()
+        };
+        let first = present(&source, None);
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        let gate = Some((raw(&*event), 1));
+        let last_reader = s.lock_state().metal.ready().unwrap();
+        for _ in 1..MAX_SLOTS {
+            present(&source, gate);
+        }
+        {
+            let mut state = s.lock_state();
+            assert!(state.metal.trim());
+            assert_eq!(state.metal.slots.len(), MAX_SLOTS);
+            assert_eq!(state.metal.ready().unwrap().frame().1, first.frame);
+        }
+        event.setSignaledValue(1);
+        assert!(all_near(&read_back(last_reader), [1, 2, 3, 255], 0));
+        eventually("burst slots to retire", || !s.lock_state().metal.trim());
+        assert_eq!(s.lock_state().metal.slots.len(), STEADY_SLOTS);
+        let last_reader = s.lock_state().metal.ready().unwrap();
+        let old_slot = Arc::downgrade(&last_reader.texture);
+        let next = present(&small, Some((raw(&*event), 2)));
+        {
+            let mut state = s.lock_state();
+            assert!(state.metal.trim());
+            assert_ne!(state.metal.ready().unwrap().frame().1, next.frame);
+        }
+        event.setSignaledValue(2);
+        assert!(release.wait(next.release, Duration::from_secs(5)));
+        assert!(old_slot.upgrade().is_some());
+        assert!(all_near(&read_back(last_reader), [1, 2, 3, 255], 0));
+        eventually("old-size slots to retire", || !s.lock_state().metal.trim());
+        let state = s.lock_state();
+        assert!(state.metal.slots.iter().all(|s| s.size == (1, 1)));
+        assert_eq!(state.metal.ready().unwrap().frame().1, next.frame);
+    }
+
+    #[test]
+    fn clearing_defers_slot_retirement_and_a_new_present_keeps_the_pool() {
+        let Some(device) = renderer() else { return };
+        let s = surface("tests:metal-cleared-slots");
+        let source = filled(&device, [1, 2, 3, 255]);
+        let release = s.release_event().unwrap();
+        let event = device.newSharedEvent().unwrap();
+        let present = |ready| unsafe { s.present_metal_texture(raw(&*source), ready) }.unwrap();
+        let first = present(None);
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        eventually("the copy to release its slot", || {
+            Arc::strong_count(&s.lock_state().metal.slots[0].texture) == 1
+        });
+        s.clear();
+        let at = s.lock_state().trim_cleared_at.unwrap();
+        let original = Arc::downgrade(&s.lock_state().metal.slots[0].texture);
+        {
+            let mut state = s.lock_state();
+            state.trim_slots(at - Duration::from_millis(1));
+            assert!(state.metal.ready().is_none());
+            assert_eq!(state.metal.slots.len(), 1);
+        }
+        let resumed = present(None);
+        assert!(release.wait(resumed.release, Duration::from_secs(5)));
+        {
+            let mut state = s.lock_state();
+            assert!(state.trim_cleared_at.is_none());
+            state.trim_slots(at);
+            assert_eq!(state.metal.slots.len(), 1);
+            assert!(Arc::ptr_eq(
+                &original.upgrade().unwrap(),
+                &state.metal.slots[0].texture
+            ));
+        }
+        let last_reader = s.lock_state().metal.ready().unwrap();
+        let last_slot = Arc::downgrade(&last_reader.texture);
+        let queued = present(Some((raw(&*event), 1)));
+        s.clear();
+        let at = s.lock_state().trim_cleared_at.unwrap();
+        {
+            let mut state = s.lock_state();
+            state.trim_slots(at);
+            assert_eq!(state.metal.slots.len(), 2);
+        }
+        event.setSignaledValue(1);
+        assert!(release.wait(queued.release, Duration::from_secs(5)));
+        eventually("the queued slot to retire", || {
+            let mut state = s.lock_state();
+            state.trim_slots(at);
+            state.metal.slots.len() == 1
+        });
+        assert!(last_slot.upgrade().is_some());
+        drop(last_reader);
+        eventually("the last reader's slot to retire", || {
+            let mut state = s.lock_state();
+            state.trim_slots(at);
+            state.metal.slots.is_empty()
+        });
+        assert!(last_slot.upgrade().is_none());
+        assert!(present(None).release > queued.release);
     }
 
     #[test]

@@ -661,14 +661,14 @@ impl SurfaceGpu {
 
     /// An old producer size or burst slot can retire once the copy queue, the latched frame and
     /// the atlas have all let go. Keep the newest completed picture while its successor waits.
-    fn trim(&mut self) {
+    pub(super) fn trim(&mut self) -> bool {
         let Some(current) = self.current.map(|i| &self.slots[i]) else {
-            return;
+            return false;
         };
         let (size, format, written) = (current.size, current.format, current.written);
         let fits = |s: &Slot| s.size == size && s.format == format;
         if self.slots.len() <= STEADY_SLOTS && self.slots.iter().all(fits) {
-            return;
+            return false;
         }
         let queue = self.queue.as_ref().expect("a submitted slot has a queue");
         let completed = queue.reclaim(&mut lock(&queue.submit));
@@ -690,10 +690,20 @@ impl SurfaceGpu {
             false
         });
         self.current = self.slots.iter().position(|s| s.written == written);
+        self.slots.len() > STEADY_SLOTS || self.slots.iter().any(|s| !fits(s))
+    }
+
+    pub(super) fn trim_withdrawn(&mut self) -> bool {
+        if let Some(queue) = &self.queue {
+            queue.reclaim(&mut lock(&queue.submit));
+        }
+        self.slots.retain(|s| Arc::strong_count(&s.texture) > 1);
+        !self.slots.is_empty()
     }
 
     /// The frame was withdrawn: no slot's frame may be shown again.
     pub(crate) fn withdraw(&mut self) {
+        self.current = None;
         for slot in &mut self.slots {
             slot.seq = 0;
         }
@@ -1504,6 +1514,54 @@ mod tests {
         let mut state = s.lock_state();
         assert_eq!(state.gpu12.for_tick(None).unwrap().frame, last.frame);
         assert_eq!(state.gpu12.slots.len(), 2, "retire on an idle tick");
+    }
+
+    #[test]
+    fn clearing_retires_all_slots_after_the_grace_period_and_copy_fence() {
+        let r = renderer();
+        let s = surface("tests:d3d12-cleared-slots");
+        let release = s.release_fence().unwrap();
+        let source = texture(&r, DXGI_FORMAT_B8G8R8A8_UNORM, 1, &[1, 2, 3, 255]);
+        let producer: ID3D12Fence =
+            unsafe { r.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.unwrap();
+        let present = |wait| unsafe {
+            s.present_d3d12(source.as_raw(), D3D12_RESOURCE_STATE_COMMON.0, wait)
+                .unwrap()
+        };
+        let first = present(None);
+        assert!(release.wait(first.release, Duration::from_secs(5)));
+        s.clear();
+        let at = s.lock_state().trim_cleared_at.unwrap();
+        let resumed = present(None);
+        assert!(release.wait(resumed.release, Duration::from_secs(5)));
+        {
+            let mut state = s.lock_state();
+            state.trim_slots(at);
+            assert!(state.trim_cleared_at.is_none());
+            assert_eq!(state.gpu12.ready().unwrap().frame, resumed.frame);
+        }
+        let last_reader = s.lock_state().gpu12.ready().unwrap();
+        let queued = present(Some((producer.as_raw(), 1)));
+        s.clear();
+        let mut state = s.lock_state();
+        let at = state.trim_cleared_at.unwrap();
+        state.trim_slots(at - Duration::from_millis(1));
+        assert!(state.gpu12.ready().is_none());
+        assert_eq!(state.gpu12.slots.len(), 2);
+        state.trim_slots(at);
+        assert_eq!(state.gpu12.slots.len(), 2);
+        drop(state);
+        unsafe { producer.Signal(1) }.unwrap();
+        assert!(release.wait(queued.release, Duration::from_secs(5)));
+        let mut state = s.lock_state();
+        state.trim_slots(at);
+        assert_eq!(state.gpu12.slots.len(), 1);
+        drop(last_reader);
+        state.trim_slots(at);
+        assert!(state.gpu12.slots.is_empty());
+        assert!(state.trim_cleared_at.is_none());
+        drop(state);
+        assert!(present(None).release > queued.release);
     }
 
     #[test]
