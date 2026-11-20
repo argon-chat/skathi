@@ -568,7 +568,7 @@ function onDrop(e: DragEvent, to: number) {
       'A drag starts after a left press on a `draggable="true"` element moves more than 4 px; the release fires `drop`, then `dragend`, and no `click`.',
       "Escape cancels the drag, and a drag ends at the window's edge.",
       "`setDragImage` does nothing: no drag image is drawn.",
-      "Files dragged in from another app fire no drag events.",
+      "A file dragged in from the desktop reaches the receiving window through dragenter, dragover, dragleave and drop (since 0.6). Read its files in the drop handler.",
     ],
   },
   "touch-event": {

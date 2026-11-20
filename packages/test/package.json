@@ -14,5 +14,8 @@
   },
   "comments": {
     "dependencies": "None on purpose: bun:test ships with bun, and the wire is node:net + node:child_process."
+  },
+  "devDependencies": {
+    "@vueuse/core": "15.0.0"
   }
 }
