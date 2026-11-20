@@ -2,6 +2,14 @@ name: macOS 26 GPU diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      measurements:
+        description: Diagnostics to run
+        type: choice
+        default: all
+        options:
+          - all
+          - surface
 
 permissions:
   contents: read
@@ -18,6 +26,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -31,6 +40,8 @@ jobs:
         with:
           key: macos-26-diagnostics-aarch64
       - name: Measure launch footprint, active displays and Metal drawables
+        env:
+          MEASUREMENTS: ${{ inputs.measurements }}
         run: bash .github/scripts/macos26-diagnostics.sh
       - name: Upload diagnostics
         if: always()

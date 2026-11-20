@@ -7,6 +7,8 @@ mkdir -p "$scratch" "$results"
 target=aarch64-apple-darwin
 profile="target/$target/release"
 features=prod,storages,clipboard,no-devtools
+measurements="${MEASUREMENTS:-all}"
+[[ "$measurements" == all || "$measurements" == surface ]]
 
 {
   sw_vers
@@ -25,36 +27,21 @@ features=prod,storages,clipboard,no-devtools
 xcrun clang -O2 -fobjc-arc .github/scripts/macos26-measure.m -framework AppKit -framework CoreGraphics -o "$scratch/measure"
 "$scratch/measure" displays | tee "$results/displays.txt"
 
-cargo build --locked --release -p sk-app --bin sk-app --no-default-features --features "$features" --target "$target"
-cp "$profile/sk-app" "$scratch/sk-app-precompiled"
-cargo build --locked --release -p sk-app --bin sk-app --no-default-features --features "$features,runtime-shaders" --target "$target"
-cp "$profile/sk-app" "$scratch/sk-app-runtime"
-
 app="$scratch/app"
 mkdir -p "$app/src"
 ln -s "$PWD/node_modules" "$app/node_modules"
 cat > "$app/package.json" <<'JSON'
 {"name":"skathi-macos26-diagnostics","private":true,"type":"module","dependencies":{"@skathi-native/runtime":"0.7.0"}}
 JSON
-cat > "$app/sk.config.json" <<'JSON'
-{"name":"skathi-macos26-diagnostics","window":{"title":"Skathi diagnostics","width":600,"height":400}}
-JSON
-cat > "$app/src/main.ts" <<'TS'
-import { createApp, h } from "@skathi-native/runtime";
-createApp({
-  render: () => h("div", { style: "position:absolute; inset:0; background:#245784" }),
-}).mount();
-TS
 publish() {
   bun packages/cli/cli/sk.ts publish "$app" --payload-only --no-aot --out "$1"
   test -s "$1/.sk/app.skpk"
 }
-publish "$scratch/minimal"
-
 printf 'run\tmax_kernel_footprint_bytes\tmedian_11_to_13_second_bytes\tfirst_frame\n' > "$results/summary.tsv"
 
 measure() (
   local name=$1 host=$2 payload=$3
+  shift 3
   local dir="$results/$name"
   mkdir -p "$dir" "$scratch/data/$name"
   local pid= sampler= probe1= probe2=
@@ -65,8 +52,11 @@ measure() (
     done
   }
   trap cleanup EXIT
+  if [[ "$name" == surface-* ]]; then
+    export SK_LOG=gpui_macos::surface_pacing=trace
+  fi
   printf '%s: %s\n' "$name" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee "$dir/launched.txt"
-  SK_PAYLOAD="$payload" SK_DATA_DIR="$scratch/data/$name" SK_WINDOW_FOCUS=raise SK_PERF=1 "$host" > "$dir/host.log" 2>&1 &
+  SK_PAYLOAD="$payload" SK_DATA_DIR="$scratch/data/$name" SK_WINDOW_FOCUS=raise SK_PERF=1 "$host" "$@" +    > "$dir/host.log" 2>&1 &
   pid=$!
   "$scratch/measure" sample "$pid" > "$dir/footprint-samples.tsv" 2>"$dir/sampler-errors.txt" &
   sampler=$!
@@ -91,12 +81,31 @@ measure() (
 
   local first_frame peak median flags=0
   first_frame=$(sed -n 's/^\[sk-perf\] boot->first-frame //p' "$dir/host.log" | sed -n '1p')
+  if [[ "$name" == control-* ]]; then
+    first_frame=$(awk '
+      /^draw / && !submitted {submitted=$3}
+      /^presented / && $3 > 0 && !shown {shown=$3}
+      END {
+        if (shown) printf "%.1fms (presented)", shown
+        else if (submitted) printf "%.1fms (submitted)", submitted
+      }
+    ' "$dir/host.log")
+  fi
   peak=$(awk -F '\t' 'NR > 1 && $3 > m {m=$3} END {print m+0}' "$dir/footprint-samples.tsv")
   median=$(awk -F '\t' '$1 >= 11000 && $1 <= 13000 {print $2}' "$dir/footprint-samples.tsv" |
     sort -n | awk '{value[NR]=$1} END {if (NR) print value[int((NR+1)/2)]}')
   printf '%s\t%s\t%s\t%s\n' "$name" "$peak" "$median" "$first_frame" | tee -a "$results/summary.tsv"
-  awk '/CAMetalLayer Display Drawable/ {n++} END {printf "%d drawable mappings at 2s\n", n+0}' "$dir/footprint-2s.txt"
-  awk '/CAMetalLayer Display Drawable/ {n++} END {printf "%d drawable mappings at 12s\n", n+0}' "$dir/footprint-12s.txt"
+  for elapsed in 2 12; do
+    awk -v elapsed="$elapsed" '
+      /CAMetalLayer Display Drawable/ && match($0, /SID: 0x[[:xdigit:]]+/) {
+        ids[substr($0, RSTART+5, RLENGTH-5)]=1
+      }
+      END {
+        for (id in ids) {count++; found=found " " id}
+        printf "%d distinct drawable IOSurfaces at %ds:%s\n", count, elapsed, found
+      }
+    ' "$dir/footprint-${elapsed}s.txt"
+  done
   if [[ -z "$first_frame" || -z "$median" || "$peak" == 0 ]] ||
     ! grep -q '^on-screen window ' "$dir/windows-12s.txt"; then
     echo "::warning::$name did not produce a verified on-screen frame and complete footprint samples"
@@ -112,18 +121,45 @@ measure() (
 )
 
 status=0
-for run in 1 2 3; do
-  if [[ "$run" == 2 ]]; then
-    modes=(runtime precompiled)
-  else
-    modes=(precompiled runtime)
-  fi
-  for mode in "${modes[@]}"; do
-    measure "$mode-$run" "$scratch/sk-app-$mode" "$scratch/minimal/.sk/app.skpk" || status=1
+if [[ "$measurements" == all ]]; then
+  cargo build --locked --release -p sk-app --bin sk-app --no-default-features --features "$features" --target "$target"
+  cp "$profile/sk-app" "$scratch/sk-app-precompiled"
+  cargo build --locked --release -p sk-app --bin sk-app --no-default-features --features "$features,runtime-shaders" --target "$target"
+  cp "$profile/sk-app" "$scratch/sk-app-runtime"
+  cat > "$app/sk.config.json" <<'JSON'
+{"name":"skathi-macos26-diagnostics","window":{"title":"Skathi diagnostics","width":600,"height":400}}
+JSON
+  cat > "$app/src/main.ts" <<'TS'
+import { createApp, h } from "@skathi-native/runtime";
+createApp({
+  render: () => h("div", { style: "position:absolute; inset:0; background:#245784" }),
+}).mount();
+TS
+  publish "$scratch/minimal"
+  for run in 1 2 3; do
+    if [[ "$run" == 2 ]]; then
+      modes=(runtime precompiled)
+    else
+      modes=(precompiled runtime)
+    fi
+    for mode in "${modes[@]}"; do
+      measure "$mode-$run" "$scratch/sk-app-$mode" "$scratch/minimal/.sk/app.skpk" || status=1
+    done
   done
+fi
+
+xcrun clang -O2 -fobjc-arc .github/scripts/macos26-drawables.m -framework AppKit -framework CoreGraphics \
+  -framework QuartzCore -framework Metal -framework IOSurface -o "$scratch/drawables"
+for test in 'next 3 2' 'link 3 2' 'link 3 1' 'link 2 2' 'hybrid 3 2' 'idle 3 2'; do
+  read -r mode count latency <<< "$test"
+  measure "control-$mode-$count-$latency" "$scratch/drawables" "" "$mode" "$count" "$latency" || status=1
 done
 
-cargo build --locked --release -p sk-app --example surface --no-default-features --features "$features" --target "$target"
+cargo rustc --locked -p sk-app --example surface --no-default-features --features "$features" --target "$target" \
+  --config "profile.dev.package.'*'.debug=0" -- \
+  -C link-arg=-Wl,-ObjC -C link-arg=-Wl,-rpath,/usr/lib/swift \
+  -C link-arg=-Wl,-no_deduplicate -C link-arg=-Wl,-w \
+  2>&1 | tee "$results/surface-build.log"
 cat > "$app/src/main.ts" <<'TS'
 import { appHost, createApp, h } from "@skathi-native/runtime";
 createApp({
@@ -176,7 +212,7 @@ for hybrid in false true; do
   printf '{"name":"skathi-macos26-diagnostics","window":{"title":"Skathi surface diagnostics","width":960,"height":540,"lowLatencySurface":%s}}\n' \
     "$hybrid" > "$app/sk.config.json"
   publish "$scratch/surface-$hybrid"
-  measure "surface-$hybrid" "$profile/examples/surface" "$scratch/surface-$hybrid/.sk/app.skpk" || status=1
+  measure "surface-$hybrid" "target/$target/debug/examples/surface" "$scratch/surface-$hybrid/.sk/app.skpk" || status=1
 done
 cat "$results/summary.tsv"
 exit "$status"
