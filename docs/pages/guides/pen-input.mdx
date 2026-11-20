@@ -73,6 +73,6 @@ viewer.addEventListener(
 );
 ```
 
-For a gesture with a beginning and an end, use [GestureEvent](/web-platform/gesture-event/). `gesturestart` begins at scale 1. Each `gesturechange` reports the cumulative scale, followed by a Ctrl+wheel update unless the gesture event was cancelled. `gestureend` reports the final scale. The platform reports a rotation of zero. Skathi leaves page scale and scroll offsets alone during a pinch. Windows Direct Manipulation recognizes precision touchpad contacts on this path. Two-finger touchscreen input depends on the platform producing a pinch.
+For a gesture with a beginning and an end, use [GestureEvent](/web-platform/gesture-event/). `gesturestart` begins at scale 1. Each `gesturechange` reports the cumulative scale. On macOS, `gestureend` can carry one more change. Both events arrive before the corresponding Ctrl+wheel, so calling `preventDefault()` on the gesture event suppresses that wheel. Rotation is zero. Skathi leaves page scale and scroll offsets alone during a pinch. Windows Direct Manipulation recognizes precision touchpad contacts on this path. Two-finger touchscreen input depends on the platform producing a pinch.
 
 To try it in the showcase, open **Media → Image**, pinch over the image and watch the zoom percentage. With DevTools you can send the same input using `pinch --scale 1.5 --at 120,90 --mods alt`.

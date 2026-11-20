@@ -102,7 +102,7 @@ createApp(App).mount();
 
 A Svelte app imports `defineWindow` and `mount` from `@skathi-native/runtime/svelte` and calls `mount(App)` instead of `createApp(App).mount()`.
 
-It accepts `title`, `backdrop`, `theme`, `alwaysOnTop`, `titleBarHeight` and `titleBarOverlay`. Any creation-time key, such as `width` or `resizable`, prints an advisory that tells you to move it to `sk.config.json` and is ignored. An unknown key prints an advisory that lists the accepted keys.
+`defineWindow` accepts `title`, `backdrop`, `theme`, `alwaysOnTop`, `visibleOnAllWorkspaces`, `opacity`, `titleBarHeight` and `titleBarOverlay`. Set creation-time options such as `width` and `resizable` in `sk.config.json`. Passing one to `defineWindow` prints an advisory. An unknown key prints the list of accepted keys.
 
 ### Runtime calls
 
