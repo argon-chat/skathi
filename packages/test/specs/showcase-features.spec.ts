@@ -36,6 +36,18 @@ async function recordHaptics() {
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
 
+test("the haptics button requests a pulse from the current device without a pointer ID", async () => {
+  await page("graphics");
+  await recordHaptics();
+  const button = app.locator('[aria-label="Test haptics on the current device"]');
+  await button.click();
+  await ui(app.locator('p[role="status"]')).toHaveText("The system accepted the pulse.");
+  expect(await cues()).toEqual([["generic", null, null]]);
+  await app.eval("__sk_appHaptics.perform = () => false");
+  await button.click();
+  await ui(app.locator('p[role="status"]')).toContainText("device");
+}, 30_000);
+
 test("pressure, guide alignment and pen feedback use the active pointer", async () => {
   await page("graphics");
   const pad = await app.locator("canvas.pressure-pad").boundingBox();

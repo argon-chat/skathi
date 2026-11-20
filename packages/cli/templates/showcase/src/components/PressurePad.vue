@@ -14,6 +14,7 @@ const snap = ref(true);
 const pointerType = ref("");
 const pressure = ref(0);
 const feedback = ref<boolean | null>(null);
+const pulseResult = ref("");
 let context: CanvasRenderingContext2D | null = null;
 let active: number | null = null;
 let sliderPointer: number | null = null;
@@ -44,6 +45,16 @@ function clear() {
 function probe(event: PointerEvent) {
   pointerType.value = event.pointerType;
   feedback.value = appHaptics.supportsPointer(event.pointerId);
+}
+
+function testHaptics() {
+  if (appHaptics.perform("generic")) {
+    pulseResult.value = "The system accepted the pulse.";
+  } else if (appHaptics.supported) {
+    pulseResult.value = "The active device could not play this pulse.";
+  } else {
+    pulseResult.value = "The system reports no haptic feedback for the active device.";
+  }
 }
 
 function paint(event: PointerEvent) {
@@ -187,10 +198,12 @@ onBeforeUnmount(finish);
       </label>
       <label class="tool"><input v-model="snap" type="checkbox" /> Snap to guides</label>
       <button class="btn" @click="clear">Clear</button>
+      <button class="btn" aria-label="Test haptics on the current device" @click="testHaptics">Test haptics</button>
     </div>
+    <p v-if="pulseResult" class="muted" role="status">{{ pulseResult }}</p>
     <p class="muted readout" v-if="pointerType">
       {{ pointerType }} · pressure {{ pressure.toFixed(2) }} ·
-      {{ feedback ? "Haptics available" : "Haptics unavailable for this pointer" }}
+      {{ feedback ? "Device feedback available" : "Device feedback unavailable" }}
     </p>
   </Card>
 </template>
