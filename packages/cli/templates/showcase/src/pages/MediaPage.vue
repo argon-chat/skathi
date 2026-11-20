@@ -7,6 +7,12 @@ const video = ref<HTMLVideoElement | null>(null);
 const playing = ref(false);
 const playbackError = ref("");
 const lastKey = ref("");
+const imageScale = ref(1);
+function zoomImage(event: WheelEvent) {
+  if (!event.ctrlKey) return;
+  event.preventDefault();
+  imageScale.value = Math.min(6, Math.max(0.5, imageScale.value * Math.exp(-event.deltaY / 100)));
+}
 async function toggleVideo() {
   const player = video.value;
   if (!player) return;
@@ -44,7 +50,19 @@ const focals = [
   >
     <div class="tiles">
       <Card class="tile" title="Image" api="<img>">
-        <img class="shot zoom" src="assets/media/aurora.png" alt="Aurora" />
+        <div class="image-viewer" @wheel="zoomImage">
+          <img
+            class="shot"
+            src="assets/media/aurora.png"
+            alt="Aurora"
+            :style="{ transform: 'scale(' + imageScale + ')' }"
+          />
+        </div>
+        <div class="row">
+          <button class="btn" :disabled="imageScale === 1" @click="imageScale = 1">Reset zoom</button>
+          <span class="muted image-scale">{{ Math.round(imageScale * 100) }}%</span>
+        </div>
+        <p class="muted">Pinch or use Ctrl+wheel over the image to zoom.</p>
       </Card>
 
       <Card class="tile" title="Video" api="<video>">
@@ -115,11 +133,10 @@ const focals = [
 .player:focus-visible {
   outline: 2px solid var(--accent);
 }
-.zoom {
-  transition: transform 300ms ease;
-}
-.zoom:hover {
-  transform: scale(1.04);
+.image-viewer {
+  height: 160px;
+  overflow: hidden;
+  border-radius: 10px;
 }
 .stage {
   height: 160px;

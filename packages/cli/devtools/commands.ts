@@ -495,6 +495,53 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "pinch",
+    description:
+      "Send a trackpad magnification through the native window's hit test. Scale is relative to the preceding update.",
+    usage: ["  pinch [start|change|end|cancel] [selector] --scale 1.5 [--at x,y] [--mods alt,shift]"],
+    args: {
+      kind: str("gesture (default), start, change, end or cancel"),
+      selector: SELECTOR,
+      index: INDEX,
+      x: int("window x"),
+      y: int("window y"),
+      scale: int("scale multiplier for a change, greater than zero"),
+      ctrl: bool("physical Control"),
+      shift: bool("physical Shift"),
+      alt: bool("physical Alt/Option"),
+      meta: bool("physical Meta/Command"),
+    },
+    cli: (rest, flags) => {
+      const parts = [...rest];
+      const kind =
+        parts[0] && ["start", "change", "end", "cancel", "gesture"].includes(parts[0]) ? parts.shift() : "gesture";
+      const selector = parts.shift() ?? stringFlag(flags.selector);
+      const at = stringFlag(flags.at)?.split(",");
+      if (at && (at.length !== 2 || at.some((v) => !v.trim() || !Number.isFinite(Number(v))))) die("--at needs x,y");
+      const x = at ? Number(at[0]) : num(flags.x);
+      const y = at ? Number(at[1]) : num(flags.y);
+      if (parts.length || (!selector && (x === undefined || y === undefined)))
+        die("pinch needs a selector or --at x,y");
+      const scale = num(flags.scale);
+      if (scale === undefined ? kind === "gesture" || kind === "change" : !Number.isFinite(scale) || scale <= 0)
+        die("pinch needs a positive --scale for each change");
+      const mods = stringFlag(flags.mods)?.split(",") ?? [];
+      if (mods.some((m) => !["ctrl", "shift", "alt", "meta"].includes(m))) die("--mods takes ctrl, shift, alt or meta");
+      return compact({
+        kind,
+        selector,
+        x,
+        y,
+        index: num(flags.index),
+        scale,
+        ctrl: flags.ctrl || mods.includes("ctrl") || undefined,
+        shift: flags.shift || mods.includes("shift") || undefined,
+        alt: flags.alt || mods.includes("alt") || undefined,
+        meta: flags.meta || mods.includes("meta") || undefined,
+      });
+    },
+  },
+  {
     cmd: "eval",
     description:
       "Evaluate JavaScript inside the app's JSC, in global scope. Returns {value, type} or " +
@@ -546,9 +593,10 @@ export const COMMANDS: CommandSpec[] = [
     usage: [
       "  windows                            every OS window this process paints (and",
       "                                     every inspector it has open on itself)",
+      "  windows --native                   include platform window diagnostics",
     ],
-    args: {},
-    cli: () => ({}),
+    args: { native: bool("include native window diagnostics") },
+    cli: (_rest, flags) => compact({ native: flags.native ? true : undefined }),
   },
   {
     cmd: "perf",

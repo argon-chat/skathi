@@ -16,6 +16,10 @@
     "dependencies": "None on purpose: bun:test ships with bun, and the wire is node:net + node:child_process."
   },
   "devDependencies": {
-    "@vueuse/core": "15.0.0"
+    "@types/d3-selection": "3.0.12",
+    "@types/d3-zoom": "3.0.9",
+    "@vueuse/core": "15.0.0",
+    "d3-selection": "3.0.1",
+    "d3-zoom": "3.0.1"
   }
 }

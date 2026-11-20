@@ -78,6 +78,7 @@ pub mod windows;
 pub mod devtools;
 mod drag_source;
 mod file_drop;
+mod pinch;
 
 pub use containers::settle_frame as settle_container_queries;
 pub use img::{

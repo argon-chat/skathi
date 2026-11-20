@@ -37,6 +37,9 @@ declare global {
     drop: DragEvent;
     error: ErrorEvent;
     focus: FocusEvent;
+    gesturestart: GestureEvent;
+    gesturechange: GestureEvent;
+    gestureend: GestureEvent;
     focusin: FocusEvent;
     focusout: FocusEvent;
     gotpointercapture: PointerEvent;

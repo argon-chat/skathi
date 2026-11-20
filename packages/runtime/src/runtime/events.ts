@@ -40,6 +40,9 @@ const HANDLER_ATTRS = [
   "ended",
   "error",
   "focus",
+  "gesturestart",
+  "gesturechange",
+  "gestureend",
   "input",
   "invalid",
   "keydown",
@@ -409,7 +412,13 @@ export function synthesize(
         break;
       case "wheel":
         if (typeof WheelEvent === "function")
-          return new WheelEvent(name, { ...common, ...M, ...wheelAt(data), deltaX: a, deltaY: b });
+          return new WheelEvent(name, { ...common, composed: true, ...M, ...wheelAt(data), deltaX: a, deltaY: b });
+        break;
+      case "gesturestart":
+      case "gesturechange":
+      case "gestureend":
+        if (typeof GestureEvent === "function")
+          return new GestureEvent(name, { ...common, composed: true, ...M, ...wheelAt(data), scale: a, rotation: b });
         break;
       case "keydown":
       case "keyup":
@@ -477,6 +486,8 @@ export function synthesize(
     /* fall through to the generic event */
   }
   const ev = new CustomEvent(name, name === "input" || name === "beforeinput" ? inputInit(name, a, b, data) : common);
+  if (name === "gesturestart" || name === "gesturechange" || name === "gestureend")
+    return withProps(ev, { scale: a, rotation: b, ...M, ...wheelAt(data) });
   const extra =
     name === "wheel"
       ? { deltaX: a, deltaY: b, ...wheelAt(data), ...M }

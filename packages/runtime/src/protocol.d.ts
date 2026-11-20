@@ -208,7 +208,10 @@ type SkEventCode =
   | 57 // surfacelost
   | 58 // surfacedisplaychange
   | 59 // mouseover
-  | 60; // mouseout
+  | 60 // mouseout
+  | 61 // gesturestart
+  | 62 // gesturechange
+  | 63; // gestureend
 
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __sk_selection_get(): string;

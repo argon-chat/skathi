@@ -90,6 +90,9 @@ export const EV_CODES = {
   // The deepest element under the pointer changed; both bubble. `key` is the other element's node id (`relatedTarget`).
   mouseover: 59,
   mouseout: 60,
+  gesturestart: 61,
+  gesturechange: 62,
+  gestureend: 63,
 } as const;
 
 /** `InputEvent.inputType` by host code: indexes sk-elements' `text_input::InputType` (lockstep, test/protocol-codes.test.ts). 0: none. */

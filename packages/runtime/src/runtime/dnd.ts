@@ -352,7 +352,11 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   const target = (retarget && pointerCaptures.get(src.id)) || nodeById(nodeId);
   if (!target) return true;
   if (name === "keydown" && key === "Escape" && globalThis.__SK_WINDOW__?.escapeFullscreen?.()) return false;
-  if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
+  if (
+    (name === "wheel" || name === "gesturestart" || name === "gesturechange" || name === "gestureend") &&
+    x !== undefined
+  )
+    data = { clientX: x, clientY: y ?? 0 };
   if (name === "mousemove") data = { movementX: x ?? 0, movementY: y ?? 0 };
   // The host delivers `selectionchange` at the root, whose listener bit the
   // document's listeners arm; a browser fires it AT the document.

@@ -252,6 +252,34 @@ interface WheelEvent extends MouseEvent {
 }
 declare var WheelEvent: { new (type: string, eventInitDict?: WheelEventInit): WheelEvent; prototype: WheelEvent };
 
+interface GestureEventInit extends UIEventInit {
+  scale?: number;
+  rotation?: number;
+  clientX?: number;
+  clientY?: number;
+  screenX?: number;
+  screenY?: number;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+}
+interface GestureEvent extends UIEvent {
+  readonly scale: number;
+  readonly rotation: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly pageX: number;
+  readonly pageY: number;
+  readonly screenX: number;
+  readonly screenY: number;
+  readonly ctrlKey: boolean;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+  readonly metaKey: boolean;
+}
+declare var GestureEvent: { new (type: string, init?: GestureEventInit): GestureEvent; prototype: GestureEvent };
+
 interface FocusEventInit extends UIEventInit {
   relatedTarget?: unknown;
 }

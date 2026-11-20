@@ -1116,6 +1116,21 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             Some(op) => picker::command(&op),
             None => cmd_pick(window_arg),
         },
+        "pinch" => cmd_pinch(
+            arg("selector").as_deref(),
+            num("index"),
+            num("x"),
+            num("y"),
+            arg("kind").as_deref().unwrap_or("gesture"),
+            num("scale"),
+            gpui::Modifiers {
+                control: flag("ctrl"),
+                shift: flag("shift"),
+                alt: flag("alt"),
+                platform: flag("meta"),
+                ..Default::default()
+            },
+        ),
         "wheel" => cmd_wheel(
             arg("selector").as_deref(),
             num("index"),
@@ -2689,6 +2704,60 @@ fn cmd_wheel(
             ("dx", Json::n(dx)),
             ("dy", Json::n(dy)),
         ])),
+    }
+}
+
+fn cmd_pinch(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    kind: &str,
+    scale: Option<f64>,
+    modifiers: gpui::Modifiers,
+) -> String {
+    use gpui::TouchPhase::{Cancelled, Ended, Moved, Started};
+    let phases: &[_] = match kind {
+        "gesture" => &[Started, Moved, Ended],
+        "start" => &[Started],
+        "change" => &[Moved],
+        "end" => &[Ended],
+        "cancel" => &[Cancelled],
+        _ => return err("pinch kind must be gesture, start, change, end or cancel"),
+    };
+    let scale = match scale {
+        Some(scale) if scale > 0.0 && (scale as f32).is_finite() && (scale as f32 - 1.0) > -1.0 => {
+            scale as f32
+        }
+        None if !phases.contains(&Moved) => 1.0,
+        _ => return err("pinch needs a finite positive scale for each change"),
+    };
+    let (node, (x, y)) = match aim(selector, index, x, y, "pinch") {
+        Ok(point) => point,
+        Err(e) => return err(e),
+    };
+    let position = gpui::point(gpui::px(x), gpui::px(y));
+    match in_window(node, |window, app| {
+        let mut prevented = false;
+        for &phase in phases {
+            let event = gpui::PinchEvent {
+                position,
+                modifiers,
+                phase,
+                delta: if phase == Moved { scale - 1.0 } else { 0.0 },
+            };
+            prevented |= window
+                .dispatch_event(gpui::PlatformInput::Pinch(event), app)
+                .default_prevented;
+        }
+        prevented
+    }) {
+        Some(prevented) => ok(Json::obj(vec![
+            ("x", Json::n(f64::from(x))),
+            ("y", Json::n(f64::from(y))),
+            ("defaultPrevented", Json::Bool(prevented)),
+        ])),
+        None => err("pinch needs a live target window"),
     }
 }
 

@@ -94,6 +94,9 @@ pub const EV_SURFACEDISPLAYCHANGE: u32 = 58;
 /// the other element's node id (`relatedTarget`), empty for none.
 pub const EV_MOUSEOVER: u32 = 59;
 pub const EV_MOUSEOUT: u32 = 60;
+pub const EV_GESTURESTART: u32 = 61;
+pub const EV_GESTURECHANGE: u32 = 62;
+pub const EV_GESTUREEND: u32 = 63;
 
 /// Every host event code with the name JS knows it by; devtools lists from here.
 pub const EVENT_NAMES: &[(u32, &str)] = &[
@@ -157,6 +160,9 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_SURFACEDISPLAYCHANGE, "surfacedisplaychange"),
     (EV_MOUSEOVER, "mouseover"),
     (EV_MOUSEOUT, "mouseout"),
+    (EV_GESTURESTART, "gesturestart"),
+    (EV_GESTURECHANGE, "gesturechange"),
+    (EV_GESTUREEND, "gestureend"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

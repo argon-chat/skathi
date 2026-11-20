@@ -1837,6 +1837,7 @@ fn build_fullscreen<V: 'static>(
     let handle = focus_handle_for(document_root, None, cx);
     let mut document = div()
         .id("sk-fullscreen-document")
+        .on_pinch(crate::pinch::handle)
         .size_full()
         .bg(gpui::black())
         .track_focus(&handle);
@@ -2331,6 +2332,7 @@ fn build_node<V: 'static>(
                 }
 
                 let mask = if id == root {
+                    d = d.on_pinch(crate::pinch::handle);
                     root_mask(t, node)
                 } else {
                     pointer_mask(node)

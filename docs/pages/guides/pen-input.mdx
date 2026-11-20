@@ -54,3 +54,21 @@ bun sk dev apps/pen-draw
 ```
 
 The devtools [`pen`](/devtools/scripting/) command sends pen events through the host's input path without a pen, which is how the end-to-end tests check them.
+
+## Trackpad zoom (since 0.6)
+
+A precision touchpad on Windows, a Mac trackpad, and Linux devices with Wayland pointer gestures or XInput 2.4 pinch events can zoom a canvas or an image. Handle [wheel](/web-platform/wheel-event/) on the surface. A pinch sets `ctrlKey` and preserves Alt/Option, Shift and Meta. A physically held Ctrl also sets `ctrlKey`, so the same handler accepts Ctrl+mouse wheel.
+
+```ts
+viewer.addEventListener("wheel", (event) => {
+  if (!event.ctrlKey) return;
+  event.preventDefault();
+  const step = Math.exp(-event.deltaY / 100);
+  if (event.altKey) zoomPicture(step);
+  else resizeViewer(step);
+}, { passive: false });
+```
+
+For a gesture with a beginning and an end, use [GestureEvent](/web-platform/gesture-event/). `gesturestart` begins at scale 1. Each `gesturechange` reports the cumulative scale, followed by a Ctrl+wheel update unless the gesture event was cancelled. `gestureend` reports the final scale. The platform reports a rotation of zero. Skathi leaves page scale and scroll offsets alone during a pinch. Windows Direct Manipulation recognizes precision touchpad contacts on this path. Two-finger touchscreen input depends on the platform producing a pinch.
+
+To try it in the showcase, open **Media → Image**, pinch over the image and watch the zoom percentage. With DevTools you can send the same input using `pinch --scale 1.5 --at 120,90 --mods alt`.

@@ -455,7 +455,7 @@ const zoom = ref(1);
 function onWheel(e: WheelEvent) {
   if (!e.ctrlKey) return;
   e.preventDefault();
-  zoom.value = Math.min(8, Math.max(0.25, zoom.value * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  zoom.value = Math.min(8, Math.max(0.25, zoom.value * Math.exp(-e.deltaY / 100)));
 }
 </script>
 
@@ -469,6 +469,7 @@ function onWheel(e: WheelEvent) {
     ],
     edgeCases: [
       "`deltaMode` is always `0`: the deltas are in pixels.",
+      "A trackpad pinch (since 0.6) sets `ctrlKey` and reports `deltaY = -100 * Math.log(scaleStep)`. Alt, Shift and Meta retain their physical state. Each pinch update leaves the scroll position alone.",
       "A cancelled `wheel` scrolls nothing, neither the element it targets nor a scroll container around it.",
       "The `wheel` event fires before the `scroll` event it causes.",
     ],
