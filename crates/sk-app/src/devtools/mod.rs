@@ -1150,6 +1150,14 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             }
             _ => err("ime needs a `selector` and a `text` (\"\" cancels the composition)"),
         },
+        "mouse_pressure" => cmd_mouse_pressure(
+            arg("selector").as_deref(),
+            num("index"),
+            num("x"),
+            num("y"),
+            num("stage"),
+            num("pressure"),
+        ),
         "mouse" => cmd_mouse(
             arg("selector").as_deref(),
             num("index"),
@@ -2206,6 +2214,43 @@ fn cmd_pen(
             ("y", Json::n(f64::from(point.1))),
             ("kind", Json::s(kind.to_string())),
         ])),
+    }
+}
+
+fn cmd_mouse_pressure(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    stage: Option<f64>,
+    pressure: Option<f64>,
+) -> String {
+    let stage = match stage {
+        Some(0.0) => gpui::PressureStage::Zero,
+        Some(1.0) => gpui::PressureStage::Normal,
+        Some(2.0) => gpui::PressureStage::Force,
+        _ => return err("mouse_pressure needs stage 0, 1 or 2"),
+    };
+    let Some(pressure) = pressure else {
+        return err("mouse_pressure needs pressure");
+    };
+    let (node, (x, y)) = match aim(selector, index, x, y, "mouse_pressure") {
+        Ok(aimed) => aimed,
+        Err(e) => return err(e),
+    };
+    match in_window(node, |window, app| {
+        window.dispatch_event(
+            gpui::PlatformInput::MousePressure(gpui::MousePressureEvent {
+                stage,
+                pressure: pressure as f32,
+                position: gpui::point(gpui::px(x), gpui::px(y)),
+                modifiers: Default::default(),
+            }),
+            app,
+        );
+    }) {
+        Some(()) => ok(Json::Bool(true)),
+        None => err("not in a commit phase"),
     }
 }
 

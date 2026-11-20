@@ -1,5 +1,6 @@
 import { capture } from "./capture";
 import { devtools } from "./devtools";
+import { haptics } from "./haptics";
 import { host } from "./host";
 import { hotkeys } from "./hotkeys";
 import { launch } from "./launch";
@@ -38,6 +39,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
 export const entries: readonly AppEntry[] = [
   ...tray,
   ...hotkeys,
+  ...haptics,
   ...storage,
   ...shell,
   ...permissions,

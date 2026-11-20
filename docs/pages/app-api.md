@@ -1,6 +1,6 @@
 ---
 title: App APIs
-description: The desktop APIs a browser does not have — tray, global hotkeys, storage folder, shell, permissions, screen capture, locale, launch, embedding and devtools — with platform support and examples.
+description: The desktop APIs a browser does not have — tray, global hotkeys, haptics, storage folder, shell, permissions, screen capture, locale, launch, embedding and devtools — with platform support and examples.
 section: Reference
 order: 5
 ---
@@ -8,7 +8,7 @@ order: 5
 # App APIs
 
 The objects an app imports from `@skathi-native/runtime` for what the web platform cannot do: a tray
-icon, system-wide hotkeys, where its data lives, opening files and links, permissions, screen capture
+icon, system-wide hotkeys, tactile feedback, where its data lives, opening files and links, permissions, screen capture
 sources, its language, how it was launched, the program that embeds it, and its devtools. The main
 window is in the [Window API](/window-api/); web standards are in [Web platform coverage](/web-platform/).
 
@@ -42,15 +42,16 @@ remove them in `onUnmounted` in Vue; in Svelte, return the unsubscribe function 
 
 ## Platforms at a glance
 
-| Object                                        | Windows       | macOS                                | Linux                          |
-| --------------------------------------------- | ------------- | ------------------------------------ | ------------------------------ |
-| [`appTray`](/app-api/app-tray/)               | Yes           | Yes                                  | No                             |
-| [`appHotkeys`](/app-api/app-hotkeys/)         | Yes           | Yes, with Accessibility access       | No                             |
-| [`appStorage`](/app-api/app-storage/)         | Yes           | Yes                                  | Yes                            |
-| [`appShell`](/app-api/app-shell/)             | Yes           | Not yet                              | Yes                            |
-| [`appPermissions`](/app-api/app-permissions/) | Yes           | Microphone, camera, screen recording | Microphone                     |
-| [`appCapture`](/app-api/app-capture/)         | Yes           | Yes                                  | No                             |
-| [`appLocale`](/app-api/app-locale/)           | Yes           | Yes                                  | Yes                            |
-| [`appLaunch`](/app-api/app-launch/)           | Yes           | Yes, no custom URL schemes yet       | Yes, no custom URL schemes yet |
-| [`appHost`](/app-api/app-host/)               | When embedded | When embedded                        | When embedded                  |
-| [`appDevtools`](/app-api/app-devtools/)       | Yes           | Yes                                  | Yes                            |
+| Object                                            | Windows                       | macOS                                | Linux                          |
+| ------------------------------------------------- | ----------------------------- | ------------------------------------ | ------------------------------ |
+| [`appTray`](/app-api/app-tray/)                   | Yes                           | Yes                                  | No                             |
+| [`appHotkeys`](/app-api/app-hotkeys/)             | Yes                           | Yes, with Accessibility access       | No                             |
+| [`appHaptics`](/app-api/app-haptics/) (since 0.6) | Haptic mouse, trackpad or pen | Force Touch trackpad                 | No                             |
+| [`appStorage`](/app-api/app-storage/)             | Yes                           | Yes                                  | Yes                            |
+| [`appShell`](/app-api/app-shell/)                 | Yes                           | Not yet                              | Yes                            |
+| [`appPermissions`](/app-api/app-permissions/)     | Yes                           | Microphone, camera, screen recording | Microphone                     |
+| [`appCapture`](/app-api/app-capture/)             | Yes                           | Yes                                  | No                             |
+| [`appLocale`](/app-api/app-locale/)               | Yes                           | Yes                                  | Yes                            |
+| [`appLaunch`](/app-api/app-launch/)               | Yes                           | Yes, no custom URL schemes yet       | Yes, no custom URL schemes yet |
+| [`appHost`](/app-api/app-host/)                   | When embedded                 | When embedded                        | When embedded                  |
+| [`appDevtools`](/app-api/app-devtools/)           | Yes                           | Yes                                  | Yes                            |

@@ -25,6 +25,7 @@ pub const BARREL: f64 = 2.0;
 pub const CONTACT: f64 = 4.0;
 /// The readings are a mouse's positions.
 pub const MOUSE: f64 = 8.0;
+const MOUSE_PRESSURE: f64 = 16.0;
 
 /// A pen that never gets a frame (a hidden window) must not grow without bound.
 const TRAIL_CAP: usize = 1024;
@@ -35,6 +36,8 @@ type Key = Option<u32>;
 /// One window's readings not yet delivered, and its pointers' predictors.
 #[derive(Default)]
 pub struct PenState {
+    primary_down: bool,
+    mouse_pressure: Option<f32>,
     trail: Vec<PenSample>,
     /// Strokes that ended (a press, release or exit) after the first `usize` readings of `trail`.
     ends: Vec<(usize, Key)>,
@@ -49,10 +52,60 @@ fn key(window: &Window) -> Key {
     window.vn_pen().map(|p| p.pointer_id)
 }
 
+pub(crate) fn mouse_button(window: &Window, down: bool) {
+    windows::here(window, |w| {
+        w.pen.primary_down = down;
+        w.pen.mouse_pressure = None;
+    });
+}
+
+fn normalized_pressure(stage: gpui::PressureStage, value: f32) -> Option<f32> {
+    if !value.is_finite() {
+        return None;
+    }
+    let half = value.clamp(0.0, 1.0) * 0.5;
+    Some(match stage {
+        gpui::PressureStage::Zero => 0.0,
+        gpui::PressureStage::Normal => half,
+        gpui::PressureStage::Force => 0.5 + half,
+    })
+}
+
+pub(crate) fn note_pressure(window: &Window, event: &gpui::MousePressureEvent) -> bool {
+    let Some(value) = normalized_pressure(event.stage, event.pressure) else {
+        return false;
+    };
+    windows::here(window, |w| {
+        let pen = &mut w.pen;
+        if !pen.primary_down || pen.mouse_pressure == Some(value) {
+            return false;
+        }
+        pen.mouse_pressure = Some(value);
+        pen.append([PenSample {
+            position: event.position,
+            pressure: value,
+            time: Some(Instant::now()),
+            ..Default::default()
+        }]);
+        true
+    })
+}
+
+impl PenState {
+    fn append(&mut self, readings: impl IntoIterator<Item = PenSample>) {
+        self.trail.extend(readings);
+        let over = self.trail.len().saturating_sub(TRAIL_CAP);
+        self.trail.drain(..over);
+        for end in &mut self.ends {
+            end.0 = end.0.saturating_sub(over);
+        }
+    }
+}
+
 /// A move's readings join the trail the next `mousemove` reports; a mouse's are its positions
 /// (none while the pointer is locked, when every move is at the lock's position). A reading
 /// without a platform time takes its delivery's.
-pub(crate) fn note_move(window: &mut Window) {
+pub(crate) fn note_move(window: &mut Window, pressed_button: Option<gpui::MouseButton>) {
     let now = Instant::now();
     let readings = match window.vn_pen() {
         Some(pen) => {
@@ -66,19 +119,19 @@ pub(crate) fn note_move(window: &mut Window) {
         None if window.vn_pointer_locked() => return,
         None => vec![PenSample {
             position: window.mouse_position(),
+            pressure: windows::here(window, |w| {
+                let down = pressed_button == Some(gpui::MouseButton::Left);
+                if !down {
+                    w.pen.mouse_pressure = None;
+                }
+                w.pen.primary_down = down;
+                w.pen.mouse_pressure.unwrap_or(0.5)
+            }),
             time: Some(now),
             ..Default::default()
         }],
     };
-    windows::here(window, |w| {
-        let pen = &mut w.pen;
-        pen.trail.extend(readings);
-        let over = pen.trail.len().saturating_sub(TRAIL_CAP);
-        pen.trail.drain(..over);
-        for end in &mut pen.ends {
-            end.0 = end.0.saturating_sub(over);
-        }
-    });
+    windows::here(window, |w| w.pen.append(readings));
 }
 
 /// A press, release or exit: the pointer's prediction starts over after the readings so far.
@@ -188,8 +241,23 @@ pub(crate) fn arm(window: &mut Window, event: u32) {
         if event == tree::EV_MOUSEMOVE {
             let (readings, predicted) = take_move(window, key);
             if !readings.is_empty() {
-                NEXT.with(|n| *n.borrow_mut() = Some(packet(MOUSE, &readings, &predicted)));
+                NEXT.with(|n| {
+                    *n.borrow_mut() = Some(packet(MOUSE + MOUSE_PRESSURE, &readings, &predicted))
+                });
             }
+        } else if let Some(pressure) = windows::here(window, |w| w.pen.mouse_pressure) {
+            let sample = PenSample {
+                position: window.mouse_position(),
+                pressure,
+                ..Default::default()
+            };
+            NEXT.with(|n| {
+                *n.borrow_mut() = Some(packet(
+                    MOUSE + MOUSE_PRESSURE,
+                    &[(sample, Clock::now().ms)],
+                    &[],
+                ))
+            });
         }
         return;
     };
@@ -254,6 +322,21 @@ pub(crate) fn take() -> Option<Vec<f64>> {
 mod tests {
     use super::*;
     use gpui::{point, px};
+
+    #[test]
+    fn trackpad_pressure_is_continuous_across_force_click_stages() {
+        use gpui::PressureStage::*;
+        assert_eq!(normalized_pressure(Zero, 1.0), Some(0.0));
+        assert_eq!(normalized_pressure(Normal, -1.0), Some(0.0));
+        assert_eq!(normalized_pressure(Normal, 0.5), Some(0.25));
+        assert_eq!(
+            normalized_pressure(Normal, 1.0),
+            normalized_pressure(Force, 0.0)
+        );
+        assert_eq!(normalized_pressure(Force, 0.5), Some(0.75));
+        assert_eq!(normalized_pressure(Force, 2.0), Some(1.0));
+        assert_eq!(normalized_pressure(Force, f32::NAN), None);
+    }
 
     fn at(x: f32, pressure: f32) -> PenSample {
         PenSample {

@@ -2,7 +2,7 @@
 // pressure, tilt, the eraser and the readings a frame folded together; the mouse events follow; capture holds.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, MACOS } from "../src/index";
+import { launch, LINUX, MACOS } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/pen/src/main.ts",
@@ -30,6 +30,48 @@ async function moves(): Promise<unknown[]> {
 }
 
 describe("pen input", () => {
+  test(
+    "haptics reports availability and rejects an unknown pointer",
+    async () => {
+      const values = await app.eval(`JSON.stringify((() => {
+      const api = __SK_TEST_PEN__.haptics;
+      return [typeof api.supported, api.supportsPointer(999), api.perform("alignment", {pointerId:999, when:"next-frame"}),
+        api.perform("ink-continuous"), api.stop(999), api.supported, api.supported ? null : api.perform("generic")];
+    })())`);
+      const [type, pointer, queued, continuous, stopped, supported, played] = JSON.parse(String(values));
+      expect([type, pointer, queued, continuous, stopped]).toEqual(["boolean", false, false, false, false]);
+      if (LINUX || process.env.SK_TEST_NO_HAPTICS === "1") expect(supported).toBe(false);
+      if (!supported) expect(played).toBe(false);
+    },
+    T,
+  );
+
+  test(
+    "stationary trackpad pressure produces mouse pointermoves and clears on release",
+    async () => {
+      const pos = { x: 70, y: 70 };
+      const force = async (stage: number, pressure: number) => {
+        await app.send("mouse_pressure", { ...pos, stage, pressure });
+        await sleep(100);
+        return (await log()).filter((s) => s.startsWith("pointermove:mouse"));
+      };
+      await app.send("mouse", { ...pos, kind: "down" });
+      await sleep(100);
+      expect(await log()).toContain("pointerdown:mouse:1:b0/1:p0.50:t0,0");
+      expect(await force(1, 0.8)).toEqual(["pointermove:mouse:1:b-1/1:p0.40:t0,0:c1:70@0.40"]);
+      expect(await force(2, 0.6)).toEqual(["pointermove:mouse:1:b-1/1:p0.80:t0,0:c1:70@0.80"]);
+      expect(await force(2, 0.6)).toEqual([]);
+      await app.send("mouse", { ...pos, kind: "up" });
+      await sleep(100);
+      expect(await log()).toContain("pointerup:mouse:1:b0/0:p0.00:t0,0");
+      expect(await force(2, 1)).toEqual([]);
+      await app.send("mouse", { ...pos, kind: "click" });
+      expect(await log()).toContain("pointerdown:mouse:1:b0/1:p0.50:t0,0");
+      await moves();
+    },
+    T,
+  );
+
   // macOS CI: the window does not get frames for synthetic input when it is not key.
   test.skipIf(MACOS)(
     "hover, a pressure stroke with coalesced readings, lift and leave",

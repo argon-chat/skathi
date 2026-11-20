@@ -273,6 +273,13 @@ pub unsafe fn install_missing(g: *mut c_void) {
         host::method(g, o, "unregisterProtocol", 1, launch_false);
         host::method(g, o, "isProtocolRegistered", 1, launch_false);
     }
+    if absent(g, "__sk_appHaptics") {
+        let o = host::install_object(g, "__sk_appHaptics", UNDEF);
+        define(g, o, "supported", FALSE, 1);
+        host::method(g, o, "supportsPointer", 1, answer_false);
+        host::method(g, o, "perform", 1, answer_false);
+        host::method(g, o, "stop", 1, answer_false);
+    }
     if absent(g, "__sk_appHotkeys") {
         let o = host::install_object(g, "__sk_appHotkeys", UNDEF);
         define(g, o, "available", FALSE, 0);

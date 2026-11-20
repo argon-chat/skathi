@@ -50,6 +50,7 @@ mod content_dialog;
 pub mod crash_window;
 mod dialogs;
 pub mod embed;
+mod haptics;
 #[cfg(feature = "hotkeys")]
 pub mod hotkeys;
 #[cfg(sk_devtools)]
@@ -1257,6 +1258,7 @@ fn run_app() {
             sk_permissions::set_decisions_file(sk_storage::cookies::folder().map(|f| f.join("permissions.json")));
             #[cfg(feature = "storages")]
             sk_tree::color_picker::set_recents_file(sk_storage::cookies::folder().map(|f| f.join("recent-colors.txt")));
+            haptics::install(rt);
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;

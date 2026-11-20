@@ -165,21 +165,46 @@ pub(crate) fn routed_target(window: &Window) -> Option<u32> {
 /// must collect moves beyond the captured box and beyond the client area as well. Every move's
 /// motion adds up here until a `mousemove` reports it.
 pub(crate) fn capture_listeners(window: &mut Window) {
-    window.on_mouse_event(|_: &gpui::MouseDownEvent, phase, window, _| {
+    window.on_mouse_event(|ev: &gpui::MouseDownEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
+            if ev.button == gpui::MouseButton::Left {
+                crate::pen::mouse_button(window, window.vn_pen().is_none());
+            }
             crate::pointer_lock::note_gesture();
             crate::pen::end_stroke(window);
         }
     });
-    window.on_mouse_event(|_: &gpui::MouseUpEvent, phase, window, _| {
+    window.on_mouse_event(|ev: &gpui::MouseUpEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
+            if ev.button == gpui::MouseButton::Left {
+                crate::pen::mouse_button(window, false);
+            }
             crate::pen::end_stroke(window);
         }
     });
-    window.on_mouse_event(|_: &gpui::MouseExitEvent, phase, window, _| {
+    window.on_mouse_event(|ev: &gpui::MouseExitEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
+            if ev.pressed_button != Some(gpui::MouseButton::Left) {
+                crate::pen::mouse_button(window, false);
+            }
             crate::pen::end_stroke(window);
         }
+    });
+    window.on_mouse_event(|ev: &gpui::MousePressureEvent, phase, window, _| {
+        if phase != DispatchPhase::Capture || !crate::pen::note_pressure(window, ev) {
+            return;
+        }
+        let id = routed_target(window).unwrap_or_else(|| target_at(window, ev.position));
+        windows::here(window, |w| {
+            w.pending_mouse_move = Some(windows::PendingMouseMove {
+                id,
+                position: ev.position,
+                button: 0.0,
+                modifiers: ev.modifiers,
+            })
+        });
+        sk_runtime::frames::wake();
+        window.refresh();
     });
     window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {
         if phase != DispatchPhase::Capture {
@@ -187,7 +212,7 @@ pub(crate) fn capture_listeners(window: &mut Window) {
         }
         let moved = window.vn_mouse_movement();
         windows::here(window, |w| w.mouse_movement = w.mouse_movement + moved);
-        crate::pen::note_move(window);
+        crate::pen::note_move(window, ev.pressed_button);
         let Some(id) = routed_target(window) else {
             return;
         };

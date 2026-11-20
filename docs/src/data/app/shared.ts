@@ -6,6 +6,7 @@ export type Kind = "property" | "method" | "event" | "interface";
 export const categories = [
   "Tray",
   "Global hotkeys",
+  "Haptics",
   "Storage",
   "Shell",
   "Permissions",

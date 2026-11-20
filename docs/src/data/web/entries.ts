@@ -349,7 +349,7 @@ const domAndEvents = section("DOM and events", [
     PART,
     [
       'Events from the host come from the mouse (`pointerType` `"mouse"`, `pointerId` `1`) or a pen (`"pen"`, `pointerId` `2`, since 0.5). There is no touch input. `isPrimary` is `true`, and `width` and `height` are `1`.',
-      "The mouse has no pressure data: `pressure` is `0.5` while a button is down and `0` otherwise, with no tilt or twist.",
+      "A mouse reports pressure `0.5` while a button is down and `0` on release. A macOS Force Touch trackpad also reports measured pressure during a press (since 0.6).",
     ],
   ),
   prop("PointerEvent.pointerType", PART, 'The kind of device behind the event: `"mouse"`, `"pen"` or `"touch"`.', {
@@ -370,13 +370,13 @@ const domAndEvents = section("DOM and events", [
     related: ["pointer-event", "pointer-event-pressure", "pointer-event-get-coalesced-events"],
     aliases: ["pen", "stylus", "pointerId", "isPrimary"],
   }),
-  prop("PointerEvent.pressure", PART, "How hard the pen tip presses, from 0 to 1.", {
+  prop("PointerEvent.pressure", PART, "How hard the pen tip or Force Touch trackpad is pressed, from 0 to 1.", {
     since: "0.5.0",
     platforms: { windows: OK, macos: OK, linux: PART },
     notes: [
       "A pen reports `0` while hovering and on `pointerup`. A device without pressure data, such as the mouse, reports `0.5` while a button is down.",
       "On Windows, it is the pen's `POINTER_PEN_INFO` pressure, 0 to 1024, scaled to 0 to 1; a pen that does not report pressure reads `0.5` while touching.",
-      "On macOS, it is the tablet event's `pressure`.",
+      "On macOS, a pen supplies its tablet pressure. A Force Touch trackpad reports a normal press in the lower half of the range and a force click in the upper half. A change in pressure alone fires a mouse `pointermove` (since 0.6).",
       "On Linux with Wayland, it is the tablet tool's pressure axis, 0 to 65535, scaled to 0 to 1.",
     ],
     limitations: ["On Linux under X11, a pen arrives as the mouse and reads `0.5` while pressed."],

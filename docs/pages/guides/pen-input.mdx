@@ -25,16 +25,18 @@ A move also carries [predicted events](/web-platform/pointer-event-get-predicted
 
 ## What the pen reports
 
-| Member                                                                         | Pen                                                | Mouse                           |
-| ------------------------------------------------------------------------------ | -------------------------------------------------- | ------------------------------- |
-| [`pressure`](/web-platform/pointer-event-pressure/)                            | 0 to 1 while touching, `0` while hovering          | `0.5` while a button is down    |
-| [`tiltX`, `tiltY`](/web-platform/pointer-event-tilt-x/)                        | Degrees, -90 to 90                                 | `0`                             |
-| [`altitudeAngle`, `azimuthAngle`](/web-platform/pointer-event-altitude-angle/) | Radians, from the tilt                             | π/2 and `0`                     |
-| [`twist`](/web-platform/pointer-event-twist/)                                  | Degrees, 0 to 359, where the pen reports it        | `0`                             |
-| [`tangentialPressure`](/web-platform/pointer-event-tangential-pressure/)       | -1 to 1 on airbrush pens (macOS, Wayland)          | `0`                             |
-| `button` / `buttons`                                                           | Tip `0` / `1`, barrel `2` / `2`, eraser `5` / `32` | Left `0` / `1`, right `2` / `2` |
+| Member                                                                         | Pen                                                | Mouse                                       |
+| ------------------------------------------------------------------------------ | -------------------------------------------------- | ------------------------------------------- |
+| [`pressure`](/web-platform/pointer-event-pressure/)                            | 0 to 1 while touching, `0` while hovering          | Force Touch pressure or `0.5` while pressed |
+| [`tiltX`, `tiltY`](/web-platform/pointer-event-tilt-x/)                        | Degrees, -90 to 90                                 | `0`                                         |
+| [`altitudeAngle`, `azimuthAngle`](/web-platform/pointer-event-altitude-angle/) | Radians, from the tilt                             | π/2 and `0`                                 |
+| [`twist`](/web-platform/pointer-event-twist/)                                  | Degrees, 0 to 359, where the pen reports it        | `0`                                         |
+| [`tangentialPressure`](/web-platform/pointer-event-tangential-pressure/)       | -1 to 1 on airbrush pens (macOS, Wayland)          | `0`                                         |
+| `button` / `buttons`                                                           | Tip `0` / `1`, barrel `2` / `2`, eraser `5` / `32` | Left `0` / `1`, right `2` / `2`             |
 
 A pen in range but off the surface fires `pointerover`, `pointerenter` and `pointermove` with `buttons` `0`, and `pointerout` and `pointerleave` when it leaves range.
+
+A Force Touch trackpad reports `pointerType: "mouse"` (since 0.6). With the primary button down, the normal click stage covers 0 to 0.5 and the force-click stage covers 0.5 to 1. Holding the pointer still and pressing harder fires `pointermove`. Release gives 0. A mouse or trackpad without pressure readings gives 0.5 while pressed.
 
 ## Platforms
 
@@ -44,7 +46,7 @@ A pen in range but off the surface fires `pointerover`, `pointerenter` and `poin
 
 ## Try it
 
-`apps/pen-draw` in the repository is a small drawing app: pressure strokes, a highlighter on the barrel button, the eraser, and a switch to draw without the coalesced events. From a checkout, build the host and run it:
+`apps/pen-draw` draws pressure-sensitive strokes and shows the last pressure reading. Enable **Snap to grid** and cross a grid intersection, or drag the brush-width slider through its steps, to try tactile feedback (since 0.6). Build the host and run the app from a checkout. See [appHaptics](/app-api/app-haptics/) for device support.
 
 ```sh
 cargo build --target x86_64-pc-windows-msvc -p sk-app

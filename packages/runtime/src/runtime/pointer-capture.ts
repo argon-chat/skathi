@@ -34,6 +34,7 @@ export interface PointerSource {
   type: "mouse" | "pen";
   eraser: boolean;
   barrel: boolean;
+  mousePressure?: boolean;
   readings: PointerReading[];
   predicted: PredictedReading[];
 }
@@ -51,6 +52,7 @@ export const MOUSE_SOURCE: PointerSource = {
 const PEN_ERASER = 1;
 const PEN_BARREL = 2;
 const PEN_MOUSE = 8;
+const MOUSE_PRESSURE = 16;
 const READING_LEN = 10;
 const PREDICTED_LEN = 3;
 
@@ -78,7 +80,7 @@ export function pointerSource(raw: unknown): PointerSource {
   }
   const predicted: PredictedReading[] = [];
   for (; i + PREDICTED_LEN <= n.length; i += PREDICTED_LEN) predicted.push({ x: n[i]!, y: n[i + 1]!, time: n[i + 2]! });
-  if (flags & PEN_MOUSE) return { ...MOUSE_SOURCE, readings, predicted };
+  if (flags & PEN_MOUSE) return { ...MOUSE_SOURCE, mousePressure: !!(flags & MOUSE_PRESSURE), readings, predicted };
   return {
     id: PEN_ID,
     type: "pen",

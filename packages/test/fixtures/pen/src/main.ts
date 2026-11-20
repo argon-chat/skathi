@@ -1,4 +1,4 @@
-import { createApp, defineComponent, h } from "@skathi-native/runtime";
+import { appHaptics, createApp, defineComponent, h } from "@skathi-native/runtime";
 import "./pen.css";
 
 interface Move {
@@ -8,7 +8,7 @@ interface Move {
   ahead: number[];
   forward: boolean;
 }
-const state = { log: [] as string[], moves: [] as Move[] };
+const state = { haptics: appHaptics, log: [] as string[], moves: [] as Move[] };
 (globalThis as { __SK_TEST_PEN__?: unknown }).__SK_TEST_PEN__ = state;
 
 const at = (n: number) => Math.round(n);

@@ -167,7 +167,7 @@ function readingInit(src: PointerSource, r: PointerReading | undefined, buttons:
       isPrimary: true,
       width: 1,
       height: 1,
-      pressure: buttons ? 0.5 : 0,
+      pressure: buttons ? (src.mousePressure ? (r?.pressure ?? 0.5) : 0.5) : 0,
     };
   return {
     pointerId: src.id,
