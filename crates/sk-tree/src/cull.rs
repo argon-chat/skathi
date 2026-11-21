@@ -139,6 +139,9 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
+    if crate::text_box::depends_on_metrics(&cs.extras, t.name(node.tag)) {
+        return true;
+    }
     // A sticky box never leaves its parent, so an ancestor wholly outside the clip hides it too;
     // the box itself is refused in `placeholder`, where its shift can bring it into view.
     if cs.extras.sticky == Some(true) {
@@ -192,7 +195,10 @@ fn view_of(t: &Tree, parent: u32, root: u32, win: WinKey) -> View {
             // A sticky box does not move with the scroll the shift below predicts.
             if MOVING.with(|m| m.borrow().contains(&parent))
                 || cs.is_some_and(|cs| {
-                    cs.base.vn_transform.is_some() || cs.extras.sticky == Some(true)
+                    cs.base.vn_transform.is_some()
+                        || cs.base.vn_translate.is_some()
+                        || cs.base.vn_rotate.is_some()
+                        || cs.extras.sticky == Some(true)
                 })
             {
                 clip = None;

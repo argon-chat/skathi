@@ -29,6 +29,11 @@ enum Animatable {
     /// A cross-fade between different effects: the first at `1 - t` beneath the second at `t`.
     EffectFade(EffectSpec, EffectSpec, f32),
     Transform(TransformSpec),
+    Display(gpui::Display),
+    ContentHidden(bool),
+    Cursor(gpui::CursorStyle),
+    FlexDirection(gpui::FlexDirection),
+    FlexWrap(gpui::FlexWrap),
     Overflow(gpui::Overflow),
     ObjectPosition(gpui::ObjectPosition),
     CornerShape(gpui::CornerShape),
@@ -349,6 +354,21 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         BorderRightWidth => slot_absolute(r.border_widths.right),
         BorderBottomWidth => slot_absolute(r.border_widths.bottom),
         BorderLeftWidth => slot_absolute(r.border_widths.left),
+        Display => r.display.map_or(Slot::Missing, |display| {
+            Slot::Value(Animatable::Display(display))
+        }),
+        ContentVisibility => r.vn_content_hidden.map_or(Slot::Missing, |hidden| {
+            Slot::Value(Animatable::ContentHidden(hidden))
+        }),
+        Cursor => r
+            .mouse_cursor
+            .map_or(Slot::Missing, |v| Slot::Value(Animatable::Cursor(v))),
+        FlexDirection => r
+            .flex_direction
+            .map_or(Slot::Missing, |v| Slot::Value(Animatable::FlexDirection(v))),
+        FlexWrap => r
+            .flex_wrap
+            .map_or(Slot::Missing, |v| Slot::Value(Animatable::FlexWrap(v))),
         OverflowX => r
             .overflow
             .x
@@ -372,9 +392,12 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         Shading => r
             .vn_effect
             .map_or(Slot::Missing, |e| Slot::Value(Animatable::Effect(e))),
-        Transform => r
-            .vn_transform
-            .map_or(Slot::Missing, |t| Slot::Value(Animatable::Transform(t))),
+        Translate | Rotate | Transform => match p {
+            Translate => r.vn_translate,
+            Rotate => r.vn_rotate,
+            _ => r.vn_transform,
+        }
+        .map_or(Slot::Missing, |t| Slot::Value(Animatable::Transform(t))),
         All | Other(_) => Slot::Missing,
     }
 }
@@ -526,6 +549,31 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         BorderRightWidth => r.border_widths.right = to_absolute(v),
         BorderBottomWidth => r.border_widths.bottom = to_absolute(v),
         BorderLeftWidth => r.border_widths.left = to_absolute(v),
+        Display => {
+            if let Animatable::Display(display) = v {
+                r.display = Some(display);
+            }
+        }
+        ContentVisibility => {
+            if let Animatable::ContentHidden(hidden) = v {
+                r.vn_content_hidden = Some(hidden);
+            }
+        }
+        Cursor => {
+            if let Animatable::Cursor(cursor) = v {
+                r.mouse_cursor = Some(cursor);
+            }
+        }
+        FlexDirection => {
+            if let Animatable::FlexDirection(direction) = v {
+                r.flex_direction = Some(direction);
+            }
+        }
+        FlexWrap => {
+            if let Animatable::FlexWrap(wrap) = v {
+                r.flex_wrap = Some(wrap);
+            }
+        }
         OverflowX | OverflowY => {
             if let Animatable::Overflow(o) = v {
                 if matches!(p, OverflowX) {
@@ -559,9 +607,13 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
             }
             _ => {}
         },
-        Transform => {
+        Translate | Rotate | Transform => {
             if let Animatable::Transform(spec) = v {
-                r.vn_transform = Some(spec);
+                match p {
+                    Translate => r.vn_translate = Some(spec),
+                    Rotate => r.vn_rotate = Some(spec),
+                    _ => r.vn_transform = Some(spec),
+                }
             }
         }
         All | Other(_) => {}
@@ -617,6 +669,11 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         BorderRightWidth => r.border_widths.right = None,
         BorderBottomWidth => r.border_widths.bottom = None,
         BorderLeftWidth => r.border_widths.left = None,
+        Display => r.display = None,
+        ContentVisibility => r.vn_content_hidden = None,
+        Cursor => r.mouse_cursor = None,
+        FlexDirection => r.flex_direction = None,
+        FlexWrap => r.flex_wrap = None,
         OverflowX => r.overflow.x = None,
         OverflowY => r.overflow.y = None,
         RowGap => r.gap.height = None,
@@ -628,6 +685,8 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
             r.vn_effect = None;
             r.vn_effect_fade = None;
         }
+        Translate => r.vn_translate = None,
+        Rotate => r.vn_rotate = None,
         Transform => r.vn_transform = None,
         All | Other(_) => {}
     }
@@ -679,6 +738,11 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         BorderRightWidth => dst.border_widths.right = src.border_widths.right,
         BorderBottomWidth => dst.border_widths.bottom = src.border_widths.bottom,
         BorderLeftWidth => dst.border_widths.left = src.border_widths.left,
+        Display => dst.display = src.display,
+        ContentVisibility => dst.vn_content_hidden = src.vn_content_hidden,
+        Cursor => dst.mouse_cursor = src.mouse_cursor,
+        FlexDirection => dst.flex_direction = src.flex_direction,
+        FlexWrap => dst.flex_wrap = src.flex_wrap,
         OverflowX => dst.overflow.x = src.overflow.x,
         OverflowY => dst.overflow.y = src.overflow.y,
         RowGap => dst.gap.height = src.gap.height,
@@ -690,6 +754,8 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
             dst.vn_effect = src.vn_effect;
             dst.vn_effect_fade = src.vn_effect_fade;
         }
+        Translate => dst.vn_translate = src.vn_translate,
+        Rotate => dst.vn_rotate = src.vn_rotate,
         Transform => dst.vn_transform = src.vn_transform,
         All | Other(_) => {}
     }
@@ -742,8 +808,13 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         | BorderLeftWidth
         | RowGap
         | ColumnGap => Some(Animatable::Pixels(Pixels::from(0.0))),
+        Display => Some(Animatable::Display(gpui::Display::default())),
+        ContentVisibility => Some(Animatable::ContentHidden(false)),
+        Cursor => Some(Animatable::Cursor(gpui::CursorStyle::Arrow)),
+        FlexDirection => Some(Animatable::FlexDirection(gpui::FlexDirection::Row)),
+        FlexWrap => Some(Animatable::FlexWrap(gpui::FlexWrap::NoWrap)),
         OverflowX | OverflowY => Some(Animatable::Overflow(gpui::Overflow::Visible)),
-        Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
+        Translate | Rotate | Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         ObjectPosition => Some(Animatable::ObjectPosition(gpui::ObjectPosition::default())),
         CornerTopLeftShape
         | CornerTopRightShape
@@ -913,7 +984,30 @@ impl Track {
     }
 
     fn value(&self, now: Instant) -> Animatable {
-        lerp(self.from, self.to, self.easing.eval(self.progress(now)))
+        if now.saturating_duration_since(self.start) < self.delay.wait() {
+            return self.from;
+        }
+        let progress = self.progress(now);
+        match (self.from, self.to) {
+            (Animatable::Display(gpui::Display::None), Animatable::Display(_))
+            | (Animatable::ContentHidden(true), Animatable::ContentHidden(false)) => self.to,
+            (Animatable::Display(_), Animatable::Display(gpui::Display::None))
+            | (Animatable::ContentHidden(false), Animatable::ContentHidden(true)) => {
+                if self.finished(now) {
+                    self.to
+                } else {
+                    self.from
+                }
+            }
+            _ if self.property.is_discrete() => {
+                if self.easing.eval(progress) < 0.5 {
+                    self.from
+                } else {
+                    self.to
+                }
+            }
+            _ => lerp(self.from, self.to, self.easing.eval(progress)),
+        }
     }
 
     fn end(&self) -> Instant {
@@ -981,8 +1075,7 @@ impl Animator {
         }
     }
 
-    /// `old = None` is the first styling of the node: CSS does not transition initial style, so
-    /// leftover tracks are dropped.
+    /// Compares rendered before-change style, or the new style with starting rules applied.
     pub fn on_computed(
         &mut self,
         node: u32,
@@ -994,10 +1087,16 @@ impl Animator {
             self.nodes.remove(&node);
             return;
         }
-        let Some(old) = old else {
-            self.nodes.remove(&node);
+        let before = old.filter(|old| {
+            self.display_at(node, now).or(old.base.display) != Some(gpui::Display::None)
+        });
+        let Some(old) = before.or(new.starting_style.as_deref()) else {
+            self.cancel_transitions(node);
             return;
         };
+        if before.is_none() {
+            self.cancel_transitions(node);
+        }
 
         for spec in new.transitions.iter() {
             if let TransitionProperty::Other(name) = &spec.property {
@@ -1070,6 +1169,22 @@ impl Animator {
         } else {
             self.nodes.insert(node, tracks);
         }
+    }
+
+    pub fn display_at(&self, node: u32, now: Instant) -> Option<gpui::Display> {
+        self.nodes.get(&node)?.iter().find_map(|track| {
+            if track.property == TransitionProperty::Display && !track.finished(now) {
+                if let Animatable::Display(display) = track.value(now) {
+                    return Some(display);
+                }
+            }
+            None
+        })
+    }
+
+    pub fn cancel_transitions(&mut self, node: u32) {
+        self.nodes.remove(&node);
+        self.states.remove(&node);
     }
 
     pub fn on_state(
@@ -1359,6 +1474,9 @@ impl Animator {
                 return Endpoints::Snap;
             }
         };
+        if property.is_discrete() {
+            return Endpoints::Pair(from, to);
+        }
         match unify(from, to) {
             Some((from, to)) => Endpoints::Pair(from, to),
             None => {
@@ -1437,6 +1555,103 @@ mod tests {
 
     fn t0() -> Instant {
         Instant::now()
+    }
+
+    #[test]
+    fn starting_style_animates_entry_and_display_remains_visible_until_exit_ends() {
+        let css = ".box { display: block; opacity: 1; translate: 0 0; \
+                          transition: opacity 1s linear, translate 1s linear, display 1s allow-discrete; \
+                          @starting-style { display: none; opacity: 0; translate: 0 12px } }";
+        let visible = crate::tests::box_node();
+        let engine = crate::Engine::compile(css);
+        let shown = engine.compute(visible, None, &crate::Env::default());
+        let hidden = states(
+            crate::parse_inline("display: none; opacity: 0; translate: 0 12px", &mut vec![]),
+            "transition: opacity 1s linear, translate 1s linear, display 1s allow-discrete",
+        );
+        let start = t0();
+        let sample = start + Duration::from_millis(500);
+        let mut animator = Animator::new();
+        animator.on_computed(1, Some(&hidden), &shown, start);
+        let style = animator.overlay(1, &shown.base, sample).unwrap();
+        assert_eq!(style.display, Some(gpui::Display::Block));
+        assert_eq!(style.opacity, Some(0.5));
+        assert_eq!(
+            style.vn_translate.unwrap().translate.1,
+            gpui::TransformLength::Pixels(6.0)
+        );
+
+        let exit = start + Duration::from_secs(1);
+        animator.on_computed(1, Some(&shown), &hidden, exit);
+        let before_end = animator
+            .overlay(1, &hidden.base, exit + Duration::from_millis(999))
+            .unwrap();
+        assert_eq!(before_end.display, Some(gpui::Display::Block));
+        let settled = exit + Duration::from_secs(1);
+        assert_eq!(animator.display_at(1, settled), None);
+        assert_eq!(hidden.base.display, Some(gpui::Display::None));
+    }
+
+    #[test]
+    fn discrete_overflow_switches_halfway_and_hidden_content_switches_at_the_end() {
+        let transition = "transition: overflow 1s linear, content-visibility 1s linear; \
+                          transition-behavior: allow-discrete";
+        let from = states(
+            crate::parse_inline(
+                "overflow: visible; content-visibility: visible",
+                &mut vec![],
+            ),
+            transition,
+        );
+        let to = states(
+            crate::parse_inline("overflow: hidden; content-visibility: hidden", &mut vec![]),
+            transition,
+        );
+        let start = t0();
+        let mut animator = Animator::new();
+        animator.on_computed(1, Some(&from), &to, start);
+        let overlay = |ms| {
+            animator
+                .overlay(1, &to.base, start + Duration::from_millis(ms))
+                .unwrap()
+        };
+        assert_eq!(overlay(499).overflow.x, Some(gpui::Overflow::Visible));
+        assert_eq!(overlay(500).overflow.x, Some(gpui::Overflow::Hidden));
+        assert_eq!(overlay(999).vn_content_hidden, Some(false));
+        assert_eq!(to.base.vn_content_hidden, Some(true));
+    }
+
+    #[test]
+    fn all_can_transition_flex_flow_and_cursor_with_a_later_normal_override() {
+        let from = states(
+            crate::parse_inline("flex-flow: row nowrap; cursor: default", &mut vec![]),
+            "",
+        );
+        let run = |transition| {
+            let to = states(
+                crate::parse_inline("flex-flow: column wrap; cursor: pointer", &mut vec![]),
+                transition,
+            );
+            let start = t0();
+            let mut animator = Animator::new();
+            animator.on_computed(1, Some(&from), &to, start);
+            let sample = |ms| {
+                animator
+                    .overlay(1, &to.base, start + Duration::from_millis(ms))
+                    .unwrap()
+            };
+            (sample(499), sample(500))
+        };
+        let (early, late) = run("transition: all 1s linear allow-discrete");
+        assert_eq!(early.flex_direction, Some(gpui::FlexDirection::Row));
+        assert_eq!(late.flex_direction, Some(gpui::FlexDirection::Column));
+        assert_eq!(early.flex_wrap, Some(gpui::FlexWrap::NoWrap));
+        assert_eq!(late.flex_wrap, Some(gpui::FlexWrap::Wrap));
+        assert_eq!(early.mouse_cursor, Some(gpui::CursorStyle::Arrow));
+        assert_eq!(late.mouse_cursor, Some(gpui::CursorStyle::PointingHand));
+
+        let (early, _) = run("transition: all 1s linear allow-discrete, cursor 1s normal");
+        assert_eq!(early.mouse_cursor, None);
     }
 
     #[test]

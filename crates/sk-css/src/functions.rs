@@ -16,6 +16,7 @@ use crate::vars::{self, VarError};
 pub(crate) struct Table {
     defs: Vec<Def>,
     containers: bool,
+    pressure: bool,
 }
 
 struct Def {
@@ -59,6 +60,7 @@ impl Table {
             Ok(mut def) => {
                 def.condition = condition;
                 self.containers |= queries_containers(&def.body);
+                self.pressure |= queries_pressure(&def.body);
                 self.defs.push(def);
             }
             Err(why) => crate::mapper::once(diagnostics, format!("@function was dropped — {why}")),
@@ -67,6 +69,10 @@ impl Table {
 
     pub(crate) fn uses_containers(&self) -> bool {
         self.containers
+    }
+
+    pub(crate) fn uses_compute_pressure(&self) -> bool {
+        self.pressure
     }
 
     fn find(&self, name: &str, env: &crate::Env) -> Option<&Def> {
@@ -563,6 +569,16 @@ fn queries_containers(items: &[Item]) -> bool {
         Item::Decl(..) => false,
         Item::When(When::Container(_), _) => true,
         Item::When(_, inner) => queries_containers(inner),
+    })
+}
+
+fn queries_pressure(items: &[Item]) -> bool {
+    items.iter().any(|item| match item {
+        Item::Decl(..) => false,
+        Item::When(When::Media(cond), inner) => {
+            cond.uses_compute_pressure() || queries_pressure(inner)
+        }
+        Item::When(_, inner) => queries_pressure(inner),
     })
 }
 

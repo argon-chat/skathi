@@ -369,6 +369,7 @@ pub struct Tree {
     has_anchors: Cell<bool>,
     self_marks: Vec<u32>,
     sibling_combinators: bool,
+    sibling_positions: RefCell<HashMap<u32, HashMap<u32, u32>>>,
     /// One counter for the tree, not per slot: a removed-then-set prop would restart at 0 and the
     /// same string would read as unassigned.
     prop_writes: u32,
@@ -692,6 +693,7 @@ impl Tree {
             Some(n) => std::mem::take(&mut n.children),
             None => return,
         };
+        self.sibling_positions.get_mut().remove(&id);
         for c in children {
             self.free_subtree(c);
         }
@@ -749,6 +751,15 @@ impl Tree {
             self.flag_path(parent);
         }
         self.child_list_changed(parent, idx, true, was_bare);
+        if self
+            .node(child)
+            .is_some_and(|node| node.kind == Kind::Element)
+        {
+            self.sibling_values_changed(parent);
+            if old_parent != 0 && old_parent != parent {
+                self.sibling_values_changed(old_parent);
+            }
+        }
         self.dirty = true;
         // Both chains: a cache boundary over either parent has a stale recording.
         if old_parent != 0 {
@@ -778,15 +789,54 @@ impl Tree {
     /// id.
     pub fn remove(&mut self, id: u32) {
         let parent = self.node(id).map(|n| n.parent).unwrap_or(0);
+        let element = self.node(id).is_some_and(|node| node.kind == Kind::Element);
         let was_bare = self.bare_if_asked(parent);
         let at = self.detach(id);
         self.free_subtree(id);
         if parent != 0 {
             self.child_list_changed(parent, at, false, was_bare);
+            if element {
+                self.sibling_values_changed(parent);
+            }
         }
         self.dirty = true;
         if parent != 0 {
             self.touch_mutated(parent, true);
+        }
+    }
+
+    fn element_children(&self, parent: u32) -> impl Iterator<Item = u32> + '_ {
+        self.node(parent)
+            .into_iter()
+            .flat_map(|node| node.children.iter().copied())
+            .filter(|&child| {
+                self.node(child)
+                    .is_some_and(|node| node.kind == Kind::Element)
+            })
+    }
+
+    fn sibling_values_changed(&mut self, parent: u32) {
+        if !self.sibling_positions.get_mut().contains_key(&parent) {
+            return;
+        }
+        let positions: HashMap<_, _> = self
+            .element_children(parent)
+            .enumerate()
+            .map(|(index, child)| (child, index as u32 + 1))
+            .collect();
+        let count = positions.len() as u32;
+        let marks: Vec<_> = positions
+            .iter()
+            .filter_map(|(&child, &index)| {
+                let values = self.node(child)?.computed.as_ref()?.sibling_values;
+                (values.index.is_some_and(|old| old != index)
+                    || values.count.is_some_and(|old| old != count))
+                .then_some(child)
+            })
+            .collect();
+        self.sibling_positions.get_mut().insert(parent, positions);
+        for child in marks {
+            self.mark_restyle(child);
         }
     }
 
@@ -856,6 +906,7 @@ impl Tree {
     }
 
     fn free_subtree(&mut self, id: u32) {
+        self.sibling_positions.get_mut().remove(&id);
         let Some(node) = self.nodes.get_mut(id as usize).and_then(Option::take) else {
             return;
         };
@@ -1617,6 +1668,9 @@ impl Tree {
         let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
         states.extras.pointer_events_none = Some(inert);
         let radii = sk_css::resolve_inherited_radii(&mut states, parent_radii);
+        if let Some(starting) = &mut states.starting_style {
+            sk_css::resolve_inherited_radii(std::rc::Rc::make_mut(starting), parent_radii);
+        }
         (states, radii)
     }
 
@@ -2023,6 +2077,17 @@ impl Tree {
         let mut display_flips: Vec<(u32, bool)> = Vec::new();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
+            let mut revealed = std::collections::HashSet::new();
+            for (id, states) in &computed {
+                let previous = self.node(*id).and_then(|n| n.computed.as_ref());
+                let was_none = animator
+                    .display_at(*id, now)
+                    .or_else(|| previous.and_then(|c| c.base.display))
+                    == Some(gpui::Display::None);
+                if was_none && states.base.display != Some(gpui::Display::None) {
+                    revealed.insert(*id);
+                }
+            }
             for (id, states) in computed {
                 let old_watchers = self
                     .node(id)
@@ -2048,7 +2113,22 @@ impl Tree {
                 // again starts them afresh.
                 let self_none = states.base.display == Some(gpui::Display::None);
                 let animated = !states.animations.is_empty() || animator.has_animations(id);
-                let hidden = animated && (self_none || self.hidden_above(id));
+                let hidden_above = self.hidden_above(id);
+                let hidden = animated && (self_none || hidden_above);
+                let under_reveal = if revealed.is_empty() {
+                    false
+                } else {
+                    let mut parent = self.node(id).map_or(0, |node| node.parent);
+                    let mut found = false;
+                    while let Some(node) = self.node(parent) {
+                        if revealed.contains(&parent) {
+                            found = true;
+                            break;
+                        }
+                        parent = node.parent;
+                    }
+                    found
+                };
                 let keywords = (animated
                     || !states.transitions.is_empty()
                     || animator.has_script_animations(id))
@@ -2083,7 +2163,14 @@ impl Tree {
                         } else {
                             n.computed.as_ref()
                         };
-                        animator.on_computed(id, before, &states, now);
+                        if hidden_above {
+                            animator.cancel_transitions(id);
+                        } else if !under_reveal {
+                            animator.on_computed(id, before, &states, now);
+                            if self_none && animator.display_at(id, now).is_none() {
+                                animator.cancel_transitions(id);
+                            }
+                        }
                         // Against the painting window's environment: `@keyframes` inside `@media`
                         // exist only where the query holds. They are document-scoped, so a sheet
                         // without any skips the check.
@@ -2093,9 +2180,10 @@ impl Tree {
                                 || animator.has_animations(id))
                         {
                             animator.on_computed_animations(id, &states, now, &|name| {
-                                engine.keyframes_for(
+                                engine.keyframes_for_siblings(
                                     name,
                                     &states.vars,
+                                    states.sibling_values,
                                     &node_env,
                                     &mut keyframe_diagnostics.borrow_mut(),
                                 )
@@ -2103,7 +2191,7 @@ impl Tree {
                         }
                         // A restyle under a stationary pointer: the flip already happened (or never
                         // will), so the animator would aim at the old fold.
-                        if states.hover_transitions() {
+                        if !hidden_above && !under_reveal && states.hover_transitions() {
                             let target = fold_hover_target(id, &states);
                             if target.is_some() || animator.holds_state(id) {
                                 animator.on_state(id, &states, target.as_ref(), now);
@@ -2113,9 +2201,10 @@ impl Tree {
                         restyled.push(id);
                     } else if rebind && !hidden {
                         animator.on_computed_animations(id, &states, now, &|name| {
-                            engine.keyframes_for(
+                            engine.keyframes_for_siblings(
                                 name,
                                 &states.vars,
+                                states.sibling_values,
                                 &node_env,
                                 &mut keyframe_diagnostics.borrow_mut(),
                             )
@@ -2125,6 +2214,7 @@ impl Tree {
             }
             // A `display` flip reaches the whole subtree, including nodes not in this pass: hiding
             // cancels every run under it, showing starts those of every non-hidden descendant.
+            let mut started = std::collections::HashSet::new();
             for (id, none) in std::mem::take(&mut display_flips) {
                 if !none && self.hidden_above(id) {
                     continue; // shown, but still under a hidden ancestor
@@ -2136,6 +2226,7 @@ impl Tree {
                 while let Some(c) = stack.pop() {
                     let Some(node) = self.node(c) else { continue };
                     if none {
+                        animator.cancel_transitions(c);
                         if animator.has_animations(c) {
                             animator.cancel_animations(c, now);
                         }
@@ -2146,6 +2237,12 @@ impl Tree {
                         if cs.base.display == Some(gpui::Display::None) {
                             continue; // its subtree stays hidden
                         }
+                        if revealed.contains(&id)
+                            && cs.starting_style.is_some()
+                            && started.insert(c)
+                        {
+                            animator.on_computed(c, None, cs, now);
+                        }
                         if !cs.animations.is_empty() {
                             let node_env = if multiwindow {
                                 crate::windows::env_for_node(self, c, env)
@@ -2153,9 +2250,10 @@ impl Tree {
                                 *env
                             };
                             animator.on_computed_animations(c, cs, now, &|name| {
-                                engine.keyframes_for(
+                                engine.keyframes_for_siblings(
                                     name,
                                     &cs.vars,
+                                    cs.sibling_values,
                                     &node_env,
                                     &mut keyframe_diagnostics.borrow_mut(),
                                 )
@@ -2545,7 +2643,13 @@ pub(crate) fn animate_detached(id: u32, states: &sk_css::ComputedStates, now: st
         ANIMATOR.with(|a| {
             a.borrow_mut()
                 .on_computed_animations(id, states, now, &|name| {
-                    engine.keyframes_for(name, &states.vars, &env, &mut diagnostics.borrow_mut())
+                    engine.keyframes_for_siblings(
+                        name,
+                        &states.vars,
+                        states.sibling_values,
+                        &env,
+                        &mut diagnostics.borrow_mut(),
+                    )
                 });
         });
     });
@@ -3106,6 +3210,25 @@ impl<'t> sk_css::MatchDom for NodeRef<'t> {
             id: p,
         })
     }
+    fn sibling_values(&self) -> (u32, u32) {
+        let parent = self.node().parent;
+        if parent == 0 {
+            return (1, 1);
+        }
+        let mut positions = self.tree.sibling_positions.borrow_mut();
+        let children = positions.entry(parent).or_insert_with(|| {
+            self.tree
+                .element_children(parent)
+                .enumerate()
+                .map(|(index, child)| (child, index as u32 + 1))
+                .collect()
+        });
+        (
+            children.get(&self.id).copied().unwrap_or(1),
+            children.len() as u32,
+        )
+    }
+
     fn prev_sibling(&self) -> Option<Self> {
         self.note_sibling_question(sel::PREV_EDGE, sel::PREV_WALK);
         self.element_sibling(false)
@@ -4417,6 +4540,46 @@ mod tests {
         with_tree(|t| t.set_class(panel, "wide"));
         restyle_all();
         assert!(buttons.iter().all(|&b| opacity(b).is_none()));
+    }
+
+    #[test]
+    fn reordering_restyles_the_changed_index_readers_without_restyling_count_readers() {
+        let sheet = ".indexed { z-index: calc(sibling-index() * 2); } \
+                     .counted { z-index: sibling-count(); }";
+        let engine = sk_css::Engine::compile(sheet);
+        let mut tree = Tree::new();
+        let root = tree.create_root();
+        let tag = tree.intern("div");
+        let a = tree.create_element(tag);
+        let b = tree.create_element(tag);
+        let counted = tree.create_element(tag);
+        tree.set_class(a, "indexed");
+        tree.set_class(b, "indexed");
+        tree.set_class(counted, "counted");
+        for child in [a, b, counted] {
+            tree.insert(child, root, 0);
+        }
+        let env = sk_css::Env::default();
+        tree.restyle(Some(&engine), &env);
+        let z = |tree: &Tree, id| tree.node(id).unwrap().computed.as_ref().unwrap().extras.z();
+        assert_eq!(
+            [z(&tree, a), z(&tree, b), z(&tree, counted)],
+            [Some(2), Some(4), Some(3)]
+        );
+        tree.insert(b, root, a);
+        assert_ne!(tree.node(counted).unwrap().mark_gen, tree.restyle_gen);
+        tree.restyle(Some(&engine), &env);
+        assert_eq!(
+            [z(&tree, a), z(&tree, b), z(&tree, counted)],
+            [Some(4), Some(2), Some(3)]
+        );
+        let text = tree.create_text();
+        tree.set_text(text, "text".into());
+        tree.insert(text, root, a);
+        assert_ne!(tree.node(a).unwrap().mark_gen, tree.restyle_gen);
+        tree.remove(b);
+        tree.restyle(Some(&engine), &env);
+        assert_eq!([z(&tree, a), z(&tree, counted)], [Some(2), Some(2)]);
     }
 
     #[test]

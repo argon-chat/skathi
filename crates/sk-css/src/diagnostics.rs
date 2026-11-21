@@ -190,6 +190,9 @@ fn visit(
                             visit(nodes, tailwind, false, Targets::default(), out);
                         }
                     }
+                    "starting-style" if params.trim().is_empty() && body.is_some() => {
+                        visit(nodes, tailwind, false, targets, out);
+                    }
                     "keyframes" | "-webkit-keyframes" | "-moz-keyframes" => {
                         visit(nodes, tailwind, true, Targets::default(), out)
                     }

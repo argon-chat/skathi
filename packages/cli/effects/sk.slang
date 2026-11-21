@@ -264,6 +264,13 @@ public struct SkPointerTimesAttribute
 {
 };
 
+/// A host-written float: 0 for full detail, 1 for reduced, 2 for minimal.
+/// Declaring it opts an effect into adaptive quality and animation cadence.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkQualityAttribute
+{
+};
+
 // ===========================================================================
 //  The engine's binding contract
 // ===========================================================================

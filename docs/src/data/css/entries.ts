@@ -1008,6 +1008,37 @@ const typography = section("Typography and text", [
     "Selects East Asian glyph variants such as simplified, traditional or ruby forms.",
   ),
   prop("line-height", OK, "Sets the height of a line of text.", { related: ["font"] }),
+  sh("text-box", PART, "Sets the trimmed sides and the font metrics used for trimming.", {
+    since: "0.7.0",
+    notes: ["`normal` resets both longhands. Supplying only an edge sets `text-box-trim: trim-both`."],
+    limitations: ["Uses the block text layout and font metrics supported by the longhands."],
+    related: ["text-box-trim", "text-box-edge", "line-height"],
+  }),
+  prop("text-box-trim", PART, "Trims above the first line and below the last line using font metrics.", {
+    since: "0.7.0",
+    values: [v("none", OK), v("trim-start", OK), v("trim-end", OK), v("trim-both", OK)],
+    limitations: [
+      "Applies to direct, plain block text, including plain button labels and badges. Mixed inline children, generated content, and trimming across nested boxes are outside this layout model.",
+    ],
+    related: ["text-box", "text-box-edge", "line-height"],
+  }),
+  prop("text-box-edge", PART, "Chooses the font metrics used to trim a text box.", {
+    since: "0.7.0",
+    values: [
+      v("auto", OK),
+      v("text", OK),
+      v("cap", OK),
+      v("ex", OK),
+      v("cap alphabetic", OK),
+      v("ideographic", NO),
+      v("ideographic-ink", NO),
+    ],
+    notes: [
+      "`auto` uses the ascent and descent. `cap` and `ex` fall back to ascent if the primary face lacks the requested metric. `alphabetic` is a block-end edge and is paired with `text`, `cap`, or `ex`.",
+    ],
+    limitations: ["Ideographic metrics and `line-fit-edge` are unavailable."],
+    related: ["text-box", "text-box-trim"],
+  }),
   prop("letter-spacing", OK, "Sets extra space between characters.", {
     limitations: ["A percentage is not supported."],
     related: ["word-spacing"],
@@ -1717,12 +1748,22 @@ const effects = section("Effects", [
     related: ["mask", "mask-image"],
   }),
   prop("-webkit-box-reflect", NO, "Draws a reflection of an element next to it."),
+  prop("effect-quality", OK, "Selects the quality tier of a shader on this element.", {
+    skathiOnly: true,
+    since: "0.7.0",
+    values: [v("auto", OK), v("full", OK), v("reduced", OK), v("minimal", OK)],
+    notes: [
+      "The default `auto` follows pressure, power scheme and available battery information. The property applies to effects declaring `[SkQuality]`.",
+      "See [adaptive effects](/guides/adaptive-effects/) for the tier policy and shader code.",
+    ],
+    related: ["shading", "media-currently-compute-pressure", "media-currently-power-scheme"],
+  }),
   prop("--shading", OK, "Applies one of Skathi's GPU shading effects to an element.", {
     skathiOnly: true,
     notes: ["A custom property that browsers ignore.", "It applies to its own element."],
     animates: "interpolated",
     aliases: ["shading", "effects", "gpu effects"],
-    related: ["filter"],
+    related: ["filter", "effect-quality"],
   }),
 ]);
 
@@ -1778,13 +1819,17 @@ const transforms = section("Transforms", [
     aliases: ["-webkit-perspective-origin"],
     related: ["perspective"],
   }),
-  prop("translate", PLAN, "Moves an element, independently of `transform`.", {
-    workaround: "Use `transform`.",
-    related: ["transform", "rotate", "scale"],
+  prop("translate", PART, "Moves an element, independently of `transform`.", {
+    since: "0.7.0",
+    animates: "interpolated",
+    limitations: ["Supports X and Y offsets. A nonzero Z offset is unsupported."],
+    related: ["transform", "rotate", "scale", "at-starting-style"],
   }),
-  prop("rotate", PLAN, "Rotates an element, independently of `transform`.", {
-    workaround: "Use `transform`.",
-    related: ["transform", "translate", "scale"],
+  prop("rotate", PART, "Rotates an element, independently of `transform`.", {
+    since: "0.7.0",
+    animates: "interpolated",
+    limitations: ["Supports rotation around the Z axis."],
+    related: ["transform", "translate", "scale", "function-sibling-index"],
   }),
   prop("scale", PLAN, "Scales an element, independently of `transform`.", {
     workaround: "Use `transform`.",
@@ -1829,9 +1874,16 @@ const transitions = section("Transitions and animations", [
     aliases: ["-webkit-transition-delay"],
     related: ["transition", "animation-delay"],
   }),
-  prop("transition-behavior", NO, "Sets whether properties with discrete values, such as `display`, transition.", {
-    values: [v("allow-discrete", NO)],
-    related: ["transition", "at-starting-style"],
+  prop("transition-behavior", PART, "Sets whether properties with discrete values, such as `display`, transition.", {
+    since: "0.7.0",
+    values: [v("normal", OK), v("allow-discrete", OK)],
+    notes: [
+      "The keyword also works in each entry of the `transition` shorthand. Overflow values switch halfway through eased progress. Display and content visibility keep content visible through exit transitions.",
+    ],
+    limitations: [
+      "Discrete transitions cover `display`, `content-visibility`, keyword `cursor`, `flex-flow`, and `overflow`.",
+    ],
+    related: ["transition", "display", "content-visibility", "cursor", "flex-flow", "overflow", "at-starting-style"],
   }),
   prop(
     "interpolate-size",
@@ -2188,7 +2240,17 @@ const interaction = section("Interaction", [
     values: [v("none", OK, "Boxes have no resize handle."), v("horizontal, vertical or both", NO)],
     workaround: "Build a drag handle with pointer events.",
   }),
-  prop("field-sizing", NO, "Lets form fields such as `<textarea>` size to their content."),
+  prop("field-sizing", PART, "Lets text inputs, textareas, and closed selects size to their content.", {
+    since: "0.7.0",
+    values: [v("fixed", OK), v("content", OK)],
+    notes: [
+      "Empty text fields use their placeholder or caret width. Textareas can grow vertically after wrapping. A select measures the selected option label and its control padding.",
+    ],
+    limitations: [
+      "Applies to text-entry inputs, textareas, and the closed select control. Other input types keep their existing sizing.",
+    ],
+    related: ["width", "height", "min-width", "max-width", "min-height", "max-height"],
+  }),
   prop("interactivity", NO, "Makes an element and its subtree inert."),
   prop("app-region", OK, "Marks an element as a region that drags the window, as in an installed web app.", {
     values: [v("drag", OK), v("no-drag", OK), v("move", OK, "Same as `drag`."), v("none", OK, "Same as `no-drag`.")],
@@ -2337,8 +2399,14 @@ const containment = section("Containment and hints", [
     since: "0.4.0",
     related: ["container-type", "container-name", "at-container"],
   }),
-  prop("content-visibility", NO, "Lets the browser skip rendering an element's content until it is needed.", {
-    related: ["contain-intrinsic-size", "contain"],
+  prop("content-visibility", PART, "Lets an element skip drawing and measuring its content.", {
+    since: "0.7.0",
+    values: [v("visible", OK), v("hidden", OK), v("auto", NO)],
+    notes: ["Hidden ordinary boxes keep their own background and borders while omitting their content."],
+    limitations: [
+      "Automatic skipping and the native contents of replaced elements and dedicated controls are unsupported.",
+    ],
+    related: ["contain-intrinsic-size", "contain", "transition-behavior"],
   }),
   sh(
     "contain-intrinsic-size",
@@ -2714,9 +2782,14 @@ const atRules = section("At-rules", [
     workaround: "Use `<style scoped>`.",
     related: ["feature-scoped-styles"],
   }),
-  at("@starting-style", NO, "Defines the starting values a transition runs from when an element is first rendered.", {
-    workaround: "Use the framework's transitions (`<Transition>`, `transition:`).",
-    related: ["transition", "transition-behavior"],
+  at("@starting-style", PART, "Defines the starting values a transition runs from when an element is first rendered.", {
+    since: "0.7.0",
+    notes: [
+      "Use a top-level block of style rules or nest a block of declarations directly in a style rule.",
+      "Starting declarations enter the ordinary cascade and inherit from the parent’s after-change style. They apply when a box is inserted or revealed from `display: none`.",
+    ],
+    limitations: ["Cascade layers and nested relative selectors follow the engine’s existing CSS nesting limitations."],
+    related: ["transition", "transition-behavior", "display", "translate"],
   }),
   at("@page", NO, "Sets the margins and size of pages when printing."),
   at("@namespace", NO, "Declares an XML namespace for the selectors of a stylesheet.", {
@@ -2756,6 +2829,22 @@ const mediaFeatures = section("Media features", [
       related: ["media-width", "media-height"],
     },
   ),
+  mf("currently-power-scheme", OK, "Tests the active system power profile.", {
+    skathiOnly: true,
+    since: "0.7.0",
+    values: [v("balanced", OK), v("saving", OK), v("performance", OK)],
+    notes: [
+      "The bare feature always matches. Systems without an explicit profile report `balanced`. A power source change alone does not select a profile.",
+    ],
+    related: ["media-currently-compute-pressure", "effect-quality"],
+  }),
+  mf("currently-compute-pressure", OK, "Tests the current CPU pressure state.", {
+    skathiOnly: true,
+    since: "0.7.0",
+    values: [v("nominal", OK), v("fair", OK), v("serious", OK), v("critical", OK)],
+    notes: ["The bare feature always matches. Use discrete keyword queries and `matchMedia` change events."],
+    related: ["media-currently-power-scheme", "effect-quality"],
+  }),
   mf("prefers-color-scheme", OK, "Tests whether the user prefers a light or dark color scheme.", {
     notes: [
       "Follows `appWindow.theme` when it is `light` or `dark`, and the system setting under `system`, the default.",
@@ -2988,6 +3077,22 @@ const valuesAndUnits = section("Values and units", [
       ...(/^(a?(sin|cos|tan)|atan2)\(/.test(name) ? { aliases: ["trigonometry"] } : {}),
     }),
   ),
+  fn("sibling-index()", PART, "Returns the element’s one-based index among its element siblings.", {
+    since: "0.7.0",
+    notes: [
+      "Use directly in numeric values or in `calc()`, including lengths, times, and angles. Generated pseudo-elements use the position of their originating element.",
+    ],
+    limitations: ["Numeric values use the mapper’s supported CSS math and property grammars."],
+    related: ["function-sibling-count", "function-calc", "transition-delay", "animation-delay", "rotate"],
+  }),
+  fn("sibling-count()", PART, "Returns the number of element children of the element’s parent.", {
+    since: "0.7.0",
+    notes: [
+      "The count includes the element itself. Generated pseudo-elements use the count of their originating element.",
+    ],
+    limitations: ["Numeric values use the mapper’s supported CSS math and property grammars."],
+    related: ["function-sibling-index", "function-calc", "rotate"],
+  }),
   fn("var()", OK, "Inserts the value of a custom property.", {
     notes: ["Fallbacks are supported."],
     related: ["custom-properties"],

@@ -1306,6 +1306,8 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         "permissions" => cmd_permissions(arg("op").as_deref(), arg("name").as_deref()),
         "effects" => effects::command(arg("op").as_deref(), num("node"), arg("value").as_deref())
             .map_or_else(err, ok),
+        "power" => crate::power::command(arg("scheme").as_deref(), arg("pressure").as_deref())
+            .map_or_else(err, ok),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}`")),

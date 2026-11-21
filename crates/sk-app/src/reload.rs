@@ -54,6 +54,7 @@ fn run(rt: &JsRuntime) {
         }
     }
     end_media(rt, "location.reload()");
+    crate::pressure_observer::clear(rt);
     crate::js::reload(rt.ctx());
     #[cfg(sk_devtools)]
     crate::devtools::mark_reload("location.reload()");

@@ -1,0 +1,9 @@
+#power {
+  color: rgb(10, 20, 30);
+}
+
+@media (currently-power-scheme: saving) or (currently-compute-pressure: critical) {
+  #power {
+    color: rgb(90, 100, 110);
+  }
+}

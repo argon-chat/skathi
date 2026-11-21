@@ -47,6 +47,8 @@ const BROWSER_GLOBALS = [
   "ResizeObserver",
   "MutationObserver",
   "IntersectionObserver",
+  "PressureObserver",
+  "PressureRecord",
   "Image",
   "Audio",
   "AudioContext",

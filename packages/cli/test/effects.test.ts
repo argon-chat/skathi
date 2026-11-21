@@ -118,11 +118,12 @@ struct Lamp : IEffect
     [SkPointer] float2 pointer;
     [SkPointerTimes] [SkAnimatedFor(0.5)] float3 seen;
     [SkAnimatedFor(3)] float4 starts;
+    [SkQuality] float quality;
 
     float4 shade(EffectInput input)
     {
         float near = 1.0 - saturate(length(input.local - pointer) * radius);
-        return float4(near, sk_pointer_presence(seen, input.time, 0.5), starts.x, 1.0) * input.coverage;
+        return float4(near, sk_pointer_presence(seen, input.time, 0.5), starts.x + quality, 1.0) * input.coverage;
     }
 };
 `,
@@ -132,6 +133,7 @@ struct Lamp : IEffect
       signature: "lamp(<length:radius>, <number:starts.x>, <number:starts.y>, <number:starts.z>, <number:starts.w>)",
       pointerParam: 1,
       pointerTimesParam: 4,
+      qualityParam: 3,
       clockSlots: [4, 5, 6, 8, 9, 10, 11],
       clockWindow: 3,
     });

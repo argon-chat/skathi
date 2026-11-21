@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import Card from "../components/Card.vue";
+import FieldTypographyCss from "../components/FieldTypographyCss.vue";
+import MotionCss from "../components/MotionCss.vue";
 import Page from "../components/Page.vue";
 
 const hot = ref(false);
@@ -207,6 +209,8 @@ const cursors = [
         <div class="cell hover">hover me</div>
       </div>
     </Card>
+    <MotionCss />
+    <FieldTypographyCss />
   </Page>
 </template>
 

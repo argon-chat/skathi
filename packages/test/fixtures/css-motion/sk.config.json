@@ -1,0 +1,10 @@
+{
+  "name": "sk-test-css-motion",
+  "window": {
+    "title": "CSS motion",
+    "width": 640,
+    "height": 440,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

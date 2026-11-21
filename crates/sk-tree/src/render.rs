@@ -2403,6 +2403,13 @@ fn build_node<V: 'static>(
                 // descendant and would deliver every key twice.
                 d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
                 let is_select = t.name(node.tag) == "select";
+                let size_to_content = (is_select
+                    || (is_input && crate::live_state::is_text_field(t, id)))
+                    && crate::inherit::layout_value(t, id, false, |x| x.field_sizing)
+                        == sk_css::FieldSizing::Content;
+                if size_to_content && is_select {
+                    size_content_field(d.style());
+                }
                 if is_select && !disabled {
                     d = crate::select::bind_press(d, id);
                 }
@@ -2452,7 +2459,8 @@ fn build_node<V: 'static>(
                         .into_any_element()
                 } else if is_input {
                     let inert = extras.pointer_events_none == Some(true);
-                    let (input, focus_target) = build_input(t, id, node, tab_index, window, cx);
+                    let (input, focus_target) =
+                        build_input(t, id, node, tab_index, size_to_content, window, cx);
                     // The editor's own handle carries this node's focus identity (mouse, Tab,
                     // programmatic), so focus/blur events hang off it.
                     watch_focus(id, &focus_target, window, cx);
@@ -2476,6 +2484,15 @@ fn build_node<V: 'static>(
                             }
                         }
                     }
+                    if size_to_content {
+                        size_content_field(d.style());
+                        if t.name(node.tag) == "textarea"
+                            && matches!(d.style().display, None | Some(gpui::Display::Block))
+                        {
+                            d.style().display = Some(gpui::Display::Flex);
+                            d.style().flex_direction = Some(gpui::FlexDirection::Column);
+                        }
+                    }
                     // Clicks on the wrapper's padding/border focus the editor, but not while the field
                     // is inert (an `opacity-0 pointer-events-none` panel parked over the visible one
                     // must not take its press).
@@ -2495,6 +2512,10 @@ fn build_node<V: 'static>(
                         None => (None, None),
                     };
                     let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
+                    let text_trim = (!pseudo
+                        && matches!(d.style().display, None | Some(gpui::Display::Block)))
+                    .then(|| crate::text_box::Trim::for_node(t, id))
+                    .flatten();
                     let mut kids: Vec<AnyElement> = Vec::new();
                     if opens {
                         open_context();
@@ -2505,73 +2526,91 @@ fn build_node<V: 'static>(
                         kids.push(crate::bgimage::layer_element(id, stack, radii));
                     }
                     let background_kids = kids.len();
-                    if let Some(marker) = list_marker_for(t, id, node, &extras) {
-                        kids.push(marker);
-                    }
-                    if let Some(pb) = before {
-                        crate::fonts::want_for_pseudo(t, id, &pb);
-                        kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
-                    }
-                    if is_file_input {
-                        let dark = crate::scheme::declared(t, id, window) == Some(true);
-                        kids.push(file_input_children(t, id, node, case, dark));
-                    } else if let Some(k) = toggle {
-                        let skin = extras.appearance_none != Some(true);
-                        crate::toggle::defaults(d.style(), k, skin);
-                        if skin {
-                            kids.push(crate::toggle::skin(t, id, k, window));
+                    if d.style().vn_content_hidden != Some(true) {
+                        if let Some(marker) = list_marker_for(t, id, node, &extras) {
+                            kids.push(marker);
                         }
-                    } else if is_select {
-                        let skin = extras.appearance_none != Some(true);
-                        kids.extend(crate::select::closed_children(t, id, skin, case));
-                        if let Some(popup) =
-                            crate::select::popup_child(t, id, node, case, window, cx)
-                        {
-                            kids.push(popup);
+                        if let Some(pb) = before {
+                            crate::fonts::want_for_pseudo(t, id, &pb);
+                            kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
                         }
-                    } else if !node.text.is_empty() {
-                        // Inline text from `setElementText` (an element whose only child is text).
-                        let collapsed = processed_text(
-                            &node.text,
-                            ws.unwrap_or(sk_css::WhiteSpaceMode::Normal),
-                        );
-                        crate::fonts::want_for_text(t, id, &collapsed);
-                        let text = trim_own_edges(t, node, &collapsed, ws);
-                        if !text.is_empty() {
-                            let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
-                            kids.push(crate::selection::text_element(
-                                t, id, &node.text, ws, lead, text, case,
-                            ));
-                        }
-                    } else {
-                        kids.extend(laid_out_children(t, node).into_iter().map(|c| {
-                            build_node(
+                        if is_file_input {
+                            let dark = crate::scheme::declared(t, id, window) == Some(true);
+                            kids.push(file_input_children(t, id, node, case, dark));
+                        } else if let Some(k) = toggle {
+                            let skin = extras.appearance_none != Some(true);
+                            crate::toggle::defaults(d.style(), k, skin);
+                            if skin {
+                                kids.push(crate::toggle::skin(t, id, k, window));
+                            }
+                        } else if is_select {
+                            let skin = extras.appearance_none != Some(true);
+                            kids.extend(crate::select::closed_children(
                                 t,
-                                c,
-                                root,
-                                window,
-                                cx,
-                                now,
-                                drag,
+                                id,
+                                skin,
                                 case,
-                                ws,
-                                align,
-                                stacking.clone(),
-                            )
-                        }));
-                    }
-                    if let Some(pb) = after {
-                        crate::fonts::want_for_pseudo(t, id, &pb);
-                        kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
-                    }
-                    // The overlay scrollbar and its wheel routing. Last child: its hitboxes sit above
-                    // the content's and its capture-phase wheel listener registers after the
-                    // container's, so the innermost scroll box gets the wheel first.
-                    if let Some(h) = &scroll_handle {
-                        let auto_hide = cx.should_auto_hide_scrollbars();
-                        kids.push(
-                            scrollbar_for(t, id, node, h, window, auto_hide, cx).into_any_element(),
-                        );
+                                size_to_content,
+                            ));
+                            if let Some(popup) =
+                                crate::select::popup_child(t, id, node, case, window, cx)
+                            {
+                                kids.push(popup);
+                            }
+                        } else if !node.text.is_empty() {
+                            // Inline text from `setElementText` (an element whose only child is text).
+                            let collapsed = processed_text(
+                                &node.text,
+                                ws.unwrap_or(sk_css::WhiteSpaceMode::Normal),
+                            );
+                            crate::fonts::want_for_text(t, id, &collapsed);
+                            let text = trim_own_edges(t, node, &collapsed, ws);
+                            if !text.is_empty() {
+                                let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
+                                let text = crate::selection::text_element(
+                                    t, id, &node.text, ws, lead, text, case,
+                                );
+                                kids.push(crate::text_box::Trim::wrap(text_trim, text));
+                            }
+                        } else {
+                            let children = laid_out_children(t, node);
+                            let sole_text = children.len() == 1
+                                && t.node(children[0])
+                                    .is_some_and(|child| child.kind == Kind::Text);
+                            kids.extend(children.into_iter().map(|c| {
+                                let element = build_node(
+                                    t,
+                                    c,
+                                    root,
+                                    window,
+                                    cx,
+                                    now,
+                                    drag,
+                                    case,
+                                    ws,
+                                    align,
+                                    stacking.clone(),
+                                );
+                                crate::text_box::Trim::wrap(
+                                    text_trim.filter(|_| sole_text),
+                                    element,
+                                )
+                            }));
+                        }
+                        if let Some(pb) = after {
+                            crate::fonts::want_for_pseudo(t, id, &pb);
+                            kids.push(pseudo_element(id, &pb, case, &stacking, own_display));
+                        }
+                        // The overlay scrollbar and its wheel routing. Last child: its hitboxes sit above
+                        // the content's and its capture-phase wheel listener registers after the
+                        // container's, so the innermost scroll box gets the wheel first.
+                        if let Some(h) = &scroll_handle {
+                            let auto_hide = cx.should_auto_hide_scrollbars();
+                            kids.push(
+                                scrollbar_for(t, id, node, h, window, auto_hide, cx)
+                                    .into_any_element(),
+                            );
+                        }
                     }
                     // A negative z landed in this context: its in-flow content paints apart from its
                     // background, after the negative ones.
@@ -2990,6 +3029,16 @@ fn align_control_content(style: &mut gpui::StyleRefinement, t: &Tree, node: &cra
     let declared = node.computed.as_ref().and_then(|cs| cs.base.display);
     if matches!(declared, None | Some(gpui::Display::Block)) {
         style.align_content = Some(gpui::AlignContent::SafeCenter);
+    }
+}
+
+fn size_content_field(style: &mut gpui::StyleRefinement) {
+    if matches!(style.size.width, None | Some(gpui::Length::Auto)) {
+        style.size.width = Some(gpui::Length::VnCalcSize(gpui::VnCalcSize {
+            basis: gpui::VnSizeBasis::FitContent,
+            scale: 1.0,
+            offset: gpui::px(0.0).into(),
+        }));
     }
 }
 
@@ -3816,10 +3865,10 @@ pub(crate) fn z_applies(extras: &sk_css::Extras, parent_display: Option<gpui::Di
 pub(crate) fn effect_context(extras: &sk_css::Extras, style: &gpui::StyleRefinement) -> bool {
     style.opacity.is_some_and(|o| o < 1.0)
         || !matches!(style.vn_clip_path, None | Some(gpui::VnClipPath::None))
-        || style
-            .vn_transform
-            .as_ref()
-            .is_some_and(|t| !t.is_identity())
+        || [style.vn_transform, style.vn_translate, style.vn_rotate]
+            .into_iter()
+            .flatten()
+            .any(|t| !t.is_identity())
         || style.backdrop_blur.is_some_and(|r| r > gpui::px(0.0))
         || extras.blur.is_some_and(|b| b > 0.0)
         || extras.filter_url.is_some()
@@ -5583,6 +5632,7 @@ fn build_input<V: 'static>(
     id: u32,
     node: &crate::tree::Node,
     tab_index: Option<isize>,
+    size_to_content: bool,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> (AnyElement, FocusHandle) {
@@ -5679,6 +5729,7 @@ fn build_input<V: 'static>(
             || t.prop(id, "readonly").is_some_and(|v| v != "false"),
         tab_index,
         multiline,
+        size_to_content,
         // `text-align` is inherited: an `<input class="text-center">` carries it itself, while one
         // inside a centred wrapper gets it from the paint-time text style, which the widget cannot
         // see at prepaint when the offset is computed.

@@ -172,6 +172,8 @@ export type EffectSchema = {
   pointerParam: number | null;
   /// `[SkPointerTimes]`'s first slot, host-filled like `pointerParam`.
   pointerTimesParam: number | null;
+  /// Scalar [SkQuality] tier supplied by the painter.
+  qualityParam: number | null;
   /// Every slot of an `[SkAnimatedFor]` field: times on the effect clock.
   clockSlots: number[];
   /// The longest `[SkAnimatedFor]` window, in seconds.
@@ -549,6 +551,7 @@ function buildSchema(
   let animatedParam: number | null = null;
   let pointerParam: number | null = null;
   let pointerTimesParam: number | null = null;
+  let qualityParam: number | null = null;
   const clockSlots: number[] = [];
   let clockWindow: number | null = null;
   let textures = 0;
@@ -621,6 +624,7 @@ function buildSchema(
         "SkAnimatedFor",
         "SkPointer",
         "SkPointerTimes",
+        "SkQuality",
       ].find((a) => attr(attrs, a) !== undefined);
       if (refused) throw new SchemaError(`${where}: [${refused}] cannot go on an SkTexture`);
       if (textures === TEXTURE_SLOTS) {
@@ -664,22 +668,26 @@ function buildSchema(
       for (let c = 0; c < components; c += 1) clockSlots.push(slot + c);
     }
 
-    const host = (["SkPointer", "SkPointerTimes"] as const).filter((a) => attr(attrs, a) !== undefined);
-    if (host.length > 1) throw new SchemaError(`${where}: [SkPointer] and [SkPointerTimes] are mutually exclusive`);
+    const host = (["SkPointer", "SkPointerTimes", "SkQuality"] as const).filter((a) => attr(attrs, a) !== undefined);
+    if (host.length > 1) throw new SchemaError(`${where}: host attributes ${host.join(", ")} are mutually exclusive`);
     if (host[0]) {
       const kind = host[0];
-      const wanted = kind === "SkPointer" ? 2 : 3;
-      if (components !== wanted) throw new SchemaError(`${where}: [${kind}] is only legal on a float${wanted}`);
+      const wanted = { SkPointer: 2, SkPointerTimes: 3, SkQuality: 1 }[kind];
+      if (components !== wanted)
+        throw new SchemaError(`${where}: [${kind}] requires float${wanted === 1 ? "" : wanted}`);
+      if (kind === "SkQuality" && animatedFor)
+        throw new SchemaError(`${where}: [SkQuality] cannot be an animation clock`);
       const css = HOST_FILLED_REFUSES.find((a) => attr(attrs, a) !== undefined);
       if (css) {
         throw new SchemaError(
           `${where}: [${css}] cannot go on a [${kind}] parameter — the host fills it, it is not a CSS argument`,
         );
       }
-      const current = kind === "SkPointer" ? pointerParam : pointerTimesParam;
+      const current = { SkPointer: pointerParam, SkPointerTimes: pointerTimesParam, SkQuality: qualityParam }[kind];
       if (current !== null) throw new SchemaError(`${where}: [${kind}] appears more than once in \`${structName}\``);
       if (kind === "SkPointer") pointerParam = slot;
-      else pointerTimesParam = slot;
+      else if (kind === "SkPointerTimes") pointerTimesParam = slot;
+      else qualityParam = slot;
       continue;
     }
 
@@ -759,6 +767,7 @@ function buildSchema(
       animatedParam,
       pointerParam,
       pointerTimesParam,
+      qualityParam,
       clockSlots,
       clockWindow,
       signature,
@@ -997,6 +1006,7 @@ export function effectFiles(
       animatedParam: c.effect.animatedParam,
       pointerParam: c.effect.pointerParam,
       pointerTimesParam: c.effect.pointerTimesParam,
+      qualityParam: c.effect.qualityParam,
       clockSlots: c.effect.clockSlots,
       clockWindow: c.effect.clockWindow,
       params: c.effect.params,

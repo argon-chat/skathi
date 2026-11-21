@@ -17,6 +17,8 @@ function lensMove(e: MouseEvent) {
 }
 
 const warm = ref(false);
+const qualities = ["auto", "full", "reduced", "minimal"] as const;
+const quality = ref<(typeof qualities)[number]>("auto");
 
 const burnt = ref(false);
 
@@ -87,13 +89,18 @@ const glass = computed(
       </p>
     </Card>
 
-    <Card title="Nebula" api="nebula · [SkAnimated] · transition">
-      <div class="nebula" :class="{ warm }" @click="warm = !warm">
+    <Card title="Adaptive nebula" api="[SkQuality] · effect-quality">
+      <div class="nebula" :class="[quality, { warm }]" @click="warm = !warm">
         <span class="hint">click to shift the palette</span>
       </div>
+      <div class="row">
+        <button v-for="q in qualities" :key="q" class="btn" :class="{ on: quality === q }" @click="quality = q">
+          {{ q }}
+        </button>
+      </div>
       <p class="faint">
-        Noise sampled at coordinates warped by more noise, redrawn every frame. A CSS transition on --shading blends the
-        palette while it moves.
+        Auto follows the machine. Full draws stars and warped clouds at display cadence. Reduced uses one noise field
+        at up to 30 ticks per second. Minimal draws moving bands at up to 15. Click the preview to shift its palette.
       </p>
     </Card>
 
@@ -261,6 +268,12 @@ const glass = computed(
   --shading: lens(22px, 32px, 0.2, #ffffff0d);
 }
 
+.nebula.full { effect-quality: full; }
+.nebula.reduced { effect-quality: reduced; }
+.nebula.minimal { effect-quality: minimal; }
+@media (currently-power-scheme: saving), (currently-compute-pressure: serious), (currently-compute-pressure: critical) {
+  .lens { --shading: none; background: #ffffff25; }
+}
 .nebula {
   height: 190px;
   display: flex;

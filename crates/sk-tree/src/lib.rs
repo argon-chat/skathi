@@ -61,6 +61,7 @@ mod sticky;
 mod style_decl;
 pub mod surface;
 mod svg;
+mod text_box;
 mod toggle;
 mod tree;
 #[cfg(feature = "video")]
@@ -896,6 +897,10 @@ pub fn env() -> sk_css::Env {
 /// Evaluates one media query against [`env`], as the cascade would. `Err` is the compile failure.
 pub fn match_media(query: &str) -> Result<bool, String> {
     sk_css::match_media(query, &tree::env())
+}
+
+pub fn uses_compute_pressure() -> bool {
+    tree::with_engine(|engine| engine.is_some_and(sk_css::Engine::uses_compute_pressure))
 }
 
 #[cfg(test)]

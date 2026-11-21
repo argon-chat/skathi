@@ -1,0 +1,54 @@
+main {
+  padding: 8px;
+  font-family: sans-serif;
+  --sizing: content;
+}
+input,
+textarea,
+select {
+  display: block;
+  field-sizing: var(--sizing);
+  max-width: 112px;
+  padding: 3px 5px;
+  border: 1px solid #777;
+  font-size: 16px;
+  line-height: 20px;
+}
+#input {
+  min-width: 44px;
+}
+#area {
+  max-height: 68px;
+}
+#bounded-area {
+  width: 96px;
+  height: 44px;
+}
+#fixed-select {
+  field-sizing: fixed;
+  width: calc-size(fit-content, size);
+}
+#type {
+  text-box-edge: cap alphabetic;
+}
+.example {
+  display: block;
+  width: 150px;
+  padding: 3px;
+  border: 1px solid #999;
+  font-size: 24px;
+  line-height: 42px;
+  white-space: pre;
+}
+.cap-start {
+  text-box-trim: trim-start;
+}
+.alphabetic-end {
+  text-box: trim-end cap alphabetic;
+}
+.cap-both {
+  text-box: cap alphabetic;
+}
+.ex-both {
+  text-box: ex alphabetic;
+}

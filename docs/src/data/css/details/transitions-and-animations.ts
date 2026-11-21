@@ -194,7 +194,8 @@ const shown = ref(false);
   },
   "transition-behavior": {
     edgeCases: [
-      'A `transition-behavior` declaration is dropped with an advisory, and `CSS.supports("transition-behavior", "allow-discrete")` returns `false`.',
+      "Each entry of a transition list can allow discrete values. A later matching entry controls the property.",
+      "A transition to display: none leaves the box in layout through the end of its active duration.",
     ],
   },
   animation: {

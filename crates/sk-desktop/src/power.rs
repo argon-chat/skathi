@@ -6,6 +6,12 @@ mod mac;
 #[cfg(target_os = "windows")]
 mod win;
 
+mod monitor;
+
+pub use monitor::{
+    init, pressure_sample, scheme, set_pressure_demand, Pressure, PressureSample, Scheme,
+};
+
 #[cfg(target_os = "macos")]
 pub use mac::hold_screen;
 #[cfg(target_os = "windows")]

@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use lightningcss::properties::{Property, PropertyId};
+use lightningcss::traits::Parse as _;
 use lightningcss::values::easing::{EasingFunction, StepPosition as CssStepPosition};
 use lightningcss::values::time::Time;
 
@@ -54,12 +55,17 @@ pub enum TransitionProperty {
     ObjectPosition,
     /// Interpolates the logarithm of the ratio, as browsers do; `auto` and `auto <ratio>` flip.
     AspectRatio,
-    /// Discrete: `Element.animate()` and `@keyframes` flip it halfway; a transition never animates it
-    /// (no `transition-behavior: allow-discrete`).
+    Display,
+    ContentVisibility,
+    Cursor,
+    FlexDirection,
+    FlexWrap,
     OverflowX,
     OverflowY,
     /// The whole function list travels as one value: matched lists interpolate componentwise, never
     /// through the matrix, which would shear.
+    Translate,
+    Rotate,
     Transform,
     /// Excluded from `all`: a custom property is not an animatable property without an `@property`
     /// registration.
@@ -68,7 +74,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 40;
+pub const ANIMATABLE_COUNT: usize = 42;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -114,24 +120,33 @@ impl TransitionProperty {
             FontSize,
             ObjectPosition,
             AspectRatio,
+            Translate,
+            Rotate,
             Transform,
         ]
     }
 
     /// What keyframes animate: the [`animatable`](Self::animatable) set and the discrete properties.
     pub fn keyframed() -> impl Iterator<Item = TransitionProperty> {
-        Self::animatable().into_iter().chain([
-            TransitionProperty::OverflowX,
-            TransitionProperty::OverflowY,
-            TransitionProperty::Shading,
-        ])
+        Self::animatable()
+            .into_iter()
+            .chain([Self::OverflowX, Self::OverflowY, Self::Shading])
+    }
+
+    fn discrete() -> [Self; 7] {
+        [
+            Self::Display,
+            Self::ContentVisibility,
+            Self::Cursor,
+            Self::FlexDirection,
+            Self::FlexWrap,
+            Self::OverflowX,
+            Self::OverflowY,
+        ]
     }
 
     pub fn is_discrete(&self) -> bool {
-        matches!(
-            self,
-            TransitionProperty::OverflowX | TransitionProperty::OverflowY
-        )
+        Self::discrete().contains(self)
     }
 
     pub fn name(&self) -> &str {
@@ -171,6 +186,11 @@ impl TransitionProperty {
             BorderRightWidth => "border-right-width",
             BorderBottomWidth => "border-bottom-width",
             BorderLeftWidth => "border-left-width",
+            Display => "display",
+            ContentVisibility => "content-visibility",
+            Cursor => "cursor",
+            FlexDirection => "flex-direction",
+            FlexWrap => "flex-wrap",
             OverflowX => "overflow-x",
             OverflowY => "overflow-y",
             RowGap => "row-gap",
@@ -178,6 +198,8 @@ impl TransitionProperty {
             FontSize => "font-size",
             ObjectPosition => "object-position",
             AspectRatio => "aspect-ratio",
+            Translate => "translate",
+            Rotate => "rotate",
             Transform => "transform",
             Shading => "--shading",
             All => "all",
@@ -238,6 +260,7 @@ pub struct TransitionSpec {
     pub duration: Duration,
     pub delay: Delay,
     pub easing: Easing,
+    pub allow_discrete: bool,
 }
 
 impl TransitionSpec {
@@ -276,6 +299,16 @@ pub fn covered(specs: &[TransitionSpec]) -> Vec<TransitionProperty> {
             }
         }
     }
+    for property in TransitionProperty::discrete() {
+        if spec_for(specs, &property).is_some_and(|spec| spec.allow_discrete)
+            && !out.contains(&property)
+        {
+            out.push(property);
+        }
+    }
+    out.retain(|property| {
+        !property.is_discrete() || spec_for(specs, property).is_some_and(|spec| spec.allow_discrete)
+    });
     out
 }
 
@@ -364,6 +397,7 @@ pub(crate) struct Collector {
     durations: Option<Vec<Duration>>,
     delays: Option<Vec<Delay>>,
     easings: Option<Vec<Easing>>,
+    behaviors: Option<Vec<bool>>,
     // From the first substitution onward, declaration order matters for shorthand/longhand pairs.
     pub(crate) deferred: Vec<(String, String)>,
     seen: bool,
@@ -387,6 +421,9 @@ impl Collector {
         if later.easings.is_some() {
             self.easings = later.easings.clone();
         }
+        if later.behaviors.is_some() {
+            self.behaviors = later.behaviors.clone();
+        }
         self.seen |= later.seen;
     }
 
@@ -401,6 +438,7 @@ impl Collector {
             durations: Some(specs.iter().map(|spec| spec.duration).collect()),
             delays: Some(specs.iter().map(|spec| spec.delay).collect()),
             easings: Some(specs.iter().map(|spec| spec.easing).collect()),
+            behaviors: Some(specs.iter().map(|spec| spec.allow_discrete).collect()),
             seen: true,
             deferred: Vec::new(),
         }
@@ -408,17 +446,27 @@ impl Collector {
 
     pub(crate) fn take(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
         let id = p.property_id();
+        let name = id.name();
         if !is_transition_id(&id) {
             return false;
         }
-        if !self.deferred.is_empty() || matches!(p, Property::Unparsed(_)) {
+        if !self.deferred.is_empty()
+            || matches!(p, Property::Unparsed(u) if crate::mapper::has_substitution(&u.value))
+            || matches!(p, Property::Custom(c) if crate::mapper::has_substitution(&c.value))
+        {
             if let Some(value) = crate::mapper::value_text(p) {
-                self.deferred.push((id.name().to_owned(), value));
+                self.deferred.push((name.to_owned(), value));
                 self.seen = true;
             }
             return true;
         }
-        self.take_literal(p, diagnostics)
+        if !self.take_literal(p, diagnostics) {
+            crate::mapper::once(
+                diagnostics,
+                format!("invalid transition declaration '{name}'"),
+            );
+        }
+        true
     }
 
     pub(crate) fn merge_resolved(
@@ -432,6 +480,14 @@ impl Collector {
         self.merge(other);
         for (name, raw) in &other.deferred {
             if let Ok(value) = crate::vars::substitute_with(raw, vars, env) {
+                let Ok(siblings) = crate::siblings::resolve(&value) else {
+                    crate::mapper::once(
+                        diagnostics,
+                        "sibling-index() and sibling-count() take no arguments".into(),
+                    );
+                    continue;
+                };
+                let value = siblings.unwrap_or(value);
                 if let Ok(property) = Property::parse_string(
                     PropertyId::from(name.as_str()),
                     &value,
@@ -458,45 +514,69 @@ impl Collector {
                 PropertyId::TransitionDuration(_) => self.durations = None,
                 PropertyId::TransitionDelay(_) => self.delays = None,
                 PropertyId::TransitionTimingFunction(_) => self.easings = None,
+                id if id.name() == "transition-behavior" => self.behaviors = None,
                 _ => unreachable!(),
             }
         }
     }
 
     fn take_literal(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
-        match p {
-            Property::Transition(list, _) => {
-                self.seen = true;
-                let mut properties = Vec::with_capacity(list.len());
-                let mut durations = Vec::with_capacity(list.len());
-                let mut delays = Vec::with_capacity(list.len());
-                let mut easings = Vec::with_capacity(list.len());
-                for entry in list.iter() {
-                    match expand(&entry.property) {
-                        Expansion::None => {}
-                        Expansion::Props(props) => properties.push(transitioned(props)),
-                    }
-                    durations.push(duration_of(
-                        &entry.duration,
-                        "transition-duration",
-                        diagnostics,
-                    ));
-                    delays.push(delay_of(&entry.delay, "transition-delay", diagnostics));
-                    easings.push(easing_of(&entry.timing_function, diagnostics));
-                }
-                self.properties = Some(properties);
-                self.durations = Some(durations);
-                self.delays = Some(delays);
-                self.easings = Some(easings);
-                true
+        let id = p.property_id();
+        if matches!(id, PropertyId::Transition(_)) {
+            let Some(value) = crate::mapper::value_text(p) else {
+                return false;
+            };
+            let mut input = cssparser::ParserInput::new(&value);
+            let mut parser = cssparser::Parser::new(&mut input);
+            let Ok(entries) = parser.parse_comma_separated(parse_shorthand_entry) else {
+                return false;
+            };
+            if entries.len() > 1 && entries.iter().any(|entry| entry.0.name() == "none") {
+                return false;
             }
+            self.seen = true;
+            let mut properties = Vec::with_capacity(entries.len());
+            let mut durations = Vec::with_capacity(entries.len());
+            let mut delays = Vec::with_capacity(entries.len());
+            let mut easings = Vec::with_capacity(entries.len());
+            let mut behaviors = Vec::with_capacity(entries.len());
+            for (property, duration, delay, easing, allow_discrete) in entries {
+                if let Expansion::Props(props) = expand(&property) {
+                    properties.push(props);
+                }
+                durations.push(duration_of(&duration, "transition-duration", diagnostics));
+                delays.push(delay_of(&delay, "transition-delay", diagnostics));
+                easings.push(easing_of(&easing, diagnostics));
+                behaviors.push(allow_discrete);
+            }
+            self.properties = Some(properties);
+            self.durations = Some(durations);
+            self.delays = Some(delays);
+            self.easings = Some(easings);
+            self.behaviors = Some(behaviors);
+            return true;
+        }
+        if id.name() == "transition-behavior" {
+            let Some(value) = crate::mapper::value_text(p) else {
+                return false;
+            };
+            let mut input = cssparser::ParserInput::new(&value);
+            let mut parser = cssparser::Parser::new(&mut input);
+            let Ok(behaviors) = parser.parse_comma_separated(parse_behavior) else {
+                return false;
+            };
+            self.seen = true;
+            self.behaviors = Some(behaviors);
+            return true;
+        }
+        match p {
             Property::TransitionProperty(list, _) => {
                 self.seen = true;
                 let mut properties = Vec::with_capacity(list.len());
                 for id in list.iter() {
                     match expand(id) {
                         Expansion::None => {}
-                        Expansion::Props(props) => properties.push(transitioned(props)),
+                        Expansion::Props(props) => properties.push(props),
                     }
                 }
                 self.properties = Some(properties);
@@ -542,6 +622,7 @@ impl Collector {
         let durations = self.durations.unwrap_or_default();
         let delays = self.delays.unwrap_or_default();
         let easings = self.easings.unwrap_or_default();
+        let behaviors = self.behaviors.unwrap_or_default();
 
         fn pick<T: Copy + Default>(list: &[T], i: usize) -> T {
             if list.is_empty() {
@@ -566,6 +647,7 @@ impl Collector {
                     duration: d,
                     delay,
                     easing: e,
+                    allow_discrete: pick(&behaviors, i),
                 });
             }
         }
@@ -573,7 +655,7 @@ impl Collector {
     }
 }
 
-fn is_transition_id(id: &PropertyId) -> bool {
+pub(crate) fn is_transition_id(id: &PropertyId) -> bool {
     matches!(
         id,
         PropertyId::Transition(_)
@@ -581,7 +663,7 @@ fn is_transition_id(id: &PropertyId) -> bool {
             | PropertyId::TransitionDuration(_)
             | PropertyId::TransitionDelay(_)
             | PropertyId::TransitionTimingFunction(_)
-    )
+    ) || id.name() == "transition-behavior"
 }
 
 enum Expansion {
@@ -589,9 +671,55 @@ enum Expansion {
     Props(Vec<TransitionProperty>),
 }
 
-fn transitioned(mut props: Vec<TransitionProperty>) -> Vec<TransitionProperty> {
-    props.retain(|p| !p.is_discrete());
-    props
+type ParseError<'i> = cssparser::ParseError<'i, lightningcss::error::ParserError<'i>>;
+
+fn parse_behavior<'i>(input: &mut cssparser::Parser<'i, '_>) -> Result<bool, ParseError<'i>> {
+    let location = input.current_source_location();
+    let ident = input.expect_ident_cloned()?;
+    if ident.eq_ignore_ascii_case("normal") {
+        Ok(false)
+    } else if ident.eq_ignore_ascii_case("allow-discrete") {
+        Ok(true)
+    } else {
+        Err(location.new_unexpected_token_error(cssparser::Token::Ident(ident)))
+    }
+}
+
+fn parse_shorthand_entry<'i>(
+    input: &mut cssparser::Parser<'i, '_>,
+) -> Result<(PropertyId<'i>, Time, Time, EasingFunction, bool), ParseError<'i>> {
+    let (mut property, mut duration, mut delay, mut easing, mut behavior) =
+        (None, None, None, None, None);
+    while !input.is_exhausted() {
+        macro_rules! take {
+            ($slot:ident, $parse:expr) => {
+                if $slot.is_none() {
+                    if let Ok(value) = input.try_parse($parse) {
+                        $slot = Some(value);
+                        continue;
+                    }
+                }
+            };
+        }
+        take!(duration, Time::parse);
+        take!(easing, EasingFunction::parse);
+        take!(delay, Time::parse);
+        take!(behavior, parse_behavior);
+        if property.is_some() {
+            return Err(input.new_custom_error(lightningcss::error::ParserError::InvalidValue));
+        }
+        property = Some(PropertyId::parse(input)?);
+    }
+    if property.is_none() && duration.is_none() && easing.is_none() && behavior.is_none() {
+        return Err(input.new_custom_error(lightningcss::error::ParserError::InvalidValue));
+    }
+    Ok((
+        property.unwrap_or(PropertyId::All),
+        duration.unwrap_or(Time::Seconds(0.0)),
+        delay.unwrap_or(Time::Seconds(0.0)),
+        easing.unwrap_or(EasingFunction::Ease),
+        behavior.unwrap_or_default(),
+    ))
 }
 
 fn expand(id: &PropertyId) -> Expansion {
@@ -622,6 +750,12 @@ fn expand(id: &PropertyId) -> Expansion {
         "border-right-width" => one(BorderRightWidth),
         "border-bottom-width" => one(BorderBottomWidth),
         "border-left-width" => one(BorderLeftWidth),
+        "display" => one(Display),
+        "content-visibility" => one(ContentVisibility),
+        "cursor" => one(Cursor),
+        "flex-direction" => one(FlexDirection),
+        "flex-wrap" => one(FlexWrap),
+        "flex-flow" => Expansion::Props(vec![FlexDirection, FlexWrap]),
         "overflow" => Expansion::Props(vec![OverflowX, OverflowY]),
         "overflow-x" => one(OverflowX),
         "overflow-y" => one(OverflowY),
@@ -695,6 +829,8 @@ fn expand(id: &PropertyId) -> Expansion {
         "font-size" => one(FontSize),
         "object-position" => one(ObjectPosition),
         "aspect-ratio" => one(AspectRatio),
+        "translate" => one(Translate),
+        "rotate" => one(Rotate),
         "transform" => one(Transform),
         // lightningcss parses an unknown property id — including a custom property — into
         // `PropertyId::Custom`, whose `name()` keeps the leading dashes.
@@ -706,14 +842,10 @@ fn expand(id: &PropertyId) -> Expansion {
 pub(crate) fn animates(name: &str) -> bool {
     match expand(&PropertyId::from(name)) {
         Expansion::None => false,
-        Expansion::Props(list) => list
-            .iter()
-            .any(|p| !matches!(p, TransitionProperty::All | TransitionProperty::Other(_))),
+        Expansion::Props(list) => TransitionProperty::keyframed().any(|p| list.contains(&p)),
     }
 }
 
-/// `None` for anything `animation-timing-function` would not take either, including `linear(...)`,
-/// which the lightningcss in use does not parse.
 pub fn parse_easing(text: &str) -> Option<Easing> {
     use lightningcss::stylesheet::ParserOptions;
     let id = PropertyId::from("animation-timing-function");
@@ -880,6 +1012,7 @@ mod tests {
                 duration: ms(200),
                 delay: ms(50).into(),
                 easing: Easing::EaseIn,
+                allow_discrete: false,
             }]
         );
     }

@@ -1507,6 +1507,7 @@ fn window_buttons_rect(s: &Snapshot) -> Option<[f32; 4]> {
 
 fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
     let (visible, t) = titlebar_rect(s);
+    let power = crate::power::state();
     sk_css::Env {
         viewport_width: s.inner_width,
         viewport_height: s.inner_height,
@@ -1519,6 +1520,8 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> sk_css::Env {
         safe_area_insets: [0.0; 4],
         reduce_transparency: crate::transparency::reduce_transparency(),
         device_size: device_size(s.screen.0, s.screen.1, (s.inner_width, s.inner_height)),
+        power_scheme: power.scheme,
+        compute_pressure: power.pressure,
         ..sk_css::Env::default()
     }
 }
@@ -1592,6 +1595,7 @@ pub fn popout_env(
     };
     let titlebar_area = (!os_chrome).then_some([0.0, 0.0, viewport.0, title_bar_height]);
     let monitor = window.display(cx).map(|d| d.bounds().size);
+    let power = crate::power::state();
     sk_css::Env {
         viewport_width: viewport.0,
         viewport_height: viewport.1,
@@ -1601,6 +1605,8 @@ pub fn popout_env(
         scale_factor: window.scale_factor(),
         display_mode,
         titlebar_area,
+        power_scheme: power.scheme,
+        compute_pressure: power.pressure,
         coarse_pointer: coarse_pointer(),
         safe_area_insets: [0.0; 4],
         reduce_transparency: crate::transparency::reduce_transparency(),
@@ -1783,6 +1789,7 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     // Before `resize`, so `matchMedia` in its handlers sees the new environment.
     keep_theme(window);
     let dark = effective_dark(window);
+    JsRuntime::with(|rt| crate::power::refresh(rt, window, cx, !hidden(&s)));
     let env_changed = sk_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
 
     publish_viewport(&s);
@@ -2530,8 +2537,8 @@ pub fn overlay() -> Option<(f32, Overlay, f32)> {
 
 host_fn!(fn sk_window_match_media(g, args) {
     let query = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let json = match sk_tree::match_media(&query) {
-        Ok(m) => Json::obj(vec![("matches", Json::Bool(m))]),
+    let json = match sk_css::match_media_with_demand(&query, &sk_tree::env()) {
+        Ok((matches, pressure)) => Json::obj(vec![("matches", Json::Bool(matches)), ("pressure", Json::Bool(pressure))]),
         Err(why) => Json::obj(vec![
             ("matches", Json::Bool(false)),
             ("error", Json::s(format!("`{query}` {why}"))),
@@ -2539,6 +2546,16 @@ host_fn!(fn sk_window_match_media(g, args) {
     }
     .to_json();
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
+});
+
+host_fn!(fn sk_window_pressure_media_demand(_g, args) {
+    crate::power::set_match_media_demand(args.arg(0).0 == sk_runtime::redjs::webapi::util::TRUE);
+    Value::undefined().0
+});
+
+host_fn!(fn sk_window_pressure_media_listener(g, args) {
+    use sk_runtime::redjs::webapi::{events, util::enc_bool};
+    enc_bool(unsafe { events::has_listener(g, args.arg(0).0, "change") })
 });
 
 // Debug hook: a synthesised click cannot exercise `WM_NCHITTEST`, so read back the hitboxes the last
@@ -2649,6 +2666,16 @@ pub fn install(rt: &JsRuntime) {
             "__sk_window_match_media",
             1,
             sk_window_match_media as *const _,
+        ),
+        (
+            "__sk_window_pressure_media_demand",
+            1,
+            sk_window_pressure_media_demand as *const _,
+        ),
+        (
+            "__sk_window_pressure_media_listener",
+            1,
+            sk_window_pressure_media_listener as *const _,
         ),
         ("__sk_window_hitboxes", 1, sk_window_hitboxes as *const _),
         ("__sk_window_cursor", 0, sk_window_cursor as *const _),

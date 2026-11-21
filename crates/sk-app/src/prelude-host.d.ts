@@ -46,6 +46,8 @@ declare function __sk_window_set_theme(name: string): void;
 declare function __sk_window_set_overlay(height: number, mode: number, color: string, symbolColor: string): void;
 
 declare function __sk_window_match_media(query: string): string;
+declare function __sk_window_pressure_media_demand(demand: boolean): void;
+declare function __sk_window_pressure_media_listener(query: MediaQueryList): boolean;
 
 /**
  * `[{ node, area }]` as JSON: what the last painted frame of one window handed gpui. Absent
@@ -105,6 +107,7 @@ interface SkWindowState {
 
 interface SkMatchMediaResult {
   matches: boolean;
+  pressure?: boolean;
   error?: string;
 }
 

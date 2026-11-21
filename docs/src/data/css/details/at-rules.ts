@@ -361,30 +361,26 @@ defineProps<{ title: string }>();
   "at-starting-style": {
     examples: [
       {
-        title: "Instead: fade a toast in when it is inserted",
-        lang: "vue",
-        code: `<script setup lang="ts">
-defineProps<{ visible: boolean }>();
-</script>
+        title: "Fade a panel in when it is shown",
+        lang: "css",
+        code: `.panel {
+  display: block;
+  opacity: 1;
+  translate: 0;
+  transition: opacity 220ms ease, translate 220ms ease, display 220ms allow-discrete;
 
-<template>
-  <Transition name="toast">
-    <div v-if="visible" class="toast">Draft saved</div>
-  </Transition>
-</template>
-
-<style>
-.toast-enter-from {
+  @starting-style {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+.panel[hidden] {
+  display: none;
   opacity: 0;
-  transform: translateY(8px);
-}
-.toast-enter-active {
-  transition: opacity 200ms ease-out, transform 200ms ease-out;
-}
-</style>`,
+  translate: 0 8px;
+}`,
       },
     ],
-    edgeCases: [IGNORED],
   },
 
   "at-page": { edgeCases: [IGNORED] },

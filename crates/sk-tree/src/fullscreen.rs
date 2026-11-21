@@ -63,6 +63,8 @@ pub(crate) fn apply_style(style: &mut gpui::StyleRefinement) {
     style.flex_shrink = Some(0.);
     style.flex_basis = Some(gpui::Length::Auto);
     style.vn_transform = None;
+    style.vn_translate = None;
+    style.vn_rotate = None;
     style.margin.top = Some(gpui::px(0.).into());
     style.margin.right = Some(gpui::px(0.).into());
     style.margin.bottom = Some(gpui::px(0.).into());

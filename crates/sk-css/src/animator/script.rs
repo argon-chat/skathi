@@ -291,7 +291,16 @@ impl Animator {
         );
         for property in TransitionProperty::keyframed() {
             if let Slot::Value(v) = slot_of(&r, &property) {
-                if let Some(css) = css_value(v) {
+                let css = match (&property, v) {
+                    (TransitionProperty::Translate, Animatable::Transform(spec)) => {
+                        Some(crate::translate_css(spec))
+                    }
+                    (TransitionProperty::Rotate, Animatable::Transform(spec)) => {
+                        Some(crate::rotate_css(spec))
+                    }
+                    _ => css_value(v),
+                };
+                if let Some(css) = css {
                     out.push((property.name().to_string(), css));
                 }
             }
@@ -427,7 +436,13 @@ fn css_value(v: Animatable) -> Option<String> {
         Animatable::CornerShape(s) => crate::corner_shape::to_css(s),
         Animatable::TextShadows(shadows) => crate::text_shadow_css(shadows.list(), shadows.current),
         Animatable::Size(form) => form.length().to_string(),
-        Animatable::Effect(_) | Animatable::EffectFade(..) => return None,
+        Animatable::Display(_)
+        | Animatable::ContentHidden(_)
+        | Animatable::Cursor(_)
+        | Animatable::FlexDirection(_)
+        | Animatable::FlexWrap(_)
+        | Animatable::Effect(_)
+        | Animatable::EffectFade(..) => return None,
     })
 }
 

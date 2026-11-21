@@ -1,0 +1,108 @@
+---
+title: Adaptive effects
+label: Adaptive effects
+description: Use CPU pressure and the active power profile to reduce shader detail or disable expensive effects.
+section: Guides
+order: 17
+---
+
+Skathi 0.7 exposes CPU pressure and the system's power profile to CSS, JavaScript and GPU effects. On the showcase's **Shaders** page, try **Adaptive nebula**. The full shader draws warped clouds and stars. Reduced samples one noise field. Minimal draws moving bands.
+
+## Turn off blur on a hot machine
+
+```css
+.glass {
+  backdrop-filter: blur(16px);
+  --shading: frost(0.55, 12px);
+}
+
+@media (currently-power-scheme: saving), (currently-compute-pressure: serious), (currently-compute-pressure: critical) {
+  .glass {
+    backdrop-filter: none;
+    --shading: none;
+    background-color: #262634;
+  }
+}
+```
+
+Both media features accept discrete keywords. Their boolean forms always match. Use `matchMedia("(currently-power-scheme: saving)")` and listen for `change` to follow a condition in script. `saving` means the OS selected an energy-saving mode. `performance` requires an explicit performance profile. `balanced` covers ordinary operation and systems without a profile provider. A laptop can be plugged in and still run in saving mode.
+
+## Read CPU pressure
+
+```ts
+const observer = new PressureObserver((records) => {
+  for (const { source, state, time } of records) {
+    console.log(source, state, time);
+  }
+});
+await observer.observe("cpu", { sampleInterval: 1000 });
+// When the view closes:
+observer.disconnect();
+```
+
+`PressureObserver.knownSources` contains `"cpu"`. A visible application with system focus receives an initial sample. The default interval delivers state changes. A positive interval also permits repeated samples of the same state. The observer's interval is in milliseconds. A record's `time` uses the performance clock. Use `takeRecords()` to drain pending records or `unobserve("cpu")` to stop observing the source.
+
+| Platform | CPU pressure signals                                                   | Power scheme                                            |
+| -------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| Windows  | System CPU utilization and processor power information                 | Energy Saver, Battery Saver and active power plan       |
+| macOS    | System CPU utilization and the thermal state reported by NSProcessInfo | Low Power Mode                                          |
+| Linux    | CPU time from `/proc/stat` and available thermal sensors               | System power profile when available, otherwise balanced |
+
+Windows reports changes through power-setting notifications. macOS delivers thermal and Low Power Mode notifications through Foundation. Linux listens to power-profiles-daemon over D-Bus. The host samples CPU utilization while a visible consumer needs the data. [Windows power settings](https://learn.microsoft.com/en-us/windows/win32/power/power-setting-guids) · [Compute Pressure specification](https://www.w3.org/TR/compute-pressure/)
+
+Apps built with the optional `battery` feature can also call `await navigator.getBattery()` to read charging state and charge level.
+
+## The SkQuality shader slot
+
+Declare a scalar `[SkQuality] float` in an effect. The painter fills the slot each time it draws. The slot adds no positional argument to the effect's CSS signature.
+
+```slang
+import sk;
+
+[SkEffect("cloud")]
+struct Cloud : IEffect
+{
+    [SkAnimated] [SkDefault("1")] float speed;
+    [SkQuality] float quality;
+
+    float4 shade(EffectInput input)
+    {
+        float2 p = input.centered() * 3.0 + input.time * speed * 0.1;
+        float light;
+        if (quality >= 1.5) light = 0.5 + 0.5 * sin(p.x);
+        else if (quality >= 0.5) light = sk_value_noise(p);
+        else light = sk_fbm(p + sk_fbm(p * 2.0));
+        return float4(light, light * 0.5, 0.6, 1.0);
+    }
+};
+```
+
+| Tier    | Slot | Automatic selection                                                            | Effect clock    |
+| ------- | ---- | ------------------------------------------------------------------------------ | --------------- |
+| Full    | 0    | Nominal pressure and ordinary AC or explicit performance mode                  | Display cadence |
+| Reduced | 1    | Fair pressure, saving mode, or discharging battery with no performance profile | Up to 30 Hz     |
+| Minimal | 2    | Serious or critical pressure, including in performance mode                    | Up to 15 Hz     |
+
+Pressure takes priority when more than one condition applies. Without optional battery information, the host uses the scheme and CPU pressure. `effect-quality` applies to the declaring element and defaults to `auto`. Use a fixed tier for a preview or for an effect whose detail matters more than power consumption.
+
+```css
+.preview {
+  --shading: cloud(1);
+  effect-quality: auto;
+}
+.preview.detailed {
+  effect-quality: full;
+}
+```
+
+Only effects declaring the slot opt into the tier and its repaint schedule. Their animation clock advances in real seconds at the selected cadence, including when another animation draws intervening frames. A frame can still paint the shader again to composite the window. Input, video and `<sk-surface>` keep their own schedules.
+
+## Try a change in devtools
+
+```sh
+bun node_modules/@skathi-native/cli/devtools/ctl.ts power --scheme saving --pressure fair
+bun node_modules/@skathi-native/cli/devtools/ctl.ts effects painted
+bun node_modules/@skathi-native/cli/devtools/ctl.ts power --scheme system --pressure system
+```
+
+The Shaders page also offers per-element preview buttons. Choose **Auto** when testing system changes. `effects painted` reads the quality slot from the last submitted frame of the addressed window.

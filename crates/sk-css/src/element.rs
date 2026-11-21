@@ -32,6 +32,22 @@ pub trait MatchDom: Copy {
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
     fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
+    fn sibling_values(&self) -> (u32, u32) {
+        let mut index = 1;
+        let mut previous = self.prev_sibling();
+        while let Some(node) = previous {
+            index += 1;
+            previous = node.prev_sibling();
+        }
+        let mut count = index;
+        let mut following = self.next_sibling();
+        while let Some(node) = following {
+            count += 1;
+            following = node.next_sibling();
+        }
+        (index, count)
+    }
+
     /// The answer moves when a following sibling changes, though the asker is neither its ancestor
     /// nor after it; a dependency-driven restyle must hear of that here.
     fn note_following_sibling_anchor(&self) {}

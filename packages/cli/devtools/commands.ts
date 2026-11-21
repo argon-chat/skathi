@@ -930,6 +930,25 @@ export const COMMANDS: CommandSpec[] = [
       }),
   },
   {
+    cmd: "power",
+    description:
+      "Read the active power scheme and CPU pressure, or override either for this app. `system` restores the native value.",
+    usage: [
+      "  power                              current state and overrides",
+      "  power --scheme saving --pressure serious",
+      "  power --scheme system --pressure system",
+    ],
+    args: {
+      scheme: str('"balanced", "saving", "performance" or "system"'),
+      pressure: str('"nominal", "fair", "serious", "critical" or "system"'),
+    },
+    cli: (_rest, flags) =>
+      compact({
+        scheme: stringFlag(flags.scheme),
+        pressure: stringFlag(flags.pressure),
+      }),
+  },
+  {
     cmd: "effects",
     description:
       "`--shading` effects: the effects.json schemas the host loaded (built-ins and the app's own), and " +
@@ -938,12 +957,13 @@ export const COMMANDS: CommandSpec[] = [
       "raises; `reset` puts back what the app had.",
     usage: [
       "  effects [list]                      schemas and the elements using them",
+      "  effects painted                     last frame\u0027s effect clocks and effective quality slots",
       "  effects node --node N               one element's effect",
       "  effects set --node N --value TEXT   override live, e.g. --value 'frost(0.6, 14px)'",
       "  effects reset --node N              drop the override",
     ],
     args: {
-      op: str('"list" (default), "node", "set" or "reset"'),
+      op: str('"list" (default), "painted", "node", "set" or "reset"'),
       node: NODE,
       value: str("for op=set: the `--shading` value, e.g. frost(0.6, 14px) or none"),
     },

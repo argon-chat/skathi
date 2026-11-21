@@ -551,6 +551,7 @@ pub(crate) fn closed_children(
     id: u32,
     skin: bool,
     case: Option<sk_css::TextTransform>,
+    size_to_content: bool,
 ) -> Vec<AnyElement> {
     let rows = rows(t, id);
     let shown_ix = shown(t, id);
@@ -571,7 +572,7 @@ pub(crate) fn closed_children(
         _ => "\u{200b}".into(),
     };
     labels = labels.child(div().whitespace_nowrap().child(line));
-    for r in &rows {
+    for r in rows.iter().filter(|_| !size_to_content) {
         if let Row::Opt { index, label, .. } = r {
             if Some(*index) == shown_ix || label.is_empty() {
                 continue;

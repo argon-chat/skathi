@@ -488,6 +488,20 @@ function reveal() {
   "webkit-box-reflect": {
     edgeCases: ["A declaration prints an advisory and changes nothing."],
   },
+  "effect-quality": {
+    examples: [
+      {
+        title: "Keep an animated texture inexpensive",
+        lang: "css",
+        code: `.grain {
+  --shading: noise(0.25, 2px, 20);
+  effect-quality: reduced;
+}`,
+        note: "The built-in noise effect uses one monochrome sample at reduced quality. Its animation clock advances up to 30 times per second.",
+      },
+    ],
+    edgeCases: ["A cross-fade applies the element's quality to both shaders if they declare the slot."],
+  },
   shading: {
     examples: [
       {

@@ -17,6 +17,26 @@ fn nearest<T>(t: &Tree, id: u32, get: impl Fn(&sk_css::Extras) -> Option<T>) -> 
     None
 }
 
+pub(crate) fn layout_value<T: Copy + Default>(
+    t: &Tree,
+    mut id: u32,
+    inherited: bool,
+    get: impl Fn(&sk_css::Extras) -> Option<sk_css::LayoutValue<T>>,
+) -> T {
+    while let Some(node) = t.node(id) {
+        match node.computed.as_ref().and_then(|style| get(&style.extras)) {
+            Some(sk_css::LayoutValue::Value(value)) => return value,
+            None if !inherited => break,
+            _ => {}
+        }
+        if node.parent == 0 || node.parent == id {
+            break;
+        }
+        id = node.parent;
+    }
+    T::default()
+}
+
 /// `interpolate-size: allow-keywords` on the element, `own` standing in for its own declaration
 /// while its new style is not stored yet.
 pub(crate) fn interpolate_keywords(t: &Tree, id: u32, own: Option<bool>) -> bool {

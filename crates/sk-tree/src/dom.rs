@@ -177,6 +177,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "display",
     "position",
     "visibility",
+    "content-visibility",
     "overflow-x",
     "overflow-y",
     "overflow",
@@ -211,6 +212,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "animation-delay",
     "animation-fill-mode",
     "transition-property",
+    "transition-behavior",
     "transition-duration",
     "transition-delay",
     "width",
@@ -230,6 +232,10 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "direction",
     "interpolate-size",
     "dynamic-range-limit",
+    "field-sizing",
+    "text-box",
+    "text-box-trim",
+    "text-box-edge",
     "font-size",
     "color",
     "text-shadow",
@@ -306,8 +312,26 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
     let transitions = |f: &dyn Fn(&sk_css::TransitionSpec) -> String| {
         cs.transitions.iter().map(f).collect::<Vec<_>>().join(", ")
     };
+    let overlay = matches!(
+        name,
+        "display"
+            | "content-visibility"
+            | "opacity"
+            | "translate"
+            | "rotate"
+            | "overflow"
+            | "overflow-x"
+            | "overflow-y"
+    )
+    .then(|| tree::animation_overlay(id, &cs.base, std::time::Instant::now()))
+    .flatten();
     Some(match name {
-        "display" => match cs.base.display.unwrap_or(gpui::Display::Block) {
+        "display" => match overlay
+            .as_ref()
+            .and_then(|style| style.display)
+            .or(cs.base.display)
+            .unwrap_or(gpui::Display::Block)
+        {
             gpui::Display::Block => "block",
             gpui::Display::Flex => "flex",
             gpui::Display::Grid => "grid",
@@ -335,7 +359,12 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         // `auto` and `clip` as computed (sk_css::Extras::overflow_names), not the `scroll` and
         // `hidden` gpui folds them into.
         "overflow-x" | "overflow-y" | "overflow" => {
-            let [x, y] = cs.extras.overflow_names(&cs.base);
+            use gpui::Refineable as _;
+            let mut style = (*cs.base).clone();
+            if let Some(overlay) = &overlay {
+                style.refine(overlay);
+            }
+            let [x, y] = cs.extras.overflow_names(&style);
             match name {
                 "overflow-x" => x.to_string(),
                 "overflow-y" => y.to_string(),
@@ -346,7 +375,25 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         // `auto` is the CSS initial value AND an exact description of what we do: gpui's scrollbars
         // are overlays, so no gutter is ever reserved and none can be. (Reka's scroll lock reads it.)
         "scrollbar-gutter" => "auto".into(),
-        "opacity" => format!("{}", cs.base.opacity.unwrap_or(1.0)),
+        "content-visibility" => if overlay
+            .as_ref()
+            .and_then(|style| style.vn_content_hidden)
+            .or(cs.base.vn_content_hidden)
+            == Some(true)
+        {
+            "hidden"
+        } else {
+            "visible"
+        }
+        .into(),
+        "opacity" => format!(
+            "{}",
+            overlay
+                .as_ref()
+                .and_then(|style| style.opacity)
+                .or(cs.base.opacity)
+                .unwrap_or(1.0)
+        ),
         "z-index" => cs
             .extras
             .z()
@@ -379,9 +426,17 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             format!("{}px {}px", at(ox, w), at(oy, h))
         }
         "zoom" => "1".into(),
-        // The individual transform properties are not mapped (`transform` is the only one that
-        // applies), plus three not implemented.
-        "translate" | "rotate" | "scale" | "perspective" | "filter" => "none".into(),
+        "translate" => overlay
+            .as_ref()
+            .and_then(|style| style.vn_translate)
+            .or(cs.base.vn_translate)
+            .map_or_else(|| "none".into(), sk_css::translate_css),
+        "rotate" => overlay
+            .as_ref()
+            .and_then(|style| style.vn_rotate)
+            .or(cs.base.vn_rotate)
+            .map_or_else(|| "none".into(), sk_css::rotate_css),
+        "scale" | "perspective" | "filter" => "none".into(),
         "will-change" => "auto".into(),
         "contain" => "none".into(),
         "container-type" => match cs.extras.container_type.unwrap_or(0) {
@@ -421,6 +476,15 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             }
             .to_string()
         }),
+        "transition-behavior" if cs.transitions.is_empty() => "normal".into(),
+        "transition-behavior" => transitions(&|s| {
+            if s.allow_discrete {
+                "allow-discrete"
+            } else {
+                "normal"
+            }
+            .into()
+        }),
         "transition-property" if cs.transitions.is_empty() => "all".into(),
         "transition-duration" | "transition-delay" if cs.transitions.is_empty() => "0s".into(),
         "transition-property" => transitions(&|s| s.property.name().to_string()),
@@ -445,6 +509,18 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         }
         .into(),
         "dynamic-range-limit" => crate::inherit::dynamic_range_limit_in(t, id).to_css(),
+        "field-sizing" => crate::inherit::layout_value(t, id, false, |x| x.field_sizing)
+            .as_str()
+            .into(),
+        "text-box-trim" => crate::inherit::layout_value(t, id, false, |x| x.text_box_trim)
+            .as_str()
+            .into(),
+        "text-box-edge" => crate::inherit::layout_value(t, id, true, |x| x.text_box_edge)
+            .as_str()
+            .into(),
+        "text-box" => crate::inherit::layout_value(t, id, true, |x| x.text_box_edge).shorthand(
+            crate::inherit::layout_value(t, id, false, |x| x.text_box_trim),
+        ),
         "font-size" => {
             let mut px = None;
             let mut at = id;

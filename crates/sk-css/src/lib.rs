@@ -34,7 +34,10 @@ mod prefix;
 mod registered;
 mod rgb_space;
 mod share;
+mod siblings;
+pub use siblings::SiblingValues;
 pub mod snap;
+mod text_box;
 mod transition;
 mod vars;
 pub mod view_transition;
@@ -88,14 +91,17 @@ pub use mapper::{
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
-    parse_color, parse_color_in, set_composed_font_families, take_unreached_fonts, text_shadow_css,
-    transform_css,
+    parse_color, parse_color_in, rotate_css, set_composed_font_families, take_unreached_fonts,
+    text_shadow_css, transform_css, translate_css,
 };
 pub use mapper::{svg_length_text, svg_user_length};
-pub use media::{match_media, DisplayMode, Env};
+pub use media::{
+    match_media, match_media_with_demand, ComputePressure, DisplayMode, Env, PowerScheme,
+};
 #[doc(hidden)]
 pub use registered::CustomAnimationContext;
 pub use rgb_space::{convert_rgb, from_linear, to_linear, RgbSpace};
+pub use text_box::{FieldSizing, LayoutValue, TextBoxEdge, TextBoxMetrics, TextBoxTrim};
 pub use transition::{
     covered, parse_easing, spec_for, Delay, Easing, StepPosition, TransitionProperty,
     TransitionSpec, ANIMATABLE_COUNT,
@@ -139,6 +145,8 @@ pub struct ComputedStates {
     /// `:focus`, `:focus-visible` and `:focus-within` on an ancestor compound, folded at render.
     pub group_focus: Option<Rc<GroupFocus>>,
     pub transitions: Rc<Vec<TransitionSpec>>,
+    pub starting_style: Option<Rc<ComputedStates>>,
+    pub sibling_values: SiblingValues,
     pub animations: Rc<Vec<AnimationSpec>>,
     pub extras: Extras,
     pub before: Option<Rc<PseudoBox>>,
@@ -498,6 +506,7 @@ struct RuleEntry {
     important_font: Option<mapper::FontDecls>,
     specificity: u32,
     order: u32,
+    starting: bool,
     states: u8,
     ancestor: Option<AncestorState>,
     /// `::before` / `::after`. A rule that carries one styles a GENERATED box, not the element it
@@ -529,6 +538,14 @@ impl RuleEntry {
             .into_iter()
             .flatten()
             .any(|c| !c.deferred.is_empty())
+            || [
+                &self.normal_animation_patch,
+                &self.important_animation_patch,
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|patch| patch.declarations.as_deref())
+            .any(|declarations| !declarations.deferred.is_empty())
     }
 
     fn set_declarations(&mut self, c: &mapper::Converted) {
@@ -811,6 +828,7 @@ pub struct Engine {
     index: RuleIndex,
     conditions: Vec<media::Cond>,
     condition_text: Vec<String>,
+    pressure_conditions: bool,
     sibling_combinators: bool,
     group_states: bool,
     generated_states: bool,
@@ -826,6 +844,7 @@ pub struct Engine {
     generation: u64,
     share: bool,
     collecting_ua: bool,
+    uses_sibling_functions: bool,
     container_queries: Vec<container::Query>,
     /// The `@container` rules being collected into, innermost last.
     collecting_container: Option<u32>,
@@ -1147,6 +1166,10 @@ fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
 }
 
 impl Engine {
+    pub fn uses_compute_pressure(&self) -> bool {
+        self.pressure_conditions || self.functions.uses_compute_pressure()
+    }
+
     pub fn compile(css: &str) -> Engine {
         Engine::compile_sheets(&[css])
     }
@@ -1160,6 +1183,7 @@ impl Engine {
             },
             conditions: Vec::new(),
             condition_text: Vec::new(),
+            pressure_conditions: false,
             sibling_combinators: false,
             group_states: false,
             generated_states: false,
@@ -1173,6 +1197,7 @@ impl Engine {
             generation: next_generation(),
             share: share::enabled(),
             collecting_ua: false,
+            uses_sibling_functions: false,
             container_queries: Vec::new(),
             collecting_container: None,
             uses_containers: false,
@@ -1188,6 +1213,7 @@ impl Engine {
         let mut order = 0u32;
         engine.collect_ua(&mut order);
         for css in sheets {
+            engine.uses_sibling_functions |= siblings::contains_function(css);
             let parsed = parse_author_sheet(css);
             engine.diagnostics.extend(parsed.diagnostics);
             if let Some(sheet) = &parsed.sheet {
@@ -1252,6 +1278,10 @@ impl Engine {
                 .flat_map(|list| list.iter())
                 .any(|&i| changes.affects_rule(i, &self.rules[i as usize]))
             || !state.animations.is_empty()
+            || state
+                .starting_style
+                .as_deref()
+                .is_some_and(|start| self.reads_changed_vars(start, changes))
     }
 
     /// Updates a non-consuming descendant's map while respecting `@property` inheritance.
@@ -1334,6 +1364,19 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> Option<Rc<keyframes::Keyframes>> {
+        self.keyframes_for_siblings(name, vars, SiblingValues::default(), env, diagnostics)
+    }
+
+    pub fn keyframes_for_siblings(
+        &self,
+        name: &str,
+        vars: &Vars,
+        siblings: SiblingValues,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
+    ) -> Option<Rc<keyframes::Keyframes>> {
+        let _siblings =
+            siblings::Scope::enter(siblings.index.unwrap_or(1), siblings.count.unwrap_or(1));
         let block = self.keyframes(name, env)?;
         if !block.dynamic {
             return Some(block);
@@ -1429,15 +1472,42 @@ impl Engine {
     }
 
     fn collect(&mut self, rules: &[CssRule<'_>], condition: Option<u32>, order: &mut u32) {
+        self.collect_scope(rules, condition, order, false, None);
+    }
+
+    fn collect_scope<'i>(
+        &mut self,
+        rules: &[CssRule<'i>],
+        condition: Option<u32>,
+        order: &mut u32,
+        starting: bool,
+        parent: Option<&lightningcss::rules::style::StyleRule<'i>>,
+    ) {
         for rule in rules {
+            let nested;
             let style = match rule {
-                CssRule::Style(style) => style,
+                CssRule::Style(style) if parent.is_none() => style,
+                CssRule::NestedDeclarations(rule) if parent.is_some() => {
+                    let parent = parent.expect("nested declarations have a parent selector");
+                    nested = lightningcss::rules::style::StyleRule {
+                        selectors: parent.selectors.clone(),
+                        vendor_prefix: parent.vendor_prefix,
+                        declarations: rule.declarations.clone(),
+                        rules: lightningcss::rules::CssRuleList(Vec::new()),
+                        loc: rule.loc,
+                    };
+                    &nested
+                }
+                CssRule::StartingStyle(rule) => {
+                    self.collect_scope(&rule.rules.0, condition, order, true, parent);
+                    continue;
+                }
                 CssRule::Media(m) => {
                     match media::parse_list(&m.query) {
                         Ok(cond) => {
                             let idx =
                                 self.push_condition(cond, condition, &media::list_text(&m.query));
-                            self.collect(&m.rules.0, Some(idx), order);
+                            self.collect_scope(&m.rules.0, Some(idx), order, starting, parent);
                         }
                         Err(reason) => mapper::once(
                             &mut self.diagnostics,
@@ -1479,7 +1549,7 @@ impl Engine {
                 }
                 CssRule::Supports(sup) => {
                     if supports_condition(&sup.condition) {
-                        self.collect(&sup.rules.0, condition, order);
+                        self.collect_scope(&sup.rules.0, condition, order, starting, parent);
                     }
                     continue;
                 }
@@ -1494,7 +1564,7 @@ impl Engine {
                             self.container_queries.push(query);
                             self.collecting_container =
                                 Some((self.container_queries.len() - 1) as u32);
-                            self.collect(&c.rules.0, condition, order);
+                            self.collect_scope(&c.rules.0, condition, order, starting, parent);
                             self.collecting_container = outer;
                         }
                         Err(reason) => mapper::once(
@@ -1708,6 +1778,7 @@ impl Engine {
                     important_font: converted.important_font.clone(),
                     specificity,
                     order: *order,
+                    starting,
                     states,
                     ancestor,
                     pseudo,
@@ -1733,6 +1804,20 @@ impl Engine {
                         rules,
                     }),
                     Err(_) => self.viewport_unkept = true,
+                }
+            }
+            for nested in &style.rules.0 {
+                if matches!(
+                    nested,
+                    CssRule::StartingStyle(_) | CssRule::NestedDeclarations(_)
+                ) {
+                    self.collect_scope(
+                        std::slice::from_ref(nested),
+                        condition,
+                        order,
+                        starting,
+                        Some(style),
+                    );
                 }
             }
         }
@@ -1836,6 +1921,7 @@ impl Engine {
         if let Some(i) = self.conditions.iter().position(|c| *c == cond) {
             return i as u32;
         }
+        self.pressure_conditions |= cond.uses_compute_pressure();
         self.conditions.push(cond);
         self.condition_text.push(text);
         (self.conditions.len() - 1) as u32
@@ -1942,6 +2028,32 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
+        self.compute_node_mode(
+            node,
+            inline,
+            parent_vars,
+            parent_color,
+            parent_font_size,
+            parent_font,
+            env,
+            diagnostics,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compute_node_mode<D: MatchDom>(
+        &self,
+        node: D,
+        inline: Option<&InlineStyle>,
+        parent_vars: &Rc<Vars>,
+        parent_color: Option<gpui::Hsla>,
+        parent_font_size: f32,
+        parent_font: &gpui::Font,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
+        starting: bool,
+    ) -> ComputedStates {
         let guessed = OWN_COLOR_GUESS.with(std::cell::Cell::take);
         let percent_basis = container::PercentBasis::enter(node.key().try_into().ok());
         let _functions = functions::Scope::enter(&self.functions, Some(parent_vars));
@@ -2031,6 +2143,10 @@ impl Engine {
                 matched.push(rule);
             }
         });
+        let has_starting = !starting && matched.iter().any(|rule| rule.starting);
+        if !starting {
+            matched.retain(|rule| !rule.starting);
+        }
         let base = self.rules.as_ptr() as usize;
         let index_of = |r: &RuleEntry| {
             ((r as *const RuleEntry as usize - base) / std::mem::size_of::<RuleEntry>()) as u32
@@ -2038,7 +2154,20 @@ impl Engine {
         matched.sort_by_key(|r| (r.specificity, r.order, index_of(r)));
         let t1 = probe.then(std::time::Instant::now);
 
+        let uses_siblings = (inline.is_some()
+            || self.has_keyframes()
+            || matched.iter().any(|r| r.has_variable_inputs()))
+            && (self.uses_sibling_functions
+                || inline.is_some_and(InlineStyle::might_use_siblings)
+                || parent_vars.uses_siblings());
+        let sibling_scope = uses_siblings.then(|| {
+            let (index, count) = node.sibling_values();
+            siblings::Scope::enter(index, count)
+        });
         let share_key = (self.share
+            && !uses_siblings
+            && !starting
+            && !has_starting
             && generated_dependencies.is_empty()
             && custom_dependencies.is_empty()
             && inline.is_none()
@@ -2478,7 +2607,7 @@ impl Engine {
                     &rule.normal_animation_patch
                 };
                 if let Some(patch) = patch {
-                    patch.apply_over(&mut animation_patch);
+                    patch.apply_over_resolved(&mut animation_patch, &vars, env, diagnostics);
                 }
             }
             if let Some(inline) = inline {
@@ -2498,7 +2627,12 @@ impl Engine {
                             );
                         }
                         if let Some(patch) = &motion.animations {
-                            patch.apply_over(&mut animation_patch);
+                            patch.apply_over_resolved(
+                                &mut animation_patch,
+                                &vars,
+                                env,
+                                diagnostics,
+                            );
                         }
                     }
                 } else if !important {
@@ -2510,11 +2644,16 @@ impl Engine {
                         if let Some(patch) =
                             keyframes::AnimationCollector::from_specs(list).finish().1
                         {
-                            patch.apply_over(&mut animation_patch);
+                            patch.apply_over_resolved(
+                                &mut animation_patch,
+                                &vars,
+                                env,
+                                diagnostics,
+                            );
                         }
                     }
                     if let Some(patch) = &inline.animation_patch {
-                        patch.apply_over(&mut animation_patch);
+                        patch.apply_over_resolved(&mut animation_patch, &vars, env, diagnostics);
                     }
                 }
             }
@@ -2621,7 +2760,7 @@ impl Engine {
         if current_color.read() && guessed.is_none() && own_current != parent_current {
             drop(current_color);
             OWN_COLOR_GUESS.with(|g| g.set(Some(own_current)));
-            return self.compute_node_with_font(
+            return self.compute_node_mode(
                 node,
                 inline,
                 parent_vars,
@@ -2630,6 +2769,7 @@ impl Engine {
                 parent_font,
                 env,
                 diagnostics,
+                starting,
             );
         }
         if extras.current_color != mapper::CurrentColorTargets::default()
@@ -2740,6 +2880,8 @@ impl Engine {
             group_active: group.active.map(|(key, r)| (key, Rc::new(r))),
             group_focus: GroupFocus::of(group.focus, group.focus_visible, group.focus_within),
             transitions: transitions.unwrap_or_default(),
+            starting_style: None,
+            sibling_values: SiblingValues::default(),
             animations: {
                 if let Some(list) = animation_patch.computed_list() {
                     Rc::new(list)
@@ -2790,6 +2932,45 @@ impl Engine {
             font_size,
             computed_font,
         };
+        if has_starting
+            && !states.transitions.is_empty()
+            && states.base.display != Some(gpui::Display::None)
+        {
+            states.starting_style = Some(Rc::new(self.compute_node_mode(
+                node,
+                inline,
+                parent_vars,
+                parent_color,
+                parent_font_size,
+                parent_font,
+                env,
+                diagnostics,
+                true,
+            )));
+        }
+        if sibling_scope.is_some() {
+            for animation in states.animations.iter() {
+                if let Some(block) = self.keyframes(&animation.name, env).filter(|b| b.dynamic) {
+                    for (_, raw) in block
+                        .steps
+                        .iter()
+                        .filter_map(|step| step.dynamic.as_deref())
+                        .flatten()
+                    {
+                        if let Ok(value) = vars::substitute_with(raw, &states.vars, env) {
+                            let _ = siblings::resolve(&value);
+                        }
+                    }
+                }
+            }
+            states.sibling_values = siblings::Scope::read();
+            if let Some(start) = &states.starting_style {
+                states.sibling_values.index =
+                    states.sibling_values.index.or(start.sibling_values.index);
+                states.sibling_values.count =
+                    states.sibling_values.count.or(start.sibling_values.count);
+            }
+        }
         let animated_registrations: Vec<_> = registrations
             .into_iter()
             .filter(|registration| {
@@ -3693,7 +3874,7 @@ mod tests {
     use std::time::Duration;
 
     #[derive(Clone, Copy)]
-    struct Node {
+    pub(super) struct Node {
         tag: &'static str,
         class: &'static str,
         attrs: &'static [(&'static str, &'static str)],
@@ -3743,12 +3924,88 @@ mod tests {
         }
     }
 
-    fn box_node() -> Node {
+    pub(super) fn box_node() -> Node {
         Node {
             tag: "div",
             class: "box",
             attrs: &[],
         }
+    }
+
+    #[test]
+    fn starting_style_uses_the_normal_cascade_order_and_parent_after_change_values() {
+        let engine = Engine::compile(
+            ".box { opacity: .8; transition: opacity 1s; --base: .4 } \
+             @starting-style { .box { opacity: var(--base) } } \
+             .box { @starting-style { opacity: var(--inherited) } }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let parent =
+            Engine::compile(".box { --inherited: .2 } @starting-style { .box { --inherited: 0 } }")
+                .compute(box_node(), None, &Env::default());
+        let computed = engine.compute_node(
+            box_node(),
+            None,
+            &parent.vars,
+            parent.color,
+            &Env::default(),
+            &mut vec![],
+        );
+        assert_eq!(computed.base.opacity, Some(0.8));
+        assert_eq!(computed.starting_style.unwrap().base.opacity, Some(0.2));
+
+        let later = Engine::compile(
+            ".box { transition: opacity 1s; @starting-style { opacity: 0 } opacity: .8 }",
+        )
+        .compute(box_node(), None, &Env::default());
+        assert_eq!(later.starting_style.unwrap().base.opacity, Some(0.8));
+    }
+
+    #[test]
+    fn sibling_functions_feed_integer_time_angle_and_pseudo_element_values() {
+        let engine = Engine::compile(
+            ".box { z-index: calc(sibling-index() * 2); \
+               transition: opacity 1s calc(sibling-index() * 40ms); \
+               rotate: calc(360deg / sibling-count() * sibling-index()); \
+               animation: spin 1s linear; animation-delay: calc(sibling-index() * 40ms) } \
+             .box::before { content: 'marker'; width: calc(sibling-index() * 10px) }",
+        );
+        let mut diagnostics = vec![];
+        let cs = engine.compute_node(
+            box_node(),
+            None,
+            &Rc::default(),
+            None,
+            &Env::default(),
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(cs.extras.z(), Some(2));
+        assert_eq!(cs.transitions[0].delay.wait(), Duration::from_millis(40));
+        assert_eq!(cs.animations[0].delay.wait(), Duration::from_millis(40));
+        assert!((cs.base.vn_rotate.unwrap().rotate.to_degrees() - 360.0).abs() < 0.01);
+        assert_eq!(
+            cs.before.unwrap().style.size.width,
+            Some(gpui::px(10.).into())
+        );
+        assert_eq!(
+            cs.sibling_values,
+            SiblingValues {
+                index: Some(1),
+                count: Some(1)
+            }
+        );
+        assert!(!catalog::supports("z-index", "sibling-index(2)"));
+        assert!(!Engine::compile(r".box\\:focus { width: var(--size) }").uses_sibling_functions);
+        let escaped = Engine::compile(r".box { z-index: sibl\\69ng-index() }");
+        assert!(escaped.uses_sibling_functions);
+        assert_eq!(
+            escaped
+                .compute(box_node(), None, &Env::default())
+                .extras
+                .z(),
+            Some(1)
+        );
     }
 
     #[test]
@@ -7897,6 +8154,7 @@ mod tests {
             duration: Duration::from_millis(900),
             delay: Delay::ZERO,
             easing: Easing::Linear,
+            allow_discrete: false,
         }]);
         let computed = engine.compute_with(box_node(), None, Some(&legacy), &Env::default());
         assert_eq!(computed.transitions[0].property, TransitionProperty::Width);

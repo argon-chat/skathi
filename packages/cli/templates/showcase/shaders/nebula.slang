@@ -21,11 +21,26 @@ struct Nebula : IEffect
     // The brightest filaments and the stars.
     [SkColor] [SkOptional] [SkDefault("#ffe6c7")]
     float4 glow;
+    [SkQuality] float quality;
 
     float4 shade(EffectInput input)
     {
         float t = input.time * speed;
         float2 p = input.centered() * scale;
+
+        // Keep the same palette and scale at lower tiers. A single noise field
+        // replaces the warped octaves, then a smooth moving band replaces noise.
+        if (quality >= 0.5)
+        {
+            float field;
+            if (quality >= 1.5)
+                field = 0.5 + 0.5 * sin(p.x * 1.8 + p.y * 0.8 + t);
+            else
+                field = sk_value_noise(p * 1.8 + float2(t, -t));
+            float3 rgb = sk_palette(field * 0.7 + hue, float3(0.42, 0.30, 0.52),
+                float3(0.42, 0.30, 0.40), float3(1.0), float3(0.62, 0.78, 0.95));
+            return float4(rgb * (0.2 + field * 0.8), 1.0);
+        }
 
         float2 q = float2(sk_fbm(p + float2(0.0, t)), sk_fbm(p + float2(5.2, 1.3) - t * 0.7));
         float2 r = float2(

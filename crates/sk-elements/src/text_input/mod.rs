@@ -234,6 +234,7 @@ pub struct TextInputOptions {
     pub disabled: bool,
     pub tab_index: Option<isize>,
     pub multiline: bool,
+    pub size_to_content: bool,
     /// The cascade gave no `color`: paint in the inherited one (sk-css folds no inherited properties).
     pub inherit_color: bool,
     /// CSS `text-align`, applied as a content offset (`TextInputState::align_offset`).
@@ -258,6 +259,7 @@ impl Default for TextInputOptions {
             disabled: false,
             tab_index: None,
             multiline: false,
+            size_to_content: false,
             text_align: gpui::TextAlign::Left,
             rows: DEFAULT_ROWS,
             inherit_color: false,
@@ -287,6 +289,7 @@ pub fn text_input(
     let focus_handle = state.update(cx, |this, _| {
         this.set_tab_index(options.tab_index);
         this.set_frame_params(handlers, disabled, multiline, input_config);
+        this.set_masked(options.masked);
         this.focus_handle()
     });
 
@@ -308,7 +311,9 @@ pub fn text_input(
         .w_full()
         .min_w_0()
         .overflow_hidden();
-    if multiline {
+    if options.size_to_content && multiline {
+        element = element.flex_grow(1.0).min_h(px(0.0)).items_stretch();
+    } else if multiline {
         // Height comes from CSS (`min-h-20`) or `rows`; an AUTO wrapper height lets flexbox stretch it.
         element = element.min_h_full();
     } else {

@@ -147,23 +147,32 @@
     return Promise.reject(e);
   };
   const liveQueries = new Set;
+  const pressureQueries = new Set;
+  const pressureListeners = new Set;
+  const pressureFinalizer = new FinalizationRegistry((ref) => {
+    pressureQueries.delete(ref);
+    if (!pressureQueries.size)
+      __sk_window_pressure_media_demand(false);
+  });
   const evaluate = (q) => {
     const r = JSON.parse(__sk_window_match_media(q));
     if (r.error)
       warn(`mq:${q}`, `matchMedia(${JSON.stringify(q)}) ${r.error}`);
-    return !!r.matches;
+    return r;
   };
   globalThis.matchMedia = (query) => {
     const q = String(query);
     const mql = new EventTarget;
-    let current = evaluate(q);
+    const initial = evaluate(q);
+    let current = initial.matches;
+    let retainPressureListener;
     ro(mql, "media", () => q);
     ro(mql, "matches", () => current);
     mql.onchange = null;
     mql.addListener = (fn) => mql.addEventListener("change", fn);
     mql.removeListener = (fn) => mql.removeEventListener("change", fn);
     mql.__skReevaluate = () => {
-      const next = evaluate(q);
+      const next = evaluate(q).matches;
       if (next === current)
         return;
       current = next;
@@ -175,8 +184,52 @@
       if (typeof mql.onchange === "function")
         mql.onchange.call(mql, ev);
       mql.dispatchEvent(ev);
+      retainPressureListener?.();
     };
-    liveQueries.add(mql);
+    if (initial.pressure) {
+      const ref = new WeakRef(mql);
+      if (!pressureQueries.size)
+        __sk_window_pressure_media_demand(true);
+      pressureQueries.add(ref);
+      pressureFinalizer.register(mql, ref);
+      const retain = () => {
+        const target = ref.deref();
+        if (!target)
+          return;
+        if (__sk_window_pressure_media_listener(target))
+          pressureListeners.add(target);
+        else
+          pressureListeners.delete(target);
+      };
+      retainPressureListener = retain;
+      let onchange = null;
+      Object.defineProperty(mql, "onchange", {
+        get: () => onchange,
+        set: (value) => {
+          onchange = value;
+          retain();
+        },
+        enumerable: true,
+        configurable: true
+      });
+      const { addEventListener, removeEventListener } = mql;
+      mql.addEventListener = function(...args) {
+        addEventListener.apply(this, args);
+        if (this === mql && args[0] === "change") {
+          retain();
+          const options = args[2];
+          if (typeof options === "object")
+            options?.signal?.addEventListener("abort", retain, { once: true });
+        }
+      };
+      mql.removeEventListener = function(...args) {
+        removeEventListener.apply(this, args);
+        if (this === mql && args[0] === "change")
+          retain();
+      };
+    } else {
+      liveQueries.add(mql);
+    }
     return mql;
   };
   let fsStack = [];
@@ -658,6 +711,8 @@
     }
     for (const mql of liveQueries)
       mql.__skReevaluate();
+    for (const ref of pressureQueries)
+      ref.deref()?.__skReevaluate();
     return true;
   });
   globalThis.__SK_WINDOW__ = {

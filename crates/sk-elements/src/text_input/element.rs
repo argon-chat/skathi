@@ -12,10 +12,10 @@
 use std::ops::Range;
 
 use gpui::{
-    fill, point, px, relative, size, App, Bounds, ContentMask, DispatchPhase, Element, ElementId,
-    ElementInputHandler, Entity, GlobalElementId, Hsla, InspectorElementId, LayoutId, MouseButton,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, UnderlineStyle, Window,
+    fill, point, px, relative, size, App, AvailableSpace, Bounds, ContentMask, DispatchPhase,
+    Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hsla, InspectorElementId,
+    LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString,
+    Style, TextAlign, TextRun, TextStyle, UnderlineStyle, Window,
 };
 
 use super::state::{LineBox, TextInputState, CARET_WIDTH};
@@ -47,6 +47,28 @@ pub(crate) struct TextPrepaint {
     scrollbar: Option<PaintQuad>,
 }
 
+impl TextElement {
+    fn display_for(&self, content: String) -> SharedString {
+        if !content.is_empty() {
+            return content.into();
+        }
+        let placeholder = &self.options.placeholder;
+        if self.options.multiline || !placeholder.contains(['\r', '\n']) {
+            placeholder.clone()
+        } else {
+            placeholder.replace(['\r', '\n'], " ").into()
+        }
+    }
+
+    fn wrap_width(&self, width: Pixels) -> Pixels {
+        if self.options.size_to_content {
+            (width - CARET_WIDTH).max(px(0.0))
+        } else {
+            width
+        }
+    }
+}
+
 impl Element for TextElement {
     type RequestLayoutState = ();
     type PrepaintState = TextPrepaint;
@@ -68,6 +90,44 @@ impl Element for TextElement {
     ) -> (LayoutId, ()) {
         let line_height = line_height_for(window, self.options.font_size);
         let mut style = Style::default();
+        if self.options.size_to_content {
+            style.flex_grow = 1.0;
+            style.min_size.width = px(0.0).into();
+            if !self.options.multiline {
+                style.size.height = line_height.into();
+            }
+            let display = self.display_for(self.state.read(cx).display_text());
+            let text_style = window.text_style();
+            let font_size = self.options.font_size;
+            let multiline = self.options.multiline;
+            let layout =
+                window.request_measured_layout(style, move |known, available, window, _| {
+                    let width = known.width.or(match available.width {
+                        AvailableSpace::Definite(width) => Some(width),
+                        AvailableSpace::MinContent => Some(px(0.0)),
+                        AvailableSpace::MaxContent => None,
+                    });
+                    let wrap = width
+                        .filter(|_| multiline)
+                        .map(|w| (w - CARET_WIDTH).max(px(0.0)));
+                    let lines = shape(
+                        display.clone(),
+                        text_style.color,
+                        font_size,
+                        None,
+                        wrap,
+                        &text_style,
+                        window,
+                    );
+                    let text_width = lines
+                        .iter()
+                        .map(|line| line.line.width())
+                        .fold(px(0.0), Pixels::max);
+                    let rows = lines.iter().map(|line| line.rows).sum::<usize>().max(1);
+                    size(text_width.ceil() + CARET_WIDTH, line_height * rows as f32)
+                });
+            return (layout, ());
+        }
         style.size.width = relative(1.0).into();
         if self.options.multiline {
             // `rows` is only the intrinsic height, so CSS `height`/`min-height` still win.
@@ -97,38 +157,30 @@ impl Element for TextElement {
                 ..inherited
             };
         }
-        let (content, marked_range) = self.state.update(cx, |state, _| {
-            state.set_masked(self.options.masked);
-            let marked = state
-                .marked_range()
-                .map(|range| state.display_index(range.start)..state.display_index(range.end));
-            (state.display_text(), marked)
-        });
-
+        let state = self.state.read(cx);
+        let content = state.display_text();
+        let marked_range = state
+            .marked_range()
+            .map(|range| state.display_index(range.start)..state.display_index(range.end));
         let is_placeholder = content.is_empty();
-        let display: SharedString = if is_placeholder {
-            let placeholder = &self.options.placeholder;
-            if self.options.multiline || !placeholder.contains(['\r', '\n']) {
-                placeholder.clone()
-            } else {
-                placeholder.replace(['\r', '\n'], " ").into()
-            }
-        } else {
-            content.into()
-        };
+        let display = self.display_for(content);
         let color = if is_placeholder {
             self.options.placeholder_color
         } else {
             self.options.text_color
         };
 
-        let wrap_width = self.options.multiline.then_some(bounds.size.width);
+        let wrap_width = self
+            .options
+            .multiline
+            .then(|| self.wrap_width(bounds.size.width));
         let lines = shape(
             display,
             color,
             self.options.font_size,
             marked_range.filter(|_| !is_placeholder),
             wrap_width,
+            &window.text_style(),
             window,
         );
 
@@ -360,9 +412,9 @@ fn shape(
     font_size: Pixels,
     marked_range: Option<Range<usize>>,
     wrap_width: Option<Pixels>,
+    text_style: &TextStyle,
     window: &mut Window,
 ) -> Vec<LineBox> {
-    let text_style = window.text_style();
     let font = text_style.font();
     // Runs are shaped here rather than via `StyledText`, so CSS `letter-spacing` must be carried across.
     let (tracking, word_spacing) = (text_style.letter_spacing, text_style.word_spacing);

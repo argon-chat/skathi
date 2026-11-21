@@ -1174,6 +1174,18 @@ const systemIntegration = section("System integration", [
     ],
     aliases: ["navigator.clipboard", "ClipboardItem", "clipboard.writeText", "clipboard.readText"],
   }),
+  iface("PressureObserver", PART, "Observes changes in CPU pressure for the visible application window.", {
+    since: "0.7.0",
+    aliases: ["Compute Pressure API", "PressureRecord", "PressureObserver.knownSources"],
+    notes: [
+      'Construct with a callback, then call `observe("cpu", { sampleInterval })`. Records contain `source`, `state` and a monotonic `time` in milliseconds. `takeRecords()` drains queued records. `unobserve("cpu")` and `disconnect()` stop observation.',
+    ],
+    limitations: [
+      "Observers run in the application window. Worker observers and cross-origin permissions policies are outside this native window implementation.",
+      "The only supported source is `cpu`. See [adaptive effects](/guides/adaptive-effects/) for the platform signals and examples.",
+    ],
+    related: ["navigator-get-battery"],
+  }),
   method("navigator.getBattery", OK, "Reports the battery's charge level and charging state.", {
     aliases: ["BatteryManager", "Battery Status API"],
   }),

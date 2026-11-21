@@ -1,0 +1,10 @@
+{
+  "name": "sk-test-field-typography",
+  "window": {
+    "title": "Skathi — field sizing and text trimming (fixture)",
+    "width": 640,
+    "height": 640,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

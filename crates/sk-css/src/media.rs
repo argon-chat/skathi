@@ -32,7 +32,40 @@ pub struct Env {
     pub device_size: (f32, f32),
     /// `dynamic-range: high`: the window's display is in HDR and the window can draw it.
     pub dynamic_range_high: bool,
+    pub power_scheme: PowerScheme,
+    pub compute_pressure: ComputePressure,
 }
+
+macro_rules! media_keywords {
+    ($name:ident { $default:ident => $default_value:literal, $($variant:ident => $value:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+        pub enum $name {
+            #[default]
+            $default,
+            $($variant),+
+        }
+
+        impl $name {
+            pub fn from_keyword(keyword: &str) -> Option<Self> {
+                match keyword.to_ascii_lowercase().as_str() {
+                    $default_value => Some(Self::$default),
+                    $($value => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    Self::$default => $default_value,
+                    $(Self::$variant => $value),+
+                }
+            }
+        }
+    };
+}
+
+media_keywords!(PowerScheme { Balanced => "balanced", Saving => "saving", Performance => "performance" });
+media_keywords!(ComputePressure { Nominal => "nominal", Fair => "fair", Serious => "serious", Critical => "critical" });
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -66,6 +99,8 @@ impl Default for Env {
             reduce_transparency: false,
             device_size: (1920.0, 1080.0),
             dynamic_range_high: false,
+            power_scheme: PowerScheme::Balanced,
+            compute_pressure: ComputePressure::Nominal,
         }
     }
 }
@@ -127,6 +162,8 @@ pub(crate) enum Feature {
     DeviceWidth(Cmp, f32),
     DeviceHeight(Cmp, f32),
     DynamicRange(bool),
+    PowerScheme(PowerScheme),
+    ComputePressure(ComputePressure),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +198,8 @@ impl Feature {
             Feature::DeviceWidth(cmp, px) => cmp.eval(env.device_size.0, px),
             Feature::DeviceHeight(cmp, px) => cmp.eval(env.device_size.1, px),
             Feature::DynamicRange(high) => !high || env.dynamic_range_high,
+            Feature::PowerScheme(scheme) => env.power_scheme == scheme,
+            Feature::ComputePressure(pressure) => env.compute_pressure == pressure,
         }
     }
 }
@@ -176,6 +215,15 @@ pub(crate) enum Cond {
 }
 
 impl Cond {
+    pub(crate) fn uses_compute_pressure(&self) -> bool {
+        match self {
+            Self::Feature(Feature::ComputePressure(_)) => true,
+            Self::Not(c) => c.uses_compute_pressure(),
+            Self::And(cs) | Self::Or(cs) => cs.iter().any(Self::uses_compute_pressure),
+            _ => false,
+        }
+    }
+
     pub(crate) fn eval(&self, env: &Env) -> bool {
         match self {
             Cond::Always => true,
@@ -216,6 +264,7 @@ pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media type
      `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-reduced-transparency`, \
      `resolution`/`min-resolution`/`max-resolution` (dppx/dpi/dpcm), `display-mode`, \
      `pointer`/`any-pointer`, `hover`/`any-hover`, `dynamic-range`/`video-dynamic-range`, \
+     `currently-power-scheme`, `currently-compute-pressure`, \
      combined with `and`/`or`/`not`/`,`";
 
 pub(crate) fn parse_list(list: &MediaList<'_>) -> Result<Cond, Unsupported> {
@@ -369,6 +418,33 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
         DynamicRange, Height, Hover as HoverId, Pointer as PointerId, PrefersColorScheme,
         PrefersReducedMotion, PrefersReducedTransparency, Resolution, VideoDynamicRange, Width,
     };
+    match f {
+        QueryFeature::Plain {
+            name: MediaFeatureName::Unknown(name),
+            value,
+        } => {
+            if name.eq_ignore_ascii_case("currently-power-scheme") {
+                return PowerScheme::from_keyword(ident(value)?)
+                    .map(|v| Cond::Feature(Feature::PowerScheme(v)))
+                    .ok_or("an unknown `currently-power-scheme` value");
+            }
+            if name.eq_ignore_ascii_case("currently-compute-pressure") {
+                return ComputePressure::from_keyword(ident(value)?)
+                    .map(|v| Cond::Feature(Feature::ComputePressure(v)))
+                    .ok_or("an unknown `currently-compute-pressure` value");
+            }
+        }
+        QueryFeature::Boolean {
+            name: MediaFeatureName::Unknown(name),
+        } => {
+            if name.eq_ignore_ascii_case("currently-power-scheme")
+                || name.eq_ignore_ascii_case("currently-compute-pressure")
+            {
+                return Ok(Cond::Always);
+            }
+        }
+        _ => {}
+    }
     Ok(match f {
         QueryFeature::Plain { name, value } => match standard(name)? {
             id @ (Width | Height | DeviceWidth | DeviceHeight) => {
@@ -448,6 +524,10 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
 /// `Err` is the reason a prelude was rejected; a browser treats an invalid media list as `not all`,
 /// so callers report `matches: false` with the advisory.
 pub fn match_media(query: &str, env: &Env) -> Result<bool, String> {
+    match_media_with_demand(query, env).map(|(matches, _)| matches)
+}
+
+pub fn match_media_with_demand(query: &str, env: &Env) -> Result<(bool, bool), String> {
     use lightningcss::rules::CssRule;
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
 
@@ -458,7 +538,7 @@ pub fn match_media(query: &str, env: &Env) -> Result<bool, String> {
         return Err("is not a media query".to_string());
     };
     parse_list(&m.query)
-        .map(|cond| cond.eval(env))
+        .map(|cond| (cond.eval(env), cond.uses_compute_pressure()))
         .map_err(|why| format!("uses {why} — {SUPPORTED}"))
 }
 
@@ -472,6 +552,30 @@ mod tests {
     use super::*;
     use lightningcss::rules::CssRule;
     use lightningcss::stylesheet::{ParserOptions, StyleSheet};
+
+    #[test]
+    fn power_and_pressure_are_discrete_live_features() {
+        let mut env = Env::default();
+        let balanced = "(currently-power-scheme: balanced)";
+        let saving = "(CURRENTLY-POWER-SCHEME: SAVING)";
+        let pressure = "(currently-compute-pressure: serious)";
+        assert_eq!(match_media(balanced, &env), Ok(true));
+        assert_eq!(match_media(saving, &env), Ok(false));
+        assert_eq!(match_media_with_demand(pressure, &env), Ok((false, true)));
+        assert_eq!(match_media("(currently-power-scheme)", &env), Ok(true));
+        env.power_scheme = PowerScheme::Saving;
+        env.compute_pressure = ComputePressure::Serious;
+        assert_eq!(match_media(balanced, &env), Ok(false));
+        assert_eq!(match_media(saving, &env), Ok(true));
+        assert_eq!(match_media_with_demand(pressure, &env), Ok((true, true)));
+        assert_eq!(match_media("(currently-power-scheme)", &env), Ok(true));
+        assert_eq!(
+            match_media_with_demand("(currently-compute-pressure)", &env),
+            Ok((true, false))
+        );
+        assert!(match_media("(currently-compute-pressure > nominal)", &env).is_err());
+        assert!(match_media("(currently-power-scheme: battery)", &env).is_err());
+    }
 
     fn cond(prelude: &str) -> Result<Cond, Unsupported> {
         let css = format!("@media {prelude} {{ .x {{ color: red }} }}");

@@ -23,6 +23,8 @@ struct Noise : IEffect
     [SkOptional] [SkAnimated] [SkDefault("0")] [SkRange(0.0, 120.0)]
     float speed;
 
+    [SkQuality] float quality;
+
     // Straight alpha is the natural way to write a grain layer: pick a colour,
     // pick a coverage. The engine premultiplies.
     static override bool straightAlpha() { return true; }
@@ -41,6 +43,12 @@ struct Noise : IEffect
         // Two decorrelated samples: a monochrome grain plus a weaker chroma
         // wobble, which is what real film grain looks like.
         float g = sk_hash12(cell + float2(frame * 17.13, frame * 7.31));
+        if (quality >= 0.5)
+        {
+            float mono = g - 0.5;
+            float a = peak * saturate(abs(mono) * 2.0 + 0.15);
+            return float4(float3(g, g, g), a);
+        }
         float r = sk_hash12(cell + float2(frame * 17.13 + 91.7, frame * 7.31 + 13.1));
         float b = sk_hash12(cell + float2(frame * 17.13 + 41.3, frame * 7.31 + 57.9));
 

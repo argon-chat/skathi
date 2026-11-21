@@ -197,6 +197,9 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     if cs.extras.filter_url.is_some() {
         return true;
     }
+    if crate::text_box::depends_on_metrics(&cs.extras, tag) {
+        return true;
+    }
     // The wheel registry is rebuilt from the paint walk, which a replay skips: the span is recorded
     // and re-registered in place ([`Boundary`]).
     if refuse_scroll_containers()

@@ -153,6 +153,9 @@ pub struct Extras {
     /// the parent's `text-align`; the renderer advises (`advise_inline_level`).
     pub inline_level: Option<bool>,
     pub appearance_none: Option<bool>,
+    pub field_sizing: Option<crate::LayoutValue<crate::FieldSizing>>,
+    pub text_box_trim: Option<crate::LayoutValue<crate::TextBoxTrim>>,
+    pub text_box_edge: Option<crate::LayoutValue<crate::TextBoxEdge>>,
     pub accent_color: Option<Option<Hsla>>,
     pub fill: Option<SvgPaint>,
     pub stroke: Option<SvgPaint>,
@@ -584,6 +587,9 @@ impl Extras {
         if other.appearance_none.is_some() {
             self.appearance_none = other.appearance_none;
         }
+        self.field_sizing = other.field_sizing.or(self.field_sizing);
+        self.text_box_trim = other.text_box_trim.or(self.text_box_trim);
+        self.text_box_edge = other.text_box_edge.or(self.text_box_edge);
         if other.accent_color.is_some() {
             self.accent_color = other.accent_color;
         }
@@ -1049,16 +1055,13 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
             if crate::prefix::property_dropped(p) {
                 continue;
             }
-            if transitions.take(p, diagnostics) {
+            if transitions.take(p, diagnostics) || animations.take(p, diagnostics) {
                 continue;
             }
             match channel(p, defer_haptics, diagnostics) {
                 Channel::Custom(name, value) => custom.push((name, value)),
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
                 Channel::Static => {
-                    if animations.take(p, diagnostics) {
-                        continue;
-                    }
                     let id = p.property_id();
                     if dynamic.iter().any(|(n, _)| *n == id.name()) {
                         once(
@@ -1218,6 +1221,16 @@ pub(crate) fn apply_dynamic(
             return;
         }
     };
+    let siblings = crate::siblings::resolve(&value);
+    let Ok(siblings) = siblings else {
+        once(
+            diagnostics,
+            "sibling-index() and sibling-count() take no arguments".into(),
+        );
+        return;
+    };
+    let from_siblings = siblings.is_some();
+    let value = siblings.unwrap_or(value);
     let value = crate::rgb_space::rewrite(&value).unwrap_or(value);
     use lightningcss::traits::IntoOwned as _;
     let parse = |value: &str| {
@@ -1225,7 +1238,13 @@ pub(crate) fn apply_dynamic(
             .ok()
             .map(|p| p.into_owned())
     };
-    let property = match parse(&value) {
+    let mut property = parse(&value);
+    if from_siblings && matches!(property, None | Some(Property::Unparsed(_))) {
+        if let Some(integer_math) = crate::siblings::integer_math(&value) {
+            property = parse(&integer_math);
+        }
+    }
+    let property = match property {
         Some(unresolved @ (Property::Unparsed(_) | Property::Custom(_))) => {
             match current_color_substituted(name, &value) {
                 Some(concrete) => parse(&concrete),
@@ -1320,6 +1339,25 @@ pub struct InlineStyle {
 }
 
 impl InlineStyle {
+    pub(crate) fn might_use_siblings(&self) -> bool {
+        let contains = |(_, raw): &(String, String)| crate::siblings::contains_function(raw);
+        self.custom.iter().chain(self.dynamic.iter()).any(contains)
+            || [self.normal_motion.as_ref(), self.important_motion.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|motion| {
+                    motion
+                        .transitions
+                        .as_deref()
+                        .is_some_and(|d| d.deferred.iter().any(contains))
+                        || motion
+                            .animations
+                            .as_ref()
+                            .and_then(|p| p.declarations.as_deref())
+                            .is_some_and(|d| d.deferred.iter().any(contains))
+                })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.refinement.is_none()
             && self.transitions.is_none()
@@ -1362,6 +1400,23 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
             Verdict::Applied
         };
     }
+    match crate::siblings::probe(value) {
+        Ok(Some(value)) => {
+            let verdict = self::verdict(name, &value);
+            return if matches!(verdict, Verdict::Invalid) {
+                crate::siblings::integer_math(&value)
+                    .map_or(verdict, |value| self::verdict(name, &value))
+            } else {
+                verdict
+            };
+        }
+        Err(()) => {
+            return Verdict::Rejected(
+                "sibling-index() and sibling-count() take no arguments".into(),
+            );
+        }
+        Ok(None) => {}
+    }
     let body = format!("{name}: {value}");
     let body = crate::rgb_space::rewrite(&body).unwrap_or(body);
     let Ok(block) = DeclarationBlock::parse_string(&body, ParserOptions::default()) else {
@@ -1380,6 +1435,11 @@ pub fn verdict(name: &str, value: &str) -> Verdict {
     }
     let mut diagnostics = Vec::new();
     let changed = match p {
+        Some(property) if crate::transition::is_transition_id(&property.property_id()) => {
+            let mut collector = crate::transition::Collector::default();
+            collector.take(property, &mut diagnostics);
+            collector.finish().is_some()
+        }
         Some(Property::Unparsed(u)) => {
             if matches!(u.property_id, PropertyId::ImageRendering)
                 && single_ident_is(&u.value, "pixelated")
@@ -1470,16 +1530,13 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                     if crate::prefix::property_dropped(p) {
                         continue;
                     }
-                    if transitions.take(p, diagnostics) {
+                    if transitions.take(p, diagnostics) || animations.take(p, diagnostics) {
                         continue;
                     }
                     match channel(p, defer_haptics, diagnostics) {
                         Channel::Custom(name, value) => custom.push((name, value)),
                         Channel::Dynamic(name, value) => dynamic.push((name, value)),
                         Channel::Static => {
-                            if animations.take(p, diagnostics) {
-                                continue;
-                            }
                             apply_static(p, &mut r, &mut extras, &mut font, diagnostics);
                             styled = true;
                         }
@@ -4304,12 +4361,15 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
     found
 }
 
-fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+pub(crate) fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
     use lightningcss::properties::custom::{TokenOrValue, UnresolvedColor};
     value.0.iter().any(|token| match token {
         TokenOrValue::Var(_) | TokenOrValue::Env(_) => true,
         TokenOrValue::Function(function) => {
-            function.name.0.starts_with("--") || has_substitution(&function.arguments)
+            function.name.0.starts_with("--")
+                || function.name.0.eq_ignore_ascii_case("sibling-index")
+                || function.name.0.eq_ignore_ascii_case("sibling-count")
+                || has_substitution(&function.arguments)
         }
         TokenOrValue::UnresolvedColor(
             UnresolvedColor::RGB { alpha, .. } | UnresolvedColor::HSL { alpha, .. },
@@ -4904,6 +4964,40 @@ fn apply_property(
             }
         }
         Transform(list, _) => apply_transform(list, r, diagnostics),
+        Translate(value) => {
+            use lightningcss::properties::transform::{Transform, Translate};
+            r.vn_translate = match value {
+                Translate::None => Some(TransformSpec::IDENTITY),
+                Translate::XYZ { x, y, z } if css_length_px(z) == Some(0.0) => {
+                    individual_transform(Transform::Translate(x.clone(), y.clone()), diagnostics)
+                }
+                Translate::XYZ { .. } => {
+                    once(
+                        diagnostics,
+                        "'translate' supports only X and Y offsets".into(),
+                    );
+                    None
+                }
+            };
+        }
+        Rotate(value) => {
+            use lightningcss::properties::transform::{Rotate, Transform};
+            r.vn_rotate = match value {
+                Rotate::None => Some(TransformSpec::IDENTITY),
+                Rotate::XYZ { x, y, z, angle } if *x == 0.0 && *y == 0.0 => {
+                    let angle =
+                        lightningcss::values::angle::Angle::Rad(angle.to_radians() * z.signum());
+                    individual_transform(Transform::Rotate(angle), diagnostics)
+                }
+                Rotate::XYZ { .. } => {
+                    once(
+                        diagnostics,
+                        "'rotate' supports only rotation about the Z axis".into(),
+                    );
+                    None
+                }
+            };
+        }
         // Seeded with the initial `50% 50%` so declaring the origin alone does not spell
         // `transform: none`.
         TransformOrigin(pos, _) => {
@@ -5998,6 +6092,13 @@ fn apply_property(
         BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
         Custom(c) => match &c.name {
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if let Some(property) = crate::text_box::property(name.0.as_ref()) =>
+            {
+                if !crate::text_box::apply(property, &value_text(p).unwrap_or_default(), x) {
+                    unsupported(diagnostics, property);
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if let Some(property) = svg_values::property(name.0.as_ref()) =>
             {
                 let value = value_text(p).and_then(|value| svg_values::computed(property, &value));
@@ -6006,6 +6107,27 @@ fn apply_property(
                     set_presentation(Rc::make_mut(list), property, value.into());
                 } else {
                     once(diagnostics, format!("invalid SVG value for `{property}`"));
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.eq_ignore_ascii_case("effect-quality") =>
+            {
+                use gpui::EffectQuality::*;
+                let quality = [
+                    (Auto, "auto"),
+                    (Full, "full"),
+                    (Reduced, "reduced"),
+                    (Minimal, "minimal"),
+                ]
+                .into_iter()
+                .find(|(_, keyword)| single_ident_is(&c.value, keyword));
+                if let Some((quality, _)) = quality {
+                    r.vn_effect_quality = Some(quality);
+                } else {
+                    once(
+                        diagnostics,
+                        "effect-quality expects auto, full, reduced or minimal".into(),
+                    );
                 }
             }
             // `--shading` is the ONE custom property Skathi interprets: a GPU effect has no web
@@ -6414,6 +6536,21 @@ fn apply_property(
                 });
                 x.mask_composite = Some(webkit_mask_compositing(first.unwrap_or("source-over")));
                 advise_mask(x, diagnostics);
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.eq_ignore_ascii_case("content-visibility") =>
+            {
+                match single_ident_raw(&c.value)
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("visible") => r.vn_content_hidden = Some(false),
+                    Some("hidden") => r.vn_content_hidden = Some(true),
+                    _ => once(
+                        diagnostics,
+                        "'content-visibility' supports visible and hidden".into(),
+                    ),
+                }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
@@ -6871,6 +7008,19 @@ fn is_current_color(c: &lightningcss::values::color::CssColor) -> bool {
     matches!(c, lightningcss::values::color::CssColor::CurrentColor)
 }
 
+fn individual_transform(
+    value: lightningcss::properties::transform::Transform,
+    diagnostics: &mut Vec<String>,
+) -> Option<TransformSpec> {
+    let mut style = StyleRefinement::default();
+    apply_transform(
+        &lightningcss::properties::transform::TransformList(vec![value]),
+        &mut style,
+        diagnostics,
+    );
+    style.vn_transform
+}
+
 fn apply_transform(
     list: &lightningcss::properties::transform::TransformList,
     r: &mut StyleRefinement,
@@ -7101,6 +7251,25 @@ fn apply_transform(
         once(diagnostics, format!("`transform` supports ordered 2D translate(), rotate(), scale(), skew(), matrix() and `transform-origin` at paint time — dropped {}", dropped.join(", ")));
     }
 }
+pub fn translate_css(spec: TransformSpec) -> String {
+    if spec.is_identity() {
+        return "none".into();
+    }
+    let length = |value| match value {
+        TransformLength::Pixels(value) => format!("{value}px"),
+        TransformLength::Fraction(value) => format!("{}%", value * 100.0),
+    };
+    format!("{} {}", length(spec.translate.0), length(spec.translate.1))
+}
+
+pub fn rotate_css(spec: TransformSpec) -> String {
+    if spec.is_identity() {
+        "none".into()
+    } else {
+        format!("{}deg", spec.rotate.to_degrees())
+    }
+}
+
 pub fn transform_css(spec: TransformSpec) -> String {
     if spec.is_identity() {
         return "none".into();

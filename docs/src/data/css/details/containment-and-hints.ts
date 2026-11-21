@@ -82,7 +82,7 @@ export const details: Details = {
   },
   "content-visibility": {
     edgeCases: [
-      "A declaration prints an advisory and changes nothing: the content renders as if the property were absent.",
+      "The hidden value skips the content of an ordinary box while preserving its border and background. An explicit size continues to apply. The auto value is unsupported.",
     ],
   },
   "contain-intrinsic-size": {

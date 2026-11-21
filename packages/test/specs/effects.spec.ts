@@ -22,6 +22,55 @@ type Shading = {
   inline: string | null;
 };
 
+test(
+  "the painted frost slot follows emulated pressure and its element's CSS override",
+  async () => {
+    async function waitForTier(expected: number) {
+      let tier: number | undefined;
+      const until = Date.now() + 5000;
+      do {
+        const painted: { effect: string; quality: number }[] = await app.send("effects", { op: "painted" });
+        tier = painted.find((q) => q.effect === "frost")?.quality;
+        if (tier === expected) break;
+        await sleep(40);
+      } while (Date.now() < until);
+      expect(tier).toBe(expected);
+    }
+    try {
+      await app.send("power", { scheme: "performance", pressure: "nominal" });
+      await waitForTier(0);
+      await app.send("power", { scheme: "saving", pressure: "fair" });
+      await waitForTier(1);
+      await app.send("power", { pressure: "critical" });
+      await waitForTier(2);
+      const locked = await idOf("#locked");
+      try {
+        await app.send("effects", { op: "set", node: locked, value: "noise(0.5, 1px, 20)" });
+        const times = new Set<number>();
+        const deadline = Date.now() + 5000;
+        while (times.size < 3 && Date.now() < deadline) {
+          const painted: { effect: string; quality: number; time: number }[] = await app.send("effects", {
+            op: "painted",
+          });
+          const noise = painted.find((q) => q.effect === "noise" && q.quality === 2);
+          if (noise) times.add(noise.time);
+          await sleep(45);
+        }
+        expect(times.size).toBeGreaterThanOrEqual(3);
+        for (const t of times) expect(t * 15).toBeCloseTo(Math.round(t * 15), 2);
+      } finally {
+        await app.send("effects", { op: "reset", node: locked });
+      }
+      await app.eval('document.querySelector("#glass").style.setProperty("effect-quality", "full"); "ok"');
+      await waitForTier(0);
+    } finally {
+      await app.eval('document.querySelector("#glass").style.removeProperty("effect-quality"); "ok"');
+      await app.send("power", { scheme: "system", pressure: "system" });
+    }
+  },
+  T,
+);
+
 const idOf = async (selector: string): Promise<number> => (await app.query(selector)).nodes[0]!.id;
 const node = (id: number): Promise<Shading> => app.send("effects", { op: "node", node: id });
 

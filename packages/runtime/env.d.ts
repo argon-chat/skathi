@@ -195,6 +195,33 @@ declare global {
   }
   var MediaQueryList: { new (): MediaQueryList; prototype: MediaQueryList };
 
+  type PressureSource = "cpu";
+  type PressureState = "nominal" | "fair" | "serious" | "critical";
+
+  interface PressureObserverOptions {
+    sampleInterval?: number;
+  }
+
+  interface PressureRecord {
+    readonly source: PressureSource;
+    readonly state: PressureState;
+    readonly time: number;
+    toJSON(): { source: PressureSource; state: PressureState; time: number };
+  }
+  var PressureRecord: { prototype: PressureRecord };
+
+  interface PressureObserver {
+    observe(source: PressureSource, options?: PressureObserverOptions): Promise<void>;
+    unobserve(source: PressureSource): void;
+    disconnect(): void;
+    takeRecords(): PressureRecord[];
+  }
+  var PressureObserver: {
+    new (callback: (records: PressureRecord[], observer: PressureObserver) => void): PressureObserver;
+    readonly knownSources: readonly PressureSource[];
+    prototype: PressureObserver;
+  };
+
   var performance: { now(): number };
 
   var ononline: ((ev: Event) => unknown) | null;

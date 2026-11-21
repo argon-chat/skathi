@@ -33,6 +33,8 @@ struct Frost : IEffect
     [SkColor] [SkOptional] [SkDefault("1 1 1 0.06")]
     float4 tint;
 
+    [SkQuality] float quality;
+
     float4 shade(EffectInput input)
     {
         float amount = saturate(strength);
@@ -41,9 +43,17 @@ struct Frost : IEffect
         // Frozen-glass grain: two lattices at different scales, one of them
         // stretched, so it looks crystalline rather than like film grain.
         float2 grain_uv = input.px / max(input.scale, 0.001);
-        float crystal = sk_fbm(grain_uv * 0.18);
-        crystal += 0.5 * sk_fbm(float2(grain_uv.x * 0.9, grain_uv.y * 0.31) * 0.55);
-        crystal = crystal / 1.5 - 0.5;
+        float crystal = 0.0;
+        if (quality < 0.5)
+        {
+            crystal = sk_fbm(grain_uv * 0.18);
+            crystal += 0.5 * sk_fbm(float2(grain_uv.x * 0.9, grain_uv.y * 0.31) * 0.55);
+            crystal = crystal / 1.5 - 0.5;
+        }
+        else if (quality < 1.5)
+        {
+            crystal = sk_hash12(floor(grain_uv)) - 0.5;
+        }
 
         // A rim highlight hugging the rounded edge, brightest right at it.
         float rim = saturate(1.0 + input.sd / max(2.5 * input.scale, 1.0));

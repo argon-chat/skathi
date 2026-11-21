@@ -49,6 +49,7 @@ mod content_dialog;
 #[doc(hidden)]
 pub mod crash_window;
 mod dialogs;
+mod effect_quality;
 pub mod embed;
 mod haptics;
 #[cfg(feature = "hotkeys")]
@@ -69,6 +70,8 @@ mod perf;
 mod placement;
 mod popout;
 mod popout_win;
+mod power;
+mod pressure_observer;
 #[cfg(feature = "prod")]
 mod prod;
 mod quiet;
@@ -574,6 +577,7 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
         };
         JsRuntime::with(|rt| {
+            pressure_observer::deliver(rt, focused && !window::page_hidden());
             let pumped = std::time::Instant::now();
             let stats = rt.pump(flags);
             let elapsed = pumped.elapsed();
@@ -668,6 +672,7 @@ impl Render for Shell {
         let _allocation_scope = crate::heapcount::recording::scope("render", "frame/build");
         perf::render_begin();
         let el = self.render_body(window, cx);
+        window.defer(cx, |window, _| power::note_primary(window));
         perf::render_done();
         // An input dispatch flushes its own changes and draws, and a paced pump may not follow it.
         #[cfg(sk_devtools)]
@@ -1269,6 +1274,7 @@ fn run_app() {
             #[cfg(feature = "storages")]
             sk_tree::color_picker::set_recents_file(sk_storage::cookies::folder().map(|f| f.join("recent-colors.txt")));
             haptics::install(rt);
+            power::install(rt);
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;

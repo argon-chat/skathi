@@ -23,6 +23,28 @@ pub(super) fn command(
 ) -> Result<Json, String> {
     match op.unwrap_or("list") {
         "list" => Ok(list()),
+        "painted" => super::with_target(|window, _| {
+            let schemas = sk_effects::effects();
+            Json::arr(
+                window
+                    .vn_painted_effects()
+                    .filter_map(|quad| {
+                        let schema = schemas.iter().find(|s| s.id == quad.effect_id)?;
+                        Some(Json::obj(vec![
+                            ("effect", Json::s(schema.name)),
+                            ("time", Json::n(quad.time)),
+                            (
+                                "quality",
+                                schema.quality_param.map_or(Json::Null, |slot| {
+                                    Json::n(quad.params[usize::from(slot)])
+                                }),
+                            ),
+                        ]))
+                    })
+                    .collect(),
+            )
+        })
+        .ok_or_else(|| "the addressed window is unavailable".into()),
         "node" => node_arg(node).map(detail),
         "set" => {
             let id = node_arg(node)?;
@@ -33,7 +55,7 @@ pub(super) fn command(
         }
         "reset" => node_arg(node).map(reset),
         other => Err(format!(
-            "unknown effects op `{other}` — use list, node, set or reset"
+            "unknown effects op `{other}` — use list, painted, node, set or reset"
         )),
     }
 }

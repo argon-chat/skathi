@@ -283,6 +283,79 @@ impl AnimationPatch {
         }
     }
 
+    pub(crate) fn apply_over_resolved(
+        &self,
+        into: &mut AnimationPatch,
+        vars: &crate::Vars,
+        env: &crate::Env,
+        diagnostics: &mut Vec<String>,
+    ) {
+        let Some(declarations) = self
+            .declarations
+            .as_deref()
+            .filter(|d| !d.deferred.is_empty())
+        else {
+            self.apply_over(into);
+            return;
+        };
+        use lightningcss::properties::{Property, PropertyId};
+        let mut merged = into.declarations.as_deref().cloned().unwrap_or_default();
+        merged.merge(declarations);
+        for (name, raw) in &declarations.deferred {
+            let parse = |value: &str| {
+                let property = Property::parse_string(
+                    PropertyId::from(name.as_str()),
+                    value,
+                    Default::default(),
+                )
+                .ok()?;
+                (!matches!(property, Property::Unparsed(_)))
+                    .then_some(property)
+                    .map(|property| {
+                        use lightningcss::traits::IntoOwned as _;
+                        property.into_owned()
+                    })
+            };
+            if let Ok(value) = crate::vars::substitute_with(raw, vars, env) {
+                if let Ok(siblings) = crate::siblings::resolve(&value) {
+                    let property = match siblings {
+                        Some(value) => parse(&value).or_else(|| {
+                            crate::siblings::integer_math(&value).and_then(|value| parse(&value))
+                        }),
+                        None => parse(&value),
+                    };
+                    if property.is_some_and(|property| merged.take(&property, diagnostics)) {
+                        continue;
+                    }
+                }
+                crate::mapper::once(
+                    diagnostics,
+                    format!("invalid '{name}: {value}' after substitution"),
+                );
+            }
+            match name.as_str() {
+                "animation" => {
+                    merged = AnimationCollector {
+                        named: true,
+                        names: None,
+                        seen: true,
+                        ..Default::default()
+                    };
+                }
+                "animation-name" => merged.names = None,
+                "animation-duration" => merged.durations = None,
+                "animation-delay" => merged.delays = None,
+                "animation-timing-function" => merged.easings = None,
+                "animation-iteration-count" => merged.iterations = None,
+                "animation-direction" => merged.directions = None,
+                "animation-fill-mode" => merged.fills = None,
+                "animation-play-state" => merged.play_states = None,
+                _ => unreachable!(),
+            }
+        }
+        *into = merged.finish().1.unwrap_or_default();
+    }
+
     pub(crate) fn computed_list(&self) -> Option<Vec<AnimationSpec>> {
         self.declarations
             .as_ref()
@@ -332,6 +405,7 @@ pub struct AnimationDeclarations {
     directions: Option<Vec<Direction>>,
     fills: Option<Vec<FillMode>>,
     play_states: Option<Vec<PlayState>>,
+    pub(crate) deferred: Vec<(String, String)>,
     seen: bool,
     named: bool,
 }
@@ -381,6 +455,29 @@ impl AnimationDeclarations {
                 a::AnimationPlayState::Running => PlayState::Running,
                 a::AnimationPlayState::Paused => PlayState::Paused,
             }
+        }
+
+        let id = p.property_id();
+        let name = id.name();
+        if matches!(
+            name,
+            "animation"
+                | "animation-name"
+                | "animation-duration"
+                | "animation-delay"
+                | "animation-timing-function"
+                | "animation-iteration-count"
+                | "animation-direction"
+                | "animation-fill-mode"
+                | "animation-play-state"
+        ) && (!self.deferred.is_empty()
+            || matches!(p, P::Unparsed(u) if crate::mapper::has_substitution(&u.value)))
+        {
+            if let Some(value) = crate::mapper::value_text(p) {
+                self.deferred.push((name.to_owned(), value));
+                self.seen = true;
+            }
+            return true;
         }
 
         match p {
@@ -497,11 +594,7 @@ impl AnimationDeclarations {
                 self.seen = true;
                 crate::mapper::once(
                     diagnostics,
-                    format!(
-                        "unresolved value for {} (var()/env() in animations is not resolved yet, \
-                         v1)",
-                        u.property_id.name()
-                    ),
+                    format!("invalid animation declaration '{}'", u.property_id.name()),
                 );
                 true
             }
@@ -539,6 +632,7 @@ impl AnimationDeclarations {
             directions: Some(specs.iter().map(|spec| spec.direction).collect()),
             fills: Some(specs.iter().map(|spec| spec.fill).collect()),
             play_states: Some(specs.iter().map(|spec| spec.play_state).collect()),
+            deferred: Vec::new(),
             seen: true,
             named: true,
         }

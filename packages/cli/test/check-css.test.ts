@@ -68,6 +68,29 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("-moz-appearance", "none")).toBeNull();
   });
 
+  test("content-sized fields and metric-based block trimming use the native CSS grammar", () => {
+    const checks = (css: string) => fileFindings("fields.css", css, false).map((d) => d.code);
+    expect(checks("textarea { field-sizing: content } p { text-box: trim-both cap alphabetic }")).toEqual([]);
+    expect(checks("p { text-box-edge: ideographic } input { field-sizing: auto }")).toEqual(["SK4002", "SK4002"]);
+  });
+
+  test("starting styles, discrete transitions and sibling functions reach the native CSS parser", () => {
+    const checks = (css: string) => fileFindings("motion.css", css, false).map((d) => d.code);
+    expect(
+      checks(`
+      .toast {
+        transition: opacity 150ms, display 150ms allow-discrete;
+        transition-behavior: normal, allow-discrete;
+        transition-delay: calc(sibling-index() * 40ms);
+        rotate: calc(360deg / sibling-count() * sibling-index());
+        @starting-style { opacity: 0; }
+      }
+      @starting-style { .dialog { opacity: 0; translate: 0 6px; } }
+    `),
+    ).toEqual([]);
+    expect(checks(".toast { transition-behavior: auto; opacity: sibling-index(2) }")).toEqual(["SK4002", "SK4002"]);
+  });
+
   test("plus-lighter blends view transition snapshots", () => {
     const check = (selector: string, value = "plus-lighter") =>
       fileFindings("fade.css", `${selector} { mix-blend-mode: ${value} }`, false).map((d) => d.code);

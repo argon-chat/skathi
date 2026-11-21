@@ -107,6 +107,8 @@ pub struct EffectSchema {
     pub pointer_param: Option<u8>,
     /// `[SkPointerTimes]`'s first slot, which the painter fills; not a CSS argument.
     pub pointer_times_param: Option<u8>,
+    /// Scalar [SkQuality] slot filled by the painter.
+    pub quality_param: Option<u8>,
     /// Bit *i*: slot *i* is a time on the effect clock (`[SkAnimatedFor]`).
     pub clock_mask: u32,
     /// Seconds to keep repainting after the latest time in `clock_mask`.
@@ -162,6 +164,8 @@ impl EffectSchema {
             animated_param: self.animated_param,
             pointer_param: self.pointer_param,
             pointer_times_param: self.pointer_times_param,
+            quality_param: self.quality_param,
+            quality: Default::default(),
             clock_mask: self.clock_mask,
             clock_window: self.clock_window,
             params,
@@ -210,6 +214,8 @@ struct RawEffect {
     pointer_param: Option<u8>,
     #[serde(default)]
     pointer_times_param: Option<u8>,
+    #[serde(default)]
+    quality_param: Option<u8>,
     #[serde(default)]
     clock_slots: Vec<u8>,
     #[serde(default)]
@@ -268,7 +274,7 @@ pub fn parse_manifest(
                 )
             })?;
             for offset in 0..kind.slots() {
-                let slot = (param.slot + offset) as usize;
+                let slot = usize::from(param.slot) + usize::from(offset);
                 if slot >= used.len() {
                     return Err(format!(
                         "{origin}: {}.{} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
@@ -333,20 +339,38 @@ pub fn parse_manifest(
             }
         }
 
-        let host_slots = [(raw.pointer_param, 2), (raw.pointer_times_param, 3)];
+        let host_slots = [
+            (raw.pointer_param, 2),
+            (raw.pointer_times_param, 3),
+            (raw.quality_param, 1),
+        ];
         for (slot, width) in host_slots.into_iter().filter_map(|(s, w)| Some((s?, w))) {
             if slot as usize + width > EFFECT_PARAM_SLOTS {
                 return Err(format!(
-                    "{origin}: {}: a pointer parameter at slot {slot} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
+                    "{origin}: {}: a host parameter at slot {slot} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
                     raw.name
                 ));
             }
+            let range = &mut used[slot as usize..slot as usize + width];
+            if range.iter().any(|used| *used) {
+                return Err(format!(
+                    "{origin}: {}: overlapping host slot {slot}",
+                    raw.name
+                ));
+            }
+            range.fill(true);
         }
         let mut clock_mask = 0u32;
         for slot in &raw.clock_slots {
             if *slot as usize >= EFFECT_PARAM_SLOTS {
                 return Err(format!(
                     "{origin}: {}: clock slot {slot} overflows the {EFFECT_PARAM_SLOTS} parameter slots",
+                    raw.name
+                ));
+            }
+            if Some(*slot) == raw.quality_param {
+                return Err(format!(
+                    "{origin}: {}: quality slot cannot be a clock",
                     raw.name
                 ));
             }
@@ -370,6 +394,7 @@ pub fn parse_manifest(
             animated_param: raw.animated_param,
             pointer_param: raw.pointer_param,
             pointer_times_param: raw.pointer_times_param,
+            quality_param: raw.quality_param,
             clock_mask,
             clock_window: raw.clock_window.unwrap_or(0.0),
             signature: Box::leak(raw.signature.into_boxed_str()),
@@ -620,12 +645,13 @@ mod tests {
         let json = USER_MANIFEST.replace(
             "\"animatedParam\": 0,",
             "\"animatedParam\": 0, \"pointerParam\": 8, \"pointerTimesParam\": 12, \
-             \"clockSlots\": [1, 2], \"clockWindow\": 3,",
+             \"qualityParam\": 15, \"clockSlots\": [1, 2], \"clockWindow\": 3,",
         );
         let ripple = parse_manifest(&json, effect_id::COUNT, false, "<test>").unwrap()[0];
         let mut spec = ripple.defaults();
         assert_eq!(spec.pointer_param, Some(8));
         assert_eq!(spec.pointer_times_param, Some(12));
+        assert_eq!(spec.quality_param, Some(15));
         assert_eq!(spec.clock_mask, 0b110);
         spec.params[1] = 10.0;
         assert!(spec.clock_running(12.9));

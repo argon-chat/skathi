@@ -38,7 +38,10 @@ impl Render for PopoutShell {
         publish_env(id, self.node, window, cx);
         let node = self.node;
         // The painted root gets its new bounds during layout, after this render returns.
-        window.defer(cx, move |window, _| report_metrics(id, node, window));
+        window.defer(cx, move |window, _| {
+            report_metrics(id, node, window);
+            crate::power::note_popout(window);
+        });
         frame_drawn(id, window, cx);
         let backdrop = POPOUTS
             .with(|p| {
@@ -1114,6 +1117,9 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
         window.on_window_should_close(cx, |window, cx| {
             crate::dialogs::may_close_now(window.window_handle(), cx)
         });
+        window
+            .observe_window_visibility(|_, window, _| crate::power::note_popout(window))
+            .detach();
     });
     // While still hidden: the taskbar reads styles on show, and a cover window's first frame must already be monitor-sized.
     if hwnd != 0 {
@@ -1560,6 +1566,7 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
         return;
     };
     let popout = POPOUTS.with(|p| p.borrow_mut().remove(i));
+    crate::power::forget_popout(id.as_u64());
     sk_tree::set_popped_out(popout.node, false);
     // Its atlas is destroyed, so owed tiles must not reach another window's `drop_image`, which could remove keys a live window re-inserted.
     sk_tree::forget_window(id.as_u64());

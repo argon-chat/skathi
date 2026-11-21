@@ -12,9 +12,21 @@ pub struct Vars {
     /// `Rc<str>` so a child overriding one property carries the other ~40 through by refcount bump,
     /// not allocation.
     entries: Vec<(Rc<str>, Rc<str>)>,
+    uses_siblings: bool,
 }
 
 impl Vars {
+    fn scan_sibling_usage(&mut self) {
+        self.uses_siblings = self
+            .entries
+            .iter()
+            .any(|(_, raw)| crate::siblings::contains_function(raw));
+    }
+
+    pub(crate) fn uses_siblings(&self) -> bool {
+        self.uses_siblings
+    }
+
     /// Substitutes the element's computed custom properties and window environment values.
     pub fn resolve_value<'a>(
         &self,
@@ -129,6 +141,7 @@ impl VarChanges {
                     (Err(_), None) => {}
                 }
             }
+            vars.scan_sibling_usage();
             (own.clone(), Rc::new(vars))
         });
         result.clone()
@@ -152,6 +165,16 @@ impl VarChanges {
                 .into_iter()
                 .flatten()
                 .flat_map(|collector| &collector.deferred),
+            )
+            .chain(
+                [
+                    &rule.normal_animation_patch,
+                    &rule.important_animation_patch,
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(|patch| patch.declarations.as_deref())
+                .flat_map(|declarations| &declarations.deferred),
             )
             .any(|(name, value)| self.affects_declaration(name, value))
         })
@@ -712,7 +735,12 @@ pub(crate) fn resolve(
     if entries == parent.entries {
         return parent.clone();
     }
-    Rc::new(Vars { entries })
+    let mut vars = Vars {
+        entries,
+        uses_siblings: false,
+    };
+    vars.scan_sibling_usage();
+    Rc::new(vars)
 }
 
 #[cfg(test)]
