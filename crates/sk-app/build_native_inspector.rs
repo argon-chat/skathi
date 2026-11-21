@@ -58,8 +58,8 @@ pub fn prepare(repo: &Path, out: &Path) {
         return;
     }
     let (target, options) = match std::env::var("TARGET").as_deref() {
-        Ok("x86_64-pc-windows-msvc") => ("x86_64-windows", "x86_64"),
-        Ok("aarch64-apple-darwin") => ("aarch64-macos", "aarch64;os=macos"),
+        Ok("x86_64-pc-windows-msvc") => ("x86_64-windows", "x86_64;references=narrow"),
+        Ok("aarch64-apple-darwin") => ("aarch64-macos", "aarch64;os=macos;references=wide"),
         _ => panic!("native-inspector requires Windows x64 or macOS arm64"),
     };
     assert!(std::env::var_os("SK_DEVTOOLS_BUNDLE").is_some(),
@@ -96,7 +96,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     require(
         &manifest,
         "compileOptions",
-        &format!("{options};references=narrow;image=pic;threads=1;default-options@{engine}"),
+        &format!("{options};image=pic;threads=1;default-options@{engine}"),
     );
     require(
         &manifest,
