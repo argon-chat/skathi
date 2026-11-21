@@ -17,6 +17,7 @@ release:
       command: cargo add skathi@0.7
 ---
 
+import Demo from "../src/components/Demo.astro";
 import Aside from "../src/components/blog/Aside.astro";
 import Feature from "../src/components/blog/Feature.astro";
 import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
@@ -185,15 +186,61 @@ The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser
 
 ## Three new templates
 
-`sk create` has three more finished apps to start from.
-
-- **`sequencer`**, in Svelte 5, is a drum machine: four patterns with accents and tracks of different lengths, a drive, an echo and a room on the mix. Its dials, keys, panel and meter are four shaders of its own, each with three levels of detail.
-- **`chip8`**, in Vue, is a CHIP-8 emulator with a debugger beside the screen: an assembler and a disassembler from one table, breakpoints, a trace of the last instructions. It is built on the `skathi:` modules, and a badge shows whether it runs under the JIT or from a native image.
-- **`rv32`**, in Vue, is a RISC-V emulator with the same kind of workbench: registers, the next instructions, a step of one instruction or one frame. Its guest is the Doom engine, compiled for RV32IM and shipped with its source. `bun install` fetches the shareware episode for it, and it runs Freedoom as well.
+`sk create` has three more finished apps to start from. Each one is there to be read as much as to be run: a few hundred lines that put one part of Skathi to real work.
 
 ```sh
 bun create skathi my-app --template sequencer
 ```
+
+### `sequencer`: a drum machine
+
+A Svelte 5 app with six tracks, sixteen steps and four patterns. A step is off, on or accented, and each track has a length of its own, so tracks of different lengths drift against each other.
+
+<Demo
+  id="sequencer"
+  caption="The sequencer template playing a pattern. Each key flares in the colour of its track as the step sounds."
+  label="The sequencer template: a drum machine playing a pattern, its keys flaring in the colour of each track as their steps sound, dials turned for drive and echo, and a second pattern taking over at the bar"
+  width={1280}
+  height={820}
+/>
+
+What it shows:
+
+- **Timing on the audio clock.** No note is started by a timer. A timer wakes every 25 ms, looks 120 ms ahead and hands each step in that window to `start(time)`, which is exact however late the timer ran. It keeps playing with the window minimized.
+- **A whole mix from Web Audio nodes.** Every drum is synthesized from oscillators, filters and noise; there are no samples. The mix goes through a wave shaper for drive, a delay with feedback for the echo, a convolver with a generated impulse for the room, and a compressor. An analyser feeds the meter sixteen bands a frame.
+- **A panel drawn by shaders.** The dials, the keys, the plate and the meter are four shaders of the app's own. Each has three levels of detail, and the host picks one from CPU pressure, the power mode and the battery; a button pins a level so you can see the difference.
+- **The `skathi:` modules in small doses.** Patterns are saved as TOML with `skathi:toml`, a line of `.`, `x` and `X` for each track, and the tempo arithmetic is `skathi:units`.
+
+### `chip8`: an emulator with a debugger
+
+A Vue app around a CHIP-8 interpreter. The programs it ships are assembly source: an assembler in the app turns one into bytes when you open it, and the disassembler in the debugger reads them back from the same table of instructions. A program file dropped on the window runs as well.
+
+What it shows:
+
+- **A CPU loop in TypeScript.** The interpreter runs a set number of instructions for each 60 Hz tick, or in turbo mode as many as fit in 8 ms of a frame. A badge says whether that loop runs under the JIT or from a native image, and the counter beside it says how fast.
+- **The `skathi:` modules as a toolbox.** Breakpoints are a `BitSet`, the trace of the last instructions a `RingBuffer`, registers wrap with `u8` and `u16`, the assembler writes through `BinaryWriter`, and a program is named by its `CRC32`.
+- **A debugger as plain reactive UI.** Registers, the code round the program counter with breakpoints, a trace of the last instructions and a step button, all ordinary Vue components that read the machine once a frame.
+
+### `rv32`: a RISC-V computer that runs Doom
+
+A Vue app around an emulator of a 32-bit RISC-V machine (RV32IM) with 16 MB of memory. Its guest is the Doom engine, compiled to a 409 KB image for a machine with no operating system. The game draws into a 320 by 200 canvas, and the workbench beside it shows the registers and the next instructions, pauses, and steps by one instruction or one frame.
+
+<Demo
+  id="rv32"
+  caption="The rv32 template running Freedoom: played, paused, then stepped an instruction and a frame at a time."
+  label="The rv32 template: a RISC-V emulator running a first-person shooter on its screen, the registers and the next instructions beside it, paused and stepped an instruction and a frame at a time"
+  width={1280}
+  height={820}
+/>
+
+What it shows:
+
+- **Heavy computation in the app's own JavaScript.** The interpreter decodes each instruction once and keeps the result, and in the clip above it runs 550 to 730 million guest instructions a second under the JIT. A button plays the engine's recorded demo as fast as it goes and reports frames and instructions per second, which makes it a benchmark for the JIT against a native image.
+- **A small, complete machine.** Everything the guest needs from outside is one of ten host calls: the screen, the clock, keys, the game file. The guest's side of them, a small C library and the build script are in `guest/`; it builds with `zig cc`.
+- **A shader over live content.** The picture tube is a shader that reads the canvas under it and adds the bulge, the scanlines and the vignette, again with three levels of detail.
+- **Data fetched at install.** The game data is not in the template. `bun install` fetches the shareware episode of Doom 1.9 and checks its hash, and with `freedoom1.wad` in `assets/` the workbench runs Freedoom instead, as it does in the clip. The engine is GPL-2.0 and the shareware episode may not be sold, so `guest/README.md` says what that means for an app you ship.
+
+The machine has no sound yet.
 
 ## Memory
 
