@@ -37,6 +37,7 @@ export type Clip = {
   /** Readies the page instead of `__demo.show(id)`. */
   show?: (app: SkApp) => Promise<void>;
 };
+export type Prepared = { app: string; env?: Record<string, string>; dispose(): void };
 export type AppPlans = {
   /** A name under `apps/`, or an entry module relative to the repo root. */
   app: string;
@@ -49,7 +50,7 @@ export type AppPlans = {
    */
   backdrop?: "acrylic" | "opaque";
   /** Makes the app before launch (from a template, say); returns its entry, its environment and a cleanup. */
-  prepare?: () => { app: string; env?: Record<string, string>; dispose(): void };
+  prepare?: () => Prepared | Promise<Prepared>;
   clips: Record<string, Clip>;
 };
 
@@ -154,7 +155,7 @@ async function withHost(mon: Monitor, host: "main" | "surface", ids: string[]) {
     copyFileSync(SURFACE_EXE, exe);
   }
   const placer = earlyPlacer(mon, image);
-  const made = plans.prepare?.();
+  const made = await plans.prepare?.();
   let app: SkApp;
   try {
     app = await launch({
