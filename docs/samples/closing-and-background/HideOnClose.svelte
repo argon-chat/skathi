@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { appLaunch, appTray, appWindow } from "@skathi-native/runtime/svelte";
+  import { appLaunch, appTray, appWindow } from "skathi:app";
 
   let seconds = $state(0);
 

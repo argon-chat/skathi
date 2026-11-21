@@ -12,6 +12,7 @@
       "vue": ["../packages/runtime/src/runtime.ts"],
       "@skathi-native/runtime": ["../packages/runtime/src/runtime.ts"],
       "@skathi-native/runtime/jsx-runtime": ["../packages/runtime/jsx-runtime.d.ts"],
+      "@skathi-native/runtime/std/*": ["../packages/runtime/src/std/*.ts"],
       "vue-router": ["../node_modules/vue-router"],
       "pinia": ["../node_modules/pinia"]
     },
@@ -25,6 +26,7 @@
     "../packages/runtime/src/protocol.d.ts",
     "../packages/runtime/src/indexeddb.d.ts",
     "../packages/runtime/src/modules.d.ts",
+    "../packages/runtime/src/std.d.ts",
     "../packages/runtime/env.d.ts",
     "hello/src/**/*.ts",
     "hello/src/**/*.vue",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appLaunch, appTray, appWindow } from "@skathi-native/runtime";
+import { appLaunch, appTray, appWindow } from "skathi:app";
 
 const seconds = ref(0);
 const tick = setInterval(() => seconds.value++, 1000);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import CursorLayer from "./CursorLayer.vue";
 import { nav } from "./demo";
 import CanvasPage from "./pages/CanvasPage.vue";

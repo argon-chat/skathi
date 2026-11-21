@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { appWindow, SkWindow, type SkWindowBounds } from "@skathi-native/runtime";
+import { SkWindow, type SkWindowBounds } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const colors = ["#e5484d", "#f76b15", "#ffc53d", "#30a46c", "#0090ff", "#8e4ec6"];
 const ink = ref("#0090ff");

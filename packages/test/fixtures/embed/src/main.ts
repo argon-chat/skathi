@@ -1,4 +1,5 @@
-import { appHost, createApp, h, ref } from "@skathi-native/runtime";
+import { createApp, h, ref } from "@skathi-native/runtime";
+import { appHost } from "skathi:app";
 import { available, checksum, crash, double, on, point, refuse, repeat, report, reversed } from "native:demo";
 import { uiThread, worker, type Value } from "native:demo";
 import { sum } from "native:extra";

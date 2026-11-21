@@ -7,7 +7,7 @@ order: 5
 
 # App APIs
 
-The objects an app imports from `@skathi-native/runtime` for what the web platform cannot do: a tray
+The objects an app imports from `skathi:app` for what the web platform cannot do: a tray
 icon, system-wide hotkeys, tactile feedback, where its data lives, opening files and links, permissions, screen capture
 sources, its language, how it was launched, the program that embeds it, and its devtools. The main
 window is in the [Window API](/window-api/); web standards are in [Web platform coverage](/web-platform/).
@@ -17,14 +17,14 @@ arrived in, examples, and what throws or prints an advisory.
 
 ## Import
 
-They do not depend on the framework. Import them from `@skathi-native/runtime` in a Vue or a Svelte app:
+They do not depend on the framework. Import them from [`skathi:app`](/std/) in a Vue or a Svelte app:
 
 ```ts
-import { appLaunch, appTray } from "@skathi-native/runtime";
+import { appLaunch, appTray } from "skathi:app";
 ```
 
-`@skathi-native/runtime/svelte` re-exports the same objects, so a Svelte app can also take everything
-from that one module.
+Since 0.7 `skathi:app` is where they live. Importing them from `@skathi-native/runtime` or
+`@skathi-native/runtime/svelte` still works but is deprecated since 0.7.
 
 Unlike `appWindow`, none of them is reactive in Vue or Svelte. Keep what a template shows in a `ref`
 or `$state`, and update it from the API's event or after the call. Register listeners in `onMounted` and

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import Scenario from "../components/Scenario.vue";
 
 const pos = ref("");

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appStorage } from "@skathi-native/runtime";
+import { appStorage } from "skathi:app";
 import { onMounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

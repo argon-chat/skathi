@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { appWindow, type SkWindowBounds } from "@skathi-native/runtime";
+import type { SkWindowBounds } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import { compact, leaveCompact } from "../store";
 import Icon from "./Icon.vue";
 import PopWindow from "./PopWindow.vue";

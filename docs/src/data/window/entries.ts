@@ -85,7 +85,7 @@ function section(category: Category, drafts: readonly Draft[]): WindowEntry[] {
   });
 }
 
-const IMPORT = 'import { appWindow } from "@skathi-native/runtime";';
+const IMPORT = 'import { appWindow } from "skathi:app";';
 const WAYLAND_NO_POSITION =
   "On Linux under Wayland, the compositor places the window: a position is ignored with an advisory, and a size still applies.";
 const MAC_LINUX_SAME_AS_CONTENT =
@@ -206,6 +206,7 @@ const mainWindow = section("Main window", [
     platforms: os(OK, OK, PART),
     syntax: `${IMPORT}\n\nconst appWindow: SkAppWindow; // extends EventTarget`,
     notes: [
+      "Since 0.7 it is imported from `skathi:app`. Importing it from `@skathi-native/runtime` still works but is deprecated since 0.7.",
       "Its getters and its `is*()` and `get*()` methods are reactive: read inside a template, `computed` or `watch`, they update when the window changes. In Svelte, since 0.3.0, they are reactive in markup, `$derived` and `$effect` once the app imports `@skathi-native/runtime/svelte`.",
       "Every verb is synchronous and returns `undefined`. Inside an input handler it applies in the same frame; elsewhere, at the top of the next frame.",
       "It always addresses the main window, also when the code runs from a pop-out's handler. A pop-out has no handle object; it is controlled through the props of `<SkWindow>`.",
@@ -493,7 +494,7 @@ onMounted(() =>
       {
         title: "Open the window from the tray icon",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 if (appTray.available) {
   appTray.set({
@@ -529,7 +530,7 @@ if (appTray.available) {
       {
         title: "Hide to the tray instead of closing",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 appWindow.addEventListener("close-requested", (e) => {
   if (!appTray.available) return;
@@ -1813,7 +1814,7 @@ const windowEvents = section("Window events", [
       {
         title: "Hide to the tray instead of closing",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 appWindow.addEventListener("close-requested", (e) => {
   if (!appTray.available) return;
@@ -5230,7 +5231,7 @@ const taskbar = section("Taskbar and dock", [
     summary: "Puts an icon with a menu in the system tray or the macOS menu bar.",
     platforms: os(OK, OK, NO),
     syntax:
-      'import { appTray } from "@skathi-native/runtime";\n\nappTray.available: boolean\nappTray.set(options: TrayOptions | null): void',
+      'import { appTray } from "skathi:app";\n\nappTray.available: boolean\nappTray.set(options: TrayOptions | null): void',
     params: [
       {
         name: "options.icon",
@@ -5263,7 +5264,7 @@ const taskbar = section("Taskbar and dock", [
       {
         title: "A tray icon that reopens the window",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 if (appTray.available) {
   appTray.set({

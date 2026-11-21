@@ -47,7 +47,7 @@ appHaptics.stop(pointerId: number): boolean`,
       {
         title: "Choose feedback for a gesture",
         lang: "ts",
-        code: `import { appHaptics } from "@skathi-native/runtime";
+        code: `import { appHaptics } from "skathi:app";
 
 const button = document.querySelector<HTMLButtonElement>("#save")!;
 button.addEventListener("pointerenter", e => {
@@ -60,7 +60,7 @@ button.addEventListener("click", () => {
       {
         title: "Feel a grid snap",
         lang: "ts",
-        code: `import { appHaptics } from "@skathi-native/runtime";
+        code: `import { appHaptics } from "skathi:app";
 
 function onSnap(event: PointerEvent) {
   appHaptics.perform("alignment", { pointerId: event.pointerId, when: "next-frame" });

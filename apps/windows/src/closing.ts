@@ -1,5 +1,5 @@
 import { watch } from "vue";
-import { appLaunch, appTray, appWindow } from "@skathi-native/runtime";
+import { appLaunch, appTray, appWindow } from "skathi:app";
 import { background, draft, go, saveDraft } from "./store";
 
 function onCloseRequested(e: Event) {

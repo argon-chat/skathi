@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { appWindow, SkWindow } from "@skathi-native/runtime/svelte";
+  import { SkWindow } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   let findOpen = $state(false);
   let findFocused = $state(false);

@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 /** Which page is shown. Bumping `key` remounts it with fresh state. */
 export const nav = reactive({ id: "windows/state-verbs", key: 0 });

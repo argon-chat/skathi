@@ -1,4 +1,5 @@
-import { appFiles, createApp, defineComponent, h, ref } from "@skathi-native/runtime";
+import { createApp, defineComponent, h, ref } from "@skathi-native/runtime";
+import { appFiles } from "skathi:app";
 import { useDropZone } from "@vueuse/core";
 
 const VueDrop = defineComponent({

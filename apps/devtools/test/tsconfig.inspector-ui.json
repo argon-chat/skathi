@@ -22,6 +22,7 @@
     "../src/effects-model.ts",
     "../src/inspector-model.ts",
     "../../../packages/runtime/src/protocol.d.ts",
+    "../../../packages/runtime/src/std.d.ts",
     "../../../packages/runtime/src/engine.d.ts",
     "../../../packages/runtime/src/indexeddb.d.ts",
     "../../../packages/runtime/env.d.ts"

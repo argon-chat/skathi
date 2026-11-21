@@ -35,7 +35,7 @@ appLaunch.addEventListener("launch", listener)`,
       {
         title: "Open the files the app was started with, and later ones",
         lang: "ts",
-        code: `import { appLaunch, appWindow } from "@skathi-native/runtime";
+        code: `import { appLaunch, appWindow } from "skathi:app";
 import type { SkLaunchEvent } from "@skathi-native/runtime";
 
 export function handleLaunches(open: (path: string) => void): void {
@@ -70,7 +70,7 @@ export function handleLaunches(open: (path: string) => void): void {
       {
         title: "Read a --profile option",
         lang: "ts",
-        code: `import { appLaunch } from "@skathi-native/runtime";
+        code: `import { appLaunch } from "skathi:app";
 
 const at = appLaunch.argv.indexOf("--profile");
 export const profile = (at >= 0 && appLaunch.argv[at + 1]) || "default";`,
@@ -96,7 +96,8 @@ export const profile = (at >= 0 && appLaunch.argv[at + 1]) || "default";`,
       {
         title: "Route a deep link",
         lang: "ts",
-        code: `import { appLaunch, type SkLaunchEvent } from "@skathi-native/runtime";
+        code: `import type { SkLaunchEvent } from "@skathi-native/runtime";
+import { appLaunch } from "skathi:app";
 
 function route(link: string | null, go: (path: string) => void): void {
   if (!link || !URL.canParse(link)) return;
@@ -136,7 +137,7 @@ export function deepLinks(go: (path: string) => void): void {
       {
         title: "Say how the app was started",
         lang: "ts",
-        code: `import { appLaunch } from "@skathi-native/runtime";
+        code: `import { appLaunch } from "skathi:app";
 
 console.log(appLaunch.singleInstance ? "Single instance: later launches come here." : "Running as a separate instance.");`,
       },
@@ -177,7 +178,8 @@ interface SkLaunchEvent extends Event {
         lang: "vue",
         code: `<script setup lang="ts">
 import { onUnmounted, ref } from "vue";
-import { appLaunch, appWindow, type SkLaunchEvent } from "@skathi-native/runtime";
+import type { SkLaunchEvent } from "@skathi-native/runtime";
+import { appLaunch, appWindow } from "skathi:app";
 
 const opened = ref<string[]>([]);
 function onLaunch(event: Event) {
@@ -222,7 +224,7 @@ onUnmounted(() => appLaunch.removeEventListener("launch", onLaunch));
       {
         title: "An opt-in link handler",
         lang: "ts",
-        code: `import { appLaunch } from "@skathi-native/runtime";
+        code: `import { appLaunch } from "skathi:app";
 
 export function setLinkHandler(on: boolean): boolean {
   if (on) appLaunch.registerProtocol("notes");
@@ -257,7 +259,7 @@ export function setLinkHandler(on: boolean): boolean {
       {
         title: "Clean up a development registration",
         lang: "ts",
-        code: `import { appLaunch } from "@skathi-native/runtime";
+        code: `import { appLaunch } from "skathi:app";
 
 if (appLaunch.unregisterProtocol("notes")) console.log("notes:// no longer opens this build.");`,
       },
@@ -282,7 +284,7 @@ if (appLaunch.unregisterProtocol("notes")) console.log("notes:// no longer opens
         lang: "vue",
         code: `<script setup lang="ts">
 import { ref } from "vue";
-import { appLaunch } from "@skathi-native/runtime";
+import { appLaunch } from "skathi:app";
 
 const registered = ref(appLaunch.isProtocolRegistered("notes"));
 function toggle() {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef } from "vue";
-import { appHaptics } from "@skathi-native/runtime";
+import { appHaptics } from "skathi:app";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
 

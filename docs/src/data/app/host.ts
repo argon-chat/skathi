@@ -130,7 +130,7 @@ appHost.off(event: string, handler: (data: unknown) => void): void`,
       {
         title: "Show embedder-only settings",
         lang: "ts",
-        code: `import { appHost } from "@skathi-native/runtime";
+        code: `import { appHost } from "skathi:app";
 
 export const embedded = appHost.available;`,
       },

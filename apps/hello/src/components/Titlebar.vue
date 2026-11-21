@@ -3,7 +3,7 @@
 // HTMIN/HTMAX/HTCLOSE, which is what buys the Windows 11 SNAP LAYOUTS flyout on hover over the
 // maximize button.
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const hostControls = ref(Boolean(appWindow.chrome.hostControls));
 const maximized = ref(appWindow.isMaximized());

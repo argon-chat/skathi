@@ -18,7 +18,8 @@ A Skathi app has one JavaScript realm, one Vue or Svelte app and one element tre
 [`appWindow`](/window-api/app-window/) always addresses the main window, even when the code runs from an event handler inside a pop-out. The same is true of the web globals: `innerWidth`, `screenX`, `devicePixelRatio`, `screen`, `matchMedia()` and `document.title` all describe the main window.
 
 ```ts
-import { appWindow, getCurrentWindow } from "@skathi-native/runtime";
+import { getCurrentWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 appWindow.title = "Notes";
 console.log(getCurrentWindow() === appWindow);

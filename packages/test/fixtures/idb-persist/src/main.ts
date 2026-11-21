@@ -1,4 +1,5 @@
-import { appLaunch, appStorage, createApp, h, onMounted, ref } from "@skathi-native/runtime";
+import { createApp, h, onMounted, ref } from "@skathi-native/runtime";
+import { appLaunch, appStorage } from "skathi:app";
 
 const req = <T>(q: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {

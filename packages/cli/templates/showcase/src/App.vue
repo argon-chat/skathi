@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appDevtools } from "@skathi-native/runtime";
+import { appDevtools } from "skathi:app";
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 import FullWindow from "./components/FullWindow.vue";

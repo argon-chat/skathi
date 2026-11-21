@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { appWindow, SkWindow, type SkWindowBounds } from "@skathi-native/runtime/svelte";
+  import { SkWindow, type SkWindowBounds } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   const colors = ["#e5484d", "#f76b15", "#ffc53d", "#30a46c", "#0090ff", "#8e4ec6"];
   let ink = $state("#0090ff");

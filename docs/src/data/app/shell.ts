@@ -34,7 +34,7 @@ appShell.trashItem(path: string): Promise<void>`,
       {
         title: "Open the log folder from a Help menu",
         lang: "ts",
-        code: `import { appShell, appStorage } from "@skathi-native/runtime";
+        code: `import { appShell, appStorage } from "skathi:app";
 
 export async function openLogs(): Promise<void> {
   try {
@@ -74,7 +74,7 @@ export async function openLogs(): Promise<void> {
         title: "Open a link in the default browser",
         lang: "vue",
         code: `<script setup lang="ts">
-import { appShell } from "@skathi-native/runtime";
+import { appShell } from "skathi:app";
 
 const props = defineProps<{ href: string }>();
 </script>
@@ -120,7 +120,8 @@ const props = defineProps<{ href: string }>();
       {
         title: "Open a file the user just exported",
         lang: "ts",
-        code: `import { appShell, type AppDesktopError } from "@skathi-native/runtime";
+        code: `import type { AppDesktopError } from "@skathi-native/runtime";
+import { appShell } from "skathi:app";
 
 export async function openExport(path: string): Promise<string | null> {
   try {
@@ -161,7 +162,7 @@ export async function openExport(path: string): Promise<string | null> {
       {
         title: "Reveal a download",
         lang: "ts",
-        code: `import { appShell } from "@skathi-native/runtime";
+        code: `import { appShell } from "skathi:app";
 
 export function reveal(path: string): void {
   appShell.showItemInFolder(path).catch((error) => console.warn("Cannot show", path, error));
@@ -190,7 +191,8 @@ export function reveal(path: string): void {
       {
         title: "Delete an attachment with a way back",
         lang: "ts",
-        code: `import { appShell, type AppDesktopError } from "@skathi-native/runtime";
+        code: `import type { AppDesktopError } from "@skathi-native/runtime";
+import { appShell } from "skathi:app";
 
 export async function removeAttachment(path: string): Promise<"trashed" | "kept"> {
   try {

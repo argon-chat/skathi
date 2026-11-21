@@ -2,7 +2,7 @@
 // Both are incremented once per mount; `localStorage` remembers across a restart of the process
 // and `sessionStorage` does not.
 import { onMounted, ref } from "vue";
-import { appStorage } from "@skathi-native/runtime";
+import { appStorage } from "skathi:app";
 
 defineOptions({ name: "StoragePage" });
 

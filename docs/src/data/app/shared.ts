@@ -70,5 +70,4 @@ export function section(category: Category, drafts: readonly Draft[]): AppEntry[
   });
 }
 
-export const RUNTIME = "@skathi-native/runtime";
-export const importLine = (...names: string[]): string => `import { ${names.join(", ")} } from "${RUNTIME}";`;
+export const importLine = (...names: string[]): string => `import { ${names.join(", ")} } from "skathi:app";`;

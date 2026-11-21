@@ -1,4 +1,4 @@
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 interface Saved {
   x: number;

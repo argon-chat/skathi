@@ -25,7 +25,7 @@ export const tray = section("Tray", [
       {
         title: "Keep a sync app in the tray",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 let paused = false;
 
@@ -72,7 +72,7 @@ if (appTray.available) renderTray();`,
       {
         title: "Offer hide-to-tray only where a tray exists",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 appWindow.addEventListener("close-requested", (event) => {
   if (!appTray.available) return;
@@ -130,7 +130,7 @@ appWindow.addEventListener("close-requested", (event) => {
       {
         title: "Show unread state in the tooltip",
         lang: "ts",
-        code: `import { appTray, appWindow } from "@skathi-native/runtime";
+        code: `import { appTray, appWindow } from "skathi:app";
 
 export function showUnread(count: number): void {
   if (!appTray.available) return;
@@ -179,7 +179,8 @@ interface TrayPixels {
       {
         title: "Draw a status dot in code",
         lang: "ts",
-        code: `import { appTray, type TrayPixels } from "@skathi-native/runtime";
+        code: `import type { TrayPixels } from "@skathi-native/runtime";
+import { appTray } from "skathi:app";
 
 function dot(rgb: [number, number, number], size = 32): TrayPixels {
   const data = new Uint8ClampedArray(size * size * 4);
@@ -199,7 +200,7 @@ export function setOnline(online: boolean): void {
       {
         title: "A monochrome glyph that follows the theme",
         lang: "ts",
-        code: `import { appTray } from "@skathi-native/runtime";
+        code: `import { appTray } from "skathi:app";
 
 const glyph =
   "data:image/svg+xml," +
@@ -243,7 +244,8 @@ type TrayMenuItem =
       {
         title: "A status submenu and a conditional item",
         lang: "ts",
-        code: `import { appTray, type TrayMenuEntry } from "@skathi-native/runtime";
+        code: `import type { TrayMenuEntry } from "@skathi-native/runtime";
+import { appTray } from "skathi:app";
 
 type Status = "online" | "away" | "busy";
 

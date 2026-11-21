@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { appWindow, type SkWindowBounds } from "@skathi-native/runtime";
+import type { SkWindowBounds } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import Icon from "../components/Icon.vue";
 import PopWindow from "../components/PopWindow.vue";
 import Scenario from "../components/Scenario.vue";

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { appWindow, SkWindow } from "@skathi-native/runtime";
+import { SkWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const findOpen = ref(false);
 const findFocused = ref(false);

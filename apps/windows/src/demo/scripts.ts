@@ -1,4 +1,4 @@
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import { background, draft } from "../store";
 import { centerOf, click, hide, mainLayer, moveTo, pressKey, showAt, sleep, type Point } from "./cursor";
 

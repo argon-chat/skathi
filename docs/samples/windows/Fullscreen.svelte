@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appWindow } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   function toggleFullscreen() {
     if (document.fullscreenElement) void document.exitFullscreen();

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { appDevtools, appHost, appLaunch, appShell, appStorage, type SkLaunchEvent } from "@skathi-native/runtime";
+import type { SkLaunchEvent } from "@skathi-native/runtime";
+import { appDevtools, appHost, appLaunch, appShell, appStorage } from "skathi:app";
 import { onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

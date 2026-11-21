@@ -26,7 +26,7 @@ After `pagehide`, every window of the app hides at once, pop-outs close, and the
 [`close-requested`](/window-api/event-close-requested/) is the event to build on. It fires before anything is torn down, and its `preventDefault()` works without the sticky-activation rule browsers apply to `beforeunload`, so an app the user has not touched yet can still hide instead of closing.
 
 ```ts
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 appWindow.addEventListener("close-requested", (e) => {
   if (hasUnsavedWork()) e.preventDefault();

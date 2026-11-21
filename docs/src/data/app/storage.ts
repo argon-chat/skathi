@@ -33,7 +33,8 @@ appStorage.flush(): boolean`,
       {
         title: "Encrypt the app's data from the first run",
         lang: "ts",
-        code: `import { appStorage, createApp } from "@skathi-native/runtime";
+        code: `import { createApp } from "@skathi-native/runtime";
+import { appStorage } from "skathi:app";
 import App from "./App.vue";
 
 if (!appStorage.encrypted) appStorage.setStorageFolder(appStorage.folder, { encrypted: true });
@@ -65,7 +66,7 @@ createApp(App).mount();`,
         title: "Show where the data lives",
         lang: "vue",
         code: `<script setup lang="ts">
-import { appShell, appStorage } from "@skathi-native/runtime";
+import { appShell, appStorage } from "skathi:app";
 </script>
 
 <template>
@@ -94,7 +95,7 @@ import { appShell, appStorage } from "@skathi-native/runtime";
       {
         title: "A privacy setting",
         lang: "ts",
-        code: `import { appStorage } from "@skathi-native/runtime";
+        code: `import { appStorage } from "skathi:app";
 
 export function setEncrypted(on: boolean): boolean {
   if (appStorage.encrypted !== on) appStorage.setStorageFolder(appStorage.folder, { encrypted: on });
@@ -155,7 +156,7 @@ readonly appStorage.kinds: string[] // ["APPDATA", "LOCALAPPDATA", "TEMP", "DOCU
       {
         title: "Export into Documents",
         lang: "ts",
-        code: `import { appShell, appStorage } from "@skathi-native/runtime";
+        code: `import { appShell, appStorage } from "skathi:app";
 
 export async function revealExport(fileName: string): Promise<void> {
   const folder = appStorage.getUserFolder("DOCUMENTS", "Notes exports");
@@ -203,7 +204,7 @@ export async function revealExport(fileName: string): Promise<void> {
       {
         title: "Keep the data in the folder the app was started from",
         lang: "ts",
-        code: `import { appLaunch, appStorage } from "@skathi-native/runtime";
+        code: `import { appLaunch, appStorage } from "skathi:app";
 
 if (appLaunch.argv.includes("--portable")) {
   appStorage.setStorageFolder(\`\${appLaunch.cwd}/data\`);
@@ -252,7 +253,7 @@ interface StorageInfo {
         lang: "vue",
         code: `<script setup lang="ts">
 import { ref } from "vue";
-import { appStorage } from "@skathi-native/runtime";
+import { appStorage } from "skathi:app";
 
 const info = ref(appStorage.info());
 </script>
@@ -287,7 +288,7 @@ const info = ref(appStorage.info());
       {
         title: "Save before handing off to an updater",
         lang: "ts",
-        code: `import { appShell, appStorage } from "@skathi-native/runtime";
+        code: `import { appShell, appStorage } from "skathi:app";
 
 export async function runInstaller(path: string): Promise<void> {
   localStorage.setItem("lastVersionPrompt", new Date().toISOString());

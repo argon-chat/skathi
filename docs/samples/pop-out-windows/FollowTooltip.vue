@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { appWindow, SkWindow, type SkWindowTarget } from "@skathi-native/runtime";
+import { SkWindow, type SkWindowTarget } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 type Rect = { x: number; y: number; width: number; height: number };
 type Overlay = { mapFromMain(target: SkWindowTarget | null): Rect | null };

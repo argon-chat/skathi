@@ -1,4 +1,5 @@
-import { appWindow, createApp, h, onMounted, ref } from "@skathi-native/runtime";
+import { createApp, h, onMounted, ref } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 type Kind = "webgpu" | "2d" | "iframe";
 

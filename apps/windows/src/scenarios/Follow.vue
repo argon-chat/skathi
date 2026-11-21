@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import Icon from "../components/Icon.vue";
 import PopWindow from "../components/PopWindow.vue";
 import Scenario from "../components/Scenario.vue";

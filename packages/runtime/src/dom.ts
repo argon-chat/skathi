@@ -17,10 +17,30 @@ import "./runtime/document";
 export { appRoot, ensureDocumentRoot } from "./runtime/root";
 /** @internal The Svelte renderer shares native node registries with the host's runtime module. */
 export const svelteNodeOps = { nodeOps, detachNode, looseCreated, patchProp };
-export { appCapture, appLaunch, appPermissions, appShell, appStorage } from "./appapi";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appCapture,
+  /** @deprecated Import from "skathi:app". */
+  appLaunch,
+  /** @deprecated Import from "skathi:app". */
+  appPermissions,
+  /** @deprecated Import from "skathi:app". */
+  appShell,
+  /** @deprecated Import from "skathi:app". */
+  appStorage,
+} from "./appapi";
 export type { AppDesktopError, CapturePermission, CaptureSource, ScreenCaptureSource, SkLaunchEvent } from "./appapi";
-export { appWindow, defineWindow, getCurrentWindow, trackWindowReads } from "./runtime/window";
-export { appDevtools } from "./devtools";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appWindow,
+  defineWindow,
+  getCurrentWindow,
+  trackWindowReads,
+} from "./runtime/window";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appDevtools,
+} from "./devtools";
 export type { DevtoolsInfo } from "./devtools";
 
 // Before any app code, so module-scope theme code (`documentElement.classList.add("dark")`) writes to the real root.
@@ -54,14 +74,33 @@ export type {
 } from "./skwindow";
 
 // `appHost`: functions and events of a program embedding Skathi as a library; inert in the exe.
-export { appHost } from "./apphost";
-export { appTray } from "./tray";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appHost,
+} from "./apphost";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appTray,
+} from "./tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";
-export { appHaptics } from "./haptics";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appHaptics,
+} from "./haptics";
 export type { AppHaptics, HapticOptions, HapticPattern, HapticTrigger } from "./haptics";
-export { appFiles, type AppFiles } from "./files";
-export { appHotkeys } from "./hotkeys";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appFiles,
+  type AppFiles,
+} from "./files";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appHotkeys,
+} from "./hotkeys";
 export type { AppHotkeys, HotkeyBinding, HotkeyButton, HotkeyChord, HotkeyEvent, HotkeyStatus } from "./hotkeys";
-export { appLocale } from "./locale";
+export {
+  /** @deprecated Import from "skathi:app". */
+  appLocale,
+} from "./locale";
 export type { AppLocale, MessageArgs, Messages } from "./locale";
 export type { AppHost, AppHostError } from "./apphost";

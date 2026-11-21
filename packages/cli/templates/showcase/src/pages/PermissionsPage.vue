@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appPermissions } from "@skathi-native/runtime";
+import { appPermissions } from "skathi:app";
 import { onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

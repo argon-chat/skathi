@@ -1,5 +1,6 @@
 // The tray icon and the global hotkey outlive the page that turns them on, so their state lives here.
-import { appHotkeys, appTray, appWindow, type HotkeyChord, type TrayPixels } from "@skathi-native/runtime";
+import type { HotkeyChord, TrayPixels } from "@skathi-native/runtime";
+import { appHotkeys, appTray, appWindow } from "skathi:app";
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 import { productName } from "../product";

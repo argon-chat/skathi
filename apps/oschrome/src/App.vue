@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 // engine.d.ts types `navigator` as optional; under sk-app it is installed before this module
 // evaluates.

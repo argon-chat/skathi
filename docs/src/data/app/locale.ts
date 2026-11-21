@@ -33,7 +33,8 @@ appLocale.t(key: string, args?: MessageArgs): string`,
         title: "A small i18n composable",
         lang: "ts",
         code: `import { computed, ref } from "vue";
-import { appLocale, type MessageArgs } from "@skathi-native/runtime";
+import type { MessageArgs } from "@skathi-native/runtime";
+import { appLocale } from "skathi:app";
 
 appLocale.define({
   en: { "inbox.title": "Inbox", "inbox.unread": "{count} unread" },
@@ -87,7 +88,8 @@ type Messages = Readonly<Record<string, Readonly<Record<string, string>>>>; // {
       {
         title: "Load catalogs shipped with the app",
         lang: "ts",
-        code: `import { appLocale, type Messages } from "@skathi-native/runtime";
+        code: `import type { Messages } from "@skathi-native/runtime";
+import { appLocale } from "skathi:app";
 import en from "./locales/en.json";
 import fr from "./locales/fr.json";
 
@@ -96,7 +98,7 @@ appLocale.define({ en, fr } satisfies Messages);`,
       {
         title: "Reword the SDK's microphone prompt",
         lang: "ts",
-        code: `import { appLocale } from "@skathi-native/runtime";
+        code: `import { appLocale } from "skathi:app";
 
 appLocale.define({
   en: { "sk.consent.microphone.title": "Let {app} hear you in calls?" },
@@ -138,7 +140,7 @@ type MessageArgs = Readonly<Record<string, string | number>>;`,
       {
         title: "Plural by key",
         lang: "ts",
-        code: `import { appLocale } from "@skathi-native/runtime";
+        code: `import { appLocale } from "skathi:app";
 
 export function unread(count: number): string {
   const key = count === 1 ? "inbox.unread.one" : "inbox.unread.other";
@@ -170,7 +172,7 @@ export function unread(count: number): string {
         title: "A language menu in Svelte",
         lang: "svelte",
         code: `<script lang="ts">
-  import { appLocale } from "@skathi-native/runtime";
+  import { appLocale } from "skathi:app";
 
   appLocale.language = localStorage.getItem("language");
   let current = $state(appLocale.resolved);
@@ -211,7 +213,7 @@ export function unread(count: number): string {
       {
         title: "Format dates in the app's language",
         lang: "ts",
-        code: `import { appLocale } from "@skathi-native/runtime";
+        code: `import { appLocale } from "skathi:app";
 
 export const formatDay = (date: Date) =>
   new Intl.DateTimeFormat(appLocale.resolved, { weekday: "long", day: "numeric", month: "long" }).format(date);`,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const note = ref(localStorage.getItem("note") ?? "");
 const save = () => localStorage.setItem("note", note.value);

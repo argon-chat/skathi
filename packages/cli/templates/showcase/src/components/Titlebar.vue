@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // sk.config.json sets "titleBarStyle": "hidden", so the app paints its own caption: `window-drag: move` makes the
 // strip drag the window, and `--window-control` on each button gives it the OS behaviour (snap layouts on maximize).
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import { onMounted, onUnmounted, ref } from "vue";
 import { productName } from "../product";
 

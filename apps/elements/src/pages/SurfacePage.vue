@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { appHost } from "@skathi-native/runtime";
+import { appHost } from "skathi:app";
 
 const PERIOD = 8;
 const size = ref("");

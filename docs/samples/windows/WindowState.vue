@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 // #region state
 const state = computed(() => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appWindow } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   const STATE_EVENTS = ["maximize", "unmaximize", "minimize", "restore", "fullscreenchange", "move"];
   let log = $state<string[]>([]);

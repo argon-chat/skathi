@@ -1,12 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import {
-    appWindow,
-    mount,
-    SkWindow,
-    type SkWindowExports,
-    type SkWindowMetrics,
-  } from "@skathi-native/runtime/svelte";
+  import { mount, SkWindow, type SkWindowExports, type SkWindowMetrics } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
   import Extra from "./Extra.svelte";
 
   let count = $state(0);

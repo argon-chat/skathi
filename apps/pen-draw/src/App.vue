@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { appHaptics } from "@skathi-native/runtime";
+import { appHaptics } from "skathi:app";
 
 const GRID = 32;
 const BARREL = 2;

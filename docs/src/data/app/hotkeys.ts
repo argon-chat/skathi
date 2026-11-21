@@ -36,7 +36,7 @@ appHotkeys.restart(): boolean`,
       {
         title: "Push to talk on F9",
         lang: "ts",
-        code: `import { appHotkeys } from "@skathi-native/runtime";
+        code: `import { appHotkeys } from "skathi:app";
 
 const F9 = 0x78;
 
@@ -103,7 +103,8 @@ interface HotkeyBinding {
         lang: "vue",
         code: `<script setup lang="ts">
 import { ref, watch } from "vue";
-import { appHotkeys, type HotkeyBinding } from "@skathi-native/runtime";
+import type { HotkeyBinding } from "@skathi-native/runtime";
+import { appHotkeys } from "skathi:app";
 
 const CTRL = 0xa2;
 const SHIFT = 0xa0;
@@ -208,7 +209,7 @@ interface HotkeyEvent {
         lang: "vue",
         code: `<script setup lang="ts">
 import { onUnmounted, ref } from "vue";
-import { appHotkeys } from "@skathi-native/runtime";
+import { appHotkeys } from "skathi:app";
 
 const talking = ref(false);
 const stop = appHotkeys.onFired((event) => {
@@ -225,7 +226,7 @@ onUnmounted(stop);
         title: "The same in Svelte",
         lang: "svelte",
         code: `<script lang="ts">
-  import { appHotkeys } from "@skathi-native/runtime";
+  import { appHotkeys } from "skathi:app";
 
   let talking = $state(false);
   $effect(() =>
@@ -267,7 +268,8 @@ onUnmounted(stop);
         lang: "vue",
         code: `<script setup lang="ts">
 import { ref } from "vue";
-import { appHotkeys, type HotkeyChord } from "@skathi-native/runtime";
+import type { HotkeyChord } from "@skathi-native/runtime";
+import { appHotkeys } from "skathi:app";
 
 const emit = defineEmits<{ change: [chord: HotkeyChord] }>();
 const recording = ref(false);
@@ -317,7 +319,7 @@ async function record() {
         lang: "vue",
         code: `<script setup lang="ts">
 import { onUnmounted } from "vue";
-import { appHotkeys } from "@skathi-native/runtime";
+import { appHotkeys } from "skathi:app";
 
 onUnmounted(() => appHotkeys.cancelCapture());
 </script>
@@ -356,7 +358,7 @@ interface HotkeyStatus {
       {
         title: "Tell the user why shortcuts do nothing",
         lang: "ts",
-        code: `import { appHotkeys } from "@skathi-native/runtime";
+        code: `import { appHotkeys } from "skathi:app";
 
 export function hotkeyProblem(): string | null {
   const status = appHotkeys.status();
@@ -390,7 +392,7 @@ export function hotkeyProblem(): string | null {
       {
         title: "Grant, then restart",
         lang: "ts",
-        code: `import { appHotkeys } from "@skathi-native/runtime";
+        code: `import { appHotkeys } from "skathi:app";
 
 export async function enableGlobalShortcuts(): Promise<boolean> {
   if (appHotkeys.requestAccessibility()) return appHotkeys.restart();
@@ -423,7 +425,7 @@ export async function enableGlobalShortcuts(): Promise<boolean> {
       {
         title: "A retry button",
         lang: "ts",
-        code: `import { appHotkeys } from "@skathi-native/runtime";
+        code: `import { appHotkeys } from "skathi:app";
 
 export function retryHotkeys(): string | null {
   try {

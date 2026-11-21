@@ -147,7 +147,7 @@ narrow.addEventListener("change", (event) => applyLayout(event.matches));`,
         lang: "vue",
         code: `<script setup lang="ts">
 import { ref, watch } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const theme = ref(appWindow.theme);
 watch(theme, (value) => (appWindow.theme = value));

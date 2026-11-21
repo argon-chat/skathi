@@ -1,6 +1,6 @@
 // The recorder's handle: `globalThis.__demo`. A clip is `reset()`, then a scripted `play(id)`.
 // Demo mode (the drawn cursor) is on with the `--demo` launch argument or `__demo.enable()`.
-import { appLaunch, appWindow } from "@skathi-native/runtime";
+import { appLaunch, appWindow } from "skathi:app";
 import { scenarioById, scenarios } from "../scenarios";
 import { background, go, leaveCompact, nav, resetDraft, titleBar } from "../store";
 import { demo, hide, pointer, sleep } from "./cursor";

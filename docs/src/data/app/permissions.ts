@@ -62,7 +62,7 @@ appPermissions.addEventListener("change", listener)`,
         lang: "vue",
         code: `<script setup lang="ts">
 import { onUnmounted, ref } from "vue";
-import { appPermissions } from "@skathi-native/runtime";
+import { appPermissions } from "skathi:app";
 
 const rows = ref(appPermissions.list());
 const refresh = () => (rows.value = appPermissions.list());
@@ -121,7 +121,7 @@ onUnmounted(() => appPermissions.removeEventListener("change", refresh));
       {
         title: "Only show the call button when it can work",
         lang: "ts",
-        code: `import { appPermissions } from "@skathi-native/runtime";
+        code: `import { appPermissions } from "skathi:app";
 
 export function canJoinWithAudio(): boolean {
   const state = appPermissions.query("microphone");
@@ -156,7 +156,7 @@ interface PermissionRow {
       {
         title: "Log what the app may use",
         lang: "ts",
-        code: `import { appPermissions } from "@skathi-native/runtime";
+        code: `import { appPermissions } from "skathi:app";
 
 for (const row of appPermissions.list()) {
   if (row.state !== "unsupported") console.log(\`\${row.name}: \${row.state}\`);
@@ -187,7 +187,7 @@ for (const row of appPermissions.list()) {
       {
         title: "Ask before a call",
         lang: "ts",
-        code: `import { appCapture, appPermissions } from "@skathi-native/runtime";
+        code: `import { appCapture, appPermissions } from "skathi:app";
 
 export async function ensureMicrophone(): Promise<string | null> {
   const state = await appPermissions.request("microphone");
@@ -218,7 +218,7 @@ export async function ensureMicrophone(): Promise<string | null> {
       {
         title: "React to the microphone being switched off",
         lang: "ts",
-        code: `import { appPermissions } from "@skathi-native/runtime";
+        code: `import { appPermissions } from "skathi:app";
 
 appPermissions.addEventListener("change", (event) => {
   const { name, state } = event as Event & { name: string; state: string };
@@ -245,7 +245,7 @@ appPermissions.addEventListener("change", (event) => {
       {
         title: "Build a settings list from the names",
         lang: "ts",
-        code: `import { appPermissions } from "@skathi-native/runtime";
+        code: `import { appPermissions } from "skathi:app";
 
 export const supported = appPermissions.names.filter((name) => appPermissions.query(name) !== "unsupported");`,
       },

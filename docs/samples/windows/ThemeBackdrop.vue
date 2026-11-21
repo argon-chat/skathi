@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const THEMES = ["system", "light", "dark"];
 const BACKDROPS = ["mica", "acrylic", "none"];

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appHotkeys, appTray } from "@skathi-native/runtime";
+import { appHotkeys, appTray } from "skathi:app";
 import { ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

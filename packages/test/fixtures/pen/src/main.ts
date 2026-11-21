@@ -1,4 +1,5 @@
-import { appHaptics, createApp, defineComponent, h } from "@skathi-native/runtime";
+import { createApp, defineComponent, h } from "@skathi-native/runtime";
+import { appHaptics } from "skathi:app";
 import "./pen.css";
 
 interface Move {

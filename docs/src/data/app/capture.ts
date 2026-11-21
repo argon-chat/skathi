@@ -30,7 +30,8 @@ appCapture.permissionHint(source: CaptureSource): string`,
         lang: "vue",
         code: `<script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { appCapture, type ScreenCaptureSource } from "@skathi-native/runtime";
+import type { ScreenCaptureSource } from "@skathi-native/runtime";
+import { appCapture } from "skathi:app";
 
 const emit = defineEmits<{ pick: [id: string] }>();
 const sources = ref<ScreenCaptureSource[]>([]);
@@ -119,7 +120,7 @@ interface ScreenCaptureSource {
       {
         title: "Pick the primary screen without asking",
         lang: "ts",
-        code: `import { appCapture } from "@skathi-native/runtime";
+        code: `import { appCapture } from "skathi:app";
 
 export async function primaryScreenId(): Promise<string | undefined> {
   const screens = await appCapture.getSources(["screen"], { thumbnailSize: { width: 0, height: 0 }, withIcons: false });
@@ -166,7 +167,7 @@ export async function primaryScreenId(): Promise<string | undefined> {
       {
         title: "Hand the picked source to the capture",
         lang: "ts",
-        code: `import { appCapture } from "@skathi-native/runtime";
+        code: `import { appCapture } from "skathi:app";
 
 export function choose(sourceId: string, withAudio: boolean): void {
   appCapture.setPendingSource(sourceId, withAudio);
@@ -203,7 +204,7 @@ interface CapturePermission {
       {
         title: "Grey out the share button",
         lang: "ts",
-        code: `import { appCapture } from "@skathi-native/runtime";
+        code: `import { appCapture } from "skathi:app";
 
 export const canShareScreen = () => appCapture.permission("screen_share").state !== "denied";`,
       },
@@ -233,7 +234,7 @@ export const canShareScreen = () => appCapture.permission("screen_share").state 
       {
         title: "Ask for screen recording, then explain",
         lang: "ts",
-        code: `import { appCapture } from "@skathi-native/runtime";
+        code: `import { appCapture } from "skathi:app";
 
 export async function askScreen(): Promise<string | null> {
   const state = await appCapture.requestPermission("screen_share");
@@ -274,7 +275,7 @@ export async function askScreen(): Promise<string | null> {
         title: "Show the hint under a denied permission",
         lang: "vue",
         code: `<script setup lang="ts">
-import { appCapture } from "@skathi-native/runtime";
+import { appCapture } from "skathi:app";
 
 const mic = appCapture.permission("microphone");
 const hint = mic.deniedBySystem ? appCapture.permissionHint("microphone") : "";

@@ -96,7 +96,7 @@ A Svelte drop zone uses the same events.
 | Read or write access       | `await item.getAsFileSystemHandle?.()`         | A file handle exposes `getFile()` and `createWritable()`. Close the writable to commit changes. A directory handle supports async iteration. |
 | A Rust module argument     | `skathi::HostFile`                             | A native module receives the host-created DOM `File` as a `PathBuf` in its `.0` field.                                                       |
 
-Use `import { appFiles } from "@skathi-native/runtime"`. Save a `File`, entry or handle promise during the drop listener. A retained `DataTransferItem` becomes unavailable after the synchronous event dispatch.
+Use `import { appFiles } from "skathi:app"`. Save a `File`, entry or handle promise during the drop listener. A retained `DataTransferItem` becomes unavailable after the synchronous event dispatch.
 
 ```ts
 async function walk(entry: FileSystemEntry, visit: (file: File) => void) {

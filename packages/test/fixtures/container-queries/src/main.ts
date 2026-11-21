@@ -1,4 +1,5 @@
-import { appWindow, createApp, defineComponent, h, onMounted } from "@skathi-native/runtime";
+import { createApp, defineComponent, h, onMounted } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import "./cq.css";
 
 const dom = document;

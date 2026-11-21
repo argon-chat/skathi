@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appHaptics } from "@skathi-native/runtime";
+import { appHaptics } from "skathi:app";
 import { ref } from "vue";
 import Card from "./Card.vue";
 

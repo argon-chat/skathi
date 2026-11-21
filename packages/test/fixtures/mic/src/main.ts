@@ -1,4 +1,5 @@
-import { appPermissions, createApp, h } from "@skathi-native/runtime";
+import { createApp, h } from "@skathi-native/runtime";
+import { appPermissions } from "skathi:app";
 
 const results: string[] = [];
 const listed: string[] = [];

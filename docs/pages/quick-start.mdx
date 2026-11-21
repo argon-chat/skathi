@@ -117,7 +117,7 @@ The template uses Svelte's DOM renderer. Svelte 5.59+ applications can opt into 
 
 Skathi renders both frameworks into one element tree with the same renderer, so styling, layout, web APIs and the window API are the same. What differs is how the app plugs into Skathi:
 
-- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount` and `SkWindow`, and importing it is what makes `appWindow` reads reactive in runes. The `app*` objects (`appWindow`, `appTray`, `appHotkeys`, `appStorage` and the rest) are the same in every framework: import them from `@skathi-native/runtime` or from `/svelte`, whichever you like.
+- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount` and `SkWindow`, and importing it is what makes `appWindow` reads reactive in runes. The `app*` objects (`appWindow`, `appTray`, `appHotkeys`, `appStorage` and the rest) are the same in every framework: import them from `skathi:app`. Since 0.7, importing them from `@skathi-native/runtime` or from `/svelte` still works but is deprecated.
 - **Mount with `mount(App)`.** Pass `props` as in Svelte's own `mount`. The target defaults to the document root. A later `mount(Component, { target })`, for example into a pop-out window, is unmounted together with the app when the dev host reloads the app.
 - **`<SkWindow>` takes callback props and bindings.** Events are `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`. `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale` read its values, and `bind:this` gives `mapFromMain()`. The [pop-out guide](/guides/pop-out-windows/) has both versions of every example.
 - **There is no `<Teleport>`.** Put a pop-out's content in the `<SkWindow>` children, or `mount` a component into the element `bind:el` gives you.
@@ -128,7 +128,7 @@ Skathi renders both frameworks into one element tree with the same renderer, so 
 
 Some parts are Vue-only:
 
-- `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime` in an app that has `vue` installed. Without it, `@skathi-native/runtime` is the DOM layer and the `app*` objects only.
+- `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime` in an app that has `vue` installed. Without it, `@skathi-native/runtime` is the DOM layer only.
 - The `showcase`, `weather` and `draw` templates use Vue. The showcase also uses the Vue libraries `vue-router` and `pinia`.
 - Of the [performance advisories](/guides/performance-advisories/), the wasted re-render and long list advisories watch Vue component updates. In a Svelte app only the host-writes advisory is reported, with a total instead of component names.
 

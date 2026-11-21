@@ -83,7 +83,7 @@ void computeMain(uint3 threadId : SV_DispatchThreadID)
 Add `title="…"` after the language to name the file in the toolbar. `focus=2-3` keeps those lines sharp and blurs the rest until the pointer is over the block; `{2}` highlights a line. Inside the code, a trailing `// [!code focus]`, `// [!code highlight]`, `// [!code ++]` or `// [!code --]` comment marks its line and is removed from the output.
 
 ```ts title="window.ts" focus=4-5
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 appWindow.addEventListener("resize", () => {
   const { width, height } = appWindow.getBounds();

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import { state, currentWindow, setTab } from "../store";
 
 const isMac = navigator.platform.startsWith("Mac");

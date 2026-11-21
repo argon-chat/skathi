@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const tabs = ref(["Inbox", "Drafts", "Archive"]);
 const active = ref("Inbox");

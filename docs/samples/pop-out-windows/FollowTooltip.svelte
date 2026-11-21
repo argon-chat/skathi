@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { appWindow, SkWindow, type SkWindowExports, type SkWindowRect } from "@skathi-native/runtime/svelte";
+  import { SkWindow, type SkWindowExports, type SkWindowRect } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   const isWindows = navigator.platform === "Win32";
   const tracks = Array.from({ length: 40 }, (_, i) => `Track ${i + 1}`);

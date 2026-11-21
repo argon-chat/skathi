@@ -29,7 +29,7 @@ appDevtools.onChange(listener: (enabled: boolean) => void): () => void`,
       {
         title: "A Developer menu",
         lang: "ts",
-        code: `import { appDevtools } from "@skathi-native/runtime";
+        code: `import { appDevtools } from "skathi:app";
 
 export const developerMenu = () =>
   appDevtools.available
@@ -61,7 +61,7 @@ export const developerMenu = () =>
       {
         title: "Turn the devtools off in production settings",
         lang: "ts",
-        code: `import { appDevtools } from "@skathi-native/runtime";
+        code: `import { appDevtools } from "skathi:app";
 
 if (localStorage.getItem("developerMode") !== "1") appDevtools.disable();`,
         note: "In the entry module, before the user can press F12.",
@@ -88,7 +88,7 @@ if (localStorage.getItem("developerMode") !== "1") appDevtools.disable();`,
         title: "A Help menu item",
         lang: "vue",
         code: `<script setup lang="ts">
-import { appDevtools } from "@skathi-native/runtime";
+import { appDevtools } from "skathi:app";
 </script>
 
 <template>
@@ -127,7 +127,7 @@ interface DevtoolsInfo {
       {
         title: "Print how to attach",
         lang: "ts",
-        code: `import { appDevtools } from "@skathi-native/runtime";
+        code: `import { appDevtools } from "skathi:app";
 
 const { enabled, port, pid } = appDevtools.info();
 if (enabled) console.log(\`devtools for process \${pid} on 127.0.0.1:\${port}\`);`,
@@ -155,7 +155,7 @@ if (enabled) console.log(\`devtools for process \${pid} on 127.0.0.1:\${port}\`)
         lang: "vue",
         code: `<script setup lang="ts">
 import { onUnmounted, ref } from "vue";
-import { appDevtools } from "@skathi-native/runtime";
+import { appDevtools } from "skathi:app";
 
 const on = ref(appDevtools.isEnabled());
 onUnmounted(appDevtools.onChange((enabled) => (on.value = enabled)));

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { appHaptics, type HapticOptions, type HapticPattern } from "@skathi-native/runtime";
+import type { HapticOptions, HapticPattern } from "@skathi-native/runtime";
+import { appHaptics } from "skathi:app";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import Card from "../components/Card.vue";
 import HapticCss from "../components/HapticCss.vue";

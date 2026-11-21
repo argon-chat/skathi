@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 const STATE_EVENTS = ["maximize", "unmaximize", "minimize", "restore", "fullscreenchange", "move"];
 const log = ref<string[]>([]);

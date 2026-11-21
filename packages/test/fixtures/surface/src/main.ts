@@ -1,4 +1,5 @@
-import { appHost, createApp, h, ref } from "@skathi-native/runtime";
+import { createApp, h, ref } from "@skathi-native/runtime";
+import { appHost } from "skathi:app";
 
 const events: string[] = [];
 const hiddenShown = ref(false);

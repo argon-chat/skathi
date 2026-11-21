@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appWindow } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   const tabs = $state(["Inbox", "Drafts", "Archive"]);
   let active = $state("Inbox");

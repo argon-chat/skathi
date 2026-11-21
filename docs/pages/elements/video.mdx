@@ -78,7 +78,7 @@ h1 {
 There is no autoplay policy, so a video plays without a user gesture, with sound or without. A video also keeps playing while it is hidden, scrolled away or in a minimized window. For a loop that is only decoration, pause it while the window is minimized:
 
 ```ts
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 
 export function pauseWhileMinimized(video: HTMLVideoElement) {
   appWindow.addEventListener("minimize", () => video.pause());

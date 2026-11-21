@@ -1,4 +1,5 @@
-import { appStorage, createApp, h, ref } from "@skathi-native/runtime";
+import { createApp, h, ref } from "@skathi-native/runtime";
+import { appStorage } from "skathi:app";
 
 const urls = ref<string[]>([]);
 let started = 0;

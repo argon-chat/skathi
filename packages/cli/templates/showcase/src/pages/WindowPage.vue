@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { appWindow, SkWindow } from "@skathi-native/runtime";
+import { SkWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

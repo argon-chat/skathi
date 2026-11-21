@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appWindow } from "@skathi-native/runtime/svelte";
+  import { appWindow } from "skathi:app";
 
   let note = $state(localStorage.getItem("note") ?? "");
   const save = () => localStorage.setItem("note", note);

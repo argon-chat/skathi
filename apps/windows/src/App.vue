@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 import CloseSheet from "./components/CloseSheet.vue";
 import CompactNotes from "./components/CompactNotes.vue";
 import Sidebar from "./components/Sidebar.vue";

@@ -1,6 +1,7 @@
 // A promise does not survive the eval round trip either, so `run()` records how each call SETTLED
 // into `results`, and the spec polls that.
-import { appShell, createApp, h, ref } from "@skathi-native/runtime";
+import { createApp, h, ref } from "@skathi-native/runtime";
+import { appShell } from "skathi:app";
 
 type Verb = "openExternal" | "openPath" | "showItemInFolder" | "trashItem";
 const results: string[] = [];

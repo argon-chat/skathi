@@ -1,4 +1,5 @@
-import { appLaunch, appShell, createApp, h, ref } from "@skathi-native/runtime";
+import { createApp, h, ref } from "@skathi-native/runtime";
+import { appLaunch, appShell } from "skathi:app";
 
 const opened: string[] = [];
 const record = {

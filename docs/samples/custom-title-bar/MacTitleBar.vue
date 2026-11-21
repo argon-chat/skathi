@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appWindow } from "@skathi-native/runtime";
+import { appWindow } from "skathi:app";
 </script>
 
 <template>

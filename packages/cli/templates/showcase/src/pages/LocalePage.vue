@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { appLocale } from "@skathi-native/runtime";
+import { appLocale } from "skathi:app";
 import { computed, ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";

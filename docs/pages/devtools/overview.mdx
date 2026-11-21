@@ -32,7 +32,7 @@ The inspector closes when the app quits.
 `appDevtools.open()` does what F12 does, for example from a Help menu:
 
 ```ts
-import { appDevtools } from "@skathi-native/runtime";
+import { appDevtools } from "skathi:app";
 
 export function openDevtools(): void {
   if (appDevtools.available) appDevtools.open();
