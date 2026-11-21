@@ -262,6 +262,51 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:text builds, reads, compares and searches strings",
+    async () => {
+      const app = await start();
+      const t = JSON.parse(String(await app.eval("__SK_TEST_STD__.text()")));
+      expect(t.builder).toEqual(["a😀1null\nx, 2, obj", 18]);
+      expect(t.cleared).toBe(0);
+      expect(t.writer).toBe("total: 3\na|b");
+      expect(t.reader).toEqual([["😀", "😀", 2, "b"], "", ["second", "third"], ["", "last", null, "end"]]);
+      expect(t.hunks).toEqual([
+        {
+          oldStart: 1,
+          oldLines: 3,
+          newStart: 1,
+          newLines: 4,
+          lines: [
+            { op: "equal", text: "one" },
+            { op: "delete", text: "two" },
+            { op: "insert", text: "2" },
+            { op: "equal", text: "three" },
+            { op: "insert", text: "four" },
+          ],
+        },
+      ]);
+      expect(t.unified).toBe("--- a.txt\n+++ b.txt\n@@ -1,3 +1,4 @@\n one\n-two\n+2\n three\n+four\n");
+      expect(t.same).toEqual([0, ""]);
+      expect(t.rebuilt).toBe("sitting 😀");
+      expect(t.chars.at(-1)).toEqual({ op: "equal", text: " 😀" });
+      expect(t.found).toEqual([
+        ["Она", 1],
+        ["кот", 2],
+      ]);
+      expect(t.words).toEqual([false, true, false]);
+      expect(t.glob).toEqual([true, true, false, true, ["b.ts"]]);
+      expect(t.errors.map((e: string) => e.split(":")[0])).toEqual([
+        "TypeError",
+        "TypeError",
+        "RangeError",
+        "TypeError",
+        "TypeError",
+      ]);
+    },
+    T,
+  );
+
+  test(
     "skathi:collections keeps bits, numbers and keyed values",
     async () => {
       const app = await start();

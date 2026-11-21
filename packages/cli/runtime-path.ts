@@ -45,6 +45,7 @@ export const STD_MODULES: readonly string[] = [
   "numeric",
   "os",
   "runtime",
+  "text",
   "time",
   "toml",
   "units",

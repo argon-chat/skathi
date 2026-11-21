@@ -36,6 +36,10 @@ declare module "skathi:runtime" {
   export * from "@skathi-native/runtime/std/runtime";
 }
 
+declare module "skathi:text" {
+  export * from "@skathi-native/runtime/std/text";
+}
+
 declare module "skathi:time" {
   export * from "@skathi-native/runtime/std/time";
 }

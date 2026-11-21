@@ -7,6 +7,7 @@ import { network } from "./network";
 import { numeric } from "./numeric";
 import { os } from "./os";
 import { runtime } from "./runtime";
+import { text } from "./text";
 import { categories, type Category, type StdEntry } from "./shared";
 import { time } from "./time";
 import { toml } from "./toml";
@@ -33,6 +34,8 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "Bytes to text and back: hex, Base32, Base64, the legacy text encodings `TextDecoder` knows and can also encode here, and MIME types by extension or content.",
   "skathi:ffi":
     "C functions of a library the app ships or the system has, called from JS without a Rust build. Only the libraries sk.config.json lists under `permissions.ffi` load. A fault in the library ends the app; for your own native code, write a [native module](/embedding/native-modules/).",
+  "skathi:text":
+    "Work on strings that is slow or long to write in JS: building text from many parts, reading it line by line, the difference between two texts, a search for many words at once, and glob patterns.",
   "skathi:time":
     "Durations as values, measuring elapsed time, deadlines that travel with a call, retry delays, rate limiting and a timer that does not drift.",
   "skathi:units":
@@ -51,6 +54,7 @@ export const entries: readonly StdEntry[] = [
   ...binary,
   ...encoding,
   ...ffi,
+  ...text,
   ...time,
   ...units,
   ...collections,

@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
+use sk_runtime::redjs::capi::JSClassRef;
 use sk_runtime::redjs::ffi::{RjsAbInfo, RjsTaInfo};
 use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::util::*;
@@ -322,3 +323,31 @@ pub(super) unsafe fn namespace(
     }
     object
 }
+
+pub(super) fn host_class<T>(cell: &std::sync::OnceLock<usize>, name: &str) -> JSClassRef {
+    *cell.get_or_init(|| unsafe { make_host_class::<T>(name) } as usize) as JSClassRef
+}
+
+/// A class whose instances carry `$ty`: its accessor, `$get`, and its maker, `$new`.
+macro_rules! host_state {
+    ($get:ident, $new:ident, $ty:ty, $cell:ident, $name:literal) => {
+        static $cell: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+        unsafe fn $get<'a>(g: *mut c_void, this: u64) -> Js<&'a mut $ty> {
+            match host_data::<$ty>(g, host_class::<$ty>(&$cell, $name), this) {
+                Some(state) => Ok(state),
+                None => type_error(g, concat!("this is not a ", $name)),
+            }
+        }
+
+        unsafe fn $new(g: *mut c_void, state: $ty) -> u64 {
+            host_create(
+                g,
+                host_class::<$ty>(&$cell, $name),
+                prototype(g, $name),
+                state,
+            )
+        }
+    };
+}
+pub(super) use host_state;

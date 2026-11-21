@@ -9,6 +9,7 @@ import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
 import { callbacks, ffi, threads, workers } from "./native";
 import { collections } from "./structures";
+import { text } from "./strings";
 
 const DOCUMENT = `title = "Skathi"
 big = 9007199254740993
@@ -72,6 +73,7 @@ Object.assign(globalThis, {
     encoding: () => JSON.stringify(encoding()),
     units: () => JSON.stringify(units()),
     collections: () => JSON.stringify(collections()),
+    text: () => JSON.stringify(text()),
     ffi: () => JSON.stringify(ffi()),
     callbacks: () => JSON.stringify(callbacks()),
     workersResult: null as string | null,

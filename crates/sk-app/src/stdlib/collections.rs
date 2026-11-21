@@ -3,9 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::sync::OnceLock;
 
-use sk_runtime::redjs::capi::JSClassRef;
 use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::util::*;
 
@@ -13,32 +11,6 @@ use super::support::{self, *};
 
 const MAX_BITS: usize = 1 << 32;
 const VALUES: &str = "skathi.values";
-
-fn host_class<T>(cell: &OnceLock<usize>, name: &str) -> JSClassRef {
-    *cell.get_or_init(|| unsafe { make_host_class::<T>(name) } as usize) as JSClassRef
-}
-
-macro_rules! host_state {
-    ($get:ident, $new:ident, $ty:ty, $cell:ident, $name:literal) => {
-        static $cell: OnceLock<usize> = OnceLock::new();
-
-        unsafe fn $get<'a>(g: *mut c_void, this: u64) -> Js<&'a mut $ty> {
-            match host_data::<$ty>(g, host_class::<$ty>(&$cell, $name), this) {
-                Some(state) => Ok(state),
-                None => type_error(g, concat!("this is not a ", $name)),
-            }
-        }
-
-        unsafe fn $new(g: *mut c_void, state: $ty) -> u64 {
-            host_create(
-                g,
-                host_class::<$ty>(&$cell, $name),
-                prototype(g, $name),
-                state,
-            )
-        }
-    };
-}
 
 unsafe fn index(g: *mut c_void, v: u64, len: usize, what: &str) -> Js<usize> {
     let i = count(g, v, what)?;

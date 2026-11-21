@@ -14,6 +14,7 @@ mod ffi;
 mod os;
 mod runtime;
 mod support;
+mod text;
 mod time;
 mod toml;
 mod units;
@@ -39,6 +40,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         collections::install(g, std);
         encoding::install(g, std);
         ffi::install(g, std);
+        text::install(g, std);
         time::install(g, std);
         units::install(g, std);
         if let Err(e) = toml::install(rt.ctx(), crate::js::Value(std)) {

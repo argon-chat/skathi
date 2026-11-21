@@ -91,6 +91,8 @@ gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/cr
 # `skathi:toml`. `preserve_order`: a parsed table keeps the document's key order, as `JSON.parse` does.
 encoding_rs = "0.8"
 toml = { version = "1.1", features = ["preserve_order"] }
+# `TextSearch` of `skathi:text`.
+aho-corasick = "1"
 sk-css = { path = "../sk-css", version = "0.7.0" }
 sk-effects = { path = "../sk-effects", version = "0.7.0" }
 sk-elements = { path = "../sk-elements", version = "0.7.0" }

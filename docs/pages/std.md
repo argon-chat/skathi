@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, time, units and collections."
+description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, strings, time, units and collections."
 section: Reference
 order: 6
 since: "0.7"
@@ -30,6 +30,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
 | [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `NativeCallback`          |
+| [`skathi:text`](#skathitext)               | `StringBuilder`, `StringReader`, `StringWriter`, `TextDiff`, `TextSearch`, `Glob`     |
 | [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
 | [`skathi:units`](#skathiunits)             | `DataSize`, `Frequency`, `Angle`                                                      |
 | [`skathi:collections`](#skathicollections) | `BitSet`, `BloomFilter`, `RingBuffer`, `DisjointSet`, `Trie`, `IntervalTree`          |
