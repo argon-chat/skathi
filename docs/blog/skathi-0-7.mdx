@@ -48,6 +48,12 @@ Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-t
   <Feature icon="terminal" title="Vite+ and tests" href="#vite-and-tests" tone="yellow">
     New apps build with Vite+; `@skathi-native/test` is on npm.
   </Feature>
+  <Feature icon="volume" title="Web Audio" href="#web-audio" tone="pink">
+    Delay, wave shaper, compressor, convolver and periodic waves.
+  </Feature>
+  <Feature icon="shapes" title="Two templates" href="#two-new-templates" tone="blue">
+    A drum machine in Svelte and a CHIP-8 emulator in Vue.
+  </Feature>
 </FeatureGrid>
 
 ## AOT on Apple Silicon
@@ -155,6 +161,37 @@ CPU pressure and the system's power profile reach CSS, JavaScript and shaders.
 
 `PressureObserver` reports the same states to script. A shader can declare a `[SkQuality] float` slot and draw three levels of detail; the host picks one from pressure, power mode and battery, and slows the effect's clock to 30 or 15 Hz on the lower two. `effect-quality` pins a tier for one element. The [adaptive effects guide](/guides/adaptive-effects/) has the table per platform.
 
+## Web Audio
+
+The audio graph gets the nodes a synthesizer or an effects chain needs: `DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode` and `PeriodicWave`, as factories on the context and as constructors.
+
+```ts
+const delay = context.createDelay(1);
+const feedback = context.createGain();
+delay.delayTime.value = 0.375;
+feedback.gain.value = 0.4;
+source.connect(delay).connect(feedback).connect(delay);
+delay.connect(context.destination);
+```
+
+- A feedback loop works with a `DelayNode` in it, as in the spec.
+- A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.
+- `suspend()` now stops `currentTime` as well as the output, and `resume()` goes on from the same time.
+- A window that is minimized or covered keeps its timers while an `AudioContext` plays, so a scheduler that looks a few tens of milliseconds ahead keeps time.
+
+The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser.
+
+## Two new templates
+
+`sk create` has two more finished apps to start from.
+
+- **`sequencer`**, in Svelte 5, is a drum machine: four patterns with accents and tracks of different lengths, a drive, an echo and a room on the mix. Its dials, keys, panel and meter are four shaders of its own, each with three levels of detail.
+- **`chip8`**, in Vue, is a CHIP-8 emulator with a debugger beside the screen: an assembler and a disassembler from one table, breakpoints, a trace of the last instructions. It is built on the `skathi:` modules, and a badge shows whether it runs under the JIT or from a native image.
+
+```sh
+bun create skathi my-app --template sequencer
+```
+
 ## Memory
 
 - **Images commit less.** An application image now runs with a compact memory profile: on Windows that is 367 to 378 MB less committed than the engine's own sizes, in pages the app never touched. `SK_AOT_MEMORY_PROFILE=default` restores them.
@@ -168,6 +205,16 @@ CPU pressure and the system's power profile reach CSS, JavaScript and shaders.
 - `field-sizing: content` for inputs, textareas and closed selects that grow with their text.
 - `text-box-trim` and `text-box-edge` to trim the space above and below text by font metrics.
 - `translate` and `rotate` as properties of their own, and `content-visibility`.
+- `image-rendering: pixelated` on a `<canvas>` scales it by nearest neighbour.
+- `top`, `left` and the other insets move only a positioned box, as in a browser. A rule that relied on them without `position` needs one.
+- `inherit` on a property that does not inherit is reported by `sk check` instead of being dropped silently.
+
+## Fixes worth knowing
+
+- **Vue.** `v-model` updates before an `@input` or `@change` handler on the same element runs, so the handler reads the new value.
+- **A failed entry module** in a packaged app opens a dialog with the error instead of an empty window.
+- **macOS.** `sk build --payload-only` signs the image containers it writes.
+- **`DataSize.format()`** prints bytes as `154 B`.
 
 ## Vite+ and tests
 
