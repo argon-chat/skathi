@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { normalizePath, type BuildOptions, type Plugin, type UserConfig } from "vite";
 import type { AotInputs } from "../aot-inputs";
+import { FRAMEWORK_FILE } from "../check/frameworks";
 import type { BuildStyles, ModuleGraph } from "../check/graph";
 import { collectAssets } from "../cli/assets";
 import { nativeSvelteRenderer } from "../cli/config";
@@ -281,7 +282,7 @@ export async function buildWithVite(options: NativeViteBuildOptions): Promise<vo
     const file = sourceFile(id);
     if (!file) continue;
     if (STYLE.test(file) || COMPONENT.test(file)) styles.add(file);
-    if (info.renderedLength && !STYLE.test(file)) modules.add(file);
+    if (info.renderedLength && FRAMEWORK_FILE.test(file) && !/[?&](?:raw|url)(?:&|$)/.test(id)) modules.add(file);
   }
   if (options.graphOut) {
     const map = chunk.map;

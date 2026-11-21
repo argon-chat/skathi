@@ -399,7 +399,12 @@ test("sk check and --aot-inputs see a typed source imported only by a Vite plugi
   const app = appWith({
     "sk.config.json": JSON.stringify({ name: "vite-graph-test", version: "1.0.0" }),
     "package.json": '{"type":"module"}',
-    "src/main.ts": 'import "virtual:bootstrap";',
+    "src/main.ts": `import "virtual:bootstrap";
+      import logo from "./logo.svg?url";
+      import example from "./example.ts?raw";
+      console.log(logo, example);`,
+    "src/logo.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    "src/example.ts": "this is displayed as text",
     "src/reachable.ts": 'export const timeout: number = 10; setTimeout("tick()", timeout);',
     "src/unreachable.ts": 'setTimeout("never()", 20);',
     "vite.config.mjs": `
@@ -414,6 +419,7 @@ test("sk check and --aot-inputs see a typed source imported only by a Vite plugi
   expect(checked.exitCode, checked.stdout.toString() + checked.stderr.toString()).toBe(0);
   const report = JSON.parse(checked.stdout.toString()) as CheckReport;
   expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "SK2003", file: "src/reachable.ts" }));
+  expect(report.diagnostics.some((d) => d.file === "src/example.ts")).toBe(false);
   expect(report.diagnostics.some((d) => d.file === "src/unreachable.ts")).toBe(false);
   const out = join(scratch, "native-aot");
   const result = run("build", app, "--out", out, "--payload-only", "--aot-inputs");
