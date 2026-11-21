@@ -109,6 +109,8 @@ struct Config {
     #[cfg_attr(not(sk_devtools), allow(dead_code))]
     inspector_exe: Option<PathBuf>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    app_menu: bool,
     desktop_id: Option<String>,
 }
 
@@ -129,6 +131,12 @@ pub(crate) fn activates() -> bool {
     CONFIG
         .get()
         .is_none_or(|c| requests_activation(c.activate, c.visible))
+}
+
+/// The standard macOS menu bar, unless embedded with [`Builder::app_menu`]`(false)`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn app_menu() -> bool {
+    CONFIG.get().is_none_or(|c| c.app_menu)
 }
 
 pub(crate) fn visible() -> bool {
@@ -324,6 +332,7 @@ pub struct Builder {
     inspector_exe: Option<PathBuf>,
     desktop_id: Option<String>,
     exact_frame_feedback: bool,
+    app_menu: bool,
 }
 
 impl Default for Builder {
@@ -350,6 +359,7 @@ impl Builder {
             inspector_exe: None,
             desktop_id: None,
             exact_frame_feedback: false,
+            app_menu: true,
         }
     }
 
@@ -488,6 +498,13 @@ impl Builder {
     /// application's update, but every window present reaches the screen one refresh later.
     pub fn exact_frame_feedback(mut self, on: bool) -> Self {
         self.exact_frame_feedback = on;
+        self
+    }
+
+    /// macOS: install the standard menu bar (Quit, Hide, Close, Minimize, Full Screen; default `true`).
+    /// `false` leaves the menu bar to the embedder.
+    pub fn app_menu(mut self, on: bool) -> Self {
+        self.app_menu = on;
         self
     }
 
@@ -638,6 +655,7 @@ impl Builder {
             activate: self.activate,
             inspector_exe: self.inspector_exe,
             desktop_id: self.desktop_id,
+            app_menu: self.app_menu,
         };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);

@@ -1037,8 +1037,8 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             theme: Theme::System,
             always_on_top: cfg.always_on_top,
             title_bar_height: cfg.title_bar_height,
-            // OS chrome draws the real buttons.
-            overlay: (cfg.title_bar_style == TitleBarStyle::Hidden)
+            // OS chrome draws the real buttons; on macOS the traffic lights are always the window's.
+            overlay: (cfg.title_bar_style == TitleBarStyle::Hidden && !cfg!(target_os = "macos"))
                 .then_some(cfg.title_bar_overlay)
                 .flatten(),
             fallback_titlebar: cfg.title_bar_fallback,
@@ -1491,6 +1491,11 @@ fn titlebar_rect(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
     (visible, (x, y, w, h))
 }
 
+/// Whether the host or the OS draws the caption buttons, so the app must not draw its own.
+fn host_controls(s: &Snapshot) -> bool {
+    s.overlay.is_some() || (cfg!(target_os = "macos") && s.buttons_visible)
+}
+
 fn window_buttons_rect(s: &Snapshot) -> Option<[f32; 4]> {
     if !s.buttons_visible || s.minimized {
         return None;
@@ -1707,7 +1712,7 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("titleBarOverlayVisible", Json::Bool(wco_visible)),
         ("titleBarArea", rect(titlebar)),
         ("fallbackTitleBar", Json::Bool(s.fallback_titlebar)),
-        ("hostControls", Json::Bool(s.overlay.is_some())),
+        ("hostControls", Json::Bool(host_controls(&s))),
         ("clientWidth", Json::n(s.client.0)),
         ("clientHeight", Json::n(s.client.1)),
         (

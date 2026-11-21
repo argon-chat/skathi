@@ -17,6 +17,8 @@ use gpui_platform::application;
 use sk_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 use sk_runtime::{host_fn, with_published, with_published_app, JsRuntime, Phase};
 
+#[cfg(target_os = "macos")]
+mod app_menu;
 mod background;
 #[cfg(all(feature = "prod", not(feature = "no-interpreter")))]
 mod bytecode;
@@ -1346,6 +1348,8 @@ fn run_app() {
                 let shell = cx.new(|_| Shell);
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);
+                #[cfg(target_os = "macos")]
+                app_menu::install(cx, &cfg.title);
                 // The pipe thread raises it directly: the foreground grant is short-lived.
                 if let Some(hwnd) = window::capture_hwnd(window) {
                     sk_desktop::launch::set_window(hwnd);

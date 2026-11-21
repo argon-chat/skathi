@@ -3292,7 +3292,12 @@ const titleBar = section("Title bar and chrome", [
       },
       { name: "fallbackTitleBar", type: "boolean", description: "Whether the host's temporary strip is shown." },
       { name: "overlayVisible", type: "boolean", description: "Equals `navigator.windowControlsOverlay.visible`." },
-      { name: "hostControls", type: "boolean", description: "Whether the `titleBarOverlay` buttons are installed." },
+      {
+        name: "hostControls",
+        type: "boolean",
+        description:
+          "Whether the host draws the caption buttons, so the app must not draw its own: the `titleBarOverlay` buttons, or on macOS the traffic lights while they are shown (since 0.7).",
+      },
       { name: "client", type: "object", description: "The client area in CSS px." },
       {
         name: "contentInset",

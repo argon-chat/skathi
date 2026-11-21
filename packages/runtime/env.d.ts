@@ -270,6 +270,7 @@ declare global {
     titleBarHeight: number;
     fallbackTitleBar: boolean;
     overlayVisible: boolean;
+    /** The host draws the caption buttons (the `titleBarOverlay` cluster, the macOS traffic lights): draw none of your own. */
     hostControls: boolean;
     client: { width: number; height: number };
     contentInset: { left: number; top: number; right: number; bottom: number };
