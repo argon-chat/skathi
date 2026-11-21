@@ -163,7 +163,7 @@ CPU pressure and the system's power profile reach CSS, JavaScript and shaders.
 
 ## Web Audio
 
-The audio graph gets the nodes a synthesizer or an effects chain needs: `DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode` and `PeriodicWave`, as factories on the context and as constructors.
+The audio graph gets the nodes a synthesizer or an effects chain needs: `DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode`, `IIRFilterNode`, `ConstantSourceNode` and `PeriodicWave`. `OfflineAudioContext` renders a graph into an `AudioBuffer` faster than it plays.
 
 ```ts
 const delay = context.createDelay(1);
@@ -175,6 +175,7 @@ delay.connect(context.destination);
 ```
 
 - Every node and `AudioBuffer` has its constructor, `new GainNode(context, { gain: 0.5 })`, and a `context` property, which libraries written for browsers rely on.
+- Contexts and nodes are `EventTarget`s: `statechange` on a context, `ended` on a source, `complete` on an offline context.
 - A feedback loop works with a `DelayNode` in it, as in the spec.
 - A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.
 - `suspend()` now stops `currentTime` as well as the output, and `resume()` goes on from the same time.
