@@ -54,6 +54,44 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:toml parses into JS values and writes them back",
+    async () => {
+      const app = await start();
+      const t = JSON.parse(String(await app.eval("__SK_TEST_STD__.toml()")));
+      expect(t.keys).toEqual(["title", "big", "ratio", "when", "day", "tags", "window", "servers"]);
+      expect([t.title, t.big, t.bigType, t.ratio]).toEqual(["Skathi", "9007199254740993", "bigint", 0.5]);
+      expect(t.when).toEqual(["Date", "1979-05-27T07:32:00.000Z"]);
+      expect(t.day).toEqual(["Temporal.PlainDate", "1979-05-27"]);
+      expect(t.window).toEqual({ width: 800, resizable: true });
+      expect(t.servers).toEqual([{ name: "one" }]);
+      expect(t.round).toBe(true);
+      expect(t.written).toBe(
+        'name = "x"\nn = 4611686018427387904\nat = 1970-01-01T00:00:00.0Z\nlist = [1, 2]\n\n[t]\nok = true\n',
+      );
+      expect(t.syntax).toStartWith("SyntaxError: TOML.parse: line 2, column 14:");
+      expect(t.nil).toBe("TypeError: TOML.stringify: window.title is null, which TOML cannot represent");
+      expect(t.hole).toStartWith("TypeError: TOML.stringify: list[1] is undefined");
+      expect(t.notTable).toStartWith("TypeError");
+    },
+    T,
+  );
+
+  test(
+    "skathi:network reads the connection from the OS",
+    async () => {
+      const app = await start();
+      const n = JSON.parse(String(await app.eval("__SK_TEST_STD__.network()")));
+      expect(n.sameOnline).toBe(true);
+      expect(n.target).toBe(true);
+      expect(["full", "limited", "portal", "none", "unknown"]).toContain(n.internet);
+      expect(["ethernet", "wifi", "cellular", "other", "none", "unknown"]).toContain(n.type);
+      for (const flag of [n.metered, n.roaming, n.overDataLimit]) expect([true, false, null]).toContain(flag);
+      expect(n.wrapped).toBe(1);
+    },
+    T,
+  );
+
+  test(
     "app.quit({ exitCode }) fires pagehide and ends the process with that code",
     async () => {
       const app = await start();

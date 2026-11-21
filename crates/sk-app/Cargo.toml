@@ -84,6 +84,8 @@ log = "0.4"
 raw-window-handle = "0.6"
 anyhow = "1"
 gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/crates/gpui_platform", version = "0.6.0", default-features = false }
+# `skathi:toml`. `preserve_order`: a parsed table keeps the document's key order, as `JSON.parse` does.
+toml = { version = "1.1", features = ["preserve_order"] }
 sk-css = { path = "../sk-css", version = "0.7.0" }
 sk-effects = { path = "../sk-effects", version = "0.7.0" }
 sk-elements = { path = "../sk-elements", version = "0.7.0" }

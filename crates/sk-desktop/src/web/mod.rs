@@ -23,6 +23,7 @@ mod entries;
 mod fsa;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod media_session;
+mod network;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod share;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -155,6 +156,10 @@ pub(crate) unsafe fn deliver(
                 app_launch::on_launch(g, &value);
                 true
             }
+            Some("network") => {
+                network::on_event(g, &value);
+                true
+            }
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             Some("mediasession") => {
                 media_session::on_action(g, &value);
@@ -241,6 +246,7 @@ pub(crate) unsafe fn install(g: *mut c_void) {
     app_shell::install(g);
     app_launch::install(g, event_target);
     app_capture::install(g);
+    network::install(g, event_target);
     fsa::install(g);
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {

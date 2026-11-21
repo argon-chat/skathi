@@ -1,7 +1,54 @@
 import { appShell as fromRuntime, createApp, h } from "@skathi-native/runtime";
 import { app, appShell } from "skathi:app";
+import { network } from "skathi:network";
+import { u8 } from "skathi:numeric";
 import { OS, os } from "skathi:os";
 import { Runtime, runtime } from "skathi:runtime";
+import { TOML } from "skathi:toml";
+
+const DOCUMENT = `title = "Skathi"
+big = 9007199254740993
+ratio = 0.5
+when = 1979-05-27T07:32:00Z
+day = 1979-05-27
+tags = ["a", "b"]
+
+[window]
+width = 800
+resizable = true
+
+[[servers]]
+name = "one"
+`;
+
+function toml() {
+  const parsed = TOML.parse(DOCUMENT) as Record<string, unknown> & { window: Record<string, unknown> };
+  const kind = (value: unknown) => Object.prototype.toString.call(value).slice(8, -1);
+  return {
+    keys: Object.keys(parsed),
+    title: parsed.title,
+    big: String(parsed.big),
+    bigType: typeof parsed.big,
+    ratio: parsed.ratio,
+    when: [kind(parsed.when), (parsed.when as Date).toISOString()],
+    day: [kind(parsed.day), String(parsed.day)],
+    window: parsed.window,
+    servers: parsed.servers,
+    round: TOML.parse(TOML.stringify(parsed)).big === parsed.big,
+    written: TOML.stringify({
+      name: "x",
+      skipped: undefined,
+      n: 1n << 62n,
+      at: new Date(0),
+      list: [1, 2],
+      t: { ok: true },
+    }),
+    syntax: attempt(() => TOML.parse('a = 1\nb = "unclosed\n')),
+    nil: attempt(() => TOML.stringify({ window: { title: null } })),
+    hole: attempt(() => TOML.stringify({ list: [1, undefined] })),
+    notTable: attempt(() => TOML.stringify([1] as unknown as Record<string, unknown>)),
+  };
+}
 
 const attempt = (run: () => void): string => {
   try {
@@ -16,6 +63,19 @@ const attempt = (run: () => void): string => {
 Object.assign(globalThis, {
   __SK_TEST_STD__: {
     app,
+    toml: () => JSON.stringify(toml()),
+    network: () =>
+      JSON.stringify({
+        online: network.online,
+        sameOnline: network.online === navigator.onLine,
+        internet: network.internet,
+        type: network.type,
+        metered: network.metered,
+        roaming: network.roaming,
+        overDataLimit: network.overDataLimit,
+        target: network instanceof EventTarget,
+        wrapped: u8(257),
+      }),
     probe: () =>
       JSON.stringify({
         version: app.getVersion(),

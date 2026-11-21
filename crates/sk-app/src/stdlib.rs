@@ -9,6 +9,7 @@ use sk_runtime::{host, JsRuntime};
 mod app;
 mod os;
 mod runtime;
+mod toml;
 
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
@@ -26,5 +27,8 @@ pub(crate) fn install(rt: &JsRuntime) {
         app::install(g, std);
         os::install(g, std);
         runtime::install(g, std);
+        if let Err(e) = toml::install(rt.ctx(), crate::js::Value(std)) {
+            eprintln!("[std] skathi:toml could not be installed: {e}");
+        }
     }
 }

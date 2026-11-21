@@ -61,6 +61,55 @@ impl Debounce {
     }
 }
 
+/// What the OS says about the connection beyond "there is a network", for `skathi:network`.
+/// `None` is "the OS cannot tell".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Details {
+    /// `full`, `limited`, `portal`, `none` or `unknown`: the OS's own check, never a probe of ours.
+    pub internet: &'static str,
+    pub metered: Option<bool>,
+    pub roaming: Option<bool>,
+    pub over_data_limit: Option<bool>,
+}
+
+const UNKNOWN: Details = Details {
+    internet: "unknown",
+    metered: None,
+    roaming: None,
+    over_data_limit: None,
+};
+
+static DETAILS: Mutex<Details> = Mutex::new(UNKNOWN);
+/// The connection type, looked up on the first read after a change: asking the OS takes milliseconds.
+static KIND: Mutex<Option<&'static str>> = Mutex::new(None);
+
+pub fn details() -> Details {
+    *DETAILS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `ethernet`, `wifi`, `cellular`, `other`, `none` or `unknown`.
+pub fn connection_type() -> &'static str {
+    let mut kind = KIND.lock().unwrap_or_else(|e| e.into_inner());
+    *kind.get_or_insert_with(imp::connection_type)
+}
+
+fn announce(event: &str) {
+    crate::emit(format!(r#"{{"kind":"network","event":"{event}"}}"#));
+}
+
+/// Never panics: called across the Win32 ABI.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn set_details(new: Details, announce_change: bool) {
+    let changed = {
+        let mut details = DETAILS.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::replace(&mut *details, new) != new
+    };
+    *KIND.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if changed && announce_change {
+        announce("change");
+    }
+}
+
 static CALC: Mutex<Option<Debounce>> = Mutex::new(None);
 static WAKE: Condvar = Condvar::new();
 
@@ -83,6 +132,7 @@ fn run() {
         if let Some(online) = guard.as_mut().and_then(|d| d.fire(now)) {
             drop(guard);
             navigator::set_on_line(Some(online));
+            announce(if online { "online" } else { "offline" });
             guard = calc();
             continue;
         }
@@ -134,7 +184,85 @@ mod imp {
     ) -> u32;
 
     unsafe extern "system" fn callback(_ctx: *const c_void, hint: Hint) {
+        super::set_details(details_of(hint), true);
         on_hint(level_is_online(hint.level));
+    }
+
+    /// `NL_NETWORK_CONNECTIVITY_LEVEL_HINT` and `NL_NETWORK_CONNECTIVITY_COST_HINT`.
+    pub(super) fn details_of(hint: Hint) -> super::Details {
+        let costed = hint.cost != 0;
+        super::Details {
+            internet: match hint.level {
+                1 => "none",
+                2 => "limited",
+                3 => "full",
+                4 => "portal",
+                _ => "unknown",
+            },
+            metered: costed.then_some(hint.cost != 1),
+            roaming: costed.then_some(hint.roaming != 0),
+            over_data_limit: costed.then_some(hint.over_data_limit != 0),
+        }
+    }
+
+    const IF_TYPE_ETHERNET: u32 = 6;
+    const IF_TYPE_LOOPBACK: u32 = 24;
+    const IF_TYPE_WIFI: u32 = 71;
+    const IF_TYPE_TUNNEL: u32 = 131;
+    const IF_TYPE_WWAN: u32 = 243;
+    const IF_TYPE_WWAN2: u32 = 244;
+
+    /// The type of the connected adapter with a gateway and the lowest metric: the one traffic takes.
+    pub(super) fn connection_type() -> &'static str {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
+            GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+        };
+        use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+
+        const FLAGS: u32 = GAA_FLAG_INCLUDE_GATEWAYS
+            | GAA_FLAG_SKIP_ANYCAST
+            | GAA_FLAG_SKIP_MULTICAST
+            | GAA_FLAG_SKIP_DNS_SERVER;
+        const ERROR_BUFFER_OVERFLOW: u32 = 111;
+        let mut size = 16 * 1024u32;
+        let mut buffer: Vec<u64> = Vec::new();
+        for _ in 0..3 {
+            buffer.resize((size as usize).div_ceil(8), 0);
+            let adapters = buffer.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+            // AF_UNSPEC: both address families.
+            match unsafe { GetAdaptersAddresses(0, FLAGS, std::ptr::null(), adapters, &mut size) } {
+                0 => {
+                    let mut best: Option<((bool, u32), &str)> = None;
+                    let mut cursor: *const IP_ADAPTER_ADDRESSES_LH = adapters;
+                    // SAFETY: the OS wrote a null-terminated list into `buffer`, which outlives the walk.
+                    while let Some(adapter) = unsafe { cursor.as_ref() } {
+                        cursor = adapter.Next;
+                        if adapter.OperStatus != IfOperStatusUp
+                            || adapter.FirstGatewayAddress.is_null()
+                            || matches!(adapter.IfType, IF_TYPE_LOOPBACK | IF_TYPE_TUNNEL)
+                        {
+                            continue;
+                        }
+                        let kind = match adapter.IfType {
+                            IF_TYPE_ETHERNET => "ethernet",
+                            IF_TYPE_WIFI => "wifi",
+                            IF_TYPE_WWAN | IF_TYPE_WWAN2 => "cellular",
+                            _ => "other",
+                        };
+                        // A VPN's virtual adapter rides on a physical one, which is the answer.
+                        let rank = (kind == "other", adapter.Ipv4Metric.min(adapter.Ipv6Metric));
+                        if best.is_none_or(|(least, _)| rank < least) {
+                            best = Some((rank, kind));
+                        }
+                    }
+                    return best.map_or("none", |(_, kind)| kind);
+                }
+                ERROR_BUFFER_OVERFLOW => continue,
+                _ => break,
+            }
+        }
+        "unknown"
     }
 
     pub(super) fn resolve() -> Option<(GetHint, NotifyHint)> {
@@ -153,7 +281,10 @@ mod imp {
     pub(super) fn current(get: GetHint) -> Result<i32, u32> {
         let mut hint = Hint::default();
         match unsafe { get(&mut hint) } {
-            0 => Ok(hint.level),
+            0 => {
+                super::set_details(details_of(hint), false);
+                Ok(hint.level)
+            }
             err => Err(err),
         }
     }
@@ -204,6 +335,10 @@ mod imp {
 
     const UNSET: &str =
         "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
+
+    pub(super) fn connection_type() -> &'static str {
+        "unknown"
+    }
 
     pub(super) fn online_now() -> io::Result<bool> {
         let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -332,6 +467,10 @@ mod imp {
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod imp {
     pub(super) fn install() {}
+
+    pub(super) fn connection_type() -> &'static str {
+        "unknown"
+    }
 }
 
 #[cfg(test)]
