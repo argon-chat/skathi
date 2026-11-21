@@ -53,14 +53,25 @@ jobs:
           const minimal = make("minimal");
           for (const [label, host, jit] of [["normal",normal,true], ["nojit",nojit,false]] as const) {
             const app = publish(minimal, label, host, true, jit);
-            for (const profile of ["default","compact"]) {
-              const result = spawnSync(app.exe, [], {encoding:"utf8", timeout:20_000, env:{...process.env, SK_SCENARIO:"aot-smoke", SK_PERF:"1", SK_AOT_MEMORY_PROFILE:profile}});
-              console.log(label, profile, "status", result.status, "signal", result.signal, result.stdout, result.stderr);
+            for (const [test, options] of Object.entries({defaults:{}, noWasm:{JSC_useWasm:"false"}, earlyAot:{JSC_useAOT:"true"}, earlyAotNoJit:{JSC_useAOT:"true", JSC_useJIT:"false"}})) {
+              const result = spawnSync(app.exe, [], {encoding:"utf8", timeout:20_000, env:{...process.env, ...options, JSC_dumpOptions:"2", SK_SCENARIO:"aot-smoke", SK_PERF:"1"}});
+              console.log(label, test, "status", result.status, "signal", result.signal, result.stdout);
+              console.log((result.stderr ?? "").split(String.fromCharCode(10)).filter(line => /\b(useAOT|useJIT|useWasm|markedBlockCageSizeInMB|sizeClassProgression)\b|native-aot|sk-perf.*first-frame/.test(line)).join(String.fromCharCode(10)));
             }
           }
           ''')
           PY
           bun scripts/aot/probe-profile.ts --hosts release-hosts --out target/mac-aot-qualification
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("packages/cli/aot/native.ts")
+          old = 'ir, image, ...flags]'
+          text = p.read_text()
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, 'ir, image, ...flags, "--option", "references=wide"]'))
+          PY
+          echo "Wide-reference compile probe"
+          bun scripts/aot/probe-profile.ts --hosts release-hosts --out target/mac-aot-wide
       - name: Exercise GUI measurement instruments
         if: inputs.jit_probe
         shell: bash
