@@ -4,6 +4,14 @@ declare module "skathi:app" {
   export * from "@skathi-native/runtime/std/app";
 }
 
+declare module "skathi:binary" {
+  export * from "@skathi-native/runtime/std/binary";
+}
+
+declare module "skathi:encoding" {
+  export * from "@skathi-native/runtime/std/encoding";
+}
+
 declare module "skathi:network" {
   export * from "@skathi-native/runtime/std/network";
 }

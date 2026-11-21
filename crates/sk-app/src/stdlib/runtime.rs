@@ -68,7 +68,7 @@ host_fn!(fn is_single_file(_g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let class = define_class(
+    let class = super::support::class(
         g,
         &ClassSpec {
             name: "Runtime",

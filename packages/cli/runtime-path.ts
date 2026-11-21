@@ -35,7 +35,16 @@ export const VUE_MISSING = `this app uses Vue but "vue" is not installed: bun ad
 export const isNativeModule = (spec: string) => spec.startsWith("native:");
 
 /** `skathi:<name>`: a module of Skathi's own library, served from the runtime package. */
-export const STD_MODULES: readonly string[] = ["app", "network", "numeric", "os", "runtime", "toml"];
+export const STD_MODULES: readonly string[] = [
+  "app",
+  "binary",
+  "encoding",
+  "network",
+  "numeric",
+  "os",
+  "runtime",
+  "toml",
+];
 export const isStdModule = (spec: string) => spec.startsWith("skathi:");
 
 /** The runtime file behind `skathi:<name>`; throws for a name Skathi has no module for. */

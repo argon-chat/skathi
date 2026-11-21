@@ -5,6 +5,7 @@ import { u8 } from "skathi:numeric";
 import { OS, os } from "skathi:os";
 import { Runtime, runtime } from "skathi:runtime";
 import { TOML } from "skathi:toml";
+import { binary, encoding } from "./bytes";
 
 const DOCUMENT = `title = "Skathi"
 big = 9007199254740993
@@ -64,6 +65,8 @@ Object.assign(globalThis, {
   __SK_TEST_STD__: {
     app,
     toml: () => JSON.stringify(toml()),
+    binary: () => JSON.stringify(binary()),
+    encoding: () => JSON.stringify(encoding()),
     network: () =>
       JSON.stringify({
         online: network.online,

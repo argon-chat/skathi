@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers and TOML."
+description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data and encodings."
 section: Reference
 order: 6
 since: "0.7"
@@ -19,14 +19,16 @@ import { os } from "skathi:os";
 import { Runtime, runtime } from "skathi:runtime";
 ```
 
-| Module                             | What it gives                                                             |
-| ---------------------------------- | ------------------------------------------------------------------------- |
-| [`skathi:app`](#skathiapp)         | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects |
-| [`skathi:runtime`](#skathiruntime) | The Skathi version, the host's features, AOT and single-file              |
-| [`skathi:os`](#skathios)           | Platform, architecture, OS release, host name, home and temp              |
-| [`skathi:network`](#skathinetwork) | Online, internet reachability, connection type, metered and roaming       |
-| [`skathi:numeric`](#skathinumeric) | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                 |
-| [`skathi:toml`](#skathitoml)       | `TOML.parse()` and `TOML.stringify()`                                     |
+| Module                               | What it gives                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| [`skathi:app`](#skathiapp)           | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects |
+| [`skathi:runtime`](#skathiruntime)   | The Skathi version, the host's features, AOT and single-file              |
+| [`skathi:os`](#skathios)             | Platform, architecture, OS release, host name, home and temp              |
+| [`skathi:network`](#skathinetwork)   | Online, internet reachability, connection type, metered and roaming       |
+| [`skathi:numeric`](#skathinumeric)   | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                 |
+| [`skathi:toml`](#skathitoml)         | `TOML.parse()` and `TOML.stringify()`                                     |
+| [`skathi:binary`](#skathibinary)     | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64   |
+| [`skathi:encoding`](#skathiencoding) | Hex, Base32, Base64, legacy text encodings and MIME types                 |
 
 A name Skathi has no module for is a build error that lists the ones there are. The modules are
 part of the host, so they work the same under `sk dev` and in a built app. A module the embedding
@@ -299,3 +301,141 @@ array element on its own line.
 - A `bigint` is written as an integer, and throws a `RangeError` outside 64 bits.
 - A `Date` is written as an offset date-time in UTC; the `Temporal` plain types as the local forms.
 - A whole number is written as an integer, any other `number` as a float.
+
+## skathi:binary
+
+Cursors over bytes, bit streams, byte order, LEB128 and CRCs.
+
+```ts
+import { BinaryReader, BinaryWriter, CRC32 } from "skathi:binary";
+
+const HEADER = { magic: "u32", version: "u16", count: "u16" } as const;
+
+const writer = new BinaryWriter();
+writer.writeStruct(HEADER, { magic: 0x534b3031, version: 1, count: 3 });
+writer.writeAll([1.5, 2.5, 3.5], "f32");
+const bytes = writer.finish();
+
+const reader = new BinaryReader(bytes);
+const header = reader.readStruct(HEADER);
+const values = reader.readArray(Float32Array, header.count);
+const checksum = CRC32.compute(bytes);
+```
+
+Each method does a batch of work in one call, because a call into the host costs more than a
+scalar read does. For one scalar at a time, read it from `reader.view`, a standard `DataView`, at
+`reader.position`, and move `position` yourself.
+
+### BinaryReader
+
+`new BinaryReader(source, { endian })` reads `source` (an `ArrayBuffer`, a typed array or a
+`DataView`) in place, without a copy. `endian` is `"little"` by default.
+
+| Member                   | What it does                                                              |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `position`               | The byte the next read starts at; assignable                              |
+| `remaining`              | Bytes from `position` to the end                                          |
+| `view`                   | A `DataView` of the whole source                                          |
+| `readArray(Type, count)` | `count` elements as a new `Type` (`Float32Array`, `Uint16Array`, …)       |
+| `readStruct(layout)`     | An object with the layout's fields, read one after another                |
+| `bytes(n)`               | The next `n` bytes as a `Uint8Array` over the source, not a copy          |
+| `string(n, encoding?)`   | The next `n` bytes as text; any `TextDecoder` label, `"utf-8"` by default |
+| `varUints(count)`        | `count` unsigned LEB128 values of up to 32 bits, as a `Uint32Array`       |
+
+A read past the end throws a `RangeError` and leaves `position` where it was.
+
+A layout is an object of field names and types: `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`,
+`i64`, `f32`, `f64`. Fields follow each other with no padding, in the order the object lists them.
+`u64` and `i64` are `bigint`, the rest are `number`. Declare a layout `as const` and the result is
+typed by it.
+
+### BinaryWriter
+
+`new BinaryWriter({ endian, initialCapacity })` grows as it is written to.
+
+| Member                       | What it does                                                     |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `writeAll(values, type)`     | Every value of an array or typed array as `type`; integers wrap  |
+| `writeStruct(layout, value)` | The layout's fields of `value`                                   |
+| `bytes(source)`              | The bytes of a buffer or a view                                  |
+| `length`                     | Bytes written so far                                             |
+| `view`                       | A `DataView` of what is written, to patch a length or a checksum |
+| `finish()`                   | The bytes as a `Uint8Array`, handed over without a copy          |
+
+The write methods return the writer. After `finish()` the writer is empty and can be used again.
+`view` covers what was written when you took it: take it again after writing more.
+
+### BitReader and BitWriter
+
+```ts
+import { BitReader, BitWriter } from "skathi:binary";
+
+const packed = new BitWriter().write(5, 3).writeMany([1, 2, 3], 2).finish();
+const bits = new BitReader(packed);
+bits.read(3); // 5
+bits.readMany(2, 3); // Uint32Array [1, 2, 3]
+```
+
+A value is 1 to 32 bits. The order is `"msb"` by default: a byte's high bit comes first, as in
+most network formats and in JPEG. `"lsb"` takes the low bit first, as DEFLATE does. Pass the same
+order to both. `align()` skips to the next byte boundary; `finish()` pads the last byte with zero
+bits.
+
+### Endian, VarInt, CRC32, CRC64
+
+| Call                                       | What it does                                                          |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| `Endian.native`                            | `"little"` or `"big"`: this machine's byte order                      |
+| `Endian.swap16(a)`, `swap32`, `swap64`     | Reverses the bytes of every element of a typed array, in place        |
+| `VarInt.encodeAll(values, zigzag?)`        | LEB128 bytes of integers within ±2^53; negative ones need `zigzag`    |
+| `VarInt.decodeAll(bytes, zigzag?)`         | Every value in `bytes`, as a `Float64Array`                           |
+| `VarInt.size(value, zigzag?)`              | The bytes one value takes                                             |
+| `CRC32.compute(bytes, seed?)`              | CRC-32 as zlib and PNG compute it; `seed` is the CRC of earlier bytes |
+| `CRC64.compute(bytes, variant?)`           | A `bigint`; `"ecma"` (default) is CRC-64/XZ, `"nvme"` is CRC-64/NVME  |
+| `CRC32.create()`, `CRC64.create(variant?)` | An object with `update(bytes)` and `digest()`, for data in pieces     |
+
+The module is the same on every platform.
+
+## skathi:encoding
+
+Bytes as text and back, and MIME types.
+
+```ts
+import { Base32, Encoding, Hex, Mime } from "skathi:encoding";
+
+Hex.encode(bytes); // "cafe01"
+Base32.encode(bytes, { alphabet: "crockford" });
+Encoding.decode(bytes, "windows-1251");
+Mime.sniff(bytes); // "image/png"
+```
+
+| Object     | Calls                                                                                  |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `Hex`      | `encode(bytes)`, `decode(text)`, `dump(bytes, { width, offset })`, `format(n, width?)` |
+| `Base16`   | `encode` and `decode` of `Hex`, under the RFC 4648 name                                |
+| `Base32`   | `encode(bytes, { alphabet, padding })`, `decode(text, { alphabet })`                   |
+| `Base64`   | `encode(bytes, { alphabet, omitPadding })`, `decode(text, { alphabet })`               |
+| `Mime`     | `fromName(name)`, `extensions(type)`, `sniff(bytes)`, `matches(type, accept)`          |
+| `Encoding` | `decode(bytes, label)`, `encode(text, label)`, `isSupported(label)`, `detect(bytes)`   |
+
+Text that is not valid for its codec throws a `SyntaxError` that says which character.
+
+- **Hex** writes lowercase and reads either case. `Hex.dump` prints lines of offset, hex pairs and
+  ASCII, the way `xxd` does. `Hex.format(255, 4)` is `"0x00ff"`, and it takes a `bigint`.
+- **Base32** alphabets are `"rfc4648"` (default), `"hex"` (base32hex) and `"crockford"`. Decoding
+  takes either case and optional padding. Crockford's also reads `O` as `0`, `I` and `L` as `1`,
+  and skips hyphens.
+- **Base64** alphabets are `"base64"` (default) and `"base64url"`. `decode` without `alphabet`
+  takes the characters of both; with it, the other alphabet's characters throw. Whitespace is
+  skipped and padding is optional.
+- **Mime.fromName** answers from the table behind `File.type` and local `fetch()`, so the three
+  agree; an unknown extension is `""`. `sniff` reads the signature in a file's first bytes and
+  returns `null` when it knows none. `matches("image/png", "image/*, .pdf")` tests a type against
+  an accept list of types, `type/*` patterns and extensions.
+- **Encoding** takes any `TextDecoder` label. `TextEncoder` only writes UTF-8; `Encoding.encode`
+  writes the legacy encodings as well (`windows-1251`, `shift_jis`, `gbk`, …). A character the
+  encoding has no bytes for becomes `?`. An unknown label throws a `RangeError`. `detect` goes by
+  the byte order mark only and returns `null` without one.
+
+`Mime.extensions` on Windows also asks the registry for a type the table does not know. The rest is
+the same on every platform.

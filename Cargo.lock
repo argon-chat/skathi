@@ -5356,6 +5356,7 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "embed-resource",
+ "encoding_rs",
  "flate2",
  "futures",
  "image",

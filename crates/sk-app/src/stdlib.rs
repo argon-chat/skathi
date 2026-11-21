@@ -1,4 +1,4 @@
-//! The `skathi:*` modules a host provides itself: `skathi:app`, `skathi:runtime`, `skathi:os`.
+//! The `skathi:*` modules a host provides itself.
 //! Their objects hang off the hidden global `__sk_std`, which the runtime's `std/*.ts` export.
 
 use std::ffi::c_void;
@@ -7,8 +7,11 @@ use sk_runtime::redjs::webapi::util::*;
 use sk_runtime::{host, JsRuntime};
 
 mod app;
+mod binary;
+mod encoding;
 mod os;
 mod runtime;
+mod support;
 mod toml;
 
 #[cfg(feature = "native-aot")]
@@ -27,6 +30,8 @@ pub(crate) fn install(rt: &JsRuntime) {
         app::install(g, std);
         os::install(g, std);
         runtime::install(g, std);
+        binary::install(g, std);
+        encoding::install(g, std);
         if let Err(e) = toml::install(rt.ctx(), crate::js::Value(std)) {
             eprintln!("[std] skathi:toml could not be installed: {e}");
         }

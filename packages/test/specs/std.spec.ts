@@ -77,6 +77,54 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:binary writes a record and reads the same values back",
+    async () => {
+      const app = await start();
+      const b = JSON.parse(String(await app.eval("__SK_TEST_STD__.binary()")));
+      expect([b.written, b.emptied, b.remaining]).toEqual([34, 0, 0]);
+      expect(b.head).toEqual({ magic: 0xcafebabe, size: 34, id: "-2", idType: "bigint" });
+      expect([b.floats, b.word, b.vars, b.text]).toEqual([[1.5, -2], 0x0102, [624485, 127], "héllo"]);
+      expect(b.past).toBe("RangeError: BinaryReader.bytes: 1 bytes wanted, 0 remain");
+      expect([b.window, b.shared]).toEqual([[7, 6], true]);
+      expect([b.bits, b.firstBits, b.nextBits]).toEqual([[205, 1], 5, [1, 2, 3]]);
+      expect(b.bitsLeft).toStartWith("RangeError");
+      expect([b.swapped, b.native]).toEqual([0x3412, "little"]);
+      expect([b.varInts, b.varSize]).toEqual([[0, 300, -1, 2 ** 40], 2]);
+      expect(b.negative).toStartWith("RangeError");
+      expect([b.crc32, b.crc32Chained, b.crc32Stream]).toEqual([0xcbf43926, 0xcbf43926, 0xcbf43926]);
+      expect([b.crc64, b.crc64Nvme]).toEqual(["995dc9bbdf1939fa", "ae8b14860a799888"]);
+      expect(b.badType).toStartWith('TypeError: BinaryReader.readStruct: field "a" has the type "u24"');
+      expect(b.globals).toEqual([]);
+    },
+    T,
+  );
+
+  test(
+    "skathi:encoding turns bytes into text and names their type",
+    async () => {
+      const app = await start();
+      const e = JSON.parse(String(await app.eval("__SK_TEST_STD__.encoding()")));
+      expect([e.hex, e.unhex]).toEqual(["00ff10", [0, 255, 16]]);
+      expect(e.oddHex).toStartWith("SyntaxError: Hex.decode:");
+      expect(e.format).toEqual(["0x00ff", "-0x1", "0x10000000000000000"]);
+      expect(e.dump).toStartWith("00000000: 4869 21");
+      expect(e.dump).toEndWith("  Hi!\n");
+      expect([e.base32, e.base32Back, e.crockford]).toEqual(["MZXW6YTBOI======", "foobar", "ZW010"]);
+      expect([e.base64, e.base64Url, e.base64Back]).toEqual(["+/8=", "-_8", [251, 255]]);
+      expect(e.base64Strict).toStartWith("SyntaxError: Base64.decode:");
+      expect(e.mime).toEqual(["image/png", ""]);
+      expect(e.extensions).toContain("jpg");
+      expect(e.sniff).toEqual(["image/png", null]);
+      expect(e.matches).toEqual([true, false]);
+      expect([e.cyrillic, e.decoded]).toEqual([[0xc4, 0xe0, 0x88, 0x3f], "Да€?"]);
+      expect(e.supported).toEqual([true, false]);
+      expect(e.detect).toEqual(["utf-16le", null]);
+      expect(e.unknown).toStartWith("RangeError: Encoding.decode:");
+    },
+    T,
+  );
+
+  test(
     "skathi:network reads the connection from the OS",
     async () => {
       const app = await start();

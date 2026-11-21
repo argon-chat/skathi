@@ -272,7 +272,7 @@ host_fn!(fn distro(g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let class = define_class(
+    let class = super::support::class(
         g,
         &ClassSpec {
             name: "OS",
