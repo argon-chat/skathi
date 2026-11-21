@@ -3,9 +3,10 @@
 //! One table of types serves every direction, so a value converts the same way wherever it goes.
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::ffi::{c_void, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
 use sk_ffi::{Signature, Type};
@@ -81,6 +82,8 @@ struct Function {
     args: Vec<Kind>,
     returns: Kind,
     errno: bool,
+    /// The call runs on a worker thread and answers with a promise.
+    nonblocking: bool,
     /// `library!symbol`, for the line a crash inside the call prints.
     label: &'static CStr,
 }
@@ -199,6 +202,7 @@ unsafe fn parse_function(
     let errno = to_bool(g, get_i(g, def, 3));
     let optional = to_bool(g, get_i(g, def, 4));
     let variadic = get_i(g, def, 5);
+    let nonblocking = to_bool(g, get_i(g, def, 6));
     let fixed = if variadic == UNDEF {
         None
     } else {
@@ -236,6 +240,7 @@ unsafe fn parse_function(
         args,
         returns,
         errno,
+        nonblocking,
         label: Box::leak(label.into_boxed_c_str()),
     }))
 }
@@ -428,6 +433,183 @@ unsafe fn from_slot(g: *mut c_void, value: u64, kind_of: Kind) -> Js<u64> {
     })
 }
 
+/// A call handed to a worker thread. It owns everything the library is given: the strings and a
+/// copy of every buffer, so that nothing the collector can move or free is in another thread's hands.
+struct Job {
+    address: usize,
+    signature: Signature,
+    slots: Vec<u64>,
+    label: &'static CStr,
+    done: Done,
+    _arena: Arena,
+}
+
+/// What the JS thread needs once the call has returned.
+struct Done {
+    g: usize,
+    settler: host::Settler,
+    returns: Kind,
+    errno: bool,
+    /// A buffer argument and the copy the library worked on, which is written back to it.
+    buffers: Vec<(u64, Vec<u8>)>,
+}
+
+// SAFETY: the engine's values in `Done` are touched on the JS thread only; the worker reads the
+// address, the signature and the slots, which point into memory the job owns or the caller vouched for.
+unsafe impl Send for Job {}
+unsafe impl Send for Done {}
+
+const WORKERS: usize = 4;
+/// Calls waiting or running; one more is refused.
+const IN_FLIGHT_LIMIT: usize = 256;
+
+#[derive(Default)]
+struct Pool {
+    waiting: VecDeque<Job>,
+    threads: usize,
+    idle: usize,
+}
+
+static POOL: Mutex<Option<Pool>> = Mutex::new(None);
+static WORK: Condvar = Condvar::new();
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+static FINISHED: Mutex<Vec<(Done, sk_ffi::Outcome)>> = Mutex::new(Vec::new());
+
+fn work() {
+    loop {
+        let job = {
+            let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+            loop {
+                let pool = guard.get_or_insert_with(Pool::default);
+                if let Some(job) = pool.waiting.pop_front() {
+                    break job;
+                }
+                pool.idle += 1;
+                guard = WORK.wait(guard).unwrap_or_else(|e| e.into_inner());
+                if let Some(pool) = guard.as_mut() {
+                    pool.idle -= 1;
+                }
+            }
+        };
+        let outcome = sk_ffi::in_call(job.label, || unsafe {
+            sk_ffi::call(job.address as *const (), &job.signature, &job.slots)
+        });
+        FINISHED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((job.done, outcome));
+        sk_runtime::frames::wake();
+        crate::background::prompt();
+    }
+}
+
+fn submit(job: Job) {
+    let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    let pool = guard.get_or_insert_with(Pool::default);
+    pool.waiting.push_back(job);
+    if pool.idle == 0 && pool.threads < WORKERS {
+        let spawned = std::thread::Builder::new()
+            .name("skathi-ffi".into())
+            .spawn(work);
+        if spawned.is_ok() {
+            pool.threads += 1;
+        }
+    }
+    drop(guard);
+    WORK.notify_one();
+}
+
+/// A resizable buffer can shrink under the copy that is written back.
+unsafe fn resizable(g: *mut c_void, v: u64) -> bool {
+    let buffer = if typed_view(g, v).is_some() {
+        get(g, v, "buffer")
+    } else {
+        v
+    };
+    to_bool(g, get(g, buffer, "resizable")) || to_bool(g, get(g, buffer, "growable"))
+}
+
+unsafe fn call_on_worker(
+    g: *mut c_void,
+    function: &Function,
+    values: &[u64],
+    mut slots: Vec<u64>,
+    arena: Arena,
+    what: &str,
+) -> Js<u64> {
+    let mut buffers = Vec::new();
+    for (i, kind_of) in function.args.iter().enumerate() {
+        let v = values[i];
+        if *kind_of != Kind::Buffer || v == NULL || v == UNDEF {
+            continue;
+        }
+        let what = format!("{what}: argument {} (buffer)", i + 1);
+        buffer_address(g, v, &what)?;
+        if resizable(g, v) {
+            return type_error(g, &format!("{what} is resizable, which a call on another thread cannot take; pass a buffer of a fixed length"));
+        }
+        let copy = bytes_arg(g, v, &what)?.to_vec();
+        buffers.push((i, v, copy));
+    }
+    if IN_FLIGHT.load(Ordering::Acquire) >= IN_FLIGHT_LIMIT {
+        return dom(
+            g,
+            "QuotaExceededError",
+            &format!(
+                "{what}: {IN_FLIGHT_LIMIT} calls on other threads are already waiting or running"
+            ),
+        );
+    }
+    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    for (i, v, copy) in &mut buffers {
+        slots[*i] = copy.as_mut_ptr() as u64;
+        capi::JSValueProtect(g as _, *v as usize as _);
+    }
+    let (promise, settler) = host::deferred(g);
+    submit(Job {
+        address: function.address,
+        signature: function.signature.clone(),
+        slots,
+        label: function.label,
+        done: Done {
+            g: g as usize,
+            settler,
+            returns: function.returns,
+            errno: function.errno,
+            buffers: buffers.into_iter().map(|(_, v, copy)| (v, copy)).collect(),
+        },
+        _arena: arena,
+    });
+    Ok(promise)
+}
+
+unsafe fn finish(done: Done, outcome: sk_ffi::Outcome) {
+    let g = done.g as *mut c_void;
+    for (v, copy) in &done.buffers {
+        if let Some(view) = buffer_source(g, *v).filter(|view| view.len == copy.len()) {
+            view.bytes_mut().copy_from_slice(copy);
+        }
+        capi::JSValueUnprotect(g as _, *v as usize as _);
+    }
+    let value = match from_slot(g, outcome.value, done.returns) {
+        Ok(value) if done.errno => with_errno(g, value, outcome.os_error),
+        Ok(value) => value,
+        Err(Thrown) => {
+            let mut error = UNDEF;
+            glue::rjs_exception_pending(g, &mut error);
+            return done.settler.reject(g, error);
+        }
+    };
+    done.settler.resolve(g, value);
+}
+
+unsafe fn with_errno(g: *mut c_void, value: u64, os_error: i32) -> u64 {
+    let result = new_object(g, UNDEF);
+    define(g, result, "value", value, 0);
+    define(g, result, "errno", enc_f64(os_error as f64), 0);
+    result
+}
+
 std_fn!(fn library_call(g, args) {
     let state = library(g, args.this().0)?;
     let index = count(g, args.arg(0).0, "the function's index")?;
@@ -447,6 +629,10 @@ std_fn!(fn library_call(g, args) {
     for (i, kind_of) in function.args.iter().enumerate() {
         let what = format!("{what}: argument {} ({})", i + 1, kind_of.name());
         slots.push(to_slot(g, args.arg(i as u32 + 1).0, *kind_of, &mut arena, &what)?);
+    }
+    if function.nonblocking {
+        let values: Vec<u64> = (0..given).map(|i| args.arg(i as u32 + 1).0).collect();
+        return call_on_worker(g, function, &values, slots, arena, &what);
     }
     for (i, kind_of) in function.args.iter().enumerate() {
         if *kind_of == Kind::Buffer {
@@ -469,10 +655,7 @@ std_fn!(fn library_call(g, args) {
     if !function.errno {
         return Ok(value);
     }
-    let result = new_object(g, UNDEF);
-    define(g, result, "value", value, 0);
-    define(g, result, "errno", enc_f64(outcome.os_error as f64), 0);
-    Ok(result)
+    Ok(with_errno(g, value, outcome.os_error))
 });
 
 std_fn!(fn library_has(g, args) {
@@ -723,6 +906,11 @@ unsafe fn from_another_thread(target: &Arc<Target>, slots: &[u64]) -> u64 {
 
 /// Runs the calls other threads made since the last frame.
 pub(crate) fn pump() {
+    let finished = std::mem::take(&mut *FINISHED.lock().unwrap_or_else(|e| e.into_inner()));
+    for (done, outcome) in finished {
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+        unsafe { finish(done, outcome) };
+    }
     let waiting = std::mem::take(&mut *QUEUE.lock().unwrap_or_else(|e| e.into_inner()));
     for (target, carried) in waiting {
         if target.closed.load(Ordering::Acquire) || target.thread != std::thread::current().id() {

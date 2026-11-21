@@ -21,6 +21,7 @@ interface Signature {
   errno?: boolean             // the call answers { value, errno }
   optional?: boolean          // a missing symbol is null instead of an error
   variadic?: number           // named parameters of a variadic function
+  nonblocking?: boolean       // the call runs on a worker thread and answers with a promise
 }`,
     params: [
       {
@@ -41,11 +42,14 @@ interface Signature {
       PERMISSION,
       '`"$APP/lib/sqlite3"` is a file in the app\'s folder; `sk build` copies it beside the executable at the same path. `"$SYSTEM/user32"` is a library the system\'s loader finds in its own folders. Without an extension the host adds `.dll`, `.dylib` or `.so`, and outside Windows it also tries `lib<name>`.',
       "Use it for a library you already have as a binary. For code you write yourself, a [native module](/embedding/native-modules/) is the better path: it is typed from Rust, and a panic becomes a JS error instead of ending the app.",
-      "A call is synchronous and runs on the JS thread: the window does not paint until it returns.",
+      "A call is synchronous and runs on the JS thread: the window does not paint until it returns. For a function that takes long (a query, a decode, anything that waits), set `nonblocking: true`.",
+      "`nonblocking: true` runs the call on one of four worker threads and the function returns a promise. A wrong argument rejects the promise instead of throwing. A string is copied for the call. A `buffer` is copied too: the library works on the copy, and the bytes are written back into your buffer when the call returns, before the promise settles. Until then your buffer is unchanged, and what you write into it in the meantime is overwritten. A `pointer` is passed as it is: the memory must stay valid until the promise settles.",
+      "Calls of one library may run at the same time on different threads, in any order. If the library is not safe for that, wait for one promise before you make the next call.",
+      "A [`NativeCallback`](/std/native-callback/) that a nonblocking call invokes is called from another thread: it runs on the JS thread a frame later, and only a `void` callback works.",
       "`errno: true` makes the call answer `{ value, errno }`. `errno` is the C `errno`, or `GetLastError()` on Windows, read on the same thread right after the call. It is whatever the last failing call left there: read it only when `value` says the call failed.",
       "`variadic` is for functions such as `printf`: list every argument of this call site in `args` and give the number of named parameters. Declaring a variadic function without it passes the arguments the wrong way on Windows and on Apple silicon.",
       "A struct cannot be passed or returned by value. Lay it out in a buffer, with [`BinaryWriter`](/std/binary-writer/) for example, and pass the buffer. A [struct layout](/std/struct-layout/) has no padding, so write the padding the C compiler adds as fields of its own.",
-      "To hand the library a function of yours, make a [`NativeCallback`](/std/native-callback/) and pass its `pointer`. Calls on a worker thread are not there yet.",
+      "To hand the library a function of yours, make a [`NativeCallback`](/std/native-callback/) and pass its `pointer`.",
       CRASH,
     ],
     edgeCases: [
@@ -54,6 +58,8 @@ interface Signature {
       "`NotSupportedError`: the host was built without the `ffi` feature. Hosts that `sk build` uses have it; an embedder turns it on.",
       '`TypeError`: a type that is not in the list, `"void"` as an argument, `"buffer"` as a return type, a struct.',
       "Calling a function with the wrong number of arguments, or with a value that is not of the declared type, throws a `TypeError` that names the function and the argument. An integer that does not fit throws a `RangeError`. Nothing is converted silently.",
+      "A nonblocking call rejects with a `TypeError` for a `buffer` that is resizable or growable, since it could shrink before the bytes are written back. If its length changed anyway (the buffer was transferred), nothing is written back.",
+      "`QuotaExceededError`: 256 nonblocking calls are already waiting or running.",
     ],
     examples: [
       {
@@ -110,6 +116,24 @@ Encoding.decode(line.subarray(0, length), "utf-8"); // "12 items, 99.5%"
 
 crt.symbols.explicit_bzero?.(line, line.length);`,
       },
+      {
+        title: "A long call on a worker thread",
+        lang: "ts",
+        code: `import { dlopen } from "skathi:ffi";
+
+const codec = dlopen("codec", {
+  codec_decode: {
+    args: ["buffer", "usize", "buffer", "usize"],
+    returns: "i32",
+    nonblocking: true,
+  },
+});
+
+const pixels = new Uint8Array(width * height * 4);
+// The window keeps painting; pixels is filled when the promise settles.
+const code = await codec.symbols.codec_decode(file, file.length, pixels, pixels.length);
+if (code !== 0) throw new Error(\`codec_decode: \${code}\`);`,
+      },
     ],
     related: ["ffi-types", "native-library", "native-pointer", "native-callback"],
     aliases: [
@@ -121,6 +145,9 @@ crt.symbols.explicit_bzero?.(line, line.length);`,
       "shared library",
       "LoadLibrary",
       "Signature",
+      "nonblocking",
+      "async call",
+      "worker thread",
     ],
   },
   {

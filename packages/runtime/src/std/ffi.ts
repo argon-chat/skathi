@@ -21,6 +21,11 @@ export interface Signature {
   readonly optional?: boolean;
   /** For a variadic function: how many of `args` are its named parameters. */
   readonly variadic?: number;
+  /**
+   * The call runs on a worker thread and answers with a promise, so the window keeps painting.
+   * A `buffer` argument is copied for the call and written back when it returns.
+   */
+  readonly nonblocking?: boolean;
 }
 
 type ArgOf<T> = T extends "bool"
@@ -52,7 +57,8 @@ type ValueOf<T> = T extends "bool"
 type Each<A extends readonly unknown[]> = { -readonly [I in keyof A]: ArgOf<A[I]> };
 type ArgsOf<S extends Signature> = S["args"] extends readonly unknown[] ? Each<S["args"]> : [];
 type Returned<S extends Signature> = ValueOf<S["returns"] extends FFIType ? S["returns"] : "void">;
-type ReturnOf<S extends Signature> = S["errno"] extends true ? { value: Returned<S>; errno: number } : Returned<S>;
+type Answered<S extends Signature> = S["errno"] extends true ? { value: Returned<S>; errno: number } : Returned<S>;
+type ReturnOf<S extends Signature> = S["nonblocking"] extends true ? Promise<Answered<S>> : Answered<S>;
 
 export interface NativeFunction<S extends Signature = Signature> {
   (...args: ArgsOf<S>): ReturnOf<S>;
@@ -159,7 +165,15 @@ export class NativeLibrary<S extends Record<string, Signature> = Record<string, 
       name,
       names.map((symbol) => {
         const s = signatures[symbol] as Signature;
-        return [symbol, s.args ?? [], s.returns ?? "void", s.errno === true, s.optional === true, s.variadic];
+        return [
+          symbol,
+          s.args ?? [],
+          s.returns ?? "void",
+          s.errno === true,
+          s.optional === true,
+          s.variadic,
+          s.nonblocking === true,
+        ];
       }),
     );
     const symbols: Record<string, unknown> = {};
@@ -168,7 +182,9 @@ export class NativeLibrary<S extends Record<string, Signature> = Record<string, 
         symbols[symbol] = null;
         return;
       }
-      const call = (...args: unknown[]): unknown => host.call(index, ...args);
+      const direct = (...args: unknown[]): unknown => host.call(index, ...args);
+      const settled = async (...args: unknown[]): Promise<unknown> => host.call(index, ...args);
+      const call = (signatures[symbol] as Signature).nonblocking === true ? settled : direct;
       Object.defineProperty(call, "name", { value: symbol });
       Object.defineProperty(call, "signature", { value: signatures[symbol] });
       symbols[symbol] = call;

@@ -136,6 +136,57 @@ export async function threads() {
   };
 }
 
+const rejection = (promise: Promise<unknown>): Promise<string> =>
+  promise.then(
+    () => "resolved",
+    (e: unknown) => `${(e as Error).name}: ${(e as Error).message}`,
+  );
+
+/** Calls that run on a worker thread and answer with a promise. */
+export async function workers() {
+  const crt = dlopen("crt", {
+    strlen: { args: ["cstring"], returns: "usize", nonblocking: true },
+    abs: { args: ["i32"], returns: "i32", nonblocking: true },
+    memcpy: { args: ["buffer", "buffer", "usize"], returns: "pointer", nonblocking: true },
+  });
+  const pending = crt.symbols.strlen("héllo");
+  const from = new Uint8Array([9, 8, 7, 6]);
+  const to = new Uint8Array(4);
+  const copied = crt.symbols.memcpy(to, from, 4);
+  const untouched = [...to];
+  const many = await Promise.all(Array.from({ length: 40 }, (_, i) => crt.symbols.abs(-i)));
+  const growing = new Uint8Array(new ArrayBuffer(4, { maxByteLength: 8 }));
+  const result = {
+    promise: pending instanceof Promise,
+    length: String(await pending),
+    untouched,
+    copied: (await copied).isNull(),
+    written: [...to],
+    many: many.reduce((sum, n) => sum + n, 0),
+    badType: await rejection(crt.symbols.abs("1" as unknown as number)),
+    resizable: await rejection(crt.symbols.memcpy(growing, from, 4)),
+    windows: null as null | { order: string[]; lastError: { errno: number }; slept: boolean },
+  };
+  if (os.platform === "win32") {
+    const kernel = dlopen("kernel32", {
+      Sleep: { args: ["u32"], nonblocking: true },
+      SetLastError: { args: ["u32"], errno: true, nonblocking: true },
+    });
+    const order: string[] = [];
+    const started = performance.now();
+    const sleeping = kernel.symbols.Sleep(300).then(() => order.push("call"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    order.push("timer");
+    await sleeping;
+    result.windows = {
+      order,
+      lastError: await kernel.symbols.SetLastError(77),
+      slept: performance.now() - started >= 280,
+    };
+  }
+  return result;
+}
+
 export function ffi() {
   const crt = dlopen("crt", {
     strlen: { args: ["cstring"], returns: "usize" },

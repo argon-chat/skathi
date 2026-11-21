@@ -58,7 +58,7 @@ impl Arg for f64 {
 impl Arg for bool {
     const TYPE: Type = Type::Bool;
     fn sample(position: usize) -> Self {
-        position % 2 == 0
+        position.is_multiple_of(2)
     }
     fn slot(self) -> u64 {
         self as u64

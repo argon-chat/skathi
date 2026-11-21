@@ -136,6 +136,32 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "a nonblocking function runs on a worker and answers with a promise",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startWorkers(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.workersResult)"));
+      }
+      const w = JSON.parse(raw);
+      expect(w.failed).toBeUndefined();
+      const r = w.result;
+      expect([r.promise, r.length, r.copied, r.many]).toEqual([true, "6", false, 780]);
+      expect([r.untouched, r.written]).toEqual([
+        [0, 0, 0, 0],
+        [9, 8, 7, 6],
+      ]);
+      expect(r.badType).toStartWith("TypeError: crt.abs: argument 1 (i32)");
+      expect(r.resizable).toStartWith("TypeError: crt.memcpy: argument 1 (buffer) is resizable");
+      if (platform() === "win32") {
+        expect(r.windows).toEqual({ order: ["timer", "call"], lastError: { errno: 77 }, slept: true });
+      }
+    },
+    T,
+  );
+
+  test(
     "skathi:binary writes a record and reads the same values back",
     async () => {
       const app = await start();
