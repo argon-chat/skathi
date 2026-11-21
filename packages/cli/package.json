@@ -6,7 +6,7 @@
     "url": "git+https://github.com/argon-chat/skathi.git",
     "directory": "packages/cli"
   },
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "files": [
     "aot",

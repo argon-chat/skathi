@@ -1,7 +1,7 @@
 {
   "name": "@skathi-native/test",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Playwright-shaped end-to-end testing for Skathi apps, as a library for `bun test`.",
   "main": "src/index.ts",

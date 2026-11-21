@@ -30,7 +30,7 @@ rasterlottie = { version = "=0.2.2", default-features = false, features = [
     "text",
 ] }
 # ThorVG (C++ submodule) + checked-in FFI; `optional` so `--no-default-features` has no C++.
-sk-thorvg-sys = { path = "../sk-thorvg-sys", version = "0.6.0", optional = true }
+sk-thorvg-sys = { path = "../sk-thorvg-sys", version = "0.6.1", optional = true }
 # `.tgs` is gzipped Lottie JSON; `rust_backend` keeps it pure Rust.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # The document is parsed here, before any backend (see `src/normalize.rs`).
