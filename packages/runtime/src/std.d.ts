@@ -20,6 +20,10 @@ declare module "skathi:ffi" {
   export * from "@skathi-native/runtime/std/ffi";
 }
 
+declare module "skathi:gpu" {
+  export * from "@skathi-native/runtime/std/gpu";
+}
+
 declare module "skathi:network" {
   export * from "@skathi-native/runtime/std/network";
 }

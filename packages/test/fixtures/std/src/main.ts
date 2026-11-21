@@ -7,6 +7,7 @@ import { Runtime, runtime } from "skathi:runtime";
 import { TOML } from "skathi:toml";
 import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
+import { EXPECTED, gpu } from "./gpu";
 import { callbacks, ffi, threads, workers } from "./native";
 import { collections } from "./structures";
 import { text } from "./strings";
@@ -76,6 +77,13 @@ Object.assign(globalThis, {
     text: () => JSON.stringify(text()),
     ffi: () => JSON.stringify(ffi()),
     callbacks: () => JSON.stringify(callbacks()),
+    gpuResult: null as string | null,
+    startGpu() {
+      void gpu().then(
+        (result) => (this.gpuResult = JSON.stringify({ ...result, expected: EXPECTED })),
+        (error: unknown) => (this.gpuResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     workersResult: null as string | null,
     startWorkers() {
       void workers().then(

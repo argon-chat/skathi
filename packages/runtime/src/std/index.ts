@@ -5,6 +5,7 @@ import * as binary from "./binary";
 import * as collections from "./collections";
 import * as encoding from "./encoding";
 import * as ffi from "./ffi";
+import * as gpu from "./gpu";
 import * as network from "./network";
 import * as numeric from "./numeric";
 import * as os from "./os";
@@ -20,6 +21,7 @@ export const stdModules: Readonly<Record<string, Record<string, unknown>>> = {
   collections,
   encoding,
   ffi,
+  gpu,
   network,
   numeric,
   os,

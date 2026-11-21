@@ -22,7 +22,7 @@ import Aside from "../src/components/blog/Aside.astro";
 import Feature from "../src/components/blog/Feature.astro";
 import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
 
-Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-time compilation, a Windows feature until now, runs on Apple Silicon and inside an embedder's own executable. The host gets a standard library: thirteen `skathi:` modules for the things every desktop app writes again, from the operating system's name to a diff of two texts. One of them, `skathi:ffi`, calls C functions of a library the app ships, behind a list of permissions. And effects learn to step down when the machine is hot or on battery.
+Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-time compilation, a Windows feature until now, runs on Apple Silicon and inside an embedder's own executable. The host gets a standard library: fourteen `skathi:` modules for the things every desktop app writes again, from the operating system's name to a diff of two texts. One of them, `skathi:ffi`, calls C functions of a library the app ships, behind a list of permissions. And effects learn to step down when the machine is hot or on battery.
 
 <FeatureGrid label="What is new in 0.7">
   <Feature icon="cpu" title="AOT on macOS" href="#aot-on-apple-silicon" tone="pink">
@@ -109,6 +109,7 @@ const patch = TextDiff.unified(before, after);
 | `skathi:binary`      | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | `skathi:encoding`    | Hex, Base32, Base64, legacy text encodings, MIME types                                |
 | `skathi:ffi`         | C functions of the libraries the config allows                                        |
+| `skathi:gpu`         | WGSL struct layouts, the shader declaration and buffer writers for WebGPU             |
 | `skathi:text`        | `StringBuilder`, `StringReader`, `TextDiff`, `TextSearch`, `Glob`                     |
 | `skathi:time`        | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
 | `skathi:units`       | `DataSize`, `Frequency`, `Angle`                                                      |

@@ -242,6 +242,22 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:gpu lays a uniform struct out as the shader compiler does",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startGpu(); 1");
+      let raw = "null";
+      for (const until = Date.now() + 20_000; raw === "null" && Date.now() < until; await Bun.sleep(50))
+        raw = String(await app.eval("String(__SK_TEST_STD__.gpuResult)"));
+      const got = JSON.parse(raw);
+      expect(got.failed).toBeUndefined();
+      expect(got.messages).toEqual([]);
+      expect(got.read).toEqual(got.expected);
+    },
+    T,
+  );
+
+  test(
     "skathi:units converts and formats sizes, frequencies and angles",
     async () => {
       const app = await start();

@@ -30,6 +30,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
 | [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `NativeCallback`          |
+| [`skathi:gpu`](#skathigpu)                 | `wgsl` types, `struct()`: buffer layouts, WGSL text and writers for WebGPU            |
 | [`skathi:text`](#skathitext)               | `StringBuilder`, `StringReader`, `StringWriter`, `TextDiff`, `TextSearch`, `Glob`     |
 | [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
 | [`skathi:units`](#skathiunits)             | `DataSize`, `Frequency`, `Angle`                                                      |
