@@ -22,6 +22,10 @@
 //! panic, like `window::visibility_changed`; after the panic it opens the crash dialog in the
 //! pump's place (src/crash_window.rs).
 //!
+//! **Sound.** A page that is playing audio is not throttled, as in a browser: while an AudioContext
+//! has work the tick runs every [`AUDIBLE_TICK`], so a scheduler that looks a few tens of
+//! milliseconds ahead keeps time with the window minimised.
+//!
 //! **Divergence.** Chrome aligns a hidden page's timers to 1 s wake-ups. Here they keep a [`TICK`]
 //! resolution, so a timer is never later than a browser's and a socket message waits at most one
 //! tick. `requestIdleCallback` waits for the next drawn frame, where a browser still runs it (late).
@@ -38,6 +42,9 @@ use gpui::App;
 /// a socket message or a due timer while the window is hidden.
 pub const TICK: Duration = Duration::from_millis(100);
 
+/// The tick while an AudioContext has work.
+pub const AUDIBLE_TICK: Duration = Duration::from_millis(10);
+
 /// How long without a pumped frame before the tick takes over. Well above any
 /// display's frame interval and any ordinary slow frame, so the tick never
 /// interleaves with a window that is drawing.
@@ -50,6 +57,7 @@ thread_local! {
     static REPORTED: Cell<bool> = const { Cell::new(false) };
     /// Until the JS context or the host next has work, as of the last background wave.
     static NEXT_WORK: Cell<Option<Duration>> = const { Cell::new(None) };
+    static AUDIBLE: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn note_frame() {
@@ -133,7 +141,12 @@ pub fn start(cx: &mut App) {
         } else {
             // Once ticking, the tick waits for the work the last wave left, or for a poke.
             let wait = if ACTIVE.with(Cell::get) {
-                NEXT_WORK.with(Cell::get).map(|d| d.max(TICK))
+                let floor = if AUDIBLE.with(Cell::get) {
+                    AUDIBLE_TICK
+                } else {
+                    TICK
+                };
+                NEXT_WORK.with(Cell::get).map(|d| d.max(floor))
             } else if crate::window::page_hidden() {
                 Some(TICK)
             } else {
@@ -207,9 +220,11 @@ fn wave(window: &mut gpui::Window, cx: &mut App) {
     crate::js_wave(window, cx, crate::Wave::Background);
     crate::after_wave(window, cx);
     let now = Instant::now();
+    AUDIBLE.with(|a| a.set(false));
     let js = sk_runtime::JsRuntime::try_with(|rt| {
         #[cfg(feature = "audio")]
         if sk_runtime::redjs::webapi::audio::busy(rt.raw()) {
+            AUDIBLE.with(|a| a.set(true));
             return Some(now);
         }
         let at = sk_runtime::redjs::web::next_work_ms(rt.raw())?;
