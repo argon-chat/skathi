@@ -141,6 +141,8 @@ sk-elements.opt-level = 3
 sk-effects.opt-level = 3
 skathi-gpui.opt-level = 3
 skathi-gpui-windows.opt-level = 3
+On some Macs the first present to a `CAMetalLayer` costs about 190 MiB of graphics memory for about a second, in any process: an M3 Max with its built-in XDR display showed it in a 40-line AppKit program with no Skathi in it. The system allocates it, `MTLDevice.currentAllocatedSize` does not count it, and the footprint settles afterwards, so a `footprintPeakMB` that includes it is not the app's cost.
+
 skathi-taffy.opt-level = 3
 ```
 
