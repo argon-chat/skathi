@@ -17,17 +17,17 @@ Your exe is yours to package, sign and update. What Skathi needs from you at rel
 
 - The app updates without rebuilding Rust: replace `app.skpk` (atomically, never in place) and restart.
 - Mapped read-only for the app's lifetime, so a large payload costs no copy.
-- Asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) sit next to it and are found there, and so does an AOT payload's native image, `app.image.dll` (since 0.6).
+- Keep asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) with the payload. AOT also needs the matching image library. See [AOT for your own executable](#aot-for-your-own-executable-since-07).
 
 </div>
 <div class="tradeoff" data-tone="gain">
 
 **Inside the exe: `payload_static`**
 
-- One file to ship, sign and verify.
+- The executable carries the payload in its signature.
 - `payload_static(include_bytes!("../app/dist/release/.sk/app.skpk"))` borrows the bytes with no copy.
-- Every app change means a Rust rebuild, and the payload is part of the exe's signature.
-- An AOT payload's `app.image.dll` ships next to the exe (since 0.6); see [What you ship](/guides/aot/#what-you-ship).
+- Every app change means a Rust rebuild.
+- AOT uses a separate image library for the embedded payload.
 
 </div>
 </div>
@@ -46,7 +46,11 @@ let builder = skathi::Builder::new().payload_static(APP);
 
 ## AOT for your own executable (since 0.7)
 
-On Windows x64, build your embedder with `prod` and `native-aot`. Use a [Skathi source checkout](https://github.com/argon-chat/skathi) with its submodules initialized, at the same version as the CLI and your Rust dependency. From that checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container:
+Use a [Skathi source checkout](https://github.com/argon-chat/skathi) with its submodules initialized, at the same version as the CLI and your Rust dependency. Build your embedder with `prod` and `native-aot`.
+
+### Windows x64
+
+From the Skathi checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container.
 
 ```powershell
 bun install
@@ -81,6 +85,32 @@ This writes `app.skpk`, `app.image.dll` and any asset or ICU packs to `app/dist/
 
 Ship `app.image.dll` and the packs beside `app.skpk` when using `Builder::payload_file`, or beside your exe when using `Builder::payload_static`. `skimage.dll` is a build input. If you use `payload_static`, build a host with `payload_file` first to produce the payload, then rebuild with `include_bytes!`.
 
+### macOS arm64
+
+On an Apple Silicon Mac, prepare the compiler, table and Mach-O template in the Skathi checkout.
+
+```bash
+bun install
+bash vendor/redjs/setup.sh
+bun tools/sk-aot/setup.ts
+(cd tools/sk-aot && cargo build --release --locked --target aarch64-apple-darwin)
+cargo build --release --manifest-path crates/sk-image/Cargo.toml --target aarch64-apple-darwin
+export REDJS_AOT_BUILTIN_TABLE_DIR="$PWD/tools/sk-aot/.cache/table"
+skAot="$PWD/tools/sk-aot/target/aarch64-apple-darwin/release/sk-aot"
+skImage="$PWD/crates/sk-image/target/aarch64-apple-darwin/release/libskimage.dylib"
+```
+
+Use the same `skathi` Cargo features as above and apply Skathi's macOS [linker arguments](/embedding/first-embedder/#4-the-build-script). Call `run_on_main_thread` from your embedder. From your embedder's project directory, build the executable and use it to compile the payload.
+
+```bash
+cargo build --release --target aarch64-apple-darwin
+release=target/aarch64-apple-darwin/release
+cp "$skImage" "$release/"
+sk publish ./app --aot --payload-only --workload "$release/my-app" --aot-compiler "$skAot"
+```
+
+This writes `app.skpk`, `app.image.dylib` and any packs to `app/dist/release/.sk`. For a bare executable with `payload_file`, keep the image library and packs beside `app.skpk`. For a `.app` using `payload_file`, put the payload and its packs in `Contents/Resources` and pass that payload path to `Builder::payload_file`. Both `payload_file` and `payload_static` look for `app.image.dylib` in `Contents/Frameworks` in this layout. `libskimage.dylib` is a build input. Sign the image library before signing the `.app`. See the [macOS bundle](/guides/aot/#macos-bundle-since-07) for signing and notarization.
+
 ### Leave out the JIT and WebAssembly
 
 From the same Skathi checkout, generate the trimmed archive and set `REDJS_NO_JIT_DIR` before building the embedder:
@@ -90,11 +120,20 @@ bun scripts/aot/no-jit.ts --out .\target\aot-no-jit --remove JIT,WebAssembly
 $env:REDJS_NO_JIT_DIR = (Resolve-Path .\target\aot-no-jit).Path
 ```
 
+On Apple Silicon, run the same script with the macOS prebuilt from `vendor/redjs/setup.sh`.
+
+```bash
+bun scripts/aot/no-jit.ts --out target/aot-no-jit --remove JIT,WebAssembly
+export REDJS_NO_JIT_DIR="$PWD/target/aot-no-jit"
+```
+
 Add `no-wasm` to your `skathi` features for that archive. It implies `no-jit` and `native-aot`. For a host that keeps WebAssembly, use `no-jit` with an archive generated using `--remove JIT`. Both hosts require an AOT payload and retain the interpreter. The experimental `no-interpreter` feature is for engine qualification and is not exposed by `skathi`.
 
-To include devtools, use `native-inspector` in place of `no-devtools`. In the Skathi checkout, run `bun scripts/aot/prepare-inspector.ts --out target/inspector --cache target/aot-cache --table tools/sk-aot/.cache/table --container <path-to-skimage.dll>`. Set `SK_DEVTOOLS_BUNDLE` and `SK_DEVTOOLS_NATIVE_MANIFEST` to the `bundle` and `manifest` paths in `target/inspector/build.json`, and set `SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER=inspector.image.dll` before rebuilding. Put the generated `inspector.image.dll` beside your exe and set `"publishDevtools": true` in the app configuration. For F12, point `Builder::inspector_exe` to that exe and delegate the leading `--devtools` flag to `skathi::run_exe()`.
+### Include the inspector
 
-On macOS, set `JSC_useJIT=false` or `JSC_useWebAssembly=false` in the environment before JavaScriptCore starts to disable either feature at runtime. Windows x64 is the only AOT target.
+Use `native-inspector` in place of `no-devtools`. In the Skathi checkout, run `bun scripts/aot/prepare-inspector.ts --out target/inspector --cache target/aot-cache --table tools/sk-aot/.cache/table --container <template>`, using `skimage.dll` on Windows or `libskimage.dylib` on macOS. Set `SK_DEVTOOLS_BUNDLE` and `SK_DEVTOOLS_NATIVE_MANIFEST` to the `bundle` and `manifest` paths in `target/inspector/build.json`. Set `SK_DEVTOOLS_NATIVE_IMAGE_CONTAINER` to `inspector.image.dll` or `inspector.image.dylib` before rebuilding.
+
+Keep the inspector library beside the build executable for `sk publish --payload-only` and set `"publishDevtools": true` in the app configuration. When you package a `.app`, put the inspector library in `Contents/Frameworks` and sign it with the application image. A bare executable loads the inspector library from beside itself. To open devtools with F12, point `Builder::inspector_exe` to the executable and delegate its leading `--devtools` flag to `skathi::run_exe()`.
 
 ## Startup graphics memory on macOS
 

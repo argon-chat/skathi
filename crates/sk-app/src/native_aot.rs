@@ -259,7 +259,7 @@ enum Image {
     File(File),
     /// Sections of the running executable.
     Mapped(&'static [u8]),
-    /// Sections of a container DLL the loader mapped.
+    /// Sections mapped by the platform's shared-library loader.
     Module(&'static [u8]),
 }
 impl Image {

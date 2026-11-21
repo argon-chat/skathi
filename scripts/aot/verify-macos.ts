@@ -3,10 +3,12 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +17,7 @@ import { parseArgs } from "node:util";
 import { create } from "../../packages/cli/cli/create";
 import { imageTemplatePath } from "../../packages/cli/cli/host";
 import { sha256, type AotCompilerEntry, type HostManifestEntry } from "../../packages/cli/cli/host-fetch";
+import { readHandshake, Wire } from "../../packages/test/src/wire";
 
 const { values } = parseArgs({
   options: {
@@ -100,8 +103,11 @@ function make(name: "minimal" | "showcase") {
   const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as {
     dependencies: Record<string, string>;
     devDependencies: Record<string, string>;
+    overrides?: Record<string, string>;
   };
-  pkg.dependencies["@skathi-native/runtime"] = "file:" + join(sdk, "packages/runtime");
+  const localRuntime = "file:" + join(sdk, "packages/runtime");
+  pkg.dependencies["@skathi-native/runtime"] = localRuntime;
+  pkg.overrides = { ...pkg.overrides, "@skathi-native/runtime": localRuntime };
   pkg.devDependencies["@skathi-native/cli"] = "file:" + join(sdk, "packages/cli");
   writeFileSync(packagePath, JSON.stringify(pkg, null, 2));
   command(process.execPath, ["install", "--cwd", root]);
@@ -163,6 +169,68 @@ function smoke(exe: string, aot: boolean, jit = true) {
   assert.equal(output.includes("[native-aot] selected application image"), aot, output);
 }
 
+async function smokeInspector(exe: string): Promise<void> {
+  const slot = mkdtempSync(join(scratch, "inspector-"));
+  const log = join(slot, "boot.log");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    SK_DIST: slot,
+    SK_DATA_DIR: join(slot, "data"),
+    SK_DEVTOOLS: "1",
+    SK_DEVTOOLS_ENGINE: "auto",
+    SK_DEVTOOLS_RAISE: "off",
+  };
+  delete env.SK_DEVTOOLS_NATIVE_IMAGE;
+  delete env.SK_DEVTOOLS_TARGET;
+  const fd = openSync(log, "w");
+  const child = (() => {
+    try {
+      return Bun.spawn([exe, "--devtools"], { cwd: sdk, env, stdin: "ignore", stdout: fd, stderr: fd });
+    } finally {
+      closeSync(fd);
+    }
+  })();
+  const deadline = Date.now() + 60_000;
+  const output = () => readFileSync(log, "utf8").slice(-12_000);
+  let wire: Wire | undefined;
+  let lastError: unknown;
+  try {
+    while (Date.now() < deadline && child.exitCode === null) {
+      const logs = output();
+      if (logs.includes("[native-aot] inspector native entry completed") && existsSync(join(slot, "devtools.json"))) {
+        assert.match(
+          logs,
+          /\[native-aot\] selected inspector image .*\/Contents\/Frameworks\/inspector\.image\.dylib \(entry /,
+        );
+        if (!wire) {
+          const handshake = readHandshake(slot);
+          assert.equal(handshake.pid, child.pid);
+          wire = new Wire(handshake, 2_000);
+        }
+        try {
+          const tree: unknown = await wire.send("tree", { depth: 3 });
+          const dom = JSON.stringify(tree);
+          if (dom?.includes("titlebar") && dom.includes("toolbar") && child.exitCode === null) return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      await Bun.sleep(100);
+    }
+    throw Error(
+      `packaged inspector did not render its UI (exit ${child.exitCode}, ${lastError ?? "no wire error"})\n${output()}`,
+    );
+  } finally {
+    wire?.close();
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await Promise.race([child.exited, Bun.sleep(3_000)]);
+      if (child.exitCode === null) child.kill("SIGKILL");
+    }
+    await child.exited;
+  }
+}
+
 const minimal = make("minimal");
 const stock = publish(minimal, "minimal-jit", normal, false, true);
 smoke(stock.exe, false);
@@ -179,6 +247,7 @@ const inspector = publish(minimal, "devtools", diagnostic, true, false, true);
 smoke(inspector.exe, true, false);
 const other = join(inspector.app, "Contents/Frameworks/inspector.image.dylib");
 assert(existsSync(other));
+await smokeInspector(inspector.exe);
 try {
   copyFileSync(other, image);
   assert.match(command(slim.exe, [], {}, 3, 30_000), /app\.image\.dylib/);

@@ -374,7 +374,7 @@ describe("the .app", () => {
     expect([...readFileSync(join(out, "Contents", "Resources", "app.skpk"))]).toEqual([9]);
     expect(() => write(out, join(d, "no-such-host"))).toThrow();
     expect([...readFileSync(join(out, "Contents", "Resources", "app.skpk"))]).toEqual([9]);
-    expect(existsSync(`${out}.partial`)).toBe(false);
+    expect(existsSync(`${out}.partial.app`)).toBe(false);
     expect(() => writeAppBundle({ host, out, executable: "a/b", payload: new Uint8Array(), infoPlist: "" })).toThrow();
   });
 });

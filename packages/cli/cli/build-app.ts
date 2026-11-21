@@ -512,7 +512,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const singleFile = config.publishSingleFile && options.mode === "release" && !options.payloadOnly;
   if (singleFile && platform === "macos") {
     throw new ConfigError(
-      '"publishSingleFile": true has no macOS form: a macOS app is a bundle, and its files go in Contents/Resources — drop it for --platform macos',
+      '"publishSingleFile": true has no macOS form. Distribute the .app bundle, which contains its resources and native image libraries. Remove this option for --platform macos.',
     );
   }
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));

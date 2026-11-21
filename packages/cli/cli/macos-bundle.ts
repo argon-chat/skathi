@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
   renameSync,
@@ -364,12 +365,11 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
     done = true;
     const app = options.out;
     const executable = join(app, "Contents", "MacOS", options.executable);
-    const bytes =
-      statSync(executable).size +
-      options.payload.length +
-      (options.icns?.length ?? 0) +
-      Buffer.byteLength(options.infoPlist) +
-      8;
+    const files = readdirSync(app, { recursive: true, withFileTypes: true });
+    const bytes = files.reduce(
+      (total, file) => total + (file.isFile() ? statSync(join(file.parentPath, file.name)).size : 0),
+      0,
+    );
     return {
       app,
       executable,

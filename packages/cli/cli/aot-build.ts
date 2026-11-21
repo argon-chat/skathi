@@ -40,7 +40,7 @@ export function aotFlags(flags: Record<string, string | boolean>): {
   if (flags.aot === true && flags["no-aot"] === true) throw new ConfigError("--aot and --no-aot contradict each other");
   const compiler = flags["aot-compiler"];
   if (compiler !== undefined && (typeof compiler !== "string" || !compiler.trim()))
-    throw new ConfigError("--aot-compiler needs the path of sk-aot.exe");
+    throw new ConfigError("--aot-compiler needs the path to the sk-aot executable");
   return {
     aot: flags["no-aot"] === true ? false : flags.aot === true ? true : undefined,
     aotCompiler: typeof compiler === "string" ? resolve(compiler.trim()) : undefined,

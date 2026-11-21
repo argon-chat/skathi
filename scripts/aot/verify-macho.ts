@@ -32,22 +32,7 @@ function verifyRuntime(executable: string, library: string) {
       throw new Error(`expected an ad hoc host signature without a Team ID\n${details}`);
     }
   }
-  const probe = Bun.spawnSync([executable, library], { stdout: "inherit", stderr: "pipe" });
-  const error = probe.stderr.toString();
-  if (error) process.stderr.write(error);
-  if (probe.exitCode === 0) return;
-  if (
-    verifyHardened &&
-    identity === "-" &&
-    probe.exitCode === 2 &&
-    /(?:mapped file has no Team ID and is not a platform binary|mapping process and mapped file \(non-platform\) have different Team IDs)/i.test(
-      error,
-    )
-  ) {
-    console.log("Hardened runtime library validation rejected the ad hoc dylib without a matching Team ID.");
-    return;
-  }
-  throw new Error(`the signed ARM64 unwind probe exited with ${probe.exitCode}`);
+  run(executable, library);
 }
 
 const contents = `<?xml version="1.0" encoding="UTF-8"?>

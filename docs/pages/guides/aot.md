@@ -1,13 +1,13 @@
 ---
 title: Ahead-of-time compilation
 label: AOT compilation
-description: Compile a Windows build's JavaScript to a native image with sk publish --aot. How it works, what it changes, what it cannot run, and how to diagnose it.
+description: Compile JavaScript to a native image with sk publish --aot on Windows x64 or Apple Silicon. How it works, what it changes, and how to diagnose it.
 section: Guides
 order: 10
 status: experimental
 ---
 
-`sk publish --aot` compiles your app's JavaScript to machine code at build time and ships the result, a native image, beside the exe or (since 0.6, with `"publishSingleFile": true`) inside it. At start the host runs the image instead of evaluating the bundle. AOT is experimental, works on Windows x64 only, and today it is slower than the JIT in Skathi's own benchmark, so treat it as something to try and measure, not a default.
+`sk publish --aot` compiles your app's JavaScript to machine code at build time. The host runs the resulting native image at startup instead of evaluating the bundle. AOT is experimental and supports Windows x64 and macOS arm64 (since 0.7). In Skathi's Windows benchmark, the JIT is faster.
 
 If you embed Skathi in your own executable, see [AOT for your own executable](/embedding/shipping/#aot-for-your-own-executable-since-07) (since 0.7).
 
@@ -27,11 +27,11 @@ If you embed Skathi in your own executable, see [AOT for your own executable](/e
 **What it costs today**
 
 - **Speed.** In the Vue benchmark the first round took 584 ms under AOT and 437 ms under the JIT.
-- **Platforms.** Windows x64 only. `sk` refuses `--aot` for macOS and Linux.
+- **Platforms.** Build Windows x64 images on Windows x64 and macOS arm64 images on Apple Silicon.
 - **Read-only built-ins.** Code that replaces a member of `Array.prototype` or a global such as `Map` throws a `TypeError`.
 - **No JIT in the process.** `eval`, `new Function` and devtools expressions run in the interpreter.
 - **No fallback.** A host that cannot load the image shows why and exits with code 3.
-- **Size and build time.** The uncompressed image ships beside the exe or inside it, and each build adds the check and the compile.
+- **Size and build time.** The uncompressed image ships with the app, and each build adds the check and the compile.
 
 </div>
 </div>
@@ -63,15 +63,15 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
    The image and its manifest. `sk-aot` is pinned to one Bun revision and one JavaScriptCore revision, and only a host built from the same pair can load its images.
 
-6. **Container** `app.image.dll`
+6. **Container** `app.image.dll` or `app.image.dylib`
 
-   Since 0.6, the image ships uncompressed in an executable-module container beside the exe: a DLL with no code of its own whose sections hold the image, page-aligned, which you sign like the exe. With [`"publishSingleFile": true`](#one-file-publishsinglefile) the same sections go into the exe instead. The manifest goes into the payload, and `app.prod.js` stays there: the host checks the image against it and runs it on a reload.
+   The image ships uncompressed in page-aligned sections. On Windows, the container is a DLL beside the exe (since 0.6). With [`"publishSingleFile": true`](#one-file-publishsinglefile-since-06) the sections go into the exe. On macOS, the container is a Mach-O dylib in `Contents/Frameworks` (since 0.7). The payload holds the image manifest and `app.prod.js`. The host checks the image against the bundle and uses the bundle on reload.
 
 <p class="pipeline-phase" data-tone="run">On every machine that runs the app, at each start</p>
 
 7. **Host maps the image where it lies**
 
-   Before the JavaScript engine starts, the host checks the manifest against itself (compiler, engine, builtin table, the host's own startup scripts) and against the payload (the SHA-256 of `app.prod.js` and of the image). Since 0.6 it loads the container like any DLL: Windows maps each part with its own protection and applies code integrity policy and signature checks to the file. The host hashes the image where Windows mapped it and runs the image's entry there instead of evaluating `app.prod.js`. Nothing is expanded or written to disk.
+   Before the JavaScript engine starts, the host checks the compiler, engine, builtin table and startup scripts in the manifest, along with the SHA-256 of `app.prod.js` and of the image. The operating system loads the container as a shared library and applies its code-signing policy. The host hashes the mapped image and runs its entry there, without expanding it or creating a disk cache for it.
 
 </div>
 
@@ -81,20 +81,20 @@ Since 0.6, workloads carry only the image loader: JavaScriptCore's image compile
 
 ## JIT and AOT compared
 
-|                                              | JIT (default)                                                      | AOT (`--aot`)                                                       |
-| -------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| At start                                     | Parses `app.prod.js` or reads its bytecode from the per-user cache | Checks the manifest, loads the native image and runs its entry      |
-| While running                                | Interprets the bundle and JIT-compiles the hot paths               | Runs the image; the process has no JIT                              |
-| `eval`, `new Function`, devtools expressions | Run like the rest of the code                                      | Run in the interpreter                                              |
-| Built-in objects                             | Writable                                                           | Read-only: replacing their members throws a `TypeError`             |
-| Per-user cache                               | Bytecode                                                           | None (since 0.6)                                                    |
-| In the payload                               | `app.prod.js`                                                      | `app.prod.js` and the image's manifest                              |
-| Beside the exe                               | `icu.skpk` and packs                                               | Also `app.image.dll`, unless `publishSingleFile` puts it in the exe |
-| Build                                        | Bundle                                                             | Bundle, `sk check`, then `sk-aot`                                   |
-| Development                                  | `sk dev`, with hot reload                                          | None: `sk dev` runs the JavaScript. `sk run --aot` tries the image  |
-| Platforms                                    | Windows, macOS, Linux                                              | Windows x64                                                         |
-| Benchmark, first round                       | **437 ms**                                                         | 584 ms                                                              |
-| Benchmark, last round                        | **447 ms**                                                         | 550 ms                                                              |
+|                                              | JIT (default)                                                      | AOT (`--aot`)                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| At start                                     | Parses `app.prod.js` or reads its bytecode from the per-user cache | Checks the manifest, loads the native image and runs its entry     |
+| While running                                | Interprets the bundle and JIT-compiles the hot paths               | Runs the image; the process has no JIT                             |
+| `eval`, `new Function`, devtools expressions | Run like the rest of the code                                      | Run in the interpreter                                             |
+| Built-in objects                             | Writable                                                           | Read-only: replacing their members throws a `TypeError`            |
+| Per-user cache                               | Bytecode                                                           | None (since 0.6)                                                   |
+| In the payload                               | `app.prod.js`                                                      | `app.prod.js` and the image's manifest                             |
+| Image in the distribution                    |                                                                    | Windows DLL, macOS dylib, or sections in a Windows single-file exe |
+| Build                                        | Bundle                                                             | Bundle, `sk check`, then `sk-aot`                                  |
+| Development                                  | `sk dev`, with hot reload                                          | None: `sk dev` runs the JavaScript. `sk run --aot` tries the image |
+| Platforms                                    | Windows, macOS, Linux                                              | Windows x64 and macOS arm64 (since 0.7)                            |
+| Benchmark, first round                       | **437 ms**                                                         | 584 ms                                                             |
+| Benchmark, last round                        | **447 ms**                                                         | 550 ms                                                             |
 
 ### Where performance stands
 
@@ -129,15 +129,15 @@ To compile every build, set `"aot"` in `sk.config.json`:
 
 `--no-aot` turns it off for one build. `sk dev` ignores the setting: it always runs the JavaScript, with hot reload.
 
-> **Note:** An app with `"aot": true` needs `--no-aot` to build for macOS or Linux.
+Use `--no-aot` to build for Intel Macs, Linux, or from a machine that cannot run the target's `sk-aot`.
 
 ### Where sk-aot comes from
 
-The first AOT build downloads `sk-aot` from the GitHub release of the `sk` version you run (`sk-aot-windows-x64.exe.gz`), checks its SHA-256 against that release's list, and caches it under `%LOCALAPPDATA%\skathi\hosts\<version>\aot\`. Before compiling, `sk` checks that `sk-aot` targets the same engine as the workload it stamps. `sk prune` removes the `sk-aot` of other versions.
+The first AOT build downloads `sk-aot` from the GitHub release of the `sk` version you run and checks its SHA-256 against the release manifest. Windows uses `sk-aot-windows-x64.exe.gz` and caches it under `%LOCALAPPDATA%\skathi\hosts\<version>\aot\`. macOS uses `sk-aot-macos-arm64.gz` and caches it under `~/Library/Caches/skathi/hosts/<version>/aot/`. Before compiling, `sk` checks that the compiler matches the workload. `sk prune` removes compilers for other versions.
 
 ### What the build leaves behind
 
-The build summary has a `native` line with the image size and where it went: `app.image.dll` beside the exe or the exe itself. With `--json`, the result has a `native` object with the same information; its `container` is the path of `app.image.dll`, or `null` for an image in the exe. The intermediate files stay in `dist/<debug|release>/.sk/aot/`:
+The build summary's `native` line reports the image size and location. With `--json`, `native.container` is the path of the DLL or dylib, or `null` for an image in a Windows single-file exe. The intermediate files stay in `dist/<debug|release>/.sk/aot/`.
 
 | File              | What it is                                         |
 | ----------------- | -------------------------------------------------- |
@@ -148,7 +148,7 @@ The build summary has a `native` line with the image size and where it went: `ap
 
 ### What you ship (since 0.6)
 
-`sk publish --aot` writes the exe and, beside it:
+On Windows, `sk publish --aot` writes the exe and its companion files.
 
 | File                  | What it is                                                                                             |
 | --------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -161,6 +161,24 @@ Keep these files together: the exe looks for them in its own folder, so the fold
 
 Each part of the image lands in its own section, protected as the engine needs it: `.skapp` (header, read-only), `.skappx` (code, read and execute) and `.skappd` (data, read-only); the inspector's are `.skins`, `.skinsx` and `.skinsd`. `dumpbin /headers app.image.dll` lists them. The container also has an exception table over the code, so debuggers and crash dumps walk the stack through the image; its frames show as `app.image.dll+offset`.
 
+#### macOS bundle (since 0.7)
+
+Ship the entire `.app` from `sk publish --aot`.
+
+| Bundle path                                 | Contents                                                |
+| ------------------------------------------- | ------------------------------------------------------- |
+| `Contents/MacOS/<name>`                     | The host executable                                     |
+| `Contents/Resources/app.skpk`               | The JavaScript bundle, image manifest and app resources |
+| `Contents/Resources/*.skpk`                 | Asset packs, when configured                            |
+| `Contents/Frameworks/app.image.dylib`       | The application image                                   |
+| `Contents/Frameworks/inspector.image.dylib` | The image for the inspector, when shipped               |
+
+The Mach-O container maps the application image on 16 KiB boundaries. Its code pages have read and execute permissions and its data pages are read-only. The compact unwind records cover the compiled functions so a stack walker can step through image frames.
+
+On a Mac, `sk publish` signs the image libraries before signing the bundle. For local use, keep the default ad hoc signature or pass `--sign -`. Rebuilding in the same output directory with the same image and signing identity lets `sk` reuse the existing library signature. Signing a build with `"publishJit": false` enables hardened runtime without the `com.apple.security.cs.allow-jit` or `com.apple.security.cs.allow-unsigned-executable-memory` entitlements.
+
+For distribution outside the Mac App Store, pass your `Developer ID Application` identity with `--sign` or `macos.sign` in `sk.config.json`. `sk` enables hardened runtime and requests a secure timestamp for that signature. Verify the signed bundle with `codesign --verify --deep --strict dist/release/notes.app`. Submit it to Apple with `notarytool`, staple the accepted ticket, then assess the result with `spctl --assess --type execute -vv dist/release/notes.app`. [Apple’s notarization documentation](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
+
 ### One file: publishSingleFile (since 0.6)
 
 ```json title="sk.config.json"
@@ -172,6 +190,8 @@ Each part of the image lands in its own section, protected as the engine needs i
 ```
 
 With `"publishSingleFile": true`, `sk publish` writes the exe alone. The image's sections, and the inspector's when there is one, are added to the exe, and the ICU data and the packs go into its payload. Windows maps the image as part of the exe, and the engine runs the code where it lies. One signature then covers everything. `sk build` ignores the option.
+
+Remove `"publishSingleFile": true` when publishing for macOS. `sk publish` requires the `.app` layout there so `codesign` can sign the image libraries as nested code and seal the resources with the bundle.
 
 `sk publish` also extends the exe's exception table over the image's code: it writes a copy of the table with the image's entries added in a section of its own, `.skpdata`, and points the exe at it. Debuggers and crash dumps walk the stack through the image as they do beside the exe; its frames show as offsets into the exe. The copy adds the size of the host's own table to the exe, about 2 MiB.
 
@@ -286,11 +306,15 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
 ### At build time
 
-- `AOT builds are Windows x64 only for now`
+- `AOT builds require Windows x64 or macOS arm64` or `The macos AOT compiler runs on macOS on Apple Silicon`
 
-  **Cause:** The build targets macOS or Linux, or `sk` runs on another OS or architecture.
+  **Cause:** The build targets Linux, or `sk` runs on an OS or architecture that cannot run the target's compiler.
 
-  **Fix:** Build with `--no-aot`.
+  **Fix:** Compile on the target's supported platform, or build with `--no-aot`.
+
+- `"publishSingleFile": true has no macOS form`
+
+  **Fix:** Drop the setting for macOS and distribute the resulting `.app` intact.
 
 - `sk check found what a native image cannot run, so the AOT build stops here`
 
@@ -314,13 +338,11 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
   **Cause:** No cached `sk-aot` matches the workload, and `SK_HOST_OFFLINE=1` forbids downloading one.
 
-  **Fix:** Allow the download once, or pass `--aot-compiler <sk-aot.exe>`.
+  **Fix:** Allow the download once, or pass `--aot-compiler <executable>`.
 
-- `--aot compiles against the workload it stamps, so it cannot be combined with --payload-only`
+- `--aot --payload-only needs --workload <exe> to compile against your embedder's native AOT loader`
 
-  **Cause:** An image is tied to one host, so an AOT build must stamp the exe.
-
-  **Fix:** Build without `--payload-only`, or without `--aot`.
+  **Fix:** Pass the embedder executable with `--workload`, or remove `--payload-only` to build a complete app.
 
 - `the aot-nojit workload has no JIT and runs only native images`
 
@@ -348,9 +370,9 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
   **Fix:** Rebuild the app with the `sk` that matches the workload.
 
-- `this app cannot start: … app.image.dll is missing` or `… differs from the one this app was built with` (since 0.6)
+- `this app cannot start: … app.image.dll is missing`, `… app.image.dylib is missing`, or `… differs from the one this app was built with`
 
-  **Cause:** `app.image.dll` is not beside the exe, or it, or the image sections of a `publishSingleFile` exe, changed after the build.
+  **Cause:** The container is missing, invalid, or from a different build. On Windows, the single-file exe's image sections may have changed.
 
   **Fix:** Ship every file `sk publish` wrote, together and unchanged. Signing them is fine: a signature does not touch the image.
 
@@ -376,17 +398,17 @@ The bundle runs from the image, and nothing falls back to the JIT. Once a proces
 
 ## Platform support
 
-| Platform                               | AOT                                                                        |
-| -------------------------------------- | -------------------------------------------------------------------------- |
-| Windows x64                            | Build and run. Every Windows workload of a Skathi release can load images. |
-| macOS, Linux                           | No. `sk` refuses `--aot` for these targets.                                |
-| Building on macOS or Linux for Windows | No. `sk-aot` runs on Windows x64 only.                                     |
+| Target                  | Build and run                                             |
+| ----------------------- | --------------------------------------------------------- |
+| Windows x64             | On Windows x64. Release workloads can load native images. |
+| macOS arm64 (since 0.7) | On macOS with Apple Silicon and an arm64 `sk-aot`.        |
+| macOS x64 and Linux     | Use `--no-aot`.                                           |
 
 A workload you build yourself with `sk workload build` loads images only when it is built with the `native-aot` cargo feature.
 
 ## Ship without the JIT (since 0.6)
 
-A process that runs an image already has no JIT, so the JIT compiler in the exe is code the app never runs. Since 0.6, `"publishJit": false` leaves it out: `sk publish --aot` then stamps the app into the `aot-nojit` workload, a Windows x64 release host whose JavaScriptCore is linked without the JIT and without WebAssembly.
+A process that runs an image has the JIT disabled. To also leave it out of the executable, set `"publishJit": false` for `sk publish --aot`. The `aot-nojit` workload links JavaScriptCore without the JIT and WebAssembly. It is available on Windows x64 since 0.6 and macOS arm64 since 0.7.
 
 ```json title="sk.config.json"
 {
@@ -396,21 +418,21 @@ A process that runs an image already has no JIT, so the JIT compiler in the exe 
 }
 ```
 
-- **Smaller.** The workload is 73.9 MiB instead of 87.6 MiB, 13.7 MiB less, with the same image and payload: 12.8 MiB of JIT and 0.9 MiB of WebAssembly.
+- **Smaller.** On Windows x64 the workload is 73.9 MiB instead of 87.6 MiB with the same image and payload. The reduction is 12.8 MiB of JIT and 0.9 MiB of WebAssembly.
 - **No WebAssembly.** `WebAssembly` is `undefined`. `sk publish` refuses an app whose image names it, a `typeof WebAssembly` test included, and lists where; see [Troubleshooting](#at-build-time).
-- **Same speed.** Measured below, the app runs as fast as on the normal workload.
+- **Interpreter.** `eval` and `new Function` execute in the interpreter on either AOT workload. The Windows measurements below compare the two workloads.
 - **No way back to the JIT.** `SK_APP_ENGINE=jit` stops the app with exit code 3 and a message that names the workload, instead of running `app.prod.js` in the interpreter. Compare against the JIT with a build that keeps `"publishJit"` on.
 - **Images only.** `sk build` and `sk publish` refuse the `aot-nojit` workload without `--aot`, and the host refuses a payload that has no image.
-- **Release builds.** `sk build` (debug) keeps the standard workload and the JIT, and so do macOS and Linux builds. `sk publish` fetches the appropriate no-JIT workload as needed, and `sk workload install` downloads it when you name it.
+- **Release builds.** `sk build` (debug) uses the standard workload by default. `sk publish` fetches the no-JIT workload as needed. Run `sk workload install aot-nojit aot-nojit-devtools` to install both variants ahead of time.
 
-| Windows x64 AOT release workload | `publishJit` | `publishDevtools` |
+| AOT release workload             | `publishJit` | `publishDevtools` |
 | -------------------------------- | ------------ | ----------------- |
 | `no-devtools`                    | `true`       | `false`           |
 | `standard`                       | `true`       | `true`            |
 | `aot-nojit`                      | `false`      | `false`           |
 | `aot-nojit-devtools` (since 0.7) | `false`      | `true`            |
 
-The `aot-nojit-devtools` workload keeps the interpreter for console expressions and runs the inspector from `inspector.image.dll` beside the exe. It needs both `"publishDevtools": true` in the packaged payload and that DLL. Leave `"publishSingleFile"` off for this combination. With the same Windows x64 release profile, devtools adds 1.82 MiB to the exe before the separate inspector image.
+The `aot-nojit-devtools` workload keeps the interpreter for console expressions. Set `"publishDevtools": true` to ship and enable its inspector. On Windows it runs from `inspector.image.dll` beside the exe, so leave `"publishSingleFile"` off. On macOS it runs from `Contents/Frameworks/inspector.image.dylib`. With the same Windows x64 release profile, devtools adds 1.82 MiB to the exe before the separate inspector image.
 
 ### What it costs (since 0.6)
 
