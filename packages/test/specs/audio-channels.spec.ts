@@ -148,3 +148,45 @@ test(
   },
   T,
 );
+
+test(
+  "a periodic wave through a shaper, a delay loop, a convolver and a compressor is heard, and suspend() stops the clock",
+  async () => {
+    const got = await inPage(`
+    const ctx = new AudioContext();
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const osc = ctx.createOscillator();
+    osc.setPeriodicWave(ctx.createPeriodicWave([0, 0, 0.5], [0, 1, 0]));
+    const shaper = new WaveShaperNode(ctx, { curve: new Float32Array([-0.8, 0, 0.8]), oversample: '2x' });
+    const delay = ctx.createDelay(0.5); delay.delayTime.value = 0.05;
+    const feedback = ctx.createGain(); feedback.gain.value = 0.4;
+    const ir = ctx.createBuffer(2, 4800, ctx.sampleRate);
+    for (let k = 0; k < 2; k++) ir.copyToChannel(new Float32Array(4800).map((_, i) => Math.exp(-i / 600) * (i % (7 + k) ? 0.1 : 1)), k);
+    const conv = new ConvolverNode(ctx, { buffer: ir });
+    const comp = new DynamicsCompressorNode(ctx, { threshold: -40 });
+    const meter = ctx.createAnalyser();
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    osc.connect(shaper).connect(delay).connect(conv).connect(comp).connect(meter).connect(mute).connect(ctx.destination);
+    delay.connect(feedback).connect(delay);
+    osc.start();
+    await sleep(600);
+    const b = new Float32Array(1024);
+    meter.getFloatTimeDomainData(b);
+    const rms = Math.sqrt(b.reduce((a, v) => a + v * v, 0) / b.length);
+    const moved = ctx.currentTime > 0;
+    await ctx.suspend();
+    const held = ctx.currentTime;
+    await sleep(200);
+    const frozen = ctx.currentTime === held && ctx.state === 'suspended';
+    await ctx.resume();
+    await sleep(200);
+    const resumed = ctx.currentTime > held && ctx.state === 'running';
+    const type = osc.type;
+    await ctx.close();
+    return { type, heard: moved ? rms > 0.001 && Number.isFinite(rms) : true, frozen, resumed: moved ? resumed : true };
+  `);
+    console.log(`[audio-channels] effects ${JSON.stringify(got)}`);
+    expect(got).toEqual({ ok: { type: "custom", heard: true, frozen: true, resumed: true } });
+  },
+  T,
+);

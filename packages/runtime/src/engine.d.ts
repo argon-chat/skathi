@@ -625,13 +625,90 @@ interface GainNode extends AudioNode {
 }
 
 interface OscillatorNode extends AudioNode {
+  /** `"custom"` is read-only: `setPeriodicWave()` sets it. */
   type: string;
   readonly frequency: AudioParam;
   readonly detune: AudioParam;
   onended: (() => void) | null;
   start(when?: number): void;
   stop(when?: number): void;
+  setPeriodicWave(periodicWave: PeriodicWave): void;
 }
+
+interface PeriodicWaveConstraints {
+  disableNormalization?: boolean;
+}
+interface PeriodicWaveOptions extends PeriodicWaveConstraints {
+  real?: Float32Array | number[];
+  imag?: Float32Array | number[];
+}
+interface PeriodicWave {}
+declare var PeriodicWave: {
+  new (context: AudioContext, options?: PeriodicWaveOptions): PeriodicWave;
+  prototype: PeriodicWave;
+};
+
+interface DelayOptions extends AudioNodeOptions {
+  maxDelayTime?: number;
+  delayTime?: number;
+}
+interface DelayNode extends AudioNode {
+  /** In a feedback loop the delay is at least 1024 frames. */
+  readonly delayTime: AudioParam;
+}
+declare var DelayNode: {
+  new (context: AudioContext, options?: DelayOptions): DelayNode;
+  prototype: DelayNode;
+};
+
+type OverSampleType = "none" | "2x" | "4x";
+interface WaveShaperOptions extends AudioNodeOptions {
+  curve?: Float32Array | number[];
+  oversample?: OverSampleType;
+}
+interface WaveShaperNode extends AudioNode {
+  curve: Float32Array | null;
+  oversample: OverSampleType;
+}
+declare var WaveShaperNode: {
+  new (context: AudioContext, options?: WaveShaperOptions): WaveShaperNode;
+  prototype: WaveShaperNode;
+};
+
+interface DynamicsCompressorOptions extends AudioNodeOptions {
+  attack?: number;
+  knee?: number;
+  ratio?: number;
+  release?: number;
+  threshold?: number;
+}
+interface DynamicsCompressorNode extends AudioNode {
+  readonly threshold: AudioParam;
+  readonly knee: AudioParam;
+  readonly ratio: AudioParam;
+  readonly attack: AudioParam;
+  readonly release: AudioParam;
+  /** The gain reduction applied now, in dB: 0 or negative. */
+  readonly reduction: number;
+}
+declare var DynamicsCompressorNode: {
+  new (context: AudioContext, options?: DynamicsCompressorOptions): DynamicsCompressorNode;
+  prototype: DynamicsCompressorNode;
+};
+
+interface ConvolverOptions extends AudioNodeOptions {
+  buffer?: AudioBuffer | null;
+  disableNormalization?: boolean;
+}
+interface ConvolverNode extends AudioNode {
+  /** 1, 2 or 4 channels at the context's sample rate. */
+  buffer: AudioBuffer | null;
+  normalize: boolean;
+}
+declare var ConvolverNode: {
+  new (context: AudioContext, options?: ConvolverOptions): ConvolverNode;
+  prototype: ConvolverNode;
+};
 
 interface AnalyserNode extends AudioNode {
   fftSize: number;
@@ -747,6 +824,15 @@ interface AudioContext {
   createBufferSource(): AudioBufferSourceNode;
   createChannelSplitter(numberOfOutputs?: number): ChannelSplitterNode;
   createChannelMerger(numberOfInputs?: number): ChannelMergerNode;
+  createDelay(maxDelayTime?: number): DelayNode;
+  createWaveShaper(): WaveShaperNode;
+  createDynamicsCompressor(): DynamicsCompressorNode;
+  createConvolver(): ConvolverNode;
+  createPeriodicWave(
+    real: Float32Array | number[],
+    imag: Float32Array | number[],
+    constraints?: PeriodicWaveConstraints,
+  ): PeriodicWave;
   decodeAudioData(audioData: ArrayBuffer): Promise<AudioBuffer>;
   resume(): Promise<void>;
   suspend(): Promise<void>;
