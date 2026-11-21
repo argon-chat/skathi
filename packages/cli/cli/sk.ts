@@ -152,7 +152,7 @@ export function cli(run: Run): Command {
     .option("--name <name>", "The app's name (default: the directory's)")
     .option(
       "--template <name>",
-      "showcase (every feature), minimal (Vue or Svelte), player (Svelte music player), weather (Vue weather app), draw (Vue pen canvas on WebGPU) or chip8 (Vue CHIP-8 emulator)",
+      "showcase (every feature), minimal (Vue or Svelte), player (Svelte music player), weather (Vue weather app), draw (Vue pen canvas on WebGPU), chip8 (Vue CHIP-8 emulator) or sequencer (Svelte drum machine)",
     )
     .option("--framework <name>", "vue or svelte, for minimal (default: vue)")
     .option("--os <list>", "What to package for: windows, macos, linux")

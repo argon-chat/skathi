@@ -21,7 +21,7 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw", "chip8"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw", "chip8", "sequencer"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 export const FRAMEWORKS = ["vue", "svelte"] as const;
@@ -134,6 +134,13 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     },
     checker: VUE_TSC,
   },
+  sequencer: {
+    hint: "a drum machine in Svelte 5, its dials, keys and meter drawn by shaders",
+    framework: "svelte",
+    dependencies: ["svelte"],
+    window: { width: 1200, height: 820, minWidth: 1080, minHeight: 760, titleBarStyle: "hidden", titleBarHeight: 40 },
+    checker: SVELTE_CHECK,
+  },
   chip8: {
     hint: "a CHIP-8 emulator in Vue, with a debugger beside the screen",
     framework: "vue",
@@ -146,7 +153,7 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8", "sequencer"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);
