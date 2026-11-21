@@ -2,6 +2,7 @@ import type { MirrorElement } from "./types";
 import { warnCompat } from "../compat";
 import { syncListenerFlag } from "./listeners";
 import { defineDom } from "./dom-members";
+import { TextControlProto } from "./protos";
 import { I } from "./event-names";
 import { patchProp } from "./patch-prop";
 import { activation, fsHost } from "./activation";
@@ -99,12 +100,31 @@ defineDom("select", function (this: MirrorElement) {
   if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea")) throw new TypeError("Illegal invocation");
   if (activeElement() !== this) this.focus();
   if (!isTextWidget(this) || !__sk_input_select(this.__skId)) return;
+  queueSelectEvent(this);
+});
+
+const SELECTION_TYPES = new Set(["text", "search", "tel", "url", "password"]);
+defineDom(
+  "setSelectionRange",
+  function (this: MirrorElement & { type: string }, start: number, end: number, direction?: string) {
+    if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea"))
+      throw new TypeError("Illegal invocation");
+    if (arguments.length < 2) throw new TypeError("setSelectionRange requires start and end offsets.");
+    if (this.tag === "input" && !SELECTION_TYPES.has(this.type)) {
+      throw new DOMException(`Input type '${this.type}' does not support text selection.`, "InvalidStateError");
+    }
+    if (__sk_input_select(this.__skId, start >>> 0, end >>> 0, direction === "backward")) queueSelectEvent(this);
+  },
+  [TextControlProto],
+);
+
+function queueSelectEvent(el: MirrorElement): void {
   // HTML queues a bubbling, non-cancelable select event. It is not an edit:
   // no input/change event or value assignment is manufactured here.
   queueMicrotask(() => {
-    if (this.__skId) propagate(this, "select", synthesize("select", 0, 0, 0, 0, undefined));
+    if (el.__skId) propagate(el, "select", synthesize("select", 0, 0, 0, 0, undefined));
   });
-});
+}
 
 export function isLabel(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;

@@ -392,7 +392,9 @@ host_fn!(fn sk_focus(_g, args) {
 });
 
 host_fn!(fn sk_input_select(_g, args) {
-    Value::boolean(render::select_input_text(arg_id(args.arg(0)))).0
+    let range = (args.argc() >= 3).then(|| arg_id(args.arg(1)) as usize..arg_id(args.arg(2)) as usize);
+    let backward = args.arg(3).as_bool().unwrap_or(false);
+    Value::boolean(render::select_input_text(arg_id(args.arg(0)), range, backward)).0
 });
 
 host_fn!(fn sk_color_picker(_g, args) {

@@ -1,6 +1,6 @@
 import { isMirrorEl } from "./controls";
 import { mark, vacant } from "./realm";
-import { ElementProto, NodeProto, TextProto } from "./protos";
+import { ElementProto, NodeProto, TextControlProto, TextProto } from "./protos";
 import type { MirrorElement, MirrorNode } from "./types";
 import { defineGlobal } from "./globals";
 import { BRANDS, HTMLCollectionProto, NodeListProto, isChildList } from "./collections";
@@ -31,7 +31,7 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
   const parentProto =
     (parentName &&
       (globalThis as unknown as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) ||
-    ElementProto;
+    (tag === "INPUT" || tag === "TEXTAREA" ? TextControlProto : ElementProto);
   if (typeof existing === "function" && !ours) {
     // The ENGINE's class (redjs's HTMLImageElement, for `new Image()`) knows
     // nothing of mirror elements; extend its `instanceof` to cover them.

@@ -13,6 +13,32 @@ afterAll(async () => {
 const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+test(
+  "a focus handler can position the native caret before the next edit",
+  async () => {
+    await app.eval(`(() => {
+      const field = document.getElementById("field");
+      document.getElementById("btn").focus();
+      field.value = "42";
+      field.addEventListener("focus", e => e.target.setSelectionRange(1, 1), { once: true });
+      field.focus();
+    })()`);
+    const insert = (text: string) => app.send("ime", { selector: "#field", text, commit: true });
+    const fieldValue = () => app.eval('document.getElementById("field").value');
+    await insert("7");
+    bunExpect(await fieldValue()).toBe("472");
+
+    await app.eval(`(() => {
+      const field = document.getElementById("field");
+      field.value = "я🙂z";
+      field.setSelectionRange(1, 3, "backward");
+    })()`);
+    await insert("X");
+    bunExpect(await fieldValue()).toBe("яXz");
+  },
+  T,
+);
+
 type Result = { log: string[]; active: string };
 
 async function press(id: string, button: 0 | 2 = 0): Promise<Result> {

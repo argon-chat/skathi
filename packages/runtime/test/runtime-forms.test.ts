@@ -652,4 +652,18 @@ describe("native text field select()", () => {
       expect(rt.host.inputSelectCalls).toEqual([]);
     }
   });
+
+  test("an unfocused textarea accepts a range without moving focus", () => {
+    const { rt, input } = field("textarea");
+    input.setSelectionRange(1, 3);
+    expect(rt.host.inputSelectCalls).toEqual([input.__skId]);
+    expect(rt.host.focus.calls).toHaveLength(0);
+  });
+
+  test("only text controls expose setSelectionRange and unsupported input types reject it", () => {
+    const { rt, input } = field("input", "number");
+    expect(() => input.setSelectionRange(1, 1)).toThrow(expect.objectContaining({ name: "InvalidStateError" }));
+    expect(rt.nodeOps.createElement("div").setSelectionRange).toBeUndefined();
+    expect(rt.host.inputSelectCalls).toEqual([]);
+  });
 });

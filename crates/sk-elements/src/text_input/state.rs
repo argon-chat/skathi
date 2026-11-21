@@ -380,6 +380,27 @@ impl TextInputState {
         self.set_selection(0..self.content.len(), cx);
     }
 
+    pub fn set_selection_range_utf16(
+        &mut self,
+        range: Range<usize>,
+        backward: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let end = self.offset_from_utf16(range.end);
+        let start = if range.start >= range.end {
+            end
+        } else {
+            self.offset_from_utf16(range.start)
+        };
+        let range = start..end;
+        if self.selected_range == range && self.selection_reversed == backward {
+            return false;
+        }
+        self.set_selection(range, cx);
+        self.selection_reversed = backward;
+        true
+    }
+
     pub fn selected_range(&self) -> Range<usize> {
         self.selected_range.clone()
     }

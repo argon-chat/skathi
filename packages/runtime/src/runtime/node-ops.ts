@@ -10,7 +10,7 @@ import {
   nodesById,
   tighten,
 } from "./nodes";
-import { ElementProto, TextProto } from "./protos";
+import { ElementProto, TextControlProto, TextProto } from "./protos";
 import { childList, touchDom } from "./collections";
 import { I } from "./event-names";
 import { WINDOW_ROOT, windowRoots } from "../skwindow";
@@ -27,7 +27,8 @@ export function mk(id: SkNodeId, kind: 1, tag: string): MirrorElement;
 export function mk(id: SkNodeId, kind: 2 | 3, tag: string): MirrorText;
 export function mk(id: SkNodeId, kind: MirrorKind, tag: string): MirrorNode;
 export function mk(id: SkNodeId, kind: MirrorKind, tag: string): MirrorNode {
-  const n = Object.create(kind === 1 ? ElementProto : TextProto) as MirrorNodeInit;
+  const proto = kind !== 1 ? TextProto : tag === "input" || tag === "textarea" ? TextControlProto : ElementProto;
+  const n = Object.create(proto) as MirrorNodeInit;
   n.__skId = id;
   n.kind = kind;
   n.tag = tag;

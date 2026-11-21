@@ -713,6 +713,7 @@ declare global {
     /** Skathi, `type="color"`: the value is linear light past 1, and the picker has an intensity in stops. */
     hdr: boolean;
     select(): void;
+    setSelectionRange(start: number | null, end: number | null, direction?: "forward" | "backward" | "none"): void;
     stepUp(n?: number): void;
     stepDown(n?: number): void;
     /** Needs a user activation (NotAllowedError otherwise). */
@@ -729,6 +730,7 @@ declare global {
     maxLength: number;
     minLength: number;
     select(): void;
+    setSelectionRange(start: number | null, end: number | null, direction?: "forward" | "backward" | "none"): void;
   }
   interface HTMLSelectElement extends HTMLElement {
     value: string;

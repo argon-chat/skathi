@@ -29,8 +29,8 @@ thread_local! {
     /// Each `<input>` editor's focus handle as of its last build. Asking where focus is must not
     /// read the editor: a `keydown` handler runs inside its update and the read panics in gpui.
     static INPUT_FOCUS: RefCell<HashMap<u32, FocusHandle>> = RefCell::new(HashMap::new());
-    /// select() can run in nextTick before the input has its first native build.
-    static INPUT_SELECT_ALL: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    /// Selection can be requested before the first native build or inside the editor's own update.
+    static INPUT_SELECTIONS: RefCell<HashMap<u32, InputSelection>> = RefCell::new(HashMap::new());
     /// Persistent scroll offset per container; owning the handle lets us read the offset back for
     /// `e.target.scrollTop`.
     static SCROLL_HANDLES: RefCell<HashMap<u32, ScrollHandle>> = RefCell::new(HashMap::new());
@@ -418,7 +418,7 @@ pub(crate) fn gc_node_state() {
     FOCUS_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_FOCUS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
-    INPUT_SELECT_ALL.with(|m| m.borrow_mut().retain(|&id| live(id)));
+    INPUT_SELECTIONS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -4568,9 +4568,33 @@ pub(crate) fn ime(
     Ok(())
 }
 
-/// Selects a text field's native editing buffer. Defers when the field has no entity yet (mounted
-/// this wave) or its `TextInputState` is already borrowed (key/input callbacks).
-pub(crate) fn select_input_text(id: u32) -> bool {
+#[derive(PartialEq)]
+struct InputSelection {
+    range_utf16: Option<std::ops::Range<usize>>,
+    backward: bool,
+    /// A deferred selection belongs after this value write and before any later assignment.
+    value: Option<(String, u32)>,
+}
+
+impl InputSelection {
+    fn apply(&self, state: &mut TextInputState, cx: &mut Context<TextInputState>) -> bool {
+        if let Some((value, write)) = &self.value {
+            state.sync_value(value, *write, cx);
+        }
+        if let Some(range) = &self.range_utf16 {
+            state.set_selection_range_utf16(range.clone(), self.backward, cx)
+        } else {
+            state.select_all_text(cx);
+            true
+        }
+    }
+}
+
+pub(crate) fn select_input_text(
+    id: u32,
+    range_utf16: Option<std::ops::Range<usize>>,
+    backward: bool,
+) -> bool {
     let info = tree::read_tree(|t| {
         let node = t.node(id)?;
         let multiline = t.name(node.tag) == "textarea";
@@ -4590,34 +4614,41 @@ pub(crate) fn select_input_text(id: u32) -> bool {
         let value = t
             .prop_write(id, "value")
             .map(|(v, write)| (v.to_string(), write))
-            .or_else(|| multiline.then(|| (node.text.clone(), 0)));
+            .or_else(|| (multiline && !node.text.is_empty()).then(|| (node.text.clone(), 0)));
         Some((multiline, value))
     });
     let Some((multiline, value)) = info else {
         return false;
     };
+    let selection = InputSelection {
+        range_utf16,
+        backward,
+        value,
+    };
     if !crate::in_input_dispatch() {
         let state = INPUT_STATES.with(|m| m.borrow().get(&id).cloned());
         if let Some(state) = state {
-            let applied = sk_runtime::with_app(|cx| {
+            if let Some(changed) = sk_runtime::with_app(|cx| {
                 state.update(cx, |s, cx| {
                     s.set_multiline(multiline);
-                    if let Some((value, write)) = &value {
-                        s.sync_value(value, *write, cx);
-                    }
-                    s.select_all_text(cx);
+                    selection.apply(s, cx)
                 })
-            })
-            .is_some();
-            if applied {
-                INPUT_SELECT_ALL.with(|m| m.borrow_mut().remove(&id));
-                return true;
+            }) {
+                INPUT_SELECTIONS.with(|m| m.borrow_mut().remove(&id));
+                return changed;
             }
         }
     }
-    INPUT_SELECT_ALL.with(|m| m.borrow_mut().insert(id));
+    let changed = INPUT_SELECTIONS.with(|m| {
+        let mut requests = m.borrow_mut();
+        if selection.range_utf16.is_some() && requests.get(&id) == Some(&selection) {
+            return false;
+        }
+        requests.insert(id, selection);
+        true
+    });
     tree::with_tree(|t| t.touch(id));
-    true
+    changed
 }
 
 /// The live text of a native `<input>`: the widget's buffer, not the `value` prop, so it reflects
@@ -5644,7 +5675,12 @@ fn build_input<V: 'static>(
     });
 
     let multiline = t.name(node.tag) == "textarea";
-    state.update(cx, |s, _| s.set_multiline(multiline));
+    state.update(cx, |s, cx| {
+        s.set_multiline(multiline);
+        if let Some(selection) = INPUT_SELECTIONS.with(|m| m.borrow_mut().remove(&id)) {
+            selection.apply(s, cx);
+        }
+    });
     for shown in [
         t.prop(id, "value"),
         t.prop(id, "placeholder"),
@@ -5670,10 +5706,6 @@ fn build_input<V: 'static>(
     } else if multiline && !node.text.is_empty() {
         let value = node.text.clone();
         state.update(cx, |s, cx| s.sync_value(&value, 0, cx));
-    }
-
-    if INPUT_SELECT_ALL.with(|m| m.borrow_mut().remove(&id)) {
-        state.update(cx, |s, cx| s.select_all_text(cx));
     }
 
     let text_style = node.computed.as_ref().map(|cs| cs.base.text.clone());
@@ -5978,13 +6010,19 @@ mod tests {
             t.set_prop(field, value, Some("Привет 🙂\nSecond line".to_string()));
             (field, other)
         });
-        assert!(super::select_input_text(field));
-        assert!(super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&field)));
-        assert!(!super::select_input_text(other));
-        assert!(!super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&other)));
+        assert!(super::select_input_text(field, None, false));
+        assert!(super::select_input_text(field, Some(1..3), true));
+        assert!(!super::select_input_text(field, Some(1..3), true));
+        super::INPUT_SELECTIONS.with(|m| {
+            let requests = m.borrow();
+            assert_eq!(requests[&field].range_utf16, Some(1..3));
+            assert!(requests[&field].backward);
+        });
+        assert!(!super::select_input_text(other, None, false));
+        assert!(!super::INPUT_SELECTIONS.with(|m| m.borrow().contains_key(&other)));
         crate::tree::with_tree(|t| t.remove(field));
         super::gc_node_state();
-        assert!(!super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&field)));
+        assert!(!super::INPUT_SELECTIONS.with(|m| m.borrow().contains_key(&field)));
     }
 
     use super::*;

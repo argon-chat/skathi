@@ -204,6 +204,7 @@ export interface MirrorElement extends MirrorNodeBase {
   focus(): void;
   blur(): void;
   select(): void;
+  setSelectionRange(start: number | null, end: number | null, direction?: "forward" | "backward" | "none"): void;
   setPointerCapture(pointerId: number): void;
   hasPointerCapture(pointerId: number): boolean;
   releasePointerCapture(pointerId: number): void;
