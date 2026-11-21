@@ -20,6 +20,7 @@ import {
   plain,
   platforms,
   sinceOn,
+  skathiOnlyNote,
   statuses,
   type RefEntry,
   type Reference,
@@ -337,7 +338,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
             <strong>{entry.skathiOnly ? "Not part of the web platform" : "Not in the browser reference"}</strong>
             <small>
               {entry.skathiOnly
-                ? "Browsers ignore it; Skathi reads it. This page is its reference."
+                ? `${skathiOnlyNote(reference)} This page is its reference.`
                 : "MDN has no page for it: it is handled by Skathi's compiler and tooling, or outside the standard. This page is its reference."}
             </small>
           </span>

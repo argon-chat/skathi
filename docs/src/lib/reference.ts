@@ -39,6 +39,13 @@ export interface Reference {
   source: string;
 }
 
+/** What a browser does with an entry only Skathi has: CSS is skipped there, a script fails. */
+export function skathiOnlyNote(ref: Reference): string {
+  if (ref.id === "css") return "Browsers ignore it; Skathi reads it.";
+  if (ref.id === "std") return "A browser has no such module, and an import of it fails there.";
+  return "A browser does not have it, and code that uses it fails there.";
+}
+
 /** The slim shape the catalog island receives. */
 export type CatalogEntry = Pick<
   RefEntry,
@@ -265,7 +272,7 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
   ];
   const fresh = freshNote(entry);
   if (fresh) lines.push(`- ${newLabel}: ${fresh}.`);
-  if (entry.skathiOnly) lines.push("- Skathi only: not part of the web platform; browsers ignore it.");
+  if (entry.skathiOnly) lines.push(`- Skathi only: not part of the web platform. ${skathiOnlyNote(ref)}`);
   if (entry.experimental) lines.push("- Experimental on the web.");
   if (entry.webDeprecated) lines.push("- Deprecated on the web.");
   if (entry.animates) lines.push(`- Animates: ${entry.animates}.`);
