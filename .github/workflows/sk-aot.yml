@@ -5,6 +5,10 @@ on:
       ref:
         description: Candidate SDK commit
         required: true
+      rebuild_hosts:
+        description: Rebuild the SDK release hosts using the compiler from the supplied run
+        type: boolean
+        default: false
       wide_app:
         description: Compile the test apps with wide references on the supplied host
         type: boolean
@@ -27,7 +31,7 @@ permissions:
 jobs:
   qualify:
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -37,8 +41,25 @@ jobs:
       - uses: ./.github/actions/native
         with:
           target: aarch64-apple-darwin
-      - uses: ./.github/actions/css-checker
-      - uses: actions/download-artifact@v4
+      - if: inputs.rebuild_hosts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-aot-workloads
+      - if: inputs.rebuild_hosts
+        uses: actions/download-artifact@v4
+        with:
+          name: sk-aot-macos-arm64
+          run-id: ${{ inputs.workloads }}
+          github-token: ${{ github.token }}
+          path: .tools/sk-aot
+      - if: inputs.rebuild_hosts
+        uses: ./.github/actions/macos-aot
+        with:
+          benchmarks: "true"
+      - if: ${{ !inputs.rebuild_hosts }}
+        uses: ./.github/actions/css-checker
+      - if: ${{ !inputs.rebuild_hosts }}
+        uses: actions/download-artifact@v4
         with:
           name: skathi-macos-arm64-workloads
           run-id: ${{ inputs.workloads }}
@@ -118,10 +139,10 @@ jobs:
                       sample = bench["capture"](exe, "jit", profile, 5, 60, scroll=scroll)
                       print(name, {k: v for k, v in sample.items() if k != "intervalsMs"}, flush=True)
           PY
-      - if: ${{ !inputs.jit_probe && !inputs.profile_probe }}
+      - if: ${{ !inputs.rebuild_hosts && !inputs.jit_probe && !inputs.profile_probe }}
         run: bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification --bench-apps
       - name: Measure startup, memory, disk size and scrolling
-        if: ${{ !inputs.jit_probe && !inputs.profile_probe }}
+        if: ${{ !inputs.rebuild_hosts && !inputs.jit_probe && !inputs.profile_probe }}
         shell: bash
         run: |
           python3 - <<'PY'
