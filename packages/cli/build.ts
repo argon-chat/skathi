@@ -161,6 +161,13 @@ function readAppName(): string | undefined {
   return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 
+function readAppVersion(): string | undefined {
+  for (const version of [readSkConfig()?.version, readPackageJson(SK_CONFIG_DIR)?.version]) {
+    if (typeof version === "string" && version.trim()) return version.trim();
+  }
+  return undefined;
+}
+
 // Launch keys the host reads before anything else; only well-typed keys are copied (`sk build`
 // is where a wrong one is an error).
 function readLaunchConfig(): Record<string, unknown> | undefined {
@@ -1314,6 +1321,7 @@ function writeManifest(files: string[]) {
         entry: toId(ENTRY_ABS),
         appRoot: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
         name: readAppName(),
+        version: readAppVersion(),
         modules: ids,
         assetFiles: Object.fromEntries(
           [...DEV_ASSET_FILES]

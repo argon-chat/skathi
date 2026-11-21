@@ -34,9 +34,24 @@ export const VUE_MISSING = `this app uses Vue but "vue" is not installed: bun ad
 /** `native:<name>`: a module the embedding program provides at run time, never a file to bundle. */
 export const isNativeModule = (spec: string) => spec.startsWith("native:");
 
-/** Bare specifiers the builders serve from the runtime (and every `native:` module); an app cannot alias them. */
+/** `skathi:<name>`: a module of Skathi's own library, served from the runtime package. */
+export const STD_MODULES: readonly string[] = ["app", "os", "runtime"];
+export const isStdModule = (spec: string) => spec.startsWith("skathi:");
+
+/** The runtime file behind `skathi:<name>`; throws for a name Skathi has no module for. */
+export function stdModuleFile(spec: string): string {
+  const name = spec.slice("skathi:".length);
+  if (!STD_MODULES.includes(name)) {
+    throw new Error(
+      `"${spec}" is not a Skathi module; there are ${STD_MODULES.map((known) => `"skathi:${known}"`).join(", ")}`,
+    );
+  }
+  return join(RUNTIME_SRC_DIR, "std", `${name}.ts`);
+}
+
+/** Bare specifiers the builders serve from the runtime (and every `native:` and `skathi:` module); an app cannot alias them. */
 export const PRESEEDED: readonly string[] = ["vue", "@skathi-native/runtime", "vue-router", "pinia"];
-export const isPreseeded = (spec: string) => PRESEEDED.includes(spec) || isNativeModule(spec);
+export const isPreseeded = (spec: string) => PRESEEDED.includes(spec) || isNativeModule(spec) || isStdModule(spec);
 /** Libraries the builders give one shared copy, the app's own install; never part of the runtime. */
 export const FRAMEWORK_LIBS: readonly string[] = ["vue-router", "pinia"];
 export const NATIVE_MODULES_ENTRY = join(RUNTIME_SRC_DIR, "native-modules.ts");

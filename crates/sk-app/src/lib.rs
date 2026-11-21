@@ -87,6 +87,7 @@ mod shutdown;
 mod slot;
 #[cfg(feature = "spatial-audio")]
 mod spatial_audio;
+mod stdlib;
 mod transparency;
 pub mod tray;
 mod window;
@@ -1281,6 +1282,7 @@ fn run_app() {
             sk_tree::color_picker::set_recents_file(sk_storage::cookies::folder().map(|f| f.join("recent-colors.txt")));
             haptics::install(rt);
             power::install(rt);
+            stdlib::install(rt);
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;

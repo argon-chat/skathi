@@ -315,7 +315,7 @@ pub(crate) fn quit(action: Action, cx: &mut App) {
     // After `begin`: a single-instance app's new process is told this one is
     // closing, and waits for it to end before it opens its window.
     if relaunch {
-        match relaunch_now() {
+        match self::relaunch(relaunch_args(std::env::args_os())) {
             Ok(pid) => sk_tree::log::record(
                 "crash",
                 format!("[crash] restarting: started process {pid}"),
@@ -339,10 +339,20 @@ pub(crate) fn quit(action: Action, cx: &mut App) {
     }
 }
 
-fn relaunch_now() -> Result<u32, String> {
-    let exe: PathBuf = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+/// Starts this program again with `args`, detached; the pid of the new process.
+pub(crate) fn relaunch(args: Vec<OsString>) -> Result<u32, String> {
+    // An AppImage's own executable lives in a mount that goes away with this process.
+    let appimage = cfg!(target_os = "linux")
+        .then(|| std::env::var_os("APPIMAGE"))
+        .flatten()
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let exe: PathBuf = match appimage {
+        Some(path) => path,
+        None => std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?,
+    };
     let mut cmd = std::process::Command::new(&exe);
-    cmd.args(relaunch_args(std::env::args_os()))
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

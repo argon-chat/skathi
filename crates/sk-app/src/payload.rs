@@ -95,6 +95,9 @@ impl AppPayload {
     fn meta(&self) -> Option<&str> {
         self.0.borrow_dependent().meta()
     }
+    pub(crate) fn is_file(&self) -> bool {
+        matches!(self.0.borrow_owner(), PayloadBytes::File(_))
+    }
     pub fn len(&self) -> usize {
         self.0.borrow_dependent().len()
     }
@@ -123,7 +126,7 @@ impl AppPayload {
     pub fn asset_ignoring_case(&self, key: &str) -> Option<(&str, &[u8])> {
         self.0.borrow_dependent().asset_ignoring_case(key)
     }
-    fn icu_data(&self) -> Option<&[u8]> {
+    pub(crate) fn icu_data(&self) -> Option<&[u8]> {
         self.0.borrow_dependent().icu_data()
     }
 }

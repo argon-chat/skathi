@@ -181,6 +181,12 @@ pub fn app_name() -> Option<String> {
     app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
 }
 
+pub fn app_version() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    let version = json::parse(&text)?.get("version")?.as_str()?.to_string();
+    (!version.is_empty()).then_some(version)
+}
+
 fn app_dir_of(entry: &str) -> Option<String> {
     let mut segs: Vec<&str> = entry.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     segs.pop()?; // the entry file itself

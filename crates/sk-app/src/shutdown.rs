@@ -18,7 +18,7 @@
 //! `ExitProcess` kills the deadline's thread before those begin, so nothing would bound them. None
 //! writes anything a user would miss, since quit hooks flush everything that persists.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,20 @@ static STEPS: Mutex<Vec<(&'static str, Instant, Option<Duration>)>> = Mutex::new
 static HIDDEN: Mutex<usize> = Mutex::new(0);
 static ENDING: AtomicBool = AtomicBool::new(false);
 static FAILED: AtomicBool = AtomicBool::new(false);
+static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
+
+/// The exit code a clean close ends the process with (`app.quit({ exitCode })`).
+pub(crate) fn set_exit_code(code: i32) {
+    EXIT_CODE.store(code, Ordering::SeqCst);
+}
+
+pub(crate) fn exit_code() -> i32 {
+    if FAILED.load(Ordering::SeqCst) {
+        1
+    } else {
+        EXIT_CODE.load(Ordering::SeqCst)
+    }
+}
 
 /// The app cannot go on: the coming quit ends the process with exit code 1, or tells the embedder
 /// it ended unclean.
@@ -198,11 +212,11 @@ fn hide_windows() -> usize {
 }
 
 fn terminate() -> ! {
-    let code = FAILED.load(Ordering::SeqCst) as u32;
+    let code = exit_code();
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-        let _ = TerminateProcess(GetCurrentProcess(), code);
+        let _ = TerminateProcess(GetCurrentProcess(), code as u32);
     }
-    std::process::exit(code as i32)
+    std::process::exit(code)
 }

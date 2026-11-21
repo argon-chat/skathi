@@ -22,6 +22,7 @@
     ".": "./src/runtime.ts",
     "./svelte": "./src/svelte.ts",
     "./svelte-renderer": "./src/svelte-renderer.ts",
+    "./std/*": "./src/std/*.ts",
     "./jsx-runtime": {
       "types": "./jsx-runtime.d.ts"
     },
