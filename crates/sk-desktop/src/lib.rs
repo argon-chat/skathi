@@ -26,7 +26,6 @@ pub mod launch;
 pub mod media_session;
 pub mod network;
 mod pool;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod power;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod share;
