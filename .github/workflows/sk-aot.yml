@@ -35,13 +35,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: sk-aot-windows-x64
             extension: .exe
-            shell: pwsh
           - name: macOS arm64
             runner: macos-15
             target: aarch64-apple-darwin
             artifact: sk-aot-macos-arm64
             extension: ""
-            shell: bash
     env:
       SK_AOT_TARGET: ${{ matrix.target }}
       SK_AOT_ASSET: ${{ matrix.artifact }}
@@ -93,7 +91,7 @@ jobs:
           key: sk-aot-cargo-${{ hashFiles('tools/sk-aot/Cargo.lock') }}
       # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
       - name: Build
-        shell: ${{ matrix.shell }}
+        shell: pwsh
         working-directory: tools/sk-aot
         run: cargo fmt --check && cargo build --release --locked --target ${{ matrix.target }}
 
