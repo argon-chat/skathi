@@ -5,6 +5,10 @@ on:
       ref:
         description: Candidate SDK commit
         required: true
+      profile_probe:
+        description: Compare default and compact memory profiles in the release hosts
+        type: boolean
+        default: false
       jit_probe:
         description: Check first-frame and scroll instrumentation with the stock host
         type: boolean
@@ -36,6 +40,27 @@ jobs:
           run-id: ${{ inputs.workloads }}
           github-token: ${{ github.token }}
           path: release-hosts
+      - name: Check the native image heap reservation
+        if: inputs.profile_probe
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path("scripts/aot/verify-macos.ts")
+          prefix, marker, _ = src.read_text().partition('const minimal = make("minimal");')
+          assert marker
+          src.with_name("probe-profile.ts").write_text(prefix + '''
+          const minimal = make("minimal");
+          for (const [label, host, jit] of [["normal",normal,true], ["nojit",nojit,false]] as const) {
+            const app = publish(minimal, label, host, true, jit);
+            for (const profile of ["default","compact"]) {
+              const result = spawnSync(app.exe, [], {encoding:"utf8", timeout:20_000, env:{...process.env, SK_SCENARIO:"aot-smoke", SK_PERF:"1", SK_AOT_MEMORY_PROFILE:profile}});
+              console.log(label, profile, "status", result.status, "signal", result.signal, result.stdout, result.stderr);
+            }
+          }
+          ''')
+          PY
+          bun scripts/aot/probe-profile.ts --hosts release-hosts --out target/mac-aot-qualification
       - name: Exercise GUI measurement instruments
         if: inputs.jit_probe
         shell: bash
@@ -66,10 +91,10 @@ jobs:
                       sample = bench["capture"](exe, "jit", profile, 5, 60, scroll=scroll)
                       print(name, {k: v for k, v in sample.items() if k != "intervalsMs"}, flush=True)
           PY
-      - if: ${{ !inputs.jit_probe }}
+      - if: ${{ !inputs.jit_probe && !inputs.profile_probe }}
         run: bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification --bench-apps
       - name: Measure startup, memory, disk size and scrolling
-        if: ${{ !inputs.jit_probe }}
+        if: ${{ !inputs.jit_probe && !inputs.profile_probe }}
         shell: bash
         run: |
           python3 - <<'PY'
