@@ -199,6 +199,57 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
   );
 
   test(
+    "an audio worklet runs beside the image, in a VM of its own",
+    async () => {
+      const { buildApp } = await import("../../cli/cli/build-app");
+      const built = await buildApp({
+        target: join(REPO, "packages", "test", "fixtures", "audio-worklet"),
+        out: join(WORK_DIR, "packaged", `aot-worklet-${process.pid}`),
+        host: "host" in ready ? ready.host : undefined,
+        variant: "standard",
+        aot: true,
+        log: (l) => console.log(`[aot.spec] ${l}`),
+      });
+      const app = await launch({
+        app: "aot-worklet",
+        exe: built.exe!,
+        packaged: built.config.name,
+        label: "aot-worklet",
+        window: [360, 200],
+        env: { SK_AOT_CACHE_DIR: join(caches, "native") },
+      });
+      opened.push(app);
+      await expect(app.locator("#root")).toHaveText("audio worklet");
+      bunExpect(lines(app, /\[native-aot\] application native entry completed/)).toHaveLength(1);
+      await app.eval(
+        `globalThis.__awl = ""; (async () => {
+          const fixture = globalThis.__SK_TEST_WORKLET__;
+          const ctx = new AudioContext();
+          await fixture.load(ctx);
+          const tone = new AudioWorkletNode(ctx, "tone", { numberOfInputs: 0 });
+          const echo = new AudioWorkletNode(ctx, "echo", { numberOfInputs: 0 });
+          const meter = ctx.createAnalyser();
+          tone.connect(meter);
+          const answers = [await fixture.ask(tone, "ping"), await fixture.ask(echo, "pong")];
+          await new Promise((r) => setTimeout(r, 500));
+          const b = new Float32Array(1024);
+          meter.getFloatTimeDomainData(b);
+          const rms = Math.sqrt(b.reduce((a, v) => a + v * v, 0) / b.length);
+          const moved = ctx.currentTime > 0;
+          await ctx.close();
+          return { answers: answers.map((a) => a.answer), heard: moved ? Math.abs(rms - 0.25) < 1e-3 : true };
+        })().then((v) => { globalThis.__awl = JSON.stringify(v); }, (e) => { globalThis.__awl = JSON.stringify(String(e)); }); "started"`,
+      );
+      let raw = "";
+      for (const until = Date.now() + 20_000; !raw && Date.now() < until; await Bun.sleep(50))
+        raw = String(await app.eval("globalThis.__awl"));
+      bunExpect(JSON.parse(raw)).toEqual({ answers: ["tone:ping", "echo:pong"], heard: true });
+      await app.close();
+    },
+    BUILD_T,
+  );
+
+  test(
     "an app that imports nothing runs from its image and sees the host's functions",
     async () => {
       const root = join(WORK_DIR, `aot-bare-${process.pid}`);

@@ -9,6 +9,7 @@ import shadingGlass from "../assets/shading-glass.png";
 import shadingNebula from "../assets/shading-nebula.png";
 import drawPoster from "../assets/media/draw-poster.webp";
 import playerPoster from "../assets/media/player-poster.webp";
+import rv32Poster from "../assets/media/rv32-poster.webp";
 import sequencerPoster from "../assets/media/sequencer-poster.webp";
 import weatherPoster from "../assets/media/weather-poster.webp";
 import slang from "../lib/slang";
@@ -23,7 +24,7 @@ import { organizationId } from "../lib/schema";
 import { fetchStats } from "../lib/stats";
 
 const command = "bun create skathi my-blazing-fast-app";
-const posterSizes = "(max-width: 900px) calc(100vw - 48px), 349px";
+const posterSizes = "(max-width: 900px) calc(100vw - 48px), 277px";
 const title = "Skathi · Vue and Svelte desktop apps without Electron";
 const metaDescription =
   "Native desktop apps from Vue 3 or Svelte 5 and TypeScript, with no Electron and no webview: a GPU renderer and JavaScriptCore, for Windows, macOS and Linux.";
@@ -336,10 +337,10 @@ const structuredData = {
       <section class="gallery" aria-labelledby="gallery-title" data-fan>
         <div class="gallery-stage">
           <h2 id="gallery-title" class="gallery-title">
-            Four templates to start from. <span class="candy-text">Every pixel drawn by Skathi.</span>
+            Five templates to start from. <span class="candy-text">Every pixel drawn by Skathi.</span>
           </h2>
           <div class="fan">
-            <figure class="fan-card" style="--side: -1.5">
+            <figure class="fan-card" style="--side: -2">
               <div class="window">
                 <Image class="window-poster" src={playerPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -360,7 +361,7 @@ const structuredData = {
                 <code>bun create skathi my-app --template player</code>
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: -0.5">
+            <figure class="fan-card" style="--side: -1">
               <div class="window">
                 <Image class="window-poster" src={drawPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -381,7 +382,7 @@ const structuredData = {
                 <code>bun create skathi my-app --template draw</code>
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: 0.5">
+            <figure class="fan-card" style="--side: 0">
               <div class="window">
                 <Image class="window-poster" src={weatherPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -402,7 +403,7 @@ const structuredData = {
                 <code>bun create skathi my-app --template weather</code>
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: 1.5">
+            <figure class="fan-card" style="--side: 1">
               <div class="window">
                 <Image
                   class="window-poster"
@@ -427,6 +428,28 @@ const structuredData = {
               <figcaption>
                 <strong>Drum machine</strong><span>Svelte 5 · dials, keys and a meter in shaders</span>
                 <code>bun create skathi my-app --template sequencer</code>
+              </figcaption>
+            </figure>
+            <figure class="fan-card" style="--side: 2">
+              <div class="window">
+                <Image class="window-poster" src={rv32Poster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
+                <video
+                  muted
+                  loop
+                  playsinline
+                  preload="none"
+                  width="1280"
+                  height="820"
+                  aria-label="The rv32 template: a RISC-V emulator running a first-person shooter on its screen, the registers and the next instructions beside it, paused and stepped an instruction and a frame at a time"
+                >
+                  <source data-src="/media/rv32.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                  <source data-src="/media/rv32.mp4" type="video/mp4" />
+                </video>
+              </div>
+              <figcaption>
+                <strong>RISC-V workbench</strong><span>Vue · an emulator and its debugger, running the Doom engine</span
+                >
+                <code>bun create skathi my-app --template rv32</code>
               </figcaption>
             </figure>
           </div>

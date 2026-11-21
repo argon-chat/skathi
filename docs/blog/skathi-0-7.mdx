@@ -51,8 +51,8 @@ Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-t
   <Feature icon="volume" title="Web Audio" href="#web-audio" tone="pink">
     Delay, wave shaper, compressor, convolver and periodic waves.
   </Feature>
-  <Feature icon="shapes" title="Two templates" href="#two-new-templates" tone="blue">
-    A drum machine in Svelte and a CHIP-8 emulator in Vue.
+  <Feature icon="shapes" title="Three templates" href="#three-new-templates" tone="blue">
+    A drum machine in Svelte, and a CHIP-8 and a RISC-V emulator in Vue.
   </Feature>
 </FeatureGrid>
 
@@ -183,12 +183,13 @@ delay.connect(context.destination);
 
 The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser.
 
-## Two new templates
+## Three new templates
 
-`sk create` has two more finished apps to start from.
+`sk create` has three more finished apps to start from.
 
 - **`sequencer`**, in Svelte 5, is a drum machine: four patterns with accents and tracks of different lengths, a drive, an echo and a room on the mix. Its dials, keys, panel and meter are four shaders of its own, each with three levels of detail.
 - **`chip8`**, in Vue, is a CHIP-8 emulator with a debugger beside the screen: an assembler and a disassembler from one table, breakpoints, a trace of the last instructions. It is built on the `skathi:` modules, and a badge shows whether it runs under the JIT or from a native image.
+- **`rv32`**, in Vue, is a RISC-V emulator with the same kind of workbench: registers, the next instructions, a step of one instruction or one frame. Its guest is the Doom engine, compiled for RV32IM and shipped with its source. `bun install` fetches the shareware episode for it, and it runs Freedoom as well.
 
 ```sh
 bun create skathi my-app --template sequencer

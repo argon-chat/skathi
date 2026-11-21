@@ -182,17 +182,17 @@
   }
   .fan {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 28px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 24px;
   }
   .fan-card {
     --closed: calc(1 - var(--fan));
     position: relative;
-    z-index: calc(2 - var(--side) * var(--side));
+    z-index: calc(4 - var(--side) * var(--side));
     margin: 0;
     transform-origin: 50% 130%;
     transform: translateX(calc(var(--closed) * var(--side) * -54%)) translateY(calc(var(--closed) * 28px))
-      rotate(calc(var(--closed) * var(--side) * 8deg)) scale(calc(1.12 - var(--fan) * 0.12));
+      rotate(calc(var(--closed) * var(--side) * 6deg)) scale(calc(1.12 - var(--fan) * 0.12));
     will-change: transform;
   }
   .window {
