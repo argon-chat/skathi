@@ -14,16 +14,25 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_NATIVE_AOT").is_some() {
+        let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+        let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+        println!("cargo:rustc-env=SK_AOT_TARGET={arch}-{os}");
+    }
     println!("cargo::rustc-check-cfg=cfg(sk_devtools)");
     println!("cargo:rerun-if-env-changed=SK_DEVTOOLS_BUNDLE");
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    let macos = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
+    if msvc {
         suppress_release_pdb();
         identical_code_folding();
         thread_stack_commit();
-        link_map();
     }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    if macos {
         macos_link();
+    }
+    if msvc || macos {
+        link_map(msvc);
     }
     host_identity();
     standalone_manifest();
@@ -230,13 +239,18 @@ fn thread_stack_commit() {
 
 /// `SK_HOST_LINK_MAP=<file>`: the linker writes the host's map there, for scripts/release-hosts.ts
 /// to check which parts of the engine the link left out.
-fn link_map() {
+fn link_map(msvc: bool) {
     println!("cargo:rerun-if-env-changed=SK_HOST_LINK_MAP");
     if let Some(path) = std::env::var_os("SK_HOST_LINK_MAP").filter(|p| !p.is_empty()) {
-        println!(
-            "cargo:rustc-link-arg-bins=/MAP:{}",
-            Path::new(&path).display()
-        );
+        let path = Path::new(&path).display();
+        if msvc {
+            println!("cargo:rustc-link-arg-bins=/MAP:{path}");
+        } else {
+            for arg in ["-Xlinker", "-map", "-Xlinker"] {
+                println!("cargo:rustc-link-arg-bins={arg}");
+            }
+            println!("cargo:rustc-link-arg-bins={path}");
+        }
     }
 }
 

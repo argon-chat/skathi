@@ -14,6 +14,13 @@ const table = join(cache, "table");
 const engine = join(webkitDirectory(sdk), "Source/JavaScriptCore/aot");
 const pin = loadPin();
 const revision = pin.frontend.revision;
+const target =
+  process.platform === "darwin" && process.arch === "arm64"
+    ? "aarch64-apple-darwin"
+    : process.platform === "win32" && process.arch === "x64"
+      ? "x86_64-pc-windows-msvc"
+      : undefined;
+if (!target) throw new Error("Build sk-aot with native Bun on an Apple Silicon Mac or an x64 Windows host");
 const SPARSE = [
   "src",
   "scripts",
@@ -170,4 +177,6 @@ if (process.platform === "win32")
 run([process.execPath, join(sdk, "scripts/aot/generate-table.ts"), "--bun-source", bun, "--out", table], { cwd: sdk });
 await verifyTable(table, sdk, pin);
 codegen();
-console.log(`tools/sk-aot/.cache is at frontend ${revision}; build with: cd tools/sk-aot && cargo build --release`);
+console.log(
+  `tools/sk-aot/.cache is at frontend ${revision}; build with: cd tools/sk-aot && cargo build --release --target ${target}`,
+);

@@ -130,10 +130,13 @@ describe("flags and config", () => {
     expect(() => aotFlags({ "aot-compiler": true })).toThrow();
   });
 
-  test("only a Windows x64 build on Windows x64 can be AOT-compiled", () => {
+  test("AOT requires a compiler on the matching architecture and OS", () => {
     expect(aotPlatformProblem("windows", { platform: "win32", arch: "x64" })).toBeNull();
+    expect(aotPlatformProblem("macos", { platform: "darwin", arch: "arm64" })).toBeNull();
     for (const [target, here] of [
-      ["macos", { platform: "darwin", arch: "arm64" }],
+      ["macos", { platform: "darwin", arch: "x64" }],
+      ["macos", { platform: "win32", arch: "x64" }],
+      ["windows", { platform: "darwin", arch: "arm64" }],
       ["linux", { platform: "win32", arch: "x64" }],
       ["windows", { platform: "win32", arch: "arm64" }],
       ["windows", { platform: "linux", arch: "x64" }],
@@ -141,7 +144,7 @@ describe("flags and config", () => {
       expect(aotPlatformProblem(target, here)).not.toBeNull();
   });
 
-  test("a non-Windows AOT build fails before a host is looked for", async () => {
+  test("an unsupported AOT build fails before a host is looked for", async () => {
     const root = app({ aot: true });
     const error = await buildApp({ target: root, platform: "linux", log: () => {} }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConfigError);

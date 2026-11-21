@@ -5,4 +5,16 @@ fn main() {
             println!("cargo:rustc-cdylib-link-arg={arg}");
         }
     }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        for arg in [
+            "-nostdlib",
+            "-lSystem",
+            "-Wl,-headerpad,0x800",
+            "-Wl,-install_name,@rpath/libskimage.dylib",
+            "-Wl,-no_fixup_chains",
+            "-Wl,-no_adhoc_codesign",
+        ] {
+            println!("cargo:rustc-cdylib-link-arg={arg}");
+        }
+    }
 }

@@ -39,8 +39,8 @@ export const variantList = (variants: readonly Variant[]): string =>
   `${variants.slice(0, -1).join(", ")} or ${variants.at(-1)}`;
 
 /** The prod variants a release has for `platform`. */
-export const platformVariants = (platform: Platform): Variant[] =>
-  VARIANTS.filter((v) => !noJitVariant(v) || platform === "windows");
+export const platformVariants = (platform: Platform, arch: string = process.arch): Variant[] =>
+  VARIANTS.filter((v) => !noJitVariant(v) || platform === "windows" || (platform === "macos" && arch === "arm64"));
 
 /** The cargo features of sk-app every published host carries (crates/sk-app/src/payload.rs `OPTIONAL`, after devtools). */
 export const ENGINE_FEATURES = ["audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;

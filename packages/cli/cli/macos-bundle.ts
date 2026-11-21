@@ -10,6 +10,7 @@
 // camera need. Notarisation is the author's step. The rest is platform-free, so it is tested on Windows.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -125,10 +126,14 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   return d;
 }
 
-export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">): {
+export function entitlements(
+  m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">,
+  jit = true,
+): {
   [key: string]: PlistValue;
 } {
-  const d: { [key: string]: PlistValue } = { "com.apple.security.cs.allow-jit": true };
+  const d: { [key: string]: PlistValue } = {};
+  if (jit) d["com.apple.security.cs.allow-jit"] = true;
   if (m.microphoneUsageDescription) d["com.apple.security.device.audio-input"] = true;
   if (m.cameraUsageDescription) d["com.apple.security.device.camera"] = true;
   return d;
@@ -309,6 +314,7 @@ export interface AppBundleOptions {
   payload: Uint8Array;
   icns?: Uint8Array | null;
   infoPlist: string;
+  finish?: (app: string) => void;
   log?: (line: string) => void;
 }
 
@@ -326,7 +332,7 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
   if (!options.executable || /[/\\:]/.test(options.executable)) {
     throw new Error(`${JSON.stringify(options.executable)} is not a file name for Contents/MacOS`);
   }
-  const partial = `${options.out}.partial`;
+  const partial = `${options.out}.partial.app`;
   rmSync(partial, { recursive: true, force: true });
   const contents = join(partial, "Contents");
   const macosDir = join(contents, "MacOS");
@@ -343,6 +349,7 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
     if (options.icns) writeFileSync(join(resources, `${ICON_NAME}.icns`), options.icns);
     writeFileSync(join(contents, "Info.plist"), options.infoPlist);
     writeFileSync(join(contents, "PkgInfo"), "APPL????");
+    options.finish?.(partial);
 
     if (existsSync(options.out)) {
       try {
@@ -379,13 +386,18 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
 /** `-` is ad hoc: no certificate, no hardened runtime, nothing to notarise. */
 export const AD_HOC = "-";
 
-export function codesignArgs(app: string, identity: string, entitlementsPath: string | null): string[] {
-  if (identity === AD_HOC) return ["--force", "--sign", AD_HOC, app];
+export function codesignArgs(
+  app: string,
+  identity: string,
+  entitlementsPath: string | null,
+  hardened = false,
+): string[] {
+  if (identity === AD_HOC && !hardened) return ["--force", "--sign", AD_HOC, app];
   return [
     "--force",
     "--options",
     "runtime",
-    "--timestamp",
+    ...(identity === AD_HOC ? [] : ["--timestamp"]),
     ...(entitlementsPath ? ["--entitlements", entitlementsPath] : []),
     "--sign",
     identity,
@@ -437,15 +449,49 @@ export function signBundle(
   identity: string,
   entitlementsPath: string | null,
   log: (line: string) => void = () => {},
+  hardened = false,
 ): { ms: number } {
   const t0 = performance.now();
-  const args = codesignArgs(app, identity, entitlementsPath);
+  const args = codesignArgs(app, identity, entitlementsPath, hardened);
   log(`codesign ${args.join(" ")}`);
   const r = spawnSync(codesign, args, { encoding: "utf8" });
   if (r.status !== 0) {
     throw new Error(`codesign failed (exit ${r.status ?? r.error?.message}):\n${(r.stderr ?? "").trim()}`);
   }
-  const v = spawnSync(codesign, ["--verify", "--strict", "--verbose=2", app], { encoding: "utf8" });
+  const v = spawnSync(codesign, ["--verify", "--deep", "--strict", "--verbose=2", app], { encoding: "utf8" });
   if (v.status !== 0) throw new Error(`codesign --verify rejected ${app}:\n${(v.stderr ?? "").trim()}`);
   return { ms: Math.round(performance.now() - t0) };
+}
+
+/** Reuse the last signed dylib for this input and identity, including its original secure timestamp. */
+export function writeSignedImage(
+  dest: string,
+  image: Uint8Array,
+  previous: string,
+  receipt: string,
+  codesign: string | null,
+  identity: string | null,
+  log: (line: string) => void,
+): void {
+  mkdirSync(dirname(dest), { recursive: true });
+  if (!codesign || !identity) {
+    writeFileSync(dest, image);
+    return;
+  }
+  const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+  const input = sha(image);
+  if (existsSync(previous) && existsSync(receipt)) {
+    const signed = readFileSync(previous);
+    const expected = JSON.stringify([identity, input, sha(signed)]);
+    if (
+      readFileSync(receipt, "utf8") === expected &&
+      spawnSync(codesign, ["--verify", "--strict", previous]).status === 0
+    ) {
+      writeFileSync(dest, signed);
+      return;
+    }
+  }
+  writeFileSync(dest, image);
+  signBundle(codesign, dest, identity, null, log, true);
+  writeFileSync(receipt, JSON.stringify([identity, input, sha(readFileSync(dest))]));
 }

@@ -22,7 +22,7 @@ const SCHEMA: &str = "skathi.native-aot";
 const TRANSFORM: &str = "opaque-host-v1";
 const APP_PRELUDES_TRANSFORM: &str = "opaque-host-preludes-v2";
 const CLOSED_APP_TRANSFORM: &str = "opaque-host-closed-preludes-v3";
-const TARGET: &str = "x86_64-windows";
+const TARGET: &str = env!("SK_AOT_TARGET");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -363,7 +363,7 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
 
 #[cfg(sk_devtools)]
 pub(crate) fn inspector_sidecar() -> Option<PathBuf> {
-    Some(container::beside_executable()?.join(EMBEDDED_IMAGE_CONTAINER?))
+    Some(container::beside_executable_image()?.join(EMBEDDED_IMAGE_CONTAINER?))
 }
 
 #[cfg(sk_devtools)]
@@ -511,9 +511,8 @@ fn application_place(manifest: &Json, beside: Option<&Path>) -> Result<(Image, S
                     "the native image container {name:?} is not a plain file name"
                 ));
             }
-            let path = beside
-                .ok_or("the native image is beside the executable, whose folder is unknown")?
-                .join(name);
+            let dir = beside.ok_or("the native image's folder is unknown")?;
+            let path = image_directory(dir).join(name);
             let bytes =
                 container::load(&path, container::APP_SECTION).map_err(|error| {
                     match error.kind() {
@@ -573,6 +572,18 @@ fn cannot_run(error: String) -> String {
         "this app's native image cannot run on this host ({error}). \
          Rebuild the app with `sk build --aot` from the sk that matches this host."
     )
+}
+
+fn image_directory(payload_dir: &Path) -> std::borrow::Cow<'_, Path> {
+    #[cfg(target_os = "macos")]
+    if payload_dir.ends_with("Contents/Resources") {
+        if let Some(contents) = payload_dir.parent() {
+            if contents.parent().and_then(Path::extension) == Some(OsStr::new("app")) {
+                return contents.join("Frameworks").into();
+            }
+        }
+    }
+    payload_dir.into()
 }
 
 /// The image the manifest names is missing or not the one built with the app.
@@ -745,7 +756,7 @@ mod tests {
             ("version", Json::n(1.0)),
             ("stage", Json::s("native-image")),
             ("kind", Json::s(kind.name())),
-            ("target", Json::s("x86_64-windows")),
+            ("target", Json::s(TARGET)),
             ("frontend", Json::s(aot::FRONTEND_REVISION)),
             ("engine", Json::s(aot::ENGINE_VERSION)),
             ("tableId", Json::s(aot::BUILD_TABLE_ID)),

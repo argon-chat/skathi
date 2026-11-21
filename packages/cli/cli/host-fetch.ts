@@ -73,10 +73,10 @@ export const hostAssetName = (platform: Platform, arch: string, variant: Variant
 export const icuAssetName = (platform: Platform, arch: string): string => `sk-icu-${platform}-${arch}.dat.gz`;
 
 export const imageTemplateAssetName = (platform: Platform, arch: string): string =>
-  `sk-image-template-${platform}-${arch}.dll.gz`;
+  `sk-image-template-${platform}-${arch}.${platform === "macos" ? "dylib" : "dll"}.gz`;
 
 export const inspectorAssetName = (platform: Platform, arch: string): string =>
-  `sk-inspector-image-${platform}-${arch}.dll.gz`;
+  `sk-inspector-image-${platform}-${arch}.${platform === "macos" ? "dylib" : "dll"}.gz`;
 
 export const aotCompilerAssetName = (platform: Platform, arch: string): string =>
   `sk-aot-${platform}-${arch}${platform === "windows" ? ".exe" : ""}.gz`;
@@ -215,7 +215,7 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   if (icu && entry.icu) await cacheAsset(release, entry.icu.file, entry.icu.size, entry.icu.sha256, icu, log);
   if (entry.imageTemplate) {
     const t = entry.imageTemplate;
-    await cacheAsset(release, t.file, t.size, t.sha256, imageTemplatePath({ exe: dest }), log);
+    await cacheAsset(release, t.file, t.size, t.sha256, imageTemplatePath({ exe: dest }, platform), log);
   }
   const inspector = inspectorContainerPath({ exe: dest, info: entry.info });
   if (inspector && entry.inspector) {

@@ -124,3 +124,37 @@ jobs:
           name: ${{ matrix.artifact }}
           path: sk-aot-out/
           if-no-files-found: error
+
+  macos-apps:
+    if: github.event_name == 'workflow_dispatch' && github.workflow == 'sk-aot'
+    needs: build
+    name: Publish macOS AOT applications
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+          submodules: recursive
+      - uses: ./.github/actions/native
+        with:
+          target: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-aot-workloads
+      - uses: actions/download-artifact@v4
+        with:
+          name: sk-aot-macos-arm64
+          path: .tools/sk-aot
+      - uses: ./.github/actions/macos-aot
+        with:
+          benchmarks: "true"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-aot-measurements
+          path: |
+            target/mac-aot-qualification/*.zip
+            target/mac-aot-qualification/measurements.json
+          if-no-files-found: ignore

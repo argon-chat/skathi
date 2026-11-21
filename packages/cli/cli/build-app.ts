@@ -59,10 +59,10 @@ import {
   containerName,
   INSPECTOR_SECTIONS,
   readImageSections,
-  TEMPLATE_NAME,
   type ImageSectionNames,
   withUnwindTable,
 } from "./image-sections";
+import { appendMachOImage } from "./image-macho";
 import {
   entitlements,
   icnsFrom,
@@ -72,6 +72,7 @@ import {
   signBundle,
   signPlan,
   writeAppBundle,
+  writeSignedImage,
   type AppBundleResult,
 } from "./macos-bundle";
 import { currentPlatform, type Platform } from "./platform";
@@ -296,11 +297,11 @@ function writeSidecars(dir: string, { packs, icu, containers }: Sidecars) {
   }
 }
 
-function readTemplate(host: ResolvedHost): Uint8Array {
-  const path = imageTemplatePath(host);
+function readTemplate(host: ResolvedHost, platform: Platform): Uint8Array {
+  const path = imageTemplatePath(host, platform);
   if (!existsSync(path)) {
     throw new HostError(
-      `the workload has no ${TEMPLATE_NAME} beside ${host.exe}: the empty container a native image is written into — ` +
+      `the workload has no ${basename(path)} beside ${host.exe}: the empty container a native image is written into — ` +
         `reinstall the workload (sk workload install ${host.info.variant})`,
     );
   }
@@ -401,29 +402,41 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
     );
   }
   const info = macInfoFor(config, !!icon);
+  const noJit = host.info.features.includes("no-jit");
   const entitlementsPath = join(work, "entitlements.plist");
-  writeFileSync(entitlementsPath, plistXml(entitlements(info)));
+  writeFileSync(entitlementsPath, plistXml(entitlements(info, !noJit)));
+
+  const out = join(outDir, `${m.exeName}.app`);
+  const onMac = process.platform === "darwin";
+  const codesign = onMac ? Bun.which("codesign") : null;
+  const plan = signPlan({ want: options.sign ?? m.sign, app: out, entitlements: entitlementsPath, codesign, onMac });
 
   const written = writeAppBundle({
     host: host.exe,
-    out: join(outDir, `${m.exeName}.app`),
+    out,
     executable: m.exeName,
     payload,
     icns: icon?.bytes ?? null,
     infoPlist: plistXml(infoPlist(info)),
+    finish(app) {
+      writeSidecars(join(app, "Contents", "Resources"), { ...sidecars, containers: new Map() });
+      for (const [file, bytes] of sidecars.containers) {
+        if (!bytes) continue;
+        const relativePath = join("Contents", "Frameworks", file);
+        writeSignedImage(
+          join(app, relativePath),
+          bytes,
+          join(out, relativePath),
+          join(work, file + ".signature"),
+          codesign,
+          plan.identity,
+          log,
+        );
+      }
+      if (codesign && plan.identity) signBundle(codesign, app, plan.identity, entitlementsPath, log, noJit);
+    },
     log,
   });
-  writeSidecars(join(written.app, "Contents", "Resources"), sidecars);
-
-  const onMac = process.platform === "darwin";
-  const plan = signPlan({
-    want: options.sign ?? m.sign,
-    app: written.app,
-    entitlements: entitlementsPath,
-    codesign: onMac ? Bun.which("codesign") : null,
-    onMac,
-  });
-  if (plan.identity) signBundle(Bun.which("codesign")!, written.app, plan.identity, entitlementsPath, log);
   return {
     exe: written.executable,
     payload,
@@ -711,8 +724,10 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     });
     inputs.push(...native.inputs);
     if (singleFile) images.push({ image: native.image, names: APP_SECTIONS });
-    else {
-      const container = appendImageSections(readTemplate(host!), native.image, APP_SECTIONS);
+    else if (platform === "macos") {
+      containers.set(appContainer, appendMachOImage(readTemplate(host!, platform), native.image));
+    } else {
+      const container = appendImageSections(readTemplate(host!, platform), native.image, APP_SECTIONS);
       containers.set(appContainer, withUnwindTable(container, [APP_SECTIONS]));
     }
   }
@@ -777,7 +792,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       container: singleFile
         ? null
         : join(
-            packaged?.bundle ? join(packaged.bundle.app, "Contents", "Resources") : packaged ? outDir : work,
+            packaged?.bundle ? join(packaged.bundle.app, "Contents", "Frameworks") : packaged ? outDir : work,
             appContainer,
           ),
       entry: native.entry,

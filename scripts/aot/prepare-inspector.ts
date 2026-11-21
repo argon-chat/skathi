@@ -1,13 +1,15 @@
 /** Build a fresh native inspector from one production bundle, for embedding in
  * the ordinary host executable. Heavy subprocesses run only from this CLI.
  * bun scripts/aot/prepare-inspector.ts --out DIR --cache DIR
- * Optional verified local inputs: --compiler <sk-aot.exe> (default: tools/sk-aot's release build)
- * --bun-source DIR --table DIR. --container <skimage.dll> also writes inspector.image.dll.
+ * Optional verified local inputs: --compiler <sk-aot executable> (default: tools/sk-aot's release build)
+ * --bun-source DIR --table DIR. --container <template> also writes a native inspector container.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { compilerInfo, repoSkAot } from "../../packages/cli/aot/native";
-import { appendImageSections, INSPECTOR_SECTIONS, withUnwindTable } from "../../packages/cli/cli/image-sections";
+import { containerName } from "../../packages/cli/cli/image-sections";
+import { currentPlatform } from "../../packages/cli/cli/platform";
+import { writeInspectorContainer } from "./inspector-container";
 import {
   fileDigest,
   loadPin,
@@ -38,8 +40,9 @@ function run(command: string[], cwd = sdk, extra: Record<string, string> = {}): 
   return child.stdout.toString();
 }
 export async function prepare(): Promise<void> {
-  if (process.platform !== "win32" || process.arch !== "x64")
-    throw Error("Native inspector packaging currently requires Windows x64");
+  const platform = currentPlatform();
+  if (!((platform === "windows" && process.arch === "x64") || (platform === "macos" && process.arch === "arm64")))
+    throw Error("Native inspector packaging requires Windows x64 or macOS arm64");
   const pin = loadPin();
   verifyEngine(sdk, pin);
   const out = argument("--out")!,
@@ -134,10 +137,12 @@ export async function prepare(): Promise<void> {
   await verifyFile(image, document.imageSha256);
   await verifyFile(join(out, "app.prod.js"), document.sourceBundleSha256);
   const template = argument("--container", true);
-  if (template) {
-    const container = appendImageSections(readFileSync(template), readFileSync(image), INSPECTOR_SECTIONS);
-    writeFileSync(join(out, "inspector.image.dll"), withUnwindTable(container, [INSPECTOR_SECTIONS]));
-  }
+  if (template)
+    writeInspectorContainer(
+      join(out, containerName("inspector", platform)),
+      readFileSync(template),
+      readFileSync(image),
+    );
   const receipt = {
     schema: "skathi.embedded-native-inspector",
     version: 1,

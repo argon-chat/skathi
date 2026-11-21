@@ -7,12 +7,11 @@ name: Release
 # Rust crates to crates.io (scripts/publish-crates.ts, whose header has the release order). skathi-gpui, redjs and
 # skathi-taffy are released from their own repositories first: the `vendor` job stops the release before anything
 # is built while crates.io lacks the versions Skathi requires.
-# Every Windows host carries the native AOT loader (apps built with --aot run from their image) and comes with
-# the empty image container sk build writes an app's image into (sk-image-template-*.dll.gz); the ones with
+# Every Windows x64 and macOS arm64 host carries the native AOT loader (apps built with --aot run from their image)
+# and comes with the empty image container sk build writes an app's image into; the ones with
 # devtools run the inspector's native image (scripts/aot/prepare-inspector.ts) from a container of its own
-# (sk-inspector-image-*.dll.gz), and the sk-aot that compiled it (.github/workflows/sk-aot.yml) is published
-# beside them for `sk build --aot`. Windows
-# also gets aot-nojit and aot-nojit-devtools, both linked against the JIT- and WebAssembly-free archive of scripts/aot/no-jit.ts.
+# and the sk-aot that compiled it (.github/workflows/sk-aot.yml) is published beside them for `sk build --aot`.
+# Both platforms get aot-nojit and aot-nojit-devtools, linked against the archive of scripts/aot/no-jit.ts.
 
 on:
   push:
@@ -69,10 +68,12 @@ jobs:
             os: windows-2025
             target: x86_64-pc-windows-msvc
             artifact: hosts-windows
+            aot: sk-aot-windows-x64
           - name: macOS arm64
             os: macos-15
             target: aarch64-apple-darwin
             artifact: hosts-macos
+            aot: sk-aot-macos-arm64
           # The hosts run on this glibc or newer: keep it the oldest distribution supported.
           - name: Linux x64
             os: ubuntu-22.04
@@ -92,16 +93,16 @@ jobs:
       - name: Check the tag
         shell: bash
         run: bun scripts/release-hosts.ts --check-tag "$TAG"
-      - if: runner.os == 'Windows'
+      - if: matrix.aot != ''
         name: Cache the native AOT toolchain
         uses: actions/cache@v4
         with:
           path: .tools/native-aot
-          key: windows-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/redjs/pins.txt') }}
-      - if: runner.os == 'Windows'
+          key: ${{ matrix.target }}-native-inspector-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/redjs/pins.txt') }}
+      - if: matrix.aot != ''
         uses: actions/download-artifact@v4
         with:
-          name: sk-aot-windows-x64
+          name: ${{ matrix.aot }}
           path: .tools/sk-aot
       - if: runner.os == 'Windows'
         name: Unpack sk-aot
@@ -116,7 +117,10 @@ jobs:
           bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot.exe &&
           bun scripts/aot/no-jit.ts --out release-no-jit &&
           bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json --no-jit release-no-jit
-      - if: runner.os != 'Windows'
+      - if: runner.os == 'macOS'
+        name: Build and qualify the macOS AOT hosts
+        uses: ./.github/actions/macos-aot
+      - if: matrix.aot == ''
         name: Build the hosts
         run: bun scripts/release-hosts.ts --out release-hosts
       - uses: actions/upload-artifact@v4

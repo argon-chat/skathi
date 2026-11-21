@@ -30,7 +30,7 @@ import type { Platform } from "./platform";
 import { KIND, NAMES, type SkpkInput } from "./skpk";
 import type { Progress } from "./term";
 
-export const AOT_PLATFORM_ONLY = "AOT builds are Windows x64 only for now";
+export const AOT_PLATFORM_ONLY = "AOT builds require Windows x64 or macOS arm64";
 
 /** `--aot`, `--no-aot` and `--aot-compiler <exe>`; an unset `aot` leaves sk.config.json "aot" in charge. */
 export function aotFlags(flags: Record<string, string | boolean>): {
@@ -52,11 +52,12 @@ export function aotPlatformProblem(
   target: Platform,
   here: { platform: string; arch: string } = { platform: process.platform, arch: process.arch },
 ): string | null {
-  if (target !== "windows")
+  if (target === "macos" && here.platform === "darwin" && here.arch === "arm64") return null;
+  if (target === "windows" && here.platform === "win32" && here.arch === "x64") return null;
+  if (target === "linux")
     return `${AOT_PLATFORM_ONLY}: build ${target} with --no-aot (or without "aot": true in sk.config.json)`;
-  if (here.platform !== "win32" || here.arch !== "x64")
-    return `${AOT_PLATFORM_ONLY}: the native compiler runs on Windows x64 and this is ${here.platform}-${here.arch}; build here with --no-aot`;
-  return null;
+  const required = target === "macos" ? "macOS on Apple Silicon" : "Windows x64";
+  return `The ${target} AOT compiler runs on ${required}; this is ${here.platform}-${here.arch}. Publish on ${required} or build here with --no-aot.`;
 }
 
 /** The host's native AOT identity; an error when the host cannot load app images. */

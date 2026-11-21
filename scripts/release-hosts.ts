@@ -3,16 +3,15 @@
 //   bun scripts/release-hosts.ts --out <dir> [--variant <name>]... [--native-inspector <build.json>] [--no-jit <dir>]
 //     on each OS: cargo-build each variant (default: every published one and the dev host), gzip it into <dir>
 //     and describe it in <dir>/hosts-<platform>-<arch>.json. The prod hosts link only the root ICU locale;
-//     the full ICU data they leave out goes beside them, gzipped, for `sk build` to ship as icu.skpk. With --native-inspector (Windows x64: the
+//     the full ICU data they leave out goes beside them, gzipped, for `sk build` to ship as icu.skpk. With --native-inspector (the
 //     build.json of scripts/aot/prepare-inspector.ts), every host carries the native AOT loader (an app
 //     built with --aot runs from its image), every host with devtools runs the inspector's native image
-//     from inspector.image.dll beside it, and the sk-aot that compiled it is published beside them
-//     (<dir>/aot-<platform>-<arch>.json). A host with the loader comes with skimage.dll, the empty container
+//     from its companion library, and the sk-aot that compiled it is published beside them
+//     (<dir>/aot-<platform>-<arch>.json). A host with the loader comes with the empty container
 //     `sk build` writes an app's image into (crates/sk-image), and the inspector's container is made from it.
 //     With --no-jit too (the directory of scripts/aot/no-jit.ts --out), the aot-nojit workload is built.
-//     On Windows each host's link map is checked: no host links the image compiler, aot-nojit links
-//     none of the entry points the inventories of scripts/aot/no-jit.ts list (the JIT's, WebAssembly's)
-//     while no-devtools links them. The two no-JIT hosts export what their JIT counterparts do.
+//     Link maps for Windows and macOS AOT hosts enforce exclusion of the image compiler and of the
+//     entry points in the JIT and WebAssembly inventories for the no-JIT workload.
 //   bun scripts/release-hosts.ts --check-no-interpreter <exe> --map <link.map>
 //     verify a Windows x64 experimental no-interpreter build locally.
 //   bun scripts/release-hosts.ts --merge <dir>
@@ -27,6 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { NO_JIT_DEVTOOLS_VARIANT, NO_JIT_VARIANT, noJitVariant, platformVariants } from "../packages/cli/cli/config";
 import { inventoryPath, REMOVED, TRIMMABLE, type Inventory } from "./aot/no-jit";
+import { writeInspectorContainer } from "./aot/inspector-container";
 import { compilerInfo, compilerMismatch } from "../packages/cli/aot/native";
 import {
   aotCompilerAssetName,
@@ -50,12 +50,7 @@ import {
   imageTemplatePath,
   inspectorContainerPath,
 } from "../packages/cli/cli/host";
-import {
-  appendImageSections,
-  containerName,
-  INSPECTOR_SECTIONS,
-  withUnwindTable,
-} from "../packages/cli/cli/image-sections";
+import { containerName } from "../packages/cli/cli/image-sections";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -167,8 +162,8 @@ if (variants.some(noJitVariant) && !(inspector && noJit)) {
   throw new Error("the no-JIT workloads need --native-inspector and --no-jit <dir>");
 }
 
-// What a Windows host's link map must show, and what each host exports.
-const maps = platform === "windows" ? mkdtempSync(join(tmpdir(), "sk-host-maps-")) : null;
+const maps =
+  platform === "windows" || (platform === "macos" && inspector) ? mkdtempSync(join(tmpdir(), "sk-host-maps-")) : null;
 const exportsOf = new Map<string, string[]>();
 function checkLink(
   variant: string,
@@ -213,6 +208,37 @@ function checkLink(
   return names;
 }
 
+function checkMacLink(variant: string, map: string): void {
+  const linked = readFileSync(map, "utf8");
+  const live = linked.split(/^# Symbols:[ \t]*\r?\n/m)[1]?.split(/^# Dead Stripped Symbols:/m)[0];
+  if (!live) throw Error(`${variant}: ${map} is missing its live symbol table`);
+  const names = new Set(
+    [...live.matchAll(/^0x[0-9a-f]+\s+0x[0-9a-f]+\s+\[\s*\d+\]\s+(\S+)/gim)].map((entry) => entry[1]!),
+  );
+  if (names.size === 0) throw Error(`${variant}: ${map} contains no live symbol records`);
+  if (
+    [...names].some((name) =>
+      /^(__ZN3JSC3AOT(?:14compileProgram|28compileProgramWithMechanisms)|_rjs_aot_compil)/.test(name),
+    )
+  )
+    throw Error(`${variant}: the host links the image compiler`);
+  for (const feature of REMOVED) {
+    const path = inventoryPath(feature, "macos-arm64");
+    const inventory = JSON.parse(readFileSync(path, "utf8")) as Inventory;
+    const entries = Object.keys(inventory.entries);
+    const kept = entries.filter((name) => names.has(name));
+    if (noJitVariant(variant) && kept.length)
+      throw Error(`${variant}: the host links ${kept.length} ${feature.name} entry points, among them ${kept[0]}`);
+    if (variant === "no-devtools" && kept.length === 0)
+      throw Error(`${variant}: ${map} contains no entry points from ${path}`);
+    if (noJitVariant(variant))
+      for (const stub of [feature.abort, feature.throws, feature.skips]) {
+        if (stub && !names.has(`_${stub}`)) throw Error(`${variant}: ${map} is missing ${stub}`);
+      }
+    console.log(`[release] ${variant}: ${kept.length} of ${entries.length} ${feature.name} entry points linked`);
+  }
+}
+
 /** A file every host of this platform keeps beside it, gzipped into `out` once. */
 function besideAsset(file: string, bytes: Uint8Array): { file: string; sha256: string; size: number } {
   const digest = sha256(bytes);
@@ -244,7 +270,8 @@ for (const variant of variants) {
   });
   const info = hostInfo(exe);
   const counterpart = variant === NO_JIT_DEVTOOLS_VARIANT ? "standard" : "no-devtools";
-  if (map)
+  if (map && platform === "macos") checkMacLink(variant, map);
+  if (map && platform === "windows")
     exportsOf.set(
       variant,
       checkLink(variant, exe, map, false, !!inspector, noJitVariant(variant) ? exportsOf.get(counterpart) : undefined),
@@ -274,13 +301,11 @@ for (const variant of variants) {
   const container = inspectorContainerPath({ exe, info });
   if (container) {
     if (!inspector) throw new Error(`${exe} runs its inspector from ${container}, but no --native-inspector was given`);
-    const sections = appendImageSections(
+    const containerBytes = writeInspectorContainer(
+      container,
       new Uint8Array(readFileSync(imageTemplatePath({ exe }))),
       new Uint8Array(readFileSync(inspectorImage(inspector))),
-      INSPECTOR_SECTIONS,
     );
-    const containerBytes = withUnwindTable(sections, [INSPECTOR_SECTIONS]);
-    writeFileSync(container, containerBytes);
     entry.inspector = besideAsset(inspectorAssetName(platform, arch), containerBytes);
   }
   entries.push(entry);

@@ -57,11 +57,11 @@ pub fn prepare(repo: &Path, out: &Path) {
             .expect("cannot write native inspector policy");
         return;
     }
-    assert_eq!(
-        std::env::var("TARGET").as_deref(),
-        Ok("x86_64-pc-windows-msvc"),
-        "native-inspector requires Windows x64"
-    );
+    let (target, options) = match std::env::var("TARGET").as_deref() {
+        Ok("x86_64-pc-windows-msvc") => ("x86_64-windows", "x86_64"),
+        Ok("aarch64-apple-darwin") => ("aarch64-macos", "aarch64;os=macos"),
+        _ => panic!("native-inspector requires Windows x64 or macOS arm64"),
+    };
     assert!(std::env::var_os("SK_DEVTOOLS_BUNDLE").is_some(),
         "native-inspector requires SK_DEVTOOLS_BUNDLE from scripts/aot/prepare-inspector.ts; rebuilding JS here would invalidate the image");
     let selected = std::env::var_os("SK_DEVTOOLS_NATIVE_MANIFEST")
@@ -75,7 +75,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     for (name, expected) in [
         ("stage", "native-image"),
         ("kind", "inspector"),
-        ("target", "x86_64-windows"),
+        ("target", target),
         ("transform", "opaque-host-v1"),
     ] {
         require(&manifest, name, expected);
@@ -96,7 +96,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     require(
         &manifest,
         "compileOptions",
-        &format!("x86_64;references=narrow;image=pic;threads=1;default-options@{engine}"),
+        &format!("{options};references=narrow;image=pic;threads=1;default-options@{engine}"),
     );
     require(
         &manifest,

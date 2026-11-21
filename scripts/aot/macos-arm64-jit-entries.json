@@ -1,0 +1,164 @@
+{
+  "schema": "skathi.no-jit-inventory",
+  "version": 1,
+  "engine": "3bc94211496460feda299ef85eef710eb67fafb3",
+  "archiveSha256": "c12049343d703dd344b108506695d29d9b0eb7da83732a2a01f267e32d40dae8",
+  "feature": {
+    "name": "JIT",
+    "id": 0
+  },
+  "references": {
+    "definition": 124,
+    "callSite": 25
+  },
+  "entries": {
+    "__ZN3JSC10AccessCasedlEPS0_St19destroying_delete_t": {
+      "definition": 51,
+      "callSite": 0
+    },
+    "__ZN3JSC11JITWorklist16resumeAllThreadsEv": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "__ZN3JSC11JITWorklist20ensureGlobalWorklistEv": {
+      "definition": 26,
+      "callSite": 0
+    },
+    "__ZN3JSC11JITWorklist21completeAllPlansForVMERNS_2VME": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_14getICStatusMapERKNS_18ConcurrentJSLockerERN3WTF7HashMapINS_10CodeOriginENS_8ICStatusENS_25CodeOriginApproximateHashENS8_10HashTraitsISA_EENSD_ISB_EENS8_15HashTableTraitsELNS8_17ShouldValidateKeyE0ENS8_10FastMallocEEEE3$_1EEvT_EUlvE0_E3runERSN_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_14getICStatusMapERKNS_18ConcurrentJSLockerERN3WTF7HashMapINS_10CodeOriginENS_8ICStatusENS_25CodeOriginApproximateHashENS8_10HashTraitsISA_EENSD_ISB_EENS8_15HashTableTraitsELNS8_17ShouldValidateKeyE0ENS8_10FastMallocEEEE3$_1EEvT_EUlvE_E3runERSN_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_20propagateTransitionsINS_11SlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE0_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_20propagateTransitionsINS_11SlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_20propagateTransitionsINS_19AbstractSlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE0_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_20propagateTransitionsINS_19AbstractSlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_22collectProfiledCalleesERN3WTF6VectorINSt3__14pairIPNS_6JSCellENS_22CodeSpecializationKindEEELm16ENS5_15CrashOnOverflowELm16ENS5_10FastMallocEEEE3$_1EEvT_EUlvE0_E3runERSJ_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_22collectProfiledCalleesERN3WTF6VectorINSt3__14pairIPNS_6JSCellENS_22CodeSpecializationKindEEELm16ENS5_15CrashOnOverflowELm16ENS5_10FastMallocEEEE3$_1EEvT_EUlvE_E3runERSJ_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_29stronglyVisitStrongReferencesINS_11SlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE0_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_29stronglyVisitStrongReferencesINS_11SlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_29stronglyVisitStrongReferencesINS_19AbstractSlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE0_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_29stronglyVisitStrongReferencesINS_19AbstractSlotVisitorEEEvRKNS_18ConcurrentJSLockerERT_EUlRNS_19PropertyInlineCacheEE_EEvSA_EUlvE_E3runERSF_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_31reconcileJITInlineCachesAtGCEndEvE3$_0EEvT_EUlvE0_E3runERS7_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_31reconcileJITInlineCachesAtGCEndEvE3$_0EEvT_EUlvE_E3runERS7_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_6findPCEPvE3$_0EEvT_EUlvE0_E3runERS8_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_6findPCEPvE3$_0EEvT_EUlvE_E3runERS8_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_D1EvE3$_2EEvT_EUlvE0_E3runERS7_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE0ELNS_18RemovedFeatureStubE0EvZNS_9CodeBlock26forEachPropertyInlineCacheIZNS3_D1EvE3$_2EEvT_EUlvE_E3runERS7_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC19ExecutableAllocator29initializeUnderlyingAllocatorEv": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC19PropertyInlineCache5resetERKNS_22ConcurrentJSLockerBaseEPNS_9CodeBlockE": {
+      "definition": 14,
+      "callSite": 0
+    },
+    "__ZN3JSC31PolymorphicAccessJITStubRoutine11computeHashENSt3__14spanIKN3WTF3RefINS_10AccessCaseENS3_12RawPtrTraitsIS5_EENS3_21DefaultRefDerefTraitsIS5_EEEELm18446744073709551615EEE": {
+      "definition": 9,
+      "callSite": 0
+    },
+    "__ZN3JSC3JIT11compileSyncERNS_2VMEPNS_9CodeBlockENS_20JITCompilationEffortE": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC4Wasm7BBQPlan6createERNS_2VMEON3WTF3RefINS0_17ModuleInformationENS4_12RawPtrTraitsIS6_EENS4_21DefaultRefDerefTraitsIS6_EEEENS0_17FunctionCodeIndexEONS5_INS0_11IPIntCalleeENS7_ISE_EENS9_ISE_EEEEONS5_INS0_6ModuleENS7_ISJ_EENS9_ISJ_EEEEONS5_INS0_11CalleeGroupENS7_ISO_EENS9_ISO_EEEEONS4_6RefPtrINS4_10SharedTaskIFvRNS0_4PlanEEEENS7_ISY_EENS9_ISY_EEEE": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC4Yarr10jitCompileERNS0_11YarrPatternEN3WTF10StringViewENS0_8CharSizeENSt3__18optionalIS4_EEPNS_2VMERNS0_13YarrCodeBlockENS0_13ExecutionModeE": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC5LLIntL19enqueueBaselinePlanEPNS_9CodeBlockE": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC9CodeBlock29setupWithUnlinkedBaselineCodeEN3WTF3RefINS_15BaselineJITCodeENS1_12RawPtrTraitsIS3_EENS1_21DefaultRefDerefTraitsIS3_EEEE": {
+      "definition": 5,
+      "callSite": 0
+    },
+    "__ZN3JSC9JITThunks10initializeERNS_2VME": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSCL14destroyJITDataINS_15BaselineJITDataEEEvPT_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSCL14destroyJITDataINS_3DFG7JITDataEEEvPT_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSCL25hostFunctionStubWithThunkERNS_2VMEN3WTF11FunctionPtrILNS2_6PtrTagE1EFxPNS_14JSGlobalObjectEPNS_9CallFrameEELNS2_18FunctionAttributesE2EEENS_24ImplementationVisibilityENS_9IntrinsicESB_PKNS_6DOMJIT9SignatureEjRKNS2_6StringE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSCL26generateSharedCommonThunksERNSt3__15arrayINS_21MacroAssemblerCodeRefILN3WTF6PtrTagE26129EEELm63EEE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSCL27generatorForLazyCommonThunkENS_16CommonJITThunkIDE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZNK3JSC11JITWorklist24totalOngoingCompilationsEv": {
+      "definition": 2,
+      "callSite": 0
+    }
+  }
+}

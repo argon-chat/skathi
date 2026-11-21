@@ -185,6 +185,10 @@ describe("Info.plist", () => {
 
   test("entitlements: the JIT always, the microphone and camera only with a usage description", () => {
     expect(entitlements({})).toEqual({ "com.apple.security.cs.allow-jit": true });
+    expect(entitlements({}, false)).toEqual({});
+    expect(entitlements({ cameraUsageDescription: "video" }, false)).toEqual({
+      "com.apple.security.device.camera": true,
+    });
     expect(entitlements({ microphoneUsageDescription: "m", cameraUsageDescription: "c" })).toEqual({
       "com.apple.security.cs.allow-jit": true,
       "com.apple.security.device.audio-input": true,
@@ -378,6 +382,16 @@ describe("the .app", () => {
 describe("codesign", () => {
   test("ad hoc is just --sign -; an identity adds the hardened runtime, a timestamp and the entitlements", () => {
     expect(codesignArgs("A.app", AD_HOC, "e.plist")).toEqual(["--force", "--sign", "-", "A.app"]);
+    expect(codesignArgs("A.app", AD_HOC, "e.plist", true)).toEqual([
+      "--force",
+      "--options",
+      "runtime",
+      "--entitlements",
+      "e.plist",
+      "--sign",
+      "-",
+      "A.app",
+    ]);
     expect(codesignArgs("A.app", "Developer ID Application: X (T)", "e.plist")).toEqual([
       "--force",
       "--options",

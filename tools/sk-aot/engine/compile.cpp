@@ -23,6 +23,8 @@
 #include <JavaScriptCore/YarrFlags.h>
 #include <JavaScriptCore/YarrSyntaxChecker.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>

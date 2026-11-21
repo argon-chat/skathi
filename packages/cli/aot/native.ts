@@ -37,7 +37,9 @@ async function run(command: string[], cwd?: string): Promise<Ran> {
 
 /** Where `cargo build --release` in a checkout's tools/sk-aot puts sk-aot. */
 export const repoSkAot = (root: string) =>
-  join(root, "tools", "sk-aot", "target", "x86_64-pc-windows-msvc", "release", "sk-aot.exe");
+  process.platform === "darwin"
+    ? join(root, "tools", "sk-aot", "target", "aarch64-apple-darwin", "release", "sk-aot")
+    : join(root, "tools", "sk-aot", "target", "x86_64-pc-windows-msvc", "release", "sk-aot.exe");
 
 const tail = (text: string, lines = 40) => text.trim().split(/\r?\n/).slice(-lines).join("\n");
 

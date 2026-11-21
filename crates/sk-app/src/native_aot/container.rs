@@ -1,30 +1,34 @@
-//! A native image stored as PE sections that `sk build` appends: to a container DLL beside the
-//! app, or to the running executable itself (`"publishSingleFile"`). The Windows loader maps
-//! either; the image is never copied or expanded, and the engine runs it where it lies.
+//! Native images in shared-library sections, or in the Windows executable with `publishSingleFile`.
 use std::path::PathBuf;
 
+#[cfg(any(windows, test))]
 const PAGE: usize = 4096;
 /// The first of the image's sections: its header and tables. Code and the rest follow.
 pub(super) const APP_SECTION: &[u8] = b".skapp";
 pub(super) const INSPECTOR_SECTION: &[u8] = b".skins";
 
+#[cfg(any(windows, test))]
 #[derive(Debug, PartialEq, Eq)]
 struct Section {
     virtual_address: u32,
     virtual_size: u32,
 }
 
+#[cfg(any(windows, test))]
 fn le16(bytes: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
 }
+#[cfg(any(windows, test))]
 fn le32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
+#[cfg(any(windows, test))]
 fn image_size(header: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(header.get(32..40)?.try_into().ok()?))
 }
 
 /// Where the section table starts, its length, the size of headers and the size of image.
+#[cfg(any(windows, test))]
 fn table(headers: &[u8]) -> Option<(usize, usize, usize, usize)> {
     if headers.get(..2)? != b"MZ" {
         return None;
@@ -43,6 +47,7 @@ fn table(headers: &[u8]) -> Option<(usize, usize, usize, usize)> {
     ))
 }
 
+#[cfg(any(windows, test))]
 fn section(headers: &[u8], name: &[u8]) -> Option<Section> {
     let (start, count, _, _) = table(headers)?;
     (0..count).find_map(|index| {
@@ -74,10 +79,23 @@ pub(super) fn beside_executable() -> Option<PathBuf> {
     Some(dir.to_path_buf())
 }
 
+/// The code location for an AOT container, with the bundle's other dylibs on macOS.
+pub(super) fn beside_executable_image() -> Option<PathBuf> {
+    let dir = beside_executable()?;
+    #[cfg(target_os = "macos")]
+    if let Some(contents) = dir.parent().filter(|c| c.ends_with("Contents")) {
+        if dir.ends_with("Resources") {
+            return Some(contents.join("Frameworks"));
+        }
+    }
+    Some(dir)
+}
+
 /// The image whose first section is `name` in the module mapped at `base`.
 ///
 /// # Safety
 /// `base` is a module the loader mapped, that stays mapped for the life of the process.
+#[cfg(any(windows, test))]
 unsafe fn mapped(base: *const u8, name: &[u8]) -> Option<&'static [u8]> {
     // SAFETY: a mapped module's headers fill at least its first page.
     let first = unsafe { std::slice::from_raw_parts(base, PAGE) };
@@ -143,7 +161,13 @@ pub(super) fn load(path: &std::path::Path, name: &[u8]) -> std::io::Result<&'sta
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub(super) fn load(path: &std::path::Path, _: &[u8]) -> std::io::Result<&'static [u8]> {
+    // SAFETY: This path is part of the trusted app bundle or host workload.
+    unsafe { sk_runtime::redjs::aot::map_macho_image(path) }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(super) fn load(_: &std::path::Path, _: &[u8]) -> std::io::Result<&'static [u8]> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }

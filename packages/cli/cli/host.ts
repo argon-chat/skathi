@@ -37,6 +37,7 @@ import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
 import { currentPlatform, hostsFor, repoHostExe, type Platform } from "./platform";
 import { TEMPLATE_NAME } from "./image-sections";
+import { MACHO_TEMPLATE_NAME } from "./image-macho";
 import { PAYLOAD_NAME } from "./stamp";
 
 export const PKG_DIR = resolve(import.meta.dir, "..");
@@ -85,7 +86,8 @@ export function icuDataPath(host: { exe: string; info: HostInfo }): string | nul
 }
 
 /** The empty native image container beside a host (scripts/release-hosts.ts, `cargoBuildHost`). */
-export const imageTemplatePath = (host: { exe: string }): string => join(dirname(host.exe), TEMPLATE_NAME);
+export const imageTemplatePath = (host: { exe: string }, platform = currentPlatform()): string =>
+  join(dirname(host.exe), platform === "macos" ? MACHO_TEMPLATE_NAME : TEMPLATE_NAME);
 
 /** The native inspector container a host with devtools expects beside itself and beside the apps it runs; null for a host that embeds its inspector image. */
 export function inspectorContainerPath(host: { exe: string; info: HostInfo }): string | null {
@@ -438,7 +440,8 @@ export function cargoBuildHost(
     env: { ...process.env, ...extras.env },
   });
   if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
-  if (currentPlatform() === "windows") {
+  const platform = currentPlatform();
+  if (platform === "windows" || (platform === "macos" && extras.features?.includes("native-aot"))) {
     // Its own workspace (it needs panic = "abort"), built into the same folder as the host.
     const template = [
       "build",
@@ -446,7 +449,7 @@ export function cargoBuildHost(
       "--manifest-path",
       join(REPO_ROOT, "crates", "sk-image", "Cargo.toml"),
       "--target",
-      hostsFor("windows").triple,
+      hostsFor(platform).triple,
       "--target-dir",
       dirname(dirname(dirname(REPO_RELEASE_EXE))),
     ];

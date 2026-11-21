@@ -49,7 +49,7 @@ export function verifyEngine(sdk: string, pin: ToolchainPin): void {
     throw Error("Review the native AOT frontend, table and redjs engine pins together");
   const configuration = readFileSync(join(webkitDirectory(sdk), "include/cmakeconfig.h"), "utf8");
   if (!configuration.includes(pin.engine.revision) || !/^#define BUN_WEBKIT_ENABLE_AOT 1\r?$/m.test(configuration))
-    throw Error("Run the pinned redjs setup before preparing a native inspector");
+    throw Error("Run the pinned redjs setup before preparing the native AOT toolchain");
 }
 export async function verifyTable(directory: string, sdk: string, pin: ToolchainPin): Promise<void> {
   const receipt = readFileSync(join(directory, ".redjs-aot-table"), "utf8");

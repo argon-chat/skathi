@@ -107,6 +107,12 @@ jobs:
       - if: runner.os == 'Windows'
         name: Removed entry points match the pinned engine
         run: bun scripts/aot/no-jit.ts --check
+      - if: runner.os == 'macOS'
+        name: Signed Mach-O image unwinds into its caller
+        run: bun scripts/aot/verify-macho.ts
+      - if: runner.os == 'macOS'
+        name: Hardened runtime validates the signed Mach-O image
+        run: bun scripts/aot/verify-macho.ts --verify-hardened
       # sk-video loads GStreamer at runtime: its end-to-end test needs the plugins, not -dev packages.
       - if: runner.os == 'Linux'
         name: GStreamer runtime

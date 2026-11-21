@@ -1,7 +1,9 @@
-//! `skimage.dll`: no code and no exports. `sk build` appends a native image to a copy of it as
-//! sections of their own, so the image travels as a PE file that can be signed and keeps its
-//! bytes, and its signature, from one release to the next while the image is unchanged.
+//! The empty signed-code container `sk build` fills with a native AOT image.
 #![no_std]
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub static skathi_image_anchor: u8 = 0;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

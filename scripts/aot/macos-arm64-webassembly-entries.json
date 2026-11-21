@@ -1,0 +1,267 @@
+{
+  "schema": "skathi.no-jit-inventory",
+  "version": 1,
+  "engine": "3bc94211496460feda299ef85eef710eb67fafb3",
+  "archiveSha256": "c12049343d703dd344b108506695d29d9b0eb7da83732a2a01f267e32d40dae8",
+  "feature": {
+    "name": "WebAssembly",
+    "id": 4
+  },
+  "references": {
+    "definition": 71,
+    "callSite": 155,
+    "table": 6
+  },
+  "entries": {
+    "__ZN3JSC13JSWebAssembly11instantiateEPNS_14JSGlobalObjectEPNS_9JSPromiseEPNS_14JSModuleLoaderEON3WTF6RefPtrINS_14SourceProviderENS7_12RawPtrTraitsIS9_EENS7_21DefaultRefDerefTraitsIS9_EEEERKNS_10IdentifierENS_7JSValueE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE4ELNS_18RemovedFeatureStubE0EvZNS_22WebAssemblyGCStructure23visitAdditionalChildrenINS_11SlotVisitorEEEvPNS_6JSCellERT_EUlvE_E3runERSA_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC13RemovableBodyILNS_16RemovableFeatureE4ELNS_18RemovedFeatureStubE0EvZNS_22WebAssemblyGCStructure23visitAdditionalChildrenINS_19AbstractSlotVisitorEEEvPNS_6JSCellERT_EUlvE_E3runERSA_": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC21JSWebAssemblyInstance14clearJSCallICsERNS_2VME": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "__ZN3JSC21JSWebAssemblyInstance40updateMatchingCachedMemoriesConcurrentlyERKNS_25SharedArrayBufferContentsE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSC21JSWebAssemblyInstance7destroyEPNS_6JSCellE": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "__ZN3JSC22WebAssemblyGCStructure7destroyEPNS_6JSCellE": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "__ZN3JSC23WebAssemblyModuleRecord17initializeExportsEPNS_14JSGlobalObjectE": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "__ZN3JSC23WebAssemblyModuleRecord17initializeImportsEPNS_14JSGlobalObjectEPNS_8JSObjectENS_4Wasm12CreationModeE": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "__ZN3JSC23WebAssemblyModuleRecord4linkEPNS_14JSGlobalObjectEN3WTF6RefPtrINS_13ScriptFetcherENS3_12RawPtrTraitsIS5_EENS3_21DefaultRefDerefTraitsIS5_EEEE": {
+      "definition": 3,
+      "callSite": 0
+    },
+    "__ZN3JSC23WebAssemblyModuleRecord8evaluateEPNS_14JSGlobalObjectE": {
+      "definition": 4,
+      "callSite": 0
+    },
+    "__ZN3JSC5IPInt20verifyInitializationEv": {
+      "definition": 0,
+      "callSite": 1
+    },
+    "__ZN3JSC5LLIntL29installWebAssemblyInterpreterEPPvS2_S2_": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "__ZN3JSCL20callJSWebAssemblyTagEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL22callJSWebAssemblyTableEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL22webAssemblyCompileFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL23callJSWebAssemblyGlobalEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL23callJSWebAssemblyMemoryEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL23callJSWebAssemblyModuleEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL23webAssemblyValidateFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL24webAssemblyModuleExportsEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL24webAssemblyModuleImportsEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL24webAssemblyPromisingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "__ZN3JSCL25callJSWebAssemblyInstanceEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL25callWebAssemblySuspendingEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL25constructJSWebAssemblyTagEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL26callJSWebAssemblyExceptionEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL26callJSWebAssemblyLinkErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL26webAssemblyInstantiateFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL27constructJSWebAssemblyTableEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL28constructJSWebAssemblyGlobalEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL28constructJSWebAssemblyMemoryEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL28constructJSWebAssemblyModuleEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL29callJSWebAssemblyCompileErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL29callJSWebAssemblyRuntimeErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL29callJSWebAssemblySuspendErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL30constructJSWebAssemblyInstanceEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL30constructWebAssemblySuspendingEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL31constructJSWebAssemblyExceptionEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL31constructJSWebAssemblyLinkErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL31webAssemblyCompileStreamingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "__ZN3JSCL31webAssemblyModuleCustomSectionsEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 0,
+      "table": 1
+    },
+    "__ZN3JSCL34constructJSWebAssemblyCompileErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL34constructJSWebAssemblyRuntimeErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL34constructJSWebAssemblySuspendErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 6
+    },
+    "__ZN3JSCL35webAssemblyInstantiateStreamingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE": {
+      "definition": 0,
+      "callSite": 2
+    },
+    "__ZNK3JSC4Wasm6Callee5rangeEv": {
+      "definition": 5,
+      "callSite": 0
+    },
+    "_operationJSToWasmEntryWrapperBuildFrame": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "_operationJSToWasmEntryWrapperBuildReturnFrame": {
+      "definition": 6,
+      "callSite": 0
+    },
+    "_operationWasmToJSExitMarshalArguments": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "_operationWasmToJSExitMarshalReturnValues": {
+      "definition": 2,
+      "callSite": 0
+    },
+    "_operationWasmUnwind": {
+      "definition": 21,
+      "callSite": 0
+    }
+  },
+  "throwing": [
+    "__ZN3JSCL20callJSWebAssemblyTagEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL22callJSWebAssemblyTableEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL22webAssemblyCompileFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL23callJSWebAssemblyGlobalEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL23callJSWebAssemblyMemoryEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL23callJSWebAssemblyModuleEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL23webAssemblyValidateFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL24webAssemblyModuleExportsEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL24webAssemblyModuleImportsEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL24webAssemblyPromisingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL25callJSWebAssemblyInstanceEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL25callWebAssemblySuspendingEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL25constructJSWebAssemblyTagEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL26callJSWebAssemblyExceptionEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL26callJSWebAssemblyLinkErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL26webAssemblyInstantiateFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL27constructJSWebAssemblyTableEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL28constructJSWebAssemblyGlobalEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL28constructJSWebAssemblyMemoryEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL28constructJSWebAssemblyModuleEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL29callJSWebAssemblyCompileErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL29callJSWebAssemblyRuntimeErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL29callJSWebAssemblySuspendErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL30constructJSWebAssemblyInstanceEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL30constructWebAssemblySuspendingEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL31constructJSWebAssemblyExceptionEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL31constructJSWebAssemblyLinkErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL31webAssemblyCompileStreamingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL31webAssemblyModuleCustomSectionsEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL34constructJSWebAssemblyCompileErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL34constructJSWebAssemblyRuntimeErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL34constructJSWebAssemblySuspendErrorEPNS_14JSGlobalObjectEPNS_9CallFrameE",
+    "__ZN3JSCL35webAssemblyInstantiateStreamingFuncEPNS_14JSGlobalObjectEPNS_9CallFrameE"
+  ],
+  "skipped": ["__ZN3JSC5LLIntL29installWebAssemblyInterpreterEPPvS2_S2_"]
+}

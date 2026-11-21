@@ -1,4 +1,4 @@
-/** The JavaScriptCore archive of the aot-nojit workload (Windows x64): the pinned archive with every
+/** The JavaScriptCore archive of the aot-nojit workload: the pinned archive with every
  * reference to an entry point of the JIT and of WebAssembly redirected to a stub redjs defines, so the
  * linker leaves both out. JSC lists those entry points itself, in its .bun_removable_entry_points records;
  * jit-entries.json and webassembly-entries.json are what they were at the reviewed pin, and every mode
@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { MACHO_NO_JIT_ARCHIVE, scanMachO, writeMachO } from "./no-jit-macho";
 
 const SDK = resolve(import.meta.dir, "../..");
 export const ARCHIVE = "JavaScriptCoreNoJIT.lib";
@@ -39,7 +40,12 @@ export interface RemovedFeature {
 
 /** What the aot-nojit workload removes; the ids are AOTBuiltinFeatures.h's. */
 export const REMOVED: readonly RemovedFeature[] = [
-  { name: "JIT", id: 0, abort: "redjs_removed_jit_entry", inventory: "jit-entries.json" },
+  {
+    name: "JIT",
+    id: 0,
+    abort: "redjs_removed_jit_entry",
+    inventory: "jit-entries.json",
+  },
   {
     name: "WebAssembly",
     id: 4,
@@ -524,7 +530,11 @@ function scan(webkit: string, removed: readonly RemovedFeature[]): Scan {
       engine,
       archiveSha256,
       feature: { name: feature.name, id: feature.id },
-      references: { definition: total("definition"), callSite: total("callSite"), ...(table ? { table } : {}) },
+      references: {
+        definition: total("definition"),
+        callSite: total("callSite"),
+        ...(table ? { table } : {}),
+      },
       entries: Object.fromEntries(sorted),
       ...(thrown.length ? { throwing: thrown } : {}),
       ...(skipped.length ? { skipped } : {}),
@@ -551,14 +561,16 @@ function difference(committed: Inventory, found: Inventory): string[] {
   return lines;
 }
 
-export const inventoryPath = (feature: RemovedFeature) => join(import.meta.dir, feature.inventory);
+export const inventoryPath = (feature: RemovedFeature, platform = "windows-amd64") =>
+  join(import.meta.dir, platform === "windows-amd64" ? feature.inventory : `${platform}-${feature.inventory}`);
 
-function checkInventory(feature: RemovedFeature, found: Inventory): void {
-  const committed = JSON.parse(readFileSync(inventoryPath(feature), "utf8")) as Inventory;
+function checkInventory(feature: RemovedFeature, found: Inventory, platform: string): void {
+  const path = inventoryPath(feature, platform);
+  const committed = JSON.parse(readFileSync(path, "utf8")) as Inventory;
   const lines = difference(committed, found);
   if (lines.length)
     throw Error(
-      `the pinned JavaScriptCore.lib does not match scripts/aot/${feature.inventory}:\n  ${lines.join("\n  ")}\n` +
+      `the pinned JavaScriptCore archive does not match ${path}:\n  ${lines.join("\n  ")}\n` +
         `Review the ${feature.name} entry points of the new engine, then run bun scripts/aot/no-jit.ts --write.`,
     );
 }
@@ -651,25 +663,38 @@ if (import.meta.main) {
       write: { type: "boolean" },
       webkit: { type: "string" },
       remove: { type: "string" },
+      platform: { type: "string" },
     },
   });
   if ([values.out !== undefined, values.check, values.write].filter(Boolean).length !== 1) {
     console.error(
-      "no-jit.ts --out <dir> | --check | --write  [--remove JIT[,WebAssembly][,Interpreter]] [--webkit <bun-webkit prebuilt>]",
+      "no-jit.ts --out <dir> | --check | --write [--remove JIT[,WebAssembly][,Interpreter]] [--webkit <prebuilt>] [--platform windows-amd64|macos-arm64]",
     );
     process.exit(2);
   }
-  if (process.platform !== "win32" || process.arch !== "x64")
-    throw Error("the aot-nojit archive is made on Windows x64, from the Windows prebuilt");
+  const platform =
+    values.platform ??
+    (process.platform === "win32" && process.arch === "x64"
+      ? "windows-amd64"
+      : process.platform === "darwin" && process.arch === "arm64"
+        ? "macos-arm64"
+        : null);
+  if (platform !== "windows-amd64" && platform !== "macos-arm64")
+    throw Error("the aot-nojit archive requires a Windows x64 or macOS arm64 engine prebuilt");
   const names = values.remove?.split(",").map((n) => n.trim()) ?? REMOVED.map((f) => f.name);
   const removed = TRIMMABLE.filter((f) => names.includes(f.name));
   for (const name of names)
     if (!TRIMMABLE.some((f) => f.name === name))
       throw Error(`--remove: ${name} is not one of ${TRIMMABLE.map((f) => f.name).join(", ")}`);
   if (!names.includes("JIT")) throw Error("--remove: the archive always leaves out the JIT");
+  if (platform === "macos-arm64" && names.includes("Interpreter"))
+    throw Error("--remove Interpreter is supported only with the Windows x64 engine prebuilt");
   const webkit = resolve(values.webkit ?? join(SDK, "vendor/redjs/prebuilt/bun-webkit"));
   const t0 = performance.now();
-  const result = scan(webkit, removed);
+  const coff = platform === "windows-amd64" ? scan(webkit, removed) : null;
+  const engine = pinnedEngine();
+  const macho = coff ? null : scanMachO(webkit, engine, removed, checkPrebuilt(webkit, engine, removed));
+  const result = (coff ?? macho)!;
   const summaries = result.inventories.map(
     (i) =>
       `${i.feature.name}: ${Object.keys(i.entries).length} entry points (${i.throwing?.length ?? 0} throw, ${i.skipped?.length ?? 0} skipped), ` +
@@ -677,12 +702,13 @@ if (import.meta.main) {
   );
   if (values.write) {
     for (const [index, feature] of removed.entries()) {
-      writeFileSync(inventoryPath(feature), JSON.stringify(result.inventories[index], null, 2) + "\n");
-      console.log(`[no-jit] ${inventoryPath(feature)}: ${summaries[index]}`);
+      const path = inventoryPath(feature, platform);
+      writeFileSync(path, JSON.stringify(result.inventories[index], null, 2) + "\n");
+      console.log(`[no-jit] ${path}: ${summaries[index]}`);
     }
     process.exit(0);
   }
-  for (const [index, feature] of removed.entries()) checkInventory(feature, result.inventories[index]!);
+  for (const [index, feature] of removed.entries()) checkInventory(feature, result.inventories[index]!, platform);
   if (values.check) {
     console.log(`[no-jit] the inventories match ${result.inventories[0]!.engine}:\n  ${summaries.join("\n  ")}`);
     process.exit(0);
@@ -690,12 +716,13 @@ if (import.meta.main) {
   const out = resolve(values.out!);
   mkdirSync(out, { recursive: true });
   rmSync(join(out, RECEIPT), { force: true });
-  const path = join(out, ARCHIVE);
-  const sha256 = writeArchive(result, path);
-  verifyArchive(path, result);
+  const path = join(out, macho ? MACHO_NO_JIT_ARCHIVE : ARCHIVE);
+  const sha256 = macho ? writeMachO(macho, path) : writeArchive(coff!, path);
+  if (coff) verifyArchive(path, coff);
   const lines = [
     "redjs.no-jit.v2",
     `webkit=${result.inventories[0]!.engine}`,
+    `platform=${platform}`,
     `source=${result.inventories[0]!.archiveSha256}`,
     `sha256=${sha256}`,
     `removed=${removed.map((f) => f.name).join(",")}`,

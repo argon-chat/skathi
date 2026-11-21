@@ -1,0 +1,39 @@
+name: Build and test macOS AOT workloads
+description: Package the arm64 workloads and qualify a signed app built with the release CLI.
+inputs:
+  benchmarks:
+    description: Build the showcase and collect measurements on this runner
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        gzip -dc .tools/sk-aot/sk-aot-macos-arm64.gz > .tools/sk-aot/sk-aot
+        chmod +x .tools/sk-aot/sk-aot
+        bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot
+        bun scripts/aot/no-jit.ts --out release-no-jit
+        bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json --no-jit release-no-jit
+    - uses: ./.github/actions/css-checker
+    - shell: bash
+      env:
+        BENCHMARKS: ${{ inputs.benchmarks }}
+      run: |
+        args=()
+        if [[ "$BENCHMARKS" == "true" ]]; then args+=(--bench-apps); fi
+        bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification "${args[@]}"
+    - if: inputs.benchmarks == 'true'
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import json, pathlib, subprocess
+        out = pathlib.Path("target/mac-aot-qualification")
+        apps = json.loads((out / "apps.json").read_text())
+        args = []
+        for key, path in apps.items():
+            if key == "devtools":
+                continue
+            args.extend(["--" + key, path])
+            subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", path, out / (key + ".zip")], check=True)
+        subprocess.run(["python3", "benches/nojit/macos.py", *args, "--out", out / "measurements.json"], check=True)
+        PY
