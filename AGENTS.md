@@ -58,6 +58,9 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
   Rust (redjs `define_class`, host data, native promises), not a TS module in `packages/runtime`. TS is
   only for what must be JS: the Vue and Svelte renderer glue, the module loader and HMR, and objects that
   libraries patch directly. A thin TS shim over a host function is not a reason to write it in TS.
+  A piece may be TS when performance calls for it: code that is all promises, timers and callbacks
+  into JS, or a call so small that crossing into the host costs more than the work. Keep that piece
+  as small as the reason for it, and the rest of the API in Rust.
 - **Generated files are not edited by hand.** `crates/sk-app/src/prelude.js` and
   `window.prelude.js` come from the `.ts` beside them (`bun run preludes`).
 - **This is a public SDK.** No product-specific code or policy: an app's own features live in
