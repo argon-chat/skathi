@@ -15,6 +15,7 @@ import { frameworkFindings, readFrameworkSources } from "./frameworks";
 import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
 import { Packages } from "./packages";
+import { allowedOf, PermissionRules, type Allowed } from "./permissions";
 import { buildProgram, readUnits, type TypeScript } from "./program";
 import { Rules } from "./rules";
 import type { CheckReport } from "./schema";
@@ -56,6 +57,8 @@ export interface AnalyzeInput {
   compiledCss?: string | undefined;
   /** The build runs Tailwind over the app's CSS. */
   tailwind?: boolean;
+  /** What sk.config.json "permissions" allows; nothing when left out. */
+  permissions?: Allowed | undefined;
 }
 
 export function loadTypeScript(appRoot: string): TypeScript {
@@ -145,6 +148,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     compiledCss: graph.compiledCss,
     tailwind: graph.tailwind ?? false,
     allow: checkConfig.allow,
+    permissions: allowedOf(config.raw.permissions),
     deps: options.deps ?? true,
     findings,
   });
@@ -246,6 +250,7 @@ export function analyze(input: AnalyzeInput): CheckReport {
     if (built.configNote) progress.warn(built.configNote);
     const { program, checker } = built;
     const rules = new Rules(typescript, checker, new Builtins(typescript, program, checker));
+    const permissions = new PermissionRules(typescript, checker, input.permissions ?? allowedOf(undefined));
     const liveness = input.bundle ? new BundleLiveness(typescript, input.bundle) : null;
     progress.step("AOT rules", units.length);
     for (const unit of units) {
@@ -279,6 +284,7 @@ export function analyze(input: AnalyzeInput): CheckReport {
       if (deps || !unit.owner) {
         const found: Finding[] = [];
         rules.run(unit, file, found);
+        permissions.run(unit, file, found);
         findings.push(...found.filter((f) => !liveness || liveness.live(f.file, f.range)));
       }
     }

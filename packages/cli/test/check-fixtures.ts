@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import ts from "typescript";
 import { analyze, type AnalyzeInput } from "../check";
 import { parseCheckConfig } from "../check/config";
+import { allowedOf } from "../check/permissions";
 import type { CheckReport, Diagnostic } from "../check/schema";
 import { ensureCssEngine } from "../check/css-engine";
 
@@ -24,6 +25,8 @@ export const RULES_MODULES = [
   "src/typing.ts",
   "src/plain.js",
   "src/App.vue",
+  "src/native.ts",
+  "node_modules/native-kit/index.js",
   "node_modules/patchy/index.js",
   "node_modules/loose-types/index.js",
   "node_modules/evil-eval/index.js",
@@ -32,13 +35,17 @@ export const RULES_MODULES = [
 ].map((m) => join(RULES, m));
 
 export function analyzeRules(options: Partial<AnalyzeInput> = {}): CheckReport {
-  const config = JSON.parse(readFileSync(join(RULES, "sk.config.json"), "utf8")) as { check: unknown };
+  const config = JSON.parse(readFileSync(join(RULES, "sk.config.json"), "utf8")) as {
+    check: unknown;
+    permissions: unknown;
+  };
   return analyze({
     typescript: ts,
     root: RULES,
     entry: join(RULES, "src/main.ts"),
     modules: RULES_MODULES,
     allow: parseCheckConfig(config.check).allow,
+    permissions: allowedOf(config.permissions),
     toolVersion: "test",
     ...options,
   });

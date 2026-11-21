@@ -1,6 +1,7 @@
 {
   "name": "check-rules",
   "version": "1.0.0",
+  "permissions": { "ffi": [{ "name": "crt", "path": "$SYSTEM/msvcrt" }] },
   "check": {
     "allow": {
       "SK2003": ["src/legacy/**"],

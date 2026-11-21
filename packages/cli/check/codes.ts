@@ -9,6 +9,8 @@ export interface CodeInfo {
   fix: string;
   /** The check could not run as asked: exit code 2. */
   fatal?: boolean;
+  /** `check.allow` cannot hide it. */
+  firm?: boolean;
 }
 
 export const RANGES = [
@@ -18,6 +20,7 @@ export const RANGES = [
   { from: 3000, to: 3999, what: "typing quality: compiles, but AOT gets no type information" },
   { from: 4000, to: 4999, what: "CSS support and rendering compatibility" },
   { from: 5000, to: 5999, what: "Vue and Svelte features that do not work, or work differently, in Skathi" },
+  { from: 6000, to: 6999, what: "permissions and modules that reach outside the app" },
 ] as const;
 
 const CODES: CodeInfo[] = [
@@ -358,6 +361,46 @@ const CODES: CodeInfo[] = [
       "The native renderer uses the experimental API introduced in Svelte 5.59.0. The compiler and runtime come from the app's Svelte installation.",
     example: 'An app with svelte 5.57 and svelte.renderer set to "native".',
     fix: 'Install svelte@^5.59.0, or set svelte.renderer to "dom".',
+  },
+  {
+    code: "SK6001",
+    severity: "error",
+    title: "`skathi:ffi` is imported, but the app allows no library",
+    explanation:
+      'A library is loaded by a name from "permissions.ffi" in sk.config.json. The list is missing or empty, so every `dlopen()` in this file throws NotAllowedError. `check.allow` cannot hide this error.',
+    example:
+      'import { dlopen } from "skathi:ffi";\n\nconst user32 = dlopen("user32", { GetSystemMetrics: { args: ["i32"], returns: "i32" } });',
+    fix: 'List the libraries the app loads: "permissions": { "ffi": [{ "name": "user32", "path": "$SYSTEM/user32" }] }.',
+    firm: true,
+  },
+  {
+    code: "SK6002",
+    severity: "error",
+    title: "`dlopen()` names a library the app does not allow",
+    explanation:
+      'The name given to `dlopen()` is not a path: it must be the "name" of an entry in "permissions.ffi" of sk.config.json. This one is not there, so the call throws NotAllowedError. `check.allow` cannot hide this error.',
+    example:
+      '// sk.config.json lists "sqlite3" only\nconst curl = dlopen("curl", { curl_version: { returns: "cstring" } });',
+    fix: 'Add an entry for the name ({ "name": "curl", "path": "$APP/lib/curl" }), or use a name that is listed.',
+    firm: true,
+  },
+  {
+    code: "SK6003",
+    severity: "warning",
+    title: "the library name given to `dlopen()` is not a literal",
+    explanation:
+      'The check compares the name with "permissions.ffi". A name computed at run time cannot be compared, so a name that is not in the list shows up only as a NotAllowedError while the app runs. A constant, or a value whose type is a union of string literals, is checked.',
+    example: 'const library = dlopen(settings.codec, { decode: { args: ["buffer", "usize"], returns: "i32" } });',
+    fix: 'Pass the name as a string literal, or type it as a union of the listed names ("codec" | "codec-fast").',
+  },
+  {
+    code: "SK6005",
+    severity: "warning",
+    title: "a dependency imports `skathi:ffi`",
+    explanation:
+      "Code in node_modules loads native libraries and calls them inside the app's process, with the permissions the app's sk.config.json gives. It can load any library in the list, not only the one the package is for.",
+    example: 'node_modules/some-codec/index.js: import { dlopen } from "skathi:ffi";',
+    fix: "Read what the package loads and calls; allow SK6005 for the package once you trust it.",
   },
 ];
 

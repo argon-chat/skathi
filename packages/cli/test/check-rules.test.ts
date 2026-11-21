@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CheckReport } from "../check/schema";
+import { parseCheckConfig } from "../check/config";
 import { analyzeRules, analyzeUnit, lines, only } from "./check-fixtures";
 
 let cached: CheckReport | undefined;
@@ -115,6 +116,20 @@ describe("SK3xxx: typing quality", () => {
     const app = typing.find((s) => s.package === null)!;
     expect(app.declarations).toBeGreaterThan(app.any);
     expect(app.any).toBeGreaterThan(0);
+  });
+});
+
+describe("SK6xxx: permissions", () => {
+  test("dlopen() names are compared with permissions.ffi", () => {
+    expect(lines(report(), "src/native.ts")).toEqual(["10:SK6002", "11:SK6003", "12:SK6002"]);
+    expect(only(report(), "SK6002").map((d) => d.message.match(/dlopen\("(\w+)"\)/)?.[1])).toEqual(["curl", "zlib"]);
+    expect(lines(report(), "node_modules/native-kit/index.js")).toEqual(["1:SK6005"]);
+  });
+
+  test("without permissions the import is the error, and check.allow cannot hide it", () => {
+    const none = analyzeRules({ permissions: undefined, allow: new Map([["SK6001", ["src/**"]]]) });
+    expect(lines(none, "src/native.ts")).toEqual(["1:SK6001"]);
+    expect(parseCheckConfig({ allow: { SK6001: ["src/**"] } }).problems).toHaveLength(1);
   });
 });
 

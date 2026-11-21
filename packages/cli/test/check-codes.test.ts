@@ -34,6 +34,7 @@ describe("the code registry", () => {
     const seen = new Set<string>();
     const add = (codes: { code: string }[]) => codes.forEach((d) => seen.add(d.code));
     add(analyzeRules().diagnostics);
+    add(analyzeRules({ permissions: undefined }).diagnostics);
     add(analyzeCss().diagnostics);
     add(analyzeFrameworks().diagnostics);
     add(analyzeUnit(["broken.ts", "missing.ts"]).diagnostics);

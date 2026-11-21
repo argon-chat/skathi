@@ -209,15 +209,16 @@ The start times stay within the spread of the runs, whose middle half spans abou
 
 ## Before the first AOT build: sk check
 
-Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in five ranges:
+Run `sk check` on the app before you turn AOT on. An AOT build runs the same check and stops on its errors. Its codes come in six ranges:
 
-| Codes    | Severity                   | Meaning                                                                                                                                              |
-| -------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SK1xxx` | Error: the AOT build stops | Breaks under AOT. See [Built-ins are read-only](#built-ins-are-read-only).                                                                           |
-| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time).                                                               |
-| `SK3xxx` | Warning                    | Typing quality: values the code passes around without a type.                                                                                        |
-| `SK4xxx` | Warning                    | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package.                         |
-| `SK5xxx` | Error or warning           | Vue and Svelte features that do not work or work differently. See [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/). |
+| Codes    | Severity                   | Meaning                                                                                                                                                                                 |
+| -------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SK1xxx` | Error: the AOT build stops | Breaks under AOT. See [Built-ins are read-only](#built-ins-are-read-only).                                                                                                              |
+| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time).                                                                                                  |
+| `SK3xxx` | Warning                    | Typing quality: values the code passes around without a type.                                                                                                                           |
+| `SK4xxx` | Warning                    | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package.                                                            |
+| `SK5xxx` | Error or warning           | Vue and Svelte features that do not work or work differently. See [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/).                                    |
+| `SK6xxx` | Error or warning           | Permissions (since 0.7): a [`dlopen()`](/std/dlopen/) of a library that sk.config.json does not allow, or a dependency that imports `skathi:ffi`. `check.allow` cannot hide the errors. |
 
 `sk explain <code>` explains a code with an example and a fix, and `sk explain --list` lists them all. `sk check --deny-warnings` also fails on warnings, for CI.
 

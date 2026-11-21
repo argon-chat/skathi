@@ -45,6 +45,13 @@ export function parseCheckConfig(raw: unknown): CheckConfig {
       problems.push({ message: `"check.allow": ${code} stops the check and cannot be allowed`, key: code });
       continue;
     }
+    if (info.firm) {
+      problems.push({
+        message: `"check.allow": ${code} is an error in the app's permissions and cannot be allowed`,
+        key: code,
+      });
+      continue;
+    }
     if (!Array.isArray(value) || value.some((v) => typeof v !== "string" || !v.trim())) {
       problems.push({
         message: `"check.allow.${code}" must be a list of package names or app-relative globs`,

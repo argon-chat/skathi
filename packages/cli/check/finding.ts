@@ -61,7 +61,7 @@ export function diagnosticsOf(
     const owner = packages.ownerOf(f.file);
     if (owner && PLATFORM.has(owner.name)) continue;
     const file = rel(f.file);
-    if (!info.fatal && suppress.matches(f.code, file, owner?.name ?? null)) {
+    if (!info.fatal && !info.firm && suppress.matches(f.code, file, owner?.name ?? null)) {
       suppressed++;
       continue;
     }
