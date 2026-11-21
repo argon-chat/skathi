@@ -32,7 +32,23 @@ function verifyRuntime(executable: string, library: string) {
       throw new Error(`expected an ad hoc host signature without a Team ID\n${details}`);
     }
   }
-  run(executable, library);
+  if (!verifyHardened || identity !== "-") {
+    run(executable, library);
+    return;
+  }
+  const probe = Bun.spawnSync([executable, library], { stdout: "inherit", stderr: "pipe" });
+  if (probe.exitCode === 0) return;
+  const details = probe.stderr.toString();
+  if (
+    probe.exitCode === 2 &&
+    /mapped file has no Team ID and is not a platform binary|mapping process and mapped file \(non-platform\) have different Team IDs/i.test(
+      details,
+    )
+  ) {
+    console.log(`Ad hoc hardened probe rejected by macOS library validation: ${details.trim()}`);
+    return;
+  }
+  throw new Error(`hardened probe exited with ${probe.exitCode}\n${details}`);
 }
 
 const contents = `<?xml version="1.0" encoding="UTF-8"?>

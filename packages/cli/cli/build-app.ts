@@ -433,7 +433,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
           log,
         );
       }
-      if (codesign && plan.identity) signBundle(codesign, app, plan.identity, entitlementsPath, log, noJit);
+      if (codesign && plan.identity) signBundle(codesign, app, plan.identity, entitlementsPath, log);
     },
     log,
   });

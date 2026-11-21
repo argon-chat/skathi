@@ -158,6 +158,9 @@ function publish(source: string, label: string, host: string, aot: boolean, jit:
   if (aot) assert(existsSync(join(app, "Contents/Frameworks/app.image.dylib")));
   command("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
   if (!jit) {
+    const signature = command("/usr/bin/codesign", ["-d", "--verbose=4", exe]);
+    assert.match(signature, /^Signature=adhoc$/m);
+    assert.doesNotMatch(signature, /^CodeDirectory .*flags=.*\bruntime\b/m);
     const detail = command("/usr/bin/codesign", ["-d", "--entitlements", ":-", exe]);
     assert.doesNotMatch(detail, /(?:allow-jit|allow-unsigned-executable-memory|disable-library-validation)/);
   }

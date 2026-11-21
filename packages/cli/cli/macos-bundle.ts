@@ -386,18 +386,13 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
 /** `-` is ad hoc: no certificate, no hardened runtime, nothing to notarise. */
 export const AD_HOC = "-";
 
-export function codesignArgs(
-  app: string,
-  identity: string,
-  entitlementsPath: string | null,
-  hardened = false,
-): string[] {
-  if (identity === AD_HOC && !hardened) return ["--force", "--sign", AD_HOC, app];
+export function codesignArgs(app: string, identity: string, entitlementsPath: string | null): string[] {
+  if (identity === AD_HOC) return ["--force", "--sign", AD_HOC, app];
   return [
     "--force",
     "--options",
     "runtime",
-    ...(identity === AD_HOC ? [] : ["--timestamp"]),
+    "--timestamp",
     ...(entitlementsPath ? ["--entitlements", entitlementsPath] : []),
     "--sign",
     identity,
@@ -449,10 +444,9 @@ export function signBundle(
   identity: string,
   entitlementsPath: string | null,
   log: (line: string) => void = () => {},
-  hardened = false,
 ): { ms: number } {
   const t0 = performance.now();
-  const args = codesignArgs(app, identity, entitlementsPath, hardened);
+  const args = codesignArgs(app, identity, entitlementsPath);
   log(`codesign ${args.join(" ")}`);
   const r = spawnSync(codesign, args, { encoding: "utf8" });
   if (r.status !== 0) {
@@ -492,6 +486,6 @@ export function writeSignedImage(
     }
   }
   writeFileSync(dest, image);
-  signBundle(codesign, dest, identity, null, log, true);
+  signBundle(codesign, dest, identity, null, log);
   writeFileSync(receipt, JSON.stringify([identity, input, sha(readFileSync(dest))]));
 }

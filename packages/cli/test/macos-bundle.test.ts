@@ -382,16 +382,7 @@ describe("the .app", () => {
 describe("codesign", () => {
   test("ad hoc is just --sign -; an identity adds the hardened runtime, a timestamp and the entitlements", () => {
     expect(codesignArgs("A.app", AD_HOC, "e.plist")).toEqual(["--force", "--sign", "-", "A.app"]);
-    expect(codesignArgs("A.app", AD_HOC, "e.plist", true)).toEqual([
-      "--force",
-      "--options",
-      "runtime",
-      "--entitlements",
-      "e.plist",
-      "--sign",
-      "-",
-      "A.app",
-    ]);
+    expect(codesignArgs("app.image.dylib", AD_HOC, null)).toEqual(["--force", "--sign", "-", "app.image.dylib"]);
     expect(codesignArgs("A.app", "Developer ID Application: X (T)", "e.plist")).toEqual([
       "--force",
       "--options",
