@@ -1,0 +1,19 @@
+[package]
+name = "sk-ffi"
+description = "Calling C functions by signature for Skathi's skathi:ffi: build-time invoke stubs, library loading"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

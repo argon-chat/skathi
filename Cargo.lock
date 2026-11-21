@@ -5482,6 +5482,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sk-ffi"
+version = "0.7.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "sk-hotkeys"
 version = "0.7.0"
 dependencies = [

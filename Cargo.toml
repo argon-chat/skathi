@@ -22,6 +22,7 @@ members = [
     "crates/sk-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
     "crates/sk-audio",      # spatial audio output: Windows ISpatialAudioClient objects behind redjs's Web Audio
     "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
+    "crates/sk-ffi",        # skathi:ffi: calling C functions by signature, build-time invoke stubs
     "crates/sk-app",        # host binary shell
     "crates/skathi",        # the facade an embedder depends on
     "crates/skathi-macros", # #[skathi::module] and #[skathi::data]
