@@ -12,6 +12,7 @@ export async function benchmarkScroll(selector: string): Promise<void> {
 
   const intervals: number[] = [];
   let moved = 0;
+  let movingFrames = 0;
   let direction = 1;
   let previous = await frame();
   for (let i = 0; i < 600; i++) {
@@ -20,9 +21,11 @@ export async function benchmarkScroll(selector: string): Promise<void> {
     else if (before >= element.scrollHeight - element.clientHeight - 1) direction = -1;
     element.scrollTop = before + 37 * direction;
     const now = await frame();
-    moved += Math.abs(element.scrollTop - before);
+    const distance = Math.abs(element.scrollTop - before);
+    moved += distance;
+    if (distance > 0) movingFrames++;
     intervals.push(now - previous);
     previous = now;
   }
-  console.log(`SKMACSCROLL ${JSON.stringify({ intervals, moved })}`);
+  console.log(`SKMACSCROLL ${JSON.stringify({ intervals, moved, movingFrames })}`);
 }

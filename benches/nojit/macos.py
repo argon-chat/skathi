@@ -24,6 +24,11 @@ VARIANTS = ("jit", "aot", "nojit")
 FIRST_FRAME = re.compile(r"\[sk-perf\] boot->first-frame ([\d.]+)ms")
 
 
+def run_order(run):
+    first = run % len(VARIANTS)
+    return VARIANTS[first:] + VARIANTS[:first]
+
+
 def executable(bundle):
     with (bundle / "Contents/Info.plist").open("rb") as stream:
         name = plistlib.load(stream)["CFBundleExecutable"]
@@ -101,7 +106,7 @@ def capture(exe, variant, profile, idle_seconds, timeout, *, scroll=False):
                         raise RuntimeError("the app did not run under the expected engine")
                 if not scroll and boot:
                     after_frame = memory(child.pid)
-                    time.sleep(idle_seconds)
+                    time.sleep(max(0, stamp + idle_seconds - time.monotonic()))
                     return {
                         "spawnToFirstFrameMs": (stamp - started) * 1000,
                         "bootToFirstFrameMs": float(boot[1]),
@@ -113,13 +118,16 @@ def capture(exe, variant, profile, idle_seconds, timeout, *, scroll=False):
                     if "error" in sample:
                         raise RuntimeError(sample["error"])
                     intervals = sorted(sample["intervals"])
-                    if len(intervals) != 600 or not all(value > 0 for value in intervals) or sample["moved"] <= 0:
-                        raise RuntimeError("expected 600 positive frame intervals and a scroll position that changed")
+                    if len(intervals) != 600 or not all(value > 0 for value in intervals):
+                        raise RuntimeError("expected 600 positive frame intervals")
+                    if sample["movingFrames"] < 540 or sample["moved"] <= 0:
+                        raise RuntimeError(f"showcase scrolled on only {sample['movingFrames']} of 600 frames")
                     return {
                         "frameP50Ms": statistics.median(intervals),
                         "frameP95Ms": intervals[math.ceil(0.95 * len(intervals)) - 1],
                         "framesOver33Ms": sum(value > 33.33 for value in intervals),
                         "scrollPixels": sample["moved"],
+                        "movingFrames": sample["movingFrames"],
                         "intervalsMs": sample["intervals"],
                     }
         except (RuntimeError, subprocess.CalledProcessError, queue.Empty) as error:
@@ -178,7 +186,7 @@ def main():
         for name in APP_NAMES:
             app_results = report["apps"][name]
             for run in range(args.runs + 1):
-                for variant in VARIANTS if run % 2 == 0 else reversed(VARIANTS):
+                for variant in run_order(run):
                     profile = Path(folder) / f"{name}-{variant}"
                     sample = capture(exes[name, variant], variant, profile, args.idle_seconds, args.timeout)
                     if run == 0:
@@ -188,7 +196,7 @@ def main():
                     save()
             if name == "showcase":
                 for run in range(args.runs):
-                    for variant in VARIANTS if run % 2 == 0 else reversed(VARIANTS):
+                    for variant in run_order(run):
                         profile = Path(folder) / f"{name}-{variant}"
                         sample = capture(
                             exes[name, variant], variant, profile, args.idle_seconds, args.timeout, scroll=True,
