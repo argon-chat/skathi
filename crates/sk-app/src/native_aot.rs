@@ -181,12 +181,11 @@ fn read_manifest(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-fn memory_profile(
-    value: Option<&OsStr>,
-    default: aot::MemoryProfile,
-) -> Result<aot::MemoryProfile, String> {
+/// Compact unless the app asks for the engine's own sizes: those commit about 370 MB that a
+/// page of ordinary size never touches.
+fn memory_profile(value: Option<&OsStr>) -> Result<aot::MemoryProfile, String> {
     match value {
-        None => Ok(default),
+        None => Ok(aot::MemoryProfile::Compact),
         Some(value) => match value.to_str() {
             Some("compact") => Ok(aot::MemoryProfile::Compact),
             Some("default") => Ok(aot::MemoryProfile::Default),
@@ -404,10 +403,7 @@ fn prepare_inspector() -> Result<(), String> {
     } else {
         return Ok(());
     };
-    let profile = memory_profile(
-        std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref(),
-        aot::MemoryProfile::Compact,
-    )?;
+    let profile = memory_profile(std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref())?;
     let manifest = json::parse(&text).ok_or("invalid native AOT manifest JSON")?;
     let source =
         crate::inspector::inspector_js().map_err(|e| format!("embedded inspector: {e}"))?;
@@ -609,11 +605,8 @@ fn damaged(error: String) -> String {
 
 #[cfg(feature = "prod")]
 fn prepare_image(manifest: &Json, script: &str, beside: Option<&Path>) -> Result<(), String> {
-    let profile = memory_profile(
-        std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref(),
-        aot::MemoryProfile::Default,
-    )
-    .map_err(cannot_run)?;
+    let profile =
+        memory_profile(std::env::var_os("SK_AOT_MEMORY_PROFILE").as_deref()).map_err(cannot_run)?;
     let expected = field(manifest, "imageSha256").map_err(cannot_run)?;
     let (plan, id) = validate(
         manifest,
