@@ -69,7 +69,7 @@ fn main() {
 }
 ```
 
-`skathi::run_exe()` runs the full standalone host, which here starts as the inspector. Without `inspector_exe`, F12 says why nothing opened; the devtools protocol works either way, so the [devtools command line](/devtools/scripting/) (`devtools/ctl.ts`) still connects. The `no-devtools` feature compiles both out of a release build.
+`skathi::run_exe()` runs the full standalone host, which here starts as the inspector. Without `inspector_exe`, F12 says why nothing opened; the devtools protocol works either way, so the [devtools command line](/devtools/scripting/) (`sk ctl`) still connects. The `no-devtools` feature compiles both out of a release build.
 
 ## Logs and the allocator
 

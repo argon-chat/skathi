@@ -2,7 +2,7 @@
 /**
  * sk-devtools CLI: the zero-setup way to drive a running dev host.
  *
- *   bun devtools/ctl.ts [--dist <slot> | --app <name>] <cmd> [args...]
+ *   sk ctl [--dist <slot> | --app <name>] <cmd> [args...]
  *
  * Reads `<dist>/devtools.json`, sends one newline-delimited JSON request over TCP to 127.0.0.1 and
  * prints the reply. Exit code 0 on `{ok:true}`, 1 otherwise. No npm dependencies on purpose: an
@@ -25,7 +25,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 const USAGE = `sk-devtools — drive a running Skathi dev host
 
-  bun devtools/ctl.ts [--dist <slot>] [--timeout <ms>] <command> [args]
+  sk ctl [--dist <slot>] [--timeout <ms>] <command> [args]
 
 commands
 ${usageBlock()}

@@ -152,8 +152,7 @@ This is the test that catches the crossing for real: argument names, `Result` er
 **With the devtools**, a running app is scriptable: [`eval`](/devtools/scripting/) runs code in the page, and `__sk_native_module("notes")` there returns the object that `import … from "native:notes"` reads, so a script can call a function or subscribe to an event of the live app:
 
 ```sh
-ctl=node_modules/@skathi-native/cli/devtools/ctl.ts
-bun $ctl --app notes eval '__sk_native_module("notes").get(1).title'
+bunx sk ctl --app notes eval '__sk_native_module("notes").get(1).title'
 ```
 
 `--app` takes the `name` from the payload's `sk.config.json` and attaches to the newest running copy. When an installed copy of the same app runs too, pin yours with `--dist`: on Windows each copy's folder is `%TEMP%\skathi\apps\<name>\<pid>`.

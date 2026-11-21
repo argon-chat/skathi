@@ -1,19 +1,19 @@
 ---
 title: Scripting the app from outside
 label: Scripting and agents
-description: Drive a running app from the command line with devtools/ctl.ts, the protocol the inspector itself uses. Read the tree, click, type, evaluate, record frames and take screenshots from scripts, tests and coding agents.
+description: Drive a running app from the command line with sk ctl, the protocol the inspector itself uses. Read the tree, click, type, evaluate, record frames and take screenshots from scripts, tests and coding agents.
 section: Devtools
 order: 6
 ---
 
-Everything the inspector shows, it gets over a small local protocol, and the CLI package ships the script that speaks it. `devtools/ctl.ts` sends one command to a running app and prints the reply as JSON. That makes the inspector's whole view of your app available to a shell script, a CI job, or a coding agent that cannot see the screen.
+Everything the inspector shows, it gets over a small local protocol, and the CLI speaks it too. `sk ctl` sends one command to a running app and prints the reply as JSON. That makes the inspector's whole view of your app available to a shell script, a CI job, or a coding agent that cannot see the screen.
 
 ## One command, one answer
 
 Start the app with `sk dev`, then, from the same folder:
 
 ```bash
-bun node_modules/@skathi-native/cli/devtools/ctl.ts text "button.primary"
+bunx sk ctl text "button.primary"
 ```
 
 ```json
@@ -24,7 +24,7 @@ bun node_modules/@skathi-native/cli/devtools/ctl.ts text "button.primary"
 }
 ```
 
-Run from the app's folder, the script finds the app `sk dev` is running there by itself (`dist/.sk-dev`). Elsewhere, pass `--dist <app>/dist/.sk-dev`. For an app built with `sk build`, pass `--app <name>` with the `name` from `sk.config.json`; it attaches to the newest running copy. `--window <id>` addresses a pop-out window: the `windows` command lists them, and `<SkWindow>`'s `open` event gives the id.
+Run from the app's folder, it finds the app `sk dev` is running there by itself (`dist/.sk-dev`). Elsewhere, pass `--dist <app>/dist/.sk-dev`. For an app built with `sk build`, pass `--app <name>` with the `name` from `sk.config.json`; it attaches to the newest running copy. `--window <id>` addresses a pop-out window: the `windows` command lists them, and `<SkWindow>`'s `open` event gives the id.
 
 The exit code is 0 when the app answered `ok`, 1 otherwise, so a script can stop at the first failure. A reply that does not come in 10 seconds is a failure too (`--timeout <ms>` changes it), so a frozen app cannot hang the script.
 
@@ -33,11 +33,10 @@ The exit code is 0 when the app answered `ok`, 1 otherwise, so a script can stop
 The input commands go through the app's real hit test, so a click lands on what is on top at that point, `pointer-events` and all, and the app's own handlers run. Act, then check:
 
 ```bash
-ctl=node_modules/@skathi-native/cli/devtools/ctl.ts
-bun $ctl click "button.primary"
-bun $ctl text "button.primary"          # "Count up · 4"
-bun $ctl logs                           # anything new in the console?
-bun $ctl screenshot shot.png            # what does it look like now?
+bunx sk ctl click "button.primary"
+bunx sk ctl text "button.primary"          # "Count up · 4"
+bunx sk ctl logs                           # anything new in the console?
+bunx sk ctl screenshot shot.png            # what does it look like now?
 ```
 
 `screenshot` captures the window's client area without raising or focusing it; pass `--backend print_window` for the whole window with its backdrop composited in. `logs` returns a cursor, `next`; pass it back as `--since` to get only the lines after it.
@@ -45,10 +44,10 @@ bun $ctl screenshot shot.png            # what does it look like now?
 When a check fails, the same script finds out why, the way you would in the inspector:
 
 ```bash
-bun $ctl rules "button.primary"         # the matched rules, as in the Elements tab
-bun $ctl styles "button.primary"        # the computed values
-bun $ctl eval "localStorage.getItem('note')"
-bun $ctl net                            # the requests, as in the Network tab
+bunx sk ctl rules "button.primary"         # the matched rules, as in the Elements tab
+bunx sk ctl styles "button.primary"        # the computed values
+bunx sk ctl eval "localStorage.getItem('note')"
+bunx sk ctl net                            # the requests, as in the Network tab
 ```
 
 ## What it can do
@@ -80,7 +79,7 @@ bun packages/cli/devtools/mcp.ts --dist <app>/dist/.sk-dev
 bun packages/cli/devtools/mcp.ts --app <name>
 ```
 
-It reads the app's handshake again on every call, so restarting the app does not need a restart of the server. It is not part of the npm package; `ctl.ts` is, and needs nothing installed beyond Bun.
+It reads the app's handshake again on every call, so restarting the app does not need a restart of the server. It is not part of the npm package; `sk ctl` is.
 
 ## Tests
 

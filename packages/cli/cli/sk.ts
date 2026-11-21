@@ -473,6 +473,15 @@ export function cli(run: Run): Command {
       throw new HostError(`sk host is now sk workload: sk workload ${RENAMED[sub ?? ""] ?? "--help"}`);
     });
 
+  // Listed for --help only: main() hands `sk ctl` to the devtools client before commander parses.
+  program
+    .command("ctl")
+    .summary("Drive a running app: read its tree, click, evaluate, take screenshots")
+    .argument("[command]")
+    .argument("[args...]")
+    .helpOption(false)
+    .allowUnknownOption();
+
   program.command("version", { hidden: true }).action(() => console.log(CLI_VERSION));
 
   return program;
@@ -488,6 +497,13 @@ function usageError(e: CommanderError, at: string, color: boolean): void {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  if (argv[0] === "ctl") {
+    const client = Bun.fileURLToPath(new URL("../devtools/ctl.ts", import.meta.url));
+    const done = Bun.spawnSync([process.execPath, client, ...argv.slice(1)], {
+      stdio: ["inherit", "inherit", "inherit"],
+    });
+    return done.exitCode;
+  }
   const split = argv.indexOf("--");
   const head = split < 0 ? argv : argv.slice(0, split);
   const run: Run = { rest: split < 0 ? [] : argv.slice(split + 1), color: colorArg(head), code: 0, at: "sk" };

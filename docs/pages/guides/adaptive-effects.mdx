@@ -100,9 +100,9 @@ Only effects declaring the slot opt into the tier and its repaint schedule. Thei
 ## Try a change in devtools
 
 ```sh
-bun node_modules/@skathi-native/cli/devtools/ctl.ts power --scheme saving --pressure fair
-bun node_modules/@skathi-native/cli/devtools/ctl.ts effects painted
-bun node_modules/@skathi-native/cli/devtools/ctl.ts power --scheme system --pressure system
+bunx sk ctl power --scheme saving --pressure fair
+bunx sk ctl effects painted
+bunx sk ctl power --scheme system --pressure system
 ```
 
 The Shaders page also offers per-element preview buttons. Choose **Auto** when testing system changes. `effects painted` reads the quality slot from the last submitted frame of the addressed window.
