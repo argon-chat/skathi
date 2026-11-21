@@ -79,10 +79,16 @@ impl MacHost {
             };
             once.call_once(|| {
                 eprintln!(
-                "[permissions] {} access requires a macOS .app with a nonempty {} in Info.plist",
-                media.cap.web_name(),
-                media.usage_key
-            )
+                    "[permissions] {} access requires a macOS .app with a nonempty {} in Info.plist — \
+                     in a Skathi app, set sk.config.json \"macos.{}\"",
+                    media.cap.web_name(),
+                    media.usage_key,
+                    if media.cap == Capability::Camera {
+                        "cameraUsageDescription"
+                    } else {
+                        "microphoneUsageDescription"
+                    }
+                )
             });
             return RequestOutcome::Settled(PermissionState::Denied);
         }

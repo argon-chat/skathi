@@ -79,6 +79,8 @@ mod prod;
 mod quiet;
 mod reclaim;
 mod reload;
+#[cfg(target_os = "macos")]
+mod responsible;
 #[cfg(all(feature = "webgpu", target_os = "windows"))]
 mod shared_gpu;
 mod shutdown;
@@ -986,6 +988,8 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 
 /// The host exe's `main`: this process IS the app.
 pub fn run_exe() {
+    #[cfg(target_os = "macos")]
+    responsible::claim();
     // First, so a host whose runner is already gone never opens a window.
     owner::watch();
     // The one parse of the command line; consumers never read `std::env::args()`.
