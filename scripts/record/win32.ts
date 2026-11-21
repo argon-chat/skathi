@@ -91,7 +91,7 @@ export function recordingMonitor(device?: string): Monitor {
 /** Each monitor's wallpaper path, keyed by device name; "" for a solid colour. */
 export function wallpapers(): Map<string, string> {
   const r = spawnSync(
-    "powershell",
+    "pwsh",
     ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(import.meta.dir, "wallpaper.ps1")],
     {
       encoding: "utf8",

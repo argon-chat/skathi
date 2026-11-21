@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 # Prints "left,top,width,height<TAB>wallpaper path" per monitor, from IDesktopWallpaper.
 Add-Type -TypeDefinition @"
 using System;

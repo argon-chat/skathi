@@ -50,7 +50,7 @@ async function clear() {
 }
 
 function powershell(cmd: string): string {
-  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8" });
+  const r = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8" });
   return r.stdout ?? "";
 }
 

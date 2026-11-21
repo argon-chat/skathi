@@ -21,7 +21,7 @@ test.skipIf(!enabled)(
     const size = 4 * 1024 ** 3 + 16 * 1024 ** 2;
     const rss = () =>
       Number(
-        execFileSync("powershell", ["-NoProfile", "-Command", "(Get-Process -Id " + app.pid + ").WorkingSet64"], {
+        execFileSync("pwsh", ["-NoProfile", "-Command", "(Get-Process -Id " + app.pid + ").WorkingSet64"], {
           encoding: "utf8",
           windowsHide: true,
         }).trim(),

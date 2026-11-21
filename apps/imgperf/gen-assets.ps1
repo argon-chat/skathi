@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 # Generates the imgperf test corpus into apps/imgperf/assets/: pwsh -File apps/imgperf/gen-assets.ps1
 #
 # Every image gets distinct bytes: gpui caches by path and its GPU atlas by decoded image id, so

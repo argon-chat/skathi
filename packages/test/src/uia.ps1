@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 # Walks a process's UI Automation tree and prints it as JSON, one flat row per node with its depth.
 # Read-only: no activation, focus or synthetic input.
 #

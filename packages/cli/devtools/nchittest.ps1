@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 # WM_NCHITTEST probe: proves the CSS drag region / caption buttons reach the OS.
 #
 # No real cursor movement and no window activation: a synthetic WM_MOUSEMOVE is

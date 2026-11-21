@@ -677,9 +677,13 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   let icu: Uint8Array | null = null;
   if (config.intl === "full" && icuData) {
     if (!existsSync(icuData)) {
+      const restore =
+        host?.source === "--workload"
+          ? `Cargo writes it beside the exe it builds (target/<triple>/<profile>); copy it along with the exe`
+          : `reinstall the workload (sk workload install ${variant})`;
       throw new HostError(
         `the ${variant} workload links only the root ICU locale and the rest of its ICU data, ${icuData}, is missing — ` +
-          `reinstall the workload (sk workload install ${variant}), or set "intl": "invariant" in sk.config.json to ship without it`,
+          `${restore}, or set "intl": "invariant" in sk.config.json to ship without it`,
       );
     }
     if (singleFile) {

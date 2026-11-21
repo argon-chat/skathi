@@ -42,7 +42,7 @@ const inp = (type: string, data: string | null, v: string, composing = false, wh
   `input@${where}|${type} data=${JSON.stringify(data)} composing=${composing} cancelable=false v=${JSON.stringify(v)}`;
 
 function powershell(cmd: string): string {
-  const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8" });
+  const r = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8" });
   return r.stdout ?? "";
 }
 

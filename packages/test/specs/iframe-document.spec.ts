@@ -16,7 +16,7 @@ afterAll(async () => {
 
 const browserProcesses = (): number => {
   const out = spawnSync(
-    "powershell.exe",
+    "pwsh",
     [
       "-NoProfile",
       "-Command",

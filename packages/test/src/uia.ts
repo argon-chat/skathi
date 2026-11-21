@@ -53,7 +53,7 @@ export function uiaSupported(): boolean {
 function runOnce(pid: number, timeout: number): Promise<UiaNode[]> {
   return new Promise((resolve, reject) => {
     const child = spawn(
-      "powershell.exe",
+      "pwsh",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", SCRIPT, "-ProcessId", String(pid)],
       { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     );
@@ -73,7 +73,7 @@ function runOnce(pid: number, timeout: number): Promise<UiaNode[]> {
       clearTimeout(timer);
       const start = out.indexOf("[");
       if (code !== 0 && start < 0) {
-        reject(new Error(`uiaTree(${pid}): powershell exited ${code}\n${err}`));
+        reject(new Error(`uiaTree(${pid}): pwsh exited ${code}\n${err}`));
         return;
       }
       if (start < 0) {

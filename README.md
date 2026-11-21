@@ -45,7 +45,7 @@ Rust (pinned by `rust-toolchain.toml`), LLVM, bun, then:
 
 ```sh
 git submodule update --init
-vendor/redjs/setup.ps1        # setup.sh on macOS and Linux
+vendor/redjs/setup.ps1        # in PowerShell 7 (pwsh); setup.sh on macOS and Linux
 bun install
 cargo build -p sk-app --target <triple>   # x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-unknown-linux-gnu
 ```

@@ -50,7 +50,7 @@ Use a [Skathi source checkout](https://github.com/argon-chat/skathi) with its su
 
 ### Windows x64
 
-From the Skathi checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container.
+From the Skathi checkout, prepare the compiler and its pinned JavaScriptCore builtin table and build the empty image container. Run this in PowerShell 7 (`pwsh`), not Windows PowerShell 5.1: `setup.ps1` requires it, and `tools/sk-aot/setup.ts` runs Bun's code generation through `pwsh`.
 
 ```powershell
 bun install
@@ -80,6 +80,8 @@ $release = '.\target\x86_64-pc-windows-msvc\release'
 Copy-Item $skImage $release
 sk publish .\app --aot --payload-only --workload "$release\my-app.exe" --aot-compiler $skAot
 ```
+
+`sk publish` learns what the executable is by running it with `--sk-host-info` as its only argument. `Builder::spawn` prints the answer and exits, so an executable that parses its own arguments first has to let that one through.
 
 This writes `app.skpk`, `app.image.dll` and any asset or ICU packs to `app/dist/release/.sk`. The manifest `sk/app.native.json` is inside `app.skpk`. It binds the image to the bundle, the host's AOT ABI and JavaScriptCore pin, the builtin table, and the host preludes. The CLI queries your exe with `--sk-host-info` before compiling. `skathi::Builder` answers that flag before loading a payload. Keep the image and payload from the same build, and rebuild both when you upgrade Skathi.
 

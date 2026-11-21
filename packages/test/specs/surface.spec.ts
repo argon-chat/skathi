@@ -884,7 +884,7 @@ test.skipIf(!WINDOWS)(
 
 const privateBytes = (pid: number) =>
   Number(
-    spawnSync("powershell", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`], {
+    spawnSync("pwsh", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`], {
       encoding: "utf8",
       windowsHide: true,
     }).stdout.trim(),
