@@ -21,7 +21,7 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw"] as const;
+export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw", "chip8"] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 export const FRAMEWORKS = ["vue", "svelte"] as const;
@@ -133,12 +133,19 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     },
     checker: VUE_TSC,
   },
+  chip8: {
+    hint: "a CHIP-8 emulator in Vue, with a debugger beside the screen",
+    framework: "vue",
+    dependencies: ["vue"],
+    window: { width: 1120, height: 800, minWidth: 900, minHeight: 700, titleBarStyle: "default" },
+    checker: VUE_TSC,
+  },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);

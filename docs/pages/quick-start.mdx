@@ -39,8 +39,9 @@ It asks for the app's name, a template, the platforms to package for, whether pu
 | `player`   | Svelte 5        | a music player dressed in shaders                               |
 | `weather`  | Vue             | a weather app whose sky and rain are drawn by shaders           |
 | `draw`     | Vue             | an infinite canvas for pens, drawn with WebGPU                  |
+| `chip8`    | Vue             | a CHIP-8 emulator with a debugger beside the screen             |
 
-`player`, `weather` and `draw` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
+`player`, `weather`, `draw` and `chip8` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
 
 ```bash
 bun create skathi my-app --template minimal --yes
@@ -129,7 +130,7 @@ Skathi renders both frameworks into one element tree with the same renderer, so 
 Some parts are Vue-only:
 
 - `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime` in an app that has `vue` installed. Without it, `@skathi-native/runtime` is the DOM layer only.
-- The `showcase`, `weather` and `draw` templates use Vue. The showcase also uses the Vue libraries `vue-router` and `pinia`.
+- The `showcase`, `weather`, `draw` and `chip8` templates use Vue. The showcase also uses the Vue libraries `vue-router` and `pinia`.
 - Of the [performance advisories](/guides/performance-advisories/), the wasted re-render and long list advisories watch Vue component updates. In a Svelte app only the host-writes advisory is reported, with a total instead of component names.
 
 ## Check compatibility
