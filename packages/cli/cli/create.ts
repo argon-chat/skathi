@@ -21,7 +21,17 @@ import { colorEnabled, paint } from "./term";
 export const PACKAGE_MANAGERS = ["bun", "npm", "pnpm", "yarn"] as const;
 export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-export const TEMPLATES = ["showcase", "minimal", "svelte", "player", "weather", "draw", "chip8", "sequencer"] as const;
+export const TEMPLATES = [
+  "showcase",
+  "minimal",
+  "svelte",
+  "player",
+  "weather",
+  "draw",
+  "chip8",
+  "sequencer",
+  "rv32",
+] as const;
 export type Template = (typeof TEMPLATES)[number];
 
 export const FRAMEWORKS = ["vue", "svelte"] as const;
@@ -71,6 +81,10 @@ interface TemplateInfo {
   dependencies: string[];
   window: Record<string, unknown>;
   packs?: { name: string; match?: string[] }[];
+  /** package.json scripts beside the usual ones. */
+  scripts?: Record<string, string>;
+  /** .gitignore lines beside the usual ones: what an install fetches. */
+  ignore?: string[];
   /** sk.config.json `macos` keys beside `bundleId`: the usage descriptions of the devices the template asks for. */
   macos?: Record<string, string>;
   checker: Checker;
@@ -148,12 +162,22 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     window: { width: 1120, height: 800, minWidth: 900, minHeight: 700, titleBarStyle: "default" },
     checker: VUE_TSC,
   },
+  rv32: {
+    hint: "a RISC-V emulator in Vue with a debugger, running the Doom engine as its guest",
+    framework: "vue",
+    dependencies: ["vue"],
+    window: { width: 1200, height: 880, minWidth: 1040, minHeight: 760, titleBarStyle: "hidden", titleBarHeight: 40 },
+    packs: [{ name: "guest", match: ["assets/**"] }],
+    scripts: { postinstall: "bun scripts/fetch-wad.mjs", wad: "bun scripts/fetch-wad.mjs" },
+    ignore: ["assets/doom1.wad"],
+    checker: VUE_TSC,
+  },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8", "sequencer"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8", "sequencer", "rv32"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);
@@ -256,6 +280,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
         publish: "sk publish",
         check: "sk check",
         typecheck: info.checker.script,
+        ...info.scripts,
       },
       dependencies: {
         "@skathi-native/runtime": sdk,
@@ -286,7 +311,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       extends: info.checker.tsconfig,
       include: ["src/**/*.ts", info.checker.sources],
     }),
-    ".gitignore": "node_modules/\ndist/\n",
+    ".gitignore": ["node_modules/", "dist/", ...(info.ignore ?? []), ""].join("\n"),
   };
 
   for (const rel of Object.keys(files)) {

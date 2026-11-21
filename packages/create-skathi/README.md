@@ -7,7 +7,7 @@ components, rendered on the GPU without a browser.
 bun create skathi my-app
 ```
 
-It asks for a template (showcase, minimal, svelte, player, weather, draw, chip8 or sequencer), the platforms to package for and the package
+It asks for a template (showcase, minimal, svelte, player, weather, draw, chip8, sequencer or rv32), the platforms to package for and the package
 manager. The options of `sk create` work here too:
 
 ```
