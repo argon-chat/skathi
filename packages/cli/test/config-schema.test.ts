@@ -4,7 +4,15 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { loadAppConfig, MACOS_KEYS, PACK_KEYS, TOP_LEVEL, WINDOWS_KEYS } from "../cli/config";
+import {
+  FFI_PERMISSION_KEYS,
+  loadAppConfig,
+  MACOS_KEYS,
+  PACK_KEYS,
+  PERMISSION_KEYS,
+  TOP_LEVEL,
+  WINDOWS_KEYS,
+} from "../cli/config";
 import { CONFIG_SCHEMA, create } from "../cli/create";
 
 interface Schema {
@@ -43,6 +51,9 @@ describe("the schema and the loader know the same keys", () => {
     expect(props(windows)).toEqual(sorted(WINDOWS_KEYS));
     expect(props(macos)).toEqual(sorted(MACOS_KEYS));
     expect(props(pack)).toEqual(sorted(PACK_KEYS));
+    const permissions = schema.properties?.permissions;
+    expect(props(permissions)).toEqual(sorted(PERMISSION_KEYS));
+    expect(props(permissions?.properties?.ffi?.items)).toEqual(sorted(FFI_PERMISSION_KEYS));
     for (const s of [windows, macos, pack]) {
       expect(s?.additionalProperties).toBe(false);
       expect(Object.keys(s?.patternProperties ?? {})).toEqual(["^\\$"]);

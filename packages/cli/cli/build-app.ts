@@ -28,6 +28,7 @@ import { removedFeatures } from "../aot/uses";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
+import { copyAppLibraries } from "./ffi-libs";
 import {
   ConfigError,
   loadAppConfig,
@@ -219,6 +220,7 @@ export function appMeta(
     launch: config.launch,
     intl: config.intl,
     ...(config.memory === "low" && { memory: config.memory }),
+    ...(config.permissions && { permissions: JSON.stringify(config.permissions) }),
     ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });
 }
@@ -333,6 +335,7 @@ interface Packaged {
 
 function stampExe({ config, host, inputs, sidecars, images, outDir, options, log }: PackageInput): Packaged {
   writeSidecars(outDir, sidecars);
+  copyAppLibraries(config, outDir, "windows");
   const fv = numericVersion(config.version);
   const exeFile = `${config.exeName}.exe`;
   const exe = join(outDir, exeFile);
@@ -402,6 +405,11 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
       `${m.iconPath} is ${Math.max(...icon.sizes)} px at most — the Dock and Finder draw up to 1024 px (512@2x); a 1024 px PNG stays sharp`,
     );
   }
+  if (config.permissions?.ffi.some((entry) => entry.path.startsWith("$APP/"))) {
+    warnings.push(
+      '"permissions.ffi": a library under $APP is not copied into the .app bundle yet — put it in Contents/ at the same path and sign the bundle after',
+    );
+  }
   const info = macInfoFor(config, !!icon);
   const noJit = host.info.features.includes("no-jit");
   const entitlementsPath = join(work, "entitlements.plist");
@@ -455,6 +463,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
 
 function linuxExe({ config, host, inputs, sidecars, outDir }: PackageInput): Packaged {
   writeSidecars(outDir, sidecars);
+  copyAppLibraries(config, outDir, "linux");
   const elf = stampElf({
     host: host.exe,
     out: join(outDir, config.exeName),

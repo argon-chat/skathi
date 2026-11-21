@@ -72,7 +72,8 @@ import { CssWarnings } from "./check/css";
 import { FrameworkWarnings } from "./check/frameworks";
 import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
-import { nativeSvelteRenderer } from "./cli/config";
+import { nativeSvelteRenderer, readPermissions } from "./cli/config";
+import { currentPlatform } from "./cli/platform";
 import { protectHapticPatterns } from "./haptic-patterns";
 
 const C = paint(colorEnabled(process.stdout));
@@ -107,6 +108,17 @@ const SK_CONFIG_DIR = appRootArg
     ? dirname(APP_SRC_DIR)
     : APP_SRC_DIR;
 const SK_CONFIG_PATH = join(SK_CONFIG_DIR, "sk.config.json");
+
+/** The app's permissions as the JSON the host reads; a bad list is reported and allows nothing. */
+function devPermissions(): string | undefined {
+  try {
+    const permissions = readPermissions(readSkConfig()?.permissions, currentPlatform());
+    return permissions && JSON.stringify(permissions);
+  } catch (e) {
+    console.error(`[sk] ${(e as Error).message}`);
+    return undefined;
+  }
+}
 
 function readSkConfig(): Record<string, unknown> | undefined {
   if (!existsSync(SK_CONFIG_PATH)) return undefined;
@@ -1323,6 +1335,7 @@ function writeManifest(files: string[]) {
         name: readAppName(),
         version: readAppVersion(),
         ...(readSkConfig()?.memory === "low" && { memory: "low" }),
+        ...(devPermissions() && { permissions: devPermissions() }),
         modules: ids,
         assetFiles: Object.fromEntries(
           [...DEV_ASSET_FILES]

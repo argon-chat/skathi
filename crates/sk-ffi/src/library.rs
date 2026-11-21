@@ -60,6 +60,21 @@ impl Library {
         Ok(Library { handle })
     }
 
+    /// A library the system's loader finds in its own folders: `name` has no folder in it.
+    pub fn open_system(name: &str) -> Result<Library, LoadError> {
+        let failed = |message: String| LoadError {
+            library: name.to_string(),
+            symbol: None,
+            message,
+        };
+        if name.is_empty() || name.contains(['/', '\\', ':']) {
+            return Err(failed("the name has a folder in it".into()));
+        }
+        let _guard = LOADER.lock().unwrap_or_else(|e| e.into_inner());
+        let handle = unsafe { sys::open_system(name) }.map_err(failed)?;
+        Ok(Library { handle })
+    }
+
     pub fn symbol(&self, name: &str) -> Option<*const ()> {
         let name = CString::new(name).ok()?;
         let _guard = LOADER.lock().unwrap_or_else(|e| e.into_inner());
@@ -75,8 +90,21 @@ mod sys {
     use std::path::Path;
     use windows_sys::Win32::System::LibraryLoader::{
         GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
     };
+
+    pub unsafe fn open_system(name: &str) -> Result<usize, String> {
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        let handle = LoadLibraryExW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(handle as usize)
+    }
 
     pub unsafe fn open(path: &Path) -> Result<usize, String> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
@@ -102,6 +130,10 @@ mod sys {
     use std::ffi::{CStr, CString};
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
+
+    pub unsafe fn open_system(name: &str) -> Result<usize, String> {
+        open(Path::new(name))
+    }
 
     pub unsafe fn open(path: &Path) -> Result<usize, String> {
         let c_path = CString::new(path.as_os_str().as_bytes())

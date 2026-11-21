@@ -50,6 +50,7 @@ lottie = ["sk-app/lottie"]
 video = ["sk-app/video"]
 # `appHotkeys` and `skathi::hotkeys`.
 hotkeys = ["sk-app/hotkeys"]
+ffi = ["sk-app/ffi"]
 # `<iframe>` (WebView2).
 webview = ["sk-app/webview"]
 

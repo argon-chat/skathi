@@ -10,6 +10,7 @@ mod app;
 mod binary;
 mod collections;
 mod encoding;
+mod ffi;
 mod os;
 mod runtime;
 mod support;
@@ -36,6 +37,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         binary::install(g, std);
         collections::install(g, std);
         encoding::install(g, std);
+        ffi::install(g, std);
         time::install(g, std);
         units::install(g, std);
         if let Err(e) = toml::install(rt.ctx(), crate::js::Value(std)) {

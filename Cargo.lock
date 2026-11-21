@@ -5382,6 +5382,7 @@ dependencies = [
  "sk-desktop",
  "sk-effects",
  "sk-elements",
+ "sk-ffi",
  "sk-hotkeys",
  "sk-locale",
  "sk-payload",

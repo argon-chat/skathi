@@ -40,6 +40,8 @@ pub struct Meta {
     pub intl: String,
     /// `"low"`: the app asked for the smaller footprint (`crate::memory`).
     pub memory: String,
+    /// `"permissions"` of sk.config.json, as JSON (`crate::permissions`).
+    pub permissions: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -411,6 +413,7 @@ fn parse_meta(text: &str) -> Meta {
             .collect(),
         intl: s("intl"),
         memory: s("memory"),
+        permissions: s("permissions"),
     }
 }
 

@@ -2,6 +2,7 @@ import { app } from "./app";
 import { binary } from "./binary";
 import { collections } from "./collections";
 import { encoding } from "./encoding";
+import { ffi } from "./ffi";
 import { network } from "./network";
 import { numeric } from "./numeric";
 import { os } from "./os";
@@ -30,6 +31,8 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "Reading and writing binary formats: byte and bit cursors over a buffer, byte order, LEB128 integers, and CRC-32 and CRC-64 checksums.",
   "skathi:encoding":
     "Bytes to text and back: hex, Base32, Base64, the legacy text encodings `TextDecoder` knows and can also encode here, and MIME types by extension or content.",
+  "skathi:ffi":
+    "C functions of a library the app ships or the system has, called from JS without a Rust build. Only the libraries sk.config.json lists under `permissions.ffi` load. A fault in the library ends the app; for your own native code, write a [native module](/embedding/native-modules/).",
   "skathi:time":
     "Durations as values, measuring elapsed time, deadlines that travel with a call, retry delays, rate limiting and a timer that does not drift.",
   "skathi:units":
@@ -47,6 +50,7 @@ export const entries: readonly StdEntry[] = [
   ...toml,
   ...binary,
   ...encoding,
+  ...ffi,
   ...time,
   ...units,
   ...collections,

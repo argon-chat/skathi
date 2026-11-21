@@ -16,6 +16,10 @@ declare module "skathi:encoding" {
   export * from "@skathi-native/runtime/std/encoding";
 }
 
+declare module "skathi:ffi" {
+  export * from "@skathi-native/runtime/std/ffi";
+}
+
 declare module "skathi:network" {
   export * from "@skathi-native/runtime/std/network";
 }

@@ -12,6 +12,7 @@ export const categories = [
   "skathi:toml",
   "skathi:binary",
   "skathi:encoding",
+  "skathi:ffi",
   "skathi:time",
   "skathi:units",
   "skathi:collections",

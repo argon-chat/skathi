@@ -40,6 +40,7 @@ export const STD_MODULES: readonly string[] = [
   "binary",
   "collections",
   "encoding",
+  "ffi",
   "network",
   "numeric",
   "os",

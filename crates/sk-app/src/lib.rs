@@ -70,6 +70,7 @@ mod occlusion;
 mod owner;
 mod payload;
 mod perf;
+mod permissions;
 mod placement;
 mod popout;
 mod popout_win;

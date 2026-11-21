@@ -35,6 +35,10 @@ prod = []
 # this exe, and the host loads at start unless sk.config.json says "intl": "invariant".
 icu-root = ["redjs/icu-root"]
 
+# `skathi:ffi`: the app may load the libraries its sk.config.json lists and call their C functions.
+# Without it the module is there and `dlopen()` throws NotSupportedError.
+ffi = []
+
 # Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
 # build includes otherwise (an app can also disable them at runtime). For a build that must prove
 # no `eval` transport was compiled in: `cargo build -p sk-app --features prod,no-devtools`.
@@ -46,7 +50,7 @@ devtools = []
 
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
-default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview"]
+default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview", "ffi"]
 audio = ["sk-runtime/audio", "sk-permissions/audio"]
 # `panningModel: "spatial"` and `AudioContext.spatialAudio`: Windows spatial audio objects.
 spatial-audio = ["audio", "dep:sk-audio"]
@@ -102,6 +106,7 @@ sk-payload = { path = "../sk-payload", version = "0.7.0" }
 memmap2 = "0.9"
 self_cell = "1"
 sk-desktop = { path = "../sk-desktop", version = "0.7.0" }
+sk-ffi = { path = "../sk-ffi", version = "0.7.0" }
 sk-hotkeys = { path = "../sk-hotkeys", version = "0.7.0", optional = true }
 sk-audio = { path = "../sk-audio", version = "0.7.0", optional = true }
 sk-permissions = { path = "../sk-permissions", version = "0.7.0" }

@@ -181,6 +181,16 @@ pub fn app_name() -> Option<String> {
     app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
 }
 
+/// The app's `"permissions"` as JSON, and the app's folder, which is `$APP` under `sk dev`.
+pub fn permissions() -> Option<(String, std::path::PathBuf)> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    let v = json::parse(&text)?;
+    Some((
+        v.get("permissions")?.as_str()?.to_string(),
+        v.get("appRoot")?.as_str()?.into(),
+    ))
+}
+
 pub fn memory() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     Some(json::parse(&text)?.get("memory")?.as_str()?.to_string())

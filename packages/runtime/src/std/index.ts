@@ -4,6 +4,7 @@ import * as app from "./app";
 import * as binary from "./binary";
 import * as collections from "./collections";
 import * as encoding from "./encoding";
+import * as ffi from "./ffi";
 import * as network from "./network";
 import * as numeric from "./numeric";
 import * as os from "./os";
@@ -17,6 +18,7 @@ export const stdModules: Readonly<Record<string, Record<string, unknown>>> = {
   binary,
   collections,
   encoding,
+  ffi,
   network,
   numeric,
   os,

@@ -112,6 +112,8 @@ struct Config {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     app_menu: bool,
     desktop_id: Option<String>,
+    ffi: Vec<(String, String)>,
+    ffi_address: bool,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -214,6 +216,18 @@ fn requests_activation(activate: bool, visible: bool) -> bool {
 #[cfg_attr(not(sk_devtools), allow(dead_code))]
 pub(crate) fn inspector_exe() -> Option<PathBuf> {
     CONFIG.get()?.inspector_exe.clone()
+}
+
+pub(crate) fn permissions() -> crate::permissions::Permissions {
+    let config = CONFIG.get();
+    crate::permissions::Permissions {
+        ffi: config.map(|c| c.ffi.clone()).unwrap_or_default(),
+        ffi_address: config.is_some_and(|c| c.ffi_address),
+        app_dir: std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(PathBuf::from))
+            .unwrap_or_default(),
+    }
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -333,6 +347,8 @@ pub struct Builder {
     desktop_id: Option<String>,
     exact_frame_feedback: bool,
     app_menu: bool,
+    ffi: Vec<(String, String)>,
+    ffi_address: bool,
 }
 
 impl Default for Builder {
@@ -360,6 +376,8 @@ impl Builder {
             desktop_id: None,
             exact_frame_feedback: false,
             app_menu: true,
+            ffi: Vec::new(),
+            ffi_address: false,
         }
     }
 
@@ -505,6 +523,20 @@ impl Builder {
     /// `false` leaves the menu bar to the embedder.
     pub fn app_menu(mut self, on: bool) -> Self {
         self.app_menu = on;
+        self
+    }
+
+    /// Lets the app's `skathi:ffi` load one library under `name`. `path` is `$APP/<path>`, from the
+    /// folder of this executable, or `$SYSTEM/<name>`, as in `"permissions.ffi"` of sk.config.json.
+    /// The payload's own list is not read: an embedded app loads what is allowed here and nothing else.
+    pub fn allow_ffi(mut self, name: impl Into<String>, path: impl Into<String>) -> Self {
+        self.ffi.push((name.into(), path.into()));
+        self
+    }
+
+    /// Lets the app make a `NativePointer` from a bare address (default `false`).
+    pub fn allow_ffi_address(mut self, on: bool) -> Self {
+        self.ffi_address = on;
         self
     }
 
@@ -655,6 +687,8 @@ impl Builder {
             activate: self.activate,
             inspector_exe: self.inspector_exe,
             desktop_id: self.desktop_id,
+            ffi: self.ffi,
+            ffi_address: self.ffi_address,
             app_menu: self.app_menu,
         };
         if CONFIG.set(config).is_err() {

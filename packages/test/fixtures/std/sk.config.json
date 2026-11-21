@@ -2,6 +2,16 @@
   "name": "sk-test-std",
   "version": "4.5.6",
 
+  "permissions": {
+    "ffi": [
+      {
+        "name": "crt",
+        "path": { "windows": "$SYSTEM/msvcrt", "macos": "$SYSTEM/libSystem.B.dylib", "linux": "$SYSTEM/libc.so.6" }
+      },
+      { "name": "kernel32", "path": { "windows": "$SYSTEM/kernel32" } }
+    ]
+  },
+
   "window": {
     "title": "Skathi — skathi:* modules (fixture)",
     "width": 420,

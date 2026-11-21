@@ -15,6 +15,8 @@
 //   "publishSingleFile": true    sk publish writes one exe: the native images, the ICU data and the packs go inside it
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "memory": "low"              the engine's allocator keeps no memory in reserve (default "default")
+//   "permissions": { "ffi": [{ "name": "sqlite3", "path": "$APP/lib/sqlite3" }] }
+//                                the libraries skathi:ffi may load; none without it
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
@@ -24,7 +26,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import type { Platform } from "./platform";
+import { currentPlatform, type Platform } from "./platform";
 import { numericVersion } from "./versioninfo";
 
 /** A prod host's name, the key the host cache and the release find it by: the whole engine, with or without devtools, or without the JIT. */
@@ -120,6 +122,8 @@ export interface AppConfig {
   intl: IntlMode;
   /** `low`: the engine's allocator commits pages as they fill and returns freed memory at once. */
   memory: MemoryMode;
+  /** What the app may reach outside the web platform; `undefined` when sk.config.json asks for nothing. */
+  permissions: Permissions | undefined;
   windows: WindowsConfig;
   macos: MacConfig;
   exeName: string;
@@ -200,6 +204,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "svelte",
   "intl",
   "memory",
+  "permissions",
   "httpCache",
   "colorPicker",
   "assets",
@@ -396,6 +401,93 @@ const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts
 
 export class ConfigError extends Error {}
 
+/** A library `skathi:ffi` may load: the name `dlopen()` takes and where the library is. */
+export interface FfiPermission {
+  name: string;
+  path: string;
+}
+
+export interface Permissions {
+  ffi: FfiPermission[];
+  /** Whether code may make a `NativePointer` from a bare address. */
+  ffiAddress: boolean;
+}
+
+export const PERMISSION_KEYS: ReadonlySet<string> = new Set(["ffi", "ffiAddress"]);
+export const FFI_PERMISSION_KEYS: ReadonlySet<string> = new Set(["name", "path"]);
+const FFI_PLATFORMS: ReadonlySet<string> = new Set(["windows", "macos", "linux"]);
+
+function ffiPath(value: string, where: string): string {
+  const rest = value.startsWith("$APP/") ? value.slice(5) : value.startsWith("$SYSTEM/") ? value.slice(8) : null;
+  const parts = rest?.split("/") ?? [];
+  const inside = parts.length > 0 && parts.every((part) => part !== "" && part !== "." && part !== "..");
+  if (rest === null || !inside || /[\\:]/.test(rest) || (value.startsWith("$SYSTEM/") && parts.length !== 1)) {
+    throw new ConfigError(
+      `${where} must be "$APP/<a path inside the app>" or "$SYSTEM/<a library name>", not ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/** `"permissions"` of sk.config.json for one platform; `undefined` when the app asks for nothing. */
+export function readPermissions(raw: unknown, platform: Platform): Permissions | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ConfigError('sk.config.json "permissions" must be an object');
+  }
+  const p = raw as Record<string, unknown>;
+  for (const key of Object.keys(p)) {
+    if (!key.startsWith("$") && !PERMISSION_KEYS.has(key)) {
+      throw new ConfigError(
+        `sk.config.json "permissions": unknown key ${JSON.stringify(key)} — known keys are ${[...PERMISSION_KEYS].join(", ")}`,
+      );
+    }
+  }
+  if (p.ffiAddress !== undefined && typeof p.ffiAddress !== "boolean") {
+    throw new ConfigError('sk.config.json "permissions.ffiAddress" must be true or false');
+  }
+  if (p.ffi !== undefined && !Array.isArray(p.ffi)) {
+    throw new ConfigError('sk.config.json "permissions.ffi" must be an array of { "name", "path" }');
+  }
+  const ffi: FfiPermission[] = [];
+  const names = new Set<string>();
+  for (const [i, entry] of ((p.ffi as unknown[] | undefined) ?? []).entries()) {
+    const where = `sk.config.json "permissions.ffi": entry ${i}`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ConfigError(`${where} must be { "name", "path" }`);
+    }
+    const e = entry as Record<string, unknown>;
+    const extra = Object.keys(e).filter((key) => !FFI_PERMISSION_KEYS.has(key));
+    if (extra.length) {
+      throw new ConfigError(`${where} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")}`);
+    }
+    if (typeof e.name !== "string" || !/^[\w.-]+$/.test(e.name)) {
+      throw new ConfigError(`${where}: "name" must be letters, digits, ".", "_" or "-": it is what dlopen() takes`);
+    }
+    if (names.has(e.name)) throw new ConfigError(`${where}: the name ${JSON.stringify(e.name)} is listed twice`);
+    names.add(e.name);
+    let path: string | undefined;
+    if (typeof e.path === "string") {
+      path = ffiPath(e.path, `${where}: "path"`);
+    } else if (e.path && typeof e.path === "object" && !Array.isArray(e.path)) {
+      for (const [os, value] of Object.entries(e.path)) {
+        if (!FFI_PLATFORMS.has(os)) {
+          throw new ConfigError(
+            `${where}: "path" has unknown platform ${JSON.stringify(os)} — windows, macos or linux`,
+          );
+        }
+        if (typeof value !== "string") throw new ConfigError(`${where}: "path.${os}" must be a string`);
+        ffiPath(value, `${where}: "path.${os}"`);
+        if (os === platform) path = value;
+      }
+    } else {
+      throw new ConfigError(`${where}: "path" must be a string, or an object of paths by platform`);
+    }
+    if (path !== undefined) ffi.push({ name: e.name, path });
+  }
+  return { ffi, ffiAddress: p.ffiAddress === true };
+}
+
 export function nativeSvelteRenderer(config: unknown): boolean {
   if (config === undefined) return false;
   if (config && typeof config === "object" && !Array.isArray(config)) {
@@ -576,6 +668,7 @@ export function loadAppConfig(
     );
   }
   const memory: MemoryMode = raw.memory === "low" ? "low" : "default";
+  const permissions = readPermissions(raw.permissions, options.platform ?? currentPlatform());
 
   const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
@@ -662,6 +755,7 @@ export function loadAppConfig(
     publishSingleFile: raw.publishSingleFile === true,
     intl,
     memory,
+    permissions,
     aot: raw.aot === true,
     windows,
     macos,

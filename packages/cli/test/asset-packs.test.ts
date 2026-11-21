@@ -54,6 +54,36 @@ describe("config", () => {
   });
 });
 
+test('"permissions.ffi" keeps the path of the platform and refuses one that leaves the app', () => {
+  const ffi = [
+    { name: "db", path: "$APP/lib/db" },
+    { name: "crt", path: { windows: "$SYSTEM/msvcrt", linux: "$SYSTEM/libc.so.6" } },
+  ];
+  const on = (platform: "windows" | "macos") =>
+    loadAppConfig(app(`ffi-${platform}`, { permissions: { ffi } }), { platform }).permissions;
+  expect(on("windows")).toEqual({
+    ffi: [
+      { name: "db", path: "$APP/lib/db" },
+      { name: "crt", path: "$SYSTEM/msvcrt" },
+    ],
+    ffiAddress: false,
+  });
+  expect(on("macos")?.ffi).toEqual([{ name: "db", path: "$APP/lib/db" }]);
+  expect(loadAppConfig(app("ffi-none", {})).permissions).toBeUndefined();
+  for (const path of [
+    "lib/db",
+    "$APP/../db",
+    "$APP//db",
+    "C:/db.dll",
+    "$SYSTEM/sub/db",
+    "$PATH/db",
+    { ios: "$APP/db" },
+  ]) {
+    expect(() => loadAppConfig(app("ffi-bad", { permissions: { ffi: [{ name: "db", path }] } }))).toThrow(ConfigError);
+  }
+  expect(() => loadAppConfig(app("ffi-key", { permissions: { process: [] } }))).toThrow(ConfigError);
+});
+
 test('"intl" is "full" unless the config says "invariant", and nothing else is accepted', () => {
   expect(loadAppConfig(app("intl-default", {})).intl).toBe("full");
   expect(loadAppConfig(app("intl-invariant", { intl: "invariant" })).intl).toBe("invariant");

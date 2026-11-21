@@ -181,6 +181,19 @@ pub fn app_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// The app's `"permissions"` as JSON, and `$APP`: the folder of the exe, or `Contents` of a macOS bundle.
+pub fn permissions() -> Option<(String, std::path::PathBuf)> {
+    let text = payload::get()?.meta.permissions.clone();
+    let exe = std::env::current_exe().ok()?;
+    let folder = exe.parent()?;
+    let app_dir = if cfg!(target_os = "macos") {
+        folder.parent().unwrap_or(folder)
+    } else {
+        folder
+    };
+    (!text.is_empty()).then(|| (text, app_dir.to_path_buf()))
+}
+
 pub fn memory() -> Option<String> {
     payload::get().map(|l| l.meta.memory.clone())
 }

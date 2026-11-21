@@ -77,6 +77,38 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:ffi calls C functions of the libraries the config lists, and only those",
+    async () => {
+      const app = await start();
+      const f = JSON.parse(String(await app.eval("__SK_TEST_STD__.ffi()")));
+      expect([f.strlen, f.strlenType, f.abs, f.pow]).toEqual(["6", "bigint", [5, 5, 7], 1024]);
+      expect([f.copied, f.stable]).toEqual([[1, 2, 3, 4], true]);
+      expect([f.slash, f.slashAt, f.offset, f.bytes]).toEqual(["/ffi", 6, "ff", [115, 107, 97]]);
+      expect([f.sameStart, f.nullFound, f.byPointer]).toEqual([true, true, "10"]);
+      expect([f.line, f.missing, f.names]).toEqual(["-7 2.50 ok", null, ["strlen", "usize", "crt"]]);
+      const e = f.errors;
+      expect(e.notListed).toStartWith('NotAllowedError: dlopen: the library "user32" is not in "permissions.ffi"');
+      expect(e.noSymbol).toStartWith("NotFoundError: dlopen: crt.sk_no_such_function");
+      expect([e.badType, e.count, e.text, e.fraction, e.bufferAsPointer, e.nul].map((m) => m.split(":")[0])).toEqual(
+        Array(6).fill("TypeError"),
+      );
+      expect(e.range).toBe("RangeError: crt.abs: argument 1 (i32): 2147483648 does not fit i32");
+      expect(e.address).toStartWith("NotAllowedError: NativePointer.fromAddress");
+      expect([e.nullRead, e.construct].map((m) => m.split(":")[0])).toEqual(["TypeError", "TypeError"]);
+      expect(e.closed).toBe("InvalidStateError: crt.abs: the library is closed");
+      if (platform() === "win32") {
+        const w = f.windows;
+        expect(w.lastError).toEqual({ errno: 1234 });
+        expect([w.pid, w.wide, w.module]).toEqual([true, 10, false]);
+        expect(w.systemRoot).toBe((process.env.SystemRoot ?? "").toLowerCase());
+        expect([w.unsigned, w.top]).toEqual([[2147483647, 2147483648], 4294967295]);
+        expect([w.big, w.bigType]).toEqual(["-9007199254740993", "bigint"]);
+      }
+    },
+    T,
+  );
+
+  test(
     "skathi:binary writes a record and reads the same values back",
     async () => {
       const app = await start();

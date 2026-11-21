@@ -164,6 +164,37 @@
       "enum": ["default", "low"],
       "default": "default"
     },
+    "permissions": {
+      "description": "What the app's code may reach outside the web platform (since 0.7). Nothing is allowed without it. An embedded app has what its embedder allows instead.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^\\$": {} },
+      "properties": {
+        "ffi": {
+          "description": "The libraries skathi:ffi may load. dlopen() takes a name from this list and nothing else.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "path"],
+            "properties": {
+              "name": {
+                "description": "What dlopen() takes: letters, digits, \".\", \"_\" and \"-\".",
+                "type": "string"
+              },
+              "path": {
+                "description": "Where the library is. \"$APP/<path>\": a file in the app's folder, which sk build copies beside the executable at the same path. \"$SYSTEM/<name>\": a library the system's loader finds in its own folders. Without an extension, .dll, .dylib or .so is added, and outside Windows lib<name> is tried too. An object gives a path for each of windows, macos and linux; a platform left out does not have the library."
+              }
+            }
+          }
+        },
+        "ffiAddress": {
+          "description": "Lets code make a NativePointer from a bare address with NativePointer.fromAddress(). Without it a pointer comes only from a call or from a buffer.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "colorPicker": { "$ref": "#/definitions/colorPicker" },
     "assets": {
