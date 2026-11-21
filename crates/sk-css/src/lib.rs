@@ -3996,8 +3996,8 @@ mod tests {
             }
         );
         assert!(!catalog::supports("z-index", "sibling-index(2)"));
-        assert!(!Engine::compile(r".box\\:focus { width: var(--size) }").uses_sibling_functions);
-        let escaped = Engine::compile(r".box { z-index: sibl\\69ng-index() }");
+        assert!(!Engine::compile(r".box\:focus { width: var(--size) }").uses_sibling_functions);
+        let escaped = Engine::compile(r".box { z-index: sibl\69ng-index() }");
         assert!(escaped.uses_sibling_functions);
         assert_eq!(
             escaped
