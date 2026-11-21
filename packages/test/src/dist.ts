@@ -4,13 +4,23 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { loadAppConfig } from "@skathi-native/cli/cli/config";
 import { reapOrphans } from "./reap";
 
-/** …/packages/test/src -> the workspace root. */
-export const REPO = resolve(import.meta.dir, "../../..");
-export const CLI_PKG = join(REPO, "packages/cli");
-const RUNTIME_SRC = join(REPO, "packages/runtime/src");
+/** The Skathi checkout this harness runs from, or null when it is installed from npm. */
+export const CHECKOUT: string | null = (() => {
+  const root = resolve(import.meta.dir, "../../..");
+  return existsSync(join(root, "Cargo.toml")) && existsSync(join(root, "crates", "sk-app")) ? root : null;
+})();
+/** The checkout's root, or the project directory `bun test` runs in. */
+export const REPO = CHECKOUT ?? process.cwd();
+export const CLI_PKG = dirname(createRequire(import.meta.url).resolve("@skathi-native/cli/package.json"));
+const RUNTIME_SRC = join(
+  dirname(createRequire(join(CLI_PKG, "package.json")).resolve("@skathi-native/runtime/package.json")),
+  "src",
+);
 /** The cargo target this machine's host is built for (`.cargo/config.toml` defaults to Windows). */
 export const TARGET =
   {
@@ -29,14 +39,19 @@ export function appDataDir(app: string): string {
 }
 
 /** Everything this harness writes that is not a user-facing artifact. */
-export const WORK_DIR = join(REPO, "packages/test/.sk-test");
+export const WORK_DIR = CHECKOUT ? join(CHECKOUT, "packages/test/.sk-test") : join(REPO, ".sk-test");
 
 const SOURCE_EXT = /\.(vue|svelte|js|ts|mjs|css|json)$/;
 
-/** `hello` -> `apps/hello/src/main.ts`; an explicit path is taken verbatim. */
+/**
+ * An app directory (its `sk.config.json` names the entry), an entry module, or in a Skathi checkout a
+ * name under `apps/` (`hello` -> `apps/hello/src/main.ts`); paths are relative to {@link REPO}.
+ */
 export function resolveEntry(app: string): string {
+  const dir = resolve(REPO, app);
+  if (existsSync(join(dir, "sk.config.json"))) return loadAppConfig(dir).entry;
   const explicit = app.includes("/") || app.includes("\\") || app.endsWith(".ts") || app.endsWith(".js");
-  if (explicit) return resolve(REPO, app);
+  if (explicit || !CHECKOUT) return dir;
   const entry = join(REPO, "apps", app, "src", "main.ts");
   if (!existsSync(entry)) {
     const available = existsSync(join(REPO, "apps"))
@@ -153,6 +168,13 @@ export function allocateSlot(cacheDist: string, label: string): string {
   cpSync(cacheDist, dir, { recursive: true });
   rmSync(join(dir, "devtools.json"), { force: true });
   return dir;
+}
+
+/** The dev host a launch runs: the checkout's debug build, else the one `sk dev` uses (cached or downloaded). */
+export async function devHostExe(log: BuildLog = () => {}): Promise<string> {
+  if (CHECKOUT) return DEFAULT_EXE;
+  const { devHost } = await import("@skathi-native/cli/cli/dev");
+  return devHost({ log });
 }
 
 /** The executable this run drives, copied aside under its own name. */

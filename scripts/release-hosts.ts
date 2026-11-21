@@ -54,7 +54,7 @@ import { containerName } from "../packages/cli/cli/image-sections";
 import { currentPlatform } from "../packages/cli/cli/platform";
 
 const ROOT = resolve(import.meta.dir, "..");
-const PUBLISHED = ["packages/runtime", "packages/cli", "packages/create-skathi"];
+const PUBLISHED = ["packages/runtime", "packages/cli", "packages/test", "packages/create-skathi"];
 
 const { values } = parseArgs({
   options: {

@@ -221,7 +221,7 @@ jobs:
         run: |
           mkdir -p npm-tarballs
           printf '{ "commit": "%s" }\n' "$(git rev-parse HEAD:templates)" > packages/cli/gallery.json
-          for pkg in runtime cli create-skathi; do
+          for pkg in runtime cli test create-skathi; do
             cp LICENSE-MIT LICENSE-APACHE "packages/$pkg/"
             (cd "packages/$pkg" && bun pm pack --destination ../../npm-tarballs)
           done
@@ -239,7 +239,7 @@ jobs:
             pre="${version#*-}"
             dist_tag="${pre%%.*}"
           fi
-          for pkg in runtime cli create-skathi; do
+          for pkg in runtime cli test create-skathi; do
             if [[ "$pkg" == create-* ]]; then name="$pkg"; file="$pkg"; else name="@skathi-native/$pkg"; file="skathi-native-$pkg"; fi
             if [[ "$(npm view "$name@$version" version 2>/dev/null)" == "$version" ]]; then
               echo "$name@$version is already published"

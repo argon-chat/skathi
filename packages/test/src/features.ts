@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { DEFAULT_EXE, REPO, TARGET, WORK_DIR, stagedExe } from "./dist";
+import { CHECKOUT, DEFAULT_EXE, REPO, TARGET, WORK_DIR, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
   /** Cargo features, e.g. */
@@ -92,6 +92,14 @@ const inFlight = new Map<string, Promise<string>>();
 
 /** A `sk-app.exe` built with `features`, staged where a spec can run it. */
 export function featureExe(options: FeatureExeOptions): Promise<string> {
+  if (!CHECKOUT) {
+    return Promise.reject(
+      new Error(
+        `featureExe builds sk-app with --features ${options.features.join(",")} from a Skathi checkout; ` +
+          "outside one, pass a host you built to launch({ exe })",
+      ),
+    );
+  }
   const dir = featureExeDir(options.features);
   const key = dir;
   const existing = inFlight.get(key);
@@ -144,13 +152,13 @@ export type HostVariant = "standard" | "no-devtools";
  * or the local host cache (`sk workload build` fills it).
  */
 export async function bareHost(variant: HostVariant, log: (l: string) => void = () => {}): Promise<string> {
-  const { resolveHost, HostError } = await import("../../cli/cli/host");
+  const { resolveHost, HostError } = await import("@skathi-native/cli/cli/host");
   try {
     const h = resolveHost({ variant, log });
     log(`[sk-test] ${variant} host: ${h.exe} (${h.source}, ${h.info.profile})`);
     return h.exe;
   } catch (e) {
-    if (!(e instanceof HostError)) throw e;
+    if (!(e instanceof HostError) || !CHECKOUT) throw e;
     log(`[sk-test] no prebuilt ${variant} host (${e.message.split("\n")[0]}) — building a debug one`);
     return featureExe({ features: variant === "standard" ? ["prod"] : ["prod", "no-devtools"], log });
   }
@@ -174,7 +182,7 @@ export interface PackagedExe {
   built: string;
   /** `sk.config.json` `"name"` — what `launch({ packaged })` takes. */
   name: string;
-  result: import("../../cli/cli/build-app").BuildResult;
+  result: import("@skathi-native/cli/cli/build-app").BuildResult;
 }
 
 /**
@@ -188,7 +196,7 @@ export async function packagedExe(options: PackagedExeOptions): Promise<Packaged
   const host = options.host ?? (await bareHost(variant, log));
   const target = existsSync(join(REPO, "apps", options.app)) ? join(REPO, "apps", options.app) : options.app;
   const out = join(WORK_DIR, "packaged", label);
-  const { buildApp } = await import("../../cli/cli/build-app");
+  const { buildApp } = await import("@skathi-native/cli/cli/build-app");
   const result = await buildApp({ target, out, host, variant, log });
   if (!result.exe) throw new Error(`sk build ${target} produced no exe`);
   // A macOS payload is Contents/Resources/app.skpk: the binary only finds it inside its bundle.

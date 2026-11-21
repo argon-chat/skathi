@@ -12,10 +12,11 @@ let seq = 0;
 function prepare() {
   rmSync(ARTIFACTS_DIR, { recursive: true, force: true });
   mkdirSync(ARTIFACTS_DIR, { recursive: true });
+  writeFileSync(join(ARTIFACTS_DIR, ".gitignore"), "*\n");
   writeFileSync(
     join(ARTIFACTS_DIR, "README.txt"),
-    "Screenshots and log dumps written by packages/test when an assertion failed.\n" +
-      "Wiped at the start of every `bun test` run. Gitignored.\n",
+    "Screenshots and log dumps @skathi-native/test wrote when an assertion failed.\n" +
+      "Wiped at the start of every `bun test` run.\n",
   );
 }
 
