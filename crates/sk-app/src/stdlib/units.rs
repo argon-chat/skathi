@@ -16,7 +16,7 @@ fn host_class<T>(cell: &OnceLock<usize>, name: &str) -> JSClassRef {
 
 /// The unit as written, its size in bytes, and the name `Intl.NumberFormat` knows it by.
 const SIZES: &[(&str, f64, &str)] = &[
-    ("B", 1.0, "byte"),
+    ("B", 1.0, ""),
     ("kB", 1e3, "kilobyte"),
     ("MB", 1e6, "megabyte"),
     ("GB", 1e9, "gigabyte"),

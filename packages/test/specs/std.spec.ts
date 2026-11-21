@@ -248,7 +248,7 @@ describe("skathi:* modules", () => {
       const u = JSON.parse(String(await app.eval("__SK_TEST_STD__.units()")));
       expect([u.bytes, u.to]).toEqual([1_610_612_736, [1536, 2.5]]);
       expect(u.format.slice(0, 2)).toEqual(["1.5 GB", "1.5 GiB"]);
-      expect(u.format[2]).toStartWith("999");
+      expect(u.format[2]).toBe("999 B");
       expect(u.format[3]).toBe("1,5 MB");
       expect(u.larger).toBe(true);
       expect(u.badSize).toStartWith('SyntaxError: DataSize.parse: "3 parsecs" is not a size');
