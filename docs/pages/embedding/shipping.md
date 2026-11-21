@@ -141,6 +141,8 @@ On an Apple M4 with macOS 26.4, a headless Metal probe loaded the same renderer 
 
 In a separate windowed test on macOS 26.7.2, two release hosts ran the same minimal payload in a 600 × 400 window on a virtual 60 Hz SDR display. Across three launches each, the median peak process footprint was 38.2 MiB with precompiled shaders and 38.1 MiB with runtime shaders. These runs did not reproduce the 229 MiB whole-app peak reported on the M3 Max. Leaving `runtime-shaders` off moves library compilation to the build. The first frame still allocates GPU resources.
 
+On some Macs the first present to a `CAMetalLayer` costs about 190 MiB of graphics memory for about a second, in any process: an M3 Max with its built-in XDR display showed it in a 40-line AppKit program with no Skathi in it. The system allocates it, `MTLDevice.currentAllocatedSize` does not count it, and the footprint settles afterwards, so a `footprintPeakMB` that includes it is not the app's cost.
+
 ## The native modules' types (since 0.4)
 
 A release exe answers `--sk-host-types` like a debug one: it prints the TypeScript of its [native modules](/embedding/native-modules/) and exits, which is how `sk types` reads them. Commit the generated `src/native-modules.d.ts` with the app, so the payload builds on a machine without your Rust build. Anyone can read those declarations out of your exe, as they could read the names in its strings: leave secrets out of module and type names.
