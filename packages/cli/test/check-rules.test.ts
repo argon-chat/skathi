@@ -9,7 +9,19 @@ const report = () => (cached ??= analyzeRules());
 describe("SK1xxx: what breaks under AOT", () => {
   test("built-in members replaced, deleted or added to a locked object (SK1001)", () => {
     const sk1001 = lines(report(), "src/builtins.ts").filter((l) => l.endsWith("SK1001"));
-    expect(sk1001).toEqual(["1:SK1001", "4:SK1001", "5:SK1001", "6:SK1001", "7:SK1001", "9:SK1001"]);
+    expect(sk1001).toEqual([
+      "1:SK1001",
+      "4:SK1001",
+      "5:SK1001",
+      "6:SK1001",
+      "7:SK1001",
+      "9:SK1001",
+      "22:SK1001",
+      "23:SK1001",
+      "23:SK1001",
+      "25:SK1001",
+      "25:SK1001",
+    ]);
   });
 
   test("redefinition through defineProperty, defineProperties, assign and Reflect (SK1002)", () => {

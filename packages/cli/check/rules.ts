@@ -16,7 +16,8 @@ const TIMERS = new Set(["setTimeout", "setInterval", "setImmediate"]);
 
 /** What changing `path` on its holder does under AOT: null when it is allowed. */
 function change(holder: string, path: string): "locked" | "locked-object" | null {
-  if (LOCKED.has(path)) return "locked";
+  // The engine's table leaves the host's `console` methods open; a Skathi image does not.
+  if (LOCKED.has(path) || holder === "console") return "locked";
   if (LOCKED_OBJECTS.has(holder) && !REPLACEABLE.has(path)) return "locked-object";
   return null;
 }
@@ -58,14 +59,30 @@ export class Rules {
     return kind >= k.FirstAssignment && kind <= k.LastAssignment;
   }
 
-  private target(node: ts.Expression): { holder: string; name: string; path: string } | null {
+  /** The members `node` can name: one, or each string of a key whose type is a union of literals. */
+  private targets(node: ts.Expression): { holder: string; name: string; path: string }[] {
     const t = this.typescript;
-    if (!t.isPropertyAccessExpression(node) && !t.isElementAccessExpression(node)) return null;
-    const name = this.builtins.memberName(t.isPropertyAccessExpression(node) ? node.name : node.argumentExpression);
-    if (name === null) return null;
+    if (!t.isPropertyAccessExpression(node) && !t.isElementAccessExpression(node)) return [];
+    const key = t.isPropertyAccessExpression(node) ? node.name : node.argumentExpression;
+    // In `holder[key]` an identifier is a variable, not the member's name.
+    const name = t.isElementAccessExpression(node) && t.isIdentifier(key) ? null : this.builtins.memberName(key);
+    const names = name !== null ? [name] : this.keys(key);
+    if (!names.length) return [];
     const holder = this.builtins.path(node.expression);
-    if (holder === null) return null;
-    return { holder, name, path: memberPath(holder, name) };
+    if (holder === null) return [];
+    return names.map((name) => ({ holder, name, path: memberPath(holder, name) }));
+  }
+
+  private keys(key: ts.Node): string[] {
+    try {
+      const type = this.checker.getTypeAtLocation(key);
+      const parts = type.isUnion() ? type.types : [type];
+      return parts.every((part) => part.isStringLiteral())
+        ? parts.map((part) => (part as ts.StringLiteralType).value)
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   private assignment(node: ts.BinaryExpression, report: (code: string, message: string) => void): void {
@@ -81,8 +98,15 @@ export class Rules {
         report("SK1004", `the global \`${left.text}\` is assigned; AOT code cannot replace the language's globals`);
       return;
     }
-    const target = this.target(left);
-    if (!target) return;
+    for (const target of this.targets(left)) this.assigned(node, target, report);
+  }
+
+  private assigned(
+    node: ts.BinaryExpression,
+    target: { holder: string; name: string; path: string },
+    report: (code: string, message: string) => void,
+  ): void {
+    const t = this.typescript;
     if (target.name === "__proto__") {
       if (OBJECTS.has(target.holder))
         report(
@@ -111,11 +135,12 @@ export class Rules {
   }
 
   private deletion(node: ts.DeleteExpression, report: (code: string, message: string) => void): void {
-    const target = this.target(node.expression);
-    if (!target || !LOCKED.has(target.path) || this.guarded(node, target.path, target.name)) return;
-    if (target.holder === "globalThis")
-      report("SK1004", `\`globalThis.${target.name}\` is deleted; AOT code cannot remove the language's globals`);
-    else report("SK1001", `\`${target.path}\` is deleted; AOT code cannot change built-in methods`);
+    for (const target of this.targets(node.expression)) {
+      if (change(target.holder, target.path) !== "locked" || this.guarded(node, target.path, target.name)) continue;
+      if (target.holder === "globalThis")
+        report("SK1004", `\`globalThis.${target.name}\` is deleted; AOT code cannot remove the language's globals`);
+      else report("SK1001", `\`${target.path}\` is deleted; AOT code cannot change built-in methods`);
+    }
   }
 
   private call(
@@ -268,6 +293,8 @@ export class Rules {
         )
           found = true;
         else if (name && t.isStringLiteralLike(n) && n.text === name) found = true;
+        // `if (!Runtime.isAot())`: the change does not run from an image.
+        else if (t.isPropertyAccessExpression(n) && n.name.text === "isAot") found = true;
         else t.forEachChild(n, look);
       };
       look(condition);

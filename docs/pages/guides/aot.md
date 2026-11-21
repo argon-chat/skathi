@@ -245,7 +245,23 @@ What still works:
 
 - Adding a member a built-in does not have, except on `Object.prototype`, `Promise.prototype` and `RegExp.prototype`, which take no new members.
 - Polyfills guarded by a check for the member, such as `if (!Array.prototype.at) { … }`, and assignments that put back the value read from the same property. `sk check` does not report these.
-- Replacing the globals the engine leaves replaceable, among them `Promise`, `Date`, `Error` and `console`.
+- Replacing the globals the engine leaves replaceable, among them `Promise`, `Date` and `Error`.
+
+The methods of `console` are read-only in an image as well (since 0.7 `sk check` reports it as SK1001). A logger that wraps `console.error` to keep the last lines for a bug report throws at that assignment, and since it usually runs before the app is mounted, the window stays empty. Wrap only when the app does not run from an image, and call your own function where the app logs:
+
+```ts
+import { Runtime } from "skathi:runtime";
+
+if (!Runtime.isAot()) {
+  const original = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    record(args);
+    original(...args);
+  };
+}
+```
+
+`sk check` does not report an assignment under `if (!Runtime.isAot())`. It does check a computed key that is one of a few literals, such as `console[level] = …` in a loop over `["error", "warn"]`.
 
 When the finding is in a dependency, look for a version or an option that does not patch built-ins. If the code that patches is never reached in your app, `sk.config.json` can silence the code for that package:
 

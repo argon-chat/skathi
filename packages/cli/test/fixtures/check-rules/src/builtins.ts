@@ -19,5 +19,11 @@ Object.setPrototypeOf(Array.prototype, null);
 globalThis.Map = class {} as unknown as MapConstructor;
 window.Array = [] as unknown as ArrayConstructor;
 delete (globalThis as { Set?: unknown }).Set;
+console.error = () => {};
+for (const name of ["pop", "shift"] as const) Array.prototype[name] = () => undefined;
+declare const which: "keys" | "values";
+Array.prototype[which] = () => [][Symbol.iterator]();
+declare const Runtime: { isAot(): boolean };
+if (!Runtime.isAot()) console.warn = () => {};
 
 export const done = true;
