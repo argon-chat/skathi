@@ -87,7 +87,7 @@ describe("skathi:* modules", () => {
       expect([f.sameStart, f.nullFound, f.byPointer]).toEqual([true, true, "10"]);
       expect([f.line, f.missing, f.names]).toEqual(["-7 2.50 ok", null, ["strlen", "usize", "crt"]]);
       const e = f.errors;
-      expect(e.notListed).toStartWith('NotAllowedError: dlopen: the library "user32" is not in "permissions.ffi"');
+      expect(e.notListed).toStartWith('NotAllowedError: dlopen: the library "gdi32" is not in "permissions.ffi"');
       expect(e.noSymbol).toStartWith("NotFoundError: dlopen: crt.sk_no_such_function");
       expect([e.badType, e.count, e.text, e.fraction, e.bufferAsPointer, e.nul].map((m) => m.split(":")[0])).toEqual(
         Array(6).fill("TypeError"),
@@ -104,6 +104,33 @@ describe("skathi:* modules", () => {
         expect([w.unsigned, w.top]).toEqual([[2147483647, 2147483648], 4294967295]);
         expect([w.big, w.bigType]).toEqual(["-9007199254740993", "bigint"]);
       }
+    },
+    T,
+  );
+
+  test(
+    "a NativeCallback is called by the library, on its thread or from another",
+    async () => {
+      const app = await start();
+      const c = JSON.parse(String(await app.eval("__SK_TEST_STD__.callbacks()")));
+      expect([c.sorted, c.called]).toEqual([[40, 12, 7, 5, 3, 0, -1, -8], true]);
+      expect(c.thrown).toBe("RangeError: not comparable");
+      expect(c.wrongAnswer).toStartWith("TypeError: NativeCallback (anonymous): the value it returns");
+      expect([c.afterThrow, c.open, c.left]).toEqual(["ok", 3, 0]);
+      expect(c.closed).toEqual([true, "InvalidStateError: NativeCallback.pointer: the callback is closed"]);
+      expect([c.notFunction, c.buffer, c.text].map((m) => m.split(":")[0])).toEqual(Array(3).fill("TypeError"));
+
+      await app.eval("__SK_TEST_STD__.startThreads(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.threadsResult)"));
+      }
+      const t = JSON.parse(raw);
+      expect(t.failed).toBeUndefined();
+      if (platform() === "win32") {
+        expect(t.result).toEqual({ accepted: [1, 1, 1], inline: 0, onJsThread: true, context: true, waited: 0 });
+      }
+      expect(app.child.exitCode).toBeNull();
     },
     T,
   );

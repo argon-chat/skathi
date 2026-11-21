@@ -2,12 +2,16 @@
 //!
 //! One table of types serves every direction, so a value converts the same way wherever it goes.
 
+use std::cell::Cell;
 use std::ffi::{c_void, CStr, CString};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::ThreadId;
 
 use sk_ffi::{Signature, Type};
 use sk_runtime::host;
-use sk_runtime::redjs::capi::JSClassRef;
+use sk_runtime::redjs::capi::{self, JSClassRef};
+use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::util::*;
 
 use super::support::{self, *};
@@ -16,6 +20,7 @@ use crate::permissions::{self, Library};
 const KIND_BOOL: u32 = 2;
 const KIND_INT32: u32 = 3;
 const KIND_DOUBLE: u32 = 4;
+const KIND_FUNCTION: u32 = 9;
 const TA_U8: u32 = 2;
 
 /// The buffer a pointer was taken from, kept alive for as long as the pointer is.
@@ -146,7 +151,7 @@ unsafe fn parse_kind(g: *mut c_void, v: u64, what: &str) -> Js<Kind> {
         return Ok(*found);
     }
     if name == "callback" {
-        return type_error(g, &format!("{what}: callbacks are not supported yet"));
+        return type_error(g, &format!("{what}: \"callback\" is not a type; make a NativeCallback and pass its pointer to a \"pointer\" parameter"));
     }
     if name.is_empty() || name.starts_with("struct") {
         return type_error(
@@ -449,10 +454,17 @@ std_fn!(fn library_call(g, args) {
             slots[i] = buffer_address(g, args.arg(i as u32 + 1).0, &what)?;
         }
     }
+    DEPTH.set(DEPTH.get() + 1);
     let outcome = sk_ffi::in_call(function.label, || {
         sk_ffi::call(function.address as *const (), &function.signature, &slots)
     });
+    DEPTH.set(DEPTH.get() - 1);
     drop(arena);
+    let mut thrown = UNDEF;
+    if glue::rjs_exception_pending(g, &mut thrown) != 0 {
+        glue::rjs_throw(g, thrown);
+        return Err(Thrown);
+    }
     let value = from_slot(g, outcome.value, function.returns)?;
     if !function.errno {
         return Ok(value);
@@ -567,6 +579,269 @@ std_fn!(fn pointer_write(g, args) {
     Ok(UNDEF)
 });
 
+/// What a thunk needs to reach its JS function.
+struct Target {
+    g: usize,
+    function: u64,
+    args: Vec<Kind>,
+    returns: Kind,
+    thread: ThreadId,
+    what: String,
+    closed: AtomicBool,
+    warned: AtomicBool,
+}
+
+// SAFETY: `g` and `function` are used on `thread` only; another thread reads the plain fields.
+unsafe impl Send for Target {}
+unsafe impl Sync for Target {}
+
+/// An argument as another thread hands it over: text is copied there, since its memory may be
+/// gone by the time the JS thread looks.
+enum Carried {
+    Slot(u64),
+    Narrow(Vec<u8>),
+    Wide(Vec<u16>),
+}
+
+const QUEUE_LIMIT: usize = 4096;
+
+static QUEUE: Mutex<Vec<(Arc<Target>, Vec<Carried>)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    /// Calls into libraries in progress on this thread: an exception a callback throws waits
+    /// for the innermost one to return.
+    static DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+unsafe fn describe(g: *mut c_void, error: u64) -> String {
+    let string = get(g, host::global(g), "String");
+    call(g, string, UNDEF, &[error])
+        .ok()
+        .and_then(|text| read_string(g, text))
+        .unwrap_or_else(|| "an exception".into())
+}
+
+/// With a call into a library below us, the exception is thrown from that call once it returns.
+/// Without one there is no JS to throw it to.
+unsafe fn raise(g: *mut c_void, target: &Target, error: u64) {
+    if DEPTH.get() > 0 {
+        glue::rjs_throw(g, error);
+    } else {
+        eprintln!("[ffi] {}: {}", target.what, describe(g, error));
+    }
+}
+
+unsafe fn invoke(target: &Target, slots: &[u64]) -> u64 {
+    let g = target.g as *mut c_void;
+    let mut pending = UNDEF;
+    if glue::rjs_exception_pending(g, &mut pending) != 0 {
+        glue::rjs_throw(g, pending);
+        return 0;
+    }
+    // In an array, so that the collector sees the values made so far while the next is made.
+    let list = new_array(g);
+    for (i, (slot, kind_of)) in slots.iter().zip(&target.args).enumerate() {
+        match from_slot(g, *slot, *kind_of) {
+            Ok(value) => set_i(g, list, i as u32, value),
+            Err(Thrown) => return settle(g, target),
+        }
+    }
+    let args: Vec<u64> = (0..slots.len()).map(|i| get_i(g, list, i as u32)).collect();
+    let value = match call(g, target.function, UNDEF, &args) {
+        Ok(value) => value,
+        Err(error) => {
+            raise(g, target, error);
+            return 0;
+        }
+    };
+    let what = format!("{}: the value it returns", target.what);
+    match to_slot(g, value, target.returns, &mut Arena::default(), &what) {
+        Ok(slot) => slot,
+        Err(Thrown) => settle(g, target),
+    }
+}
+
+/// A conversion left its exception pending in the VM.
+unsafe fn settle(g: *mut c_void, target: &Target) -> u64 {
+    let mut pending = UNDEF;
+    if glue::rjs_exception_pending(g, &mut pending) != 0 {
+        raise(g, target, pending);
+    }
+    0
+}
+
+unsafe fn carry(slot: u64, kind_of: Kind) -> Carried {
+    match kind_of {
+        Kind::CString if slot != 0 => Carried::Narrow(
+            CStr::from_ptr(slot as *const _)
+                .to_bytes_with_nul()
+                .to_vec(),
+        ),
+        Kind::WString if slot != 0 => {
+            let start = slot as *const u16;
+            let mut units = Vec::new();
+            loop {
+                let unit = start.add(units.len()).read_unaligned();
+                units.push(unit);
+                if unit == 0 {
+                    break;
+                }
+            }
+            Carried::Wide(units)
+        }
+        _ => Carried::Slot(slot),
+    }
+}
+
+/// On a thread that is not the JS thread: nothing of the engine is touched here.
+unsafe fn from_another_thread(target: &Arc<Target>, slots: &[u64]) -> u64 {
+    let refuse = |reason: &str| {
+        if !target.warned.swap(true, Ordering::Relaxed) {
+            eprintln!("[ffi] {}: {reason}", target.what);
+        }
+        0
+    };
+    if target.returns != Kind::Plain(Type::Void) {
+        return refuse("called from another thread, where only a callback that returns \"void\" can run; 0 was returned");
+    }
+    let carried = slots
+        .iter()
+        .zip(&target.args)
+        .map(|(slot, kind_of)| carry(*slot, *kind_of))
+        .collect();
+    let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+    if queue.len() >= QUEUE_LIMIT {
+        drop(queue);
+        return refuse("more calls from another thread are waiting than the JS thread takes; calls are being dropped");
+    }
+    queue.push((target.clone(), carried));
+    drop(queue);
+    sk_runtime::frames::wake();
+    crate::background::prompt();
+    0
+}
+
+/// Runs the calls other threads made since the last frame.
+pub(crate) fn pump() {
+    let waiting = std::mem::take(&mut *QUEUE.lock().unwrap_or_else(|e| e.into_inner()));
+    for (target, carried) in waiting {
+        if target.closed.load(Ordering::Acquire) || target.thread != std::thread::current().id() {
+            continue;
+        }
+        let slots: Vec<u64> = carried
+            .iter()
+            .map(|c| match c {
+                Carried::Slot(slot) => *slot,
+                Carried::Narrow(bytes) => bytes.as_ptr() as u64,
+                Carried::Wide(units) => units.as_ptr() as u64,
+            })
+            .collect();
+        unsafe { invoke(&target, &slots) };
+    }
+}
+
+struct NativeCallback {
+    callback: Option<sk_ffi::Callback>,
+    address: u64,
+    target: Arc<Target>,
+}
+
+static CALLBACK: OnceLock<usize> = OnceLock::new();
+
+fn callback_class() -> JSClassRef {
+    *CALLBACK
+        .get_or_init(|| unsafe { make_host_class::<NativeCallback>("NativeCallback") } as usize)
+        as JSClassRef
+}
+
+unsafe fn callback<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativeCallback> {
+    match host_data::<NativeCallback>(g, callback_class(), this) {
+        Some(state) => Ok(state),
+        None => type_error(g, "this is not a NativeCallback"),
+    }
+}
+
+std_fn!(fn callback_construct(g, args) {
+    let function = args.arg(0).0;
+    if kind(g, function) != KIND_FUNCTION {
+        return type_error(g, "NativeCallback: the first argument must be a function");
+    }
+    if !cfg!(feature = "ffi") {
+        return dom(g, "NotSupportedError", "NativeCallback: this host was built without skathi:ffi (the \"ffi\" feature)");
+    }
+    let what = "NativeCallback";
+    let signature = args.arg(1).0;
+    let types = option(g, signature, "args");
+    let mut kinds = Vec::new();
+    for i in 0..if types == UNDEF { 0 } else { length(g, types) } {
+        let kind_of = parse_kind(g, get_i(g, types, i as u32), what)?;
+        if matches!(kind_of, Kind::Buffer | Kind::Plain(Type::Void)) {
+            return type_error(g, &format!("{what}: \"{}\" is not a type a callback receives; a block of memory arrives as a \"pointer\"", kind_of.name()));
+        }
+        kinds.push(kind_of);
+    }
+    let returned = option(g, signature, "returns");
+    let returns = if returned == UNDEF { Kind::Plain(Type::Void) } else { parse_kind(g, returned, what)? };
+    if !matches!(returns, Kind::Plain(_)) {
+        return type_error(g, &format!("{what}: a callback cannot return \"{}\": the memory would not outlive the call; return a \"pointer\"", returns.name()));
+    }
+    let name = read_string(g, get(g, function, "name")).filter(|n| !n.is_empty());
+    let target = Arc::new(Target {
+        g: g as usize,
+        function,
+        args: kinds.clone(),
+        returns,
+        thread: std::thread::current().id(),
+        what: format!("NativeCallback {}", name.as_deref().unwrap_or("(anonymous)")),
+        closed: AtomicBool::new(false),
+        warned: AtomicBool::new(false),
+    });
+    let c_signature = Signature {
+        args: kinds.iter().map(|k| k.c()).collect(),
+        returns: returns.c(),
+        fixed: None,
+    };
+    let reached = target.clone();
+    let handler: sk_ffi::Handler = Arc::new(move |slots: &[u64]| unsafe {
+        if reached.closed.load(Ordering::Acquire) {
+            0
+        } else if std::thread::current().id() == reached.thread {
+            invoke(&reached, slots)
+        } else {
+            from_another_thread(&reached, slots)
+        }
+    });
+    let Some(taken) = sk_ffi::Callback::new(c_signature, handler) else {
+        return dom(g, "NotSupportedError", &format!("{what}: all {} callbacks are in use; close() the ones no longer needed", sk_ffi::CALLBACK_CAPACITY));
+    };
+    // The library may call for as long as it has the pointer, whatever JS still holds: until close().
+    capi::JSValueProtect(g as _, function as usize as _);
+    let address = taken.pointer() as u64;
+    let state = NativeCallback { callback: Some(taken), address, target };
+    Ok(host_create(g, callback_class(), prototype(g, "NativeCallback"), state))
+});
+
+std_fn!(fn callback_pointer(g, args) {
+    let state = callback(g, args.this().0)?;
+    if state.callback.is_none() {
+        return dom(g, "InvalidStateError", "NativeCallback.pointer: the callback is closed");
+    }
+    Ok(pointer_new(g, state.address))
+});
+
+std_fn!(fn callback_close(g, args) {
+    let state = callback(g, args.this().0)?;
+    if let Some(taken) = state.callback.take() {
+        state.target.closed.store(true, Ordering::Release);
+        taken.release();
+        capi::JSValueUnprotect(g as _, state.target.function as usize as _);
+    }
+    Ok(UNDEF)
+});
+
+std_fn!(fn callback_closed(g, args) { Ok(enc_bool(callback(g, args.this().0)?.callback.is_none())) });
+std_fn!(fn callback_live(_g, _args) { Ok(enc_f64(sk_ffi::live_callbacks() as f64)) });
+
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
     let module = new_object(g, UNDEF);
     static_fn(g, module, "open", 2, ffi_open);
@@ -612,6 +887,21 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
     static_fn(g, pointer.ctor, "fromAddress", 1, pointer_from_address);
     define(g, pointer.ctor, "NULL", pointer_new(g, 0), 0);
     define(g, module, "NativePointer", pointer.ctor, 0);
+
+    let callback = support::class(
+        g,
+        &ClassSpec {
+            name: "NativeCallback",
+            arity: 2,
+            construct: Some(callback_construct),
+            parent_proto: 0,
+            methods: &[("close", 0, callback_close)],
+            getters: &[("pointer", callback_pointer), ("closed", callback_closed)],
+            accessors: &[],
+        },
+    );
+    static_fn(g, callback.ctor, "live", 0, callback_live);
+    define(g, module, "NativeCallback", callback.ctor, 0);
 
     define(g, std, "ffi", module, 0);
 }

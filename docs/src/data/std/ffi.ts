@@ -45,7 +45,7 @@ interface Signature {
       "`errno: true` makes the call answer `{ value, errno }`. `errno` is the C `errno`, or `GetLastError()` on Windows, read on the same thread right after the call. It is whatever the last failing call left there: read it only when `value` says the call failed.",
       "`variadic` is for functions such as `printf`: list every argument of this call site in `args` and give the number of named parameters. Declaring a variadic function without it passes the arguments the wrong way on Windows and on Apple silicon.",
       "A struct cannot be passed or returned by value. Lay it out in a buffer, with [`BinaryWriter`](/std/binary-writer/) for example, and pass the buffer. A [struct layout](/std/struct-layout/) has no padding, so write the padding the C compiler adds as fields of its own.",
-      "Callbacks (a JS function as a C function pointer) and calls on a worker thread are not there yet.",
+      "To hand the library a function of yours, make a [`NativeCallback`](/std/native-callback/) and pass its `pointer`. Calls on a worker thread are not there yet.",
       CRASH,
     ],
     edgeCases: [
@@ -111,7 +111,7 @@ Encoding.decode(line.subarray(0, length), "utf-8"); // "12 items, 99.5%"
 crt.symbols.explicit_bzero?.(line, line.length);`,
       },
     ],
-    related: ["ffi-types", "native-library", "native-pointer"],
+    related: ["ffi-types", "native-library", "native-pointer", "native-callback"],
     aliases: [
       "FFI",
       "foreign function interface",
@@ -180,7 +180,7 @@ crt.symbols.explicit_bzero?.(line, line.length);`,
       "A `cstring` argument with a NUL character in it is a `TypeError`: the C side would see the text cut short.",
       "A string argument is encoded on every call. For a string passed many times, encode it once, keep it in a typed array and declare the parameter as `buffer`.",
       "A returned `cstring` or `wstring` is read up to its NUL. If the library allocated it and expects you to free it, declare the return as `pointer`, read it with `readCString()` and pass the pointer to the library's free function.",
-      "There is no struct type and no callback type yet.",
+      "There is no struct type. A function pointer is a `pointer`: pass the `pointer` of a [`NativeCallback`](/std/native-callback/).",
     ],
     examples: [
       {
@@ -355,6 +355,112 @@ reading.at; // a bigint`,
       "readCString",
       "readWString",
       "ffiAddress",
+    ],
+  },
+  {
+    slug: "native-callback",
+    name: "NativeCallback",
+    kind: "class",
+    summary: "A JS function as a C function pointer that a library can call.",
+    syntax: `${importLine("skathi:ffi", "NativeCallback")}
+
+new NativeCallback(callback: (...args) => value, signature: { args?: FFIType[]; returns?: FFIType })
+
+static NativeCallback.live(): number
+
+readonly callback.pointer: NativePointer
+readonly callback.closed: boolean
+callback.close(): void`,
+    params: [
+      {
+        name: "callback",
+        type: "function",
+        description:
+          "Called with the C arguments converted by the same rules as a function's return value: a `pointer` is a `NativePointer`, a `cstring` or `wstring` is a JS string or `null`, a 64-bit integer is a `bigint`.",
+      },
+      {
+        name: "signature",
+        type: "{ args?, returns? }",
+        description:
+          'The C signature the library expects. `args` cannot have `"buffer"`: memory arrives as a `"pointer"`. `returns` is `"void"` by default and cannot be `"buffer"`, `"cstring"` or `"wstring"`.',
+      },
+    ],
+    notes: [
+      'Pass `callback.pointer` where the library takes a function pointer, declared as `"pointer"` in the function\'s signature.',
+      "A callback holds its JS function until `close()`, even when nothing in JS refers to the `NativeCallback` any more: the library may call for as long as it has the pointer. Close every callback you make, after the library has stopped using it.",
+      "There are 128 slots. They are thunks built into the host, so nothing is generated at run time and callbacks work in a build without the JIT. `NativeCallback.live()` is how many are open: a number that only grows is a callback that is never closed.",
+      "A call that arrives after `close()` runs nothing and returns 0. A slot is reused as late as possible, so a pointer kept by mistake reaches nothing for a long time, but it must not be relied on.",
+      "An exception thrown inside the callback does not unwind through the library. The callback returns 0 to the library, later callbacks of the same call are skipped and return 0, and the exception is thrown from the `symbols` call that led to it, once the library returns.",
+      "A value of the wrong type returned from the callback is a `TypeError`, thrown the same way.",
+      'A library may call from a thread of its own. The JS function then runs on the JS thread, in the app\'s next frame: the arguments are taken on the calling thread (text is copied there), and the call returns to the library at once. So only a callback that returns `"void"` can be called from another thread. One that returns a value answers 0 there and logs a line. A `pointer` argument is passed as it is: the memory must still be valid a frame later.',
+      "More than 4096 calls from other threads waiting for one frame are dropped, with a line in the log.",
+    ],
+    edgeCases: [
+      "`TypeError`: the first argument is not a function, or the signature has a type a callback cannot receive or return.",
+      "`NotSupportedError`: all 128 slots are taken, or the host was built without the `ffi` feature.",
+      "`InvalidStateError`: reading `pointer` after `close()`. Calling `close()` again does nothing.",
+    ],
+    examples: [
+      {
+        title: "Sort with a comparison written in JS",
+        lang: "ts",
+        code: `import { dlopen, NativeCallback, type NativePointer } from "skathi:ffi";
+
+const crt = dlopen("crt", {
+  qsort: { args: ["buffer", "usize", "usize", "pointer"] },
+});
+
+const int32 = (p: NativePointer) => new Int32Array(p.read(4).buffer)[0]!;
+const descending = new NativeCallback((a, b) => int32(b) - int32(a), {
+  args: ["pointer", "pointer"],
+  returns: "i32",
+});
+
+const numbers = new Int32Array([3, -1, 40, 7]);
+try {
+  crt.symbols.qsort(numbers, numbers.length, 4, descending.pointer);
+} finally {
+  descending.close();
+}
+numbers; // Int32Array [40, 7, 3, -1]`,
+      },
+      {
+        title: "A callback the library calls from its own thread",
+        lang: "ts",
+        code: `import { dlopen, NativeCallback } from "skathi:ffi";
+
+const player = dlopen("player", {
+  player_on_progress: { args: ["pointer"] },
+  player_start: { args: ["cstring"], returns: "i32" },
+});
+
+// void (*)(double seconds): the decoder thread calls it; it runs here a frame later.
+const onProgress = new NativeCallback(
+  (seconds) => {
+    progress.value = seconds;
+  },
+  { args: ["f64"] },
+);
+
+player.symbols.player_on_progress(onProgress.pointer);
+player.symbols.player_start("intro.ogg");
+
+window.addEventListener("pagehide", () => {
+  player.symbols.player_on_progress(null);
+  onProgress.close();
+});`,
+      },
+    ],
+    related: ["dlopen", "ffi-types", "native-pointer"],
+    aliases: [
+      "callback",
+      "function pointer",
+      "JSCallback",
+      "thunk",
+      "NativeCallback.close",
+      "NativeCallback.pointer",
+      "NativeCallback.live",
+      "threadsafe",
     ],
   },
 ]);

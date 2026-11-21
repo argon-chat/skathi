@@ -622,6 +622,7 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
         sk_permissions::pump();
         sk_desktop::pump();
         embed::pump();
+        stdlib::pump_ffi();
         // At most one localStorage file write per frame.
         #[cfg(feature = "storages")]
         sk_storage::pump();

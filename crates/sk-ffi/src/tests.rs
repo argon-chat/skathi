@@ -341,3 +341,144 @@ fn a_missing_library_and_a_missing_symbol_say_which() {
     assert!(error.library.ends_with("no-such-library.bin"));
     assert!(Library::open(std::path::Path::new("relative.dll")).is_err());
 }
+
+static POOL_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn pool_test() -> std::sync::MutexGuard<'static, ()> {
+    POOL_TESTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn mixing(types: Vec<Type>) -> Callback {
+    let signature = Signature {
+        args: types,
+        returns: Type::U64,
+        fixed: None,
+    };
+    let handler: Handler = std::sync::Arc::new(|slots: &[u64]| {
+        slots.iter().fold(17u64, |mix, slot| {
+            mix.wrapping_mul(1_000_003).wrapping_add(*slot)
+        })
+    });
+    Callback::new(signature, handler).unwrap()
+}
+
+/// The compiler calls a thunk as a C function of the given parameters; the handler must see them all.
+macro_rules! receives {
+    ($($name:ident($($arg:ident: $ty:ty),*);)*) => {$(
+        #[test]
+        #[allow(unused_mut, unused_assignments)]
+        fn $name() {
+            let _pool = pool_test();
+            let callback = mixing(vec![$(<$ty as Arg>::TYPE),*]);
+            let function: extern "C" fn($($ty),*) -> u64 =
+                unsafe { std::mem::transmute(callback.pointer()) };
+            let mut position = 0;
+            let mut expected = 17u64;
+            $(
+                let $arg = <$ty as Arg>::sample(position);
+                position += 1;
+                expected = expected
+                    .wrapping_mul(1_000_003)
+                    .wrapping_add(<$ty as Arg>::TYPE.normalize($arg.slot()));
+            )*
+            let _ = position;
+            assert_eq!(function($($arg),*), expected);
+            callback.release();
+        }
+    )*};
+}
+
+receives! {
+    a_callback_without_arguments();
+    a_callback_of_each_integer(a: i8, b: u8, c: i16, d: u16, e: i32, f: u32, g: i64, h: u64);
+    a_callback_of_integers_and_floats(a: i32, b: f64, c: u64, d: f32, e: i8, f: f64, g: u16, h: f32);
+    a_callback_with_small_integers_on_the_stack(
+        a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64,
+        i: i8, j: i16, k: i8, l: i32, m: u8, n: u64, o: bool, p: u16
+    );
+    a_callback_with_both_kinds_past_their_registers(
+        a: i64, b: f64, c: i64, d: f64, e: i64, f: f64, g: i64, h: f64, i: i64, j: f64,
+        k: i64, l: f64, m: i64, n: f64, o: i64, p: f64, q: i64, r: f64, s: i32, t: f32,
+        u: i8, v: f32, w: u16, x: f64
+    );
+    a_callback_of_pointers(a: *const u8, b: usize, c: isize, d: *const u8, e: bool, f: *const u8);
+}
+
+fn answering(returns: Type, value: u64) -> Callback {
+    let signature = Signature {
+        args: vec![],
+        returns,
+        fixed: None,
+    };
+    Callback::new(signature, std::sync::Arc::new(move |_: &[u64]| value)).unwrap()
+}
+
+#[test]
+fn a_callback_returns_integers_and_floats() {
+    let _pool = pool_test();
+    let byte = answering(Type::U8, 0xdead_01ff);
+    let double = answering(Type::F64, 2.5f64.to_bits());
+    let single = answering(Type::F32, (-1.5f32).to_bits() as u64);
+    unsafe {
+        let f: extern "C" fn() -> u8 = std::mem::transmute(byte.pointer());
+        assert_eq!(f(), 0xff);
+        let f: extern "C" fn() -> f64 = std::mem::transmute(double.pointer());
+        assert_eq!(f(), 2.5);
+        let f: extern "C" fn() -> f32 = std::mem::transmute(single.pointer());
+        assert_eq!(f(), -1.5);
+    }
+    byte.release();
+    double.release();
+    single.release();
+}
+
+#[test]
+fn each_thunk_reaches_its_own_handler_and_none_after_release() {
+    let _pool = pool_test();
+    let callbacks: Vec<Callback> = (0..CALLBACK_CAPACITY as u64)
+        .map(|n| answering(Type::U64, n * 7 + 1))
+        .collect();
+    assert_eq!(live_callbacks(), CALLBACK_CAPACITY);
+    let full = Signature {
+        args: vec![],
+        returns: Type::Void,
+        fixed: None,
+    };
+    assert!(Callback::new(full, std::sync::Arc::new(|_: &[u64]| 0)).is_none());
+    let functions: Vec<extern "C" fn() -> u64> = callbacks
+        .iter()
+        .map(|c| unsafe { std::mem::transmute(c.pointer()) })
+        .collect();
+    let answers: Vec<u64> = functions.iter().map(|f| f()).collect();
+    for callback in callbacks {
+        callback.release();
+    }
+    assert_eq!(answers.len(), CALLBACK_CAPACITY);
+    assert!(answers.iter().all(|a| a % 7 == 1));
+    let mut distinct = answers.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), CALLBACK_CAPACITY);
+    assert_eq!(live_callbacks(), 0);
+    assert_eq!(functions[0](), 0);
+}
+
+#[test]
+fn a_callback_runs_on_the_thread_that_calls_it() {
+    let _pool = pool_test();
+    let callback = mixing(vec![Type::I32, Type::F64]);
+    let address = callback.pointer() as usize;
+    let seen = std::thread::spawn(move || {
+        let function: extern "C" fn(i32, f64) -> u64 = unsafe { std::mem::transmute(address) };
+        function(-3, 0.5)
+    })
+    .join()
+    .unwrap();
+    let expected = [(-3i64) as u64, 0.5f64.to_bits()]
+        .iter()
+        .fold(17u64, |mix, slot| {
+            mix.wrapping_mul(1_000_003).wrapping_add(*slot)
+        });
+    assert_eq!(seen, expected);
+    callback.release();
+}

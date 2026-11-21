@@ -7,7 +7,7 @@ import { Runtime, runtime } from "skathi:runtime";
 import { TOML } from "skathi:toml";
 import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
-import { ffi } from "./native";
+import { callbacks, ffi, threads } from "./native";
 import { collections } from "./structures";
 
 const DOCUMENT = `title = "Skathi"
@@ -73,6 +73,14 @@ Object.assign(globalThis, {
     units: () => JSON.stringify(units()),
     collections: () => JSON.stringify(collections()),
     ffi: () => JSON.stringify(ffi()),
+    callbacks: () => JSON.stringify(callbacks()),
+    threadsResult: null as string | null,
+    startThreads() {
+      void threads().then(
+        (result) => (this.threadsResult = JSON.stringify({ result })),
+        (error: unknown) => (this.threadsResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     timeResult: null as string | null,
     startTime() {
       void time().then(

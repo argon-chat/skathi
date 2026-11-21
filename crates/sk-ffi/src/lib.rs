@@ -4,10 +4,12 @@
 //! registers and the stack from a [`Frame`] that [`call`] lays out.
 
 mod abi;
+mod callback;
 mod crash;
 mod invoke;
 mod library;
 
+pub use callback::{live as live_callbacks, Callback, Handler, CAPACITY as CALLBACK_CAPACITY};
 pub use crash::in_call;
 pub use library::{Library, LoadError};
 

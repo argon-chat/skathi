@@ -29,7 +29,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:toml`](#skathitoml)               | `TOML.parse()` and `TOML.stringify()`                                                 |
 | [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
-| [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `NativePointer`           |
+| [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `NativeCallback`          |
 | [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
 | [`skathi:units`](#skathiunits)             | `DataSize`, `Frequency`, `Angle`                                                      |
 | [`skathi:collections`](#skathicollections) | `BitSet`, `BloomFilter`, `RingBuffer`, `DisjointSet`, `Trie`, `IntervalTree`          |

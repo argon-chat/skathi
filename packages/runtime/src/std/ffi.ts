@@ -90,6 +90,41 @@ export interface NativePointerStatics {
   fromAddress(address: bigint | number): NativePointer;
 }
 
+/** What a callback is called with and what it answers. A block of memory arrives as a `pointer`. */
+export interface CallbackSignature {
+  readonly args?: readonly Exclude<FFIType, "void" | "buffer">[];
+  /** `"void"` when left out. */
+  readonly returns?: Exclude<FFIType, "buffer" | Text>;
+}
+
+type Received<T> = T extends Text ? string | null : T extends "pointer" ? NativePointer : ValueOf<T>;
+type ReceivedEach<A extends readonly unknown[]> = { -readonly [I in keyof A]: Received<A[I]> };
+type ReceivedBy<S extends CallbackSignature> = S["args"] extends readonly unknown[] ? ReceivedEach<S["args"]> : [];
+type AnsweredBy<S extends CallbackSignature> =
+  S["returns"] extends Exclude<FFIType, "void"> ? ArgOf<S["returns"]> : void;
+
+/**
+ * A JS function as a C function pointer. It takes one of a fixed number of slots and holds the
+ * function until `close()`, whatever else still refers to it.
+ */
+export interface NativeCallback {
+  /** What to pass to the library. Throws `InvalidStateError` once closed. */
+  readonly pointer: NativePointer;
+  readonly closed: boolean;
+  /** Gives the slot back. A call the library makes afterwards runs nothing and returns 0. */
+  close(): void;
+}
+
+export interface NativeCallbackConstructor {
+  readonly prototype: NativeCallback;
+  new <const S extends CallbackSignature>(
+    callback: (...args: ReceivedBy<S>) => AnsweredBy<S>,
+    signature: S,
+  ): NativeCallback;
+  /** How many callbacks are open, of the 128 there can be. */
+  live(): number;
+}
+
 interface HostLibrary {
   readonly path: string;
   readonly closed: boolean;
@@ -101,11 +136,13 @@ interface HostLibrary {
 declare const __sk_std: {
   ffi: {
     NativePointer: NativePointerStatics;
+    NativeCallback: NativeCallbackConstructor;
     open(name: string, definitions: readonly unknown[]): HostLibrary;
   };
 };
 
 export const NativePointer: NativePointerStatics = __sk_std.ffi.NativePointer;
+export const NativeCallback: NativeCallbackConstructor = __sk_std.ffi.NativeCallback;
 
 export class NativeLibrary<S extends Record<string, Signature> = Record<string, Signature>> {
   readonly name: string;

@@ -18,6 +18,7 @@ mod time;
 mod toml;
 mod units;
 
+pub(crate) use ffi::pump as pump_ffi;
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
 
