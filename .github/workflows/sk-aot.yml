@@ -5,6 +5,10 @@ on:
       ref:
         description: Candidate SDK commit
         required: true
+      wide_app:
+        description: Compile the test apps with wide references on the supplied host
+        type: boolean
+        default: false
       profile_probe:
         description: Compare default and compact memory profiles in the release hosts
         type: boolean
@@ -72,6 +76,18 @@ jobs:
           PY
           echo "Wide-reference compile probe"
           bun scripts/aot/probe-profile.ts --hosts release-hosts --out target/mac-aot-wide
+      - name: Compile with wide references
+        if: inputs.wide_app
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("packages/cli/aot/native.ts")
+          old = 'ir, image, ...flags]'
+          text = p.read_text()
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, 'ir, image, ...flags, "--option", "references=wide"]'))
+          PY
       - name: Exercise GUI measurement instruments
         if: inputs.jit_probe
         shell: bash
