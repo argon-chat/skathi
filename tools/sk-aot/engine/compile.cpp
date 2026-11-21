@@ -19,6 +19,9 @@
 #include <JavaScriptCore/AOTStoredStrings.h>
 #include <JavaScriptCore/AOTThreads.h>
 #include <JavaScriptCore/AOTWireDiagnosticColumns.h>
+#if OS(DARWIN)
+#include <JavaScriptCore/AOTImage.h>
+#endif
 #include <JavaScriptCore/YarrErrorCode.h>
 #include <JavaScriptCore/YarrFlags.h>
 #include <JavaScriptCore/YarrSyntaxChecker.h>
@@ -243,6 +246,14 @@ extern "C" bool Bun__AOT__hasCompiler()
 {
     return true;
 }
+
+#if OS(DARWIN)
+extern "C" int64_t Bun__AOT__offsetInCode(const void* address)
+{
+    auto offset = JSC::AOT::imageCodeOffset(address);
+    return offset ? static_cast<int64_t>(*offset) : -1;
+}
+#endif
 
 // redjs's rjs_aot_compile with option words applied after its options, for probes of engine options.
 struct SkAotImage {

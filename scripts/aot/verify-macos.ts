@@ -87,7 +87,8 @@ const scenario = `
 if (globalThis.__SK_SCENARIO__ === "aot-smoke") {
   requestAnimationFrame(() => {
     const dynamic = new Function("a", "return a + 1");
-    console.log("SK_AOT_SMOKE " + dynamic(eval("40+1")));
+    const wasm = Reflect.get(globalThis, ["Web", "Assembly"].join(""));
+    console.log("SK_AOT_SMOKE " + dynamic(eval("40+1")) + " wasm=" + typeof wasm);
     setTimeout(() => window.close(), 100);
   });
 }
@@ -156,9 +157,9 @@ function publish(source: string, label: string, host: string, aot: boolean, jit:
   apps.set(label, app);
   return { app, exe };
 }
-function smoke(exe: string, aot: boolean) {
+function smoke(exe: string, aot: boolean, jit = true) {
   const output = command(exe, [], { SK_SCENARIO: "aot-smoke", SK_PERF: "1" }, 0, 60_000);
-  assert.match(output, /SK_AOT_SMOKE 42/);
+  assert(output.includes("SK_AOT_SMOKE 42 wasm=" + (jit ? "object" : "undefined")), output);
   assert.equal(output.includes("[native-aot] selected application image"), aot, output);
 }
 
@@ -168,14 +169,14 @@ smoke(stock.exe, false);
 const usual = publish(minimal, "minimal-aot", normal, true, true);
 smoke(usual.exe, true);
 const slim = publish(minimal, "minimal-nojit", nojit, true, false);
-smoke(slim.exe, true);
+smoke(slim.exe, true, false);
 const image = join(slim.app, "Contents/Frameworks/app.image.dylib");
 const original = readFileSync(image);
 publish(minimal, "minimal-nojit", nojit, true, false);
 assert.equal(sha256(readFileSync(image)), sha256(original), "identical inputs must retain the image signature");
 assert.match(command(slim.exe, [], { SK_APP_ENGINE: "jit" }, 3, 30_000), /aot-nojit.*no JIT/s);
 const inspector = publish(minimal, "devtools", diagnostic, true, false, true);
-smoke(inspector.exe, true);
+smoke(inspector.exe, true, false);
 const other = join(inspector.app, "Contents/Frameworks/inspector.image.dylib");
 assert(existsSync(other));
 try {
@@ -199,7 +200,7 @@ if (values["bench-apps"]) {
     ["showcase-aot", normal, true, true],
     ["showcase-nojit", nojit, true, false],
   ] as const)
-    smoke(publish(showcase, label, host, aot, jit).exe, aot);
+    smoke(publish(showcase, label, host, aot, jit).exe, aot, jit);
 }
 writeFileSync(join(dir, "apps.json"), JSON.stringify(Object.fromEntries(apps), null, 2));
 console.log(`macOS arm64 published AOT verification passed; bundles in ${scratch}`);

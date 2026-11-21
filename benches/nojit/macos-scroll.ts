@@ -1,5 +1,6 @@
 export async function benchmarkScroll(selector: string): Promise<void> {
-  if (globalThis.__SK_SCENARIO__ !== "macos-scroll") return;
+  const host: typeof globalThis & { __SK_SCENARIO__?: string } = globalThis;
+  if (host.__SK_SCENARIO__ !== "macos-scroll") return;
 
   const frame = () => new Promise<number>((resolve) => requestAnimationFrame(resolve));
   for (let i = 0; i < 20; i++) await frame();

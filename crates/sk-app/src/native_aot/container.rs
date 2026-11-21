@@ -1,6 +1,4 @@
 //! Native images in shared-library sections, or in the Windows executable with `publishSingleFile`.
-use std::path::PathBuf;
-
 #[cfg(any(windows, test))]
 const PAGE: usize = 4096;
 /// The first of the image's sections: its header and tables. Code and the rest follow.
@@ -60,35 +58,6 @@ fn section(headers: &[u8], name: &[u8]) -> Option<Section> {
             virtual_address: le32(headers, at + 12)?,
         })
     })
-}
-
-/// Where a container beside the app lives: beside the executable, or in the Resources of the
-/// macOS bundle that holds it.
-pub(super) fn beside_executable() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    #[cfg(target_os = "macos")]
-    if dir.file_name().is_some_and(|n| n == "MacOS") {
-        if let Some(contents) = dir
-            .parent()
-            .filter(|c| c.file_name().is_some_and(|n| n == "Contents"))
-        {
-            return Some(contents.join("Resources"));
-        }
-    }
-    Some(dir.to_path_buf())
-}
-
-/// The code location for an AOT container, with the bundle's other dylibs on macOS.
-pub(super) fn beside_executable_image() -> Option<PathBuf> {
-    let dir = beside_executable()?;
-    #[cfg(target_os = "macos")]
-    if let Some(contents) = dir.parent().filter(|c| c.ends_with("Contents")) {
-        if dir.ends_with("Resources") {
-            return Some(contents.join("Frameworks"));
-        }
-    }
-    Some(dir)
 }
 
 /// The image whose first section is `name` in the module mapped at `base`.

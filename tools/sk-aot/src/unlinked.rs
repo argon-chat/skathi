@@ -13,6 +13,12 @@ macro_rules! unlinked {
     )*};
 }
 
+#[cfg(target_os = "macos")]
+unlinked! {
+    us_loop_run_bun_tick
+    uws_get_loop
+}
+
 unlinked! {
     ASN1_STRING_to_UTF8
     BIO_clear_retry_flags

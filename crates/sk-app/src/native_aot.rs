@@ -363,7 +363,8 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
 
 #[cfg(sk_devtools)]
 pub(crate) fn inspector_sidecar() -> Option<PathBuf> {
-    Some(container::beside_executable_image()?.join(EMBEDDED_IMAGE_CONTAINER?))
+    let exe = std::env::current_exe().ok()?;
+    Some(image_directory(exe.parent()?).join(EMBEDDED_IMAGE_CONTAINER?))
 }
 
 #[cfg(sk_devtools)]
@@ -576,9 +577,13 @@ fn cannot_run(error: String) -> String {
 
 fn image_directory(payload_dir: &Path) -> std::borrow::Cow<'_, Path> {
     #[cfg(target_os = "macos")]
-    if payload_dir.ends_with("Contents/Resources") {
+    if payload_dir.ends_with("Contents/Resources") || payload_dir.ends_with("Contents/MacOS") {
         if let Some(contents) = payload_dir.parent() {
-            if contents.parent().and_then(Path::extension) == Some(OsStr::new("app")) {
+            if contents
+                .parent()
+                .and_then(Path::extension)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+            {
                 return contents.join("Frameworks").into();
             }
         }
@@ -680,6 +685,20 @@ pub(crate) fn boot(rt: &JsRuntime, kind: Kind) -> Result<bool, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_static_or_file_payload_uses_the_bundle_frameworks() {
+        use std::path::Path;
+        for relative in ["Contents/Resources", "Contents/MacOS"] {
+            let dir = Path::new("/work/My.APP").join(relative);
+            assert_eq!(
+                super::image_directory(&dir).as_ref(),
+                Path::new("/work/My.APP/Contents/Frameworks")
+            );
+        }
+        let external = Path::new("/work/Contents/Resources");
+        assert_eq!(super::image_directory(external).as_ref(), external);
+    }
     use super::*;
     struct TempArtifact(std::path::PathBuf);
     impl TempArtifact {
