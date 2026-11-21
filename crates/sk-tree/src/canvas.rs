@@ -678,9 +678,18 @@ pub(super) fn build<V: 'static>(
             .unwrap_or(gpui::ObjectFit::Fill)
     };
     let position = super::object_position_of(d.style());
+    let sampling = match node
+        .computed
+        .as_ref()
+        .map(|cs| sk_css::image_rendering(&cs.vars))
+    {
+        Some("pixelated") => gpui::ImageSampling::Nearest,
+        _ => gpui::ImageSampling::Linear,
+    };
     let fitted = |image| {
         let mut picture = gpui::img(ImageSource::Render(image))
             .object_fit(fit())
+            .image_sampling(sampling)
             .size_full();
         picture.style().vn_object_position = Some(position);
         picture.into_any_element()

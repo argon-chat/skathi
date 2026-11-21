@@ -187,6 +187,34 @@ test.skipIf(!SCREENSHOTS || MACOS)(
   T,
 );
 
+test.skipIf(!SCREENSHOTS || MACOS)(
+  "image-rendering: pixelated scales a canvas without blending its pixels",
+  async () => {
+    await inPage(`
+    const c = document.createElement('canvas');
+    c.id = 'cv-pixelated';
+    c.width = 2; c.height = 1;
+    c.style.cssText = 'position:absolute;left:10px;top:200px;width:120px;height:60px;image-rendering:pixelated';
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#f00'; ctx.fillRect(0, 0, 1, 1);
+    ctx.fillStyle = '#00f'; ctx.fillRect(1, 0, 1, 1);
+    document.body.appendChild(c);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return true;
+  `);
+    const b = (await app.query("#cv-pixelated")).nodes[0]!.bounds!;
+    const shot = readPng(await app.screenshot());
+    const scale = shot.width / Number(await app.eval("window.innerWidth"));
+    const at = (x: number) => shot.at(Math.round((b.x + x) * scale), Math.round((b.y + 30) * scale));
+    // Bilinear filtering would mix the two colours across the middle half of the box.
+    expect([at(50), at(70)]).toEqual([
+      [255, 0, 0],
+      [0, 0, 255],
+    ]);
+  },
+  T,
+);
+
 // A canvas keeps its bitmap premultiplied; gpui's atlas takes straight alpha and blends with
 // SRC_ALPHA.
 test.skipIf(!SCREENSHOTS || MACOS)(

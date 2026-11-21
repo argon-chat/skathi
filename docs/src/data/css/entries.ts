@@ -2479,10 +2479,11 @@ const generated = section("Generated content and lists", [
   prop("image-rendering", PART, "Sets the scaling algorithm used for images, such as smooth or pixelated.", {
     values: [
       v("auto", OK, "Bounded Catmull–Rom for enlargement on native surfaces."),
-      v("pixelated", OK, "Nearest-neighbour on native surfaces."),
+      v("pixelated", OK, "Nearest-neighbour on native surfaces and on a `<canvas>`."),
     ],
     notes: [
       "Native surfaces use bounded Catmull–Rom for enlargement with `auto` and nearest-neighbour with `pixelated`.",
+      "A `<canvas>` is scaled with bilinear filtering, and with nearest-neighbour under `pixelated`.",
       "A stylesheet inside an SVG can set `image-rendering: pixelated` on an SVG `<image>`.",
     ],
     limitations: ["App stylesheets cannot change the sampling of an `<img>`."],
