@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ffi::{c_void, CStr, CString};
+use std::fmt::{self, Display};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -84,6 +85,8 @@ struct Function {
     errno: bool,
     /// The call runs on a worker thread and answers with a promise.
     nonblocking: bool,
+    /// Some argument is a buffer.
+    buffers: bool,
     /// `library!symbol`, for the line a crash inside the call prints.
     label: &'static CStr,
 }
@@ -203,6 +206,7 @@ unsafe fn parse_function(
     let optional = to_bool(g, get_i(g, def, 4));
     let variadic = get_i(g, def, 5);
     let nonblocking = to_bool(g, get_i(g, def, 6));
+    let buffers = args.contains(&Kind::Buffer);
     let fixed = if variadic == UNDEF {
         None
     } else {
@@ -241,6 +245,7 @@ unsafe fn parse_function(
         returns,
         errno,
         nonblocking,
+        buffers,
         label: Box::leak(label.into_boxed_c_str()),
     }))
 }
@@ -282,7 +287,17 @@ fn range(ty: Type) -> (i128, i128) {
 }
 
 /// An integer of `ty` from a number or a bigint, by one rule whichever the engine holds it as.
-unsafe fn integer(g: *mut c_void, v: u64, ty: Type, what: &str) -> Js<u64> {
+unsafe fn integer(g: *mut c_void, v: u64, ty: Type, what: &dyn Display) -> Js<u64> {
+    if let Some(n) = dec_f64(v) {
+        let whole = n as i64;
+        let (min, max) = range(ty);
+        if whole as f64 == n
+            && n.abs() <= 9_007_199_254_740_991.0
+            && (min..=max).contains(&(whole as i128))
+        {
+            return Ok(whole as u64);
+        }
+    }
     let name = Kind::Plain(ty).name();
     let value: i128 = match kind(g, v) {
         KIND_BIGINT => {
@@ -328,13 +343,22 @@ struct Arena {
 
 /// The slot of every argument but a buffer, whose address is read last: converting another
 /// argument may allocate, and an allocation may move a small typed array's bytes.
-unsafe fn to_slot(g: *mut c_void, v: u64, kind_of: Kind, arena: &mut Arena, what: &str) -> Js<u64> {
+unsafe fn to_slot(
+    g: *mut c_void,
+    v: u64,
+    kind_of: Kind,
+    arena: &mut Arena,
+    what: &dyn Display,
+) -> Js<u64> {
     let nothing = v == NULL || v == UNDEF;
     match kind_of {
         Kind::Buffer => Ok(0),
         Kind::CString if nothing => Ok(0),
         Kind::CString => {
-            let mut bytes = string(g, v, what)?.into_bytes();
+            if kind(g, v) != KIND_STRING {
+                return type_error(g, &format!("{what} must be a string"));
+            }
+            let mut bytes = read_string(g, v).ok_or(Thrown)?.into_bytes();
             if bytes.contains(&0) {
                 return type_error(g, &format!("{what} has a NUL character in it, where a C string ends"));
             }
@@ -362,10 +386,9 @@ unsafe fn to_slot(g: *mut c_void, v: u64, kind_of: Kind, arena: &mut Arena, what
             Ok(to_bool(g, v) as u64)
         }
         Kind::Plain(ty @ (Type::F32 | Type::F64)) => {
-            if !matches!(kind(g, v), KIND_INT32 | KIND_DOUBLE) {
+            let Some(n) = dec_f64(v) else {
                 return type_error(g, &format!("{what} must be a number"));
-            }
-            let n = number(g, v)?;
+            };
             Ok(if ty == Type::F32 { (n as f32).to_bits() as u64 } else { n.to_bits() })
         }
         Kind::Plain(Type::Pointer) if nothing => Ok(0),
@@ -378,7 +401,7 @@ unsafe fn to_slot(g: *mut c_void, v: u64, kind_of: Kind, arena: &mut Arena, what
     }
 }
 
-unsafe fn buffer_address(g: *mut c_void, v: u64, what: &str) -> Js<u64> {
+unsafe fn buffer_address(g: *mut c_void, v: u64, what: &dyn Display) -> Js<u64> {
     if v == NULL || v == UNDEF {
         return Ok(0);
     }
@@ -610,13 +633,39 @@ unsafe fn with_errno(g: *mut c_void, value: u64, os_error: i32) -> u64 {
     result
 }
 
+/// Arguments converted on the stack; a call with more takes a `Vec`.
+const INLINE_SLOTS: usize = 12;
+
+/// `library.function`, or one of its arguments, for an error message that is rarely written.
+#[derive(Clone, Copy)]
+struct Site<'a> {
+    library: &'a str,
+    function: &'a str,
+    arg: Option<(usize, Kind)>,
+}
+
+impl Display for Site<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.library, self.function)?;
+        match self.arg {
+            Some((index, kind_of)) => write!(f, ": argument {} ({})", index + 1, kind_of.name()),
+            None => Ok(()),
+        }
+    }
+}
+
 std_fn!(fn library_call(g, args) {
     let state = library(g, args.this().0)?;
-    let index = count(g, args.arg(0).0, "the function's index")?;
+    let first = args.arg(0).0;
+    let index = if first & TAG_NUMBER == TAG_NUMBER {
+        first as u32 as usize
+    } else {
+        count(g, first, "the function's index")?
+    };
     let Some(function) = state.functions.get(index).and_then(Option::as_ref) else {
         return type_error(g, "the library has no such function");
     };
-    let what = format!("{}.{}", state.name, function.name);
+    let what = Site { library: &state.name, function: &function.name, arg: None };
     if state.closed {
         return dom(g, "InvalidStateError", &format!("{what}: the library is closed"));
     }
@@ -625,31 +674,44 @@ std_fn!(fn library_call(g, args) {
         return type_error(g, &format!("{what} takes {} argument(s), {given} given", function.args.len()));
     }
     let mut arena = Arena::default();
-    let mut slots = Vec::with_capacity(given);
+    let mut inline = [0u64; INLINE_SLOTS];
+    let mut spill = Vec::new();
+    let slots: &mut [u64] = if given <= INLINE_SLOTS {
+        &mut inline[..given]
+    } else {
+        spill.resize(given, 0);
+        &mut spill
+    };
     for (i, kind_of) in function.args.iter().enumerate() {
-        let what = format!("{what}: argument {} ({})", i + 1, kind_of.name());
-        slots.push(to_slot(g, args.arg(i as u32 + 1).0, *kind_of, &mut arena, &what)?);
+        let what = Site { arg: Some((i, *kind_of)), ..what };
+        slots[i] = to_slot(g, args.arg(i as u32 + 1).0, *kind_of, &mut arena, &what)?;
     }
     if function.nonblocking {
         let values: Vec<u64> = (0..given).map(|i| args.arg(i as u32 + 1).0).collect();
-        return call_on_worker(g, function, &values, slots, arena, &what);
+        return call_on_worker(g, function, &values, slots.to_vec(), arena, &what.to_string());
     }
-    for (i, kind_of) in function.args.iter().enumerate() {
-        if *kind_of == Kind::Buffer {
-            let what = format!("{what}: argument {} (buffer)", i + 1);
-            slots[i] = buffer_address(g, args.arg(i as u32 + 1).0, &what)?;
+    if function.buffers {
+        for (i, kind_of) in function.args.iter().enumerate() {
+            if *kind_of == Kind::Buffer {
+                let what = Site { arg: Some((i, *kind_of)), ..what };
+                slots[i] = buffer_address(g, args.arg(i as u32 + 1).0, &what)?;
+            }
         }
     }
+    let entered = ENTERED.get();
     DEPTH.set(DEPTH.get() + 1);
     let outcome = sk_ffi::in_call(function.label, || {
-        sk_ffi::call(function.address as *const (), &function.signature, &slots)
+        sk_ffi::call(function.address as *const (), &function.signature, slots)
     });
     DEPTH.set(DEPTH.get() - 1);
     drop(arena);
-    let mut thrown = UNDEF;
-    if glue::rjs_exception_pending(g, &mut thrown) != 0 {
-        glue::rjs_throw(g, thrown);
-        return Err(Thrown);
+    // Only a callback that ran during the call can have left an exception.
+    if ENTERED.get() != entered {
+        let mut thrown = UNDEF;
+        if glue::rjs_exception_pending(g, &mut thrown) != 0 {
+            glue::rjs_throw(g, thrown);
+            return Err(Thrown);
+        }
     }
     let value = from_slot(g, outcome.value, function.returns)?;
     if !function.errno {
@@ -694,7 +756,7 @@ std_fn!(fn pointer_from_address(g, args) {
     if !permissions::current().ffi_address {
         return dom(g, "NotAllowedError", "NativePointer.fromAddress: making a pointer from an address needs \"permissions\": { \"ffiAddress\": true } in sk.config.json");
     }
-    let address = integer(g, args.arg(0).0, Type::Usize, "NativePointer.fromAddress: the address")?;
+    let address = integer(g, args.arg(0).0, Type::Usize, &"NativePointer.fromAddress: the address")?;
     Ok(pointer_new(g, address))
 });
 
@@ -794,6 +856,8 @@ thread_local! {
     /// Calls into libraries in progress on this thread: an exception a callback throws waits
     /// for the innermost one to return.
     static DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// Callbacks entered on this thread so far.
+    static ENTERED: Cell<u64> = const { Cell::new(0) };
 }
 
 unsafe fn describe(g: *mut c_void, error: u64) -> String {
@@ -816,6 +880,7 @@ unsafe fn raise(g: *mut c_void, target: &Target, error: u64) {
 
 unsafe fn invoke(target: &Target, slots: &[u64]) -> u64 {
     let g = target.g as *mut c_void;
+    ENTERED.set(ENTERED.get().wrapping_add(1));
     let mut pending = UNDEF;
     if glue::rjs_exception_pending(g, &mut pending) != 0 {
         glue::rjs_throw(g, pending);

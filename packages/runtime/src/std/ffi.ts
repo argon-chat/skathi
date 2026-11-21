@@ -150,6 +150,46 @@ declare const __sk_std: {
 export const NativePointer: NativePointerStatics = __sk_std.ffi.NativePointer;
 export const NativeCallback: NativeCallbackConstructor = __sk_std.ffi.NativeCallback;
 
+/**
+ * A function of exactly `arity` parameters: a rest parameter would make an array on every call.
+ * A call with another number of arguments goes as it is, for the host to refuse.
+ */
+function fixed(host: HostLibrary, index: number, arity: number): (...args: unknown[]) => unknown {
+  const any = (...args: unknown[]): unknown => host.call(index, ...args);
+  switch (arity) {
+    case 0:
+      return function () {
+        return arguments.length === 0 ? host.call(index) : any(...arguments);
+      };
+    case 1:
+      return function (a: unknown) {
+        return arguments.length === 1 ? host.call(index, a) : any(...arguments);
+      };
+    case 2:
+      return function (a: unknown, b: unknown) {
+        return arguments.length === 2 ? host.call(index, a, b) : any(...arguments);
+      };
+    case 3:
+      return function (a: unknown, b: unknown, c: unknown) {
+        return arguments.length === 3 ? host.call(index, a, b, c) : any(...arguments);
+      };
+    case 4:
+      return function (a: unknown, b: unknown, c: unknown, d: unknown) {
+        return arguments.length === 4 ? host.call(index, a, b, c, d) : any(...arguments);
+      };
+    case 5:
+      return function (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown) {
+        return arguments.length === 5 ? host.call(index, a, b, c, d, e) : any(...arguments);
+      };
+    case 6:
+      return function (a: unknown, b: unknown, c: unknown, d: unknown, e: unknown, f: unknown) {
+        return arguments.length === 6 ? host.call(index, a, b, c, d, e, f) : any(...arguments);
+      };
+    default:
+      return any;
+  }
+}
+
 export class NativeLibrary<S extends Record<string, Signature> = Record<string, Signature>> {
   readonly name: string;
   readonly symbols: SymbolsOf<S>;
@@ -182,7 +222,7 @@ export class NativeLibrary<S extends Record<string, Signature> = Record<string, 
         symbols[symbol] = null;
         return;
       }
-      const direct = (...args: unknown[]): unknown => host.call(index, ...args);
+      const direct = fixed(host, index, (signatures[symbol] as Signature).args?.length ?? 0);
       const settled = async (...args: unknown[]): Promise<unknown> => host.call(index, ...args);
       const call = (signatures[symbol] as Signature).nonblocking === true ? settled : direct;
       Object.defineProperty(call, "name", { value: symbol });

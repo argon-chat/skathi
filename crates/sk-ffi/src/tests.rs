@@ -510,3 +510,74 @@ fn a_fault_in_a_foreign_function_names_it() {
     let said = String::from_utf8_lossy(&child.stderr);
     assert!(said.contains("[crash] ffi: probe!write_to\n"), "{said}");
 }
+
+#[allow(clippy::too_many_arguments)]
+extern "C" fn many(
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u64,
+    f: u64,
+    g: u64,
+    h: u64,
+    i: u64,
+    j: u64,
+    k: u64,
+    l: u64,
+    m: u64,
+    n: u64,
+    o: u64,
+    p: u64,
+    q: u64,
+    r: u64,
+    s: u64,
+    t: u64,
+    u: u64,
+    v: u64,
+    w: u64,
+    x: u64,
+) -> u64 {
+    a.rotate_left(0)
+        ^ b.rotate_left(1)
+        ^ c.rotate_left(2)
+        ^ d.rotate_left(3)
+        ^ e.rotate_left(4)
+        ^ f.rotate_left(5)
+        ^ g.rotate_left(6)
+        ^ h.rotate_left(7)
+        ^ i.rotate_left(8)
+        ^ j.rotate_left(9)
+        ^ k.rotate_left(10)
+        ^ l.rotate_left(11)
+        ^ m.rotate_left(12)
+        ^ n.rotate_left(13)
+        ^ o.rotate_left(14)
+        ^ p.rotate_left(15)
+        ^ q.rotate_left(16)
+        ^ r.rotate_left(17)
+        ^ s.rotate_left(18)
+        ^ t.rotate_left(19)
+        ^ u.rotate_left(20)
+        ^ v.rotate_left(21)
+        ^ w.rotate_left(22)
+        ^ x.rotate_left(23)
+}
+
+#[test]
+fn more_stack_arguments_than_the_frame_holds_inline() {
+    let args: Vec<u64> = (0..24u64)
+        .map(|i| 0x9e37_79b9_7f4a_7c15u64.wrapping_mul(i + 1))
+        .collect();
+    let signature = Signature {
+        args: vec![Type::U64; 24],
+        returns: Type::U64,
+        fixed: None,
+    };
+    let expected = args
+        .iter()
+        .enumerate()
+        .fold(0, |mix, (i, a)| mix ^ a.rotate_left(i as u32));
+    let outcome = unsafe { call(many as *const (), &signature, &args) };
+    assert_eq!(outcome.value, expected);
+}

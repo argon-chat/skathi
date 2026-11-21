@@ -103,6 +103,7 @@ pub unsafe fn call(function: *const (), signature: &Signature, args: &[u64]) -> 
     assert!(!signature.args.contains(&Type::Void));
     let mut frame = abi::lay_out(signature, args);
     frame.function = function as usize;
+    frame.seal();
     invoke::sk_ffi_invoke(&mut frame);
     let os_error = library::last_os_error();
     let raw = if signature.returns.is_float() {

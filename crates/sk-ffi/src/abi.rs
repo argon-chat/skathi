@@ -12,23 +12,61 @@ pub(crate) struct Frame {
     fpr: [u64; 8],
     pub ret_gpr: u64,
     pub ret_fpr: u64,
-    /// Keeps `stack` alive; `u64`s so that it is aligned for any argument.
-    owner: Vec<u64>,
+    /// The stack area of most calls; `u64`s so that it is aligned for any argument.
+    inline: [u64; INLINE],
+    /// The stack area of a call with more than `inline` holds.
+    spill: Vec<u64>,
 }
 
-#[derive(Default)]
+const INLINE: usize = 16;
+
+impl Frame {
+    /// Points `stack` at the area. The frame must not move after this.
+    pub fn seal(&mut self) {
+        self.stack = if self.spill.is_empty() {
+            self.inline.as_ptr().cast()
+        } else {
+            self.spill.as_ptr().cast()
+        };
+    }
+}
+
 struct Layout {
     gpr: [u64; 8],
     fpr: [u64; 8],
-    stack: Vec<u8>,
+    inline: [u64; INLINE],
+    spill: Vec<u64>,
+    /// Bytes of the stack area in use.
+    len: usize,
 }
 
 impl Layout {
-    fn push(&mut self, bits: u64, size: usize, align: usize) {
-        while !self.stack.len().is_multiple_of(align) {
-            self.stack.push(0);
+    fn reserve(&mut self, len: usize) {
+        self.len = len;
+        let words = len.div_ceil(8);
+        if words > INLINE || !self.spill.is_empty() {
+            if self.spill.is_empty() {
+                self.spill.extend_from_slice(&self.inline);
+            }
+            if self.spill.len() < words {
+                self.spill.resize(words, 0);
+            }
         }
-        self.stack.extend_from_slice(&bits.to_le_bytes()[..size]);
+    }
+
+    fn push(&mut self, bits: u64, size: usize, align: usize) {
+        let at = self.len.next_multiple_of(align);
+        self.reserve(at + size);
+        let area: &mut [u64] = if self.spill.is_empty() {
+            &mut self.inline
+        } else {
+            &mut self.spill
+        };
+        // SAFETY: `reserve` made the area hold `at + size` bytes.
+        unsafe {
+            let to = area.as_mut_ptr().cast::<u8>().add(at);
+            std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to, size);
+        }
     }
 
     fn slot(&mut self, bits: u64) {
@@ -36,44 +74,43 @@ impl Layout {
     }
 
     fn finish(mut self) -> Frame {
-        while !self.stack.len().is_multiple_of(16) {
-            self.stack.push(0);
-        }
-        let mut owner = vec![0u64; self.stack.len() / 8];
-        for (word, bytes) in owner.iter_mut().zip(self.stack.chunks_exact(8)) {
-            *word = u64::from_le_bytes(bytes.try_into().unwrap());
-        }
+        self.reserve(self.len.next_multiple_of(16));
         Frame {
             function: 0,
-            stack: owner.as_ptr().cast(),
-            stack_len: self.stack.len(),
+            stack: std::ptr::null(),
+            stack_len: self.len,
             gpr: self.gpr,
             fpr: self.fpr,
             ret_gpr: 0,
             ret_fpr: 0,
-            owner,
+            inline: self.inline,
+            spill: self.spill,
         }
     }
 }
 
 pub(crate) fn lay_out(signature: &Signature, args: &[u64]) -> Frame {
-    let mut layout = Layout::default();
+    let mut layout = Layout {
+        gpr: [0; 8],
+        fpr: [0; 8],
+        inline: [0; INLINE],
+        spill: Vec::new(),
+        len: 0,
+    };
     let values = signature
         .args
         .iter()
         .zip(args)
         .map(|(ty, bits)| (*ty, ty.normalize(*bits)));
     place(&mut layout, signature, values);
-    let frame = layout.finish();
-    debug_assert_eq!(frame.owner.len() * 8, frame.stack_len);
-    frame
+    layout.finish()
 }
 
 /// Win64: an argument's position alone picks its register, and a float also travels in the
 /// integer register of its position, which is what a variadic callee reads.
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn place(layout: &mut Layout, _: &Signature, values: impl Iterator<Item = (Type, u64)>) {
-    layout.stack.resize(32, 0);
+    layout.reserve(32);
     for (index, (_, bits)) in values.enumerate() {
         if index < 4 {
             layout.gpr[index] = bits;
