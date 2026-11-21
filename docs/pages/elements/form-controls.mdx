@@ -188,9 +188,9 @@ The dialog needs a user gesture, so call `showPicker()` from a click, not from a
 
 `<input type="color">` is a swatch, 50 × 27 pixels by default. `::-webkit-color-swatch` and `::-webkit-color-swatch-wrapper` style it.
 
-`value` is a lowercase `#rrggbb`. Any CSS color can be assigned, such as `#f05`, `rgb()`, `hsl()` or a name, and is converted to that form; anything that is not a color becomes `#000000`. Since 0.5 the `alpha`, `colorspace` and `hdr` attributes change that form, as described below.
+`value` is a lowercase `#rrggbb`. Any CSS color can be assigned, such as `#f05`, `rgb()`, `hsl()` or a name, and is converted to that form; anything that is not a color becomes `#000000`. The `alpha`, `colorspace` and `hdr` attributes change that form, as described below.
 
-### The picker (since 0.5)
+### The picker
 
 A click, Enter or Space on the input opens a picker under it, drawn by Skathi on every platform. The picker is a popup window of its own, so it may extend past the app's window, as a browser's does. The app's window keeps the keyboard and stays active meanwhile.
 
@@ -229,11 +229,11 @@ The hex field shows the color as sRGB. The RGB fields are 0 to 255 in the input'
 
 There is no eyedropper.
 
-### Alpha (since 0.5)
+### Alpha
 
 With the `alpha` attribute the picker shows an alpha slider and the swatch shows transparency over a checkerboard. `value` then follows the HTML standard: `color(srgb r g b / a)`, with each channel rounded to 8 bits, such as `color(srgb 1 0.501961 0 / 0.5)`. An opaque color leaves out the `/ a`. Any CSS color can be assigned, `#ff800080` included. Put `alpha` before a static `value` in the markup, or bind the value with `v-model` or `bind:value`: a `value` set before the attribute is converted without its alpha.
 
-### Display P3 (since 0.5)
+### Display P3
 
 `colorspace="display-p3"` keeps the color in Display P3, the wider gamut of most current displays, as the HTML standard specifies. `value` is `color(display-p3 r g b)`, with `/ a` under `alpha`, and its channels are not rounded to 8 bits. An assigned color in any space, `#ff0000` included, is converted: `#ff0000` becomes `color(display-p3 0.917488 0.200287 0.138561)`. The picker's square, wheel and fields work in P3 coordinates; its swatches are painted as the window shows them. `input.colorSpace` reads `"limited-srgb"` (the default) or `"display-p3"`.
 
@@ -257,7 +257,7 @@ const brand = ref("color(display-p3 0 0.6 1)");
 <input bind:value={brand} type="color" colorspace="display-p3" />
 ```
 
-### HDR colors (since 0.5)
+### HDR colors
 
 The `hdr` attribute is Skathi's own. It adds an intensity to the picker: an exposure from −10 to +10 stops that multiplies the color by 2 to that power, with a slider, buttons for common stops and a preview of the color before and after. The preview glows when the result is brighter than white.
 
@@ -286,7 +286,7 @@ const glow = ref("color(srgb-linear 4 2 0.5)");
 
 Browsers ignore `hdr`, so the same markup in a web build gets a plain sRGB input.
 
-### Show your own picker (since 0.5)
+### Show your own picker
 
 Before any picker opens, the input fires a `showpicker` event, which bubbles and can be cancelled. Call `preventDefault()` on it and nothing opens: show your own picker instead, and set `value` and dispatch `input` and `change` yourself when the user picks. One listener on a parent replaces the picker for every color input inside it.
 
@@ -348,7 +348,7 @@ Dispatching `input` keeps `v-model` and `bind:value` in step, as with any input 
 
 To use the operating system's color dialog instead, set [`"colorPicker": "system"`](/sk-config/#colorPicker) in `sk.config.json`: `ChooseColor` on Windows, `NSColorPanel` on macOS, and zenity or kdialog on Linux. A pick there sets `value` and fires `input` and `change`; cancelling fires nothing. `showpicker` fires before it too. The OS dialog has no alpha, Display P3 or intensity: it ignores `alpha`, `colorspace` and `hdr`, and its sRGB pick is converted to the input's space.
 
-### `showPicker()` (since 0.5)
+### `showPicker()`
 
 `input.showPicker()` opens the picker from script, as a click would, and fires `showpicker` first. As in browsers, it needs a user gesture, such as your own button's click, and throws a `NotAllowedError` without one and an `InvalidStateError` on a disabled input. A click on the input without a gesture, such as `input.click()` from a timer, opens nothing and logs a warning.
 
@@ -384,7 +384,7 @@ An input that paints nothing, as here, has the picker open at the pointer.
 
 The list is drawn by Skathi, not as an OS menu. It opens under the box, or above it when there is no room, shows up to 20 rows before it scrolls, and closes when the window loses focus.
 
-- The list (since 0.5) is a popup window of its own and may extend past the app's window. Moving or resizing the window closes it.
+- The list is a popup window of its own and may extend past the app's window. Moving or resizing the window closes it.
 - On Windows, macOS and X11 the room it measures is the screen's, on the box's monitor (on macOS, clear of the menu bar and the Dock).
 - On Wayland the compositor places it, flipping it above the box when there is no room below. It is not shortened to the room there, so the compositor may slide a long list over the box.
 - If the popup window cannot be opened, the list opens inside the window and stays inside it.

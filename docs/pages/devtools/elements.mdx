@@ -51,7 +51,7 @@ The values are the engine's own: sizes, edges and corners as the layout and pain
 
 Some elements are hard to click: hidden ones, zero-sized ones, ones under an overlay.
 
-- **Search.** **find** (Ctrl+F) searches the whole tree. A row matches when its tag, class names, id or text contains what you typed: `primary` finds `button.btn.primary`, `reset` finds the button labelled Reset. Since 0.4 a query is also tried as a CSS selector, so `.btn.primary`, `#save` and `.toolbar > button` find what they select. Enter and Shift+Enter, or the arrows, step through the hits; each step selects the hit and expands its parents.
+- **Search.** **find** (Ctrl+F) searches the whole tree. A row matches when its tag, class names, id or text contains what you typed: `primary` finds `button.btn.primary`, `reset` finds the button labelled Reset. A query is also tried as a CSS selector, so `.btn.primary`, `#save` and `.toolbar > button` find what they select. Enter and Shift+Enter, or the arrows, step through the hits; each step selects the hit and expands its parents.
 - **Breadcrumbs.** The bar under the tree lists the selected element's ancestors; click one to select it. It is the fastest way from a label to the flex container that positions it.
 - **Vue fragment anchors.** The `<!---->` toggle shows the empty comment nodes Vue leaves for `v-if` and `v-for`. They paint nothing, so they are hidden by default; turn them on when you count children or debug a list that renders nothing.
 

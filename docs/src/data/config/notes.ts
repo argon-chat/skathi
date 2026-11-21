@@ -301,14 +301,14 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   "macos.microphoneUsageDescription": {
     notes: [
       "Without it, a microphone request is denied without a prompt. With it, the bundle also gets the audio input entitlement.",
-      "`sk dev` runs the app from a dev `.app` with these descriptions and the bundle id `<bundleId>.dev`, so macOS asks there too (since 0.7). `sk create` writes them for the showcase.",
+      "`sk dev` runs the app from a dev `.app` with these descriptions and the bundle id `<bundleId>.dev`, so macOS asks there too. `sk create` writes them for the showcase.",
     ],
     example: "Notes records voice memos.",
   },
   "macos.cameraUsageDescription": {
     notes: [
       "Without it, a camera request is denied without a prompt. With it, the bundle also gets the camera entitlement.",
-      "`sk dev` runs the app from a dev `.app` with these descriptions, so macOS asks there too (since 0.7).",
+      "`sk dev` runs the app from a dev `.app` with these descriptions, so macOS asks there too.",
     ],
     example: "Notes scans documents with the camera.",
   },

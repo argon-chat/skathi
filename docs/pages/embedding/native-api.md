@@ -37,7 +37,7 @@ An `Err` or a panic in `setup` stops startup; `spawn` then never shows a window.
 | `read_secret(name)`, `write_secret(name, value)` | Strings sealed by the OS (DPAPI, the Keychain, the Secret Service), never written in plain text             |
 | `storage_dir()`, `random_bytes(buf)`             | Where the profile's storage lives; cryptographically random bytes                                           |
 
-## Unsafe native window handles (since 0.6)
+## Unsafe native window handles
 
 > **Warning**
 >

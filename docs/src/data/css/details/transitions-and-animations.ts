@@ -43,7 +43,7 @@ const expanded = ref(false);
   max-height: 320px;
   padding: 12px 16px;
 }`,
-        note: "This rule animates between two pixel limits. To animate `height` from a length to `auto`, set `interpolate-size: allow-keywords` (since 0.4).",
+        note: "This rule animates between two pixel limits. To animate `height` from a length to `auto`, set `interpolate-size: allow-keywords`.",
       },
       {
         title: "Lift a card on hover",
@@ -61,7 +61,7 @@ const expanded = ref(false);
       },
     ],
     edgeCases: [
-      "`transition: opacity var(--duration) linear` and transition longhands use the custom properties computed for each element (since 0.6).",
+      "`transition: opacity var(--duration) linear` and transition longhands use the custom properties computed for each element.",
       "Declare `transition` on the base rule. A `transition` inside a `:hover`, `:focus` or other state rule is ignored, with an advisory in `sk dev`.",
       "An element's first style never transitions: a node mounted with a `transition` starts at its declared values. Change a class or a style after mount to animate.",
       "With the default `interpolate-size: numeric-only`, a change between a length and `auto` snaps. Set `interpolate-size: allow-keywords` to animate it.",

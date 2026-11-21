@@ -1,0 +1,196 @@
+---
+title: Skathi 0.7
+metaTitle: "Skathi 0.7: AOT on macOS, a standard library, and C libraries from JS"
+description: Ahead-of-time compilation on Apple Silicon and for an embedder's own executable, the skathi:* standard library, calls into C libraries with permissions, effects that follow CPU pressure and the power profile, CSS entry transitions, Vite+ builds, and the end-to-end test harness on npm.
+date: 2026-11-21
+draft: true
+tags: [release, aot, std, css]
+release:
+  version: "0.7.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.7.0 && bun add -d @skathi-native/cli@^0.7.0
+    - label: Rust program
+      command: cargo add skathi@0.7
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+
+Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-time compilation, a Windows feature until now, runs on Apple Silicon and inside an embedder's own executable. The host gets a standard library: thirteen `skathi:` modules for the things every desktop app writes again, from the operating system's name to a diff of two texts. One of them, `skathi:ffi`, calls C functions of a library the app ships, behind a list of permissions. And effects learn to step down when the machine is hot or on battery.
+
+<FeatureGrid label="What is new in 0.7">
+  <Feature icon="cpu" title="AOT on macOS" href="#aot-on-apple-silicon" tone="pink">
+    `sk publish --aot` on Apple Silicon: a signed `.app` with its native image.
+  </Feature>
+  <Feature icon="plug" title="AOT for embedders" href="#aot-in-your-own-executable" tone="blue">
+    `native-aot`, `no-jit` and `no-wasm` as features of the `skathi` crate.
+  </Feature>
+  <Feature icon="package" title="A standard library" href="#the-skathi-modules" tone="lilac">
+    `skathi:app`, `os`, `time`, `binary`, `text`, `collections` and more.
+  </Feature>
+  <Feature icon="code" title="C libraries" href="#c-libraries-from-js" tone="yellow">
+    `dlopen()`, callbacks and worker-thread calls, allowed in sk.config.json.
+  </Feature>
+  <Feature icon="sparkle" title="Adaptive effects" href="#effects-that-follow-the-machine" tone="pink">
+    CPU pressure and the power profile in CSS, JS and shaders.
+  </Feature>
+  <Feature icon="layers" title="Less memory" href="#memory" tone="blue">
+    A compact profile for images, and `"memory": "low"`.
+  </Feature>
+  <Feature icon="braces" title="CSS motion" href="#css" tone="lilac">
+    `@starting-style`, `sibling-index()`, `field-sizing`, `text-box`.
+  </Feature>
+  <Feature icon="terminal" title="Vite+ and tests" href="#vite-and-tests" tone="yellow">
+    New apps build with Vite+; `@skathi-native/test` is on npm.
+  </Feature>
+</FeatureGrid>
+
+## AOT on Apple Silicon
+
+`sk publish --aot` now works on a Mac with Apple Silicon. The result is one `.app`: the host in `Contents/MacOS`, the payload in `Contents/Resources`, and the image as `app.image.dylib` in `Contents/Frameworks`. `sk publish` signs the image before it signs the bundle, ad hoc by default and with the hardened runtime when you pass a `Developer ID Application` identity.
+
+`"publishJit": false` publishes on the no-JIT workload there too. On a GitHub-hosted M1 runner, the showcase app measured:
+
+| Showcase, macOS arm64 | Warm start | RSS at 5 s | Bundle    |
+| --------------------- | ---------- | ---------- | --------- |
+| JIT                   | 483.5 ms   | 129.5 MiB  | 96.3 MiB  |
+| AOT                   | 358.5 ms   | 120.5 MiB  | 100.9 MiB |
+| AOT without JIT       | 291.2 ms   | 119.4 MiB  | 82.7 MiB  |
+
+The first launch after an install is slower under AOT (895 to 1145 ms against 691 ms), and scrolling paces the same in all three. The [AOT guide](/guides/aot/#macos-arm64-measurements) has the method and the raw samples.
+
+## AOT in your own executable
+
+A program that embeds Skathi can run native images as well. The `skathi` crate re-exports `native-aot`, `no-jit`, `no-wasm` and `native-inspector`, and `sk publish --aot --payload-only --workload <your exe>` compiles the payload against it. The [shipping guide](/embedding/shipping/#aot-for-your-own-executable) walks through the toolchain.
+
+An embedder who ported a video player [measured it](https://github.com/argon-chat/skathi/issues/37) on an M3 Max: the idle interface settles 18 MiB lower without the JIT, and its pointer handlers answer about twice as fast as under the JIT.
+
+Devtools no longer need the JIT either. With `"publishJit": false` and `"publishDevtools": true`, the `aot-nojit-devtools` workload ships the inspector as its own image, `inspector.image.dll`, beside the app's.
+
+## The skathi modules
+
+Every host now provides a library under the `skathi:` prefix. There is nothing to install: the modules are part of the host, typed from the runtime package, and work the same under `sk dev` and in a built app.
+
+```ts
+import { app } from "skathi:app";
+import { os } from "skathi:os";
+import { Stopwatch, RetryPolicy } from "skathi:time";
+import { TextDiff } from "skathi:text";
+
+console.log(`${app.getVersion()} on ${os.platform} ${os.release}`);
+
+const watch = Stopwatch.startNew();
+const saved = await new RetryPolicy({ attempts: 3 }).run(() => upload(file));
+console.log(`uploaded in ${watch.elapsed}`);
+
+const patch = TextDiff.unified(before, after);
+```
+
+| Module               | What is in it                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| `skathi:app`         | Quit, restart, the app's version; the `app*` objects under one import                 |
+| `skathi:runtime`     | The Skathi version, its features, `Runtime.isAot()`                                   |
+| `skathi:os`          | Platform, architecture, OS release, host name, home and temp folders                  |
+| `skathi:network`     | Online, internet reachability, connection type, metered and roaming                   |
+| `skathi:numeric`     | Fixed-width integers and floats: `i8` to `u64`, `f16`, `f32`                          |
+| `skathi:toml`        | `TOML.parse()` and `TOML.stringify()`                                                 |
+| `skathi:binary`      | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
+| `skathi:encoding`    | Hex, Base32, Base64, legacy text encodings, MIME types                                |
+| `skathi:ffi`         | C functions of the libraries the config allows                                        |
+| `skathi:text`        | `StringBuilder`, `StringReader`, `TextDiff`, `TextSearch`, `Glob`                     |
+| `skathi:time`        | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
+| `skathi:units`       | `DataSize`, `Frequency`, `Angle`                                                      |
+| `skathi:collections` | `BitSet`, `BloomFilter`, `RingBuffer`, `DisjointSet`, `Trie`, `IntervalTree`          |
+
+The classes are native: their contents live in the host, and the methods that take a whole array (`appendAll`, `readLines`, `findAll`, `filter`) cross into it once. Each export has a page in the [standard library reference](/std/). The `app*` objects are still exported from `@skathi-native/runtime`, now marked deprecated.
+
+## C libraries from JS
+
+`skathi:ffi` calls a library you already have as a binary, without a Rust build.
+
+```json title="sk.config.json"
+{
+  "permissions": {
+    "ffi": [{ "name": "sqlite3", "path": "$APP/lib/sqlite3" }]
+  }
+}
+```
+
+```ts
+import { dlopen } from "skathi:ffi";
+
+const sqlite = dlopen("sqlite3", {
+  sqlite3_libversion: { returns: "cstring" },
+  sqlite3_open: { args: ["cstring", "buffer"], returns: "i32" },
+});
+sqlite.symbols.sqlite3_libversion(); // "3.46.0"
+```
+
+- **Permissions.** A library loads only by a name the config lists, from the app's own folder (`$APP`) or from the system's (`$SYSTEM`). `sk build` copies `$APP` libraries beside the exe, and into `Contents/Frameworks` of a macOS bundle. `sk check` compares every `dlopen()` with the list before the app runs (the new `SK6` codes).
+- **Types from the signature.** TypeScript types each function from the literal you pass. A value of the wrong type is a `TypeError` that names the function and the argument; nothing is converted silently.
+- **Callbacks.** `new NativeCallback(fn, signature)` gives the library a function pointer. The thunks are built into the host, so callbacks work without a JIT.
+- **Off the JS thread.** `nonblocking: true` runs a call on a worker thread and returns a promise.
+- **Cost.** A call with numbers, pointers or buffers takes 0.1 to 0.2 µs and allocates nothing.
+
+A fault in the library ends the app, after a `[crash] ffi: library!symbol` line that says where. For native code you write yourself, a [native module](/embedding/native-modules/) is still the better path.
+
+## Effects that follow the machine
+
+CPU pressure and the system's power profile reach CSS, JavaScript and shaders.
+
+```css
+@media (currently-power-scheme: saving), (currently-compute-pressure: serious) {
+  .glass {
+    backdrop-filter: none;
+    --shading: none;
+    background-color: #262634;
+  }
+}
+```
+
+`PressureObserver` reports the same states to script. A shader can declare a `[SkQuality] float` slot and draw three levels of detail; the host picks one from pressure, power mode and battery, and slows the effect's clock to 30 or 15 Hz on the lower two. `effect-quality` pins a tier for one element. The [adaptive effects guide](/guides/adaptive-effects/) has the table per platform.
+
+## Memory
+
+- **Images commit less.** An application image now runs with a compact memory profile: on Windows that is 367 to 378 MB less committed than the engine's own sizes, in pages the app never touched. `SK_AOT_MEMORY_PROFILE=default` restores them.
+- **`"memory": "low"`** in sk.config.json trades allocation speed for memory. In the showcase on Windows, private bytes went from 256 to 160 MB, with allocation bursts about 1.3 times slower. The new [memory guide](/guides/memory/) shows where an app's memory goes and how to measure it.
+- **GPU copies.** A surface keeps at most two copy slots in steady use and releases them after `clear()`.
+
+## CSS
+
+- `@starting-style` and `transition-behavior: allow-discrete`: an element animates in when it first renders and out when it goes to `display: none`.
+- `sibling-index()` and `sibling-count()` for staggered delays without inline styles.
+- `field-sizing: content` for inputs, textareas and closed selects that grow with their text.
+- `text-box-trim` and `text-box-edge` to trim the space above and below text by font metrics.
+- `translate` and `rotate` as properties of their own, and `content-visibility`.
+
+## Vite+ and tests
+
+- **Vite+.** `sk create` now writes a `vite.config.ts`, and packaged builds go through the Vite+ the app declares, with its plugins. An existing project with a Vite config beside `sk.config.json` gets the same.
+- **`@skathi-native/test`** is on npm. The harness that drives a real host in Skathi's own end-to-end tests installs into your app and runs under `bun test`. See the [testing guide](/guides/testing/).
+- **`sk check`** also reports a `console` method replaced under AOT, and a built-in written through a key that is one of a few literals.
+
+## macOS
+
+- The host installs the standard menu bar: Quit, Hide, Close Window, Enter Full Screen, Minimize and Zoom, with their shortcuts.
+- A custom title bar no longer draws Windows caption buttons beside the traffic lights.
+- The camera and the microphone work under `sk dev`.
+- Colours outside the display's gamut survive on HDR surfaces.
+
+<Aside kind="warning" title="What 0.7 does not do yet">
+
+- **AOT** is for Windows x64 and macOS arm64. Linux hosts run the JIT.
+- **`skathi:text`** has no collation, word boundaries or Unicode properties yet: use `Intl.Collator`, `Intl.Segmenter` and `normalize()`.
+- **`skathi:ffi`** passes no struct by value, and its JavaScript layer was tested on Windows only.
+- **`skathi:network`** reports only `online` on macOS and Linux.
+
+</Aside>
+
+## Upgrading
+
+Run the commands at the top of this post and `bunx sk check`. Under AOT, a logger that replaces `console.error` now stops the build instead of the app: wrap it in `if (!Runtime.isAot())`. Imports of the `app*` objects from `@skathi-native/runtime` keep working and show a deprecation hint that names `skathi:app`. For embedders: rebuild the payload with `sk` 0.7, and a build without the `audio` feature needs the release, not an earlier commit of master.

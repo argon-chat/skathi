@@ -89,12 +89,12 @@ Some props are read once, when the window is created. Others are applied to the 
 | [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises    | Windows                                        |
 | [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises    | Windows                                        |
 | [`resizable`](/window-api/sk-window-resizable/)                                                  | `true`            | Creation; advises    | All                                            |
-| [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Live (since 0.6)     | All                                            |
-| [`maxWidth`](/window-api/sk-window-max-width/), [`maxHeight`](/window-api/sk-window-max-height/) | none              | Live (since 0.6)     | All                                            |
-| [`aspectRatio`](/window-api/sk-window-aspect-ratio/)                                             | none              | Live (since 0.6)     | All                                            |
-| [`opacity`](/window-api/sk-window-opacity/)                                                      | `1`               | Live (since 0.6)     | Windows, macOS and composited X11              |
-| [`visibleOnAllWorkspaces`](/window-api/sk-window-visible-on-all-workspaces/)                     | `false`           | Live (since 0.6)     | macOS and X11 with a supporting window manager |
-| [`trafficLightPosition`](/window-api/sk-window-traffic-light-position/)                          | automatic         | Live (since 0.6)     | macOS                                          |
+| [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Live                 | All                                            |
+| [`maxWidth`](/window-api/sk-window-max-width/), [`maxHeight`](/window-api/sk-window-max-height/) | none              | Live                 | All                                            |
+| [`aspectRatio`](/window-api/sk-window-aspect-ratio/)                                             | none              | Live                 | All                                            |
+| [`opacity`](/window-api/sk-window-opacity/)                                                      | `1`               | Live                 | Windows, macOS and composited X11              |
+| [`visibleOnAllWorkspaces`](/window-api/sk-window-visible-on-all-workspaces/)                     | `false`           | Live                 | macOS and X11 with a supporting window manager |
+| [`trafficLightPosition`](/window-api/sk-window-traffic-light-position/)                          | automatic         | Live                 | macOS                                          |
 
 "Advises" means a change on an open window prints an advisory and does nothing. To change a creation-time prop, remount the window, for example with a `:key`, or a `{#key}` block in Svelte, that includes the value. [`SK_WINDOW_CREATION_TIME_PROPS`](/window-api/sk-window-creation-time-props/) lists exactly the creation-time props.
 

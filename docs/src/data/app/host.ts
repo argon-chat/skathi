@@ -61,7 +61,7 @@ appHost.call<T = unknown>(name: string, ...args: unknown[]): Promise<T>
 appHost.on(event: string, handler: (data: unknown) => void): () => void
 appHost.off(event: string, handler: (data: unknown) => void): void`,
     notes: [
-      "`appHost.call` reaches functions registered with `Builder::function`, and `appHost.on` events sent with `Handle::emit`; both are deprecated since 0.4.0 and print a `[skathi compat]` advisory once.",
+      "`appHost.call` reaches functions registered with `Builder::function`, and `appHost.on` events sent with `Handle::emit`; both are deprecated and print a `[skathi compat]` advisory once.",
       "`appHost.available` is not deprecated: it still says whether the app runs inside an embedding program.",
       NOT_EMBEDDED,
     ],

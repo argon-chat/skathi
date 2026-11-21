@@ -131,7 +131,7 @@ export function deepLinks(go: (path: string) => void): void {
       'With `"singleInstance": true` in `sk.config.json`, a second launch hands its command line, working folder and URL to the running process and exits before it opens a window. The running one gets a `launch` event and, unless `"raiseOnSecondInstance": false`, its window is brought to the front.',
       "`false` when the key is not set, when the environment variable `SK_SINGLE_INSTANCE` is `0` or `off`, in the devtools inspector, or when the lock could not be taken (the app then runs as a separate instance and says why on stderr).",
       'The lock is per user and per app identity (`"id"`, else the app name), so two development copies of one app share it.',
-      "It works on Windows, Linux and, since 0.3.0, macOS.",
+      "It works on Windows, Linux and, macOS.",
     ],
     examples: [
       {

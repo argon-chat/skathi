@@ -303,7 +303,7 @@ pub const CATALOG: &[Entry] = &[
     e("grid-template-areas", Unsupported, &[], &["\"a b\""], "Place items by line number"),
     e("grid-template-columns", Partial, &["1fr 1fr", "repeat(3, 10px)"], &["none"], "`none` cannot undo an earlier track list"),
     e("grid-template-rows", Partial, &["1fr 1fr", "repeat(3, 10px)"], &["none"], "`none` cannot undo an earlier track list"),
-    e("haptic", Supported, &["none", "press tick 0.4", "step tick 0.2, boundary edge 0.7", "activate pattern(--confirm)"], &[], "Skathi gesture feedback (since 0.6)."),
+    e("haptic", Supported, &["none", "press tick 0.4", "step tick 0.2, boundary edge 0.7", "activate pattern(--confirm)"], &[], "Skathi gesture feedback."),
     e("haptic-effect", Supported, &["tick", "hint, align", "pattern(--confirm)", "none"], &[], "Semantic effect or named pulse sequence."),
     e("haptic-intensity", Supported, &["0", "0.4, 1"], &[], "Zero silences the effect. Positive values use the controller's intensity capability."),
     e("haptic-min-interval", Supported, &["0ms", "30ms, 0.2s"], &[], "Minimum time between requests for each element, trigger and target."),

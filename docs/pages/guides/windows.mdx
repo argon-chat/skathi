@@ -72,7 +72,7 @@ The default `titleBarStyle` is `"hidden"`: your app draws its own title bar. Thi
 
 [`minWidth`](/window-api/config-window-min-width/) and [`minHeight`](/window-api/config-window-min-height/) each work alone; the other side is then not limited.
 
-### Start position and monitor (since 0.4)
+### Start position and monitor
 
 [`x` and `y`](/window-api/config-window-x/) place the window when it is created, so it never shows at a default spot first. They are CSS px from the top-left corner of the monitor's work area, the part of the screen the taskbar or Dock leaves free. [`monitor`](/window-api/config-window-monitor/) picks the monitor: `"primary"` (the default), `"cursor"` for the one under the mouse pointer, or an index from `0`.
 
@@ -212,18 +212,18 @@ The web globals are not reactive. `innerWidth`, `innerHeight`, `screenX` and `de
 
 The events are spread over four targets. `resize`, `focus` and `blur` fire on both the global `window` and `appWindow`.
 
-| Event                                                                                    | Target                            | Fires when                                                                                           | Windows | macOS   | Linux                     |
-| ---------------------------------------------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------- | ------- | ------- | ------------------------- |
-| [`resize`](/window-api/event-resize/)                                                    | `window`, `appWindow`             | the viewport or the scale changes; once at start on `window`                                         | yes     | yes     | yes                       |
-| [`focus`](/window-api/event-focus/), [`blur`](/window-api/event-blur/)                   | `window`, `appWindow`             | the main window gains or loses activation                                                            | yes     | yes     | yes                       |
-| [`maximize`](/window-api/event-maximize/), [`unmaximize`](/window-api/event-unmaximize/) | `appWindow`                       | the maximized state flips                                                                            | yes     | yes     | yes                       |
-| [`minimize`](/window-api/event-minimize/), [`restore`](/window-api/event-restore/)       | `appWindow`                       | the window enters or leaves minimized                                                                | yes     | yes     | yes, not on Wayland       |
-| [`move`](/window-api/event-move/)                                                        | `appWindow`                       | the outer position changed, once per frame                                                           | yes     | partial | partial                   |
-| [`fullscreenchange`](/window-api/event-fullscreenchange/)                                | `appWindow`                       | fullscreen by any route                                                                              | yes     | yes     | yes                       |
-| [`backdropchange`](/window-api/event-backdropchange/)                                    | `appWindow`                       | `backdrop` or `effectiveBackdrop` changed                                                            | yes     | yes     | yes                       |
-| [`visibilitychange`](/window-api/event-visibilitychange/)                                | `document`                        | minimized or hidden; on Windows also covered, on another desktop or, since 0.5, with the display off | yes     | partial | partial, never on Wayland |
-| [`geometrychange`](/window-api/event-geometrychange/)                                    | `navigator.windowControlsOverlay` | the title bar area moved or resized                                                                  | yes     | yes     | yes                       |
-| [`close-requested`](/window-api/event-close-requested/)                                  | `appWindow`                       | the user asks to close                                                                               | yes     | yes     | yes                       |
+| Event                                                                                    | Target                            | Fires when                                                                                | Windows | macOS   | Linux                     |
+| ---------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------- | ------- | ------- | ------------------------- |
+| [`resize`](/window-api/event-resize/)                                                    | `window`, `appWindow`             | the viewport or the scale changes; once at start on `window`                              | yes     | yes     | yes                       |
+| [`focus`](/window-api/event-focus/), [`blur`](/window-api/event-blur/)                   | `window`, `appWindow`             | the main window gains or loses activation                                                 | yes     | yes     | yes                       |
+| [`maximize`](/window-api/event-maximize/), [`unmaximize`](/window-api/event-unmaximize/) | `appWindow`                       | the maximized state flips                                                                 | yes     | yes     | yes                       |
+| [`minimize`](/window-api/event-minimize/), [`restore`](/window-api/event-restore/)       | `appWindow`                       | the window enters or leaves minimized                                                     | yes     | yes     | yes, not on Wayland       |
+| [`move`](/window-api/event-move/)                                                        | `appWindow`                       | the outer position changed, once per frame                                                | yes     | partial | partial                   |
+| [`fullscreenchange`](/window-api/event-fullscreenchange/)                                | `appWindow`                       | fullscreen by any route                                                                   | yes     | yes     | yes                       |
+| [`backdropchange`](/window-api/event-backdropchange/)                                    | `appWindow`                       | `backdrop` or `effectiveBackdrop` changed                                                 | yes     | yes     | yes                       |
+| [`visibilitychange`](/window-api/event-visibilitychange/)                                | `document`                        | minimized or hidden; on Windows also covered, on another desktop or, with the display off | yes     | partial | partial, never on Wayland |
+| [`geometrychange`](/window-api/event-geometrychange/)                                    | `navigator.windowControlsOverlay` | the title bar area moved or resized                                                       | yes     | yes     | yes                       |
+| [`close-requested`](/window-api/event-close-requested/)                                  | `appWindow`                       | the user asks to close                                                                    | yes     | yes     | yes                       |
 
 Every host event is a plain `Event` with no payload. Read the new state from `appWindow` inside the handler; it is already current there.
 
@@ -365,7 +365,7 @@ By default `window.focus()` does not steal focus: it asks for attention instead.
 - [Pop-out windows](/guides/pop-out-windows/): open more OS windows with `<SkWindow>` that share your app's state.
 - [Closing, hiding and quitting](/guides/closing-and-background/): ask before closing, keep running in the background, and save data on quit.
 
-## A mini player (since 0.6)
+## A mini player
 
 Set the minimum and aspect ratio on the native content area, in CSS pixels. Passing `null` to either setter clears the constraint. A new minimum that exceeds the current size grows the window. `setMaxSize()` applies the upper bound.
 

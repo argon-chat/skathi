@@ -772,7 +772,7 @@ defineProps<{ message: string }>();
       "A `fixed` box whose parent is not the size of the window prints an advisory in `sk dev`.",
       "In a pop-out window, a `fixed` box is placed against the pop-out's edges, not the main window's, with a one-time advisory.",
       "`fixed` and `sticky` always open a stacking context, even with `z-index: auto`.",
-      "`position: relative` paints above overlapping in-flow siblings at `z-index: auto` or `0`. A zero z-index also contains the z-indices of its descendants (since 0.6).",
+      "`position: relative` paints above overlapping in-flow siblings at `z-index: auto` or `0`. A zero z-index also contains the z-indices of its descendants.",
       "A `sticky` box with `z-index: auto` paints over the in-flow content after it, as in a browser.",
       "The nearest ancestor with `overflow` `hidden`, `scroll` or `auto` is the scroll container a `sticky` box holds to. Inside an `overflow: hidden` card it holds to the card, and so does not follow the page's scroll.",
       "A percentage or `calc()` in `top` or `bottom` resolves against the scroll container's height, and in `left` or `right` against its width.",

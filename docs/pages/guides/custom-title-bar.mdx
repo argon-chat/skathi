@@ -198,9 +198,9 @@ Your `app-region` areas move the window and `--window-control` elements act on m
 
 <Sample src="custom-title-bar/MacTitleBar" focus="clear" />
 
-`appWindow.chrome.hostControls` is `true` on macOS while the traffic lights are shown, so a bar that draws its own buttons only when `hostControls` is `false` draws none there (since 0.7). It turns `false`, with `geometrychange`, while `setWindowButtonsVisible(false)` hides the lights.
+`appWindow.chrome.hostControls` is `true` on macOS while the traffic lights are shown, so a bar that draws its own buttons only when `hostControls` is `false` draws none there. It turns `false`, with `geometrychange`, while `setWindowButtonsVisible(false)` hides the lights.
 
-The host installs the standard menu bar: Quit (⌘Q), Hide (⌘H), Close Window (⌘W), Enter Full Screen (⌃⌘F), Minimize (⌘M) and Zoom (since 0.7). Close Window is a close request like the red button's, and Quit is the Dock's Quit. A page that calls `preventDefault()` on the keydown keeps the shortcut for itself. An embedder that installs its own menus turns this off with `Builder::app_menu(false)`.
+The host installs the standard menu bar: Quit (⌘Q), Hide (⌘H), Close Window (⌘W), Enter Full Screen (⌃⌘F), Minimize (⌘M) and Zoom. Close Window is a close request like the red button's, and Quit is the Dock's Quit. A page that calls `preventDefault()` on the keydown keeps the shortcut for itself. An embedder that installs its own menus turns this off with `Builder::app_menu(false)`.
 
 ### Linux
 

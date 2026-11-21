@@ -17,7 +17,7 @@ appHaptics.trigger(element: Element, gesture: HapticTrigger, pointerId?: number)
 appHaptics.perform(pattern: HapticPattern, options?: { pointerId?: number; when?: "now" | "next-frame"; fallback?: HapticPattern | false }): boolean
 appHaptics.stop(pointerId: number): boolean`,
     notes: [
-      "CSS can bind ordinary controls directly (since 0.6). For an application-defined grid or guide, call appHaptics.trigger(element, 'snap', event.pointerId) on entering a new snap position. The element's computed CSS chooses the effect, theme and timing.",
+      "CSS can bind ordinary controls directly. For an application-defined grid or guide, call appHaptics.trigger(element, 'snap', event.pointerId) on entering a new snap position. The element's computed CSS chooses the effect, theme and timing.",
       'Use "alignment" for snapping, "level-change" for a slider step and "generic" for a confirmation. Call `appHaptics.perform("generic")` from a button to send an immediate pulse to the current device, including a compatible mouse or trackpad. Pass a PointerEvent’s `pointerId` when the feedback should follow that event’s device.',
       "The app chooses the event. Call from `pointerenter` once on entry, `click` for activation, or `input` when the control crosses a step. Read `getSupportedPatterns(pointerId?)` during input to discover the current device’s directly supported effects without playing them. An unknown pointer or unavailable device gives an empty array.",
       'Pass `fallback: false` for the exact pattern only, or name one alternate such as `fallback: "generic"`. At most one effect plays. Without this option, alignment and slider cues keep their platform defaults and a Windows pencil stroke can fall back to ink. A native short pulse is called "generic" across devices.',
@@ -30,7 +30,7 @@ appHaptics.stop(pointerId: number): boolean`,
     ],
     examples: [
       {
-        title: "Give a control CSS feedback (since 0.6)",
+        title: "Give a control CSS feedback",
         lang: "css",
         code: `:root { --selection: tick .3; }
 .checkbox { haptic: change var(--selection); }

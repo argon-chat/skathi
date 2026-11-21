@@ -131,7 +131,7 @@ The running instance receives the second launch's arguments and links through [`
 
 ## The macOS menu bar
 
-On macOS Skathi installs the standard menu bar when its window opens: Quit, Hide, Close Window, Enter Full Screen, Minimize and Zoom, with their usual shortcuts (since 0.7). If your exe installs menus of its own, turn this off so they are not replaced:
+On macOS Skathi installs the standard menu bar when its window opens: Quit, Hide, Close Window, Enter Full Screen, Minimize and Zoom, with their usual shortcuts. If your exe installs menus of its own, turn this off so they are not replaced:
 
 ```rust
 let builder = skathi::Builder::new().app_menu(false);

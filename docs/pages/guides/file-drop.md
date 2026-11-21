@@ -7,7 +7,7 @@ order: 13
 
 # Drop files into a window
 
-A Skathi window receives files from the system file manager through HTML drag events (since 0.6).
+A Skathi window receives files from the system file manager through HTML drag events.
 Call `preventDefault()` on `dragover` to accept a drop. Set `dropEffect` to an operation the source offers to select the cursor. Use `copy` when opening or previewing a file. A source can remove the original after a successful `move`.
 
 ## Preview video
@@ -120,7 +120,7 @@ An enabled `<input type="file">` accepts drops by default and fires `input` foll
 
 Devtools can deliver a gesture through the same input path. Relative to the target window, `drag-files --paths /absolute/path/to/clip.mp4 --at 120,80` performs a full drop. Use `drag-files enter`, `over`, `leave` or `drop` to test each stage, with `--ctrl`, `--alt`, `--shift` or `--meta` as needed.
 
-## Drag files out of a window (since 0.6)
+## Drag files out of a window
 
 To try both directions, run `bun run showcase` in the Skathi repository and open **Desktop → Files**. Drop files from a folder, then drag the group to another folder. Drag **notes.txt** out to export the current editor text.
 

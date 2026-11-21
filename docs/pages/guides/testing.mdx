@@ -14,7 +14,7 @@ Every gesture goes through the devtools connection, not the operating system. Th
 
 ## What you need
 
-Install it in your app beside `@skathi-native/cli`, at the same version (since 0.7):
+Install it in your app beside `@skathi-native/cli`, at the same version:
 
 ```sh
 bun add -d @skathi-native/test @types/bun
@@ -185,7 +185,7 @@ test("the palette pops out", async () => {
 
 `app.send("windows")` lists the app's windows with their `id`, `kind` (`"main"` or `"popout"`), `title`, `viewport` size and `focused` state. Screenshots, including the ones taken when an assertion fails, show the main window only.
 
-An open color picker or `<select>` list is a window of its own (since 0.5): it is listed with `kind: "popup"`, the `owner` window that opened it, and the `margin` of transparent room around its content. Every window has a `screen` rectangle, its position and size on the screen. Pass a popup's `id` as `window` to `screenshot` or `mouse` to see or click into it, as `app.send("mouse", { window: id, x, y, kind: "click" })`.
+An open color picker or `<select>` list is a window of its own: it is listed with `kind: "popup"`, the `owner` window that opened it, and the `margin` of transparent room around its content. Every window has a `screen` rectangle, its position and size on the screen. Pass a popup's `id` as `window` to `screenshot` or `mouse` to see or click into it, as `app.send("mouse", { window: id, x, y, kind: "click" })`.
 
 ## Testing a packaged build
 

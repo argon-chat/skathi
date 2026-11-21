@@ -349,8 +349,8 @@ const domAndEvents = section("DOM and events", [
     ["pointer events"],
     PART,
     [
-      'Events from the host come from the mouse (`pointerType` `"mouse"`, `pointerId` `1`) or a pen (`"pen"`, `pointerId` `2`, since 0.5). There is no touch input. `isPrimary` is `true`, and `width` and `height` are `1`.',
-      "A mouse reports pressure `0.5` while a button is down and `0` on release. A macOS Force Touch trackpad also reports measured pressure during a press (since 0.6).",
+      'Events from the host come from the mouse (`pointerType` `"mouse"`, `pointerId` `1`) or a pen (`"pen"`, `pointerId` `2`). There is no touch input. `isPrimary` is `true`, and `width` and `height` are `1`.',
+      "A mouse reports pressure `0.5` while a button is down and `0` on release. A macOS Force Touch trackpad also reports measured pressure during a press.",
     ],
   ),
   prop("PointerEvent.pointerType", PART, 'The kind of device behind the event: `"mouse"`, `"pen"` or `"touch"`.', {
@@ -377,7 +377,7 @@ const domAndEvents = section("DOM and events", [
     notes: [
       "A pen reports `0` while hovering and on `pointerup`. A device without pressure data, such as the mouse, reports `0.5` while a button is down.",
       "On Windows, it is the pen's `POINTER_PEN_INFO` pressure, 0 to 1024, scaled to 0 to 1; a pen that does not report pressure reads `0.5` while touching.",
-      "On macOS, a pen supplies its tablet pressure. A Force Touch trackpad reports a normal press in the lower half of the range and a force click in the upper half. A change in pressure alone fires a mouse `pointermove` (since 0.6).",
+      "On macOS, a pen supplies its tablet pressure. A Force Touch trackpad reports a normal press in the lower half of the range and a force click in the upper half. A change in pressure alone fires a mouse `pointermove`.",
       "On Linux with Wayland, it is the tablet tool's pressure axis, 0 to 65535, scaled to 0 to 1.",
     ],
     limitations: ["On Linux under X11, a pen arrives as the mouse and reads `0.5` while pressed."],
@@ -475,7 +475,7 @@ const domAndEvents = section("DOM and events", [
     },
   ),
   eventIface("KeyboardEvent", "An event from a key press or release.", ["keyboard events"], PART, [
-    "Desktop keydown and keyup report the layout's `key`, the physical `code`, and the held modifier flags (since 0.6). `location` distinguishes left (1), right (2), and keypad (3) keys. Other keys use 0. Held keydown events set `repeat`.",
+    "Desktop keydown and keyup report the layout's `key`, the physical `code`, and the held modifier flags. `location` distinguishes left (1), right (2), and keypad (3) keys. Other keys use 0. Held keydown events set `repeat`.",
     "Legacy `keyCode` and `charCode` are unavailable.",
   ]),
   eventIface("WheelEvent", "An event from a mouse wheel or similar input.", ["wheel events"]),
@@ -599,7 +599,7 @@ const domAndEvents = section("DOM and events", [
   }),
   api("custom-elements", "Custom elements", NO, "Defines new HTML elements with their own behavior.", {
     notes: [
-      "Since 0.5 a `customElements` registry exists, so code that probes it works: `get()` returns `undefined`, `getName()` returns `null`, and `define()` and `whenDefined()` fail with `NotSupportedError`. Svelte then sets attributes on `sk-*` tags as plain attributes.",
+      "A `customElements` registry exists, so code that probes it works: `get()` returns `undefined`, `getName()` returns `null`, and `define()` and `whenDefined()` fail with `NotSupportedError`. Svelte then sets attributes on `sk-*` tags as plain attributes.",
     ],
     workaround: NO_SHADOW,
     related: ["shadow-dom"],

@@ -44,7 +44,7 @@ let builder = skathi::Builder::new().payload_static(APP);
 
 `payload_bytes(vec)` takes owned bytes, for a payload you download, decrypt or unpack yourself. With none of the three, a `prod` build reads `SK_PAYLOAD`, and fails with `Error::NoPayload` when that is empty too.
 
-## AOT for your own executable (since 0.7)
+## AOT for your own executable
 
 Use a [Skathi source checkout](https://github.com/argon-chat/skathi) with its submodules initialized, at the same version as the CLI and your Rust dependency. Build your embedder with `prod` and `native-aot`.
 
@@ -111,7 +111,7 @@ cp "$skImage" "$release/"
 sk publish ./app --aot --payload-only --workload "$release/my-app" --aot-compiler "$skAot"
 ```
 
-This writes `app.skpk`, `app.image.dylib` and any packs to `app/dist/release/.sk`. For a bare executable with `payload_file`, keep the image library and packs beside `app.skpk`. For a `.app` using `payload_file`, put the payload and its packs in `Contents/Resources` and pass that payload path to `Builder::payload_file`. Both `payload_file` and `payload_static` look for `app.image.dylib` in `Contents/Frameworks` in this layout. `libskimage.dylib` is a build input. Sign the image library before signing the `.app`. See the [macOS bundle](/guides/aot/#macos-bundle) for signing and notarization.
+This writes `app.skpk`, `app.image.dylib` and any packs to `app/dist/release/.sk`. For a bare executable with `payload_file`, keep the image library and packs beside `app.skpk`. For a `.app` using `payload_file`, put the payload and its packs in `Contents/Resources` and pass that payload path to `Builder::payload_file`. Both `payload_file` and `payload_static` look for `app.image.dylib` in `Contents/Frameworks` in this layout. `libskimage.dylib` is a build input. On a Mac, `sk publish` signs the image library ad hoc, or with `--sign <identity>`; the host refuses an unsigned one. Sign it again with your identity before signing the `.app`. See the [macOS bundle](/guides/aot/#macos-bundle) for signing and notarization.
 
 ### Leave out the JIT and WebAssembly
 
@@ -145,7 +145,7 @@ In a separate windowed test on macOS 26.7.2, two release hosts ran the same mini
 
 On some Macs the first present to a `CAMetalLayer` costs about 190 MiB of graphics memory for about a second, in any process: an M3 Max with its built-in XDR display showed it in a 40-line AppKit program with no Skathi in it. The system allocates it, `MTLDevice.currentAllocatedSize` does not count it, and the footprint settles afterwards, so a `footprintPeakMB` that includes it is not the app's cost.
 
-## The native modules' types (since 0.4)
+## The native modules' types
 
 A release exe answers `--sk-host-types` like a debug one: it prints the TypeScript of its [native modules](/embedding/native-modules/) and exits, which is how `sk types` reads them. Commit the generated `src/native-modules.d.ts` with the app, so the payload builds on a machine without your Rust build. Anyone can read those declarations out of your exe, as they could read the names in its strings: leave secrets out of module and type names.
 

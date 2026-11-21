@@ -36,7 +36,7 @@ A move also carries [predicted events](/web-platform/pointer-event-get-predicted
 
 A pen in range but off the surface fires `pointerover`, `pointerenter` and `pointermove` with `buttons` `0`, and `pointerout` and `pointerleave` when it leaves range.
 
-A Force Touch trackpad reports `pointerType: "mouse"` (since 0.6). With the primary button down, the normal click stage covers 0 to 0.5 and the force-click stage covers 0.5 to 1. Holding the pointer still and pressing harder fires `pointermove`. Release gives 0. A mouse or trackpad without pressure readings gives 0.5 while pressed.
+A Force Touch trackpad reports `pointerType: "mouse"`. With the primary button down, the normal click stage covers 0 to 0.5 and the force-click stage covers 0.5 to 1. Holding the pointer still and pressing harder fires `pointermove`. Release gives 0. A mouse or trackpad without pressure readings gives 0.5 while pressed.
 
 ## Platforms
 
@@ -46,7 +46,7 @@ A Force Touch trackpad reports `pointerType: "mouse"` (since 0.6). With the prim
 
 ## Try it
 
-`apps/pen-draw` draws pressure-sensitive strokes and shows the last pressure reading. Enable **Snap to grid** and cross a grid intersection, or drag the brush-width slider through its steps, to try tactile feedback (since 0.6). Build the host and run the app from a checkout. See [appHaptics](/app-api/app-haptics/) for device support.
+`apps/pen-draw` draws pressure-sensitive strokes and shows the last pressure reading. Enable **Snap to grid** and cross a grid intersection, or drag the brush-width slider through its steps, to try tactile feedback. Build the host and run the app from a checkout. See [appHaptics](/app-api/app-haptics/) for device support.
 
 ```sh
 cargo build --target x86_64-pc-windows-msvc -p sk-app
@@ -55,7 +55,7 @@ bun sk dev apps/pen-draw
 
 The devtools [`pen`](/devtools/scripting/) command sends pen events through the host's input path without a pen, which is how the end-to-end tests check them.
 
-## Trackpad zoom (since 0.6)
+## Trackpad zoom
 
 A precision touchpad on Windows, a Mac trackpad, and Linux devices with Wayland pointer gestures or XInput 2.4 pinch events can zoom a canvas or an image. Handle [wheel](/web-platform/wheel-event/) on the surface. A pinch sets `ctrlKey` and preserves Alt/Option, Shift and Meta. A physically held Ctrl also sets `ctrlKey`, so the same handler accepts Ctrl+mouse wheel.
 

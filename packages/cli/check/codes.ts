@@ -194,7 +194,7 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "a CSS property Skathi does not support",
     explanation:
-      "The native renderer does not implement this property. This includes declarations whose value comes from var() (since 0.6). Inactive @supports branches, CSS-wide keywords and inert defaults such as float: none are skipped.",
+      "The native renderer does not implement this property. This includes declarations whose value comes from var(). Inactive @supports branches, CSS-wide keywords and inert defaults such as float: none are skipped.",
     example: ".card {\n  float: left;\n}",
     fix: "Use what the help line suggests (flex or grid instead of `float`), or remove the declaration. Keep it for a browser build inside `@supports (float: left) { … }`.",
   },
@@ -221,7 +221,7 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "a CSS at-rule Skathi does not support",
     explanation:
-      "The native stylesheet collector ignores this at-rule or query. For @property only percentage syntax with a percentage initial value is supported (since 0.6). The diagnostic identifies the relevant rule.",
+      "The native stylesheet collector ignores this at-rule or query. For @property only percentage syntax with a percentage initial value is supported. The diagnostic identifies the relevant rule.",
     example: "@scope (.card) {\n  img { border-radius: 4px; }\n}",
     fix: "Move the rules out of the block, or write the query with what the help line names.",
   },
@@ -239,7 +239,7 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "CSS rendering depends on the surrounding layout or paint",
     explanation:
-      "The native renderer can draw this pattern differently depending on the computed background, the SVG paint or the display of the parent and siblings (since 0.6). The warning describes the condition. Check the matched element to see whether it applies.",
+      "The native renderer can draw this pattern differently depending on the computed background, the SVG paint or the display of the parent and siblings. The warning describes the condition. Check the matched element to see whether it applies.",
     example: ".caption { filter: drop-shadow(0 1px 2px black); }",
     fix: "Use the alternative in the help line if the computed style meets the condition.",
   },
@@ -248,7 +248,7 @@ const CODES: CodeInfo[] = [
     severity: "warning",
     title: "this CSS needs a Skathi 0.6 host",
     explanation:
-      "This declaration or selector relies on rendering introduced in 0.6. Earlier hosts can drop it or draw a different result (since 0.6).",
+      "This declaration or selector relies on rendering introduced in 0.6. Earlier hosts can drop it or draw a different result.",
     example: ".dialog { width: min(32rem, 100%); }",
     fix: "Distribute a 0.6 or later host. Once every supported host has the feature, check.allow can silence SK4007 for the covered files.",
   },

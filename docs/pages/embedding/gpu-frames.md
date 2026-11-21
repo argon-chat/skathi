@@ -18,7 +18,7 @@ Skathi renders with Direct3D 12 (the default build), or with Direct3D 11 in a bu
 | D3D12 on its own device or process | `SharedTexture::with_fence`, `present_shared_fenced`                                           | same (an `ID3D11Fence` opens the D3D12 one) |
 | Vulkan                             | external memory and a semaphore shared as a D3D12 fence: `with_fence`, `present_shared_fenced` | same                                        |
 
-Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. Since 0.5, while the newest copy runs, the window shows the newest frame already copied. Since 0.5 each surface has its own queue and release fence: a fence that is never signalled holds back only the surface it was presented to. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
+Under the D3D12 renderer the D3D12 and fence paths never touch Direct3D 11: the copy runs on a queue of the surface's own, after a GPU-side wait on the producer's fence, and the window takes the frame once that copy has finished, so a slow producer never stalls the UI. While the newest copy runs, the window shows the newest frame already copied. Each surface has its own queue and release fence: a fence that is never signalled holds back only the surface it was presented to. The D3D11 paths go through the renderer's D3D11On12 device, created on first use.
 
 Textures are `B8G8R8A8_UNORM` (or its `_UNORM_SRGB` and `_TYPELESS` forms), or `R16G16B16A16_FLOAT` on a [half-float surface](#half-float-textures); mip 0 is shown. Alpha is straight.
 
@@ -59,7 +59,7 @@ fn produce(surface: SurfaceHandle) {
             continue;
         }
         if gpu.is_none() {
-            // `NoDevice` until the window has drawn once, and since 0.5 while a removed device is replaced.
+            // `NoDevice` until the window has drawn once, and while a removed device is replaced.
             let Ok(device) = surface.d3d11_device() else { continue };
             let raw = device.as_raw();
             let device = unsafe { ID3D11Device::from_raw_borrowed(&raw) }.unwrap().clone();
@@ -125,7 +125,7 @@ let release = surface.release_fence()?;
 release.wait(presented.release, Duration::from_millis(100)); // or queue.Wait on release.as_raw()
 ```
 
-`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface's textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames. Since 0.5 a texture is free again as soon as its copy has finished; before, in an HDR window, four copies queued at once could leave every later present `Busy`.
+`d3d12_device().queue()` is the renderer's own queue: work submitted there delays the next frame, so a producer keeps its own. A resource made on another D3D12 device returns `SurfaceError::WrongDevice`; share it as below. If the surface's textures are all still in flight (the producer outruns the window, or its fence is never signalled), a present to it returns `SurfaceError::Busy` and the frame can be dropped. Other surfaces keep showing their frames. A texture is free again as soon as its copy has finished; before, in an HDR window, four copies queued at once could leave every later present `Busy`.
 
 ## Textures from another device, API or process
 
@@ -175,7 +175,7 @@ The values are scRGB, with 1.0 as SDR white: what Windows shows for 1.0 on an SD
 
 The frame stays half float in the surface's textures. A window on a display in HDR mode draws HDR while it shows a visible half-float surface whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 (see [HDR windows](/embedding/native-frames/#hdr-windows)): the element then shows the frame's own values, up to that limit and the display's headroom. In a standard window, when an element draws the frame, the surface first renders it into an 8-bit texture of its own (clamped to 0…1, then the exact sRGB curve; see [half-float frames](/embedding/native-frames/#half-float-frames)): under the D3D12 renderer on the surface's queue, with the window's copy waiting on the GPU; under Direct3D 11 on the renderer's immediate context. A frame that is never shown is never mapped.
 
-Since 0.7, half-float surfaces preserve negative channels in an HDR window. These channels represent colors outside the BT.709 gamut. The scene carries them through sampling, tint, grayscale, and alpha blending in extended sRGB-encoded values. The upper headroom limit still applies.
+Half-float surfaces preserve negative channels in an HDR window. These channels represent colors outside the BT.709 gamut. The scene carries them through sampling, tint, grayscale, and alpha blending in extended sRGB-encoded values. The upper headroom limit still applies.
 
 The 8-bit path clips negative channels to zero. This applies as soon as a window returns to SDR, for example after the last surface that needs HDR changes its `dynamic-range-limit`, or when HDR is turned off on the display. The current `outputHdr` in `surfacedisplaychange` lets a producer choose an SDR gamut mapping when the window switches. See [HDR windows and filters](/embedding/native-frames/#hdr-windows).
 

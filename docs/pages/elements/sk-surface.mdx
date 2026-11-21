@@ -234,7 +234,7 @@ The frame is scaled into the box:
 
 - [`object-fit`](/css/object-fit/) defaults to `contain`, as on `<video>`; `cover`, `fill`, `none` and `scale-down` apply too.
 - [`object-position`](/css/object-position/) places the frame in the box.
-- [`image-rendering`](/css/image-rendering/) inherits. Its default, `auto`, uses bounded Catmull–Rom on magnified axes and bilinear sampling at native size or when shrinking. Use `image-rendering: pixelated` for nearest-neighbour sampling. In both modes the atlas tile keeps the producer's frame dimensions (since 0.6).
+- [`image-rendering`](/css/image-rendering/) inherits. Its default, `auto`, uses bounded Catmull–Rom on magnified axes and bilinear sampling at native size or when shrinking. Use `image-rendering: pixelated` for nearest-neighbour sampling. In both modes the atlas tile keeps the producer's frame dimensions.
 - [`border-radius`](/css/border-radius/) and an ancestor's `overflow` clip it.
 - `transform`, `opacity` and `z-index` apply to the picture like to any other element, because the frame is drawn in the page, not in a window of its own.
 - [`dynamic-range-limit`](/css/dynamic-range-limit/) caps how bright the element may get on an HDR display. The producer reads the result as its content headroom; see [HDR windows](/embedding/native-frames/#hdr-windows).
@@ -243,7 +243,7 @@ Until the first frame arrives the element paints nothing over its own background
 
 ## What counts as visible
 
-The element takes a frame on its next paint, and only while it is visible: in the document, in a shown window, not in a hidden page, with a non-zero painted size, and with its painted rectangle inside the viewport and every clipping ancestor. `display: none` counts as hidden. `opacity: 0` and an element covered by another one count as visible. Since 0.5 a GPU frame whose copy is still running when the element paints does not hold the picture back: the element shows the newest frame already copied, and the newer one on a later paint.
+The element takes a frame on its next paint, and only while it is visible: in the document, in a shown window, not in a hidden page, with a non-zero painted size, and with its painted rectangle inside the viewport and every clipping ancestor. `display: none` counts as hidden. `opacity: 0` and an element covered by another one count as visible. A GPU frame whose copy is still running when the element paints does not hold the picture back: the element shows the newest frame already copied, and the newer one on a later paint.
 
 ## Several elements, one surface
 

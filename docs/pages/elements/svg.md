@@ -142,13 +142,13 @@ Only a simple one-color icon, made of `<g>`, `<path>`, `<rect>`, `<circle>`, `<e
 
 CSS rules match the children, and the computed `fill`, `stroke`, `fill-opacity`, `fill-rule`, `stroke-opacity`, `stroke-width`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`, `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` are written into the document, along with the children's `opacity` and `display: none`.
 
-Shape geometry (`x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy`, `r`) and gradient `stop-color` and `stop-opacity` can come from CSS (since 0.6). A child's inline style resolves `var()` using its own cascade. For example, `rect { x: 0.5px; width: calc(100% - 1px) }` follows the nearest SVG viewport as it resizes. A percentage circle radius uses the viewport's normalized diagonal.
+Shape geometry (`x`, `y`, `width`, `height`, `rx`, `ry`, `cx`, `cy`, `r`) and gradient `stop-color` and `stop-opacity` can come from CSS. A child's inline style resolves `var()` using its own cascade. For example, `rect { x: 0.5px; width: calc(100% - 1px) }` follows the nearest SVG viewport as it resizes. A percentage circle radius uses the viewport's normalized diagonal.
 
-`getComputedStyle(rect).width` and `.height` return the resolved dimensions in SVG user units with a `px` suffix (since 0.6). A rectangle inside a `viewBox="0 0 240 88"` with `width: calc(100% - 1px)` reports `239px`.
+`getComputedStyle(rect).width` and `.height` return the resolved dimensions in SVG user units with a `px` suffix. A rectangle inside a `viewBox="0 0 240 88"` with `width: calc(100% - 1px)` reports `239px`.
 
 The SVG renderer also reads styles written directly on a child or in a `<style>` inside the SVG. For example, `<text style="text-anchor: middle">` centers the label on its x coordinate, and `<path style="filter: grayscale(1)">` grays out the path. Both declarations are ignored in an app stylesheet. For path geometry, set the `d` attribute directly. A scaled stroke keeps scaling even with `vector-effect="non-scaling-stroke"`.
 
-A custom property can carry hover state into SVG geometry and gradient paint (since 0.6). For example, a button with `--accent: red` and `.button:hover { --accent: blue }` can use `<stop style="stop-color: var(--accent)" />`. A rule such as `.gradient-stop { stop-color: var(--accent) }` reads the same inherited value.
+A custom property can carry hover state into SVG geometry and gradient paint. For example, a button with `--accent: red` and `.button:hover { --accent: blue }` can use `<stop style="stop-color: var(--accent)" />`. A rule such as `.gradient-stop { stop-color: var(--accent) }` reads the same inherited value.
 
 Setting [`fill`](/css/fill/), [`stroke`](/css/stroke/) or the other properties above directly in a `:hover`, `:focus`, `:active` or group-state rule on an SVG child emits an advisory. Set `color` on the button and use `currentColor`, or change a custom property that a base rule reads. Animating `color` interpolates `currentColor` paint. A change between two concrete `fill` or `stroke` colors jumps.
 

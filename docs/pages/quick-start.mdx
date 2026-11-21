@@ -38,7 +38,7 @@ It asks for the app's name, a template, the platforms to package for, whether pu
 | `minimal`  | Vue or Svelte 5 | one window, one component                                       |
 | `player`   | Svelte 5        | a music player dressed in shaders                               |
 | `weather`  | Vue             | a weather app whose sky and rain are drawn by shaders           |
-| `draw`     | Vue             | an infinite canvas for pens, drawn with WebGPU (since 0.5)      |
+| `draw`     | Vue             | an infinite canvas for pens, drawn with WebGPU                  |
 
 `player`, `weather` and `draw` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
 
@@ -113,11 +113,11 @@ Press **F12** in the running app to open the inspector. The [devtools section](/
 
 ## Coming from Vue: what differs in Svelte
 
-The template uses Svelte's DOM renderer. Svelte 5.59+ applications can opt into the experimental native renderer with `"svelte": { "renderer": "native" }` in `sk.config.json` (since 0.6). Form bindings, transitions and global event components need the DOM renderer. [Renderer comparison](/guides/svelte-support/#choose-a-renderer)
+The template uses Svelte's DOM renderer. Svelte 5.59+ applications can opt into the experimental native renderer with `"svelte": { "renderer": "native" }` in `sk.config.json`. Form bindings, transitions and global event components need the DOM renderer. [Renderer comparison](/guides/svelte-support/#choose-a-renderer)
 
 Skathi renders both frameworks into one element tree with the same renderer, so styling, layout, web APIs and the window API are the same. What differs is how the app plugs into Skathi:
 
-- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount` and `SkWindow`, and importing it is what makes `appWindow` reads reactive in runes. The `app*` objects (`appWindow`, `appTray`, `appHotkeys`, `appStorage` and the rest) are the same in every framework: import them from `skathi:app`. Since 0.7, importing them from `@skathi-native/runtime` or from `/svelte` still works but is deprecated.
+- **Import from `@skathi-native/runtime/svelte`.** It exports `mount`, `unmount` and `SkWindow`, and importing it is what makes `appWindow` reads reactive in runes. The `app*` objects (`appWindow`, `appTray`, `appHotkeys`, `appStorage` and the rest) are the same in every framework: import them from `skathi:app`. Importing them from `@skathi-native/runtime` or from `/svelte` still works but is deprecated.
 - **Mount with `mount(App)`.** Pass `props` as in Svelte's own `mount`. The target defaults to the document root. A later `mount(Component, { target })`, for example into a pop-out window, is unmounted together with the app when the dev host reloads the app.
 - **`<SkWindow>` takes callback props and bindings.** Events are `onopen`, `onclose`, `onfocus`, `onblur`, `onresize`, `onshow` and `onhide`. `bind:el`, `bind:windowId`, `bind:width`, `bind:height` and `bind:scale` read its values, and `bind:this` gives `mapFromMain()`. The [pop-out guide](/guides/pop-out-windows/) has both versions of every example.
 - **There is no `<Teleport>`.** Put a pop-out's content in the `<SkWindow>` children, or `mount` a component into the element `bind:el` gives you.
@@ -158,7 +158,7 @@ Produce the release build, one executable to ship, in `dist/release`:
 bun run publish
 ```
 
-The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Files such as `icu.skpk` ship beside the exe; since 0.6, `"publishSingleFile": true` puts them inside it. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
+The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Files such as `icu.skpk` ship beside the exe; `"publishSingleFile": true` puts them inside it. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
 
 ### Vite+ and plugins in packaged builds
 

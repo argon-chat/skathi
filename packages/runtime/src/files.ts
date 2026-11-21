@@ -1,4 +1,4 @@
-/** Files, directory entries and handles granted by the desktop host (since 0.6). */
+/** Files, directory entries and handles granted by the desktop host. */
 export interface AppFiles {
   /** Absolute disk path. Script-created files and the virtual root have no path. */
   getPathForFile(fileOrEntryOrHandle: object): string | null;

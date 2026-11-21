@@ -211,7 +211,7 @@ Stylesheets are compiled by lightningcss, laid out by taffy and painted natively
 
 `sk check` reports unsupported properties, values, selectors and at-rules in your stylesheets before you run anything (codes SK4001 to SK4005), with the file and line. `sk build` and `sk publish` print the same warnings for the CSS they bundle, and `sk dev` prints them at startup and then only the new ones in a file you edit; neither fails on them, and `check.allow` in sk.config.json silences them as it does for `sk check`. Most unsupported declarations also print an advisory while the app runs, in the console and next to the rule in the devtools Styles panel. With a root Vite config, packaged Vue apps use their installed style preprocessors. The native hot-reload builder reports SK5011 for these blocks. For CSS module support and other style diagnostics, see [Vue support](/guides/vue-support/#styles).
 
-CSS warnings use the native stylesheet checker bundled with the CLI (since 0.6). They cover unsupported properties (SK4001), values (SK4002), selectors (SK4003) and at-rules (SK4004). Dependency warnings are grouped under SK4005. SK4006 identifies a conditional rendering difference such as an auto-width inline-flex box among block siblings or a drop shadow on text without an opaque background. SK4007 marks a feature that needs a 0.6 host, including percentage comparisons in sizes, generated boxes selected by an interaction state, transitions with variables, SVG stop paint and relative paint order. A project distributing only 0.6 or newer hosts can allow SK4007 for its app files.
+CSS warnings use the native stylesheet checker bundled with the CLI. They cover unsupported properties (SK4001), values (SK4002), selectors (SK4003) and at-rules (SK4004). Dependency warnings are grouped under SK4005. SK4006 identifies a conditional rendering difference such as an auto-width inline-flex box among block siblings or a drop shadow on text without an opaque background. SK4007 marks a feature that needs a 0.6 host, including percentage comparisons in sizes, generated boxes selected by an interaction state, transitions with variables, SVG stop paint and relative paint order. A project distributing only 0.6 or newer hosts can allow SK4007 for its app files.
 
 ## Use the platform's APIs
 
@@ -225,7 +225,7 @@ Some browser behaviors have nothing to act on in a desktop app. Skathi keeps the
 - **Storage.** [`localStorage`](/web-platform/local-storage/) and [IndexedDB](/web-platform/indexed-db/) are saved to disk. To move them to another folder or encrypt them at rest, call `appStorage.setStorageFolder(path, { encrypted: true })` before the first `indexedDB` call, which fixes the folder for the run. `localStorage` reaches the disk at most once per frame and when the app quits; `appStorage.flush()` writes the pending change at once.
 - **Events the host does not deliver.** Adding a listener for one, or an `@event` handler, prints an advisory that the handler will never fire. Treat that advisory as a bug in your code, not as noise.
 
-## Choose how much locale data to ship (since 0.4)
+## Choose how much locale data to ship
 
 On Windows and Linux, `Intl`, `toLocaleString()`, `localeCompare()` and `Intl.Segmenter` read ICU's locale data. A published app carries only the root locale in its exe, and `sk build` and `sk publish` put the rest beside it as `icu.skpk`, about 12 MB. An app that shows no locale-formatted text, or formats it itself, can leave that file out with `"intl": "invariant"` in [sk.config.json](/sk-config/#intl). `sk dev` and macOS apps always have every locale.
 
@@ -244,7 +244,7 @@ In invariant mode nothing throws, and anything that does not depend on a locale 
 
 Dates come out ISO-like, numbers use `,` and `.` the English way, sorting follows the Unicode root order, display names are the codes you pass, and Chinese, Japanese, Thai, Khmer, Lao and Burmese text is not split into words. `resolvedOptions().locale` still reports the locale you asked for. Use invariant mode when the text the app formats is technical (logs, ISO timestamps, byte counts) or when the app brings its own formatting; keep the default when people read dates, numbers or sorted names in their own language.
 
-## Trade allocation speed for memory (since 0.7)
+## Trade allocation speed for memory
 
 An app that sits in the tray or stays open all day can run with `"memory": "low"` in [sk.config.json](/sk-config/#memory): the allocators keep nothing in reserve, which took a small app from 119 MB to 79 MB of RAM and makes bursts of allocation about 1.3 times slower. [Memory use](/guides/memory/) has the numbers, where the memory goes and how to measure your own app.
 

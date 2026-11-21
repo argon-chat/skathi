@@ -11,7 +11,7 @@ A Skathi app uses its own Svelte 5 compiler and client runtime. By default Svelt
 
 `sk check` reports every feature on this page that does not work (an error) or works differently (a warning), with codes in the `SK5xxx` range. `sk build`, `sk publish` and `sk dev` print the same lines while they build. `sk explain SK5003` explains a code with an example and a fix. The [quick start](/quick-start/#coming-from-vue-what-differs-in-svelte) covers how a Svelte app mounts and what differs from a Vue app.
 
-## Choose a renderer (since 0.6)
+## Choose a renderer
 
 Existing applications and new templates use the **DOM renderer**. It implements the feature table below, including form bindings, transitions and global events. The optional **native renderer** uses Svelte's experimental renderer API and the same native node operations as Skathi's Vue renderer. Both paths draw into the Skathi window.
 

@@ -309,7 +309,7 @@ const onAuxClick = (e: MouseEvent) => e.button === 1 && emit("close");
       },
     ],
     edgeCases: [
-      "On events from the host, `pageX` and `pageY` equal `clientX` and `clientY`. `offsetX` and `offsetY` are measured from the target's padding edge when first read (since 0.5).",
+      "On events from the host, `pageX` and `pageY` equal `clientX` and `clientY`. `offsetX` and `offsetY` are measured from the target's padding edge when first read.",
       "`buttons` is already `0` on `mouseup`, `click`, `dblclick`, `auxclick` and `contextmenu`.",
       "At most one `mousemove` is delivered per frame; that frame's `mouseleave` and `mouseenter` come before it.",
       "When the pointer moves from one element to another, `mouseleave` and `mouseenter` can come in either order.",
@@ -469,7 +469,7 @@ function onWheel(e: WheelEvent) {
     ],
     edgeCases: [
       "`deltaMode` is always `0`: the deltas are in pixels.",
-      "A trackpad pinch (since 0.6) sets `ctrlKey` and reports `deltaY = -100 * Math.log(scaleStep)`. Alt, Shift and Meta retain their physical state. Each pinch update leaves the scroll position alone.",
+      "A trackpad pinch sets `ctrlKey` and reports `deltaY = -100 * Math.log(scaleStep)`. Alt, Shift and Meta retain their physical state. Each pinch update leaves the scroll position alone.",
       "A cancelled `wheel` scrolls nothing, neither the element it targets nor a scroll container around it.",
       "The `wheel` event fires before the `scroll` event it causes.",
     ],
@@ -569,7 +569,7 @@ function onDrop(e: DragEvent, to: number) {
       'A drag starts after a left press on a `draggable="true"` element moves more than 4 px; the release fires `drop`, then `dragend`, and no `click`.',
       "Escape cancels the drag, and a drag ends at the window's edge.",
       "`setDragImage` does nothing: no drag image is drawn.",
-      "A file dragged in from the desktop reaches the receiving window through dragenter, dragover, dragleave and drop (since 0.6). Read its files in the drop handler.",
+      "A file dragged in from the desktop reaches the receiving window through dragenter, dragover, dragleave and drop. Read its files in the drop handler.",
     ],
   },
   "touch-event": {

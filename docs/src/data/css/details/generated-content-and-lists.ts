@@ -26,7 +26,7 @@ export const details: Details = {
     ],
     edgeCases: [
       "Without a `content` declaration, or with `content: none` or `normal`, no box is generated, whatever its size and background.",
-      "`:hover` and `:focus-visible` on the originating element or an ancestor update the generated box, including its layout (since 0.6).",
+      "`:hover` and `:focus-visible` on the originating element or an ancestor update the generated box, including its layout.",
       "`transition` and `animation` do not run on the generated box; animate a real child element instead.",
       "The element's `text-transform` applies to the generated text.",
     ],
@@ -53,7 +53,7 @@ export const details: Details = {
     ],
     edgeCases: [
       "Without a `content` declaration, or with `content: none` or `normal`, no box is generated, whatever its size and background.",
-      "`.menu:hover .item::after` and `.item:focus-visible::after` can create a box only while their state holds (since 0.6).",
+      "`.menu:hover .item::after` and `.item:focus-visible::after` can create a box only while their state holds.",
       "`transition` and `animation` do not run on the generated box; animate a real child element instead.",
     ],
   },
@@ -256,7 +256,7 @@ ol.steps ol {
   },
   "image-rendering": {
     edgeCases: [
-      "On `<sk-surface>`, `auto` enlarges the native frame using bounded Catmull–Rom and `pixelated` selects its nearest source texel. The property inherits from ancestors (since 0.6).",
+      "On `<sk-surface>`, `auto` enlarges the native frame using bounded Catmull–Rom and `pixelated` selects its nearest source texel. The property inherits from ancestors.",
       "Ordinary `<img>` elements and canvases use their own sampling paths. The SVG renderer also accepts `image-rendering: pixelated` on an SVG `<image>` child.",
     ],
   },

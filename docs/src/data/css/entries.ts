@@ -475,7 +475,7 @@ const boxModel = section("Box model and sizing", [
     ],
     notes: [
       "A `min-*` or `max-*` size on one axis is carried through the ratio to the other, as in browsers.",
-      "An `<img>` with a relative width, such as `width: 100%`, takes its height from the ratio (since 0.4.0).",
+      "An `<img>` with a relative width, such as `width: 100%`, takes its height from the ratio.",
     ],
     animates: "interpolated",
     related: ["width", "height", "at-container", "media-aspect-ratio"],
@@ -734,8 +734,8 @@ const layout = section("Layout", [
   }),
   prop("position", OK, "Sets how an element is positioned: in the flow, offset, or taken out of the flow.", {
     values: [
-      v("static", OK),
-      v("relative", OK, "With `z-index: auto` or `0`, the box paints above in-flow siblings (since 0.6)."),
+      v("static", OK, "`top`, `right`, `bottom` and `left` do not move the box."),
+      v("relative", OK, "With `z-index: auto` or `0`, the box paints above in-flow siblings."),
       v("absolute", OK),
       v("fixed", PART, 'Placed against the parent: exact at the app root or in a `<Teleport to="body">`.'),
       v(
@@ -2419,16 +2419,12 @@ const containment = section("Containment and hints", [
 const generated = section("Generated content and lists", [
   pe("::before", OK, "Creates a pseudo-element as the first child of an element, rendered from `content`.", {
     notes: ['A string `content` is supported, including `content: ""` boxes.'],
-    values: [
-      v(":hover / :focus-visible before ::before", OK, "Matches the originating element or an ancestor (since 0.6)."),
-    ],
+    values: [v(":hover / :focus-visible before ::before", OK, "Matches the originating element or an ancestor.")],
     related: ["pseudo-after", "content"],
   }),
   pe("::after", OK, "Creates a pseudo-element as the last child of an element, rendered from `content`.", {
     notes: ['A string `content` is supported, including `content: ""` boxes.'],
-    values: [
-      v(":hover / :focus-visible before ::after", OK, "Matches the originating element or an ancestor (since 0.6)."),
-    ],
+    values: [v(":hover / :focus-visible before ::after", OK, "Matches the originating element or an ancestor.")],
     related: ["pseudo-before", "content"],
   }),
   prop("content", PART, "Sets the content of `::before` and `::after` pseudo-elements.", {
@@ -2486,7 +2482,7 @@ const generated = section("Generated content and lists", [
       v("pixelated", OK, "Nearest-neighbour on native surfaces."),
     ],
     notes: [
-      "Native surfaces use bounded Catmull–Rom for enlargement with `auto` and nearest-neighbour with `pixelated` (since 0.6).",
+      "Native surfaces use bounded Catmull–Rom for enlargement with `auto` and nearest-neighbour with `pixelated`.",
       "A stylesheet inside an SVG can set `image-rendering: pixelated` on an SVG `<image>`.",
     ],
     limitations: ["App stylesheets cannot change the sampling of an `<img>`."],
@@ -2734,7 +2730,7 @@ const atRules = section("At-rules", [
     aliases: ["cascade layers"],
     related: ["feature-tailwind-4"],
   }),
-  at("@haptic-pattern", OK, "Defines a sequence of timed tactile pulses (since 0.6).", {
+  at("@haptic-pattern", OK, "Defines a sequence of timed tactile pulses.", {
     ...hapticCss,
     notes: [
       "Name the sequence with a dashed identifier. Each time in ms or s specifies one pulse with optional intensity and sharpness. The binding's intensity multiplies each pulse.",
@@ -3041,15 +3037,15 @@ const valuesAndUnits = section("Values and units", [
     related: ["function-min", "function-max", "function-clamp"],
   }),
   fn("min()", PART, "Returns the smallest of several values.", {
-    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths."],
     related: ["function-max", "function-clamp", "function-calc"],
   }),
   fn("max()", PART, "Returns the largest of several values.", {
-    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths."],
     related: ["function-min", "function-clamp", "function-calc"],
   }),
   fn("clamp()", PART, "Clamps a value between a minimum and a maximum.", {
-    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths (since 0.6)."],
+    notes: ["Width, height and their min/max bounds accept mixed percentages and lengths."],
     related: ["function-min", "function-max", "function-calc"],
   }),
   ...(
@@ -3101,7 +3097,7 @@ const valuesAndUnits = section("Values and units", [
     slug: "custom-properties",
     notes: [
       "Unregistered custom properties inherit. `var(--name, fallback)` uses its fallback when the property is missing or invalid.",
-      'A matching state rule can change a custom property for the element and its descendants. `getComputedStyle(element).getPropertyValue("--name")` returns the value for the current state (since 0.6).',
+      'A matching state rule can change a custom property for the element and its descendants. `getComputedStyle(element).getPropertyValue("--name")` returns the value for the current state.',
     ],
     aliases: ["--*", "css variables"],
     related: ["function-var", "pseudo-hover", "at-property"],
