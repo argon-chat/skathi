@@ -191,7 +191,7 @@ export function ffi() {
   const crt = dlopen("crt", {
     strlen: { args: ["cstring"], returns: "usize" },
     abs: { args: ["i32"], returns: "i32" },
-    pow: { args: ["f64", "f64"], returns: "f64" },
+    ldexp: { args: ["f64", "i32"], returns: "f64" },
     memcpy: { args: ["buffer", "buffer", "usize"], returns: "pointer" },
     strchr: { args: ["pointer", "i32"], returns: "pointer" },
     snprintf: { ...PRINT, optional: true },
@@ -223,7 +223,7 @@ export function ffi() {
     strlen: String(crt.symbols.strlen("héllo")),
     strlenType: typeof crt.symbols.strlen(""),
     abs: [crt.symbols.abs(-5), crt.symbols.abs(-5n), crt.symbols.abs(new Float64Array([-7])[0]!)],
-    pow: crt.symbols.pow(2, 10),
+    ldexp: crt.symbols.ldexp(1, 10),
     copied: [...to],
     slash: slash.readCString(),
     slashAt: Number(slash.address - start.address),

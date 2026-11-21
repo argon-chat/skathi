@@ -81,7 +81,7 @@ describe("skathi:* modules", () => {
     async () => {
       const app = await start();
       const f = JSON.parse(String(await app.eval("__SK_TEST_STD__.ffi()")));
-      expect([f.strlen, f.strlenType, f.abs, f.pow]).toEqual(["6", "bigint", [5, 5, 7], 1024]);
+      expect([f.strlen, f.strlenType, f.abs, f.ldexp]).toEqual(["6", "bigint", [5, 5, 7], 1024]);
       expect([f.copied, f.stable]).toEqual([[1, 2, 3, 4], true]);
       expect([f.slash, f.slashAt, f.offset, f.bytes]).toEqual(["/ffi", 6, "ff", [115, 107, 97]]);
       expect([f.sameStart, f.nullFound, f.byPointer]).toEqual([true, true, "10"]);
