@@ -344,8 +344,8 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             (Some(true), _) => "fixed",
             _ if cs.extras.sticky == Some(true) => "sticky",
             (_, Some(gpui::Position::Absolute)) => "absolute",
-            (_, Some(gpui::Position::Relative)) => "relative",
-            (_, None) => "static",
+            (_, Some(gpui::Position::Relative)) if cs.extras.positioned == Some(true) => "relative",
+            _ => "static",
         }
         .into(),
         // The CSS value, inherited, not gpui's paint switch: a screen-reader-only box paints nothing

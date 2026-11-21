@@ -2853,6 +2853,9 @@ impl Engine {
         mapper::apply_size_containment(&mut base, &extras);
         mapper::compute_overflow(&mut before.0, &mut before.1);
         mapper::compute_overflow(&mut after.0, &mut after.1);
+        mapper::drop_static_insets(&mut base, &extras);
+        mapper::drop_static_insets(&mut before.0, &before.1);
+        mapper::drop_static_insets(&mut after.0, &after.1);
 
         let mut states = ComputedStates {
             base: Rc::new(base),
@@ -5522,12 +5525,33 @@ mod tests {
     }
 
     #[test]
+    fn insets_move_a_positioned_box_only() {
+        let left = |css: &str| computed_with_env(css, &Env::default()).0.inset.left;
+        assert_eq!(left(".box { left: 18px }"), None);
+        assert_eq!(
+            left("div { position: absolute; left: 18px } .box { position: static }"),
+            None
+        );
+        assert_eq!(
+            left(".box { position: relative; left: 18px }"),
+            Some(gpui::px(18.0).into())
+        );
+    }
+
+    #[test]
+    fn inherit_on_a_property_that_does_not_inherit_is_reported() {
+        let diags = |css: &str| computed_with_env(css, &Env::default()).1;
+        assert_eq!(diags(".box { flex-direction: inherit }").len(), 1);
+        assert!(diags(".box { color: inherit; border-radius: inherit }").is_empty());
+    }
+
+    #[test]
     fn drawer_pseudo_inset_initial_and_variable_fallback_reset_to_auto() {
         let engine = Engine::compile(
-            ".box::after { content: \"\"; inset: 12px } \
+            ".box::after { content: \"\"; position: absolute; inset: 12px } \
              [data-vaul-drawer][data-vaul-drawer-direction=bottom]::after { \
                  top: 100%; bottom: initial; left: 0; right: 0; height: 200% } \
-             .box { bottom: 16px; bottom: var(--missing-edge, initial) }",
+             .box { position: fixed; bottom: 16px; bottom: var(--missing-edge, initial) }",
         );
         let mut diagnostics = engine.diagnostics.clone();
         let states = engine.compute_node(

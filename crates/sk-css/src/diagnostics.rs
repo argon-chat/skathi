@@ -331,6 +331,21 @@ fn declaration(
     use mapper::Verdict;
     let value = raw.trim();
     let lower = value.to_ascii_lowercase();
+    if lower == "inherit"
+        && !mapper::inherits(name)
+        && !name.contains("radius")
+        && !name.starts_with("corner-")
+        && catalog::entry(name).is_some_and(|e| e.status != catalog::Status::Unsupported)
+    {
+        emit(
+            out,
+            at,
+            "SK4002",
+            format!("the renderer does not apply `{name}: inherit`"),
+            mapper::INHERIT_DROPPED,
+        );
+        return;
+    }
     if name.starts_with("--")
         || matches!(
             lower.as_str(),

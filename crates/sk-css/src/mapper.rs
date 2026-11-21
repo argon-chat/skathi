@@ -6910,6 +6910,15 @@ fn apply_unparsed(
             _ => 0,
         };
         x.radius_inherit.write(corners, true);
+        if corners == 0 && !inherits(u.property_id.name()) {
+            once(
+                diagnostics,
+                format!(
+                    "`{}: inherit` was dropped. {INHERIT_DROPPED}",
+                    u.property_id.name()
+                ),
+            );
+        }
         return true;
     }
     false
@@ -7515,6 +7524,78 @@ fn overflow_keyword(axis: Option<Overflow>, declared: Option<OverflowKeyword>) -
         Some(Overflow::Scroll) if declared == Some(K::Auto) => K::Auto,
         Some(Overflow::Scroll) => K::Scroll,
     }
+}
+
+/// `top`, `right`, `bottom` and `left` apply to a positioned box only; taffy would offset a
+/// static one by them.
+pub(crate) fn drop_static_insets(r: &mut StyleRefinement, x: &Extras) {
+    if x.positioned != Some(true) {
+        r.inset = Default::default();
+    }
+}
+
+pub const INHERIT_DROPPED: &str =
+    "`inherit` is not resolved for a property that does not inherit (only for border-radius and corner-shape). Write the parent's value.";
+
+/// The properties whose unset value is the parent's, so that ignoring `inherit` is honouring it.
+pub(crate) fn inherits(name: &str) -> bool {
+    name.starts_with("--")
+        || name.starts_with("font")
+        || name.starts_with("text-")
+        || name.starts_with("-webkit-text-")
+        || name.starts_with("list-style")
+        || name.starts_with("word-")
+        || name.starts_with("overflow-wrap")
+        || matches!(
+            name,
+            "all"
+                | "color"
+                | "cursor"
+                | "direction"
+                | "letter-spacing"
+                | "line-height"
+                | "white-space"
+                | "white-space-collapse"
+                | "tab-size"
+                | "hyphens"
+                | "line-break"
+                | "visibility"
+                | "pointer-events"
+                | "quotes"
+                | "caret-color"
+                | "accent-color"
+                | "color-scheme"
+                | "writing-mode"
+                | "user-select"
+                | "-webkit-user-select"
+                | "window-drag"
+                | "-webkit-app-region"
+                | "-webkit-font-smoothing"
+                | "-moz-osx-font-smoothing"
+                | "-webkit-tap-highlight-color"
+                | "image-rendering"
+                | "border-collapse"
+                | "border-spacing"
+                | "caption-side"
+                | "empty-cells"
+                | "fill"
+                | "fill-opacity"
+                | "fill-rule"
+                | "stroke"
+                | "stroke-width"
+                | "stroke-opacity"
+                | "stroke-linecap"
+                | "stroke-linejoin"
+                | "stroke-dasharray"
+                | "stroke-dashoffset"
+                | "stroke-miterlimit"
+                | "shape-rendering"
+                | "paint-order"
+                | "interpolate-size"
+                | "dynamic-range-limit"
+                | "orphans"
+                | "widows"
+        )
 }
 
 pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
