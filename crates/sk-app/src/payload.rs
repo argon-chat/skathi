@@ -38,6 +38,8 @@ pub struct Meta {
     pub packs: Vec<PackRef>,
     /// `"invariant"`: the app asked for the root locale only; anything else is every locale.
     pub intl: String,
+    /// `"low"`: the app asked for the smaller footprint (`crate::memory`).
+    pub memory: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -408,6 +410,7 @@ fn parse_meta(text: &str) -> Meta {
             })
             .collect(),
         intl: s("intl"),
+        memory: s("memory"),
     }
 }
 

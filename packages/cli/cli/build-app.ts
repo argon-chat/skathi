@@ -218,6 +218,7 @@ export function appMeta(
     assets: assetCount,
     launch: config.launch,
     intl: config.intl,
+    ...(config.memory === "low" && { memory: config.memory }),
     ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });
 }

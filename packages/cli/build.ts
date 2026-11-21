@@ -1322,6 +1322,7 @@ function writeManifest(files: string[]) {
         appRoot: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
         name: readAppName(),
         version: readAppVersion(),
+        ...(readSkConfig()?.memory === "low" && { memory: "low" }),
         modules: ids,
         assetFiles: Object.fromEntries(
           [...DEV_ASSET_FILES]

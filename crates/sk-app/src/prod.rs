@@ -181,6 +181,10 @@ pub fn app_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+pub fn memory() -> Option<String> {
+    payload::get().map(|l| l.meta.memory.clone())
+}
+
 pub fn app_version() -> Option<String> {
     payload::get()
         .map(|l| l.meta.version.clone())

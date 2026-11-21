@@ -181,6 +181,11 @@ pub fn app_name() -> Option<String> {
     app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
 }
 
+pub fn memory() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    Some(json::parse(&text)?.get("memory")?.as_str()?.to_string())
+}
+
 pub fn app_version() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let version = json::parse(&text)?.get("version")?.as_str()?.to_string();

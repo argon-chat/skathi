@@ -62,6 +62,7 @@ pub mod js;
 mod json;
 mod mapped_file;
 #[cfg(feature = "audio")]
+mod memory;
 mod microphone;
 #[cfg(feature = "native-aot")]
 mod native_aot;
@@ -1012,6 +1013,7 @@ pub fn run_exe() {
     if let Some(dist) = args.host.sk_dist.as_deref().filter(|d| !d.is_empty()) {
         std::env::set_var("SK_DIST", dist);
     }
+    memory::apply();
     // Single instance, before the inspector, logger and gpui: a second launch forwards its
     // argv/url/cwd and exits without a window. The inspector (`--devtools`) is never an instance.
     {

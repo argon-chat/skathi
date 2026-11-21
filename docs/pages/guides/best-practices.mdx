@@ -244,6 +244,14 @@ In invariant mode nothing throws, and anything that does not depend on a locale 
 
 Dates come out ISO-like, numbers use `,` and `.` the English way, sorting follows the Unicode root order, display names are the codes you pass, and Chinese, Japanese, Thai, Khmer, Lao and Burmese text is not split into words. `resolvedOptions().locale` still reports the locale you asked for. Use invariant mode when the text the app formats is technical (logs, ISO timestamps, byte counts) or when the app brings its own formatting; keep the default when people read dates, numbers or sorted names in their own language.
 
+## Trade allocation speed for memory (since 0.7)
+
+The JS engine's allocator holds freed memory for a moment because it is likely to be asked for again, and commits a page whole when it takes one. `"memory": "low"` in [sk.config.json](/sk-config/#memory) turns both off: a page is committed as it fills, and freed memory goes back to the system at once. A GPU driver that carries the same allocator and reads its settings from the environment follows, which NVIDIA's does.
+
+On a small app in a debug host on Windows with an NVIDIA card, private bytes went from 256 MB to 160 MB and the private working set from 119 MB to 79 MB. Of the 96 MB, 35 MB is the engine's and 60 MB the driver's, so expect the smaller figure on other GPUs. The price is allocation in bursts: a loop that makes 800,000 short-lived objects and 240 MB of buffers took about 1.3 times as long. Steady work that allocates little is not affected.
+
+Choose it for an app that sits in the tray or stays open all day, and leave the default for one that builds large data in bursts. `SK_MEMORY=low` or `SK_MEMORY=default` in the environment decides over the config, which makes it easy to measure both on your own app.
+
 ## Tools
 
 - **Performance advisories.** Under `sk dev`, the runtime warns about wasted re-renders, long lists without virtualization and too many native writes in one frame, naming the component and suggesting a fix. See [Performance advisories](/guides/performance-advisories/).

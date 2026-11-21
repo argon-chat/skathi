@@ -14,6 +14,7 @@
 //   "publishJit": false          an AOT sk publish for Windows uses a host without the JIT or WebAssembly
 //   "publishSingleFile": true    sk publish writes one exe: the native images, the ICU data and the packs go inside it
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
+//   "memory": "low"              the engine's allocator keeps no memory in reserve (default "default")
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
@@ -117,6 +118,8 @@ export interface AppConfig {
   publishSingleFile: boolean;
   /** `full`: every ICU locale, shipped as icu.skpk beside the app; `invariant`: the root locale only. */
   intl: IntlMode;
+  /** `low`: the engine's allocator commits pages as they fill and returns freed memory at once. */
+  memory: MemoryMode;
   windows: WindowsConfig;
   macos: MacConfig;
   exeName: string;
@@ -136,6 +139,8 @@ export interface PackConfig {
 
 export type IntlMode = "full" | "invariant";
 export const INTL_MODES: readonly IntlMode[] = ["full", "invariant"];
+export type MemoryMode = "default" | "low";
+export const MEMORY_MODES: readonly MemoryMode[] = ["default", "low"];
 
 const PACK_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** Pack file names the build writes itself. */
@@ -194,6 +199,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "aot",
   "svelte",
   "intl",
+  "memory",
   "httpCache",
   "colorPicker",
   "assets",
@@ -564,6 +570,12 @@ export function loadAppConfig(
     throw new ConfigError('sk.config.json "intl" must be "full" (every locale) or "invariant" (the root locale only)');
   }
   const intl: IntlMode = raw.intl === "invariant" ? "invariant" : "full";
+  if (raw.memory !== undefined && !MEMORY_MODES.includes(raw.memory as MemoryMode)) {
+    throw new ConfigError(
+      'sk.config.json "memory" must be "default" or "low" (a smaller footprint, slower allocation)',
+    );
+  }
+  const memory: MemoryMode = raw.memory === "low" ? "low" : "default";
 
   const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
@@ -649,6 +661,7 @@ export function loadAppConfig(
     publishJit,
     publishSingleFile: raw.publishSingleFile === true,
     intl,
+    memory,
     aot: raw.aot === true,
     windows,
     macos,

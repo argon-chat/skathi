@@ -159,6 +159,11 @@
       "enum": ["full", "invariant"],
       "default": "full"
     },
+    "memory": {
+      "description": "How much memory the allocators in the process keep in reserve (since 0.7). \"default\": freed memory is held for a moment to be reused, and a page is committed whole when it is taken. \"low\": a page is committed as it fills and freed memory goes back to the system at once, in the JS engine's allocator and in a GPU driver's that reads the same settings (NVIDIA's does). Less memory, slower bursts of allocation. The SK_MEMORY environment variable, set to low or default, decides over this.",
+      "enum": ["default", "low"],
+      "default": "default"
+    },
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "colorPicker": { "$ref": "#/definitions/colorPicker" },
     "assets": {
