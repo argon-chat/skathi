@@ -214,7 +214,7 @@ Run `sk check` on the app before you turn AOT on. An AOT build runs the same che
 | Codes    | Severity                   | Meaning                                                                                                                                                                     |
 | -------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SK1xxx` | Error: the AOT build stops | Breaks under AOT. See [Built-ins are read-only](#built-ins-are-read-only).                                                                                                  |
-| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time).                                                                                      |
+| `SK2xxx` | Warning                    | Works under AOT, but runs slower. See [Code made at run time](#code-made-at-run-time) and [Tight loops](#tight-loops).                                                      |
 | `SK3xxx` | Warning                    | Typing quality: values the code passes around without a type.                                                                                                               |
 | `SK4xxx` | Warning                    | CSS the renderer does not apply, in the app's stylesheets, `<style>` blocks and `style` attributes; one summary per package.                                                |
 | `SK5xxx` | Error or warning           | Vue and Svelte features that do not work or work differently. See [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/).                        |
@@ -288,6 +288,38 @@ An image has no JIT, so code created while the app runs is interpreted:
 - **SK2004:** `import()` with a computed specifier. A path the build did not compile fails to load at run time. Use string literals, for example a map of `() => import("./pages/home.ts")` loaders.
 
 SK2003 reports a string passed to `setTimeout` or `setInterval`. Skathi's timers never run a string, with or without AOT, so that code is broken on every host.
+
+### Tight loops
+
+A JIT compiles a loop after watching it run, so it knows which numbers were always integers and which arrays stayed dense. An image is compiled before the app starts and assumes less. In most code that does not show. It shows in a loop whose body is only arithmetic and element access, such as an emulator's or a codec's inner loop, where two warnings point at the shapes that cost the most:
+
+- **SK2005:** a `number` parameter bounds the loop. Take an integer copy first, `const end = n | 0`, and compare with that. The copy is only right for a bound that is always an integer below 2^31.
+- **SK2006:** the loop writes into a `number[]` through a computed index. Keep those numbers in an `Int32Array`, `Uint8Array` or `Float64Array`.
+
+Both are reported in TypeScript only, and only for a loop with no calls in its body other than `Math`'s. A loop that runs a few times is not worth changing: list the file under the code in `check.allow`.
+
+The warnings come from a measurement of a RISC-V interpreter written in TypeScript, on Windows x64 hosts of Skathi 0.6.1. Its instruction loop, in millions of emulated instructions a second, by what ran it:
+
+| Runs the loop      | MIPS |
+| ------------------ | ---- |
+| Interpreter        | 11   |
+| JIT, baseline tier | 55   |
+| JIT, middle tier   | 249  |
+| JIT, top tier      | 311  |
+| AOT image          | 331  |
+
+So an image runs such a loop at the speed of the JIT's top tier, from the first pass, and code the image does not hold runs 30 times slower. Four shapes were slower in the image than in the top tier, in nanoseconds per pass:
+
+| Shape                                                            | JIT, top tier | AOT image | AOT image, rewritten                        |
+| ---------------------------------------------------------------- | ------------- | --------- | ------------------------------------------- |
+| `for (let i = 0; i < n; i++)` with `n: number`                   | 0.18          | 0.61      | 0.18 with `const end = n \| 0`              |
+| The same loop computing `(i * 7) >>> 3`                          | 0.21          | 0.66      | 0.21 with `Math.imul` and the integer bound |
+| Interpreter registers in a `number[]`, read and written by index | 1.1           | 2.93      | 1.25 in an `Int32Array`                     |
+| A call to a small function                                       | 0.20          | 0.46      |                                             |
+
+`sk check` reports the first three. A small function called from a hot loop costs about twice what it does under the JIT; when a profile shows such a call, write its body in the loop.
+
+One more result has no explanation yet and no warning: in a small interpreter loop, declaring the countdown as `let left = n | 0` instead of `let left = n` made the image 2.3 times slower (2.94 against 1.25 ns), while the same change did nothing in the full emulator. Measure before and after when you rewrite a loop for the image.
 
 ### Typing warnings
 

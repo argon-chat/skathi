@@ -154,6 +154,26 @@ const CODES: CodeInfo[] = [
     fix: 'Use string literals, for example a map of `() => import("./pages/home.ts")` loaders, or import.meta.glob.',
   },
   {
+    code: "SK2005",
+    severity: "warning",
+    title: "a tight loop is bounded by a number that may not be an integer",
+    explanation:
+      "A JIT watches a loop run, sees that its bound is always a small integer and compiles the comparison for integers. An AOT image is compiled before the app runs and has nothing to watch: a parameter declared `number` may hold a fraction, so the image cannot compile the comparison for integers only. In a loop whose body is only arithmetic and element access, that comparison is much of the work: the measured loop ran three times slower than under the JIT, and as fast as the JIT with an integer bound. Reported for a `number` parameter that bounds a loop with no calls in its body, in TypeScript only.",
+    example:
+      "function sum(values: Int32Array, n: number): number {\n  let total = 0;\n  for (let i = 0; i < n; i++) total = (total + values[i]!) | 0;\n  return total;\n}",
+    fix: "When the bound is always an integer below 2^31, take an integer copy before the loop and compare with that: `const end = n | 0; for (let i = 0; i < end; i++)`. A loop that runs a few times is not worth changing: allow the finding in check.allow.",
+  },
+  {
+    code: "SK2006",
+    severity: "warning",
+    title: "a tight loop writes into a number[] by index",
+    explanation:
+      "An array can change the kind of values it holds, grow, and have holes, and each indexed store has to allow for that. A JIT learns from the run that a `number[]` stays dense and numeric and drops the checks; an AOT image keeps them. In the measured loop, an interpreter's registers read and written by index, the image was about 2.3 times slower with a `number[]` than with an Int32Array, and the JIT was not. Reported for a store through a computed index into a value typed `number[]`, inside a loop with no calls in its body, in TypeScript only.",
+    example:
+      "function scale(out: number[], by: number): void {\n  for (let i = 0; i < out.length; i++) out[i] = (i * by) | 0;\n}",
+    fix: "Keep numbers a hot loop writes in a typed array of a fixed length: Int32Array, Uint8Array, Float64Array. A loop that runs a few times is not worth changing: allow the finding in check.allow.",
+  },
+  {
     code: "SK3001",
     severity: "warning",
     title: "a dependency ships no type declarations",

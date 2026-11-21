@@ -70,6 +70,10 @@ describe("SK2xxx: what runs slower under AOT", () => {
     ]);
   });
 
+  test("tight loops: a number parameter as the bound (SK2005), indexed stores into a number[] (SK2006)", () => {
+    expect(lines(report(), "src/loops.ts")).toEqual(["3:SK2005", "9:SK2005", "15:SK2006", "16:SK2006"]);
+  });
+
   test("positions inside a .vue file point at the SFC itself", () => {
     const d = only(report(), "SK2001").find((x) => x.file === "src/App.vue")!;
     expect(d.range).toEqual({ start: { line: 5, character: 14 }, end: { line: 5, character: 18 } });

@@ -21,6 +21,7 @@ export const RULES_MODULES = [
   "src/clean.ts",
   "src/lazy.ts",
   "src/dynamic.ts",
+  "src/loops.ts",
   "src/legacy/timers.ts",
   "src/typing.ts",
   "src/plain.js",

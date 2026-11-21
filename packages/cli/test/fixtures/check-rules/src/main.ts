@@ -1,6 +1,7 @@
 import * as builtins from "./builtins";
 import * as clean from "./clean";
 import * as dynamic from "./dynamic";
+import * as loops from "./loops";
 import * as timers from "./legacy/timers";
 import * as typed from "./typing";
 import { patch } from "patchy";
@@ -13,4 +14,4 @@ import App from "./App.vue";
 import { libraries } from "./native";
 import { kit } from "native-kit";
 
-console.log(builtins, clean, dynamic, timers, typed, patch, loose, evil, shorthand, hidden, plain, App, libraries, kit);
+console.log(builtins, clean, dynamic, loops, timers, typed, patch, loose, evil, shorthand, hidden, plain, App, libraries, kit);

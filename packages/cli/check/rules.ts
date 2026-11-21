@@ -36,6 +36,7 @@ export class Rules {
     const at = (node: ts.Node) => [node.getStart(file), node.getEnd()] as const;
 
     const visit = (node: ts.Node): void => {
+      if (t.isIterationStatement(node, false) && this.tight(node.statement)) this.tightLoop(node, file, report);
       if (t.isBinaryExpression(node) && this.isAssignment(node.operatorToken.kind)) {
         this.assignment(node, (code, message) => report(code, message, ...at(node.left)));
       } else if (t.isDeleteExpression(node)) {
@@ -52,6 +53,80 @@ export class Rules {
       t.forEachChild(node, visit);
     };
     visit(file);
+  }
+
+  /** A loop body that is all arithmetic and element access: no calls but `Math`'s, no closures. */
+  private tight(body: ts.Node): boolean {
+    const t = this.typescript;
+    const plain = (node: ts.Node): boolean => {
+      if (t.isFunctionLike(node) || t.isAwaitExpression(node) || t.isYieldExpression(node)) return false;
+      if (t.isNewExpression(node) || t.isTaggedTemplateExpression(node)) return false;
+      if (t.isCallExpression(node) && !(this.builtins.path(node.expression) ?? "").startsWith("Math.")) return false;
+      return t.forEachChild(node, (child) => !plain(child)) !== true;
+    };
+    return plain(body);
+  }
+
+  private tightLoop(
+    loop: ts.IterationStatement,
+    file: ts.SourceFile,
+    report: (code: string, message: string, start: number, end: number) => void,
+  ): void {
+    const t = this.typescript;
+    const k = t.SyntaxKind;
+    const condition = t.isForStatement(loop)
+      ? loop.condition
+      : t.isWhileStatement(loop) || t.isDoStatement(loop)
+        ? loop.expression
+        : undefined;
+    if (
+      condition &&
+      t.isBinaryExpression(condition) &&
+      condition.operatorToken.kind >= k.LessThanToken &&
+      condition.operatorToken.kind <= k.GreaterThanEqualsToken
+    ) {
+      for (const side of [condition.left, condition.right]) {
+        if (t.isIdentifier(side) && this.numberParameter(side))
+          report(
+            "SK2005",
+            `\`${side.text}\` bounds a tight loop as a \`number\`; an AOT image cannot assume it is an integer, and the loop runs about three times slower than with an integer bound`,
+            side.getStart(file),
+            side.getEnd(),
+          );
+      }
+    }
+    const stores = (node: ts.Node): void => {
+      if (node !== loop.statement && t.isIterationStatement(node, false)) return;
+      if (
+        t.isBinaryExpression(node) &&
+        this.isAssignment(node.operatorToken.kind) &&
+        t.isElementAccessExpression(node.left) &&
+        !t.isLiteralExpression(node.left.argumentExpression) &&
+        this.numberArray(node.left.expression)
+      )
+        report(
+          "SK2006",
+          `\`${node.left.expression.getText(file)}\` is a \`number[]\` written by index in a tight loop; an AOT image stores into a typed array about twice as fast`,
+          node.left.getStart(file),
+          node.left.getEnd(),
+        );
+      t.forEachChild(node, stores);
+    };
+    stores(loop.statement);
+  }
+
+  private numberParameter(name: ts.Identifier): boolean {
+    const t = this.typescript;
+    const declaration = this.checker.getSymbolAtLocation(name)?.valueDeclaration;
+    if (!declaration || !t.isParameter(declaration) || declaration.dotDotDotToken) return false;
+    return this.checker.getTypeAtLocation(name).flags === t.TypeFlags.Number;
+  }
+
+  private numberArray(target: ts.Expression): boolean {
+    const type = this.checker.getTypeAtLocation(target);
+    if (type.symbol?.name !== "Array") return false;
+    const [element] = this.checker.getTypeArguments(type as ts.TypeReference);
+    return element?.flags === this.typescript.TypeFlags.Number;
   }
 
   private isAssignment(kind: ts.SyntaxKind): boolean {
