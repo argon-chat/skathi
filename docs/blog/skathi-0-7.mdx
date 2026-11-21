@@ -52,8 +52,8 @@ Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-t
   <Feature icon="volume" title="Web Audio" href="#web-audio" tone="pink">
     Delay, wave shaper, compressor, convolver and periodic waves.
   </Feature>
-  <Feature icon="shapes" title="Three templates" href="#three-new-templates" tone="blue">
-    A drum machine in Svelte, and a CHIP-8 and a RISC-V emulator in Vue.
+  <Feature icon="shapes" title="Two templates" href="#two-new-templates" tone="blue">
+    A drum machine in Svelte and a RISC-V emulator in Vue that runs Doom.
   </Feature>
 </FeatureGrid>
 
@@ -184,9 +184,9 @@ delay.connect(context.destination);
 
 The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser.
 
-## Three new templates
+## Two new templates
 
-`sk create` has three more finished apps to start from. Each one is there to be read as much as to be run: a few hundred lines that put one part of Skathi to real work.
+`sk create` has two more finished apps to start from. Each one is there to be read as much as to be run: a few hundred lines that put one part of Skathi to real work.
 
 ```sh
 bun create skathi my-app --template sequencer
@@ -210,16 +210,6 @@ What it shows:
 - **A whole mix from Web Audio nodes.** Every drum is synthesized from oscillators, filters and noise; there are no samples. The mix goes through a wave shaper for drive, a delay with feedback for the echo, a convolver with a generated impulse for the room, and a compressor. An analyser feeds the meter sixteen bands a frame.
 - **A panel drawn by shaders.** The dials, the keys, the plate and the meter are four shaders of the app's own. Each has three levels of detail, and the host picks one from CPU pressure, the power mode and the battery; a button pins a level so you can see the difference.
 - **The `skathi:` modules in small doses.** Patterns are saved as TOML with `skathi:toml`, a line of `.`, `x` and `X` for each track, and the tempo arithmetic is `skathi:units`.
-
-### `chip8`: an emulator with a debugger
-
-A Vue app around a CHIP-8 interpreter. The programs it ships are assembly source: an assembler in the app turns one into bytes when you open it, and the disassembler in the debugger reads them back from the same table of instructions. A program file dropped on the window runs as well.
-
-What it shows:
-
-- **A CPU loop in TypeScript.** The interpreter runs a set number of instructions for each 60 Hz tick, or in turbo mode as many as fit in 8 ms of a frame. A badge says whether that loop runs under the JIT or from a native image, and the counter beside it says how fast.
-- **The `skathi:` modules as a toolbox.** Breakpoints are a `BitSet`, the trace of the last instructions a `RingBuffer`, registers wrap with `u8` and `u16`, the assembler writes through `BinaryWriter`, and a program is named by its `CRC32`.
-- **A debugger as plain reactive UI.** Registers, the code round the program counter with breakpoints, a trace of the last instructions and a step button, all ordinary Vue components that read the machine once a frame.
 
 ### `rv32`: a RISC-V computer that runs Doom
 
@@ -283,7 +273,7 @@ The machine has no sound yet.
 
 - **AOT** is for Windows x64 and macOS arm64. Linux hosts run the JIT.
 - **`skathi:text`** has no collation, word boundaries or Unicode properties yet: use `Intl.Collator`, `Intl.Segmenter` and `normalize()`.
-- **`skathi:ffi`** passes no struct by value, and its JavaScript layer was tested on Windows only.
+- **`skathi:ffi`** passes no struct by value.
 - **`skathi:network`** reports only `online` on macOS and Linux.
 
 </Aside>
