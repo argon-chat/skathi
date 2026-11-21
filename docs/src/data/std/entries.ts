@@ -36,7 +36,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "skathi:ffi":
     "C functions of a library the app ships or the system has, called from JS without a Rust build. Only the libraries sk.config.json lists under `permissions.ffi` load. A fault in the library ends the app; for your own native code, write a [native module](/embedding/native-modules/).",
   "skathi:gpu":
-    "WGSL structs described once: the layout of a uniform, storage or vertex buffer, the declaration for the shader, and a writer that puts values at the right offsets. It goes with [WebGPU](/web-platform/webgpu/).",
+    "WGSL structs described once: the layout of a uniform, storage or vertex buffer, the declaration for the shader, and a writer that puts values at the right offsets; and two things every WebGPU app writes again, GPU pass timing and reading a texture or a buffer back. It goes with [WebGPU](/web-platform/webgpu/).",
   "skathi:text":
     "Work on strings that is slow or long to write in JS: building text from many parts, reading it line by line, the difference between two texts, a search for many words at once, and glob patterns.",
   "skathi:time":

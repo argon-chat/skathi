@@ -262,4 +262,148 @@ scene.view("lights", 1).set("position", { x: 3, y: 1, z: 0 });`,
     related: ["struct-class", "struct", "wgsl"],
     aliases: ["set", "setAll", "writeBuffer", "uniform writer", "mat3x3 padding"],
   },
+  {
+    slug: "gpu-timer",
+    name: "GpuTimer",
+    kind: "class",
+    summary: "Measures how long render and compute passes take on the GPU, with timestamp queries.",
+    syntax: `${importLine("skathi:gpu", "GpuTimer")}
+
+new GpuTimer(device: GPUDevice, options?: { passes?: number })
+
+readonly timer.enabled: boolean
+timer.pass(label: string): { timestampWrites?: GPURenderPassTimestampWrites }
+timer.resolve(encoder: GPUCommandEncoder): void
+timer.collect(): Promise<GpuTimes | null>
+timer.last: GpuTimes | null
+timer.destroy(): void
+
+interface GpuTimes {
+  total: number;
+  passes: { label: string; ms: number }[];
+}`,
+    notes: [
+      "A timer on a device that was not requested with the `timestamp-query` feature is disabled: `enabled` is `false`, every call does nothing and `last` stays `null`. The same code runs where timing is possible and where it is not.",
+      "A frame goes in three steps. `pass(label)` gives an object to spread into the descriptor of each pass to time. `resolve(encoder)` records the readout at the end of the frame, into an encoder that is submitted after it. `collect()`, called after `queue.submit()`, reads the times back.",
+      "The times arrive a frame or two late, since reading from the GPU is asynchronous. `collect()` resolves with them and leaves them in `last`.",
+      "`total` is the time from the start of the first timed pass to the end of the last, in milliseconds. `passes` has one entry for each label, the longest first; passes that share a label are summed.",
+      "`passes` in the options is how many passes one frame can time, 64 by default. `pass()` gives an empty object past that, and the pass runs untimed.",
+      "Up to three frames can be on their way back at once. A frame resolved while all three are still out is not timed.",
+      "This is the time the GPU spent, which a clock in JS cannot see: `queue.submit()` returns before the work is done.",
+    ],
+    examples: [
+      {
+        title: "Time two passes of a frame",
+        lang: "ts",
+        code: `import { GpuTimer } from "skathi:gpu";
+
+declare const adapter: GPUAdapter;
+declare const view: GPUTextureView;
+declare function drawScene(pass: GPURenderPassEncoder): void;
+declare function drawUi(pass: GPURenderPassEncoder): void;
+
+const timed = adapter.features.has("timestamp-query");
+const device = await adapter.requestDevice({ requiredFeatures: timed ? ["timestamp-query"] : [] });
+const timer = new GpuTimer(device);
+
+export function frame(): void {
+  const encoder = device.createCommandEncoder();
+
+  const scene = encoder.beginRenderPass({
+    colorAttachments: [{ view, loadOp: "clear", storeOp: "store" }],
+    ...timer.pass("scene"),
+  });
+  drawScene(scene);
+  scene.end();
+
+  const ui = encoder.beginRenderPass({
+    colorAttachments: [{ view, loadOp: "load", storeOp: "store" }],
+    ...timer.pass("ui"),
+  });
+  drawUi(ui);
+  ui.end();
+
+  timer.resolve(encoder);
+  device.queue.submit([encoder.finish()]);
+  void timer.collect();
+
+  const times = timer.last;
+  if (times) console.log(times.total.toFixed(2), "ms on the GPU", times.passes);
+}`,
+      },
+    ],
+    related: ["read-texture", "struct"],
+    aliases: ["timestamp-query", "GPU time", "profiler", "timestampWrites", "GPUQuerySet"],
+  },
+  {
+    slug: "read-texture",
+    name: "readTexture()",
+    kind: "function",
+    summary: "Copies the texels of a texture, or of a region of it, from the GPU to memory.",
+    syntax: `${importLine("skathi:gpu", "readTexture")}
+
+readTexture(
+  device: GPUDevice,
+  texture: GPUTexture,
+  options?: {
+    mipLevel?: number;
+    origin?: { x?: number; y?: number; z?: number };
+    size?: { width: number; height: number };
+  },
+): Promise<{ data: Uint8Array; width: number; height: number; bytesPerRow: number; format: GPUTextureFormat }>`,
+    notes: [
+      "The texture needs the `COPY_SRC` usage.",
+      "`data` holds the rows one after another, `bytesPerRow` apart, in the texture's own format. A GPU copy puts each row at a multiple of 256 bytes; `readTexture()` takes that padding out.",
+      "With no options it reads the whole first mip level. `origin` and `size` pick a region, and `origin.z` an array layer.",
+      "It reads the uncompressed colour formats of 8, 16 and 32 bits to a channel, the packed `rgb10a2unorm`, `rg11b10ufloat` and `rgb9e5ufloat`, and `depth32float` and `depth16unorm`. Another format throws a `TypeError`.",
+      "The copy is submitted on its own, after the commands the app has already submitted. Commands still in an encoder that is not submitted are not in the picture.",
+    ],
+    examples: [
+      {
+        title: "Save what a render target holds",
+        lang: "ts",
+        code: `import { readTexture } from "skathi:gpu";
+
+declare const device: GPUDevice;
+declare const target: GPUTexture; // rgba8unorm, RENDER_ATTACHMENT | COPY_SRC
+
+export async function snapshot(): Promise<ImageData> {
+  const { data, width, height } = await readTexture(device, target);
+  return new ImageData(new Uint8ClampedArray(data.buffer), width, height);
+}`,
+      },
+    ],
+    related: ["read-buffer", "gpu-timer"],
+    aliases: ["copyTextureToBuffer", "readback", "read pixels", "bytesPerRow", "screenshot of a texture"],
+  },
+  {
+    slug: "read-buffer",
+    name: "readBuffer()",
+    kind: "function",
+    summary: "Copies a range of a GPU buffer to memory.",
+    syntax: `${importLine("skathi:gpu", "readBuffer")}
+
+readBuffer(device: GPUDevice, buffer: GPUBuffer, byteOffset?: number, byteLength?: number): Promise<ArrayBuffer>`,
+    notes: [
+      "The buffer needs the `COPY_SRC` usage. It does not need `MAP_READ`: the bytes go through a staging buffer, so this reads a storage or a uniform buffer.",
+      "With no range it reads the whole buffer. `byteOffset` must be a multiple of 4.",
+      "The result is a copy the app owns. Wrap it in a typed array, or hand it to a struct's `writer()` to change fields in place.",
+    ],
+    examples: [
+      {
+        title: "Read what a compute shader wrote",
+        lang: "ts",
+        code: `import { readBuffer } from "skathi:gpu";
+
+declare const device: GPUDevice;
+declare const histogram: GPUBuffer; // STORAGE | COPY_SRC, 256 u32 counts
+
+export async function counts(): Promise<Uint32Array> {
+  return new Uint32Array(await readBuffer(device, histogram));
+}`,
+      },
+    ],
+    related: ["read-texture", "struct-writer"],
+    aliases: ["mapAsync", "readback", "copyBufferToBuffer", "storage buffer"],
+  },
 ]);

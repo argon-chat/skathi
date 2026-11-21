@@ -1,4 +1,4 @@
-import { struct, wgsl } from "skathi:gpu";
+import { GpuTimer, readBuffer, readTexture, struct, wgsl } from "skathi:gpu";
 
 const Light = struct("Light", { position: wgsl.vec3(wgsl.f32), power: wgsl.f32 });
 const Small = struct("Small", { v: wgsl.f32 });
@@ -34,10 +34,19 @@ const READS = [
 export const EXPECTED = [1, 3, 5, 7, 9, 0.5, 1, 7, 11, 18, 21, 22, 31, 42, 44, 50];
 
 /** A compute shader reads the struct the writer filled, field by field, into a storage buffer. */
-export async function gpu(): Promise<{ read: number[]; size: number; messages: string[] }> {
+export async function gpu(): Promise<{
+  read: number[];
+  size: number;
+  messages: string[];
+  timed: string[] | null;
+  pixels: number[];
+  row: number;
+}> {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error("no adapter");
-  const device = await adapter.requestDevice();
+  const timestamps = adapter.features.has("timestamp-query");
+  const device = await adapter.requestDevice({ requiredFeatures: timestamps ? ["timestamp-query"] : [] });
+  const timer = new GpuTimer(device);
   const code = `${Scene.toWGSL()}
 
 struct Out { values: array<f32, ${READS.length}> }
@@ -69,7 +78,6 @@ ${READS.map((read, i) => `  out.values[${i}] = ${read};`).join("\n")}
   device.queue.writeBuffer(uniform, 0, writer.buffer, writer.byteOffset, writer.byteLength);
   const bytes = READS.length * 4;
   const storage = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-  const staging = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
   const bind = device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -79,17 +87,33 @@ ${READS.map((read, i) => `  out.values[${i}] = ${read};`).join("\n")}
     ],
   });
   const encoder = device.createCommandEncoder();
-  const pass = encoder.beginComputePass();
+  const pass = encoder.beginComputePass({ ...timer.pass("copy") });
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bind);
   pass.dispatchWorkgroups(1);
   pass.end();
-  encoder.copyBufferToBuffer(storage, 0, staging, 0, bytes);
+  timer.resolve(encoder);
   device.queue.submit([encoder.finish()]);
+  const times = await timer.collect();
   const failed = await device.popErrorScope();
   if (failed) messages.push(`validation: ${failed.message}`);
-  await staging.mapAsync(GPUMapMode.READ);
-  const read = [...new Float32Array(staging.getMappedRange())];
-  staging.unmap();
-  return { read, size: Scene.size, messages };
+  const read = [...new Float32Array(await readBuffer(device, storage))];
+
+  // Three texels to a row: a copy pads each row to 256 bytes, and the padding must not come back.
+  const texture = device.createTexture({
+    size: [3, 2],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
+  });
+  const texels = Uint8Array.from({ length: 24 }, (_, i) => i + 1);
+  device.queue.writeTexture({ texture }, texels, { bytesPerRow: 12 }, [3, 2]);
+  const got = await readTexture(device, texture);
+  return {
+    read,
+    size: Scene.size,
+    messages,
+    timed: timer.enabled === timestamps && times ? times.passes.map((p) => p.label) : timestamps ? [] : null,
+    pixels: [...got.data],
+    row: got.bytesPerRow,
+  };
 }

@@ -242,7 +242,7 @@ describe("skathi:* modules", () => {
   );
 
   test(
-    "skathi:gpu lays a uniform struct out as the shader compiler does",
+    "skathi:gpu lays a uniform struct out as the shader compiler does, times a pass and reads back",
     async () => {
       const app = await start();
       await app.eval("__SK_TEST_STD__.startGpu(); 1");
@@ -253,6 +253,9 @@ describe("skathi:* modules", () => {
       expect(got.failed).toBeUndefined();
       expect(got.messages).toEqual([]);
       expect(got.read).toEqual(got.expected);
+      expect(got.pixels).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+      expect(got.row).toBe(12);
+      if (got.timed !== null) expect(got.timed).toEqual(["copy"]);
     },
     T,
   );

@@ -1,6 +1,9 @@
 // `skathi:gpu`: WGSL struct layouts and writers for them, so the offsets in JS and in the shader agree.
 // TS on purpose: a layout is computed once, and `set` is a store or two per frame that the JIT inlines.
 
+export { GpuTimer, readBuffer, readTexture } from "./gpu-device";
+export type { GpuTimes, ReadTextureOptions, TexturePixels } from "./gpu-device";
+
 export type VertexFormat =
   | "float32"
   | "float32x2"
