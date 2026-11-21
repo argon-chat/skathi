@@ -450,6 +450,33 @@ Measured with `benches/nojit` in the Skathi repository, one Windows x64 machine,
 
 The two image columns stay within the spread of the runs. On the normal workload a process that runs an image has no JIT for WebAssembly either: it runs in its interpreter, about 20 times slower than under the JIT, so an app whose hot path is Wasm should not use AOT.
 
+### macOS arm64 measurements (since 0.7)
+
+Skathi `86194799` ran on a GitHub-hosted Apple M1 virtual machine (VirtualMac2,1, 7.0 GiB RAM) with macOS 15.8.2. The empty app appends a single `<div>`. Showcase opens its home screen. For each app, JIT and regular AOT used the same release host. Both AOT variants used the compact memory profile. The no-JIT workload omits the JIT and WebAssembly.
+
+Startup is the time from process launch until Skathi starts processing the first frame. The first launch uses a fresh app data directory. Packaging smoke tests had already opened the apps. macOS kept its filesystem cache between launches. The warm startup and memory values are medians of seven new processes per variant, reusing that variant’s app data. Each run rotates which variant starts first. Memory is process RSS and physical footprint, sampled after the first frame marker and again five seconds after it. Showcase continues its home-screen animation during the five seconds without input.
+
+| App      | Engine          | Fresh profile (ms) | Warm (ms) | After first frame, RSS / footprint (MiB) | At 5 s, RSS / footprint (MiB) | Bundle, logical / allocated (MiB) |
+| -------- | --------------- | -----------------: | --------: | ---------------------------------------: | ----------------------------: | --------------------------------: |
+| Empty    | JIT             |              413.9 |     520.6 |                              77.8 / 26.1 |                   82.2 / 25.8 |                       94.5 / 94.5 |
+| Empty    | AOT             |              334.4 |     479.6 |                              77.0 / 26.5 |                   82.1 / 26.6 |                       95.5 / 95.5 |
+| Empty    | AOT without JIT |              303.5 |     434.0 |                              76.6 / 26.5 |                   81.7 / 26.5 |                       77.3 / 77.3 |
+| Showcase | JIT             |              691.2 |     483.5 |                             115.4 / 70.3 |                  129.5 / 80.0 |                       96.3 / 96.3 |
+| Showcase | AOT             |             1145.2 |     358.5 |                             101.5 / 61.4 |                  120.5 / 96.8 |                     100.9 / 100.9 |
+| Showcase | AOT without JIT |              895.5 |     291.2 |                             101.1 / 57.9 |                  119.4 / 96.0 |                       82.7 / 82.7 |
+
+Showcase scrolls its main content for 600 animation frames per run. Each column is the median of seven runs. The intervals measure the pacing of animation callbacks. The last column counts intervals over 33.33 ms in a 600-frame run.
+
+| Engine          | Frame p50 (ms) | Frame p95 (ms) | Frames over 33.33 ms |
+| --------------- | -------------: | -------------: | -------------------: |
+| JIT             |           16.6 |           20.3 |                    0 |
+| AOT             |           16.6 |           20.2 |                    0 |
+| AOT without JIT |           16.6 |           20.2 |                    0 |
+
+The no-JIT Showcase bundle used 13.6 MiB less disk space than JIT. At five seconds the median RSS fell from 129.5 to 119.4 MiB, while the median physical footprint rose from 80.0 to 96.0 MiB. Across runs the footprint ranged from 79.2 to 110.4 MiB under JIT and from 70.1 to 101.6 MiB under AOT without JIT while Showcase animated. The p95 scroll intervals differed by 0.1 ms on this virtual display.
+
+[Measured SDK revision](https://github.com/argon-chat/skathi/commit/8619479954e87acbe378915815dc1d61b88cee28) · [GitHub Actions run](https://github.com/argon-chat/skathi/actions/runs/44914425380) · [Raw samples and published apps](https://github.com/argon-chat/skathi/actions/runs/44914425380/artifacts/14712114085)
+
 ## Environment variables
 
 | Variable                | Used by             | Effect                                                                                                                                                                                                                                                                                                                                                                                                                       |
