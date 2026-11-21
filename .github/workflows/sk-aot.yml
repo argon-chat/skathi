@@ -5,6 +5,10 @@ on:
       ref:
         description: Candidate SDK commit
         required: true
+      jit_probe:
+        description: Check first-frame and scroll instrumentation with the stock host
+        type: boolean
+        default: false
       workloads:
         description: Run which uploaded the release workloads
         required: true
@@ -32,8 +36,40 @@ jobs:
           run-id: ${{ inputs.workloads }}
           github-token: ${{ github.token }}
           path: release-hosts
-      - run: bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification --bench-apps
+      - name: Exercise GUI measurement instruments
+        if: inputs.jit_probe
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path("scripts/aot/verify-macos.ts")
+          prefix, marker, _ = src.read_text().partition('const minimal = make("minimal");')
+          assert marker
+          src.with_name("probe-benchmark.ts").write_text(prefix + '''
+          for (const name of ["minimal", "showcase"] as const) {
+            const published = publish(make(name), name + "-jit", normal, false, true);
+            smoke(published.exe, false);
+          }
+          writeFileSync(join(dir, "apps.json"), JSON.stringify(Object.fromEntries(apps)));
+          ''')
+          PY
+          bun scripts/aot/probe-benchmark.ts --hosts release-hosts --out target/mac-aot-qualification
+          python3 - <<'PY'
+          import json, pathlib, runpy, tempfile
+          bench = runpy.run_path("benches/nojit/macos.py")
+          apps = json.loads(pathlib.Path("target/mac-aot-qualification/apps.json").read_text())
+          with tempfile.TemporaryDirectory() as folder:
+              for name, path in apps.items():
+                  exe = bench["executable"](pathlib.Path(path))
+                  profile = pathlib.Path(folder) / name
+                  for scroll in ([False, True] if name == "showcase-jit" else [False]):
+                      sample = bench["capture"](exe, "jit", profile, 5, 60, scroll=scroll)
+                      print(name, {k: v for k, v in sample.items() if k != "intervalsMs"}, flush=True)
+          PY
+      - if: ${{ !inputs.jit_probe }}
+        run: bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification --bench-apps
       - name: Measure startup, memory, disk size and scrolling
+        if: ${{ !inputs.jit_probe }}
         shell: bash
         run: |
           python3 - <<'PY'
