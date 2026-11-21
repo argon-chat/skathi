@@ -534,6 +534,14 @@ impl Builder {
         self
     }
 
+    /// Registers an audio processor written in Rust under `name`, for every window of the
+    /// process. A name that is taken keeps its first processor.
+    #[cfg(feature = "audio")]
+    pub fn audio_processor(self, name: &str, spec: crate::audio::ProcessorSpec) -> Self {
+        crate::audio::register_processor(name, spec);
+        self
+    }
+
     /// Lets the app make a `NativePointer` from a bare address (default `false`).
     pub fn allow_ffi_address(mut self, on: bool) -> Self {
         self.ffi_address = on;

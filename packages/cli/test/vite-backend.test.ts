@@ -437,3 +437,48 @@ test("sk check and --aot-inputs see a typed source imported only by a Vite plugi
   const bytes = payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!);
   expect(manifest.script.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
 }, 120_000);
+
+test("audio worklet modules are built into classic scripts and packed under the URLs the app has", () => {
+  const app = appWith({
+    "vite.config.mjs": "export default {};",
+    "src/main.ts": `import meterUrl from "./meter.worklet.ts?worklet";
+      globalThis.urls.push(meterUrl);
+      globalThis.ctx.audioWorklet.addModule(new URL("./gate.worklet.ts", import.meta.url));`,
+    "src/meter.worklet.ts":
+      'import { scale } from "./dsp";\n' +
+      'registerProcessor("meter", class extends AudioWorkletProcessor { level: number = scale(2); });\n',
+    "src/gate.worklet.ts":
+      'import { scale } from "./dsp";\n' +
+      'registerProcessor("gate", class extends AudioWorkletProcessor { level: number = scale(3); });\n',
+    "src/dsp.ts": "export const scale = (n: number): number => n * 21;\n",
+  });
+  const out = join(scratch, "native-worklets");
+  const result = run("build", app, "--out", out, "--payload-only");
+  expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
+  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
+  const urls: string[] = [];
+  const globals = { urls, ctx: { audioWorklet: { addModule: (url: string) => urls.push(String(url)) } } };
+  new Function("globalThis", script)(globals);
+  const levels: Record<string, number> = {};
+  for (const url of globals.urls) {
+    const asset = payload.find(KIND.ASSET, url.slice(1));
+    expect(asset).toBeDefined();
+    new Function("registerProcessor", "AudioWorkletProcessor", new TextDecoder().decode(payload.bytes(asset!)))(
+      (name: string, processor: new () => { level: number }) => (levels[name] = new processor().level),
+      class {},
+    );
+  }
+  expect(levels).toEqual({ meter: 42, gate: 63 });
+}, 120_000);
+
+test("a worklet module Vite cannot bundle fails the build and is named", () => {
+  const app = appWith({
+    "vite.config.mjs": "export default {};",
+    "src/main.ts": 'import meterUrl from "./meter.worklet.ts?worklet"; globalThis.url = meterUrl;',
+    "src/meter.worklet.ts": 'import { scale } from "./missing";\nregisterProcessor("meter", scale);\n',
+  });
+  const result = run("build", app, "--out", join(scratch, "native-worklet-broken"), "--payload-only");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString() + result.stderr.toString()).toContain("meter.worklet.ts");
+}, 120_000);

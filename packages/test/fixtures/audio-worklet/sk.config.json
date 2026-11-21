@@ -1,0 +1,9 @@
+{
+  "name": "sk-test-audio-worklet",
+
+  "window": {
+    "title": "Skathi — audio worklet modules (fixture)",
+    "width": 360,
+    "height": 200
+  }
+}

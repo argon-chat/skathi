@@ -25,6 +25,7 @@ import {
   svgDefaultOf,
   tagModuleNamespaces,
   takeDefineArgs,
+  transformSource,
 } from "../vitecompat";
 import { collectAssets } from "../cli/assets";
 import { buildApp } from "../cli/build-app";
@@ -582,4 +583,111 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
     ).toBe(true);
     expect(has("sk-unsupported:wasm/packages/cli/test/fixtures/vite-app/src/mod.wasm")).toBe(true);
   });
+});
+
+describe("audio worklet modules", () => {
+  const WORKLET_APP = {
+    "sk.config.json": "{}",
+    "src/main.ts": [
+      'import meterUrl from "./meter.worklet.ts?worklet";',
+      "declare const ctx: { audioWorklet: { addModule(url: unknown): Promise<void> } };",
+      "ctx.audioWorklet.addModule(meterUrl);",
+      'ctx.audioWorklet.addModule(new URL("./gate.worklet.ts", import.meta.url));',
+      "",
+    ].join("\n"),
+    "src/meter.worklet.ts":
+      'import { scale } from "./dsp";\n' +
+      'registerProcessor("meter", class extends AudioWorkletProcessor { level: number = scale(2); });\n',
+    "src/gate.worklet.ts":
+      'import { scale } from "./dsp";\n' +
+      'registerProcessor("gate", class extends AudioWorkletProcessor { level: number = scale(3); });\n',
+    "src/dsp.ts": "export const scale = (n: number): number => n * 21;\n",
+  };
+
+  /** Evaluates a built module the way the worklet scope does: a classic script in a function, with the scope's names. */
+  function register(script: string): Record<string, number> {
+    const levels: Record<string, number> = {};
+    new Function("registerProcessor", "AudioWorkletProcessor", script)(
+      (name: string, processor: new () => { level: number }) => (levels[name] = new processor().level),
+      class {},
+    );
+    return levels;
+  }
+
+  test("only the argument of addModule() is rewritten; another script URL stays as written", () => {
+    const options = { docRoot: PKG_DIR, wsRoot: PKG_DIR, notes: new Map<string, number>() };
+    const other = 'const u = new URL("./plain.ts", import.meta.url);';
+    expect(transformSource(other, join(PKG_DIR, "a.ts"), options)).toBeNull();
+    const code = transformSource(
+      other + '\nctx.audioWorklet.addModule(new URL("./w.ts", import.meta.url).href);',
+      join(PKG_DIR, "a.ts"),
+      options,
+    );
+    expect(code).toContain(other);
+    expect(code).not.toContain('new URL("./w.ts"');
+    expect(code).toContain("w.ts?worklet");
+  });
+
+  test("prod.ts builds each module into one classic script with its imports inlined, and lists it as an asset", () => {
+    const root = scratch(WORKLET_APP);
+    const out = join(root, "out");
+    const proc = Bun.spawnSync(["bun", "prod.ts", join(root, "src/main.ts"), join(out, "app.prod.js")], {
+      cwd: PKG_DIR,
+    });
+    if (proc.exitCode !== 0) throw new Error(proc.stdout.toString() + proc.stderr.toString());
+    const assets = JSON.parse(readFileSync(join(out, "assets.json"), "utf8")) as { key: string; path: string }[];
+    const body = readFileSync(join(out, "app.prod.js"), "utf8");
+    const levels: Record<string, number> = {};
+    for (const asset of assets) {
+      expect(body).toContain(`"/${asset.key}"`);
+      expect(resolve(asset.path).startsWith(resolve(root, "src"))).toBe(false);
+      Object.assign(levels, register(readFileSync(asset.path, "utf8")));
+    }
+    expect(levels).toEqual({ meter: 42, gate: 63 });
+  });
+
+  test("build.ts (dev) maps each module's URL to its built script", () => {
+    const root = scratch(WORKLET_APP);
+    const dist = join(root, "dist");
+    const proc = Bun.spawnSync(["bun", "build.ts", join(root, "src/main.ts"), dist], { cwd: PKG_DIR });
+    if (proc.exitCode !== 0) throw new Error(proc.stdout.toString() + proc.stderr.toString());
+    const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as {
+      assetFiles: Record<string, string>;
+    };
+    const levels: Record<string, number> = {};
+    for (const path of Object.values(manifest.assetFiles)) Object.assign(levels, register(readFileSync(path, "utf8")));
+    expect(levels).toEqual({ meter: 42, gate: 63 });
+  });
+
+  test("a module that cannot be bundled fails the build and is named", () => {
+    const root = scratch({
+      ...WORKLET_APP,
+      "src/meter.worklet.ts": 'import { scale } from "./missing";\nregisterProcessor("meter", scale);\n',
+    });
+    for (const builder of ["prod.ts", "build.ts"]) {
+      const proc = Bun.spawnSync(["bun", builder, join(root, "src/main.ts"), join(root, builder, "app.prod.js")], {
+        cwd: PKG_DIR,
+      });
+      expect(proc.exitCode).not.toBe(0);
+      expect(proc.stdout.toString() + proc.stderr.toString()).toContain("meter.worklet.ts");
+    }
+  });
+
+  test("sk build packs the built modules and keeps them out of the AOT inputs", async () => {
+    const target = scratch({
+      ...WORKLET_APP,
+      "sk.config.json": JSON.stringify({ name: "worklet-pack", version: "1.0.0" }),
+    });
+    const out = join(target, "dist");
+    const result = await buildApp({ target, out, payloadOnly: true, aotInputs: true, log: () => {} });
+    const payload = readSkpk(readFileSync(result.skpk));
+    const levels: Record<string, number> = {};
+    for (const entry of payload.entries) {
+      if (entry.kind === KIND.ASSET) Object.assign(levels, register(new TextDecoder().decode(payload.bytes(entry))));
+    }
+    expect(levels).toEqual({ meter: 42, gate: 63 });
+    const inputs = JSON.parse(readFileSync(result.aotInputs!, "utf8")) as { files: { path: string }[] };
+    expect(inputs.files.some((file) => file.path === "src/main.ts")).toBe(true);
+    expect(inputs.files.some((file) => /worklet|dsp/.test(file.path))).toBe(false);
+  }, 60_000);
 });

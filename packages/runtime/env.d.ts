@@ -1455,6 +1455,8 @@ declare global {
   interface ImportMeta {
     /** Undefined in a build. */
     readonly hot?: SkHotContext;
+    /** The base of `new URL("./file", import.meta.url)`, which the builder resolves to the file's URL in the app. */
+    readonly url: string;
   }
 }
 

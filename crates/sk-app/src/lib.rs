@@ -53,6 +53,15 @@ pub mod crash_window;
 mod dialogs;
 mod effect_quality;
 pub mod embed;
+/// Audio processors written in Rust: DSP that runs in the audio callback, behind a node the
+/// app makes with `audioContext.loadNativeAudioWorklet(name)`.
+#[cfg(feature = "audio")]
+pub mod audio {
+    pub use sk_runtime::redjs::webapi::audio::{
+        register_processor, AudioProcessor, ProcessIo, ProcessorSpec, MAX_MESSAGE_VALUES,
+        MAX_PROCESSOR_PARAMS,
+    };
+}
 mod haptics;
 #[cfg(feature = "hotkeys")]
 pub mod hotkeys;

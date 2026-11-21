@@ -52,6 +52,7 @@ import {
   LEAF_IMPORT,
   SFC_FS,
   appDefines,
+  bundleWorklets,
   devEsmInterop,
   devImportsPlugin,
   frameworkDep,
@@ -602,6 +603,7 @@ let inlinedNow: Set<string> | null = null;
 const noteInlined = (abs: string) => void inlinedNow?.add(abs);
 
 const DEV_ASSET_FILES = new Map<string, string>();
+const DEV_WORKLETS = { outDir: join(DIST, "worklets"), minify: false, define: DEFINES, pending: new Set<string>() };
 const shapesOptions = (dev: boolean) => ({
   docRoot: SK_CONFIG_DIR,
   wsRoot: ID_ROOT,
@@ -609,6 +611,7 @@ const shapesOptions = (dev: boolean) => ({
   compileSfc: (absPath: string, source: string) => compileVue(absPath, source, false),
   assets: DEV_ASSET_FILES,
   notes: SHAPE_NOTES,
+  worklets: DEV_WORKLETS,
   dev,
   inlined: dev ? noteInlined : undefined,
 });
@@ -849,6 +852,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
       plugins: [devShapesPlugin, devImports, appModulePlugin],
       define: MODULE_DEFINES,
     });
+    if (result.success) await bundleWorklets(DEV_SHAPES, noteInlined);
   } finally {
     inlinedNow = null;
   }
@@ -1220,6 +1224,7 @@ async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] 
       say(`${stamp()} npm ${id}: ${((npmBuilt.get(id) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`);
     }
   }
+  await bundleWorklets(DEV_SHAPES);
 
   const wanted = wantedNpm();
   for (const id of Array.from(npmBuilt.keys())) {

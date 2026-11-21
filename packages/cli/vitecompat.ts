@@ -1,9 +1,11 @@
 // Vite parity for the builders (prod.ts and build.ts), so an import means the same in both:
 // ?raw (text), ?url / assets (URL; `sk build` packs the file), .svg (a component with
 // vite-svg-loader, else a URL), import.meta.glob (expanded at load time), ?worker (a constructor
-// throwing a named NotSupportedError), .wasm (a stub with an advisory). Unsupported shapes fail by name.
+// throwing a named NotSupportedError), ?worklet (the URL of the module bundled into one classic script),
+// .wasm (a stub with an advisory). Unsupported shapes fail by name.
 
-import { existsSync, readFileSync, realpathSync, statSync } from "fs";
+import { createHash } from "crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
 import type { SFCTemplateBlock } from "vue/compiler-sfc";
 import { VUE_RANGE, sfcCompiler } from "./runtime-path";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
@@ -530,6 +532,100 @@ export function stubWorkerUrls(src: string, file: string, keepUrl = true): { cod
   return count ? { code, count } : null;
 }
 
+/**
+ * The payload key and URL of an audio worklet module's bundle. The source never ships, so the key
+ * is addressed by the source's place in the app, under the prefix dev maps to files outside the
+ * document root.
+ */
+export function workletAsset(absPath: string, docRoot: string): { key: string; url: string } {
+  const h = createHash("sha256")
+    .update(posix(relative(docRoot, absPath)))
+    .digest("hex")
+    .slice(0, 8);
+  const key = `_vn/fs/${h}/${basename(absPath).replace(/\.[cm]?[jt]sx?$/i, "")}.js`;
+  return { key, url: "/" + key.split("/").map(encodeURIComponent).join("/") };
+}
+
+const ADD_MODULE_URL =
+  /(\.addModule\s*\(\s*)new\s+URL\s*\(\s*(['"`])([^'"`$\n]+\.[cm]?[jt]sx?)\2\s*,\s*import\.meta\.url\s*\)(?:\s*\.\s*(?:href|toString\s*\(\s*\)))?/g;
+
+/**
+ * `audioWorklet.addModule(new URL("./m.ts", import.meta.url))`: the URL argument, with a trailing
+ * `.href`, becomes `expr(spec)`, an expression for the URL as a string. A script URL anywhere else
+ * is left alone.
+ */
+export function rewriteWorkletUrls(
+  code: string,
+  expr: (spec: string) => string,
+): { code: string; count: number } | null {
+  if (!code.includes("addModule")) return null;
+  let count = 0;
+  const out = code.replace(ADD_MODULE_URL, (_m, head: string, _q: string, spec: string) => {
+    count++;
+    return head + expr(spec);
+  });
+  return count ? { code: out, count } : null;
+}
+
+export interface WorkletOptions {
+  outDir: string;
+  minify: boolean;
+  define?: Record<string, string> | undefined;
+  /** The modules a build imported and `bundleWorklets` has yet to build. */
+  pending: Set<string>;
+}
+
+/**
+ * Builds each worklet module the last build imported into the one classic script its scope
+ * evaluates (imports inlined, TypeScript transpiled, wrapped in a function) and lists it as an
+ * asset. A build inside a plugin's hook never settles in Bun, so the builders call this once
+ * theirs has returned.
+ */
+export async function bundleWorklets(
+  o: Pick<ShapesOptions, "assets" | "worklets" | "wsRoot" | "docRoot">,
+  loaded?: (absPath: string) => void,
+): Promise<void> {
+  const files = [...o.worklets.pending];
+  o.worklets.pending.clear();
+  for (const absPath of files) {
+    const result = await Bun.build({
+      entrypoints: [absPath],
+      format: "iife",
+      target: "browser",
+      minify: o.worklets.minify ? { whitespace: true, identifiers: true, syntax: true } : false,
+      ...(o.worklets.define && { define: o.worklets.define }),
+      plugins: [
+        {
+          name: "sk-worklet-inputs",
+          setup(build: Bun.PluginBuilder) {
+            build.onLoad({ filter: /.*/ }, (args: Bun.OnLoadArgs) => {
+              loaded?.(args.path);
+              return undefined;
+            });
+          },
+        },
+      ],
+      throw: false,
+    });
+    if (!result.success || result.outputs.length !== 1) {
+      const why = result.success
+        ? "it imports a file that is not script or JSON, and a worklet has nowhere to load one from"
+        : result.logs.map(String).join("\n");
+      throw new Error(
+        `${posix(relative(o.wsRoot, absPath))}: the audio worklet module did not bundle: ${why}\n` +
+          `A worklet module is built into one self-contained script, so everything it imports must be inlinable.`,
+      );
+    }
+    const { key } = workletAsset(absPath, o.docRoot);
+    const file = join(o.worklets.outDir, ...key.split("/").slice(2));
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, await result.outputs[0]!.text());
+    renameSync(tmp, file);
+    o.assets.set(key, file);
+  }
+}
+
 const WASM_WHY = "WebAssembly is out of scope for Skathi; " + "the native replacement is a host binding";
 
 export function wasmStubModule(id: string, query: Set<string>): string {
@@ -571,6 +667,7 @@ export interface ShapesOptions {
   ) => { contents: string; loader: "js" | "ts" } | Promise<{ contents: string; loader: "js" | "ts" }>;
   assets: Map<string, string>;
   notes: Map<string, number>;
+  worklets: WorkletOptions;
   /** The dev builder: one module per file, imports left to its registry. */
   dev?: boolean | undefined;
   /** Called with each file a `?query` import builds into its importer, so a watcher can rebuild the importer. */
@@ -593,7 +690,7 @@ export const importerDir = (args: { resolveDir?: string; importer?: string }, fa
   args.resolveDir || (args.importer ? dirname(args.importer) : fallback);
 
 const NS = "sk-vite";
-const KINDS = ["raw", "url", "inline", "worker", "sharedworker", "component", "init"];
+const KINDS = ["raw", "url", "inline", "worker", "sharedworker", "worklet", "component", "init"];
 
 function note(o: ShapesOptions, what: string) {
   o.notes.set(what, (o.notes.get(what) ?? 0) + 1);
@@ -626,6 +723,19 @@ export function transformSource(
     code = w.code;
     changed = true;
     add("new Worker(new URL(…)) stubbed (no Workers yet)", w.count);
+  }
+  const imports: string[] = [];
+  const a = rewriteWorkletUrls(code, (spec) => {
+    const name = `__sk_worklet_${imports.length}`;
+    imports.push(`import ${name} from ${J(posix(resolve(dirname(file), spec)) + "?worklet")};`);
+    return name;
+  });
+  if (a) {
+    // A shebang has to stay on line 1.
+    const bang = a.code.startsWith("#!") ? a.code.indexOf("\n") + 1 : 0;
+    code = a.code.slice(0, bang) + imports.join("\n") + "\n" + a.code.slice(bang);
+    changed = true;
+    add("addModule(new URL(…)) (bundled as a worklet asset)", a.count);
   }
   const u = rewriteAssetUrls(code, file, o.docRoot, o.assets);
   if (u) {
@@ -682,6 +792,11 @@ export function viteShapesPlugin(o: ShapesOptions) {
         if (isWasm) {
           note(o, `.wasm stubbed (WebAssembly out of scope)`);
           return { contents: wasmStubModule(id, params), loader: "js" };
+        }
+        if (params.has("worklet")) {
+          note(o, `?worklet (bundled and packed as an asset)`);
+          o.worklets.pending.add(file);
+          return { contents: `export default ${J(workletAsset(file, o.docRoot).url)};\n`, loader: "js" };
         }
         if (params.has("raw")) {
           note(o, `?raw`);

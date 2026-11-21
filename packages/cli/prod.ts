@@ -6,6 +6,7 @@
 //                      `sk build` (cli/build-app.ts) packs it into the SKPK payload.
 //   dist/window.json   the `window` block of sk.config.json
 //   dist/assets.json   [{ key, path }]: every file imported by URL, packed into the payload under key
+//   dist/worklets/     audio worklet modules, each bundled into one script and listed in assets.json
 //   dist/styles.json   { files, tailwind }: the files whose CSS the bundle includes, for sk build's CSS warnings
 //
 // Unlike build.ts: "vue" and "@skathi-native/runtime" alias to src/runtime.ts (src/dom.ts without vue),
@@ -58,6 +59,7 @@ import {
   takeDefineArgs,
   templateJsonUrls,
   transformSource,
+  bundleWorklets,
   viteShapesPlugin,
   type CssPiece,
   type LiftedHtml,
@@ -496,6 +498,7 @@ const SHAPES = {
   compileSfc: (absPath: string, source: string) => compileVue(absPath, source),
   assets: ASSETS,
   notes: SHAPE_NOTES,
+  worklets: { outDir: join(dirname(OUT_FILE), "worklets"), minify, define: DEFINES, pending: new Set<string>() },
 };
 
 const vuePlugin = {
@@ -713,6 +716,7 @@ async function build() {
     for (const log of result.logs) console.error(log);
     throw new Error("prod build failed");
   }
+  await bundleWorklets(SHAPES);
   const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
 
   if (/\b__DEV__\b/.test(body)) {

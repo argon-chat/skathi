@@ -1027,7 +1027,6 @@ const graphics = section("Graphics and media", [
       "`suspend()` stops rendering and `currentTime`; `resume()` goes on from the same time.",
     ],
     limitations: [
-      "`audioContext.audioWorklet` is not defined.",
       "`OfflineAudioContext` renders in one piece: `suspend(time)` and `resume()` reject with `NotSupportedError`. Scheduled starts, stops and parameter changes land on the 128-frame block they fall in. It is an `instanceof AudioContext`.",
       "A `ConstantSourceNode` or any other node cannot be connected to an `AudioParam`. An `IIRFilterNode` filters at most 2 channels.",
       "A feedback loop needs a `DelayNode` in it, as in the spec, but the delay of a node in a loop is at least 1024 frames (about 21 ms at 48 kHz), not 128. Outside a loop any `delayTime` down to 0 is exact.",
@@ -1039,9 +1038,33 @@ const graphics = section("Graphics and media", [
       "A `BiquadFilterNode` filters at most 8 channels. `PannerNode`, `StereoPannerNode` and `MediaStreamAudioDestinationNode` take at most 2, and `channelCount` above that throws `NotSupportedError`.",
       "`createMediaElementSource()` returns a silent node: `<audio>` and `<video>` play through the platform's media engine, not the graph.",
     ],
-    related: ["get-user-media", "spatial-audio"],
+    related: ["get-user-media", "spatial-audio", "audio-worklet"],
     aliases: ["AudioContext", "AudioNode", "channelCount", "maxChannelCount", "5.1", "7.1", "surround"],
   }),
+  api(
+    "audio-worklet",
+    "AudioWorklet",
+    PART,
+    "Runs custom audio processing written in JavaScript inside a Web Audio graph.",
+    {
+      since: "0.7.0",
+      notes: [
+        "Experimental. `audioContext.audioWorklet.addModule(url)` loads a file of `AudioWorkletProcessor` classes, and `new AudioWorkletNode(context, name, options)` makes a node that runs one, with `parameters`, a `port` in both directions, `processorOptions` and the `processorerror` event. The [audio worklets guide](/guides/audio-worklets/) has an example and the Rust alternative.",
+        "The processors of a context run on one thread with a JavaScript VM of its own. Its scope has the language, `AudioWorkletProcessor`, `registerProcessor`, `sampleRate`, `currentFrame`, `currentTime` and a `console`.",
+        'Import the file with `?worklet`, or pass `new URL("./file.ts", import.meta.url)` to `addModule()`: the build bundles the file and what it imports into one script.',
+      ],
+      limitations: [
+        "A node has at most one input and one output. The input has two channels, the output two or one (`outputChannelCount`).",
+        "A node's output reaches the graph at least 256 frames later than in a browser, and later still after its processor has fallen behind.",
+        "A parameter has one value for each block: `parameters.name` always has length 1.",
+        "Messages and `processorOptions` are copied and never transferred: numbers, strings, booleans, `null`, `undefined`, arrays, plain objects, `ArrayBuffer`s and typed arrays. Anything else throws `DataCloneError`. A processor's port has `postMessage` and `onmessage` only; the node's port is an `EventTarget` named `AudioWorkletPort`.",
+        "A worklet file has no `fetch`, timers or `import()`, and in an app built with `--aot` it is interpreted.",
+        "`OfflineAudioContext` has no worklet: `addModule()` rejects with `NotSupportedError`.",
+      ],
+      related: ["web-audio"],
+      aliases: ["AudioWorkletNode", "AudioWorkletProcessor", "registerProcessor", "addModule", "audioWorklet"],
+    },
+  ),
   api(
     "spatial-audio",
     "Spatial audio",

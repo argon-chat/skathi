@@ -1,7 +1,16 @@
 import { existsSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Api as VuePluginApi } from "@vitejs/plugin-vue";
-import { normalizePath, type Alias, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from "vite";
+import {
+  build as viteBuild,
+  normalizePath,
+  type Alias,
+  type BuildOptions,
+  type ConfigEnv,
+  type Plugin,
+  type PluginOption,
+  type UserConfig,
+} from "vite";
 import type { AssetURLOptions, AssetURLTagConfig } from "vue/compiler-sfc";
 import { protectHapticPatterns } from "../haptic-patterns";
 import {
@@ -14,12 +23,21 @@ import {
   STD_MODULES,
   stdModuleFile,
 } from "../runtime-path";
-import { stubWorkerUrls, TEMPLATE_ASSET_URLS, templateJsonUrls, wasmStubModule, workerStubModule } from "../vitecompat";
+import {
+  rewriteWorkletUrls,
+  stubWorkerUrls,
+  TEMPLATE_ASSET_URLS,
+  templateJsonUrls,
+  wasmStubModule,
+  workerStubModule,
+  workletAsset,
+} from "../vitecompat";
 
 import type { NativeVitePluginOptions } from "./public";
 export type { NativeVitePluginOptions } from "./public";
 
 const NATIVE = "\0skathi:native:";
+const WORKLET = "\0skathi:worklet:";
 const SVELTE_CSS = "?skathi-svelte.css";
 const DEFAULT_VUE = Symbol.for("@skathi-native/cli/default-vue-plugin");
 const OWN_PLUGINS = new Set(["skathi:modules", "skathi:svelte", "skathi:template-assets"]);
@@ -111,6 +129,54 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
     replacement: normalizePath(file),
   }));
   alias.unshift({ find: /^native:(.+)$/, replacement: NATIVE + "$1.cjs" });
+  const worklets = new Map<string, Promise<string>>();
+  let workletBuild: Pick<UserConfig, "define" | "resolve"> & { minify: BuildOptions["minify"] } = { minify: true };
+  // A worklet scope evaluates one classic script, so the module is built on its own and emitted as an asset.
+  const bundleWorklet = async (file: string): Promise<{ key: string; code: string }> => {
+    const name = normalizePath(relative(options.appRoot, file));
+    const { minify, ...shared } = workletBuild;
+    let chunks: string[];
+    try {
+      const result = await viteBuild({
+        ...shared,
+        configFile: false,
+        root: options.appRoot,
+        logLevel: "silent",
+        build: {
+          write: false,
+          minify: minify ?? true,
+          copyPublicDir: false,
+          rolldownOptions: {
+            input: file,
+            output: { format: "iife", entryFileNames: "worklet.js", codeSplitting: false },
+          },
+        },
+      });
+      if (Array.isArray(result) || !("output" in result)) throw new Error("the build produced no script");
+      if (result.output.some((out) => out.type !== "chunk"))
+        throw new Error("it imports a file that is not script or JSON, and a worklet has nowhere to load one from");
+      chunks = result.output.flatMap((out) => (out.type === "chunk" ? [out.code] : []));
+      if (chunks.length !== 1) throw new Error("it did not build into one script");
+    } catch (error) {
+      throw new Error(
+        `${name}: the audio worklet module did not bundle: ${error instanceof Error ? error.message : String(error)}\n` +
+          `A worklet module is built into one self-contained script, so everything it imports must be inlinable.`,
+      );
+    }
+    return { key: workletAsset(file, options.appRoot).key, code: chunks[0]! };
+  };
+  const workletUrl = (emit: (file: { type: "asset"; fileName: string; source: string }) => string, file: string) => {
+    const path = resolve(file);
+    let url = worklets.get(path);
+    if (!url) {
+      url = bundleWorklet(path).then(({ key, code }) => {
+        emit({ type: "asset", fileName: key, source: code });
+        return workletAsset(path, options.appRoot).url;
+      });
+      worklets.set(path, url);
+    }
+    return url;
+  };
   return {
     name: "skathi:modules",
     enforce: "pre",
@@ -130,6 +196,11 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
     configResolved: {
       order: "pre",
       handler(config) {
+        workletBuild = {
+          minify: config.build.minify,
+          define: config.define ?? {},
+          resolve: { alias: [...config.resolve.alias] },
+        };
         if (installedVue) {
           for (const plugin of config.plugins) if (plugin.name === "vite:vue") configureVue(plugin, options.appRoot);
         }
@@ -137,28 +208,47 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
     },
     async resolveId(id, importer) {
       if (id.startsWith(NATIVE)) return id;
-      if (!/[?&](?:sharedworker|worker)(?:[=&]|$)|\.wasm(?:\?|$)/i.test(id)) return null;
+      if (!/[?&](?:sharedworker|worker|worklet)(?:[=&]|$)|\.wasm(?:\?|$)/i.test(id)) return null;
       const [path, query] = id.split("?", 2);
       if (!path) return null;
       const params = new Set(new URLSearchParams(query).keys());
       const worker = params.has("worker") || params.has("sharedworker");
-      if (!worker && !path.toLowerCase().endsWith(".wasm")) return null;
+      const worklet = !worker && params.has("worklet");
+      if (!worker && !worklet && !path.toLowerCase().endsWith(".wasm")) return null;
       const file = await this.resolve(path, importer, { skipSelf: true });
       if (!file || file.external) return null;
+      if (worklet) return WORKLET + encodeURIComponent(file.id) + ".js";
       const name = normalizePath(relative(options.appRoot, file.id));
       const virtual = "\0skathi:stub:" + encodeURIComponent(file.id + "?" + (query ?? "")) + ".js";
       stubs.set(virtual, worker ? workerStubModule(name, params.has("url")) : wasmStubModule(name, params));
       return virtual;
     },
-    load(id) {
+    async load(id) {
+      if (id.startsWith(WORKLET)) {
+        const file = decodeURIComponent(id.slice(WORKLET.length, -".js".length));
+        return `export default ${JSON.stringify(await workletUrl((asset) => this.emitFile(asset), file))};\n`;
+      }
       if (!id.startsWith(NATIVE)) return stubs.get(id);
       const name = id.slice(NATIVE.length, -".cjs".length);
       return `module.exports = require(${JSON.stringify(normalizePath(NATIVE_MODULES_ENTRY))}).nativeModule(${JSON.stringify(name)});`;
     },
-    transform(code, id) {
-      if (!/\.(?:[cm]?[jt]sx?|vue|svelte)(?:\?|$)/.test(id) || !code.includes("Worker")) return null;
+    async transform(code, id) {
+      if (!/\.(?:[cm]?[jt]sx?|vue|svelte)(?:\?|$)/.test(id)) return null;
+      let out = code;
       // A Vite asset URL would read import.meta.url before the constructor can report the unsupported worker.
-      return stubWorkerUrls(code, normalizePath(relative(options.appRoot, id)), false)?.code ?? null;
+      if (out.includes("Worker"))
+        out = stubWorkerUrls(out, normalizePath(relative(options.appRoot, id)), false)?.code ?? out;
+      // Vite's own asset URL would emit the module's source as written, not a script a worklet scope can run.
+      const specs = new Set<string>();
+      rewriteWorkletUrls(out, (spec) => (specs.add(spec), ""));
+      if (specs.size) {
+        const from = dirname(id.split("?", 1)[0]!);
+        const urls = new Map<string, string>();
+        for (const spec of specs)
+          urls.set(spec, await workletUrl((asset) => this.emitFile(asset), resolve(from, spec)));
+        out = rewriteWorkletUrls(out, (spec) => JSON.stringify(urls.get(spec)))!.code;
+      }
+      return out === code ? null : out;
     },
   };
 }

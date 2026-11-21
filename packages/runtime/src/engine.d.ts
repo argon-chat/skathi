@@ -806,13 +806,67 @@ interface SkNativeAudioWorkletNode extends AudioNode {
   readonly port: SkNativeAudioWorkletPort;
 }
 
+interface AudioWorklet {
+  /**
+   * The module is one classic script with no `import`: pass a `?worklet` import's URL, or
+   * `new URL("./module.ts", import.meta.url)`, and the builder bundles it.
+   */
+  addModule(moduleURL: string | URL): Promise<void>;
+}
+interface AudioWorkletNodeOptions {
+  numberOfInputs?: 0 | 1;
+  numberOfOutputs?: 0 | 1;
+  outputChannelCount?: [1 | 2];
+  parameterData?: Record<string, number>;
+  processorOptions?: unknown;
+}
+interface AudioWorkletPort extends EventTarget {
+  onmessage: ((event: SkNativeAudioMessage) => void) | null;
+  postMessage(message: unknown): void;
+  start(): void;
+  close(): void;
+}
+interface AudioWorkletNode extends AudioNode {
+  readonly port: AudioWorkletPort;
+  readonly parameters: ReadonlyMap<string, AudioParam>;
+  onprocessorerror: ((event: Event) => void) | null;
+}
+declare var AudioWorkletNode: {
+  new (context: AudioContext, name: string, options?: AudioWorkletNodeOptions): AudioWorkletNode;
+  prototype: AudioWorkletNode;
+};
+
+// The audio worklet scope. These exist only inside a module given to `audioWorklet.addModule()`,
+// which has the language and nothing else of the page.
+
+interface AudioParamDescriptor {
+  name: string;
+  defaultValue?: number;
+  minValue?: number;
+  maxValue?: number;
+}
+interface AudioWorkletProcessor {
+  readonly port: Pick<AudioWorkletPort, "onmessage" | "postMessage">;
+}
+declare var AudioWorkletProcessor: { new (): AudioWorkletProcessor; prototype: AudioWorkletProcessor };
+interface AudioWorkletProcessorConstructor {
+  new (options: AudioWorkletNodeOptions): AudioWorkletProcessor & {
+    process(inputs: Float32Array[][], outputs: Float32Array[][], parameters: Record<string, Float32Array>): boolean;
+  };
+  readonly parameterDescriptors?: AudioParamDescriptor[];
+}
+declare function registerProcessor(name: string, processorCtor: AudioWorkletProcessorConstructor): void;
+declare const sampleRate: number;
+declare const currentFrame: number;
+declare const currentTime: number;
+
 interface AudioContext {
   readonly state: "suspended" | "running" | "closed";
   readonly sampleRate: number;
   readonly currentTime: number;
   readonly destination: AudioDestinationNode;
   readonly listener: AudioListener;
-  readonly audioWorklet?: unknown;
+  readonly audioWorklet: AudioWorklet;
   /** Skathi's spatial output status; present with the `spatial-audio` feature. Not web API. */
   readonly spatialAudio?: SkSpatialAudioStatus;
   createGain(): GainNode;

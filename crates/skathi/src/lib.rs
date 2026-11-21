@@ -148,6 +148,8 @@
 //! parts of which are LGPL-2; its source is at <https://github.com/oven-sh/WebKit>, at the commit
 //! redjs pins.
 
+#[cfg(feature = "audio")]
+pub use sk_app::audio;
 /// The serde `#[skathi::data]` derives with.
 pub use sk_app::embed::serde;
 pub use sk_app::embed::DynamicRangeLimit;
