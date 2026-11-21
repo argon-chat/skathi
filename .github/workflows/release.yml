@@ -223,6 +223,8 @@ jobs:
           done
           ls -l npm-tarballs
           tar -tzf npm-tarballs/skathi-native-cli-*.tgz | grep -qx package/check/sk-css.wasm.br
+      - name: Apps from the tarballs
+        run: bun scripts/smoke-packages.ts --tarballs npm-tarballs
       # The runtime first: the published CLI depends on it at exactly this version. A re-run skips
       # what is already published. A prerelease (0.1.0-beta.1) goes to its own dist-tag, not latest.
       - name: Publish

@@ -10,7 +10,10 @@ function shipped(): Set<string> {
   const out = new Set<string>(["package.json"]);
   for (const entry of pkg.files) {
     const path = join(root, entry);
-    if (existsSync(path) && statSync(path).isDirectory()) {
+    if (entry.includes("*")) {
+      for (const file of new Glob(entry.replace(/^\//, "")).scanSync({ cwd: root }))
+        out.add(file.replaceAll("\\", "/"));
+    } else if (existsSync(path) && statSync(path).isDirectory()) {
       for (const file of new Glob("**/*").scanSync({ cwd: path, dot: true })) {
         out.add(posix.join(entry, file.replaceAll("\\", "/")));
       }
