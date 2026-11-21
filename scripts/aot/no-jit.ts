@@ -1,6 +1,6 @@
 /** The JavaScriptCore archive of the aot-nojit workload: the pinned archive with every
  * reference to an entry point of the JIT and of WebAssembly redirected to a stub redjs defines, so the
- * linker leaves both out. JSC lists those entry points itself, in its .bun_removable_entry_points records;
+ * linker leaves both out. JSC lists those entry points itself in its object-file guard records;
  * jit-entries.json and webassembly-entries.json are what they were at the reviewed pin, and every mode
  * fails when the pinned archive says otherwise.
  *
@@ -10,7 +10,7 @@
  * function the engine skips once the feature is removed (ReturnDefault) goes to a stub that returns: the
  * engine still calls it directly while nothing is cut out by address range (isTrimmed is 0).
  *
- *   bun scripts/aot/no-jit.ts --out <dir>   <dir>/JavaScriptCoreNoJIT.lib and the receipt redjs's no-jit feature reads
+ *   bun scripts/aot/no-jit.ts --out <dir>   the trimmed archive and the receipt redjs's no-jit feature reads
  *   bun scripts/aot/no-jit.ts --check       fails unless the inventories match the pinned archive
  *   bun scripts/aot/no-jit.ts --write       rewrites the inventories from the pinned archive, to review after a pin change
  *   --remove JIT                            only the JIT (default: JIT,WebAssembly)
@@ -21,6 +21,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, write
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { MACHO_NO_JIT_ARCHIVE, scanMachO, writeMachO } from "./no-jit-macho";
+import { webkitDirectory } from "./toolchain";
 
 const SDK = resolve(import.meta.dir, "../..");
 export const ARCHIVE = "JavaScriptCoreNoJIT.lib";
@@ -672,13 +673,13 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
-  const platform =
-    values.platform ??
-    (process.platform === "win32" && process.arch === "x64"
+  const local =
+    process.platform === "win32" && process.arch === "x64"
       ? "windows-amd64"
       : process.platform === "darwin" && process.arch === "arm64"
         ? "macos-arm64"
-        : null);
+        : null;
+  const platform = values.platform ?? local;
   if (platform !== "windows-amd64" && platform !== "macos-arm64")
     throw Error("the aot-nojit archive requires a Windows x64 or macOS arm64 engine prebuilt");
   const names = values.remove?.split(",").map((n) => n.trim()) ?? REMOVED.map((f) => f.name);
@@ -689,7 +690,12 @@ if (import.meta.main) {
   if (!names.includes("JIT")) throw Error("--remove: the archive always leaves out the JIT");
   if (platform === "macos-arm64" && names.includes("Interpreter"))
     throw Error("--remove Interpreter is supported only with the Windows x64 engine prebuilt");
-  const webkit = resolve(values.webkit ?? join(SDK, "vendor/redjs/prebuilt/bun-webkit"));
+  const webkit = resolve(
+    values.webkit ??
+      (platform === local
+        ? webkitDirectory(SDK)
+        : join(SDK, "vendor/redjs/prebuilt", platform === "windows-amd64" ? "bun-webkit" : `bun-webkit-${platform}`)),
+  );
   const t0 = performance.now();
   const coff = platform === "windows-amd64" ? scan(webkit, removed) : null;
   const engine = pinnedEngine();

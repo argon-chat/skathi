@@ -8,7 +8,8 @@
   },
   "engine": {
     "revision": "3bc94211496460feda299ef85eef710eb67fafb3",
-    "archiveSha256": "837f06ecd569791d4497ea7e8703f636fac5a1869ca5ee7c5f49b4c4eaa40e3d"
+    "archiveSha256": "837f06ecd569791d4497ea7e8703f636fac5a1869ca5ee7c5f49b4c4eaa40e3d",
+    "macosArm64ArchiveSha256": "e98ec1a90c0594f607c3aaadc1da599c9da1488e208f7d391e00de7c090b0be4"
   },
   "table": {
     "id": "a9db25bde548594d86b2439e8dfd11335a87004ee374a31e2d1a557c40543886",

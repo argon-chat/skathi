@@ -90,8 +90,7 @@ const scenario = `
 if (globalThis.__SK_SCENARIO__ === "aot-smoke") {
   requestAnimationFrame(() => {
     const dynamic = new Function("a", "return a + 1");
-    const wasm = Reflect.get(globalThis, ["Web", "Assembly"].join(""));
-    console.log("SK_AOT_SMOKE " + dynamic(eval("40+1")) + " wasm=" + typeof wasm);
+    console.log("SK_AOT_SMOKE " + dynamic(eval("40+1")));
     setTimeout(() => window.close(), 100);
   });
 }
@@ -163,9 +162,9 @@ function publish(source: string, label: string, host: string, aot: boolean, jit:
   apps.set(label, app);
   return { app, exe };
 }
-function smoke(exe: string, aot: boolean, jit = true) {
+function smoke(exe: string, aot: boolean) {
   const output = command(exe, [], { SK_SCENARIO: "aot-smoke", SK_PERF: "1" }, 0, 60_000);
-  assert(output.includes("SK_AOT_SMOKE 42 wasm=" + (jit ? "object" : "undefined")), output);
+  assert(output.includes("SK_AOT_SMOKE 42"), output);
   assert.equal(output.includes("[native-aot] selected application image"), aot, output);
 }
 
@@ -183,13 +182,12 @@ async function smokeInspector(exe: string): Promise<void> {
   delete env.SK_DEVTOOLS_NATIVE_IMAGE;
   delete env.SK_DEVTOOLS_TARGET;
   const fd = openSync(log, "w");
-  const child = (() => {
-    try {
-      return Bun.spawn([exe, "--devtools"], { cwd: sdk, env, stdin: "ignore", stdout: fd, stderr: fd });
-    } finally {
-      closeSync(fd);
-    }
-  })();
+  let child;
+  try {
+    child = Bun.spawn([exe, "--devtools"], { cwd: sdk, env, stdin: "ignore", stdout: fd, stderr: fd });
+  } finally {
+    closeSync(fd);
+  }
   const deadline = Date.now() + 60_000;
   const output = () => readFileSync(log, "utf8").slice(-12_000);
   let wire: Wire | undefined;
@@ -207,12 +205,19 @@ async function smokeInspector(exe: string): Promise<void> {
           assert.equal(handshake.pid, child.pid);
           wire = new Wire(handshake, 2_000);
         }
+        let tree: unknown;
         try {
-          const tree: unknown = await wire.send("tree", { depth: 3 });
-          const dom = JSON.stringify(tree);
-          if (dom?.includes("titlebar") && dom.includes("toolbar") && child.exitCode === null) return;
+          tree = await wire.send("tree", { depth: 3 });
         } catch (error) {
           lastError = error;
+        }
+        const dom = JSON.stringify(tree);
+        if (dom?.includes("titlebar") && dom.includes("toolbar") && child.exitCode === null) {
+          // Check the namespace after startup so the compiler does not record a Wasm dependency.
+          const reply: unknown = await wire.send("eval", { js: "typeof WebAssembly" });
+          assert.deepEqual(reply, { value: "undefined", type: "string" });
+          assert.equal(child.exitCode, null, output());
+          return;
         }
       }
       await Bun.sleep(100);
@@ -237,14 +242,14 @@ smoke(stock.exe, false);
 const usual = publish(minimal, "minimal-aot", normal, true, true);
 smoke(usual.exe, true);
 const slim = publish(minimal, "minimal-nojit", nojit, true, false);
-smoke(slim.exe, true, false);
+smoke(slim.exe, true);
 const image = join(slim.app, "Contents/Frameworks/app.image.dylib");
 const original = readFileSync(image);
 publish(minimal, "minimal-nojit", nojit, true, false);
 assert.equal(sha256(readFileSync(image)), sha256(original), "identical inputs must retain the image signature");
 assert.match(command(slim.exe, [], { SK_APP_ENGINE: "jit" }, 3, 30_000), /aot-nojit.*no JIT/s);
 const inspector = publish(minimal, "devtools", diagnostic, true, false, true);
-smoke(inspector.exe, true, false);
+smoke(inspector.exe, true);
 const other = join(inspector.app, "Contents/Frameworks/inspector.image.dylib");
 assert(existsSync(other));
 await smokeInspector(inspector.exe);
@@ -269,7 +274,7 @@ if (values["bench-apps"]) {
     ["showcase-aot", normal, true, true],
     ["showcase-nojit", nojit, true, false],
   ] as const)
-    smoke(publish(showcase, label, host, aot, jit).exe, aot, jit);
+    smoke(publish(showcase, label, host, aot, jit).exe, aot);
 }
 writeFileSync(join(dir, "apps.json"), JSON.stringify(Object.fromEntries(apps), null, 2));
 console.log(`macOS arm64 published AOT verification passed; bundles in ${scratch}`);

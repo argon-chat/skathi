@@ -54,6 +54,7 @@ describe("native inspector build provenance", () => {
         { frontend: { ...pin.frontend, sourceRepository: "https://example.com/bun.git" } },
         { frontend: { ...pin.frontend, revision: "main" } },
         { engine: { ...pin.engine, archiveSha256: "" } },
+        { engine: { ...pin.engine, macosArm64ArchiveSha256: "" } },
         { table: { ...pin.table, id: "not-a-digest" } },
         { target: "aarch64-macos" },
       ]) {
@@ -78,25 +79,28 @@ describe("native inspector build provenance", () => {
   test("engine archive and AOT-enabled installed headers must agree", () =>
     fixture((root) => {
       const redjs = join(root, "vendor/redjs");
-      const headers = join(redjs, "prebuilt/bun-webkit/include");
+      const webkit = join(root, "test-webkit");
+      const headers = join(webkit, "include");
       mkdirSync(headers, { recursive: true });
       mkdirSync(join(redjs, "redjs"), { recursive: true });
       writeFileSync(
         join(redjs, "redjs", "pins.txt"),
-        `webkit.version = ${pin.engine.revision}\nwebkit.sha256 = ${pin.engine.archiveSha256}\nwebkit.aot = 1\n`,
+        `webkit.version = ${pin.engine.revision}\nwebkit.sha256 = ${pin.engine.archiveSha256}\n` +
+          `webkit.macos-arm64.sha256 = ${pin.engine.macosArm64ArchiveSha256}\nwebkit.aot = 1\n`,
       );
       const configuration = join(headers, "cmakeconfig.h");
       writeFileSync(configuration, `// ${pin.engine.revision}\n#define BUN_WEBKIT_ENABLE_AOT 1\n`);
-      verifyEngine(root, pin);
+      verifyEngine(root, pin, webkit);
       writeFileSync(configuration, `// ${pin.engine.revision}\n#define BUN_WEBKIT_ENABLE_AOT 0\n`);
-      expect(() => verifyEngine(root, pin)).toThrow();
+      expect(() => verifyEngine(root, pin, webkit)).toThrow();
       writeFileSync(configuration, "#define BUN_WEBKIT_ENABLE_AOT 1\n");
-      expect(() => verifyEngine(root, pin)).toThrow();
+      expect(() => verifyEngine(root, pin, webkit)).toThrow();
     }));
   test("table ID covers every generated native table and the exact engine wire schema", () =>
     fixture(async (root) => {
-      const table = join(root, "table"),
-        headers = join(root, "vendor/redjs/prebuilt/bun-webkit/include/JavaScriptCore/aot");
+      const table = join(root, "table");
+      const webkit = join(root, "test-webkit");
+      const headers = join(webkit, "include/JavaScriptCore/aot");
       mkdirSync(table);
       mkdirSync(headers, { recursive: true });
       for (const name of TABLE_FILES)
@@ -114,11 +118,11 @@ describe("native inspector build provenance", () => {
       for (const name of TABLE_FILES) hash.update(name).update(readFileSync(join(table, name)));
       hash.update(readFileSync(wire));
       const expected = { ...pin, table: { id: hash.digest("hex"), dumpSha256: await fileDigest(dump) } };
-      await verifyTable(table, root, expected);
+      await verifyTable(table, root, expected, webkit);
       writeFileSync(wire, "// different schema\n");
-      await expect(verifyTable(table, root, expected)).rejects.toThrow();
+      await expect(verifyTable(table, root, expected, webkit)).rejects.toThrow();
       writeFileSync(wire, "// schema v1\n");
       writeFileSync(dump, '{"entries":["changed"]}');
-      await expect(verifyTable(table, root, expected)).rejects.toThrow();
+      await expect(verifyTable(table, root, expected, webkit)).rejects.toThrow();
     }));
 });

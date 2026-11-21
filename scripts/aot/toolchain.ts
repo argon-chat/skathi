@@ -38,20 +38,28 @@ export const TABLE_FILES = [
   "AOTBuiltinTableOverloads.cpp",
   "AOTBuiltinTableTypes.cpp",
 ] as const;
-export function verifyEngine(sdk: string, pin: ToolchainPin): void {
+export function verifyEngine(sdk: string, pin: ToolchainPin, webkit = webkitDirectory(sdk)): void {
   const pins = readFileSync(join(sdk, "vendor/redjs/redjs/pins.txt"), "utf8");
   const value = (name: string) => new RegExp(`^${name.replace(/\./g, "\\.")}\\s*=\\s*([^\\s#]+)`, "m").exec(pins)?.[1];
   if (
     value("webkit.version") !== pin.engine.revision ||
     value("webkit.sha256") !== pin.engine.archiveSha256 ||
-    value("webkit.aot") !== "1"
+    value("webkit.aot") !== "1" ||
+    (pin.engine.macosArm64ArchiveSha256 !== undefined &&
+      value("webkit.macos-arm64.sha256") !== pin.engine.macosArm64ArchiveSha256) ||
+    (process.platform === "darwin" && !pin.engine.macosArm64ArchiveSha256)
   )
     throw Error("Review the native AOT frontend, table and redjs engine pins together");
-  const configuration = readFileSync(join(webkitDirectory(sdk), "include/cmakeconfig.h"), "utf8");
+  const configuration = readFileSync(join(webkit, "include/cmakeconfig.h"), "utf8");
   if (!configuration.includes(pin.engine.revision) || !/^#define BUN_WEBKIT_ENABLE_AOT 1\r?$/m.test(configuration))
     throw Error("Run the pinned redjs setup before preparing the native AOT toolchain");
 }
-export async function verifyTable(directory: string, sdk: string, pin: ToolchainPin): Promise<void> {
+export async function verifyTable(
+  directory: string,
+  sdk: string,
+  pin: ToolchainPin,
+  webkit = webkitDirectory(sdk),
+): Promise<void> {
   const receipt = readFileSync(join(directory, ".redjs-aot-table"), "utf8");
   if (!receipt.includes(`frontend=${pin.frontend.revision}`) || !receipt.includes(`webkit=${pin.engine.revision}`))
     throw Error("Native AOT table generation receipt differs from the pinned toolchain");
@@ -60,7 +68,7 @@ export async function verifyTable(directory: string, sdk: string, pin: Toolchain
     hash.update(name);
     for await (const chunk of createReadStream(join(directory, name), { highWaterMark: 64 * 1024 })) hash.update(chunk);
   }
-  for await (const chunk of createReadStream(join(webkitDirectory(sdk), "include/JavaScriptCore/aot/AOTWire.cpp"), {
+  for await (const chunk of createReadStream(join(webkit, "include/JavaScriptCore/aot/AOTWire.cpp"), {
     highWaterMark: 64 * 1024,
   }))
     hash.update(chunk);

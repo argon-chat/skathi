@@ -11,7 +11,7 @@ export interface ToolchainPin {
   version: number;
   target: string;
   frontend: { revision: string; sourceRepository: string };
-  engine: { revision: string; archiveSha256: string };
+  engine: { revision: string; archiveSha256: string; macosArm64ArchiveSha256?: string };
   table: { id: string; dumpSha256: string };
 }
 
@@ -34,6 +34,8 @@ export function loadPin(path: string = PIN_PATH): ToolchainPin {
     if (!/^[a-f0-9]{40}$/.test(revision || "")) throw Error("Invalid native AOT revision");
   for (const digest of [pin.engine?.archiveSha256, pin.table?.id, pin.table?.dumpSha256])
     if (!/^[a-f0-9]{64}$/.test(digest || "")) throw Error("Invalid native AOT digest");
+  if (pin.engine.macosArm64ArchiveSha256 !== undefined && !/^[a-f0-9]{64}$/.test(pin.engine.macosArm64ArchiveSha256))
+    throw Error("Invalid native macOS AOT digest");
   if (pin.frontend.sourceRepository !== "https://github.com/oven-sh/bun.git")
     throw Error("The AOT frontend must be built from the official Bun repository");
   return pin;
