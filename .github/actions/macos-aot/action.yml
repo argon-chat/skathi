@@ -7,22 +7,35 @@ inputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    - name: Compile the native inspector
+      shell: bash
       run: |
         gzip -dc .tools/sk-aot/sk-aot-macos-arm64.gz > .tools/sk-aot/sk-aot
         chmod +x .tools/sk-aot/sk-aot
         bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --compiler .tools/sk-aot/sk-aot
-        bun scripts/aot/no-jit.ts --out release-no-jit
-        bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json --no-jit release-no-jit
+    - name: Remove JIT and WebAssembly entry points
+      shell: bash
+      run: bun scripts/aot/no-jit.ts --out release-no-jit
+    - name: Build and verify release workloads
+      shell: bash
+      run: bun scripts/release-hosts.ts --out release-hosts --native-inspector release-inspector/build.json --no-jit release-no-jit
+    - if: inputs.benchmarks == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: skathi-macos-arm64-workloads
+        path: release-hosts/
+        if-no-files-found: error
     - uses: ./.github/actions/css-checker
-    - shell: bash
+    - name: Publish and launch the applications
+      shell: bash
       env:
         BENCHMARKS: ${{ inputs.benchmarks }}
       run: |
         args=()
         if [[ "$BENCHMARKS" == "true" ]]; then args+=(--bench-apps); fi
         bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification "${args[@]}"
-    - if: inputs.benchmarks == 'true'
+    - name: Measure startup, memory, disk size and scrolling
+      if: inputs.benchmarks == 'true'
       shell: bash
       run: |
         python3 - <<'PY'

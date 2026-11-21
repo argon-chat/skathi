@@ -10,6 +10,8 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -213,9 +215,11 @@ async function smokeInspector(exe: string): Promise<void> {
         }
         const dom = JSON.stringify(tree);
         if (dom?.includes("titlebar") && dom.includes("toolbar") && child.exitCode === null) {
-          // Check the namespace after startup so the compiler does not record a Wasm dependency.
-          const reply: unknown = await wire.send("eval", { js: "typeof WebAssembly" });
-          assert.deepEqual(reply, { value: "undefined", type: "string" });
+          // Source sent over the wire exercises the interpreter after the native image has booted.
+          const reply: unknown = await wire.send("eval", {
+            js: "[eval('40 + 2'), new Function('n', 'return n + 1')(41), typeof WebAssembly]",
+          });
+          assert.deepEqual(reply, { value: [42, 42, "undefined"], type: "object" });
           assert.equal(child.exitCode, null, output());
           return;
         }
@@ -244,22 +248,25 @@ smoke(usual.exe, true);
 const slim = publish(minimal, "minimal-nojit", nojit, true, false);
 smoke(slim.exe, true);
 const image = join(slim.app, "Contents/Frameworks/app.image.dylib");
-const original = readFileSync(image);
+const original = sha256(readFileSync(image));
 publish(minimal, "minimal-nojit", nojit, true, false);
-assert.equal(sha256(readFileSync(image)), sha256(original), "identical inputs must retain the image signature");
+assert.equal(sha256(readFileSync(image)), original, "identical inputs must retain the image signature");
 assert.match(command(slim.exe, [], { SK_APP_ENGINE: "jit" }, 3, 30_000), /aot-nojit.*no JIT/s);
 const inspector = publish(minimal, "devtools", diagnostic, true, false, true);
 smoke(inspector.exe, true);
 const other = join(inspector.app, "Contents/Frameworks/inspector.image.dylib");
 assert(existsSync(other));
 await smokeInspector(inspector.exe);
+const saved = join(scratch, "signed-app.image.dylib");
+renameSync(image, saved);
 try {
   copyFileSync(other, image);
   assert.match(command(slim.exe, [], {}, 3, 30_000), /app\.image\.dylib/);
+  rmSync(image);
   writeFileSync(image, "invalid Mach-O");
   assert.match(command(slim.exe, [], {}, 3, 30_000), /app\.image\.dylib/);
 } finally {
-  writeFileSync(image, original);
+  renameSync(saved, image);
 }
 command("/usr/bin/codesign", ["--verify", "--deep", "--strict", slim.app]);
 const assessment = spawnSync("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=4", slim.app], {

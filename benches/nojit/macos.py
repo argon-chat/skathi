@@ -153,6 +153,9 @@ def main():
 
     report = {
         "macosVersion": platform.mac_ver()[0], "architecture": platform.machine(),
+        "hardwareModel": subprocess.check_output(["/usr/sbin/sysctl", "-n", "hw.model"], text=True).strip(),
+        "cpu": subprocess.check_output(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
+        "memoryBytes": int(subprocess.check_output(["/usr/sbin/sysctl", "-n", "hw.memsize"], text=True)),
         "runs": args.runs, "idleSeconds": args.idle_seconds, "apps": {},
     }
     bundles = {

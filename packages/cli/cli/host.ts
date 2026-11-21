@@ -1,6 +1,6 @@
 // Where `sk build` gets the prebuilt bare host it stamps: `cargo build --release -p sk-app
 // --features prod,icu-root` (the whole engine, no app, the root ICU locale), built once per Skathi version and
-// variant: `standard`, `no-devtools` with the devtools compiled out, or (Windows x64) `aot-nojit`
+// variant: `standard`, `no-devtools` with the devtools compiled out, or `aot-nojit`
 // without devtools or the JIT, which runs only apps built with `--aot`.
 //
 // Resolution, first hit wins: 1. `--workload <exe>` or `SK_HOST`; 2. in-repo
@@ -31,7 +31,15 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { CompilerInfo } from "../aot/pin";
-import { cargoFeatureArgs, ENGINE_FEATURES, NO_JIT_VARIANT, variantList, VARIANTS, type Variant } from "./config";
+import {
+  cargoFeatureArgs,
+  ENGINE_FEATURES,
+  NO_JIT_VARIANT,
+  noJitVariant,
+  variantList,
+  VARIANTS,
+  type Variant,
+} from "./config";
 import { appendedPayloadOf, elfMachineOf } from "./elf";
 import { bundlePayloadPath, machOArchs } from "./macos-bundle";
 import { readPe, RT } from "./pe";
@@ -441,7 +449,10 @@ export function cargoBuildHost(
   });
   if (r.status !== 0) throw new HostError(`cargo ${args.join(" ")} failed (exit ${r.status})`);
   const platform = currentPlatform();
-  if (platform === "windows" || (platform === "macos" && extras.features?.includes("native-aot"))) {
+  if (
+    platform === "windows" ||
+    (platform === "macos" && (noJitVariant(variant) || extras.features?.includes("native-aot")))
+  ) {
     // Its own workspace (it needs panic = "abort"), built into the same folder as the host.
     const template = [
       "build",
