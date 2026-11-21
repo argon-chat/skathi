@@ -49,6 +49,15 @@ fn info() -> Result<String, String> {
     ))
 }
 
+fn pinned_reference_option() -> Option<&'static str> {
+    cfg!(all(target_os = "macos", target_arch = "aarch64")).then(|| {
+        redjs::aot::COMPILE_OPTIONS
+            .split(';')
+            .find(|word| word.starts_with("references="))
+            .expect("redjs COMPILE_OPTIONS must name its reference width")
+    })
+}
+
 fn front_end(input: &str, ir: &str, flags: &Flags) -> Result<(), String> {
     let Flags {
         types,
@@ -56,10 +65,11 @@ fn front_end(input: &str, ir: &str, flags: &Flags) -> Result<(), String> {
         defines,
         ..
     } = flags;
-    // The front end's own engine run answers under the admitted code that redjs compiles the image with.
+    // Use the same reference width and admitted code as the backend's compile.
     let pinned = redjs::aot::COMPILE_OPTIONS
         .split(';')
         .filter(|word| word.starts_with("admit="))
+        .chain(pinned_reference_option())
         .map(str::to_owned);
     let option_words: &Vec<String> = &pinned.chain(options.iter().cloned()).collect();
     let (cwd, entry, ir_path) = match types.as_slice() {

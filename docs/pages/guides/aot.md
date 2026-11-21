@@ -175,6 +175,8 @@ Ship the entire `.app` from `sk publish --aot`.
 
 The Mach-O container maps the application image on 16 KiB boundaries. Its code pages have read and execute permissions and its data pages are read-only. The compact unwind records cover the compiled functions so a stack walker can step through image frames.
 
+On Apple Silicon, `sk-aot` uses wide references for JavaScript objects. This lets the same image run on the full and no-JIT workloads even when JavaScriptCore cannot reserve its aligned heap range.
+
 On a Mac, `sk publish` signs the image libraries before signing the bundle. For local use, keep the default ad hoc signature or pass `--sign -`. Rebuilding in the same output directory with the same image and signing identity lets `sk` reuse the existing library signature. Use a signing identity with a Team ID for hardened runtime. On a physical Mac running macOS 26.4, library validation rejected an ad hoc hardened app loading its ad hoc dylib because neither had a Team ID. The default ad hoc build runs with ordinary code signing. A no-JIT build needs no JIT or unsigned executable memory entitlement.
 
 For distribution outside the Mac App Store, pass your `Developer ID Application` identity with `--sign` or `macos.sign` in `sk.config.json`. `sk` enables hardened runtime and requests a secure timestamp for that signature. Verify the signed bundle with `codesign --verify --deep --strict dist/release/notes.app`. Submit it to Apple with `notarytool`, staple the accepted ticket, then assess the result with `spctl --assess --type execute -vv dist/release/notes.app`. [Apple’s notarization documentation](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
@@ -450,13 +452,13 @@ The two image columns stay within the spread of the runs. On the normal workload
 
 ## Environment variables
 
-| Variable                | Used by             | Effect                                                                                                                                                                                                                     |
-| ----------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SK_APP_ENGINE`         | the app             | `auto` (default) runs the image; `jit` runs `app.prod.js`. Since 0.6, the `aot-nojit` workload refuses `jit`.                                                                                                              |
-| `SK_AOT_CACHE_DIR`      | the app, `sk prune` | Where images are expanded instead of `%LOCALAPPDATA%\skathi\native-aot\v1`. Must be absolute. Since 0.6 only hosts that embed a compressed inspector image expand one; published apps expand nothing.                      |
-| `SK_AOT_MEMORY_PROFILE` | the app             | `default` or `compact`. `compact` caps two engine capacities: the structure heap at 256 MiB and the object address range at 1 GiB. These are capacities, not a limit on the app's memory; a large app can run out of them. |
-| `SK_AOT_COMPILER`       | `sk`                | The `sk-aot.exe` to compile with, as `--aot-compiler` does.                                                                                                                                                                |
-| `SK_HOST_OFFLINE`       | `sk`                | `1` forbids downloading `sk-aot` and workloads.                                                                                                                                                                            |
+| Variable                | Used by             | Effect                                                                                                                                                                                                             |
+| ----------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SK_APP_ENGINE`         | the app             | `auto` (default) runs the image; `jit` runs `app.prod.js`. Since 0.6, the `aot-nojit` workload refuses `jit`.                                                                                                      |
+| `SK_AOT_CACHE_DIR`      | the app, `sk prune` | Where images are expanded instead of `%LOCALAPPDATA%\skathi\native-aot\v1`. Must be absolute. Since 0.6 only hosts that embed a compressed inspector image expand one; published apps expand nothing.              |
+| `SK_AOT_MEMORY_PROFILE` | the app             | `default` or `compact`. `compact` sets the structure heap capacity to 256 MiB and requests a 1 GiB range for JavaScript objects. Windows images require this range. macOS arm64 images can use objects outside it. |
+| `SK_AOT_COMPILER`       | `sk`                | The `sk-aot.exe` to compile with, as `--aot-compiler` does.                                                                                                                                                        |
+| `SK_HOST_OFFLINE`       | `sk`                | `1` forbids downloading `sk-aot` and workloads.                                                                                                                                                                    |
 
 ## When not to use it
 

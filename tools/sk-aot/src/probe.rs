@@ -41,8 +41,9 @@ fn identity(program: &[u8], words: &[String]) -> [u8; 16] {
 
 pub fn compile(program: &[u8], words: &[String]) -> Result<redjs::aot::CompiledImage, String> {
     let identity = identity(program, words);
-    let raw: Vec<Bytes> = words
-        .iter()
+    let raw: Vec<Bytes> = crate::pinned_reference_option()
+        .into_iter()
+        .chain(words.iter().map(String::as_str))
         .map(|word| Bytes {
             ptr: word.as_ptr(),
             len: word.len(),

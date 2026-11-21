@@ -47,13 +47,13 @@ export function pinnedCompilerInfo(
 ): CompilerInfo {
   if (target !== "aarch64-macos" && target !== "x86_64-windows")
     throw Error(`Unsupported native AOT target: ${target}`);
-  const platformOptions = target === "aarch64-macos" ? "aarch64;os=macos" : "x86_64";
+  const platformOptions = target === "aarch64-macos" ? "aarch64;os=macos;references=wide" : "x86_64;references=narrow";
   return {
     target,
     frontend: pin.frontend.revision,
     engine: pin.engine.revision,
     tableId: pin.table.id,
-    compileOptions: `${platformOptions};references=narrow;image=pic;threads=1;default-options@${pin.engine.revision}`,
+    compileOptions: `${platformOptions};image=pic;threads=1;default-options@${pin.engine.revision}`,
   };
 }
 

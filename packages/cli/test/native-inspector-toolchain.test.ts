@@ -47,6 +47,19 @@ describe("native inspector build provenance", () => {
 
   test("official frontend and every native compatibility field are pinned", async () => {
     verifyCompilerInfo(info(), pin, "x86_64-windows");
+    const apple = {
+      ...info(),
+      target: "aarch64-macos",
+      compileOptions: `aarch64;os=macos;references=wide;image=pic;threads=1;default-options@${pin.engine.revision}`,
+    };
+    verifyCompilerInfo(apple, pin, apple.target);
+    expect(() =>
+      verifyCompilerInfo(
+        { ...apple, compileOptions: apple.compileOptions.replace("wide", "narrow") },
+        pin,
+        apple.target,
+      ),
+    ).toThrow();
     for (const name of Object.keys(info()))
       expect(() => verifyCompilerInfo({ ...info(), [name]: "stale" }, pin, "x86_64-windows")).toThrow();
     await fixture((root) => {

@@ -109,6 +109,11 @@ jobs:
           cd "$RUNNER_TEMP/probe"
           echo 'globalThis.__sk_aot_probe = String(6 * 7);' > probe.js
           "$exe" compile probe.js probe.ir probe.image
+          bun -e '
+            const image = new Uint8Array(await Bun.file("probe.image").arrayBuffer());
+            const expectedWidth = process.platform === "darwin" ? 0 : 1;
+            if (image[91] !== expectedWidth) throw Error("AOT image reference width differs from the target pin");
+          '
           "$exe" run probe.image | tee run.txt
           grep -q 'aot_active=true probe=42' run.txt
 
