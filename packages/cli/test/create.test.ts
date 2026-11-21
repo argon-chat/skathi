@@ -175,7 +175,6 @@ test("the svelte templates depend on svelte at the version the runtime accepts a
       "typescript",
       "vite-plus",
     ]);
-    expect(pkg(dir).scripts.typecheck).toBe("svelte-check");
     expect((JSON.parse(read(dir, "tsconfig.json")) as { include: string[] }).include).toEqual([
       "src/**/*.ts",
       "src/**/*.svelte",

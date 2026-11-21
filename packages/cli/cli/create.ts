@@ -46,7 +46,8 @@ const VUE_TSC: Checker = {
   tsconfig: "@skathi-native/runtime/tsconfig.app.json",
 };
 const SVELTE_CHECK: Checker = {
-  script: "svelte-check",
+  // Styles are `sk check`'s to judge: svelte-check does not know the properties Skathi adds.
+  script: "svelte-check --diagnostic-sources js,svelte",
   devDependencies: { "svelte-check": "^4" },
   sources: "src/**/*.svelte",
   tsconfig: "@skathi-native/runtime/tsconfig.svelte.json",
