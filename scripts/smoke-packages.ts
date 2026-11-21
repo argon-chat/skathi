@@ -1,10 +1,10 @@
 // Creates apps from the packed npm packages, as a user gets them, and builds them.
 //
-//   bun scripts/smoke-packages.ts                    packs runtime and cli (with their prepack) first
+//   bun scripts/smoke-packages.ts                    packs runtime, cli (with its prepack) and test first
 //   bun scripts/smoke-packages.ts --tarballs <dir>   uses the tarballs release.yml is about to publish
 //
 // Each template is created with the packed CLI, installed from the tarballs and run through sk check
-// and sk build --payload-only, which needs no host from a release.
+// and sk build --payload-only, which needs no host from a release; @skathi-native/test must import there.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,12 +28,13 @@ function run(cmd: string[], cwd: string): void {
 const tarballs = values.tarballs ? resolve(values.tarballs) : join(work, "tarballs");
 if (!values.tarballs) {
   mkdirSync(tarballs);
-  for (const pkg of ["runtime", "cli"])
+  for (const pkg of ["runtime", "cli", "test"])
     run(["bun", "pm", "pack", "--destination", tarballs], join(SDK, "packages", pkg));
 }
 const tgz = (name: string) => `file:${join(tarballs, `${name}-${version}.tgz`).replaceAll("\\", "/")}`;
 const runtime = tgz("skathi-native-runtime");
 const cli = tgz("skathi-native-cli");
+const testLib = tgz("skathi-native-test");
 
 const write = (path: string, json: unknown) => writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`);
 
@@ -63,12 +64,19 @@ try {
       overrides?: Record<string, string>;
     };
     pkg.dependencies = { ...pkg.dependencies, "@skathi-native/runtime": runtime };
-    pkg.devDependencies = { ...pkg.devDependencies, "@skathi-native/cli": cli };
-    pkg.overrides = { "@skathi-native/runtime": runtime };
+    pkg.devDependencies = { ...pkg.devDependencies, "@skathi-native/cli": cli, "@skathi-native/test": testLib };
+    pkg.overrides = { "@skathi-native/runtime": runtime, "@skathi-native/cli": cli };
     write(join(dir, "package.json"), pkg);
     run(["bun", "install"], dir);
     run(["bunx", "sk", "check"], dir);
     run(["bunx", "sk", "build", "--payload-only"], dir);
+    const probe = join(dir, "sk-test-probe.ts");
+    writeFileSync(
+      probe,
+      'import { CHECKOUT, REPO } from "@skathi-native/test";\n' +
+        "if (CHECKOUT !== null || REPO !== process.cwd()) throw new Error(`@skathi-native/test took ${REPO} for a checkout`);\n",
+    );
+    run(["bun", probe], dir);
   }
   console.log(`✓ ${templates.map((t) => t.name).join(", ")} build from the ${version} packages`);
 } finally {

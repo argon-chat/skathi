@@ -14,21 +14,19 @@ Every gesture goes through the devtools connection, not the operating system. Th
 
 ## What you need
 
-`@skathi-native/test` is not published to npm yet. It runs from a checkout of the Skathi repository, where it finds the build tool and the host executable it starts. You need:
-
-- **Bun 1.4.0 or later.** Older versions can crash the test runner while it stops the app, so the harness refuses to start on them.
-- **A Skathi checkout** with its dependencies installed (`bun install` at its root).
-- **A debug host** to test your app from source. Build it once with Cargo from the checkout, and again when you update the checkout.
-- **Or a packaged build** of your app from `sk build`. Then you don't need the debug host; see [Testing a packaged build](#testing-a-packaged-build).
+Install it in your app beside `@skathi-native/cli`, at the same version (since 0.7):
 
 ```sh
-bun install
-cargo build -p sk-app                                      # Windows
-cargo build -p sk-app --target aarch64-apple-darwin        # macOS on Apple silicon
-cargo build -p sk-app --target x86_64-unknown-linux-gnu    # Linux
+bun add -d @skathi-native/test @types/bun
 ```
 
-The checkout's Cargo configuration builds for Windows by default, so macOS and Linux need the `--target`. The harness looks for the host in `target/<target>/debug/`.
+- **Bun 1.4.0 or later.** Older versions can crash the test runner while it stops the app, so the harness refuses to start on them.
+- **The dev host** that `sk dev` runs. The harness uses the same one, downloaded once per version into the host cache. `SK_DEV_HOST` names another.
+- **Or a packaged build** of your app from `sk build`. Then you don't need the dev host; see [Testing a packaged build](#testing-a-packaged-build).
+
+Keep the tests outside `src/`, with a tsconfig of their own that has `"types": ["bun"]`: the app's code runs in Skathi, not in Bun.
+
+In a checkout of the Skathi repository the harness runs the checkout's debug host instead, built with `cargo build -p sk-app` (with `--target` on macOS and Linux), and `app` can name a folder under `apps/`.
 
 ### What works where
 
@@ -42,12 +40,14 @@ The checkout's Cargo configuration builds for Windows by default, so macOS and L
 
 ## Where tests live
 
-A test file is an ordinary `bun test` file. Inside the checkout's Bun workspace, import from `@skathi-native/test`. A test file elsewhere imports the package by its path in the checkout, `<checkout>/packages/test/src/index.ts`.
+A test file is an ordinary `bun test` file that imports from `@skathi-native/test`.
 
-`launch({ app })` takes the app to test:
+`launch({ app })` takes the app to test, relative to the directory `bun test` runs in:
 
-- the name of a folder under the checkout's `apps/` directory, such as `"hello"`, which means `apps/hello/src/main.ts`;
-- or a path to the app's entry module, relative to the checkout root or absolute. The app can live outside the checkout. A Vue app needs `vue`, and a Svelte app `svelte`, in its own dependencies, as for `sk dev`.
+- the app's directory, such as `"."`, whose `sk.config.json` names the entry module;
+- or a path to the app's entry module.
+
+The build goes to `.sk-test/` and failure screenshots to `.sk-test-artifacts/`, both in that directory.
 
 ## A first test
 
@@ -67,7 +67,7 @@ The first test types a task, presses Enter and checks the result:
 
 <Sample src="testing/todo.spec.ts" region="first" title="todo.spec.ts" />
 
-Run it from the checkout:
+Run it from the app's directory:
 
 ```sh
 bun test ./path/to/todo.spec.ts
@@ -116,7 +116,7 @@ Pass a locator to `expect` and you get matchers that retry until they pass or th
 
 To check how something looks, assert on the class or attribute that drives the style, as the test above does with `done`, rather than on the style itself.
 
-When an assertion fails, its message shows what it expected, what it last saw and the app's last log lines, with the path to a screenshot of the window and to the host's full log. Screenshots go to `.sk-test-artifacts/` at the checkout root, which is emptied at the start of each run. `app.screenshot(path?)` takes one yourself.
+When an assertion fails, its message shows what it expected, what it last saw and the app's last log lines, with the path to a screenshot of the window and to the host's full log. Screenshots go to `.sk-test-artifacts/`, which is emptied at the start of each run. `app.screenshot(path?)` takes one yourself.
 
 ## Evaluating code in the app
 
@@ -203,7 +203,7 @@ With `packaged`, the harness builds nothing and does not need the debug host. `a
 
 The test needs the devtools port. `sk build` makes a debug build, which always has it. `sk publish` makes a release build without devtools unless `sk.config.json` has `"publishDevtools": true`, and such a build cannot be tested this way. An app that turns devtools off at startup with `appDevtools.disable()` cannot be tested either; see [Turning devtools off](/devtools/release-builds/).
 
-Inside the checkout, `packagedExe({ app })` runs `sk build` for you and returns `{ exe, name }` to pass to `launch()`. It needs a prebuilt host, the one `sk build` would use, and may otherwise build one with Cargo, which takes minutes.
+`packagedExe({ app })` runs `sk build` for you and returns `{ exe, name }` to pass to `launch()`. It needs the host `sk build` would use; in a Skathi checkout it may otherwise build one with Cargo, which takes minutes.
 
 A packaged app keeps its storage between runs, like any installed app: localStorage, IndexedDB and cookies written by one run are there in the next. Start each test file from a known state instead of assuming an empty store.
 
@@ -231,8 +231,8 @@ If the test runner is killed, its hosts notice and exit. Pass `keepAlive: true` 
 ## Continuous integration
 
 - **A desktop session.** The machine needs a session that can open windows, with working graphics: Direct3D on Windows, Metal on macOS, Vulkan on Linux. A CI agent running as a background service with no desktop cannot open the window.
-- **Build once.** The debug host takes a while to build. Cache Cargo's `target/` folder, or test a packaged build from an earlier step of the pipeline.
-- **Keep the evidence.** On failure, upload `.sk-test-artifacts/` (screenshots) and `packages/test/.sk-test/logs/` (a full log per host) from the checkout.
+- **Cache the host.** The dev host is downloaded on the first run of a version; cache the host cache folder, or test a packaged build from an earlier step of the pipeline.
+- **Keep the evidence.** On failure, upload `.sk-test-artifacts/` (screenshots) and `.sk-test/logs/` (a full log per host).
 - **Leave time.** The first `launch()` of a run builds the app. A test that waits for animations or network needs more than the default timeouts.
 
 ## Unit tests

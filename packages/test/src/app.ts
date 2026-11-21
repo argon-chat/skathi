@@ -10,6 +10,7 @@ import { Wire, readHandshake, pingOnce, SkCommandError } from "./wire";
 import {
   allocateSlot,
   cacheDistFor,
+  devHostExe,
   ensureBuild,
   ensureWorkDir,
   releaseStagedExe,
@@ -23,8 +24,8 @@ import { killTree } from "./reap";
 
 export interface LaunchOptions {
   /**
-   * The app under test: a name under `apps/` (`"hello"`, `"shadcn"`) or a path to an entry module
-   * relative to the workspace root.
+   * The app under test: its directory (`"."`), a path to its entry module, or in a Skathi checkout a
+   * name under `apps/` (`"hello"`). Paths are relative to the directory `bun test` runs in, or the checkout's root.
    */
   app: string;
   /** `[width, height]` in CSS px — becomes `SK_WINDOW`. */
@@ -43,7 +44,7 @@ export interface LaunchOptions {
   verbose?: boolean;
   /** A name for slot directories and artifacts. */
   label?: string;
-  /** Use this executable instead of a staged copy of `target/.../sk-app.exe`. */
+  /** Use this executable instead of a staged copy of the dev host. */
   exe?: string;
   /** `exe` is a PACKAGED app (`sk build`) whose `sk.config.json` name is this. */
   packaged?: string;
@@ -446,7 +447,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
     }
     slotDir = allocateSlot(cache, label);
   }
-  const exe = options.exe ? resolve(options.exe) : stagedExe();
+  const exe = options.exe ? resolve(options.exe) : stagedExe(await devHostExe(log));
 
   const logsDir = join(WORK_DIR, "logs");
   mkdirSync(logsDir, { recursive: true });

@@ -9,7 +9,7 @@ export type { StyleEntry } from "./styles";
 export { readPng, changedRegion, inset, Png } from "./pixels";
 export type { Rect } from "./pixels";
 export { ARTIFACTS_DIR, artifactPath } from "./artifacts";
-export { appDataDir, REPO, DEFAULT_EXE, EXE_SUFFIX, TARGET, WORK_DIR } from "./dist";
+export { appDataDir, CHECKOUT, REPO, DEFAULT_EXE, EXE_SUFFIX, TARGET, WORK_DIR } from "./dist";
 export { findOrphans, killTree, reapOrphans } from "./reap";
 export { LINUX, MACOS, ON_SCREEN, SCREENSHOTS, WINDOWS } from "./platform";
 export type { Orphan } from "./reap";
