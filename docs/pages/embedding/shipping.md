@@ -17,7 +17,7 @@ Your exe is yours to package, sign and update. What Skathi needs from you at rel
 
 - The app updates without rebuilding Rust: replace `app.skpk` (atomically, never in place) and restart.
 - Mapped read-only for the app's lifetime, so a large payload costs no copy.
-- Keep asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) with the payload. AOT also needs the matching image library. See [AOT for your own executable](#aot-for-your-own-executable-since-07).
+- Keep asset packs (`fonts.skpk`, `assets.skpk`, `icu.skpk`) with the payload. AOT also needs the matching image library. See [AOT for your own executable](#aot-for-your-own-executable).
 
 </div>
 <div class="tradeoff" data-tone="gain">
@@ -111,7 +111,7 @@ cp "$skImage" "$release/"
 sk publish ./app --aot --payload-only --workload "$release/my-app" --aot-compiler "$skAot"
 ```
 
-This writes `app.skpk`, `app.image.dylib` and any packs to `app/dist/release/.sk`. For a bare executable with `payload_file`, keep the image library and packs beside `app.skpk`. For a `.app` using `payload_file`, put the payload and its packs in `Contents/Resources` and pass that payload path to `Builder::payload_file`. Both `payload_file` and `payload_static` look for `app.image.dylib` in `Contents/Frameworks` in this layout. `libskimage.dylib` is a build input. Sign the image library before signing the `.app`. See the [macOS bundle](/guides/aot/#macos-bundle-since-07) for signing and notarization.
+This writes `app.skpk`, `app.image.dylib` and any packs to `app/dist/release/.sk`. For a bare executable with `payload_file`, keep the image library and packs beside `app.skpk`. For a `.app` using `payload_file`, put the payload and its packs in `Contents/Resources` and pass that payload path to `Builder::payload_file`. Both `payload_file` and `payload_static` look for `app.image.dylib` in `Contents/Frameworks` in this layout. `libskimage.dylib` is a build input. Sign the image library before signing the `.app`. See the [macOS bundle](/guides/aot/#macos-bundle) for signing and notarization.
 
 ### Leave out the JIT and WebAssembly
 

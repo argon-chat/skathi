@@ -9,7 +9,7 @@ status: experimental
 
 `sk publish --aot` compiles your app's JavaScript to machine code at build time. The host runs the resulting native image at startup instead of evaluating the bundle. AOT is experimental and supports Windows x64 and macOS arm64 (since 0.7). In Skathi's Windows benchmark, the JIT is faster.
 
-If you embed Skathi in your own executable, see [AOT for your own executable](/embedding/shipping/#aot-for-your-own-executable-since-07) (since 0.7).
+If you embed Skathi in your own executable, see [AOT for your own executable](/embedding/shipping/#aot-for-your-own-executable) (since 0.7).
 
 <div class="tradeoffs">
 <div class="tradeoff" data-tone="gain">
@@ -65,7 +65,7 @@ Without AOT, the exe carries the production bundle, `app.prod.js`, and JavaScrip
 
 6. **Container** `app.image.dll` or `app.image.dylib`
 
-   The image ships uncompressed in page-aligned sections. On Windows, the container is a DLL beside the exe (since 0.6). With [`"publishSingleFile": true`](#one-file-publishsinglefile-since-06) the sections go into the exe. On macOS, the container is a Mach-O dylib in `Contents/Frameworks` (since 0.7). The payload holds the image manifest and `app.prod.js`. The host checks the image against the bundle and uses the bundle on reload.
+   The image ships uncompressed in page-aligned sections. On Windows, the container is a DLL beside the exe (since 0.6). With [`"publishSingleFile": true`](#one-file-publishsinglefile) the sections go into the exe. On macOS, the container is a Mach-O dylib in `Contents/Frameworks` (since 0.7). The payload holds the image manifest and `app.prod.js`. The host checks the image against the bundle and uses the bundle on reload.
 
 <p class="pipeline-phase" data-tone="run">On every machine that runs the app, at each start</p>
 

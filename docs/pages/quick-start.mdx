@@ -113,7 +113,7 @@ Press **F12** in the running app to open the inspector. The [devtools section](/
 
 ## Coming from Vue: what differs in Svelte
 
-The template uses Svelte's DOM renderer. Svelte 5.59+ applications can opt into the experimental native renderer with `"svelte": { "renderer": "native" }` in `sk.config.json` (since 0.6). Form bindings, transitions and global event components need the DOM renderer. [Renderer comparison](/guides/svelte-support/#choose-a-renderer-since-06)
+The template uses Svelte's DOM renderer. Svelte 5.59+ applications can opt into the experimental native renderer with `"svelte": { "renderer": "native" }` in `sk.config.json` (since 0.6). Form bindings, transitions and global event components need the DOM renderer. [Renderer comparison](/guides/svelte-support/#choose-a-renderer)
 
 Skathi renders both frameworks into one element tree with the same renderer, so styling, layout, web APIs and the window API are the same. What differs is how the app plugs into Skathi:
 

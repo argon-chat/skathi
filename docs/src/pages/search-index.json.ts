@@ -11,6 +11,7 @@ const apiGroup = "API";
 const groupOf: Readonly<Record<string, string>> = {
   "app-api": apiGroup,
   "window-api": apiGroup,
+  std: apiGroup,
   "web-platform": "Web platform",
   css: "CSS",
 };
