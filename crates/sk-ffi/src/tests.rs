@@ -482,3 +482,31 @@ fn a_callback_runs_on_the_thread_that_calls_it() {
     assert_eq!(seen, expected);
     callback.release();
 }
+
+extern "C" fn write_to(address: *mut u8) {
+    unsafe { address.write_volatile(1) }
+}
+
+#[test]
+fn a_fault_in_a_foreign_function_names_it() {
+    const NAME: &str = "tests::a_fault_in_a_foreign_function_names_it";
+    if std::env::var_os("SK_FFI_FAULT").is_some() {
+        let signature = Signature {
+            args: vec![Type::Pointer],
+            returns: Type::Void,
+            fixed: None,
+        };
+        in_call(c"probe!write_to", || unsafe {
+            call(write_to as *const (), &signature, &[8])
+        });
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+        .env("SK_FFI_FAULT", "1")
+        .output()
+        .unwrap();
+    assert!(!child.status.success());
+    let said = String::from_utf8_lossy(&child.stderr);
+    assert!(said.contains("[crash] ffi: probe!write_to\n"), "{said}");
+}

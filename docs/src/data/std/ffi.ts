@@ -1,7 +1,7 @@
 import { importLine, section } from "./shared";
 
 const CRASH =
-  "The call runs inside the app's process. A fault in the library (an access violation, a wrong signature) ends the app at once: no `pagehide`, no crash dialog, unsaved data is lost. On Windows the host prints `[crash] ffi: <library>!<symbol>` to stderr first.";
+  "The call runs inside the app's process. A fault in the library (an access violation, a wrong signature) ends the app at once: no `pagehide`, no crash dialog, unsaved data is lost. The host prints `[crash] ffi: <library>!<symbol>` to stderr first.";
 const PERMISSION =
   'A library loads only if sk.config.json lists it under [`"permissions.ffi"`](/sk-config/#permissions). The rule is the same under `sk dev`. An app embedded in another program loads what that program allows with `Builder::allow_ffi()` instead, and the `ffi` feature of the `skathi` crate must be on.';
 
