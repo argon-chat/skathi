@@ -181,17 +181,17 @@ pub fn app_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-/// The app's `"permissions"` as JSON, and `$APP`: the folder of the exe, or `Contents` of a macOS bundle.
+/// The app's `"permissions"` as JSON, and `$APP`: the folder of the exe, or `Contents/Frameworks`
+/// of a macOS bundle, where nested code is signed with it.
 pub fn permissions() -> Option<(String, std::path::PathBuf)> {
     let text = payload::get()?.meta.permissions.clone();
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?;
-    let app_dir = if cfg!(target_os = "macos") {
-        folder.parent().unwrap_or(folder)
-    } else {
-        folder
+    let app_dir = match folder.parent() {
+        Some(contents) if cfg!(target_os = "macos") => contents.join("Frameworks"),
+        _ => folder.to_path_buf(),
     };
-    (!text.is_empty()).then(|| (text, app_dir.to_path_buf()))
+    (!text.is_empty()).then_some((text, app_dir))
 }
 
 pub fn memory() -> Option<String> {

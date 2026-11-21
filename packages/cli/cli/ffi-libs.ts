@@ -18,22 +18,30 @@ export function libraryCandidates(path: string, platform: Platform): string[] {
   return platform === "windows" ? [plain] : [plain, `${path.slice(0, slash + 1)}lib${file}${extension}`];
 }
 
-/** Copies every `$APP` library into `dir` at its own path; returns the files written, relative to `dir`. */
-export function copyAppLibraries(config: AppConfig, dir: string, platform: Platform): string[] {
-  const written: string[] = [];
+/** Every `$APP` library of the config as the file it is in the app's folder, relative to it. */
+export function appLibraries(config: AppConfig, platform: Platform): string[] {
+  const found: string[] = [];
   for (const entry of config.permissions?.ffi ?? []) {
     if (!entry.path.startsWith("$APP/")) continue;
     const candidates = libraryCandidates(entry.path.slice("$APP/".length), platform);
-    const found = candidates.find((candidate) => existsSync(join(config.appRoot, candidate)));
-    if (!found) {
+    const file = candidates.find((candidate) => existsSync(join(config.appRoot, candidate)));
+    if (!file) {
       throw new ConfigError(
         `sk.config.json "permissions.ffi": the library "${entry.name}" is not in the app: no ${candidates.join(" or ")} in ${config.appRoot}`,
       );
     }
-    const target = join(dir, found);
-    mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(join(config.appRoot, found), target);
-    written.push(found);
+    found.push(file);
   }
-  return written;
+  return found;
+}
+
+/** Copies every `$APP` library into `dir` at its own path; returns the files written, relative to `dir`. */
+export function copyAppLibraries(config: AppConfig, dir: string, platform: Platform): string[] {
+  const files = appLibraries(config, platform);
+  for (const file of files) {
+    const target = join(dir, file);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(config.appRoot, file), target);
+  }
+  return files;
 }

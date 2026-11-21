@@ -28,7 +28,7 @@ import { removedFeatures } from "../aot/uses";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
-import { copyAppLibraries } from "./ffi-libs";
+import { appLibraries, copyAppLibraries } from "./ffi-libs";
 import {
   ConfigError,
   loadAppConfig,
@@ -405,11 +405,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
       `${m.iconPath} is ${Math.max(...icon.sizes)} px at most — the Dock and Finder draw up to 1024 px (512@2x); a 1024 px PNG stays sharp`,
     );
   }
-  if (config.permissions?.ffi.some((entry) => entry.path.startsWith("$APP/"))) {
-    warnings.push(
-      '"permissions.ffi": a library under $APP is not copied into the .app bundle yet — put it in Contents/ at the same path and sign the bundle after',
-    );
-  }
+  const libraries = appLibraries(config, "macos");
   const info = macInfoFor(config, !!icon);
   const noJit = host.info.features.includes("no-jit");
   const entitlementsPath = join(work, "entitlements.plist");
@@ -419,6 +415,11 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
   const onMac = process.platform === "darwin";
   const codesign = onMac ? Bun.which("codesign") : null;
   const plan = signPlan({ want: options.sign ?? m.sign, app: out, entitlements: entitlementsPath, codesign, onMac });
+  if (libraries.length && !onMac) {
+    warnings.push(
+      `"permissions.ffi": ${libraries.join(", ")} went into Contents/Frameworks unsigned — on the Mac, codesign each of them before the bundle`,
+    );
+  }
 
   const written = writeAppBundle({
     host: host.exe,
@@ -437,6 +438,19 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
           bytes,
           join(out, relativePath),
           join(work, file + ".signature"),
+          codesign,
+          plan.identity,
+          log,
+        );
+      }
+      // Signed with the app's identity, so the hardened runtime's library validation accepts them.
+      for (const file of libraries) {
+        const relativePath = join("Contents", "Frameworks", file);
+        writeSignedImage(
+          join(app, relativePath),
+          readFileSync(join(config.appRoot, file)),
+          join(out, relativePath),
+          join(work, file.replace(/[\\/]/g, "_") + ".signature"),
           codesign,
           plan.identity,
           log,

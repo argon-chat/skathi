@@ -40,7 +40,7 @@ interface Signature {
     returns: "A [`NativeLibrary`](/std/native-library/) whose `symbols` has one function for each entry.",
     notes: [
       PERMISSION,
-      '`"$APP/lib/sqlite3"` is a file in the app\'s folder; `sk build` copies it beside the executable at the same path. `"$SYSTEM/user32"` is a library the system\'s loader finds in its own folders. Without an extension the host adds `.dll`, `.dylib` or `.so`, and outside Windows it also tries `lib<name>`.',
+      '`"$APP/lib/sqlite3"` is a file in the app\'s folder; `sk build` copies it beside the executable at the same path; in a macOS bundle it goes under `Contents/Frameworks` and is signed with the identity of the app, so the hardened runtime loads it. `"$SYSTEM/user32"` is a library the system\'s loader finds in its own folders. Without an extension the host adds `.dll`, `.dylib` or `.so`, and outside Windows it also tries `lib<name>`.',
       "`sk check` compares the names with the config before the app runs: a `dlopen()` of a name that is not listed is the error SK6002, an import of `skathi:ffi` in an app that lists nothing is SK6001, a name that is not a literal is the warning SK6003, and a package in node_modules that imports `skathi:ffi` is the warning SK6005.",
       "Use it for a library you already have as a binary. For code you write yourself, a [native module](/embedding/native-modules/) is the better path: it is typed from Rust, and a panic becomes a JS error instead of ending the app.",
       "A call is synchronous and runs on the JS thread: the window does not paint until it returns. For a function that takes long (a query, a decode, anything that waits), set `nonblocking: true`.",
