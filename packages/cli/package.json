@@ -22,6 +22,7 @@
     "ascii.ts",
     "build.ts",
     "css-prefixes.ts",
+    "haptic-patterns.ts",
     "prod.ts",
     "runtime-path.ts",
     "svelte.ts",
