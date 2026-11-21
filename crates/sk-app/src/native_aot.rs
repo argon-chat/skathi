@@ -498,6 +498,13 @@ fn application_image(payload: &crate::payload::AppPayload) -> Result<Option<(Jso
     Ok(Some((manifest, script)))
 }
 
+static APP_IMAGE_BESIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the app's image was loaded from a container file rather than this executable.
+pub(crate) fn app_image_beside() -> bool {
+    APP_IMAGE_BESIDE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Where the manifest says `sk build` put the image: a container beside the payload, or
 /// sections of this executable.
 fn application_place(manifest: &Json, beside: Option<&Path>) -> Result<(Image, String), String> {
@@ -521,6 +528,7 @@ fn application_place(manifest: &Json, beside: Option<&Path>) -> Result<(Image, S
                         _ => format!("{}: {error}", path.display()),
                     }
                 })?;
+            APP_IMAGE_BESIDE.store(true, std::sync::atomic::Ordering::Relaxed);
             Ok((Image::Module(bytes), path.display().to_string()))
         }
         other => Err(format!("unsupported native image place {other:?}")),

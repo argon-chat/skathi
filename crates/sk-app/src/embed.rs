@@ -721,6 +721,8 @@ pub struct Exit {
     pub clean: bool,
     /// What closed it and how long each teardown step took (the exe's `[shutdown]` line).
     pub summary: String,
+    /// What the app passed to `app.quit({ exitCode })`, 0 without one; 1 when the app could not go on.
+    pub exit_code: i32,
 }
 
 static EXIT: Mutex<Option<Exit>> = Mutex::new(None);
@@ -732,7 +734,11 @@ static SHOW: AtomicBool = AtomicBool::new(false);
 pub(crate) fn finished(clean: bool, summary: String) {
     let Ok(mut exit) = EXIT.lock() else { return };
     if exit.is_none() {
-        *exit = Some(Exit { clean, summary });
+        *exit = Some(Exit {
+            clean,
+            summary,
+            exit_code: crate::shutdown::exit_code(),
+        });
         EXIT_CV.notify_all();
     }
 }

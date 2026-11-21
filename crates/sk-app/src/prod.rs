@@ -76,8 +76,9 @@ pub fn boot(rt: &JsRuntime) {
         let ran = crate::perf::boot_eval("app native image (+mount)", || {
             crate::native_aot::boot(rt, crate::native_aot::Kind::Application)
         });
-        if let Err(e) = ran {
-            eprintln!("[prod] app.prod.js (native image): {e}");
+        match ran {
+            Ok(native) => crate::stdlib::set_app_native(native),
+            Err(e) => eprintln!("[prod] app.prod.js (native image): {e}"),
         }
         return;
     }
@@ -107,6 +108,7 @@ pub fn reboot(rt: &JsRuntime) {
         eprintln!(
             "[native-aot] reload: running app.prod.js; the native entry runs once per process"
         );
+        crate::stdlib::set_app_native(false);
         if let Err(e) = rt.eval(script, "sk://app.prod.js") {
             eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
         }
@@ -177,6 +179,12 @@ pub fn app_name() -> Option<String> {
     payload::get()
         .map(|l| l.meta.name.clone())
         .filter(|n| !n.is_empty())
+}
+
+pub fn app_version() -> Option<String> {
+    payload::get()
+        .map(|l| l.meta.version.clone())
+        .filter(|v| !v.is_empty())
 }
 
 /// `SK_APP_ROOT` is ignored in a packaged exe: the package is the document, and an env var pointing

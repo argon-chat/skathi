@@ -1,0 +1,10 @@
+{
+  "name": "sk-test-std",
+  "version": "4.5.6",
+
+  "window": {
+    "title": "Skathi — skathi:* modules (fixture)",
+    "width": 420,
+    "height": 300
+  }
+}

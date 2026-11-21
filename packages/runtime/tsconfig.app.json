@@ -13,9 +13,17 @@
     "paths": {
       "vue": ["./src/runtime.ts"],
       "@skathi-native/runtime": ["./src/runtime.ts"],
-      "@skathi-native/runtime/jsx-runtime": ["./jsx-runtime.d.ts"]
+      "@skathi-native/runtime/jsx-runtime": ["./jsx-runtime.d.ts"],
+      "@skathi-native/runtime/std/*": ["./src/std/*.ts"]
     }
   },
   "vueCompilerOptions": { "lib": "@skathi-native/runtime" },
-  "files": ["./env.d.ts", "./src/engine.d.ts", "./src/protocol.d.ts", "./src/indexeddb.d.ts", "./src/modules.d.ts"]
+  "files": [
+    "./env.d.ts",
+    "./src/engine.d.ts",
+    "./src/protocol.d.ts",
+    "./src/indexeddb.d.ts",
+    "./src/modules.d.ts",
+    "./src/std.d.ts"
+  ]
 }

@@ -33,11 +33,13 @@ import {
   RUNTIME_SRC_DIR,
   RUNTIME_VERSION,
   NATIVE_MODULES_ENTRY,
+  STD_MODULES,
   VUE_MISSING,
   appVue,
   isPreseeded,
   packageDir,
   sfcCompiler,
+  stdModuleFile,
   type SfcCompiler,
 } from "./runtime-path";
 import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
@@ -156,6 +158,7 @@ const APP_RUNTIME = APP_VUE ? RUNTIME_ENTRY : DOM_ENTRY;
 const buildAliases = (): Record<string, string> => ({
   ...(APP_VUE ? { vue: RUNTIME_ENTRY, "@vue/runtime-core": APP_VUE.runtimeCore } : {}),
   "@skathi-native/runtime": APP_RUNTIME,
+  ...Object.fromEntries(STD_MODULES.map((name) => [`skathi:${name}`, stdModuleFile(`skathi:${name}`)])),
   ...Object.fromEntries(APP_ALIASES),
   ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
 });
@@ -525,6 +528,7 @@ const vuePlugin = {
       contents: `module.exports = require(${J(NATIVE_MODULES_ENTRY.split(sep).join("/"))}).nativeModule(${J(args.path.slice("native:".length))});`,
       loader: "js",
     }));
+    build.onResolve({ filter: /^skathi:/ }, (args: Bun.OnResolveArgs) => ({ path: stdModuleFile(args.path) }));
     if (APP_ALIASES.size) {
       const names = [...APP_ALIASES.keys()].map((name) => name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
       build.onResolve({ filter: new RegExp(`^(${names.join("|")})$`) }, (args: Bun.OnResolveArgs) => ({

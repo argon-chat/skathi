@@ -4,7 +4,16 @@ import type { Api as VuePluginApi } from "@vitejs/plugin-vue";
 import { normalizePath, type Alias, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from "vite";
 import type { AssetURLOptions, AssetURLTagConfig } from "vue/compiler-sfc";
 import { protectHapticPatterns } from "../haptic-patterns";
-import { appVue, DOM_ENTRY, NATIVE_MODULES_ENTRY, RUNTIME_ENTRY, RUNTIME_SRC_DIR, sfcCompiler } from "../runtime-path";
+import {
+  appVue,
+  DOM_ENTRY,
+  NATIVE_MODULES_ENTRY,
+  RUNTIME_ENTRY,
+  RUNTIME_SRC_DIR,
+  sfcCompiler,
+  STD_MODULES,
+  stdModuleFile,
+} from "../runtime-path";
 import { stubWorkerUrls, TEMPLATE_ASSET_URLS, templateJsonUrls, wasmStubModule, workerStubModule } from "../vitecompat";
 
 import type { NativeVitePluginOptions } from "./public";
@@ -93,6 +102,7 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
     "@skathi-native/runtime": installedVue ? RUNTIME_ENTRY : DOM_ENTRY,
     "@skathi-native/runtime/svelte": join(RUNTIME_SRC_DIR, "svelte.ts"),
     "@skathi-native/runtime/svelte-renderer": join(RUNTIME_SRC_DIR, "svelte-renderer.ts"),
+    ...Object.fromEntries(STD_MODULES.map((name) => [`skathi:${name}`, stdModuleFile(`skathi:${name}`)])),
     ...(installedVue && { vue: RUNTIME_ENTRY, "@vue/runtime-core": installedVue.runtimeCore }),
     ...options.aliases,
   };

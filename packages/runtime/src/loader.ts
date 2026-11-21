@@ -21,6 +21,7 @@
 
 import * as nativeNs from "./native-modules";
 import * as runtimeNs from "./runtime";
+import * as stdNs from "./std/index";
 
 type ModuleId = string;
 
@@ -326,6 +327,15 @@ function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknow
   if (hit) return hit.exports;
   if (id.startsWith("native:")) {
     const exports = nativeNs.nativeModule(id.slice("native:".length));
+    cache.set(id, { id, exports });
+    return exports;
+  }
+  if (id.startsWith("skathi:")) {
+    const exports = stdNs.stdModules[id.slice("skathi:".length)];
+    if (!exports) {
+      const known = Object.keys(stdNs.stdModules).map((name) => `"skathi:${name}"`);
+      throw new Error(`[sk] "${id}" is not a Skathi module; there are ${known.join(", ")}`);
+    }
     cache.set(id, { id, exports });
     return exports;
   }
