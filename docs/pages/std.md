@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data and encodings."
+description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, time and units."
 section: Reference
 order: 6
 since: "0.7"
@@ -19,16 +19,18 @@ import { os } from "skathi:os";
 import { Runtime, runtime } from "skathi:runtime";
 ```
 
-| Module                               | What it gives                                                             |
-| ------------------------------------ | ------------------------------------------------------------------------- |
-| [`skathi:app`](#skathiapp)           | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects |
-| [`skathi:runtime`](#skathiruntime)   | The Skathi version, the host's features, AOT and single-file              |
-| [`skathi:os`](#skathios)             | Platform, architecture, OS release, host name, home and temp              |
-| [`skathi:network`](#skathinetwork)   | Online, internet reachability, connection type, metered and roaming       |
-| [`skathi:numeric`](#skathinumeric)   | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                 |
-| [`skathi:toml`](#skathitoml)         | `TOML.parse()` and `TOML.stringify()`                                     |
-| [`skathi:binary`](#skathibinary)     | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64   |
-| [`skathi:encoding`](#skathiencoding) | Hex, Base32, Base64, legacy text encodings and MIME types                 |
+| Module                               | What it gives                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| [`skathi:app`](#skathiapp)           | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects             |
+| [`skathi:runtime`](#skathiruntime)   | The Skathi version, the host's features, AOT and single-file                          |
+| [`skathi:os`](#skathios)             | Platform, architecture, OS release, host name, home and temp                          |
+| [`skathi:network`](#skathinetwork)   | Online, internet reachability, connection type, metered and roaming                   |
+| [`skathi:numeric`](#skathinumeric)   | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                             |
+| [`skathi:toml`](#skathitoml)         | `TOML.parse()` and `TOML.stringify()`                                                 |
+| [`skathi:binary`](#skathibinary)     | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
+| [`skathi:encoding`](#skathiencoding) | Hex, Base32, Base64, legacy text encodings and MIME types                             |
+| [`skathi:time`](#skathitime)         | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
+| [`skathi:units`](#skathiunits)       | `DataSize`, `Frequency`, `Angle`                                                      |
 
 A name Skathi has no module for is a build error that lists the ones there are. The modules are
 part of the host, so they work the same under `sk dev` and in a built app. A module the embedding
@@ -439,3 +441,122 @@ Text that is not valid for its codec throws a `SyntaxError` that says which char
 
 `Mime.extensions` on Windows also asks the registry for a type the table does not know. The rest is
 the same on every platform.
+
+## skathi:time
+
+Durations, stopwatches, deadlines, backoff, rate limits, retries and timers.
+
+```ts
+import { Deadline, RetryPolicy, Stopwatch, TimeSpan } from "skathi:time";
+
+const deadline = Deadline.after(TimeSpan.parse("10s"));
+const policy = new RetryPolicy({ attempts: 4, backoff: { initial: 200 } });
+
+const watch = Stopwatch.startNew();
+const response = await policy.run((attempt, signal) => fetch(url, { signal }), deadline.signal);
+console.log(`took ${watch.elapsed}`); // "took 1.284s"
+```
+
+Wherever a time is taken, it is a number of milliseconds or a `TimeSpan`.
+
+### TimeSpan
+
+A length of time as one number of milliseconds. `Temporal.Duration` keeps separate fields and
+cannot be compared without a reference date; a `TimeSpan` compares with `<` and adds up.
+
+| Member                                                                                | What it does                                                   |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `TimeSpan.fromMilliseconds(n)`, `fromSeconds`, `fromMinutes`, `fromHours`, `fromDays` | A span of that length                                          |
+| `TimeSpan.parse(text)`                                                                | `"1h30m"`, `"1.5s"`, `"250ms"`, `"2d 4h"`, ISO 8601 `"P1DT2H"` |
+| `totalMilliseconds`, `totalSeconds`                                                   | The length                                                     |
+| `add(other)`, `subtract(other)`                                                       | A new span                                                     |
+| `toDuration()`                                                                        | A `Temporal.Duration` of days, hours, minutes, seconds, ms     |
+| `toString(locale?)`                                                                   | `"1h30m"`; with a locale, `"1 hr, 30 min"`                     |
+
+`parse` throws a `SyntaxError` for text it cannot read, and for years and months, which have no
+fixed length. `toString()` without a locale writes what `parse` reads. `valueOf()` and `toJSON()`
+give the milliseconds, so `+span`, `a < b` and `JSON.stringify` work on it.
+
+### Stopwatch
+
+`new Stopwatch()` is stopped; `Stopwatch.startNew()` is running. `start()`, `stop()`, `reset()`
+and `restart()` control it, `elapsed` is a `TimeSpan`, `running` says whether it counts. `stop()`
+keeps the time and `start()` goes on from it. It reads the OS's monotonic clock, so a change of the
+wall clock does not move it.
+
+### Deadline
+
+`Deadline.after(time)` is a point in time a chain of calls must finish by.
+
+| Member             | What it does                                                                |
+| ------------------ | --------------------------------------------------------------------------- |
+| `signal`           | An `AbortSignal` that aborts with a `TimeoutError` when the deadline passes |
+| `remaining()`      | Milliseconds left, 0 once passed                                            |
+| `expired()`        | Whether it has passed                                                       |
+| `throwIfExpired()` | Throws a `TimeoutError` `DOMException` once passed                          |
+
+Unlike `AbortSignal.timeout()`, a deadline tells what is left, to hand the rest of the time to the
+next call.
+
+### Backoff and RetryPolicy
+
+`new Backoff({ initial, max, factor, jitter })` gives growing delays: `next()` returns
+`initial × factor^attempt` milliseconds, capped at `max`. The defaults are 100 ms, 30 s and 2.
+`jitter` is `"full"` (default: a random delay from 0 to that value), `"equal"` (from half of it)
+or `"none"`. `reset()` starts over; `attempt` counts the calls.
+
+`new RetryPolicy({ attempts, backoff, retryIf })` runs a function until it succeeds.
+`run(fn, signal?)` calls `fn(attempt, signal)` with attempts numbered from 1 and waits a backoff
+delay after each failure. It rejects with the last error when the attempts run out or
+`retryIf(error)` returns `false`, and with the signal's reason when the signal aborts. `backoff`
+takes the options of `Backoff`; every `run` counts its own delays.
+
+### RateLimiter
+
+`new RateLimiter({ tokens, per, burst })` is a token bucket: `tokens` are added every `per`, and up
+to `burst` of them (`tokens` by default) wait unused.
+
+- `tryAcquire(count?)` takes the tokens if they are there and says whether it did.
+- `acquire(count?, signal?)` resolves when the tokens are the caller's, in the order of the calls.
+  Aborting the signal rejects and gives them back.
+- `available` is the whole tokens that can be taken now.
+
+### Timer
+
+`new Timer(time, { repeat })` fires a `tick` event when its time is up, once or repeatedly.
+`start()`, `pause()`, `resume()` and `reset()` control it; `remaining` is the milliseconds to the
+next tick and stands still while paused. A `Timer` runs on the host's event loop, not on frames,
+so it fires in a hidden window, where `requestAnimationFrame` does not.
+
+The module is the same on every platform.
+
+## skathi:units
+
+Sizes of data, frequencies and angles.
+
+```ts
+import { Angle, DataSize, Frequency } from "skathi:units";
+
+DataSize.parse("1.5 GiB").bytes; // 1610612736
+DataSize.bytes(1_500_000_000).format(); // "1.5 GB"
+Frequency.hz(60).period.totalMilliseconds; // 16.666…
+Angle.deg(-90).normalize().degrees; // 270
+```
+
+| Class       | Made by                     | Members                                             |
+| ----------- | --------------------------- | --------------------------------------------------- |
+| `DataSize`  | `bytes(n)`, `parse(text)`   | `bytes`, `to(unit)`, `format({ binary, locale })`   |
+| `Frequency` | `hz(n)`, `fromPeriod(time)` | `hz`, `period` (a `TimeSpan`)                       |
+| `Angle`     | `deg(n)`, `rad(n)`          | `degrees`, `radians`, `normalize()` (0° up to 360°) |
+
+`DataSize` units are `B`, the decimal `kB`, `MB`, `GB`, `TB`, `PB` (1000 bytes to the step) and
+the binary `KiB`, `MiB`, `GiB`, `TiB`, `PiB` (1024). `parse` reads a number and a unit in either
+case, and a bare number as bytes. `format()` picks the largest unit that leaves at least 1 and
+keeps one decimal; `binary: true` counts in 1024s. The number is written for `locale`, the app's
+by default, by `Intl.NumberFormat`: `"1,5 MB"` in German. With `"intl": "invariant"` that is the
+root locale's form.
+
+`String(value)` gives `"1.5 GB"`, `"44.1 kHz"` and `"90°"`. A `DataSize` and a `Frequency` compare
+with `<` by their bytes and hertz.
+
+The module is the same on every platform.

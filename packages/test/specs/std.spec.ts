@@ -125,6 +125,58 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:time measures, limits, retries and fires on the event loop",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startTime(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.timeResult)"));
+      }
+      const t = JSON.parse(raw);
+      expect(t.failed).toBeUndefined();
+      expect(t.span).toEqual([5_430_000, 5430, "1h30m30s", 5_430_000, '{"span":5430000}']);
+      expect(t.localized).toContain("30 min");
+      expect(t.duration).toEqual(["PT1H30M30S", "Duration"]);
+      expect(t.iso).toBe(86_400_500);
+      expect(t.badSpan).toStartWith('SyntaxError: TimeSpan.parse: "90" is not a duration');
+      expect([t.ordered, t.stopped, t.held, t.running]).toEqual([true, true, true, false]);
+      expect([t.delays, t.jittered, t.attempts]).toEqual([[100, 200, 350], true, 3]);
+      expect(t.badBackoff).toStartWith("RangeError");
+      expect([t.before, t.sameSignal]).toEqual([[false, true, false], true]);
+      expect(t.after).toEqual([true, 0, true, "TimeoutError"]);
+      expect(t.passed).toBe("TimeoutError: The deadline has passed");
+      expect([t.taken, t.waited, t.queued, t.refused]).toEqual([[true, true, false], true, "resolved", "AbortError"]);
+      expect([t.retried, t.calls, t.exhausted, t.gaveUp, t.picky]).toEqual(["done", [1, 2, 3], "TypeError", 2, 1]);
+      expect(t.stillPaused).toEqual([0, true, false]);
+      expect(t.fired).toEqual([1, false]);
+      expect(t.repeated).toBe(true);
+      expect(t.globals).toEqual([]);
+    },
+    T,
+  );
+
+  test(
+    "skathi:units converts and formats sizes, frequencies and angles",
+    async () => {
+      const app = await start();
+      const u = JSON.parse(String(await app.eval("__SK_TEST_STD__.units()")));
+      expect([u.bytes, u.to]).toEqual([1_610_612_736, [1536, 2.5]]);
+      expect(u.format.slice(0, 2)).toEqual(["1.5 GB", "1.5 GiB"]);
+      expect(u.format[2]).toStartWith("999");
+      expect(u.format[3]).toBe("1,5 MB");
+      expect(u.larger).toBe(true);
+      expect(u.badSize).toStartWith('SyntaxError: DataSize.parse: "3 parsecs" is not a size');
+      expect(u.frequency).toEqual([20, 0.5]);
+      expect(u.frequencyText).toEqual(["44.1 kHz", "1 kHz"]);
+      expect(u.noPeriod).toStartWith("RangeError");
+      expect(u.angle).toEqual([180, true, 270]);
+      expect(u.angleText).toBe("90°");
+    },
+    T,
+  );
+
+  test(
     "skathi:network reads the connection from the OS",
     async () => {
       const app = await start();

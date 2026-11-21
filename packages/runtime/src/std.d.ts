@@ -28,6 +28,14 @@ declare module "skathi:runtime" {
   export * from "@skathi-native/runtime/std/runtime";
 }
 
+declare module "skathi:time" {
+  export * from "@skathi-native/runtime/std/time";
+}
+
 declare module "skathi:toml" {
   export * from "@skathi-native/runtime/std/toml";
+}
+
+declare module "skathi:units" {
+  export * from "@skathi-native/runtime/std/units";
 }

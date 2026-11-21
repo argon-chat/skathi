@@ -12,7 +12,9 @@ mod encoding;
 mod os;
 mod runtime;
 mod support;
+mod time;
 mod toml;
+mod units;
 
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
@@ -32,6 +34,8 @@ pub(crate) fn install(rt: &JsRuntime) {
         runtime::install(g, std);
         binary::install(g, std);
         encoding::install(g, std);
+        time::install(g, std);
+        units::install(g, std);
         if let Err(e) = toml::install(rt.ctx(), crate::js::Value(std)) {
             eprintln!("[std] skathi:toml could not be installed: {e}");
         }

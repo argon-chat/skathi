@@ -43,7 +43,9 @@ export const STD_MODULES: readonly string[] = [
   "numeric",
   "os",
   "runtime",
+  "time",
   "toml",
+  "units",
 ];
 export const isStdModule = (spec: string) => spec.startsWith("skathi:");
 
