@@ -24,6 +24,12 @@ fn checkout_revision(checkout: &Path) -> String {
 }
 
 fn main() {
+    let target = env::var("TARGET").unwrap();
+    let (windows, prebuilt) = match target.as_str() {
+        "x86_64-pc-windows-msvc" => (true, "bun-webkit"),
+        "aarch64-apple-darwin" => (false, "bun-webkit-macos-arm64"),
+        _ => panic!("sk-aot supports Windows x64 and macOS arm64 hosts, got {target}"),
+    };
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let sdk = manifest
         .parent()
@@ -64,13 +70,18 @@ fn main() {
     let redjs = sdk.join("vendor/redjs/redjs");
     let webkit = env::var("BUN_WEBKIT_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| sdk.join("vendor/redjs/prebuilt/bun-webkit"));
+        .unwrap_or_else(|_| sdk.join("vendor/redjs/prebuilt").join(prebuilt));
     let include = webkit.join("include");
+    println!("cargo:rerun-if-env-changed=BUN_WEBKIT_DIR");
+    println!(
+        "cargo:rerun-if-changed={}",
+        include.join("cmakeconfig.h").display()
+    );
+    println!("cargo:rerun-if-changed=engine");
     let codegen = PathBuf::from(env::var("BUN_CODEGEN_DIR").expect("BUN_CODEGEN_DIR"));
-    cc::Build::new()
+    let mut compiler = cc::Build::new();
+    compiler
         .cpp(true)
-        .compiler("clang-cl")
-        .static_crt(true)
         .file("engine/compile.cpp")
         .include(&include)
         .include(include.join("JavaScriptCore"))
@@ -83,17 +94,37 @@ fn main() {
         .define("STATICALLY_LINKED_WITH_JavaScriptCore", "1")
         .define("STATICALLY_LINKED_WITH_WTF", "1")
         .define("STATICALLY_LINKED_WITH_BMALLOC", "1")
-        .define("BUILDING_WITH_CMAKE", "1")
-        .define("NOMINMAX", None)
-        .define("WIN32", None)
-        .define("_WINDOWS", None)
-        .define("WIN32_LEAN_AND_MEAN", "1")
-        .define("_CRT_SECURE_NO_WARNINGS", None)
-        .flag("/std:c++23preview")
-        .flag("/W0")
-        .flag("-Wno-inconsistent-dllimport")
-        .flag("/FIcmakeconfig.h")
-        .compile("sk_aot_engine");
+        .define("BUILDING_WITH_CMAKE", "1");
+    if windows {
+        compiler
+            .compiler("clang-cl")
+            .static_crt(true)
+            .define("NOMINMAX", None)
+            .define("WIN32", None)
+            .define("_WINDOWS", None)
+            .define("WIN32_LEAN_AND_MEAN", "1")
+            .define("_CRT_SECURE_NO_WARNINGS", None)
+            .flag("/std:c++23preview")
+            .flag("/W0")
+            .flag("-Wno-inconsistent-dllimport")
+            .flag("/FIcmakeconfig.h");
+    } else {
+        compiler
+            .compiler(env::var("CXX").unwrap_or_else(|_| "clang++".into()))
+            .opt_level(2)
+            .flag("-std=c++23")
+            .flag("-include")
+            .flag("cmakeconfig.h")
+            .flag("-fno-exceptions")
+            .flag("-fno-rtti")
+            .flag("-w")
+            .define("BUILDING_JSCONLY__", None);
+    }
+    compiler.compile("sk_aot_engine");
+    if !windows {
+        return;
+    }
+
     // bun_sys does its file I/O through libuv on Windows: Bun's fork and sources, at Bun's pin.
     let libuv = bun.join("vendor/libuv");
     let shared = [
@@ -174,5 +205,4 @@ fn main() {
     // Folded natives (DataView's setInt8 and setUint8) give one boxed call two stubs, which
     // the engine refuses when it creates a realm.
     println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
-    println!("cargo:rerun-if-changed=engine");
 }

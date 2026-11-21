@@ -4,7 +4,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve, basename } from "node:path";
-import { canonicalTableReceipt } from "./toolchain";
+import { canonicalTableReceipt, webkitDirectory } from "./toolchain";
 const FRONTEND = "237bba51e98a8b3d5b62d2d6c33853c2e83820a7";
 const WEBKIT = "3bc94211496460feda299ef85eef710eb67fafb3";
 function argument(name: string): string {
@@ -22,8 +22,9 @@ if (revision.exitCode || revision.stdout.toString().trim() !== FRONTEND) {
 }
 const clean = Bun.spawnSync(["git", "-C", root, "diff", "--quiet", "HEAD", "--"]);
 if (clean.exitCode !== 0) throw new Error("Bun tracked source checkout is modified; use a clean pinned checkout");
-const engine = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/Source/JavaScriptCore/aot");
-const generated = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/include/JavaScriptCore/aot");
+const webkit = webkitDirectory(sdk);
+const engine = resolve(webkit, "Source/JavaScriptCore/aot");
+const generated = resolve(webkit, "include/JavaScriptCore/aot");
 const pins = readFileSync(resolve(sdk, "vendor/redjs/redjs/pins.txt"), "utf8");
 if (!pins.includes(`webkit.version = ${WEBKIT}`))
   throw new Error("Review the frontend/engine pin together before regenerating");

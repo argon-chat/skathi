@@ -4,15 +4,16 @@
 //   bun tools/sk-aot/setup.ts
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, copyFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { loadPin, verifyEngine, verifyTable, webkitDirectory } from "../../scripts/aot/toolchain";
 
 const here = import.meta.dir;
 const sdk = resolve(here, "../..");
 const cache = join(here, ".cache");
 const bun = join(cache, "bun");
 const table = join(cache, "table");
-const engine = join(sdk, "vendor/redjs/prebuilt/bun-webkit/Source/JavaScriptCore/aot");
-const pin = JSON.parse(readFileSync(join(sdk, "packages/cli/aot/toolchain.lock.json"), "utf8"));
-const revision: string = pin.frontend.revision;
+const engine = join(webkitDirectory(sdk), "Source/JavaScriptCore/aot");
+const pin = loadPin();
+const revision = pin.frontend.revision;
 const SPARSE = [
   "src",
   "scripts",
@@ -160,10 +161,13 @@ function codegen() {
   }
 }
 
+verifyEngine(sdk, pin);
 checkout();
 vendor("lolhtml", "oven-sh/lol-html", dependencyCommit("lolhtml", "LOLHTML_COMMIT"));
 vendor("zstd", "facebook/zstd", dependencyCommit("zstd", "ZSTD_COMMIT"));
-vendor("libuv", "oven-sh/libuv", dependencyCommit("libuv", "LIBUV_COMMIT"), libuvPatches());
+if (process.platform === "win32")
+  vendor("libuv", "oven-sh/libuv", dependencyCommit("libuv", "LIBUV_COMMIT"), libuvPatches());
 run([process.execPath, join(sdk, "scripts/aot/generate-table.ts"), "--bun-source", bun, "--out", table], { cwd: sdk });
+await verifyTable(table, sdk, pin);
 codegen();
 console.log(`tools/sk-aot/.cache is at frontend ${revision}; build with: cd tools/sk-aot && cargo build --release`);

@@ -14,6 +14,15 @@ export {
 } from "../../packages/cli/aot/pin";
 import { verifyFile } from "../../packages/cli/aot/pin";
 
+export function webkitDirectory(sdk: string): string {
+  const override = process.env.BUN_WEBKIT_DIR;
+  if (override) return override;
+  const platform = process.platform === "darwin" ? "macos" : process.platform;
+  const architecture = process.arch === "x64" ? "amd64" : process.arch;
+  const prebuilt = platform === "win32" ? "bun-webkit" : `bun-webkit-${platform}-${architecture}`;
+  return join(sdk, "vendor/redjs/prebuilt", prebuilt);
+}
+
 // CRLF is part of the already-qualified table identity, independent of the
 // source checkout's line endings. Keep it explicit so clean CI regenerates
 // the same ABI identifier as the native compiler and existing images.
@@ -38,7 +47,7 @@ export function verifyEngine(sdk: string, pin: ToolchainPin): void {
     value("webkit.aot") !== "1"
   )
     throw Error("Review the native AOT frontend, table and redjs engine pins together");
-  const configuration = readFileSync(join(sdk, "vendor/redjs/prebuilt/bun-webkit/include/cmakeconfig.h"), "utf8");
+  const configuration = readFileSync(join(webkitDirectory(sdk), "include/cmakeconfig.h"), "utf8");
   if (!configuration.includes(pin.engine.revision) || !/^#define BUN_WEBKIT_ENABLE_AOT 1\r?$/m.test(configuration))
     throw Error("Run the pinned redjs setup before preparing a native inspector");
 }
@@ -51,10 +60,9 @@ export async function verifyTable(directory: string, sdk: string, pin: Toolchain
     hash.update(name);
     for await (const chunk of createReadStream(join(directory, name), { highWaterMark: 64 * 1024 })) hash.update(chunk);
   }
-  for await (const chunk of createReadStream(
-    join(sdk, "vendor/redjs/prebuilt/bun-webkit/include/JavaScriptCore/aot/AOTWire.cpp"),
-    { highWaterMark: 64 * 1024 },
-  ))
+  for await (const chunk of createReadStream(join(webkitDirectory(sdk), "include/JavaScriptCore/aot/AOTWire.cpp"), {
+    highWaterMark: 64 * 1024,
+  }))
     hash.update(chunk);
   if (hash.digest("hex") !== pin.table.id)
     throw Error("Generated native AOT table/schema differs from the reviewed pin");

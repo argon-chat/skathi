@@ -39,13 +39,19 @@ export function loadPin(path: string = PIN_PATH): ToolchainPin {
   return pin;
 }
 
-export function pinnedCompilerInfo(pin: ToolchainPin): CompilerInfo {
+export function pinnedCompilerInfo(
+  pin: ToolchainPin,
+  target = process.platform === "darwin" && process.arch === "arm64" ? "aarch64-macos" : pin.target,
+): CompilerInfo {
+  if (target !== "aarch64-macos" && target !== "x86_64-windows")
+    throw Error(`Unsupported native AOT target: ${target}`);
+  const platformOptions = target === "aarch64-macos" ? "aarch64;os=macos" : "x86_64";
   return {
-    target: pin.target,
+    target,
     frontend: pin.frontend.revision,
     engine: pin.engine.revision,
     tableId: pin.table.id,
-    compileOptions: `x86_64;references=narrow;image=pic;threads=1;default-options@${pin.engine.revision}`,
+    compileOptions: `${platformOptions};references=narrow;image=pic;threads=1;default-options@${pin.engine.revision}`,
   };
 }
 
@@ -61,7 +67,7 @@ export async function verifyFile(path: string, expected: string): Promise<void> 
     throw Error(`Native AOT input digest mismatch: ${path}; expected ${expected}, got ${actual}`);
 }
 
-export function verifyCompilerInfo(info: Record<string, unknown>, pin: ToolchainPin): void {
-  for (const [name, value] of Object.entries(pinnedCompilerInfo(pin)))
+export function verifyCompilerInfo(info: Record<string, unknown>, pin: ToolchainPin, target?: string): void {
+  for (const [name, value] of Object.entries(pinnedCompilerInfo(pin, target)))
     if (info[name] !== value) throw Error(`Native AOT compiler ${name} differs from the reviewed toolchain`);
 }

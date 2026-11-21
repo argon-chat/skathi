@@ -16,8 +16,11 @@ use core::ptr::NonNull;
 #[allow(dead_code)]
 mod typescript_libs;
 
-/// What `bun compile` names the folder of an executable's modules on Windows.
-const MODULE_PREFIX: &[u8] = b"B:/~BUN/root/";
+const MODULE_PREFIX: &[u8] = if cfg!(windows) {
+    b"B:/~BUN/root/"
+} else {
+    b"/$bunfs/root/"
+};
 
 pub struct Request<'r> {
     pub working_directory: &'r [u8],
@@ -62,8 +65,8 @@ fn transform_options(
             Box::from(&b"process.versions.bun"[..]),
         ],
         values: vec![
-            Box::from(&b"\"win32\""[..]),
-            Box::from(&b"\"x64\""[..]),
+            Box::from(const_format::concatcp!("\"", bun_core::Global::os_name, "\"").as_bytes()),
+            Box::from(const_format::concatcp!("\"", bun_core::Global::arch_name, "\"").as_bytes()),
             Box::from(
                 const_format::concatcp!("\"", bun_core::Global::package_json_version, "\"")
                     .as_bytes(),
@@ -109,7 +112,11 @@ pub fn compile(request: &Request<'_>, log: &mut Log) -> Option<AotBuild> {
     opts.allow_unresolved = AllowUnresolved::All;
     opts.bytecode = false;
     opts.public_path = Box::from(MODULE_PREFIX);
-    opts.compile_entry_point_name = Box::from(&b"unused.exe"[..]);
+    opts.compile_entry_point_name = Box::from(if cfg!(windows) {
+        &b"unused.exe"[..]
+    } else {
+        &b"unused"[..]
+    });
     opts.root_dir = Box::default();
     if transpiler.configure_defines().is_err() {
         return None;

@@ -1,8 +1,5 @@
 name: sk-aot
 
-# sk-aot (tools/sk-aot) for Windows x64, uploaded as the artifact sk-aot-windows-x64
-# (sk-aot-windows-x64.exe.gz). release.yml calls it; it is not part of ci.yml.
-
 on:
   workflow_call:
     inputs:
@@ -26,9 +23,29 @@ env:
 
 jobs:
   build:
-    name: sk-aot (Windows x64)
-    runs-on: windows-2025
+    name: sk-aot (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact: sk-aot-windows-x64
+            extension: .exe
+            shell: pwsh
+          - name: macOS arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            artifact: sk-aot-macos-arm64
+            extension: ""
+            shell: bash
+    env:
+      SK_AOT_TARGET: ${{ matrix.target }}
+      SK_AOT_ASSET: ${{ matrix.artifact }}
+      SK_AOT_EXT: ${{ matrix.extension }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -39,16 +56,17 @@ jobs:
         run: git submodule update --init --depth 1 -- vendor/redjs
       - uses: ./.github/actions/native
         with:
-          target: x86_64-pc-windows-msvc
+          target: ${{ matrix.target }}
       # The aot-nojit workload redirects the JIT and WebAssembly entry points these inventories list; a
       # new engine pin fails here until they are reviewed (bun scripts/aot/no-jit.ts --write).
-      - name: Removed entry points match the pinned engine
+      - if: runner.os == 'Windows'
+        name: Removed entry points match the pinned engine
         run: bun scripts/aot/no-jit.ts --check
       - name: Pinned nightly
         shell: bash
         working-directory: tools/sk-aot
         run: |
-          rustup toolchain install
+          rustup toolchain install --target "$SK_AOT_TARGET"
           rustc --version
 
       - name: Cache the Bun sources, table and codegen
@@ -59,7 +77,7 @@ jobs:
             tools/sk-aot/.cache/bun
             tools/sk-aot/.cache/table
             tools/sk-aot/.cache/home
-          key: sk-aot-setup-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/redjs/pins.txt') }}
+          key: sk-aot-setup-${{ matrix.target }}-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/redjs/pins.txt') }}
       # Takes a free drive letter with subst for Bun's codegen and removes it before it exits.
       - if: steps.setup-cache.outputs.cache-hit != 'true'
         name: Set up (Bun sources at the pin, C dependencies, table, codegen)
@@ -75,14 +93,14 @@ jobs:
           key: sk-aot-cargo-${{ hashFiles('tools/sk-aot/Cargo.lock') }}
       # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
       - name: Build
-        shell: pwsh
+        shell: ${{ matrix.shell }}
         working-directory: tools/sk-aot
-        run: cargo fmt --check && cargo build --release --locked
+        run: cargo fmt --check && cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Check
         shell: bash
         run: |
-          exe="$PWD/tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe"
+          exe="$PWD/tools/sk-aot/target/$SK_AOT_TARGET/release/sk-aot$SK_AOT_EXT"
           "$exe" info | tee "$RUNNER_TEMP/sk-aot-info.json"
           bun -e "
             import { loadPin, verifyCompilerInfo } from './packages/cli/aot/pin';
@@ -100,11 +118,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p sk-aot-out
-          gzip -9 -c tools/sk-aot/target/x86_64-pc-windows-msvc/release/sk-aot.exe > sk-aot-out/sk-aot-windows-x64.exe.gz
-          cp "$RUNNER_TEMP/sk-aot-info.json" sk-aot-out/sk-aot-windows-x64.info.json
+          gzip -9 -c "tools/sk-aot/target/$SK_AOT_TARGET/release/sk-aot$SK_AOT_EXT" > "sk-aot-out/$SK_AOT_ASSET$SK_AOT_EXT.gz"
+          cp "$RUNNER_TEMP/sk-aot-info.json" "sk-aot-out/$SK_AOT_ASSET.info.json"
           ls -l sk-aot-out
       - uses: actions/upload-artifact@v4
         with:
-          name: sk-aot-windows-x64
+          name: ${{ matrix.artifact }}
           path: sk-aot-out/
           if-no-files-found: error

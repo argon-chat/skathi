@@ -46,9 +46,9 @@ describe("native inspector build provenance", () => {
   });
 
   test("official frontend and every native compatibility field are pinned", async () => {
-    verifyCompilerInfo(info(), pin);
+    verifyCompilerInfo(info(), pin, "x86_64-windows");
     for (const name of Object.keys(info()))
-      expect(() => verifyCompilerInfo({ ...info(), [name]: "stale" }, pin)).toThrow();
+      expect(() => verifyCompilerInfo({ ...info(), [name]: "stale" }, pin, "x86_64-windows")).toThrow();
     await fixture((root) => {
       for (const change of [
         { frontend: { ...pin.frontend, sourceRepository: "https://example.com/bun.git" } },
