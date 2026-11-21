@@ -1,136 +1,21 @@
-name: sk-aot
-
+name: macOS workload qualification
 on:
-  workflow_call:
-    inputs:
-      ref:
-        description: "The ref to build (default: the caller's)"
-        type: string
-        default: ""
   workflow_dispatch:
     inputs:
       ref:
-        description: "The ref to build (default: the selected branch)"
-        type: string
-        default: ""
-
+        description: Candidate SDK commit
+        required: true
+      workloads:
+        description: Run which uploaded the release workloads
+        required: true
+        default: "44865937995"
 permissions:
+  actions: read
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-
 jobs:
-  build:
-    name: sk-aot (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows x64
-            runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            artifact: sk-aot-windows-x64
-            extension: .exe
-          - name: macOS arm64
-            runner: macos-15
-            target: aarch64-apple-darwin
-            artifact: sk-aot-macos-arm64
-            extension: ""
-    env:
-      SK_AOT_TARGET: ${{ matrix.target }}
-      SK_AOT_ASSET: ${{ matrix.artifact }}
-      SK_AOT_EXT: ${{ matrix.extension }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-      # sk-aot links redjs; the other submodules are not inputs.
-      - name: Check out redjs
-        run: git submodule update --init --depth 1 -- vendor/redjs
-      - uses: ./.github/actions/native
-        with:
-          target: ${{ matrix.target }}
-      # The aot-nojit workload redirects the JIT and WebAssembly entry points these inventories list; a
-      # new engine pin fails here until they are reviewed (bun scripts/aot/no-jit.ts --write).
-      - if: runner.os == 'Windows'
-        name: Removed entry points match the pinned engine
-        run: bun scripts/aot/no-jit.ts --check
-      - name: Pinned nightly
-        shell: bash
-        working-directory: tools/sk-aot
-        run: |
-          rustup toolchain install --target "$SK_AOT_TARGET"
-          rustc --version
-
-      - name: Cache the Bun sources, table and codegen
-        id: setup-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            tools/sk-aot/.cache/bun
-            tools/sk-aot/.cache/table
-            tools/sk-aot/.cache/home
-          key: sk-aot-setup-${{ matrix.target }}-${{ hashFiles('packages/cli/aot/toolchain.lock.json', 'tools/sk-aot/setup.ts', 'scripts/aot/generate-table.ts', 'scripts/aot/toolchain.ts', 'vendor/redjs/redjs/pins.txt') }}
-      # Takes a free drive letter with subst for Bun's codegen and removes it before it exits.
-      - if: steps.setup-cache.outputs.cache-hit != 'true'
-        name: Set up (Bun sources at the pin, C dependencies, table, codegen)
-        run: bun tools/sk-aot/setup.ts
-
-      - name: Cache the cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: sk-aot-cargo-${{ hashFiles('tools/sk-aot/Cargo.lock') }}
-      # pwsh, not bash: Git's /usr/bin/link.exe shadows MSVC's on bash's PATH.
-      - name: Build
-        shell: pwsh
-        working-directory: tools/sk-aot
-        run: cargo fmt --check && cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Check
-        shell: bash
-        run: |
-          exe="$PWD/tools/sk-aot/target/$SK_AOT_TARGET/release/sk-aot$SK_AOT_EXT"
-          "$exe" info | tee "$RUNNER_TEMP/sk-aot-info.json"
-          bun -e "
-            import { loadPin, verifyCompilerInfo } from './packages/cli/aot/pin';
-            verifyCompilerInfo(JSON.parse(await Bun.file(process.argv[1]).text()), loadPin());
-          " "$RUNNER_TEMP/sk-aot-info.json"
-          df -h .
-          mkdir -p "$RUNNER_TEMP/probe"
-          cd "$RUNNER_TEMP/probe"
-          echo 'globalThis.__sk_aot_probe = String(6 * 7);' > probe.js
-          "$exe" compile probe.js probe.ir probe.image
-          "$exe" run probe.image | tee run.txt
-          grep -q 'aot_active=true probe=42' run.txt
-
-      - name: Package
-        shell: bash
-        run: |
-          mkdir -p sk-aot-out
-          gzip -9 -c "tools/sk-aot/target/$SK_AOT_TARGET/release/sk-aot$SK_AOT_EXT" > "sk-aot-out/$SK_AOT_ASSET$SK_AOT_EXT.gz"
-          cp "$RUNNER_TEMP/sk-aot-info.json" "sk-aot-out/$SK_AOT_ASSET.info.json"
-          ls -l sk-aot-out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: sk-aot-out/
-          if-no-files-found: error
-
-  macos-apps:
-    if: github.event_name == 'workflow_dispatch' && github.workflow == 'sk-aot'
-    needs: build
-    name: Publish macOS AOT applications
+  qualify:
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -140,16 +25,29 @@ jobs:
       - uses: ./.github/actions/native
         with:
           target: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: macos-aot-workloads
+      - uses: ./.github/actions/css-checker
       - uses: actions/download-artifact@v4
         with:
-          name: sk-aot-macos-arm64
-          path: .tools/sk-aot
-      - uses: ./.github/actions/macos-aot
-        with:
-          benchmarks: "true"
+          name: skathi-macos-arm64-workloads
+          run-id: ${{ inputs.workloads }}
+          github-token: ${{ github.token }}
+          path: release-hosts
+      - run: bun scripts/aot/verify-macos.ts --hosts release-hosts --out target/mac-aot-qualification --bench-apps
+      - name: Measure startup, memory, disk size and scrolling
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          out = pathlib.Path("target/mac-aot-qualification")
+          apps = json.loads((out / "apps.json").read_text())
+          args = []
+          for key, path in apps.items():
+              if key == "devtools":
+                  continue
+              args.extend(["--" + key, path])
+              subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", path, out / (key + ".zip")], check=True)
+          subprocess.run(["python3", "benches/nojit/macos.py", *args, "--out", out / "measurements.json"], check=True)
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
