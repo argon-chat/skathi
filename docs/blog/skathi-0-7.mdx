@@ -274,7 +274,7 @@ The machine has no sound yet.
 - **AOT** is for Windows x64 and macOS arm64. Linux hosts run the JIT.
 - **`skathi:text`** has no collation, word boundaries or Unicode properties yet: use `Intl.Collator`, `Intl.Segmenter` and `normalize()`.
 - **`skathi:ffi`** passes no struct by value.
-- **`skathi:network`** reports only `online` on macOS and Linux.
+- **`skathi:network`** has no `roaming` or `overDataLimit` on macOS and Linux, and no connectivity check on macOS. On Linux, `internet` and `metered` need NetworkManager.
 
 </Aside>
 

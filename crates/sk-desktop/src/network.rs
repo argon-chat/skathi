@@ -1,7 +1,7 @@
 //! `navigator.onLine` and the `online` / `offline` events, from the OS. As in Chromium, online means "the OS
 //! believes there is a network". Windows uses the connectivity hint (iphlpapi, 2004+), resolved at run time
-//! so an older Windows still starts with the state unset; Linux uses rtnetlink. [`install`] seeds the state
-//! synchronously before any context exists.
+//! so an older Windows still starts with the state unset; Linux uses rtnetlink and macOS the path monitor.
+//! [`install`] seeds the state synchronously before any context exists.
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -98,13 +98,26 @@ fn announce(event: &str) {
 }
 
 /// Never panics: called across the Win32 ABI.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(target_os = "windows")]
 fn set_details(new: Details, announce_change: bool) {
     let changed = {
         let mut details = DETAILS.lock().unwrap_or_else(|e| e.into_inner());
         std::mem::replace(&mut *details, new) != new
     };
     *KIND.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if changed && announce_change {
+        announce("change");
+    }
+}
+
+/// Takes what the OS says now; `details: None` keeps the last. One `change` however much of it moved.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn refresh(details: Option<Details>, kind: &'static str, announce_change: bool) {
+    let mut changed = details.is_some_and(|new| {
+        let mut details = DETAILS.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::replace(&mut *details, new) != new
+    });
+    changed |= KIND.lock().unwrap_or_else(|e| e.into_inner()).replace(kind) != Some(kind);
     if changed && announce_change {
         announce("change");
     }
@@ -125,6 +138,24 @@ fn on_hint(online: bool) {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn seed(online: bool) {
+    *calc() = Some(Debounce::new(online));
+    navigator::set_on_line(Some(online));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn start() -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("sk-net".into())
+        .spawn(run)
+        .map(drop)
+}
+
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
 fn run() {
     let mut guard = calc();
     loop {
@@ -327,144 +358,14 @@ mod imp {
 }
 
 #[cfg(target_os = "linux")]
-mod imp {
-    use std::io;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[path = "network/linux.rs"]
+mod imp;
 
-    use super::{calc, navigator, on_hint, Debounce};
+#[cfg(target_os = "macos")]
+#[path = "network/macos.rs"]
+mod imp;
 
-    const UNSET: &str =
-        "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
-
-    pub(super) fn connection_type() -> &'static str {
-        "unknown"
-    }
-
-    pub(super) fn online_now() -> io::Result<bool> {
-        let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-        if unsafe { libc::getifaddrs(&mut list) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let wanted = (libc::IFF_UP | libc::IFF_RUNNING) as u32;
-        let mut online = false;
-        let mut cursor = list;
-        while !cursor.is_null() && !online {
-            // SAFETY: a node of the list getifaddrs returned, freed below.
-            let ifa = unsafe { &*cursor };
-            cursor = ifa.ifa_next;
-            if ifa.ifa_addr.is_null()
-                || ifa.ifa_flags & wanted != wanted
-                || ifa.ifa_flags & libc::IFF_LOOPBACK as u32 != 0
-            {
-                continue;
-            }
-            online = match i32::from(unsafe { (*ifa.ifa_addr).sa_family }) {
-                libc::AF_INET => true,
-                libc::AF_INET6 => {
-                    // SAFETY: an AF_INET6 address is a sockaddr_in6.
-                    let octets = unsafe {
-                        (*ifa.ifa_addr.cast::<libc::sockaddr_in6>())
-                            .sin6_addr
-                            .s6_addr
-                    };
-                    !(octets[0] == 0xfe && octets[1] & 0xc0 == 0x80)
-                }
-                _ => false,
-            };
-        }
-        unsafe { libc::freeifaddrs(list) };
-        Ok(online)
-    }
-
-    fn subscribe() -> io::Result<OwnedFd> {
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_NETLINK,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-                libc::NETLINK_ROUTE,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: a descriptor this call just opened and nothing else owns.
-        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-        let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-        addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-        addr.nl_groups =
-            (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
-        let size = std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
-        if unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&addr as *const libc::sockaddr_nl).cast(),
-                size,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(fd)
-    }
-
-    fn watch(fd: OwnedFd) {
-        let mut buffer = [0u8; 16 * 1024];
-        loop {
-            let n =
-                unsafe { libc::recv(fd.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), 0) };
-            if n < 0 {
-                let error = io::Error::last_os_error();
-                match error.raw_os_error() {
-                    Some(libc::EINTR) => continue,
-                    Some(libc::ENOBUFS) => {}
-                    _ => {
-                        crate::log_later("advisory", format!("navigator.onLine: the netlink socket failed ({error}); onLine keeps its last value"));
-                        return;
-                    }
-                }
-            }
-            if let Ok(online) = online_now() {
-                on_hint(online);
-            }
-        }
-    }
-
-    pub(super) fn install() {
-        let fd = match subscribe() {
-            Ok(fd) => fd,
-            Err(error) => {
-                crate::advise_later(&format!(
-                    "navigator.onLine: no rtnetlink socket ({error}), {UNSET}"
-                ));
-                return;
-            }
-        };
-        let seed = match online_now() {
-            Ok(online) => online,
-            Err(error) => {
-                crate::advise_later(&format!(
-                    "navigator.onLine: getifaddrs failed ({error}), {UNSET}"
-                ));
-                return;
-            }
-        };
-        *calc() = Some(Debounce::new(seed));
-        navigator::set_on_line(Some(seed));
-        let started = std::thread::Builder::new()
-            .name("sk-netlink".into())
-            .spawn(move || watch(fd))
-            .and_then(|_| {
-                std::thread::Builder::new()
-                    .name("sk-net".into())
-                    .spawn(super::run)
-            });
-        if let Err(e) = started {
-            crate::advise_later(&format!("navigator.onLine: its threads did not start ({e}), so onLine keeps its startup value"));
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 mod imp {
     pub(super) fn install() {}
 
@@ -526,6 +427,37 @@ mod tests {
         assert_eq!(navigator::on_line_state(), Some(level_is_online(level)));
         install();
         assert!(navigator::on_line_state().is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_default_route_names_the_interface_and_sysfs_its_kind() {
+        let v4 =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n\
+                  wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+                  wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0\n";
+        let v6 = "00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+                  fe800000000000000000000000000001 00000064 00000001 00000000 00000003 eth0\n\
+                  00000000000000000000000000000000 00 00000000000000000000000000000000 00 \
+                  00000000000000000000000000000000 ffffffff 00000001 00000000 00200200 lo\n";
+        assert_eq!(
+            imp::default_routes(v4, v6),
+            [("wlan0".to_owned(), 600), ("eth0".to_owned(), 100)]
+        );
+        assert_eq!(
+            imp::kind_of("1\n", "INTERFACE=eth0\nIFINDEX=2\n", false),
+            "ethernet"
+        );
+        assert_eq!(
+            imp::kind_of("1\n", "DEVTYPE=wlan\nINTERFACE=wlan0\n", true),
+            "wifi"
+        );
+        assert_eq!(imp::kind_of("1\n", "DEVTYPE=wwan\n", false), "cellular");
+        assert_eq!(imp::kind_of("1\n", "DEVTYPE=bridge\n", false), "other");
+        assert_eq!(
+            imp::kind_of("65534\n", "DEVTYPE=wireguard\n", false),
+            "other"
+        );
     }
 
     #[cfg(target_os = "linux")]

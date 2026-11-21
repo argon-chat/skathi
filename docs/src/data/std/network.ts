@@ -1,12 +1,12 @@
-import { OK, PART, PLAN, importLine, os, section } from "./shared";
+import { OK, PART, importLine, os, section } from "./shared";
 
 const IMPORT = importLine("skathi:network", "network");
 const WINDOWS_2004 =
   'Windows needs Windows 10 2004 or later. Before it `online` reads `true`, `internet` reads `"unknown"`, the three flags read `null` and no event fires.';
 const MAC =
-  'On macOS, for now, `online` is always `true`, `internet` and `type` read `"unknown"`, the three flags read `null` and no event fires.';
+  'On macOS, `internet` reads `"none"` without a network and `"unknown"` with one: the system has no connectivity check to ask. `roaming` and `overDataLimit` read `null`.';
 const LINUX =
-  'On Linux, `online` and its events work. For now `internet` and `type` read `"unknown"`, and `metered`, `roaming` and `overDataLimit` read `null`.';
+  'On Linux, `internet` and `metered` come from NetworkManager; on a system without it they read `"unknown"` and `null`. `roaming` and `overDataLimit` read `null`.';
 
 export const network = section("skathi:network", [
   {
@@ -15,7 +15,7 @@ export const network = section("skathi:network", [
     kind: "object",
     summary:
       "Reads what the OS knows about the connection: online, internet reachability, connection type, metered and roaming, with change events.",
-    platforms: os(OK, PLAN, PART),
+    platforms: os(OK, PART, PART),
     syntax: `${IMPORT}
 
 readonly network.online: boolean
@@ -33,8 +33,9 @@ network.addEventListener(type: "change" | "online" | "offline", listener: (event
       "`type` is the physical connection traffic takes. See [ConnectionType](/std/connection-type/).",
       "`metered` says the connection is billed by use. `metered`, `roaming` and `overDataLimit` are `null` when the OS cannot tell.",
       "On Windows, `metered` is `true` for a fixed or variable-cost connection and `false` for an unrestricted one. `roaming` and `overDataLimit` come from the same system cost hint.",
+      "On macOS, `metered` is `true` on a connection the system marks as expensive, such as cellular or a personal hotspot. On Linux it is NetworkManager's metered setting, its guess included.",
       "`online` and `offline` fire together with `window`'s events of the same name. Each is followed by a `change` on `network`.",
-      "On Windows, `change` also fires when `internet`, `metered`, `roaming` or `overDataLimit` changes.",
+      "`change` also fires when `internet`, `metered`, `roaming` or `overDataLimit` changes, and on macOS and Linux when `type` does.",
       "A change towards online is announced after 500 ms and a change towards offline after 1.5 s. A switch between networks that passes through no network inside that time fires neither `offline` nor `online`.",
     ],
     limitations: [MAC, LINUX, WINDOWS_2004],
@@ -108,7 +109,7 @@ onBeforeUnmount(() => network.removeEventListener("change", update));
     name: "Internet",
     kind: "type",
     summary: "The values of `network.internet`: the result of the operating system's own connectivity check.",
-    platforms: os(OK, PLAN, PLAN),
+    platforms: os(OK, PART, PART),
     syntax: `import type { Internet } from "skathi:network";
 
 type Internet = "full" | "limited" | "portal" | "none" | "unknown";`,
@@ -117,15 +118,16 @@ type Internet = "full" | "limited" | "portal" | "none" | "unknown";`,
       { value: "limited", status: OK, note: "A network without internet." },
       { value: "portal", status: OK, note: "A captive portal: the network asks for a sign-in first." },
       { value: "none", status: OK, note: "No network." },
-      { value: "unknown", status: OK, note: "The OS cannot tell. Always the value on macOS and Linux for now." },
+      { value: "unknown", status: OK, note: "The OS cannot tell." },
     ],
     notes: [
-      "On Windows the value comes from the system's connectivity check.",
+      "On Windows the value comes from the system's connectivity check, on Linux from NetworkManager's.",
       "Skathi sends no probe of its own. An app that needs its server checks its server.",
       '`"limited"` and `"portal"` are both online: `network.online` is `true` for them.',
     ],
     limitations: [
-      'On macOS and Linux the value is `"unknown"` for now.',
+      'On macOS the value is `"none"` without a network and `"unknown"` with one: the system has no connectivity check to ask.',
+      'On Linux without NetworkManager the value is `"unknown"`.',
       'On Windows before Windows 10 2004 the value is `"unknown"`.',
     ],
     examples: [
@@ -155,7 +157,7 @@ export function connectionHint(): string | null {
     name: "ConnectionType",
     kind: "type",
     summary: "The values of `network.type`: the physical connection traffic takes.",
-    platforms: os(OK, PLAN, PLAN),
+    platforms: os(OK, OK, OK),
     syntax: `import type { ConnectionType } from "skathi:network";
 
 type ConnectionType = "ethernet" | "wifi" | "cellular" | "other" | "none" | "unknown";`,
@@ -165,14 +167,14 @@ type ConnectionType = "ethernet" | "wifi" | "cellular" | "other" | "none" | "unk
       { value: "cellular", status: OK },
       { value: "other", status: OK, note: "Another kind of adapter, or nothing but virtual adapters." },
       { value: "none", status: OK, note: "No connected adapter has a default gateway." },
-      { value: "unknown", status: OK, note: "The OS cannot tell. Always the value on macOS and Linux for now." },
+      { value: "unknown", status: OK, note: "The OS cannot tell." },
     ],
     notes: [
       "On Windows it is the type of the connected adapter with a default gateway. With several, the one with the lowest route metric wins.",
       'Behind a VPN it is the adapter under the tunnel, and `"other"` only when there is nothing but virtual adapters.',
-      "The first read after a change asks the OS, which takes milliseconds. Later reads return the stored value.",
+      "On macOS it is the interface of the system's current network path. On Linux it is the interface of the default route with the lowest metric.",
+      "On Windows the first read after a change asks the OS, which takes milliseconds. Later reads return the stored value.",
     ],
-    limitations: ['On macOS and Linux the value is `"unknown"` for now.'],
     examples: [
       {
         title: "Hold large downloads on cellular",
