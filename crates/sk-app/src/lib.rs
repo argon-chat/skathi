@@ -61,8 +61,8 @@ mod inspector;
 pub mod js;
 mod json;
 mod mapped_file;
-#[cfg(feature = "audio")]
 mod memory;
+#[cfg(feature = "audio")]
 mod microphone;
 #[cfg(feature = "native-aot")]
 mod native_aot;
