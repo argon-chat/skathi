@@ -525,6 +525,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         crash_window::on_poisoned(cx);
         return;
     }
+    crash_window::on_entry_failed(cx);
     if first_wave_waits(window) {
         idle::rearm_unpaced(window, pump_frame);
         return;

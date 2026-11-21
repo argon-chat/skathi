@@ -104,6 +104,7 @@ pub struct Report {
     pub version: Option<String>,
     pub os: String,
     pub time: SystemTime,
+    pub what: &'static str,
     pub reason: String,
 }
 
@@ -136,11 +137,12 @@ impl Report {
              Host: Skathi {}\r\n\
              OS: {}\r\n\
              Time: {}\r\n\
-             Error: native panic: {}\r\n",
+             Error: {}: {}\r\n",
             self.app,
             env!("CARGO_PKG_VERSION"),
             self.os,
             utc(self.time),
+            self.what,
             self.reason,
         )
     }
@@ -269,6 +271,52 @@ fn app_name() -> String {
         .unwrap_or_else(|| "Skathi".to_string())
 }
 
+static ENTRY_ERROR: Mutex<Option<String>> = Mutex::new(None);
+static ENTRY_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// The app's entry threw before it put anything in the window: the user is looking at an empty one.
+#[cfg(feature = "prod")]
+pub(crate) fn entry_failed(error: String) {
+    *ENTRY_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+    ENTRY_FAILED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn on_entry_failed(cx: &mut App) {
+    if !ENTRY_FAILED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let Some(reason) = ENTRY_ERROR.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+        return;
+    };
+    let first = !DECIDED.swap(true, Ordering::SeqCst);
+    let decision = decide(
+        first,
+        crate::quiet::never_focus(),
+        crate::shutdown::is_closing(),
+    );
+    sk_tree::log::record(
+        "crash",
+        format!("[crash] the app's entry threw and mounted nothing: {reason}"),
+    );
+    if decision != Decision::Dialog {
+        return;
+    }
+    let report = Report {
+        app: app_name(),
+        version: app_version(),
+        os: os_version(),
+        time: SystemTime::now(),
+        what: "the app's entry threw",
+        reason,
+    };
+    cx.spawn(async move |cx| {
+        #[cfg(target_os = "windows")]
+        view::restore_primary(cx.update(view::primary_hwnd));
+        cx.update(|cx| show(report, cx))
+    })
+    .detach();
+}
+
 /// Called where JS would have run; only the first call logs and opens the dialog.
 pub(crate) fn on_poisoned(cx: &mut App) {
     let first = !DECIDED.swap(true, Ordering::SeqCst);
@@ -285,6 +333,7 @@ pub(crate) fn on_poisoned(cx: &mut App) {
         version: app_version(),
         os: os_version(),
         time: SystemTime::now(),
+        what: "native panic",
         reason: sk_runtime::bridge::poison_reason().unwrap_or_else(|| "(no message)".to_string()),
     };
     let line = format!(
@@ -976,6 +1025,7 @@ mod view {
                     version: p.version.clone(),
                     os: super::os_version(),
                     time: std::time::SystemTime::now(),
+                    what: "native panic",
                     reason: p.reason.clone(),
                 },
                 lang: if p.lang.is_empty() {
