@@ -181,8 +181,8 @@ fn read_manifest(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-/// Compact unless the app asks for the engine's own sizes: those commit about 370 MB that a
-/// page of ordinary size never touches.
+/// Compact unless the app asks for the engine's own sizes: on Windows those commit about
+/// 325 MB more, in pages an app of ordinary size never touches.
 fn memory_profile(value: Option<&OsStr>) -> Result<aot::MemoryProfile, String> {
     match value {
         None => Ok(aot::MemoryProfile::Compact),
