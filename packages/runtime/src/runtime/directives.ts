@@ -9,6 +9,7 @@ import {
   setOptionSelected,
   setSelectedIndex,
 } from "./select";
+import { addModelListener } from "./listeners";
 import { nextTick } from "@vue/runtime-core";
 import { hyphenate, inlineDisplay, setInlineDisplay, vShowHidden, vShowOriginalDisplay } from "./inline-style";
 
@@ -42,7 +43,7 @@ export const vModelText = {
           "not source a `change` event yet, so binding one would never fire at all",
       );
     }
-    el.addEventListener("input", () => {
+    addModelListener(el, "input", () => {
       if (el.composing) return;
       // `.trim` runs before `.number`, so `v` is still a string at both casts.
       let v: string | number = el.value;
@@ -101,7 +102,7 @@ export const vModelCheckbox = {
   deep: true,
   created(el: MirrorElement, _binding: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = modelAssigner(vnode);
-    el.addEventListener("change", () => {
+    addModelListener(el, "change", () => {
       const model = el._modelValue;
       const value = toggleValue(el);
       const checked = el.checked;
@@ -132,7 +133,7 @@ export const vModelRadio = {
   created(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
     el.checked = looseEqual(value, vnode.props?.value);
     el[assignKey] = modelAssigner(vnode);
-    el.addEventListener("change", () => {
+    addModelListener(el, "change", () => {
       (el[assignKey] as ((value: unknown) => void) | null | undefined)?.(toggleValue(el));
     });
   },
@@ -240,7 +241,7 @@ export const vModelSelect = {
   deep: true,
   created(el: MirrorElement, { value, modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
     el._modelValue = value;
-    el.addEventListener("change", () => {
+    addModelListener(el, "change", () => {
       const picked = selectOptions(el)
         .filter((o) => o._selected)
         .map((o) => (modifiers.number ? looseToNumber(modelValueOf(o)) : modelValueOf(o)));

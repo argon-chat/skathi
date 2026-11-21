@@ -377,6 +377,16 @@ export function addExtraListener(
   syncListenerFlag(node, name);
 }
 
+/**
+ * A `v-model` listener. It runs before the element's `@input` or `@change` handler, which then
+ * reads the new value: Vue's DOM runtime adds the directive's listener first.
+ */
+export function addModelListener(node: MirrorElement, name: string, fn: EventHandler): void {
+  addExtraListener(node, name, fn, false);
+  const entry = handlers.get(node)?.[canonicalEvent(name)]?.extraB.find((e) => e.fn === fn);
+  if (entry) entry.first = true;
+}
+
 export function removeExtraListener(
   node: MirrorElement,
   rawName: string,

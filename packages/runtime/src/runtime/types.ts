@@ -20,6 +20,8 @@ export interface ExtraListener {
   passive?: boolean;
   signalCleanup?: (() => void) | undefined;
   removed?: boolean;
+  /** Runs before the renderer's own handler for the event. */
+  first?: boolean;
 }
 
 /**

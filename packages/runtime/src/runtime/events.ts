@@ -630,6 +630,12 @@ function invoke(
   Object.defineProperty(ev, "currentTarget", { value: node, configurable: true });
   Object.defineProperty(ev, "eventPhase", { value: eventPhase, configurable: true });
   const fn = phase === "capture" ? buckets.capture : buckets.bubble;
+  if (phase === "bubble") {
+    for (const entry of buckets.extraB) {
+      if (state.immediate) break;
+      if (entry.first && !entry.removed) callListener(entry.fn, node, ev, !!entry.passive);
+    }
+  }
   if (fn) {
     const passive = !!buckets[phase === "capture" ? "passiveC" : "passiveB"];
     if (buckets[phase === "capture" ? "onceC" : "onceB"]) {
@@ -646,7 +652,7 @@ function invoke(
   const extra = phase === "capture" ? buckets.extraC : buckets.extraB;
   for (const entry of [...extra]) {
     if (state.immediate) break;
-    if (entry.removed) continue;
+    if (entry.removed || entry.first) continue;
     if (entry.once) {
       const i = extra.indexOf(entry);
       if (i >= 0) extra.splice(i, 1);

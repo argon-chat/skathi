@@ -181,6 +181,30 @@ describe("v-model", () => {
     return el;
   }
 
+  test("an @change handler beside v-model reads the picked value", () => {
+    const rt = createRuntime();
+    const model = ref<unknown>("a");
+    const seen: unknown[] = [];
+    let el!: El;
+    rt.createApp({
+      render: () =>
+        withDirectives(
+          h(
+            "select",
+            {
+              ref: (e: unknown) => (el = e as El),
+              "onUpdate:modelValue": (v: unknown) => (model.value = v),
+              onChange: () => seen.push(model.value),
+            },
+            [h("option", { value: "a" }, "A"), h("option", { value: "b" }, "B")],
+          ),
+          [[rt.vModelSelect as never, model.value]],
+        ),
+    }).mount();
+    pick(rt, el, 1);
+    expect(seen).toEqual(["b"]);
+  });
+
   test(".number with numeric :value — the Argon client's settings selects", async () => {
     const rt = createRuntime();
     const model = ref<unknown>(1);
