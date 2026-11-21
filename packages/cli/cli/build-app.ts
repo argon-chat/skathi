@@ -65,6 +65,7 @@ import {
 } from "./image-sections";
 import { appendMachOImage } from "./image-macho";
 import {
+  AD_HOC,
   entitlements,
   icnsFrom,
   ICON_NAME,
@@ -775,6 +776,15 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   const msNative = performance.now() - tn;
   const sidecars: Sidecars = { packs, icu, containers };
   writeSidecars(work, sidecars);
+  // The host refuses an unsigned image library; an embedder who bundles it signs it again.
+  if (options.payloadOnly && platform === "macos" && process.platform === "darwin") {
+    const codesign = Bun.which("codesign");
+    const want = options.sign ?? config.macos.sign;
+    const identity = want === false ? null : (want ?? AD_HOC);
+    for (const [file, bytes] of containers) {
+      if (bytes && codesign && identity) signBundle(codesign, join(work, file), identity, null, log);
+    }
+  }
 
   let packaged: Packaged | null = null;
   const ts = performance.now();
