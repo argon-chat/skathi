@@ -1023,7 +1023,7 @@ const graphics = section("Graphics and media", [
       "Multichannel graphs follow the spec: `channelCount`, `channelCountMode` and `channelInterpretation` on every node, with the speaker up- and down-mix rules for mono, stereo, quad and 5.1 and discrete mixing otherwise, up to 32 channels.",
       "`destination.maxChannelCount` is the output device's channel count. Raising `destination.channelCount` (up to it) plays each channel on its speaker, so a 5.1 or 7.1 graph plays as such on a 5.1 or 7.1 device; a narrower destination is mixed up onto the device's layout.",
       "`ChannelSplitterNode`, `ChannelMergerNode` and decoded `AudioBuffer`s keep their real channel counts.",
-      "`DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode` and `PeriodicWave` are there, as factories on the context and as constructors. A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.",
+      "`DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode` and `PeriodicWave` are there. Every node and `AudioBuffer` can be made by its constructor, `new GainNode(context, options)`, as well as by the factory on the context, and answers its `context`. A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.",
       "`suspend()` stops rendering and `currentTime`; `resume()` goes on from the same time.",
     ],
     limitations: [

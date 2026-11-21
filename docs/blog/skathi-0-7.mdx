@@ -174,6 +174,7 @@ source.connect(delay).connect(feedback).connect(delay);
 delay.connect(context.destination);
 ```
 
+- Every node and `AudioBuffer` has its constructor, `new GainNode(context, { gain: 0.5 })`, and a `context` property, which libraries written for browsers rely on.
 - A feedback loop works with a `DelayNode` in it, as in the spec.
 - A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.
 - `suspend()` now stops `currentTime` as well as the output, and `resume()` goes on from the same time.
