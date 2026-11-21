@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, time and units."
+description: "The modules every Skathi host provides under the skathi: prefix — ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, time, units and collections."
 section: Reference
 order: 6
 since: "0.7"
@@ -19,18 +19,19 @@ import { os } from "skathi:os";
 import { Runtime, runtime } from "skathi:runtime";
 ```
 
-| Module                               | What it gives                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------------- |
-| [`skathi:app`](#skathiapp)           | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects             |
-| [`skathi:runtime`](#skathiruntime)   | The Skathi version, the host's features, AOT and single-file                          |
-| [`skathi:os`](#skathios)             | Platform, architecture, OS release, host name, home and temp                          |
-| [`skathi:network`](#skathinetwork)   | Online, internet reachability, connection type, metered and roaming                   |
-| [`skathi:numeric`](#skathinumeric)   | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                             |
-| [`skathi:toml`](#skathitoml)         | `TOML.parse()` and `TOML.stringify()`                                                 |
-| [`skathi:binary`](#skathibinary)     | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
-| [`skathi:encoding`](#skathiencoding) | Hex, Base32, Base64, legacy text encodings and MIME types                             |
-| [`skathi:time`](#skathitime)         | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
-| [`skathi:units`](#skathiunits)       | `DataSize`, `Frequency`, `Angle`                                                      |
+| Module                                     | What it gives                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------- |
+| [`skathi:app`](#skathiapp)                 | `app.quit()`, `app.restart()`, `app.getVersion()`, and the `app*` objects             |
+| [`skathi:runtime`](#skathiruntime)         | The Skathi version, the host's features, AOT and single-file                          |
+| [`skathi:os`](#skathios)                   | Platform, architecture, OS release, host name, home and temp                          |
+| [`skathi:network`](#skathinetwork)         | Online, internet reachability, connection type, metered and roaming                   |
+| [`skathi:numeric`](#skathinumeric)         | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                             |
+| [`skathi:toml`](#skathitoml)               | `TOML.parse()` and `TOML.stringify()`                                                 |
+| [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
+| [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
+| [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
+| [`skathi:units`](#skathiunits)             | `DataSize`, `Frequency`, `Angle`                                                      |
+| [`skathi:collections`](#skathicollections) | `BitSet`, `BloomFilter`, `RingBuffer`, `DisjointSet`, `Trie`, `IntervalTree`          |
 
 A name Skathi has no module for is a build error that lists the ones there are. The modules are
 part of the host, so they work the same under `sk dev` and in a built app. A module the embedding
@@ -560,3 +561,92 @@ root locale's form.
 with `<` by their bytes and hertz.
 
 The module is the same on every platform.
+
+## skathi:collections
+
+Structures of bits, numbers and string keys, kept by the host.
+
+```ts
+import { BitSet, IntervalTree, RingBuffer, Trie } from "skathi:collections";
+
+const commands = new Trie<Command>();
+commands.set("open file", openFile).set("open folder", openFolder);
+[...commands.withPrefix("open")]; // [["open file", …], ["open folder", …]]
+
+const clips = new IntervalTree<Clip>();
+clips.insert(0, 4.5, intro).insert(4, 12, scene);
+clips.containing(4.2); // [intro, scene]
+```
+
+| Class             | Holds                                  | Typical use                                |
+| ----------------- | -------------------------------------- | ------------------------------------------ |
+| `BitSet`          | A fixed number of flags                | Millions of flags, set operations          |
+| `BloomFilter`     | A fingerprint of the values added      | "Certainly not seen" before a costly check |
+| `RingBuffer`      | The last `capacity` numbers            | Frame times, samples, a moving window      |
+| `DisjointSet`     | Which of `size` elements are connected | Grouping, flood fill, connected components |
+| `Trie<V>`         | Values under string keys, in key order | Search by prefix, autocomplete, routes     |
+| `IntervalTree<V>` | Values on intervals of numbers         | Timelines, ranges of text, schedules       |
+
+Every class has `size` and `clear()` except `DisjointSet`, whose elements are fixed. `BitSet`,
+`RingBuffer` and `Trie` are iterable.
+
+### BitSet
+
+`new BitSet(size)` holds `size` flags, all off.
+
+| Member                                     | What it does                                         |
+| ------------------------------------------ | ---------------------------------------------------- |
+| `set(index)`, `clear(index)`, `has(index)` | One flag; `clear()` without an index clears them all |
+| `count()`                                  | How many are on                                      |
+| `and(other)`, `or`, `xor`, `andNot`        | A new set; both must be the same size                |
+| `indices()`                                | The indices that are on, as a `Uint32Array`          |
+
+`set` and `clear` throw a `RangeError` for an index outside the set; `has` answers `false`.
+Iterating gives the indices that are on, in order.
+
+### BloomFilter
+
+`new BloomFilter(expected, falsePositiveRate)` is sized for `expected` values; the rate is 0.01 by
+default. `add(value)` and `addAll(values)` take strings, numbers, bigints and bytes.
+`mightHave(value)` is `false` only for a value that was never added; `true` means it was added or,
+at about the rate asked for, that it collides. A string and a number that print the same are
+different values. `size` counts the values added and `bits` is the memory in bits.
+
+### RingBuffer
+
+`new RingBuffer(capacity)` keeps the last `capacity` numbers. `push(value)` returns the number it
+pushed out once the buffer is full; `pushAll(values)` takes an array or a `Float64Array`.
+`shift()` takes the oldest. `at(index)` counts from the oldest, and from the newest for a negative
+index. `toArray()` copies the contents into a `Float64Array`, oldest first. `full` and `capacity`
+say how it stands.
+
+### DisjointSet
+
+`new DisjointSet(size)` starts with every element of `0..size` on its own. `union(a, b)` merges
+two sets and says whether they were separate, `connected(a, b)` asks, `find(element)` names the
+element that stands for a set, and `count` is the number of sets left.
+
+### Trie
+
+`new Trie<V>()` maps string keys to values of any kind: `set`, `get`, `has` and `delete` as on a
+`Map`.
+
+- `withPrefix(prefix)` iterates the `[key, value]` entries whose key starts with `prefix`.
+- `longestPrefix(text)` is the longest key that `text` starts with, or `undefined`.
+- Iterating the trie gives every entry.
+
+Keys come in the order of their code points.
+
+### IntervalTree
+
+`new IntervalTree<V>()` keeps values on closed intervals: `lo` and `hi` both belong to it.
+
+- `insert(lo, hi, value)` adds one; the same interval can hold several values.
+- `overlapping(lo, hi)` returns the values whose interval shares at least a point with the range,
+  ordered by the start of their interval.
+- `containing(point)` returns the ones that cover the point.
+- `delete(lo, hi, value)` removes one entry with those ends and that value, compared as `Object.is`
+  does.
+
+`Deque`, `PriorityQueue`, the sorted and ordered maps, `LRUCache` and the other containers of
+arbitrary values are not in this module yet. The module is the same on every platform.

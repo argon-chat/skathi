@@ -7,6 +7,7 @@ import { Runtime, runtime } from "skathi:runtime";
 import { TOML } from "skathi:toml";
 import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
+import { collections } from "./structures";
 
 const DOCUMENT = `title = "Skathi"
 big = 9007199254740993
@@ -69,6 +70,7 @@ Object.assign(globalThis, {
     binary: () => JSON.stringify(binary()),
     encoding: () => JSON.stringify(encoding()),
     units: () => JSON.stringify(units()),
+    collections: () => JSON.stringify(collections()),
     timeResult: null as string | null,
     startTime() {
       void time().then(

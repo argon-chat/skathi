@@ -2,6 +2,7 @@
 
 import * as app from "./app";
 import * as binary from "./binary";
+import * as collections from "./collections";
 import * as encoding from "./encoding";
 import * as network from "./network";
 import * as numeric from "./numeric";
@@ -14,6 +15,7 @@ import * as units from "./units";
 export const stdModules: Readonly<Record<string, Record<string, unknown>>> = {
   app,
   binary,
+  collections,
   encoding,
   network,
   numeric,

@@ -8,6 +8,7 @@ use sk_runtime::{host, JsRuntime};
 
 mod app;
 mod binary;
+mod collections;
 mod encoding;
 mod os;
 mod runtime;
@@ -33,6 +34,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         os::install(g, std);
         runtime::install(g, std);
         binary::install(g, std);
+        collections::install(g, std);
         encoding::install(g, std);
         time::install(g, std);
         units::install(g, std);

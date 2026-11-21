@@ -8,6 +8,10 @@ declare module "skathi:binary" {
   export * from "@skathi-native/runtime/std/binary";
 }
 
+declare module "skathi:collections" {
+  export * from "@skathi-native/runtime/std/collections";
+}
+
 declare module "skathi:encoding" {
   export * from "@skathi-native/runtime/std/encoding";
 }

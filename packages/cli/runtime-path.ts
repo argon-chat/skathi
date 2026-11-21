@@ -38,6 +38,7 @@ export const isNativeModule = (spec: string) => spec.startsWith("native:");
 export const STD_MODULES: readonly string[] = [
   "app",
   "binary",
+  "collections",
   "encoding",
   "network",
   "numeric",

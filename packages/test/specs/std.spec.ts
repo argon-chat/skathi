@@ -177,6 +177,38 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:collections keeps bits, numbers and keyed values",
+    async () => {
+      const app = await start();
+      const c = JSON.parse(String(await app.eval("__SK_TEST_STD__.collections()")));
+      expect(c.bits).toEqual([130, 65, [0, 2, 4], [0, 1, 2, 3, 4, 5, 64, 129], true, false, false]);
+      expect(c.lowAfterClear).toBe(6);
+      expect(c.outside).toStartWith("RangeError: BitSet.set: index 130 is outside 0..130");
+      expect(c.mismatch).toStartWith("RangeError: BitSet.and:");
+      expect(c.bloom).toEqual([true, true, false, false, 3]);
+      expect(c.badKey).toStartWith("TypeError");
+      expect(c.ring).toEqual([[null, null, null, 1], [4, 5, 6], 4, 6, null, true, 4, 2]);
+      expect(c.sets).toEqual([[true, true, false], 4, true, false, true]);
+      expect(c.trie).toEqual([
+        4,
+        [["/users", 2]],
+        ["/", "/about", "/users", "/zeta"],
+        true,
+        5,
+        "/users",
+        null,
+        [true, false],
+        6,
+      ]);
+      expect(c.intervals).toEqual([["a", "b", "b2", "c"], ["b2"], [true, false], 3, []]);
+      expect(c.sameObject).toEqual([true, false, true]);
+      expect(c.backwards).toStartWith("RangeError");
+      expect(c.globals).toEqual([]);
+    },
+    T,
+  );
+
+  test(
     "skathi:network reads the connection from the OS",
     async () => {
       const app = await start();
