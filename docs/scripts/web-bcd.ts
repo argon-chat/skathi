@@ -1,5 +1,6 @@
 // Fills src/data/web/bcd.ts (MDN link, experimental, deprecated per entry) from @mdn/browser-compat-data.
-// Usage: bun scripts/web-bcd.ts <path to BCD data.json or its package folder> [--check]
+// Usage: bun scripts/web-bcd.ts [--check] [path to BCD data.json or its package folder]
+// An entry BCD does not know fails the run until KEYS names its key, or null for one the web does not have.
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { entries, type WebEntry } from "../src/data/web/entries";
@@ -15,6 +16,7 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "performance-mark": "api.Performance.mark",
   "performance-measure": "api.Performance.measure",
   "web-workers": "api.Worker",
+  "audio-worklet": "api.AudioWorklet",
   "elements-and-attributes": "api.Element",
   "get-computed-style": "api.Window.getComputedStyle",
   "element-from-point": "api.Document.elementFromPoint",
@@ -173,11 +175,10 @@ function render(found: ReadonlyMap<string, Found>): string {
   ].join("\n");
 }
 
-const [source, ...flags] = process.argv.slice(2);
-if (source === undefined) {
-  console.error("usage: bun scripts/web-bcd.ts <@mdn/browser-compat-data folder or data.json> [--check]");
-  process.exit(2);
-}
+const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
+const source =
+  process.argv.slice(2).find((a) => !a.startsWith("--")) ??
+  Bun.resolveSync("@mdn/browser-compat-data", import.meta.dir);
 const file = existsSync(source) && statSync(source).isDirectory() ? join(source, "data.json") : source;
 const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
 if (!isObject(parsed)) throw new Error(`${file} is not BCD data`);
@@ -186,12 +187,14 @@ const version = isObject(meta) && typeof meta["version"] === "string" ? meta["ve
 
 const found = new Map<string, Found>();
 const unknown: WebEntry[] = [];
+const unlisted: WebEntry[] = [];
 const missingKeys: string[] = [];
 for (const e of entries) {
   const keys = candidates(e);
   const hit = keys.map((k) => lookup(parsed, k)).find((f) => f !== undefined);
   if (hit === undefined) {
     if (!e.skathiOnly) unknown.push(e);
+    if (!e.skathiOnly && !(e.slug in KEYS)) unlisted.push(e);
     if (keys.length > 0) missingKeys.push(`${e.slug} (${keys.join(", ")})`);
     continue;
   }
@@ -223,10 +226,18 @@ console.log(
 if (missingKeys.length > 0) console.log(`keys not found in BCD: ${missingKeys.join(", ")}`);
 if (stale.length > 0) console.log(`key overrides for missing slugs: ${stale.join(", ")}`);
 
+if (unlisted.length > 0) {
+  console.error(
+    `no BCD key for: ${unlisted.map((e) => e.slug).join(", ")}\n` +
+      "Give each a key in KEYS of scripts/web-bcd.ts, or null when MDN has no page for it.",
+  );
+  process.exit(1);
+}
+
 if (flags.includes("--check")) {
   const current = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
   if (current !== text) {
-    console.error("src/data/web/bcd.ts is out of date; run without --check");
+    console.error("src/data/web/bcd.ts is out of date; run `bun run bcd` in docs");
     process.exit(1);
   }
 } else {

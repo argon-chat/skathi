@@ -1,5 +1,6 @@
 // Fills src/data/css/bcd.ts (MDN link, experimental, deprecated per entry) from @mdn/browser-compat-data.
-// Usage: bun scripts/css-bcd.ts <path to BCD data.json or its package folder> [--check]
+// Usage: bun scripts/css-bcd.ts [--check] [path to BCD data.json or its package folder]
+// An entry BCD does not know fails the run until KEYS names its key, or null for one the web does not have.
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { entries, type CssEntry } from "../src/data/css/entries";
@@ -36,6 +37,8 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "webkit-font-smoothing": "css.properties.font-smooth",
   "app-region": "css.properties.-webkit-app-region",
   "webkit-mask": null,
+  "function-webkit-gradient": null,
+  "pseudo-webkit-color-swatch": null,
   "selector-type": "css.selectors.type",
   "selector-class": "css.selectors.class",
   "selector-id": "css.selectors.id",
@@ -65,6 +68,7 @@ type Json = { readonly [key: string]: unknown };
 const isObject = (x: unknown): x is Json => typeof x === "object" && x !== null && !Array.isArray(x);
 
 function bareName(e: CssEntry): string {
+  if (e.kind === "media-feature") return /\(([^)]+)\)/.exec(e.name)?.[1] ?? e.name;
   return e.name.replace(/^[:@]+/, "").replace(/\(\)$/, "");
 }
 
@@ -157,11 +161,10 @@ function render(found: ReadonlyMap<string, Found>): string {
   ].join("\n");
 }
 
-const [source, ...flags] = process.argv.slice(2);
-if (source === undefined) {
-  console.error("usage: bun scripts/css-bcd.ts <@mdn/browser-compat-data folder or data.json> [--check]");
-  process.exit(2);
-}
+const flags = process.argv.slice(2).filter((a) => a.startsWith("--"));
+const source =
+  process.argv.slice(2).find((a) => !a.startsWith("--")) ??
+  Bun.resolveSync("@mdn/browser-compat-data", import.meta.dir);
 const file = existsSync(source) && statSync(source).isDirectory() ? join(source, "data.json") : source;
 const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
 if (!isObject(parsed)) throw new Error(`${file} is not BCD data`);
@@ -170,12 +173,14 @@ const version = isObject(meta) && typeof meta["version"] === "string" ? meta["ve
 
 const found = new Map<string, Found>();
 const unknown: CssEntry[] = [];
+const unlisted: CssEntry[] = [];
 for (const e of entries) {
   const hit = candidates(e)
     .map((k) => lookup(parsed, k))
     .find((f) => f !== undefined);
   if (hit === undefined) {
     if (!e.skathiOnly) unknown.push(e);
+    if (!e.skathiOnly && !(e.slug in KEYS)) unlisted.push(e);
     continue;
   }
   found.set(e.slug, hit);
@@ -205,10 +210,18 @@ console.log(
 );
 if (stale.length > 0) console.log(`key overrides for missing slugs: ${stale.join(", ")}`);
 
+if (unlisted.length > 0) {
+  console.error(
+    `no BCD key for: ${unlisted.map((e) => e.slug).join(", ")}\n` +
+      "Give each a key in KEYS of scripts/css-bcd.ts, or null when MDN has no page for it.",
+  );
+  process.exit(1);
+}
+
 if (flags.includes("--check")) {
   const current = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
   if (current !== text) {
-    console.error("src/data/css/bcd.ts is out of date; run without --check");
+    console.error("src/data/css/bcd.ts is out of date; run `bun run bcd` in docs");
     process.exit(1);
   }
 } else {

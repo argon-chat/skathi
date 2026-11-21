@@ -505,6 +505,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.AudioContext",
     mdn: "https://developer.mozilla.org/docs/Web/API/AudioContext",
   },
+  "audio-worklet": {
+    key: "api.AudioWorklet",
+    mdn: "https://developer.mozilla.org/docs/Web/API/AudioWorklet",
+  },
   "get-user-media": {
     key: "api.MediaDevices.getUserMedia",
     mdn: "https://developer.mozilla.org/docs/Web/API/MediaDevices/getUserMedia",
@@ -557,6 +561,11 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "async-clipboard": {
     key: "api.Clipboard",
     mdn: "https://developer.mozilla.org/docs/Web/API/Clipboard",
+  },
+  "pressure-observer": {
+    key: "api.PressureObserver",
+    mdn: "https://developer.mozilla.org/docs/Web/API/PressureObserver",
+    experimental: true,
   },
   "navigator-get-battery": {
     key: "api.Navigator.getBattery",

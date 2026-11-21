@@ -30,4 +30,13 @@ if [ -n "$web" ]; then
   fi
 fi
 
+# A reference entry gets its MDN link from generated data: a new entry needs the data made again.
+if printf '%s\n' "$staged" | grep -qE '^docs/(src/data/(css|web)/(entries|bcd)\.ts|scripts/(css|web)-bcd\.ts)$'; then
+  if ! out=$(bun run --cwd docs bcd:check 2>&1); then
+    echo "MDN links of the reference are out of date (run bun run --cwd docs bcd):" >&2
+    printf '%s\n' "$out" | grep -E 'no BCD key|Give each|out of date' >&2
+    failed=1
+  fi
+fi
+
 exit $failed

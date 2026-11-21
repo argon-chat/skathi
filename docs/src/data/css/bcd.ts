@@ -423,6 +423,18 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.properties.line-height",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/line-height",
   },
+  "text-box": {
+    key: "css.properties.text-box",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/text-box",
+  },
+  "text-box-trim": {
+    key: "css.properties.text-box-trim",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/text-box-trim",
+  },
+  "text-box-edge": {
+    key: "css.properties.text-box-edge",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/text-box-edge",
+  },
   "letter-spacing": {
     key: "css.properties.letter-spacing",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/letter-spacing",
@@ -678,7 +690,6 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "dynamic-range-limit": {
     key: "css.properties.dynamic-range-limit",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/dynamic-range-limit",
-    experimental: true,
   },
   "function-dynamic-range-limit-mix": {
     key: "css.types.dynamic-range-limit-mix",
@@ -1210,18 +1221,6 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.properties.stop-opacity",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/stop-opacity",
   },
-  "clip-rule": {
-    key: "css.properties.clip-rule",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/clip-rule",
-  },
-  "flood-color": {
-    key: "css.properties.flood-color",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/flood-color",
-  },
-  "lighting-color": {
-    key: "css.properties.lighting-color",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/lighting-color",
-  },
   x: {
     key: "css.properties.x",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/x",
@@ -1250,21 +1249,21 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.properties.ry",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/ry",
   },
-  d: {
-    key: "css.properties.d",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/d",
+  "clip-rule": {
+    key: "css.properties.clip-rule",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/clip-rule",
   },
-  "vector-effect": {
-    key: "css.properties.vector-effect",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/vector-effect",
+  "flood-color": {
+    key: "css.properties.flood-color",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/flood-color",
+  },
+  "lighting-color": {
+    key: "css.properties.lighting-color",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/lighting-color",
   },
   "paint-order": {
     key: "css.properties.paint-order",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/paint-order",
-  },
-  marker: {
-    key: "css.properties.marker",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/marker",
   },
   "text-anchor": {
     key: "css.properties.text-anchor",
@@ -1273,6 +1272,18 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "dominant-baseline": {
     key: "css.properties.dominant-baseline",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/dominant-baseline",
+  },
+  marker: {
+    key: "css.properties.marker",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/marker",
+  },
+  d: {
+    key: "css.properties.d",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/d",
+  },
+  "vector-effect": {
+    key: "css.properties.vector-effect",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/vector-effect",
   },
   contain: {
     key: "css.properties.contain",
@@ -1430,6 +1441,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.selectors.checked",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/:checked",
   },
+  "pseudo-indeterminate": {
+    key: "css.selectors.indeterminate",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/:indeterminate",
+  },
   "pseudo-fullscreen": {
     key: "css.selectors.fullscreen",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/:fullscreen",
@@ -1513,10 +1528,6 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "pseudo-required": {
     key: "css.selectors.required",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/:required",
-  },
-  "pseudo-indeterminate": {
-    key: "css.selectors.indeterminate",
-    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Selectors/:indeterminate",
   },
   "pseudo-default": {
     key: "css.selectors.default",
@@ -1681,7 +1692,6 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "at-function": {
     key: "css.at-rules.function",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/At-rules/@function",
-    experimental: true,
   },
   "at-scope": {
     key: "css.at-rules.scope",
@@ -1998,6 +2008,14 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
   "function-atan2": {
     key: "css.types.atan2",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/atan2",
+  },
+  "function-sibling-index": {
+    key: "css.types.sibling-index",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/sibling-index",
+  },
+  "function-sibling-count": {
+    key: "css.types.sibling-count",
+    mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Values/sibling-count",
   },
   "function-var": {
     key: "css.types.var",
