@@ -3,7 +3,8 @@
 //
 // The dev host, first hit wins: `--exe` or SK_DEV_HOST; in a checkout, its debug sk-app (`cargo build
 // -p sk-app`); the cached dev host of this version; a download of it from the release (host-fetch.ts).
-// An `--exe` built with the skathi crate also writes src/native-modules.d.ts first (types.ts).
+// An `--exe` built with the skathi crate also writes src/native-modules.d.ts first (types.ts). On macOS
+// the host runs from a dev `.app` (dev-bundle.ts), whose Info.plist carries the app's usage descriptions.
 //
 // An app with shaders/*.slang has them compiled into <dist>/effects, which the host reads through
 // SK_EFFECTS_DIR, and recompiled on every change, the first shader of an app that had none too. A
@@ -17,9 +18,20 @@ import { dirname, join } from "node:path";
 import { compileAppEffects, EffectsError, formatProblems, hasAppEffects, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler } from "../effects/redslangc";
 import { requireAppDependencies } from "./app-deps";
-import { loadAppConfig } from "./config";
+import { loadAppConfig, type AppConfig } from "./config";
+import { devBundle } from "./dev-bundle";
 import { devEffectsWatch, type EffectsWatch } from "./effects";
-import { cachedHost, checkHost, DEV_HOST, HostError, hostInfo, PKG_DIR, REPO_ROOT, CLI_VERSION } from "./host";
+import {
+  cachedHost,
+  checkHost,
+  DEV_HOST,
+  HostError,
+  hostInfo,
+  inspectorContainerPath,
+  PKG_DIR,
+  REPO_ROOT,
+  CLI_VERSION,
+} from "./host";
 import { fetchHost, type OnBytes } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
 import { colorEnabled, paint, progressFor } from "./term";
@@ -59,6 +71,26 @@ export async function devHost(
     await fetchHost({ variant: DEV_HOST, log, onBytes: options.onBytes });
   }
   return cached;
+}
+
+/** The host inside a dev `.app`, so TCC finds the app's usage descriptions; the bare host when that cannot be written. */
+function macDevApp(config: AppConfig, exe: string): string {
+  let inspector: string | null = null;
+  try {
+    inspector = inspectorContainerPath({ exe, info: hostInfo(exe) });
+  } catch {}
+  try {
+    return devBundle({
+      config,
+      host: exe,
+      frameworks: inspector ? [inspector] : [],
+      codesign: Bun.which("codesign"),
+      log: (line) => console.error(line),
+    }).exe;
+  } catch (e) {
+    console.error(`no dev app bundle (${(e as Error).message}): the camera and microphone stay unavailable in sk dev`);
+    return exe;
+  }
 }
 
 function reloadsEffects(exe: string): boolean {
@@ -135,9 +167,10 @@ export async function dev(
     if (Date.now() > deadline) throw new Error("bun build.ts produced no manifest within 2 minutes");
     await Bun.sleep(100);
   }
+  const run = process.platform === "darwin" ? macDevApp(config, exe) : exe;
   console.log(`${c.green("▶")} ${c.bold(config.name)} ${c.dim(`dist ${dist}, workload ${exe}`)}`);
   const start = (): ChildProcess =>
-    spawn(exe, [], {
+    spawn(run, [], {
       stdio: "inherit",
       // SK_OWNER_PID: the host dies with this process however it ends (crates/sk-app/src/owner.rs).
       env: {

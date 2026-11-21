@@ -68,6 +68,37 @@ jobs:
       - name: Generated preludes are current
         run: bun run preludes:check
 
+  packages:
+    name: Packed packages (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+          - name: macOS arm64
+            os: macos-15
+          - name: Linux x64
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check out gpui, taffy, redjs and the templates
+        run: git submodule update --init --depth 1 -- vendor/redjs vendor/gpui vendor/taffy templates
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      # The CLI's prepack builds the release CSS checker; this makes that a cache hit.
+      - uses: ./.github/actions/css-checker
+        with:
+          release: true
+      - name: Apps from the packed runtime and CLI
+        run: bun scripts/smoke-packages.ts
+
   rust:
     name: Rust (${{ matrix.name }})
     strategy:

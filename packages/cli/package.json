@@ -29,17 +29,7 @@
     "devtools/ctl.ts",
     "dist/vite-plugin.mjs",
     "dist/vue-adapter.mjs",
-    "aot-inputs.ts",
-    "ascii.ts",
-    "ascii-literals.ts",
-    "build.ts",
-    "css-prefixes.ts",
-    "haptic-patterns.ts",
-    "prod.ts",
-    "runtime-path.ts",
-    "svelte.ts",
-    "tailwind.ts",
-    "vitecompat.ts"
+    "/*.ts"
   ],
   "description": "The sk CLI: SFC compiler, dev and production builders, packaging and devtools for Skathi apps.",
   "bin": {

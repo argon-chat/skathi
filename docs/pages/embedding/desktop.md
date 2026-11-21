@@ -129,4 +129,12 @@ match builder.spawn() {
 
 The running instance receives the second launch's arguments and links through [`appLaunch`](/app-api/app-launch/), and its window comes to the front. Without `desktop_launch`, your exe decides itself whether a second copy may run.
 
+## The macOS menu bar
+
+On macOS Skathi installs the standard menu bar when its window opens: Quit, Hide, Close Window, Enter Full Screen, Minimize and Zoom, with their usual shortcuts (since 0.7). If your exe installs menus of its own, turn this off so they are not replaced:
+
+```rust
+let builder = skathi::Builder::new().app_menu(false);
+```
+
 Next: [Dev loop and devtools](/embedding/dev-loop/).

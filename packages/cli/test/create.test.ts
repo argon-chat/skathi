@@ -40,6 +40,9 @@ test("the answers land in sk.config.json, and the builders read them back", () =
   expect(config.productName).toBe("My App");
   expect(config.platforms).toEqual(["windows", "macos"]);
   expect(config.macos.bundleId).toBe("com.example.my-app");
+  // Without them macOS keeps the showcase's Permissions page from the microphone and camera.
+  expect(config.macos.microphoneUsageDescription).toBeTruthy();
+  expect(config.macos.cameraUsageDescription).toBeTruthy();
   expect(config.publishDevtools).toBe(false);
   expect(modeVariant(config, "release")).toBe("no-devtools");
   expect(modeVariant(config, "debug")).toBe("standard");

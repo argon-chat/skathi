@@ -70,6 +70,8 @@ interface TemplateInfo {
   dependencies: string[];
   window: Record<string, unknown>;
   packs?: { name: string; match?: string[] }[];
+  /** sk.config.json `macos` keys beside `bundleId`: the usage descriptions of the devices the template asks for. */
+  macos?: Record<string, string>;
   checker: Checker;
 }
 
@@ -80,6 +82,10 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     dependencies: ["vue", "pinia", "vue-router"],
     window: { width: 1100, height: 720, minWidth: 480, minHeight: 360, titleBarStyle: "hidden", titleBarHeight: 40 },
     packs: [{ name: "media", match: ["assets/media/**"] }],
+    macos: {
+      microphoneUsageDescription: "The Permissions page records from the microphone when you ask it to.",
+      cameraUsageDescription: "The Permissions page asks for the camera when you press Ask.",
+    },
     checker: VUE_TSC,
   },
   minimal: {
@@ -259,7 +265,7 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       assets: ["assets"],
       ...(info.packs ? { packs: info.packs } : {}),
       windows: { exeName, icon: "icon.png" },
-      ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}` } } : {}),
+      ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}`, ...info.macos } } : {}),
     }),
     "tsconfig.json": json({
       extends: info.checker.tsconfig,
