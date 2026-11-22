@@ -10,6 +10,7 @@ import { time, units } from "./clock";
 import { EXPECTED, gpu } from "./gpu";
 import { image } from "./image";
 import { memory, memoryWorkers } from "./memory";
+import { connection, connectionChange } from "./network";
 import { callbacks, ffi, structs, threads, workers } from "./native";
 import { collections } from "./structures";
 import { text } from "./strings";
@@ -129,6 +130,13 @@ Object.assign(globalThis, {
         (error: unknown) => (this.timeResult = JSON.stringify({ failed: String(error) })),
       );
     },
+    connectionResult: null as string | null,
+    startConnectionChange() {
+      void connectionChange().then(
+        (result) => (this.connectionResult = JSON.stringify(result)),
+        (error: unknown) => (this.connectionResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     network: () =>
       JSON.stringify({
         online: network.online,
@@ -139,6 +147,7 @@ Object.assign(globalThis, {
         roaming: network.roaming,
         overDataLimit: network.overDataLimit,
         target: network instanceof EventTarget,
+        connection: connection(),
         wrapped: u8(257),
       }),
     probe: () =>

@@ -404,6 +404,45 @@ describe("skathi:* modules", () => {
       expect(["ethernet", "wifi", "cellular", "other", "none", "unknown"]).toContain(n.type);
       for (const flag of [n.metered, n.roaming, n.overDataLimit]) expect([true, false, null]).toContain(flag);
       expect(n.wrapped).toBe(1);
+      expect(n.connection).toEqual({ type: n.type, same: true, instance: true, target: true, measured: [] });
+    },
+    T,
+  );
+
+  test(
+    "navigator.connection follows skathi:network and fires change when the type changes",
+    async () => {
+      const app = await launch({
+        app: "packages/test/fixtures/std/src/main.ts",
+        window: [420, 300],
+        label: "std-network",
+        env: { SK_NETWORK: "fake" },
+      });
+      apps.push(app);
+      await app.locator("#ready").waitFor();
+      await app.eval("__SK_TEST_STD__.startConnectionChange(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.connectionResult)"));
+      }
+      const c = JSON.parse(raw);
+      expect(c.failed).toBeUndefined();
+      expect(c.steps).toEqual([
+        ["wifi", true],
+        ["wifi", true],
+        ["none", true],
+      ]);
+      expect(c.log).toEqual([
+        "network:change",
+        "connection:wifi",
+        "onchange",
+        "network:change",
+        "network:offline",
+        "network:change",
+        "connection:none",
+        "onchange",
+      ]);
+      expect([c.metered, c.onLine]).toEqual([true, false]);
     },
     T,
   );

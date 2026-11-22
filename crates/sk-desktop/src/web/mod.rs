@@ -222,7 +222,6 @@ pub(crate) unsafe fn handler_set(g: *mut c_void, this: u64, name: &str, v: u64) 
 }
 
 /// `navigator`'s prototype, where the members go as in a browser.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 unsafe fn navigator_proto(g: *mut c_void) -> u64 {
     let ctor = get(g, global(g), "Navigator");
     let proto = if is_cell(ctor) {

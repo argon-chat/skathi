@@ -180,7 +180,51 @@ fn run() {
 
 pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(imp::install);
+    ONCE.call_once(|| {
+        if faked() {
+            *KIND.lock().unwrap_or_else(|e| e.into_inner()) = Some("unknown");
+            navigator::set_on_line(Some(true));
+        } else {
+            imp::install();
+        }
+    });
+}
+
+/// `SK_NETWORK=fake`, for end-to-end tests: no OS provider, the state is only what [`fake`] sets.
+pub fn faked() -> bool {
+    static FAKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FAKED.get_or_init(|| {
+        std::env::var("SK_NETWORK").is_ok_and(|v| v.trim().eq_ignore_ascii_case("fake"))
+    })
+}
+
+/// A state for [`fake`]; `None` keeps the current value.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Fake {
+    pub online: Option<bool>,
+    pub kind: Option<&'static str>,
+    pub details: Option<Details>,
+}
+
+/// Sets the state as a provider would, without the debounce, and announces it.
+pub fn fake(state: Fake) {
+    let flip = state
+        .online
+        .filter(|&online| navigator::on_line_state() != Some(online));
+    if let Some(details) = state.details {
+        *DETAILS.lock().unwrap_or_else(|e| e.into_inner()) = details;
+    }
+    if let Some(kind) = state.kind {
+        *KIND.lock().unwrap_or_else(|e| e.into_inner()) = Some(kind);
+    }
+    if let Some(online) = state.online {
+        navigator::set_on_line(Some(online));
+    }
+    announce(match flip {
+        Some(true) => "online",
+        Some(false) => "offline",
+        None => "change",
+    });
 }
 
 #[cfg(target_os = "windows")]

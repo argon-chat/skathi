@@ -366,7 +366,16 @@ interface BatteryManager extends EventTarget {
 /** Exposed for branding / instanceof; direct construction throws TypeError. */
 declare var BatteryManager: (Function & { readonly prototype: BatteryManager }) | undefined;
 
+type ConnectionType = "ethernet" | "wifi" | "cellular" | "other" | "none" | "unknown";
+/** The OS's view of the connection, the same state as `skathi:network`. No `effectiveType`, `downlink`, `rtt` or `saveData`. */
+interface NetworkInformation extends EventTarget {
+  readonly type: ConnectionType;
+  onchange: ((this: NetworkInformation, ev: Event) => unknown) | null;
+}
+declare var NetworkInformation: Function & { readonly prototype: NetworkInformation };
+
 interface Navigator {
+  readonly connection: NetworkInformation;
   readonly language: string;
   readonly languages: readonly string[];
   /** Only with the `battery` feature; probe before calling. */

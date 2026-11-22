@@ -332,6 +332,10 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "api.Navigator.sendBeacon",
     mdn: "https://developer.mozilla.org/docs/Web/API/Navigator/sendBeacon",
   },
+  "navigator-connection": {
+    key: "api.Navigator.connection",
+    mdn: "https://developer.mozilla.org/docs/Web/API/Navigator/connection",
+  },
   "service-workers": {
     key: "api.ServiceWorker",
     mdn: "https://developer.mozilla.org/docs/Web/API/ServiceWorker",

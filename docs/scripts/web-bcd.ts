@@ -46,6 +46,7 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "window-open": "api.Window.open",
   "accept-language": "http.headers.Accept-Language",
   "navigator-send-beacon": "api.Navigator.sendBeacon",
+  "navigator-connection": "api.Navigator.connection",
   "service-workers": "api.ServiceWorker",
   "cache-api": "api.Cache",
   "crypto-get-random-values": "api.Crypto.getRandomValues",

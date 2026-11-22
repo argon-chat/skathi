@@ -31,6 +31,7 @@ network.addEventListener(type: "change" | "online" | "offline", listener: (event
       "`online` is `navigator.onLine`: the OS believes there is a network. A LAN without internet and a captive portal are both online.",
       "`internet` is the operating system's own connectivity check. Skathi sends no probe of its own; an app that needs its server checks its server. See [Internet](/std/internet/).",
       "`type` is the physical connection traffic takes. See [ConnectionType](/std/connection-type/).",
+      "`navigator.connection` is the standard view of the same state: its `type` is always `network.type`. See [navigator.connection](/web-platform/navigator-connection/).",
       "`metered` says the connection is billed by use. `metered`, `roaming` and `overDataLimit` are `null` when the OS cannot tell.",
       "On Windows, `metered` is `true` for a fixed or variable-cost connection and `false` for an unrestricted one. `roaming` and `overDataLimit` come from the same system cost hint.",
       "On macOS, `metered` is `true` on a connection the system marks as expensive, such as cellular or a personal hotspot. On Linux it is NetworkManager's metered setting, its guess included.",
@@ -96,7 +97,6 @@ onBeforeUnmount(() => network.removeEventListener("change", update));
       "network.roaming",
       "network.overDataLimit",
       "navigator.onLine",
-      "navigator.connection",
       "offline",
       "online event",
       "change event",
@@ -188,6 +188,6 @@ export function canDownloadNow(bytes: number): boolean {
       },
     ],
     related: ["network", "internet"],
-    aliases: ["network.type", "wifi", "ethernet", "cellular", "VPN", "adapter", "effectiveType"],
+    aliases: ["network.type", "wifi", "ethernet", "cellular", "VPN", "adapter"],
   },
 ]);

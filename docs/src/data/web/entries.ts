@@ -698,6 +698,17 @@ const networking = section("Networking", [
     related: ["fetch"],
     aliases: ["sendBeacon"],
   }),
+  prop("navigator.connection", PART, "Reports the type of the network connection and fires `change` when it changes.", {
+    notes: [
+      '`type` is `"ethernet"`, `"wifi"`, `"cellular"`, `"other"`, `"none"` or `"unknown"`: the same value as `network.type` in [skathi:network](/std/network/), read from the same system state.',
+      "`change` fires when `type` changes. `onchange` works as well as `addEventListener`.",
+    ],
+    limitations: [
+      "`effectiveType`, `downlink`, `downlinkMax` and `rtt` are absent: they need measurements of the connection, which Skathi does not make.",
+      "`saveData` is absent: it is the user's choice to save data, which is not what the connection's cost says. For a connection billed by use, read `metered` from [skathi:network](/std/network/).",
+    ],
+    aliases: ["NetworkInformation", "Network Information API", "connection.type", "effectiveType", "saveData"],
+  }),
   api("service-workers", "Service workers", NO, "Scripts that intercept a site's network requests, for offline use.", {
     related: ["cache-api"],
     aliases: ["ServiceWorker", "navigator.serviceWorker"],
