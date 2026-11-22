@@ -147,4 +147,17 @@ let builder = skathi::Builder::new().backdrop("transparent");
 
 The names are those of [`backdrop`](/window-api/config-window-backdrop/) in sk.config.json; another name makes `spawn()` return `Error::Backdrop`. Pop-out windows keep the backdrop their `<SkWindow>` asks for.
 
+## Fewer drawables on macOS (dangerous)
+
+A window's Metal layer may hold three drawables, each the size of the window. A program that shows its picture in a layer of its own, and keeps the page mostly still, can ask for two:
+
+```rust
+let builder = skathi::Builder::new().metal_drawable_count(2);
+```
+
+- It saves one window-sized buffer: about 33 MB for a 3840 × 2160 window in 8-bit.
+- It can cost frame pacing. With two drawables a frame that misses its refresh leaves the next one waiting for a buffer, and animations stutter. Measure your own app before you ship it.
+- Core Animation can still hand out more buffers over a window's lifetime than this maximum; see [GPU frames, Windows and macOS](/embedding/native-frames/#gpu-frames-windows-and-macos).
+- 2 and 3 are the only values; another makes `spawn()` return `Error::DrawableCount`. It applies to every window and does nothing on Windows and Linux.
+
 Next: [Dev loop and devtools](/embedding/dev-loop/).

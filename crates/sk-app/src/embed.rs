@@ -290,6 +290,8 @@ pub enum Error {
     Module(String),
     /// [`Builder::backdrop`] was given a name that is not a backdrop.
     Backdrop(String),
+    /// [`Builder::metal_drawable_count`] was given a count other than 2 or 3.
+    DrawableCount(u8),
     Spawn(std::io::Error),
     /// AppKit needs the process main thread: use `run_on_main_thread`.
     MainThreadRequired,
@@ -317,6 +319,10 @@ impl std::fmt::Display for Error {
             Error::Backdrop(name) => write!(
                 f,
                 "unknown backdrop {name:?}: expected mica, mica-alt, tabbed, acrylic, blur, transparent or none"
+            ),
+            Error::DrawableCount(count) => write!(
+                f,
+                "metal_drawable_count({count}): Core Animation takes 2 or 3"
             ),
             Error::Spawn(e) => write!(f, "the Skathi thread did not start: {e}"),
             Error::MainThreadRequired => write!(
@@ -364,6 +370,7 @@ pub struct Builder {
     ffi_address: bool,
     backdrop: Option<String>,
     display_change: Option<DisplayChange>,
+    drawable_count: Option<u8>,
 }
 
 type DisplayChange = Box<dyn Fn(u64, SurfaceDisplay) + Send + Sync>;
@@ -397,6 +404,7 @@ impl Builder {
             ffi_address: false,
             backdrop: None,
             display_change: None,
+            drawable_count: None,
         }
     }
 
@@ -543,6 +551,14 @@ impl Builder {
     /// applied. For an embedder that composes its own content under the window.
     pub fn backdrop(mut self, name: impl Into<String>) -> Self {
         self.backdrop = Some(name.into());
+        self
+    }
+
+    /// Dangerous. macOS: the most drawables a window's Metal layer may hold, 2 or 3 (the default).
+    /// 2 saves one window-sized buffer and can cost frame pacing; measure it. Elsewhere it does
+    /// nothing.
+    pub fn metal_drawable_count(mut self, count: u8) -> Self {
+        self.drawable_count = Some(count);
         self
     }
 
@@ -726,6 +742,12 @@ impl Builder {
             .filter(|n| !crate::window::Backdrop::known(n))
         {
             return Err(Error::Backdrop(name.to_string()));
+        }
+        if let Some(count) = self.drawable_count {
+            if !(2..=3).contains(&count) {
+                return Err(Error::DrawableCount(count));
+            }
+            gpui::drawables::set_metal_drawable_count(count);
         }
         gpui::present_feedback::set_feedback_after_composition(self.exact_frame_feedback);
         match self.display_change.take() {
