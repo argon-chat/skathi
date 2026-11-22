@@ -220,7 +220,7 @@ Run `sk check` on the app before you turn AOT on. An AOT build runs the same che
 | `SK5xxx` | Error or warning           | Vue and Svelte features that do not work or work differently. See [Vue support](/guides/vue-support/) and [Svelte support](/guides/svelte-support/).                        |
 | `SK6xxx` | Error or warning           | Permissions: a [`dlopen()`](/std/dlopen/) of a library that sk.config.json does not allow, or a dependency that imports `skathi:ffi`. `check.allow` cannot hide the errors. |
 
-`sk explain <code>` explains a code with an example and a fix, and `sk explain --list` lists them all. `sk check --deny-warnings` also fails on warnings, for CI.
+Every code has a page in the [`sk check` reference](/sk-check/). `sk explain <code>` prints the same in the terminal, and `sk explain --list` lists them all. `sk check --deny-warnings` also fails on warnings, for CI.
 
 ### Built-ins are read-only
 

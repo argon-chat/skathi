@@ -1,0 +1,115 @@
+---
+title: Architecture
+label: Architecture
+description: "How a Skathi app is put together: what the build makes, what runs on the UI thread and what runs beside it, where JavaScript ends and Rust begins, and the path of one frame from a click to the GPU."
+section: Getting started
+order: 2.5
+since: "0.7"
+---
+
+import ArchitectureDiagram from "../src/components/ArchitectureDiagram.astro";
+
+A Skathi app is one process. Your components run in JavaScriptCore, and everything they produce,
+from the element tree to the pixels, is native code in the same process. There is no WebView and no
+second process to talk to.
+
+<ArchitectureDiagram caption="One process: a UI thread that runs the app and draws it, platform services in Rust beside it, and other threads for work that must not hold a frame." />
+
+[The runtime model](/concepts/) describes the same parts in words. This page is about where each one
+runs and what crosses between them.
+
+## One frame
+
+A click, a timer or a network answer starts the same path, and all of it runs on the UI thread:
+
+1. **Input.** The window's event reaches the element under the pointer, and the handlers your
+   components attached run in JavaScriptCore.
+2. **Your code.** The handler changes state. Vue or Svelte works out what that changes and tells the
+   renderer.
+3. **The element tree.** The renderer's operations (make an element, set an attribute, change a
+   text) are applied to a tree kept in Rust. It answers the DOM calls the frameworks make, and it
+   is not a browser's DOM: [Web platform](/web-platform/) lists what it has.
+4. **Style and layout.** The CSS engine matches rules for what changed, and Taffy lays out flexbox,
+   grid and blocks.
+5. **Paint.** The renderer turns boxes, text, images and effects into one scene.
+6. **The GPU.** The scene is drawn with Direct3D on Windows, Metal on macOS and Vulkan on Linux,
+   and shown at the display's next refresh.
+
+An idle app does not draw: with no input, no timer and no animation there is no frame.
+
+## What the UI thread means for your code
+
+JavaScript, layout and paint take turns on one thread. A handler that runs for 30 ms holds two
+frames, during which nothing paints and no input is handled. The host says so: a callback that
+holds the thread for more than 8 ms is reported as a
+[performance advisory](/guides/performance-advisories/).
+
+Two things follow:
+
+- **Keep handlers short.** Work that takes long belongs on another thread: a `nonblocking` call of
+  [`skathi:ffi`](/std/dlopen/), a `#[task]` method of a
+  [native module](/embedding/native-modules/#where-things-run), or a request the host makes in the
+  background.
+- **Let CSS animate.** A transition or an animation of `transform` and `opacity` is run by the host
+  from one frame to the next, without your code. [Best practices](/guides/best-practices/#animate-natively)
+  has the list.
+
+## What runs beside it
+
+| Work                                  | Where it runs                                 | What reaches the UI thread           |
+| ------------------------------------- | --------------------------------------------- | ------------------------------------ |
+| Decoding images                       | Background threads, shared between elements   | Pixels, ready to upload              |
+| [`<lottie>`](/elements/lottie/)       | One thread that parses and rasterizes         | Finished frames                      |
+| [`<video>`](/elements/video/)         | The operating system's player, on its threads | The newest decoded frame, each frame |
+| [Web Audio](/web-platform/web-audio/) | The audio callback, and a thread for worklets | Events and analyser data             |
+| `nonblocking` FFI calls               | A pool of worker threads                      | A promise that settles               |
+| `#[task]` methods of your modules     | Worker threads                                | A promise that settles               |
+| `fetch()` and WebSockets              | The host's network threads                    | The response, a chunk or a message   |
+
+None of them runs your JavaScript, with one exception: an
+[audio worklet](/guides/audio-worklets/) written in JavaScript has a VM of its own on its thread.
+Everything else in the app's script runs on the UI thread, so the app needs no locks.
+
+## Where JavaScript ends
+
+Windows, the tray, files, the clipboard, permissions and the rest of the platform are Rust. Your
+code reaches them through objects the host registers in the engine: the `app*` objects and the
+[`skathi:` modules](/std/), the [window API](/window-api/), and the web APIs Skathi implements. A
+call into one of them is a function call inside the process: no message is serialized and no other
+process answers.
+
+The same door is open to you. A [native module](/embedding/native-modules/) is Rust of your own
+behind an import, and [`skathi:ffi`](/std/dlopen/) calls a C library the app ships.
+
+## From source to an app
+
+| Step             | What it does                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `sk dev`         | Builds the app, starts the development host and replaces changed modules while the window stays open |
+| `sk check`       | Reads the app as a production build does and [reports](/sk-check/) what will not work                |
+| `sk build`       | Bundles scripts, styles and assets into the **payload** and stamps it into a copy of the host exe    |
+| `sk build --aot` | Also compiles the bundle to a native **image** that the host loads instead of compiling JavaScript   |
+| `sk publish`     | Makes the release build you hand to users, signed where the platform asks for it                     |
+
+The host is the same program for every app, and you never build it: `sk` downloads the one that
+matches its version. An app differs from another only by its payload. [AOT](/guides/aot/) explains
+the image, and [Embedding](/embedding/overview/) is the other arrangement, where the host is a
+library inside a program of yours.
+
+## The parts by name
+
+For reading the source, and for embedders who pick features:
+
+| Part                     | What it is                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `@skathi-native/runtime` | What the app imports: the renderer glue for Vue and Svelte, the types           |
+| `@skathi-native/cli`     | `sk`: the compilers for components, the bundler, the check, devtools            |
+| redjs                    | JavaScriptCore with the web APIs that need no window: fetch, streams, Web Audio |
+| `sk-runtime`             | The engine inside the host, and the bridge between it and the tree              |
+| `sk-tree`, `sk-elements` | The element tree and the built-in elements                                      |
+| `sk-css`                 | The CSS engine: parsing, the cascade, computed values                           |
+| skathi-taffy             | Layout                                                                          |
+| skathi-gpui              | Windows, input, text and the GPU renderer                                       |
+| `sk-desktop` and others  | Platform services: tray, dialogs, storage, clipboard, permissions, hotkeys      |
+| `sk-app`                 | The host program that puts them together                                        |
+| `skathi`                 | The crate an embedder depends on                                                |

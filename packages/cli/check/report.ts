@@ -201,6 +201,8 @@ export function explain(code: string, options: { color?: boolean; highlight?: Hi
     ...info.example.split("\n").map((l) => `    ${highlight(l)}`),
     "",
     `${p.green("Fix:")} ${inline(p, info.fix)}`,
+    "",
+    p.dim(`https://skathi.land/sk-check/${info.code.toLowerCase()}/`),
   ].join("\n");
 }
 

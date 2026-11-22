@@ -1,6 +1,7 @@
 import type { APIRoute, MarkdownHeading } from "astro";
 import { render } from "astro:content";
 import { getPosts, postUrl } from "../lib/blog";
+import { checkGroups, checkPage, codeUrl } from "../lib/check";
 import { configPage, configSections, optionId, type ConfigOption } from "../lib/config";
 import { getDocs, pageUrl, sections, statusLabels } from "../lib/docs";
 import { entryUrl, kindLabel, ordered, plain, statuses } from "../lib/reference";
@@ -16,7 +17,7 @@ const groupOf: Readonly<Record<string, string>> = {
   css: "CSS",
 };
 const blogGroup = "Blog";
-const groups = [...sections, apiGroup, "Web platform", "CSS", "sk.config.json", blogGroup];
+const groups = [...sections, apiGroup, "Web platform", "CSS", "sk.config.json", checkPage.title, blogGroup];
 
 /** Markdown prose as plain text: no code blocks, MDX imports or tags, link targets or emphasis marks. */
 function plainText(markdown: string): string {
@@ -204,10 +205,33 @@ function configRecords(): SearchRecord[] {
   return configSections.flatMap((section) => section.options.flatMap((option) => walk(option, section.title)));
 }
 
+function checkRecords(): SearchRecord[] {
+  const group = groups.indexOf(checkPage.title);
+  return checkGroups.flatMap((range) =>
+    range.codes.map((info): SearchRecord => [
+      group,
+      info.code,
+      `${checkPage.title} › ${range.label}: ${range.title}`,
+      codeUrl(info.code),
+      plainText(info.title),
+      [info.explanation, info.fix].map(plainText).join(" "),
+      "",
+      info.severity === "error" ? "Error" : "Warning",
+      "",
+    ]),
+  );
+}
+
 export const GET: APIRoute = async () => {
   const data: SearchData = {
     groups,
-    records: [...(await docRecords()), ...referenceRecords(), ...configRecords(), ...(await postRecords())],
+    records: [
+      ...(await docRecords()),
+      ...referenceRecords(),
+      ...configRecords(),
+      ...checkRecords(),
+      ...(await postRecords()),
+    ],
   };
   return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json; charset=utf-8" } });
 };

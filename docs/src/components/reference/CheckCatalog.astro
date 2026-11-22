@@ -1,0 +1,109 @@
+---
+import { checkGroups, codeUrl, retiredCodes } from "../../lib/check";
+import { inline } from "../../lib/reference";
+---
+
+{
+  checkGroups.map((group) => (
+    <>
+      <h2 id={group.id}>
+        {group.label}: {group.title}
+      </h2>
+      <p>
+        {group.what.charAt(0).toUpperCase() + group.what.slice(1)}.
+        {group.more?.length ? (
+          <>
+            {" See "}
+            {group.more.map((link, index) => (
+              <>
+                {index > 0 && (index === group.more!.length - 1 ? " and " : ", ")}
+                <a href={link.href}>{link.label}</a>
+              </>
+            ))}
+            .
+          </>
+        ) : null}
+      </p>
+      <div class="table-scroll">
+        <table class="check-codes" data-plain>
+          <thead>
+            <tr>
+              <th scope="col">Code</th>
+              <th scope="col">Severity</th>
+              <th scope="col">What it reports</th>
+            </tr>
+          </thead>
+          <tbody>
+            {group.codes.map((info) => (
+              <tr>
+                <td>
+                  <a href={codeUrl(info.code)}>
+                    <code>{info.code}</code>
+                  </a>
+                </td>
+                <td>
+                  <span class="check-severity" data-severity={info.severity}>
+                    {info.severity}
+                  </span>
+                </td>
+                <td set:html={inline(info.title.charAt(0).toUpperCase() + info.title.slice(1))} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  ))
+}
+
+<h2 id="retired-codes">Retired codes</h2>
+<p>
+  A code is retired when the feature it reported starts to work. Its number is not used again, and an entry for it in <code
+    >check.allow</code
+  > is ignored.
+</p>
+<div class="table-scroll">
+  <table class="check-codes" data-plain>
+    <thead>
+      <tr>
+        <th scope="col">Code</th>
+        <th scope="col">Why it is gone</th>
+      </tr>
+    </thead>
+    <tbody>
+      {
+        retiredCodes.map(({ code, why }) => (
+          <tr>
+            <td>
+              <code>{code}</code>
+            </td>
+            <td set:html={inline(why.charAt(0).toUpperCase() + why.slice(1))} />
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+
+<style is:global>
+  .check-severity {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.8em;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .check-severity[data-severity="error"] {
+    background: color-mix(in srgb, #e5484d 16%, transparent);
+    color: color-mix(in srgb, #e5484d 78%, currentColor);
+  }
+  .check-severity[data-severity="warning"] {
+    background: color-mix(in srgb, #e2a336 20%, transparent);
+    color: color-mix(in srgb, #b7791f 70%, currentColor);
+  }
+  .check-codes td:first-child,
+  .check-codes td:nth-child(2) {
+    white-space: nowrap;
+  }
+</style>

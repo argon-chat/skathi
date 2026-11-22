@@ -1,0 +1,21 @@
+---
+import type { GetStaticPaths } from "astro";
+import CheckCodePage from "../../components/reference/CheckCodePage.astro";
+import { checkCodes, type CodeInfo } from "../../lib/check";
+
+export const getStaticPaths = (() =>
+  checkCodes.map((info, index) => ({
+    params: { code: info.code.toLowerCase() },
+    props: { info, previous: checkCodes[index - 1], next: checkCodes[index + 1] },
+  }))) satisfies GetStaticPaths;
+
+interface Props {
+  info: CodeInfo;
+  previous?: CodeInfo | undefined;
+  next?: CodeInfo | undefined;
+}
+
+const { info, previous, next } = Astro.props;
+---
+
+<CheckCodePage info={info} previous={previous} next={next} />

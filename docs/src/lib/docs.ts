@@ -1,5 +1,6 @@
 import { getCollection, type CollectionEntry } from "astro:content";
 import type { MarkdownHeading } from "astro";
+import { checkMarkdown, checkPage } from "./check";
 import { configMarkdown, configPage } from "./config";
 import { catalogMarkdown } from "./reference";
 import { references } from "./references";
@@ -53,7 +54,9 @@ export function pageMarkdown(page: CollectionEntry<"docs">, site: URL): string {
     ? `\n\n${catalogMarkdown(reference, site)}`
     : page.id === configPage.id
       ? `\n\n${configMarkdown(site)}`
-      : "";
+      : page.id === checkPage.id
+        ? `\n\n${checkMarkdown(site)}`
+        : "";
   const status = page.data.status ? `\n\nStatus: ${statusLabels[page.data.status]}` : "";
   const fresh = isNew(page.data.since) ? `\n\n${newLabel}` : "";
   return `# ${page.data.title}\n\n> ${page.data.description}\n\nSource: ${new URL(pageUrl(page.id), site).href}${status}${fresh}\n\n${body}${catalog}\n`;

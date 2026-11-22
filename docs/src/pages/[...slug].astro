@@ -2,9 +2,11 @@
 import { render, type CollectionEntry } from "astro:content";
 import type { GetStaticPaths } from "astro";
 import "../styles/reference.css";
+import CheckCatalog from "../components/reference/CheckCatalog.astro";
 import ConfigReference from "../components/reference/ConfigReference.astro";
 import RefCatalog from "../components/reference/RefCatalog.vue";
 import DocsLayout from "../layouts/DocsLayout.astro";
+import { checkGroups, checkPage } from "../lib/check";
 import { configHeadings, configPage } from "../lib/config";
 import { getDocs, type TocHeading } from "../lib/docs";
 import { catalogEntries, categoryId, inline, kindLabel } from "../lib/reference";
@@ -40,12 +42,19 @@ const toc: TocHeading[] = reference
     ]
   : page.id === configPage.id
     ? [...headings, ...configHeadings]
-    : headings;
+    : page.id === checkPage.id
+      ? [
+          ...headings,
+          ...checkGroups.map((group) => ({ depth: 2, slug: group.id, text: `${group.label}: ${group.title}` })),
+          { depth: 2, slug: "retired-codes", text: "Retired codes" },
+        ]
+      : headings;
 ---
 
 <DocsLayout page={page} headings={toc}>
   <Content />
   {page.id === configPage.id && <ConfigReference />}
+  {page.id === checkPage.id && <CheckCatalog />}
   {
     reference && (
       <RefCatalog

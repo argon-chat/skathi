@@ -1,0 +1,136 @@
+---
+import type { MarkdownHeading } from "astro";
+import { Code } from "astro:components";
+import "../../styles/reference.css";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import { allowance, checkPage, codeMarkdownUrl, codeUrl, exampleLang, groupOf, type CodeInfo } from "../../lib/check";
+import { repository } from "../../lib/docs";
+import { inline, plain } from "../../lib/reference";
+
+interface Props {
+  info: CodeInfo;
+  previous?: CodeInfo | undefined;
+  next?: CodeInfo | undefined;
+}
+
+const { info, previous, next } = Astro.props;
+const group = groupOf(info);
+const allow = allowance(info);
+const lang = exampleLang(info);
+const title = info.title.charAt(0).toUpperCase() + info.title.slice(1);
+const headings: MarkdownHeading[] = [
+  { depth: 2, slug: "what-it-means", text: "What it means" },
+  { depth: 2, slug: "example", text: "Example" },
+  { depth: 2, slug: "fix", text: "Fix" },
+  { depth: 2, slug: "allowing-it", text: "Allowing it" },
+];
+const link = (c: CodeInfo | undefined) => c && { label: c.code, href: codeUrl(c.code) };
+const allowExample = JSON.stringify({ check: { allow: { [info.code]: ["some-package", "src/legacy/**"] } } }, null, 2);
+---
+
+<DocsLayout
+  title={`${info.code}: ${plain(info.title)}`}
+  description={`${info.code}, a sk check ${info.severity}: ${plain(info.title)}. What it means, an example and the fix.`}
+  headings={headings}
+  sub={{
+    parent: checkPage.id,
+    path: codeUrl(info.code),
+    trail: [
+      { label: checkPage.title, href: `/${checkPage.id}/` },
+      { label: `${group.label}: ${group.title}`, href: `/${checkPage.id}/#${group.id}` },
+      { label: info.code, href: codeUrl(info.code) },
+    ],
+    markdown: codeMarkdownUrl(info.code),
+    edit: `${repository}/edit/master/${checkPage.source}`,
+    previous: link(previous),
+    next: link(next),
+  }}
+>
+  <header class="sheet-head" slot="heading">
+    <h1 class="sheet-title">{info.code}</h1>
+    <p class="sheet-lead" set:html={inline(title)} />
+  </header>
+
+  <div class="sheet-actions">
+    <span class:list={["sheet-badge", info.severity === "error" ? "sheet-badge-no" : "sheet-badge-planned"]}>
+      {info.severity === "error" ? "Error" : "Warning"}
+    </span>
+    <a class="sheet-badge sheet-badge-kind" href={`/${checkPage.id}/#${group.id}`}>
+      {group.label}: {group.title}
+    </a>
+    {info.fatal && <span class="sheet-badge">Stops the check</span>}
+    {!allow.allowed && <span class="sheet-badge">Cannot be allowed</span>}
+  </div>
+
+  <h2 id="what-it-means">What it means</h2>
+  <p set:html={inline(info.explanation)} />
+  {
+    info.severity === "error" ? (
+      <p>
+        It is an error: <code>sk check</code> exits with {info.fatal ? "2" : "1"}
+        {group.label === "SK1xxx" ? ", and a build with AOT stops on it" : ""}.
+      </p>
+    ) : (
+      <p>
+        It is a warning: <code>sk check</code> still exits with 0, unless it runs with <code>--deny-warnings</code>.
+      </p>
+    )
+  }
+
+  <h2 id="example">Example</h2>
+  {
+    lang === "text" ? (
+      <p>{info.example.charAt(0).toUpperCase() + info.example.slice(1)}.</p>
+    ) : (
+      <Code
+        code={info.example}
+        lang={lang as "ts"}
+        themes={{ light: "github-light", dark: "github-dark" }}
+        defaultColor={false}
+      />
+    )
+  }
+
+  <h2 id="fix">Fix</h2>
+  <p set:html={inline(info.fix)} />
+  {
+    group.more?.length ? (
+      <p>
+        More on this range:{" "}
+        {group.more.map((more, index) => (
+          <>
+            {index > 0 && ", "}
+            <a href={more.href}>{more.label}</a>
+          </>
+        ))}
+        .
+      </p>
+    ) : null
+  }
+
+  <h2 id="allowing-it">Allowing it</h2>
+  {
+    allow.allowed ? (
+      <>
+        <p>
+          When the finding is known and accepted,{" "}
+          <a href="/sk-config/#check.allow">
+            <code>check.allow</code>
+          </a>{" "}
+          in sk.config.json hides it for a package or for the app's files that match a glob:
+        </p>
+        <Code
+          code={allowExample}
+          lang="json"
+          themes={{ light: "github-light", dark: "github-dark" }}
+          defaultColor={false}
+        />
+      </>
+    ) : (
+      <p>{allow.note}</p>
+    )
+  }
+  <p>
+    The same text is in the terminal: <code>sk explain {info.code}</code>.
+  </p>
+</DocsLayout>

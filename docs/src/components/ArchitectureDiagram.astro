@@ -1,0 +1,510 @@
+---
+interface Props {
+  caption?: string;
+}
+
+const { caption } = Astro.props;
+
+const icons = {
+  code: "m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 14",
+  braces:
+    "M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1m8-18h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1",
+  menu: "M4 6h16M4 12h16M4 18h16",
+  package: "m21 8-9-5-9 5v8l9 5 9-5V8ZM3 8l9 5 9-5m-9 5v8",
+  sparkle:
+    "m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Zm7 13 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z",
+  plug: "M9 2v5m6-5v5M6 7h12v4a6 6 0 0 1-12 0V7Zm6 10v5",
+  layers: "m12 3 10 6-10 6L2 9l10-6Zm-10 12 10 6 10-6M2 12l10 6 10-6",
+  play: "M7 4.8v14.4a.8.8 0 0 0 1.2.7l11.5-7.2a.8.8 0 0 0 0-1.4L8.2 4.1a.8.8 0 0 0-1.2.7Z",
+  volume: "M11 5 6 9H3v6h3l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13",
+  cpu: "M9 3v2m6-2v2M9 19v2m6-2v2M3 9h2m-2 6h2m14-6h2m-2 6h2M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm2 4h6v6H9Z",
+} as const;
+
+const sources = [
+  { x: 24, icon: "code", label: "Components", note: ".vue and .svelte" },
+  { x: 244, icon: "braces", label: "Stylesheets", note: "CSS, Tailwind" },
+  { x: 464, icon: "menu", label: "sk.config.json", note: "Window, permissions" },
+] as const;
+
+const stages = [
+  {
+    y: 172,
+    tone: "pink",
+    title: "JavaScriptCore",
+    chips: ["Vue", "Svelte"],
+    lines: ["Your components and the Skathi runtime.", "Handlers, timers and promises run here."],
+  },
+  {
+    y: 296,
+    tone: "lilac",
+    title: "Element tree",
+    chips: ["Rust"],
+    lines: [
+      "What the renderer makes: elements, attributes, text.",
+      "It answers DOM calls, and is not a browser's DOM.",
+    ],
+  },
+  {
+    y: 420,
+    tone: "blue",
+    title: "Style and layout",
+    chips: ["CSS engine", "Taffy"],
+    lines: ["The cascade and computed values.", "Flexbox, grid and block layout."],
+  },
+  {
+    y: 544,
+    tone: "yellow",
+    title: "Paint",
+    chips: ["Renderer"],
+    lines: ["Boxes, text, images and effects", "become one scene for the frame."],
+  },
+] as const;
+
+const services = [
+  "Windows and tray",
+  "Files and storage",
+  "Clipboard",
+  "Permissions",
+  "Hotkeys",
+  "Network state",
+  "Your native modules",
+] as const;
+
+const helpers = [
+  { y: 172, icon: "layers", title: "Decoders", line: "Images, Lottie, stickers" },
+  { y: 266, icon: "play", title: "Video", line: "The operating system's player" },
+  { y: 360, icon: "volume", title: "Audio", line: "The audio graph and worklets" },
+  { y: 454, icon: "cpu", title: "Workers", line: "Tasks, FFI calls, network" },
+] as const;
+
+const backends = [
+  { x: 340, w: 92, label: "Direct3D" },
+  { x: 440, w: 68, label: "Metal" },
+  { x: 516, w: 76, label: "Vulkan" },
+] as const;
+
+const chipWidth = (label: string) => Math.round(label.length * 7.4 + 22);
+---
+
+<figure class="arch wide">
+  <svg
+    viewBox="0 0 1200 882"
+    role="img"
+    aria-label="Skathi's architecture. An app's components, styles and configuration are built into a payload, with a native image under AOT. In the host process, one UI thread runs JavaScriptCore, the element tree, style and layout, and paint, which goes to the GPU and the window. Rust platform services sit beside it and are called from JavaScript. Other threads decode images, play video, render audio and run tasks, and hand over finished work."
+  >
+    <defs>
+      <marker id="arch-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" class="arch-head"></path>
+      </marker>
+      <linearGradient id="arch-spine" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" class="arch-stop-pink"></stop>
+        <stop offset="0.36" class="arch-stop-lilac"></stop>
+        <stop offset="0.7" class="arch-stop-blue"></stop>
+        <stop offset="1" class="arch-stop-yellow"></stop>
+      </linearGradient>
+      <linearGradient id="arch-brand" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" class="arch-stop-pink"></stop>
+        <stop offset="0.5" class="arch-stop-lilac"></stop>
+        <stop offset="1" class="arch-stop-blue"></stop>
+      </linearGradient>
+      <pattern id="arch-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+        <circle cx="2" cy="2" r="1" class="arch-dot"></circle>
+      </pattern>
+      <filter id="arch-glow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="14"></feGaussianBlur>
+      </filter>
+    </defs>
+
+    <text x="24" y="24" class="arch-band">Your app</text>
+    {
+      sources.map((source) => (
+        <g class="arch-source">
+          <rect x={source.x} y="38" width="204" height="66" rx="14" />
+          <g transform={`translate(${source.x + 16} 59)`}>
+            <path d={icons[source.icon]} class="arch-icon" />
+          </g>
+          <text x={source.x + 52} y="65" class="arch-chip-title">
+            {source.label}
+          </text>
+          <text x={source.x + 52} y="86" class="arch-small">
+            {source.note}
+          </text>
+        </g>
+      ))
+    }
+    <path d="M680 71 H764" class="arch-line arch-flow" marker-end="url(#arch-arrow)"></path>
+    <text x="722" y="60" class="arch-note">sk build</text>
+    <g class="arch-payload">
+      <rect x="774" y="38" width="216" height="66" rx="14"></rect>
+      <g transform="translate(790 59)"><path d={icons.package} class="arch-icon arch-icon-brand"></path></g>
+      <text x="826" y="65" class="arch-chip-title">The payload</text>
+      <text x="826" y="86" class="arch-small">Scripts, styles, assets</text>
+    </g>
+    <g class="arch-image">
+      <rect x="1002" y="38" width="174" height="66" rx="14"></rect>
+      <g transform="translate(1018 59)"><path d={icons.sparkle} class="arch-icon arch-icon-brand"></path></g>
+      <text x="1054" y="65" class="arch-chip-title">An image</text>
+      <text x="1054" y="86" class="arch-small">With AOT</text>
+    </g>
+
+    <rect x="12" y="124" width="1176" height="746" rx="22" class="arch-host"></rect>
+    <rect x="12" y="124" width="1176" height="746" rx="22" class="arch-host-dots"></rect>
+    <text x="34" y="150" class="arch-band">The host process</text>
+
+    <rect x="318" y="174" width="524" height="506" rx="26" class="arch-glow" filter="url(#arch-glow)"></rect>
+    <rect x="300" y="154" width="560" height="546" rx="20" class="arch-thread"></rect>
+    <text x="840" y="684" class="arch-thread-label">The UI thread</text>
+
+    {
+      stages.map((stage, index) => {
+        let right = 826;
+        return (
+          <g class="arch-stage" data-tone={stage.tone}>
+            <rect x="320" y={stage.y} width="520" height="110" rx="14" class="arch-stage-box" />
+            <circle cx="350" cy={stage.y + 34} r="15" class="arch-step" />
+            <text x="350" y={stage.y + 39} class="arch-step-number">
+              {index + 1}
+            </text>
+            <text x="378" y={stage.y + 40} class="arch-title">
+              {stage.title}
+            </text>
+            {[...stage.chips].reverse().map((chip) => {
+              const width = chipWidth(chip);
+              right -= width;
+              const x = right;
+              right -= 8;
+              return (
+                <>
+                  <rect x={x} y={stage.y + 21} width={width} height="26" rx="13" class="arch-tag arch-tag-tone" />
+                  <text x={x + width / 2} y={stage.y + 38.5} class="arch-tag-text">
+                    {chip}
+                  </text>
+                </>
+              );
+            })}
+            {stage.lines.map((line, n) => (
+              <text x="378" y={stage.y + 65 + n * 20} class="arch-text">
+                {line}
+              </text>
+            ))}
+            {index < stages.length - 1 && (
+              <path
+                d={`M580 ${stage.y + 110} V${stage.y + 122}`}
+                class="arch-line arch-flow"
+                marker-end="url(#arch-arrow)"
+              />
+            )}
+          </g>
+        );
+      })
+    }
+
+    <g class="arch-services">
+      <rect x="24" y="172" width="212" height="344" rx="16"></rect>
+      <g transform="translate(42 191)"><path d={icons.plug} class="arch-icon"></path></g>
+      <text x="76" y="210" class="arch-title">Platform services</text>
+      {
+        services.map((service, index) => (
+          <>
+            <circle cx="50" cy={249 + index * 28} r="3" class="arch-bullet" />
+            <text x="64" y={254 + index * 28} class="arch-text">
+              {service}
+            </text>
+          </>
+        ))
+      }
+      <rect x="42" y="456" width="58" height="26" rx="13" class="arch-tag"></rect>
+      <text x="71" y="473.5" class="arch-tag-text">Rust</text>
+      <path d="M320 204 H246" class="arch-line" marker-end="url(#arch-arrow)"></path>
+      <path d="M236 236 H310" class="arch-line" marker-end="url(#arch-arrow)"></path>
+      <text x="268" y="194" class="arch-note">calls</text>
+      <text x="268" y="255" class="arch-note">events</text>
+    </g>
+
+    <g class="arch-helpers">
+      <text x="900" y="150" class="arch-band">Other threads</text>
+      {
+        helpers.map((helper) => (
+          <>
+            <rect x="900" y={helper.y} width="272" height="80" rx="14" />
+            <circle cx="932" cy={helper.y + 40} r="18" class="arch-badge" />
+            <g transform={`translate(${932 - 10.8} ${helper.y + 40 - 10.8}) scale(0.9)`}>
+              <path d={icons[helper.icon]} class="arch-icon" />
+            </g>
+            <text x="962" y={helper.y + 35} class="arch-title">
+              {helper.title}
+            </text>
+            <text x="962" y={helper.y + 57} class="arch-text">
+              {helper.line}
+            </text>
+            <path d={`M900 ${helper.y + 40} H868`} class="arch-line" marker-end="url(#arch-arrow)" />
+          </>
+        ))
+      }
+      <text x="900" y="570" class="arch-small">They never run your JavaScript.</text>
+      <text x="900" y="590" class="arch-small">They hand over finished work:</text>
+      <text x="900" y="610" class="arch-small">pixels, frames, results.</text>
+    </g>
+
+    <path d="M580 656 V720" class="arch-line arch-flow" marker-end="url(#arch-arrow)"></path>
+    <g class="arch-gpu">
+      <rect x="320" y="726" width="340" height="120" rx="14"></rect>
+      <text x="342" y="760" class="arch-title">GPU</text>
+      <text x="342" y="783" class="arch-text">The scene, drawn at the next refresh</text>
+      {
+        backends.map((backend) => (
+          <>
+            <rect x={backend.x + 2} y="798" width={backend.w} height="26" rx="13" class="arch-tag" />
+            <text x={backend.x + 2 + backend.w / 2} y="815.5" class="arch-tag-text">
+              {backend.label}
+            </text>
+          </>
+        ))
+      }
+    </g>
+    <path d="M660 786 H702" class="arch-line arch-flow" marker-end="url(#arch-arrow)"></path>
+    <g class="arch-window">
+      <rect x="712" y="726" width="148" height="120" rx="12" class="arch-window-frame"></rect>
+      <path d="M712 750 H860" class="arch-window-bar"></path>
+      <circle cx="727" cy="738" r="3.5" class="arch-light arch-light-a"></circle>
+      <circle cx="739" cy="738" r="3.5" class="arch-light arch-light-b"></circle>
+      <circle cx="751" cy="738" r="3.5" class="arch-light arch-light-c"></circle>
+      <rect x="727" y="766" width="74" height="9" rx="4.5" class="arch-ui arch-ui-strong"></rect>
+      <rect x="727" y="785" width="118" height="7" rx="3.5" class="arch-ui"></rect>
+      <rect x="727" y="800" width="96" height="7" rx="3.5" class="arch-ui"></rect>
+      <rect x="727" y="818" width="46" height="12" rx="6" class="arch-ui arch-ui-button"></rect>
+    </g>
+    <text x="786" y="863" class="arch-note">The app's window</text>
+    <path d="M712 812 H686 V858 H130 V524" class="arch-line arch-dash" marker-end="url(#arch-arrow)"></path>
+    <text x="144" y="849" class="arch-note arch-start">Clicks, keys, scrolling</text>
+  </svg>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  .arch {
+    margin-block: 32px;
+  }
+  .arch svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    font-family: inherit;
+  }
+  .arch figcaption {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: var(--fs-sm);
+    text-align: center;
+  }
+  .arch rect {
+    fill: var(--surface);
+    stroke: var(--border-strong);
+    stroke-width: 1.2;
+  }
+  .arch .arch-stop-pink {
+    stop-color: var(--candy-pink);
+  }
+  .arch .arch-stop-lilac {
+    stop-color: var(--candy-lilac);
+  }
+  .arch .arch-stop-blue {
+    stop-color: var(--candy-blue);
+  }
+  .arch .arch-stop-yellow {
+    stop-color: var(--candy-yellow);
+  }
+  .arch .arch-dot {
+    fill: color-mix(in srgb, var(--muted) 22%, transparent);
+  }
+  .arch .arch-host {
+    fill: color-mix(in srgb, var(--surface) 40%, transparent);
+    stroke: var(--border);
+    stroke-dasharray: 5 6;
+  }
+  .arch .arch-host-dots {
+    fill: url(#arch-dots);
+    stroke: none;
+  }
+  .arch .arch-glow {
+    fill: url(#arch-spine);
+    stroke: none;
+    opacity: 0.16;
+  }
+  .arch .arch-thread {
+    fill: color-mix(in srgb, var(--surface) 70%, transparent);
+    stroke: url(#arch-spine);
+    stroke-width: 1.6;
+  }
+  .arch-payload rect,
+  .arch-image rect,
+  .arch .arch-window-frame {
+    stroke: url(#arch-brand);
+    stroke-width: 1.6;
+  }
+  .arch-image rect {
+    stroke-dasharray: 5 5;
+  }
+  .arch-stage {
+    --tone: var(--candy-pink);
+  }
+  .arch-stage[data-tone="lilac"] {
+    --tone: var(--candy-lilac);
+  }
+  .arch-stage[data-tone="blue"] {
+    --tone: var(--candy-blue);
+  }
+  .arch-stage[data-tone="yellow"] {
+    --tone: var(--candy-yellow);
+  }
+  .arch .arch-stage-box {
+    fill: color-mix(in srgb, var(--tone) 9%, var(--surface));
+    stroke: var(--tone);
+    stroke-width: 1.8;
+  }
+  .arch .arch-step {
+    fill: var(--tone);
+  }
+  .arch .arch-step-number {
+    fill: #1a1423;
+    font-size: 14px;
+    font-weight: 800;
+    text-anchor: middle;
+  }
+  .arch .arch-tag {
+    fill: color-mix(in srgb, var(--muted) 12%, transparent);
+    stroke: var(--border-strong);
+    stroke-width: 1;
+  }
+  .arch .arch-tag-tone {
+    fill: color-mix(in srgb, var(--tone) 16%, transparent);
+    stroke: color-mix(in srgb, var(--tone) 55%, transparent);
+  }
+  .arch .arch-tag-text {
+    font-size: 12.5px;
+    font-weight: 600;
+    text-anchor: middle;
+  }
+  .arch text {
+    fill: var(--text);
+  }
+  .arch .arch-band {
+    fill: var(--muted);
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .arch .arch-chip-title {
+    font-size: 15.5px;
+    font-weight: 700;
+  }
+  .arch .arch-title {
+    font-size: 17.5px;
+    font-weight: 700;
+  }
+  .arch .arch-text {
+    fill: var(--body, var(--text));
+    font-size: 14px;
+  }
+  .arch .arch-small {
+    fill: var(--muted);
+    font-size: 13px;
+  }
+  .arch .arch-thread-label {
+    fill: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-anchor: end;
+    text-transform: uppercase;
+  }
+  .arch .arch-note {
+    fill: var(--muted);
+    font-size: 12.5px;
+    text-anchor: middle;
+  }
+  .arch .arch-start {
+    text-anchor: start;
+  }
+  .arch .arch-icon {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .arch .arch-icon-brand {
+    stroke: var(--candy-pink);
+  }
+  .arch .arch-badge {
+    fill: color-mix(in srgb, var(--candy-lilac) 14%, transparent);
+    stroke: color-mix(in srgb, var(--candy-lilac) 45%, transparent);
+  }
+  .arch-helpers .arch-icon {
+    stroke: var(--candy-lilac);
+  }
+  .arch .arch-bullet {
+    fill: var(--candy-blue);
+  }
+  .arch .arch-line {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.5;
+  }
+  .arch .arch-dash {
+    stroke-dasharray: 4 5;
+  }
+  .arch .arch-flow {
+    stroke: var(--candy-lilac);
+    stroke-dasharray: 4 5;
+    animation: arch-flow 1.1s linear infinite;
+  }
+  .arch .arch-head {
+    fill: var(--muted);
+  }
+  .arch .arch-window-bar {
+    fill: none;
+    stroke: var(--border-strong);
+  }
+  .arch .arch-light {
+    stroke: none;
+  }
+  .arch .arch-light-a {
+    fill: var(--candy-pink);
+  }
+  .arch .arch-light-b {
+    fill: var(--candy-yellow);
+  }
+  .arch .arch-light-c {
+    fill: var(--candy-blue);
+  }
+  .arch .arch-ui {
+    fill: color-mix(in srgb, var(--muted) 30%, transparent);
+    stroke: none;
+  }
+  .arch .arch-ui-strong {
+    fill: color-mix(in srgb, var(--text) 55%, transparent);
+  }
+  .arch .arch-ui-button {
+    fill: var(--candy-lilac);
+  }
+  @keyframes arch-flow {
+    to {
+      stroke-dashoffset: -18;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .arch .arch-flow {
+      animation: none;
+    }
+  }
+  @media (max-width: 720px) {
+    .arch {
+      overflow-x: auto;
+    }
+    .arch svg {
+      min-width: 860px;
+    }
+  }
+</style>
