@@ -1034,3 +1034,31 @@ test.skipIf(!WINDOWS && !MACOS)(
   },
   T,
 );
+
+test(
+  "a native layer hears where its sk-layer element is, in the frame that paints it",
+  async () => {
+    const told: string[] = [];
+    const heard = (line: string) =>
+      until(
+        async () => (told.push(...((await call("layerLog")) as string[])), told),
+        (all) => all.includes(line),
+      );
+    expect(await heard("place:300,140,120,80")).toContain("place:300,140,120,80");
+    expect(told[0]).toStartWith("attach:");
+    expect(told.filter((line) => line.startsWith("attach:")).length).toBe(1);
+
+    told.length = 0;
+    await app.eval("moveLayer(320); 0");
+    expect(await heard("place:320,140,120,80")).toEqual(["place:320,140,120,80"]);
+
+    told.length = 0;
+    await app.eval("moveLayer(null); 0");
+    expect(await heard("hide")).toEqual(["hide"]);
+
+    told.length = 0;
+    await app.eval("moveLayer(300); 0");
+    expect(await heard("place:300,140,120,80")).toEqual(["place:300,140,120,80"]);
+  },
+  T,
+);

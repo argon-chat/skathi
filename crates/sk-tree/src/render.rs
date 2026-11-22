@@ -431,6 +431,7 @@ pub(crate) fn gc_node_state() {
     crate::video::gc(live);
     crate::surface::node::gc(live);
     crate::iframe::gc(live);
+    crate::layer::gc(live);
     sticker::gc(live);
     crate::svg::gc(live);
     tree::with_tree(crate::selection::gc);
@@ -1759,6 +1760,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     reset_bounds(win);
     crate::sticky::begin_frame(win);
     crate::iframe::drawing(win);
+    crate::layer::drawing(win);
     windows::of(win, |w| {
         w.any_drag_region = false;
         w.control_hitboxes.clear();
@@ -1890,6 +1892,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     reset_bounds(win);
     crate::sticky::begin_frame(win);
     crate::iframe::drawing(win);
+    crate::layer::drawing(win);
     crate::aria::reset_frame();
     sk_elements::scrollbar::reset_frame();
     windows::of(win, |w| {
@@ -2194,6 +2197,16 @@ fn build_node<V: 'static>(
                 sticky,
                 false,
                 sticker::build(t, id, node, window, cx, now, control_area),
+            ),
+        ),
+        Kind::Element if t.name(node.tag) == "sk-layer" => stack(
+            own.clone(),
+            &extras,
+            placed(
+                id,
+                sticky,
+                false,
+                build_layer(t, id, node, window, cx, now, control_area),
             ),
         ),
         Kind::Element if t.name(node.tag) == "sk-surface" => stack(
@@ -5353,25 +5366,7 @@ fn build_iframe<V: 'static>(
     let reporter = gpui::canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
-            let mask = window.content_mask().bounds;
-            let rem = window.rem_size();
-            let radius =
-                |r: Option<gpui::AbsoluteLength>| r.map_or(gpui::px(0.0), |r| r.to_pixels(rem));
-            let corners = gpui::Corners {
-                top_left: radius(radii.top_left),
-                top_right: radius(radii.top_right),
-                bottom_right: radius(radii.bottom_right),
-                bottom_left: radius(radii.bottom_left),
-            };
-            let s = window.scale_factor();
-            let device_radii = [
-                corners.top_left,
-                corners.top_right,
-                corners.bottom_right,
-                corners.bottom_left,
-            ]
-            .map(|r| f32::from(r) * s);
-            let place = crate::iframe::placement(bounds, mask, device_radii, s, opacity);
+            let (place, corners) = underlay_placement(bounds, &radii, opacity, window);
             crate::iframe::painted_in(id, window);
             crate::iframe::placed(id, place);
             // The document is composited under the app's surface: erase what the app painted in the
@@ -5389,6 +5384,76 @@ fn build_iframe<V: 'static>(
         pointer_mask(node),
         handle,
         focusable,
+        true,
+        cx,
+    )
+    .into_any_element()
+}
+
+/// Where a box painted at `bounds` is in the window, for what is composited under the page.
+fn underlay_placement(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radii: &gpui::CornersRefinement<gpui::AbsoluteLength>,
+    opacity: f32,
+    window: &Window,
+) -> (crate::iframe::Placement, gpui::Corners<gpui::Pixels>) {
+    let mask = window.content_mask().bounds;
+    let rem = window.rem_size();
+    let radius = |r: Option<gpui::AbsoluteLength>| r.map_or(gpui::px(0.0), |r| r.to_pixels(rem));
+    let corners = gpui::Corners {
+        top_left: radius(radii.top_left),
+        top_right: radius(radii.top_right),
+        bottom_right: radius(radii.bottom_right),
+        bottom_left: radius(radii.bottom_left),
+    };
+    let s = window.scale_factor();
+    let device_radii = [
+        corners.top_left,
+        corners.top_right,
+        corners.bottom_right,
+        corners.bottom_left,
+    ]
+    .map(|r| f32::from(r) * s);
+    let place = crate::iframe::placement(bounds, mask, device_radii, s, opacity);
+    (place, corners)
+}
+
+/// `<sk-layer name="…">`: a transparent box the embedding program's layer of that name is shown
+/// under (`crate::layer`).
+fn build_layer<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let win = windows::key(window);
+    let name = t.prop(id, "name").unwrap_or("").trim().to_string();
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+    let opacity = d.style().opacity.unwrap_or(1.0);
+    let radii = d.style().corner_radii.clone();
+    let reporter = gpui::canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let (place, _) = underlay_placement(bounds, &radii, opacity, window);
+            crate::layer::painted(id, &name, place, window);
+        },
+    )
+    .absolute()
+    .size_full();
+    bind_events(
+        d.child(reporter),
+        id,
+        pointer_mask(node),
+        None,
+        false,
         true,
         cx,
     )

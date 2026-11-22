@@ -184,7 +184,14 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     if (tag == "svg" && !crate::svg::can_replay(t, id))
         || matches!(
             tag,
-            "input" | "textarea" | "img" | "video" | "canvas" | "iframe" | "sk-surface"
+            "input"
+                | "textarea"
+                | "img"
+                | "video"
+                | "canvas"
+                | "iframe"
+                | "sk-surface"
+                | "sk-layer"
         )
     {
         return true;

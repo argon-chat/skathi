@@ -121,6 +121,8 @@ declare module "svelte/elements" {
         onsurfacelost?: ((event: SurfaceEvent) => void) | undefined;
         onsurfacedisplaychange?: ((event: SurfaceDisplayEvent) => void) | undefined;
       };
+    /** A transparent box the embedding program shows its native layer `name` under. */
+    "sk-layer": HTMLAttributes<HTMLElement> & { name?: string | undefined };
     /** Plays a Lottie animation (`.json` or `.lottie`). */
     lottie: HTMLAttributes<HTMLElement> &
       SizeHints & {

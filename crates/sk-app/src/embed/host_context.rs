@@ -104,6 +104,12 @@ impl<'a> HostContext<'a> {
         sk_tree::surface::surface(name)
     }
 
+    /// Has each `<sk-layer name="…">` of that name show a native layer made by `make`, one per
+    /// element, under the page. See [`super::Layer`].
+    pub fn layer(&self, name: &str, make: impl Fn() -> Box<dyn super::Layer> + 'static) {
+        sk_tree::layer::register(name, make);
+    }
+
     /// Called on the VM thread once per frame before the frame's wave drains: deliver what worker
     /// threads queued here, so a JS handler never observes a half-applied patch. Keep it bounded;
     /// it is on the frame's critical path. Runs until shutdown.

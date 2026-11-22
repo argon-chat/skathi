@@ -887,6 +887,7 @@ fn install_iframe_backend() {
 fn close_iframes_on_quit(cx: &mut App) {
     std::mem::forget(cx.on_app_quit(|_| {
         sk_tree::iframe::shutdown();
+        sk_tree::layer::shutdown();
         std::future::ready(())
     }));
 }

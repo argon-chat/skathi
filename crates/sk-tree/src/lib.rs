@@ -31,6 +31,7 @@ mod img;
 mod inherit;
 mod inline_style;
 mod keyboard;
+pub mod layer;
 mod live;
 mod live_state;
 pub mod log;
@@ -791,6 +792,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let scripted = tree::take_script_dirty();
     img::tick(window, cx);
     iframe::tick(window, cx);
+    layer::tick(windows::key(window));
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
     let stickers_moved = render::sticker::tick(window, cx);
@@ -854,6 +856,7 @@ pub fn forget_window(key: windows::WinKey) {
     lottie::forget_window(key);
     surface::node::forget_window(key);
     iframe::forget_window(key);
+    layer::forget_window(key);
     pointer_lock::window_closed(key);
 }
 

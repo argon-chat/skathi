@@ -14,6 +14,8 @@
 //!   and presents half floats instead: the colour is then linear `[r, g, b, a]`, and may go
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
+//! - `layerLog()` answers and clears what the `<sk-layer name="probe">` layer was told:
+//!   `attach:<window>`, `place:x,y,w,h` in CSS px and `hide`.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
 //! - `feedbackStart(name, fps, paced, source, ring, width, height, pauseEvery)` and `feedbackStop(name)`: frames at `fps`
 //!   (`0` runs unthrottled, `-1` presents once per measured refresh) with `on_frame` listening.
@@ -42,10 +44,37 @@
 // The surface spec and its fixture still speak `appHost.call`.
 #![allow(deprecated)]
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use sk_app::embed::{Builder, Call, SurfaceFormat, SurfaceHandle};
+use sk_app::embed::{
+    Builder, Call, Layer, LayerHost, LayerPlacement, SurfaceFormat, SurfaceHandle,
+};
+
+static LAYER_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+struct ProbeLayer;
+
+impl Layer for ProbeLayer {
+    fn attach(&mut self, host: &LayerHost) {
+        LAYER_LOG
+            .lock()
+            .unwrap()
+            .push(format!("attach:{}", host.window));
+    }
+
+    fn place(&mut self, placement: Option<LayerPlacement>) {
+        let told = match placement {
+            Some(p) => {
+                let css = p.bounds.map(|v| (v / p.scale).round().to_string());
+                format!("place:{}", css.join(","))
+            }
+            None => "hide".into(),
+        };
+        LAYER_LOG.lock().unwrap().push(told);
+    }
+}
 
 /// What a present fills its frame with.
 #[derive(Clone, Copy)]
@@ -101,6 +130,14 @@ fn surface_of(args: &[Value]) -> SurfaceHandle {
 fn main() {
     let builder = Builder::new()
         .activate(false)
+        .setup(|host| {
+            host.layer("probe", || Box::new(ProbeLayer));
+            Ok(())
+        })
+        .function("layerLog", |call| {
+            let told = std::mem::take(&mut *LAYER_LOG.lock().unwrap());
+            call.resolve(json!(told).to_string());
+        })
         .function("present", |call| {
             let args = args_of(&call);
             let surface = surface_of(&args);

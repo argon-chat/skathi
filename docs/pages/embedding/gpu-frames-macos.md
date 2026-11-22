@@ -186,4 +186,4 @@ The values are linear extended sRGB with 1.0 as SDR white: an `'RGhA'` buffer in
 - **Another process, or a device or API you cannot change?** Share an IOSurface over a mach port, with an `MTLSharedEvent` through its handle.
 - **Not sure yet?** Start with `present_bgra`. It works everywhere, and moving to a GPU path later changes only the producer.
 
-Next: [Window, tray and hotkeys](/embedding/desktop/).
+Next: [A native layer under the page](/embedding/native-layer/).
