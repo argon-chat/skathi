@@ -26,6 +26,7 @@ createApp({
           onSelect: () => log.push("select"),
         }),
         h("input", { id: "short", maxlength: 5 }),
+        h("input", { id: "plain" }),
         h("input", { id: "num", type: "number" }),
       ]);
   },

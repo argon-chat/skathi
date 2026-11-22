@@ -147,7 +147,8 @@ impl InputIntent {
 }
 
 /// Called when user editing changed the content. Deferred ([`Window::defer`]), so it may call back
-/// into the entity, including [`TextInputState::sync_value`].
+/// into the entity, including [`TextInputState::sync_value`]. A controlled write made during the call
+/// that equals the reported value is its echo and leaves caret, undo and composition alone.
 pub type OnChange = Rc<dyn Fn(&str, &InputIntent, &mut Window, &mut App)>;
 
 /// Fired before every user edit (DOM `beforeinput`), after `keydown`; `false` cancels it. Not called

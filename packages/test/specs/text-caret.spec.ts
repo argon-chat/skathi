@@ -84,6 +84,53 @@ test(
   T,
 );
 
+async function untilLive(selector: string, want: string): Promise<string> {
+  const deadline = Date.now() + 3_000;
+  for (;;) {
+    const got = await app.locator(selector).textContent();
+    if (got === want || Date.now() > deadline) return got;
+    await Bun.sleep(50);
+  }
+}
+
+test(
+  "assigning a value the user typed on the way takes effect, caret at its end",
+  async () => {
+    const PLAIN = "document.querySelector('#plain')";
+    const PLAIN_CARET = `(() => { const t = ${PLAIN}; return [t.selectionStart, t.selectionEnd].join(","); })()`;
+    await app.locator("#plain").type("abcde");
+    expect(await untilLive("#plain", "abcde")).toBe("abcde");
+    await app.eval(`(${PLAIN}.value = "ab", 0)`);
+    expect(await untilLive("#plain", "ab")).toBe("ab");
+    expect(await until(PLAIN_CARET, "2,2")).toBe("2,2");
+    await app.locator("#plain").type("X");
+    expect(await untilLive("#plain", "abX")).toBe("abX");
+  },
+  T,
+);
+
+test(
+  "fast typing into a controlled field keeps every character and the caret at the end",
+  async () => {
+    await reset();
+    const typed = "the quick brown fox jumps over the lazy dog";
+    await app.locator("#ta").type(typed);
+    expect(await untilLive("#ta", typed)).toBe(typed);
+    expect(await until("__SK_TEST_CARET__.text.value", typed)).toBe(typed);
+    expect(await until(CARET, `${typed.length},${typed.length},${FORWARD}`)).toBe(
+      `${typed.length},${typed.length},${FORWARD}`,
+    );
+    await app.locator("#ta").press("ArrowLeft");
+    await app.locator("#ta").type("!");
+    const edited = typed.slice(0, -1) + "!g";
+    expect(await untilLive("#ta", edited)).toBe(edited);
+    expect(await until(CARET, `${typed.length},${typed.length},${FORWARD}`)).toBe(
+      `${typed.length},${typed.length},${FORWARD}`,
+    );
+  },
+  T,
+);
+
 test(
   "setRangeText replaces a range, places the selection by mode, and the next keystroke lands there",
   async () => {

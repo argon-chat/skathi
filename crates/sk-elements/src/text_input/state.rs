@@ -91,8 +91,7 @@ use super::{
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
 
-/// Self-reported values remembered so a framework echo of them can be swallowed (keeps a `v-model`ed
-/// input from fighting the user for the caret).
+/// Write counters of framework echoes not yet synced (see [`echo_write`]).
 const ECHO_RING_CAPACITY: usize = 32;
 const UNDO_LIMIT: usize = 256;
 const CARET_BLINK_MS: u64 = 500;
@@ -168,25 +167,29 @@ fn multi_line_text(text: &str) -> String {
     out
 }
 
-fn remember_reported(pending: &mut VecDeque<String>, value: String) {
-    pending.push_back(value);
-    while pending.len() > ECHO_RING_CAPACITY {
-        pending.pop_front();
+/// The write that echoes a reported value: one made while script handled that report (`before` is
+/// the counter when the dispatch began) and holding exactly the reported string. Matching an older
+/// report is not enough, since a script may assign any value the user once typed.
+fn echo_write(reported: &str, before: Option<u32>, after: Option<(&str, u32)>) -> Option<u32> {
+    let (value, write) = after?;
+    (before != Some(write) && value == reported).then_some(write)
+}
+
+fn remember_echo(echoes: &mut VecDeque<u32>, write: u32) {
+    echoes.push_back(write);
+    while echoes.len() > ECHO_RING_CAPACITY {
+        echoes.pop_front();
     }
 }
 
-/// Whether an incoming controlled value echoes one this input reported: on a match everything up to
-/// it is retired; on a miss the ring is cleared and the value is external.
-fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
-    match pending.iter().rposition(|reported| reported == value) {
+/// Whether `write` is a recorded echo; it and the echoes before it are retired.
+fn take_echo(echoes: &mut VecDeque<u32>, write: u32) -> bool {
+    match echoes.iter().position(|&echo| echo == write) {
         Some(index) => {
-            pending.drain(..=index);
+            echoes.drain(..=index);
             true
         }
-        None => {
-            pending.clear();
-            false
-        }
+        None => false,
     }
 }
 
@@ -302,7 +305,7 @@ pub struct TextInputState {
     suppress_text_input: bool,
     _key_interceptor: Option<Subscription>,
 
-    pending_values: VecDeque<String>,
+    echo_writes: VecDeque<u32>,
     /// The framework's write counter for the last assignment applied. Keyed on the counter, not the
     /// string: a second assignment of the same value must land if the user typed in between.
     last_synced_write: Option<u32>,
@@ -399,7 +402,7 @@ impl TextInputState {
             _blur: blur,
             suppress_text_input: false,
             _key_interceptor: Some(interceptor),
-            pending_values: VecDeque::new(),
+            echo_writes: VecDeque::new(),
             last_synced_write: None,
             controlled_value: None,
             undo_stack: Vec::new(),
@@ -438,15 +441,15 @@ impl TextInputState {
     }
 
     /// Controlled-value sync from the framework (Vue `v-model`). The same `write` is a no-op, so
-    /// this can be called every frame. A value matching one this input reported is swallowed (echo
-    /// ring); any other change is external and hard-resets content, caret and undo.
+    /// this can be called every frame. A write recorded as the echo of a reported value is swallowed;
+    /// any other is an assignment and hard-resets content, caret and undo.
     pub fn sync_value(&mut self, value: &str, write: u32, cx: &mut Context<Self>) {
         if self.last_synced_write == Some(write) {
             return;
         }
         self.last_synced_write = Some(write);
 
-        if take_echo(&mut self.pending_values, value) {
+        if take_echo(&mut self.echo_writes, write) {
             return;
         }
         self.set_external_text(value, cx);
@@ -659,15 +662,28 @@ impl TextInputState {
         cx.notify();
     }
 
-    /// Reports the current value and its edit to the framework and remembers it in the echo ring.
-    /// Deferred, so the callback may call back into this entity.
+    /// Reports the current value and its edit to the framework, recording the framework's write-back
+    /// of it as an echo. Deferred, so the callback may call back into this entity.
     fn emit_change(&mut self, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(on_change) = self.on_change.clone() else {
             return;
         };
-        remember_reported(&mut self.pending_values, self.content.clone());
         let value = self.content.clone();
-        window.defer(cx, move |window, cx| on_change(&value, &intent, window, cx));
+        let source = self.controlled_value.clone();
+        let this = cx.weak_entity();
+        window.defer(cx, move |window, cx| {
+            let read = |cx: &App| source.as_ref().and_then(|source| source(cx));
+            let before = read(cx).map(|(_, write)| write);
+            // The dispatch runs script and its microtasks to completion, so a framework write-back
+            // has landed by the time it returns.
+            on_change(&value, &intent, window, cx);
+            let after = read(cx);
+            let after = after.as_ref().map(|(text, write)| (text.as_str(), *write));
+            if let Some(write) = echo_write(&value, before, after) {
+                this.update(cx, |this, _| remember_echo(&mut this.echo_writes, write))
+                    .ok();
+            }
+        });
     }
 
     /// `beforeinput` for an edit about to be made: `false` when a handler cancelled it. IME edits
@@ -2022,41 +2038,55 @@ mod tests {
         assert_eq!(single_line_text("\r\n"), " ");
     }
 
-    fn ring(values: &[&str]) -> VecDeque<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    #[test]
-    fn our_own_value_coming_back_is_swallowed() {
-        let mut pending = ring(&["a", "ab"]);
-        assert!(take_echo(&mut pending, "ab"));
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn an_echo_retires_everything_older_than_it() {
-        let mut pending = ring(&["a", "ab", "abc"]);
-        assert!(take_echo(&mut pending, "a"));
-        assert_eq!(pending, ring(&["ab", "abc"]));
-        assert!(take_echo(&mut pending, "abc"));
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn a_genuinely_external_value_clears_the_ring() {
-        let mut pending = ring(&["a", "ab"]);
-        assert!(!take_echo(&mut pending, "reset from js"));
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn the_ring_never_grows_past_its_capacity() {
-        let mut pending = VecDeque::new();
-        for index in 0..ECHO_RING_CAPACITY * 2 {
-            remember_reported(&mut pending, index.to_string());
+    /// Reports each prefix of `typed`; `framework` answers one (the value seen, the counter before)
+    /// with the field's controlled value after it, as `(value, write)`.
+    fn type_reports(
+        typed: &str,
+        mut framework: impl FnMut(&str, Option<u32>) -> Option<(String, u32)>,
+    ) -> VecDeque<u32> {
+        let mut echoes = VecDeque::new();
+        let mut current: Option<(String, u32)> = None;
+        for end in 1..=typed.len() {
+            let reported = &typed[..end];
+            let before = current.as_ref().map(|(_, write)| *write);
+            current = framework(reported, before).or(current);
+            let after = current
+                .as_ref()
+                .map(|(value, write)| (value.as_str(), *write));
+            if let Some(write) = echo_write(reported, before, after) {
+                remember_echo(&mut echoes, write);
+            }
         }
-        assert_eq!(pending.len(), ECHO_RING_CAPACITY);
-        assert_eq!(pending.front().map(String::as_str), Some("32"));
-        assert!(!take_echo(&mut pending, "0"));
+        echoes
+    }
+
+    #[test]
+    fn an_earlier_typed_value_assigned_by_script_is_not_an_echo() {
+        let mut echoes = type_reports("abcde", |_, _| None);
+        assert!(echoes.is_empty());
+        assert!(!take_echo(&mut echoes, 1));
+        assert_eq!(echo_write("ab", None, Some(("ab", 1))), Some(1));
+        assert_eq!(echo_write("abcde", Some(0), Some(("ab", 1))), None);
+    }
+
+    #[test]
+    fn write_backs_are_echoes_even_when_synced_late_or_out_of_order() {
+        let mut write = 0;
+        let mut echoes = type_reports("abcd", |reported, _| {
+            write += 1;
+            Some((reported.to_owned(), write))
+        });
+        assert_eq!(echoes, VecDeque::from([1, 2, 3, 4]));
+        assert!(take_echo(&mut echoes, 2));
+        assert!(take_echo(&mut echoes, 4));
+        assert!(echoes.is_empty());
+    }
+
+    #[test]
+    fn a_handler_rewriting_the_value_is_an_assignment() {
+        let echoes = type_reports("ab", |reported, before| {
+            Some((reported.to_uppercase(), before.unwrap_or(0) + 1))
+        });
+        assert!(echoes.is_empty());
     }
 }
