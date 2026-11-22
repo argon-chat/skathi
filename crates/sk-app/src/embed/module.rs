@@ -257,6 +257,11 @@ pub(crate) fn event_data<T: Serialize + ?Sized>(data: &T) -> Option<marshal::Own
     native_buffer::moving(false, || marshal::owned(data, false).ok())
 }
 
+/// [`event_data`] of data the sender gives away: a NativeBuffer in it reaches the app as it is.
+pub(crate) fn event_data_moved<T: Serialize>(data: T) -> Option<marshal::Owned> {
+    native_buffer::moving(true, || marshal::owned(&data, false).ok())
+}
+
 enum Invoke {
     Function(Box<dyn Fn(&Context, &HostArgs) -> Result<Value, Fail> + Send + Sync>),
     Task(Box<dyn Fn(&Context, &HostArgs) -> Result<Work, Fail> + Send + Sync>),
@@ -1508,6 +1513,9 @@ mod tests {
                 );
                 let frame = NativeBuffer::from(vec![4u8; 2]);
                 emit("buffers", "frame", event_data(&frame).unwrap());
+                let given = NativeBuffer::from(vec![6u8; 2]);
+                let given_at = address(&given).to_string();
+                emit("buffers", "frame", event_data_moved(given).unwrap());
                 settle();
                 assert_eq!(
                     eval("__settled.away"),
@@ -1524,10 +1532,15 @@ mod tests {
                 // An event's buffer stays the sender's: the app gets a copy.
                 assert_eq!(
                     eval("[__frames.length, __frames[0][0], __frames[0][2]].join()"),
-                    "1,true,4,4"
+                    "2,true,4,4"
                 );
                 assert_ne!(eval("String(__frames[0][1])"), address(&frame).to_string());
                 assert_eq!(&*frame, &[4, 4]);
+                // One the sender gave away crosses as its memory.
+                assert_eq!(
+                    eval("[__frames[1][0], __frames[1][1], __frames[1][2]].join()"),
+                    format!("true,{given_at},6,6")
+                );
                 assert_eq!(KEPT.lock().unwrap().len(), 2);
             })
         });

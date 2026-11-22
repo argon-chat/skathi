@@ -929,6 +929,26 @@ impl Handle {
         event: &str,
         data: &T,
     ) -> Result<(), EmitError> {
+        self.emit_with(module, event, || module::event_data(data))
+    }
+
+    /// [`Self::emit_to`] with data given away: a `NativeBuffer` in it reaches the app in its own
+    /// memory, where `emit_to` copies it.
+    pub fn emit_into<T: serde::Serialize>(
+        &self,
+        module: &str,
+        event: &str,
+        data: T,
+    ) -> Result<(), EmitError> {
+        self.emit_with(module, event, || module::event_data_moved(data))
+    }
+
+    fn emit_with(
+        &self,
+        module: &str,
+        event: &str,
+        data: impl FnOnce() -> Option<marshal::Owned>,
+    ) -> Result<(), EmitError> {
         if self.is_closed() {
             return Err(EmitError::Closed);
         }
@@ -938,8 +958,7 @@ impl Handle {
         }) else {
             return Err(EmitError::NotDeclared);
         };
-        let data = module::event_data(data).ok_or(EmitError::NotJson)?;
-        module::emit(module, event, data);
+        module::emit(module, event, data().ok_or(EmitError::NotJson)?);
         Ok(())
     }
 

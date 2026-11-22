@@ -111,6 +111,7 @@ fn main() {
 - **An event nobody listens to is dropped.** Nothing is kept for a handler that subscribes later. The same goes for events sent while the page reloads: they belonged to the old page.
 - **A handler that throws** does not stop the others. Its error and stack go to your program's stderr as `[native:notes] a handler for "progress" threw: …`.
 - **Events emitted before the app has loaded** wait for it, then follow the rule above: delivered if a handler is subscribed by then.
+- **`emit_into` gives the data away.** It is `emit_to` taking the data by value, so a [`NativeBuffer`](/embedding/native-modules/values/) in it, a video frame or a block of samples, reaches the app in its own memory instead of as a copy. It refuses the same things.
 - **`emit_to` refuses** an event the module did not declare (`EmitError::NotDeclared`), data that cannot be serialized, such as a map whose keys are not strings or numbers (`EmitError::NotJson`), and anything after the app closed (`EmitError::Closed`). `Closed` is the normal way a thread of yours learns to stop.
 
 ## State plus an event

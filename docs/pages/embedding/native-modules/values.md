@@ -178,7 +178,7 @@ frame.free();
 
 - **Made in Rust:** `NativeBuffer::from(vec)` or `from(boxed_slice)` keeps the allocation and frees it the way `Vec` would, once the app frees the buffer or it is collected. `NativeBuffer::zeroed(len)` gives zeroed memory at a multiple of 16, as `NativeBuffer.alloc()` does. It derefs to `[u8]`.
 - **A result** is the app's: a `NativeBuffer` result, or one inside a `#[skathi::data]` type, an `Option`, a `Result` or a `Vec`, hands its memory over. If Rust still holds it after the call, say the function returned a reference to one it keeps, the app gets a copy, so the two sides never write the same bytes.
-- **An event** copies the buffer: `emit_to` borrows it, and the sender may change it right after.
+- **An event** from `emit_to` copies the buffer: it borrows the data, and the sender may change it right after. `emit_into` takes the data by value and hands the buffer's memory over, as a result does.
 - **A function's parameter** is the app's buffer, lent for the call. Freeing it from a getter during the call does not free it under Rust; the memory goes back when the call returns.
 - **A task's parameter** is the app's buffer too, not a copy. Until the task settles, its `buffer` is detached, as after a transfer, and passing it anywhere else throws `InvalidStateError`. When the task settles, panics or is dropped, the buffer comes back with a new `buffer` over the same memory, freed if the app called `free()` meanwhile.
 - **Keeping one** past the call or the task, in a field or a channel, makes it Rust's: the app sees it freed, and the memory lives until Rust drops it.
