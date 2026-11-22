@@ -27,12 +27,14 @@ mod host_context;
 mod host_file;
 mod marshal;
 mod module;
+mod native_buffer;
 #[cfg(feature = "types")]
 mod types;
 pub use bytes::Bytes;
 pub use host_context::{HostContext, HostCookie, SameSite};
 pub use host_file::HostFile;
 pub use module::{Declared, Function, IntoModule, Job, Module, Task, Typed};
+pub use native_buffer::NativeBuffer;
 pub use serde;
 
 /// What `#[skathi::module]` and `#[skathi::data]` expand to; not an API.

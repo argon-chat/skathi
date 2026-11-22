@@ -12,31 +12,33 @@ A [native module](/embedding/native-modules/) function's parameters are its Java
 
 Each row is a Rust type as a parameter, a result or a field of a `#[skathi::data]` type, unless it says otherwise.
 
-| Rust                                                                | TypeScript                                                   | How it crosses                                                                                                       |
-| ------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `bool`                                                              | `boolean`                                                    | directly                                                                                                             |
-| `u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `u128`                | `number`                                                     | directly; read only from a whole number in the type's range                                                          |
-| `f32`, `f64`                                                        | `number`                                                     | directly; `NaN` and the infinities are `null`                                                                        |
-| `char`                                                              | `string`                                                     | directly; one character                                                                                              |
-| `String`                                                            | `string`                                                     | directly                                                                                                             |
-| `&str` (parameter of a function)                                    | `string`                                                     | read for the length of the call, without a `String` of yours; not on a task                                          |
-| `()`                                                                | `null`                                                       | a function that returns nothing returns `null`                                                                       |
-| `Option<T>`                                                         | `T \| null`                                                  | directly; `null`, `undefined` and a missing property are `None`. A trailing `Option` parameter may be left out (`?`) |
-| `Box<T>`                                                            | `T`                                                          | as `T`                                                                                                               |
-| `Vec<T>`, `[T]` (result)                                            | `T[]`                                                        | directly; a parameter also reads a typed array as its numbers                                                        |
-| `HashMap<String, V>`, `BTreeMap<String, V>`                         | `{ [key in string]: V }`                                     | directly                                                                                                             |
-| a map with other keys, `HashMap<u32, V>`                            | `{ [key in number]: V }`                                     | through serde; the keys are text in the app, as in JSON                                                              |
-| tuples `(A, B)`                                                     | `[A, B]`                                                     | through serde, as arrays                                                                                             |
-| `Result<T, E>` (result)                                             | `T`                                                          | `Ok` is the value; `Err` throws (a task rejects). [What JS sees](/embedding/native-modules/errors-and-tasks/)        |
-| `Vec<u8>`, `skathi::Bytes`                                          | `Uint8Array` (a parameter: `ArrayBufferView \| ArrayBuffer`) | copied once; see [Bytes](#bytes)                                                                                     |
-| `Option<Vec<u8>>`                                                   | `Uint8Array \| null`                                         | as above                                                                                                             |
-| `&[u8]` (parameter of a function)                                   | `ArrayBufferView \| ArrayBuffer`                             | read in place, not copied; not on a task                                                                             |
-| `&[i8]`, `&[i16]`, `&[u16]`, `&[i32]`, `&[u32]`, `&[f32]`, `&[f64]` | `Int8Array`, …, `Float64Array`                               | read in place from a typed array of that kind, copied from anything else that holds numbers                          |
-| `&[i64]`, `&[u64]`                                                  | `BigInt64Array`, `BigUint64Array`                            | as above                                                                                                             |
-| `serde_json::Value`                                                 | `Value`, a JSON type declared in the module                  | through serde, as any JSON value; a typed array arrives as JSON would see it, an object of indexes                   |
-| a `#[skathi::data]` struct                                          | an object type                                               | directly, field by field                                                                                             |
-| a `#[skathi::data]` enum                                            | a union, by its [representation](#enums)                     | a result directly; an argument that is not a plain variant name through serde                                        |
-| any other `Serialize`/`Deserialize` type                            | its specta type, if it has one                               | through serde, over the engine's values; it means the same, a little slower                                          |
+| Rust                                                                | TypeScript                                                                        | How it crosses                                                                                                       |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `bool`                                                              | `boolean`                                                                         | directly                                                                                                             |
+| `u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `u128`                | `number`                                                                          | directly; read only from a whole number in the type's range                                                          |
+| `f32`, `f64`                                                        | `number`                                                                          | directly; `NaN` and the infinities are `null`                                                                        |
+| `char`                                                              | `string`                                                                          | directly; one character                                                                                              |
+| `String`                                                            | `string`                                                                          | directly                                                                                                             |
+| `&str` (parameter of a function)                                    | `string`                                                                          | read for the length of the call, without a `String` of yours; not on a task                                          |
+| `()`                                                                | `null`                                                                            | a function that returns nothing returns `null`                                                                       |
+| `Option<T>`                                                         | `T \| null`                                                                       | directly; `null`, `undefined` and a missing property are `None`. A trailing `Option` parameter may be left out (`?`) |
+| `Box<T>`                                                            | `T`                                                                               | as `T`                                                                                                               |
+| `Vec<T>`, `[T]` (result)                                            | `T[]`                                                                             | directly; a parameter also reads a typed array as its numbers                                                        |
+| `HashMap<String, V>`, `BTreeMap<String, V>`                         | `{ [key in string]: V }`                                                          | directly                                                                                                             |
+| a map with other keys, `HashMap<u32, V>`                            | `{ [key in number]: V }`                                                          | through serde; the keys are text in the app, as in JSON                                                              |
+| tuples `(A, B)`                                                     | `[A, B]`                                                                          | through serde, as arrays                                                                                             |
+| `Result<T, E>` (result)                                             | `T`                                                                               | `Ok` is the value; `Err` throws (a task rejects). [What JS sees](/embedding/native-modules/errors-and-tasks/)        |
+| `Vec<u8>`, `skathi::Bytes`                                          | `Uint8Array` (a parameter: also `ArrayBufferView`, `ArrayBuffer`, `NativeBuffer`) | copied once; see [Bytes](#bytes)                                                                                     |
+| `Option<Vec<u8>>`                                                   | `Uint8Array \| null`                                                              | as above                                                                                                             |
+| `&[u8]` (parameter of a function)                                   | `ArrayBufferView \| ArrayBuffer \| NativeBuffer`                                  | read in place, not copied; not on a task                                                                             |
+| `&mut [u8]` (parameter of a function)                               | `ArrayBufferView \| ArrayBuffer \| NativeBuffer`                                  | written in place, never a copy; not on a task                                                                        |
+| `skathi::NativeBuffer`                                              | `NativeBuffer` of `skathi:memory`                                                 | its memory crosses, not a copy, either way and on a task too; see [NativeBuffer](#nativebuffer)                      |
+| `&[i8]`, `&[i16]`, `&[u16]`, `&[i32]`, `&[u32]`, `&[f32]`, `&[f64]` | `Int8Array`, …, `Float64Array`                                                    | read in place from a typed array of that kind, copied from anything else that holds numbers                          |
+| `&[i64]`, `&[u64]`                                                  | `BigInt64Array`, `BigUint64Array`                                                 | as above                                                                                                             |
+| `serde_json::Value`                                                 | `Value`, a JSON type declared in the module                                       | through serde, as any JSON value; a typed array arrives as JSON would see it, an object of indexes                   |
+| a `#[skathi::data]` struct                                          | an object type                                                                    | directly, field by field                                                                                             |
+| a `#[skathi::data]` enum                                            | a union, by its [representation](#enums)                                          | a result directly; an argument that is not a plain variant name through serde                                        |
+| any other `Serialize`/`Deserialize` type                            | its specta type, if it has one                                                    | through serde, over the engine's values; it means the same, a little slower                                          |
 
 A parameter type must be `Deserialize` and a result type `Serialize`, both with [specta](https://docs.rs/specta)'s `Type` when the `types` feature is on (it is by default). `#[skathi::data]` derives all three.
 
@@ -63,7 +65,7 @@ Two differences from serde's own reading, both about values that are not JSON an
 
 ## Borrowed parameters
 
-A function, not a task, may borrow two kinds of parameter for the length of the call:
+A function, not a task, may borrow these parameters for the length of the call:
 
 ```rust
 #[skathi::module]
@@ -79,8 +81,11 @@ impl Text {
 ```
 
 - **`&str`** reads the app's string without a `String` of yours.
-- **`&[u8]`** reads the memory of any typed array, `DataView` or `ArrayBuffer` in place, with no copy (a view of 16-bit numbers is its bytes).
+- **`&[u8]`** reads the memory of any typed array, `DataView`, `ArrayBuffer` or [`NativeBuffer`](#nativebuffer) in place, with no copy (a view of 16-bit numbers is its bytes).
+- **`&mut [u8]`** is the same memory, written in place: what the function writes is in the app's buffer when it returns. It never copies, so it takes only those four, not a plain array, and not a `SharedArrayBuffer`, which another thread may be using.
 - **`&[f32]`, `&[i16]`, `&[f64]`, …** read a typed array of exactly that kind in place: `&[f32]` from a `Float32Array`. Anything else that holds numbers, a plain array included, is copied into the slice's type, so the function works either way; only the copy costs.
+
+Two parameters over the same memory, one of them written (`&mut [u8]` or a `NativeBuffer`), are a `TypeError`: Rust may not see the same bytes as both shared and mutable. Passing the same buffer to two `&[u8]` is fine.
 
 The borrow ends when the function returns. To keep the data, copy it (`text.to_owned()`, `bytes.to_vec()`) or take the owned type instead. A `#[task]` runs after the call has returned, so a borrowed parameter on a task does not compile; the error says which owned type to take:
 
@@ -88,7 +93,7 @@ The borrow ends when the function returns. To keep the data, copy it (`text.to_o
 error: a #[task] runs on a worker after the call has returned, so it cannot borrow from it: take `String` instead
 ```
 
-Any other reference, `&String`, `&mut [u8]` or `&'static str`, is a compile error too. Borrowing is only for module methods; the closure form takes owned types.
+Any other reference, `&String`, `&mut [f32]` or `&'static str`, is a compile error too. Borrowing is only for module methods; the closure form takes owned types.
 
 ## Bytes
 
@@ -132,6 +137,52 @@ pub struct Attachments {
 ```
 
 Other numbers come out as plain arrays: a `Vec<f32>` result is a `number[]`, not a `Float32Array`.
+
+## NativeBuffer
+
+`skathi::NativeBuffer` is the Rust side of a [`NativeBuffer`](/std/native-buffer/) of `skathi:memory`. Its memory crosses itself, never a copy, in both directions and to a task, and in the app it is the same class as one from `NativeBuffer.alloc()`: same `buffer`, `free()` and `freed`, and it goes to `skathi:binary`, `skathi:ffi` and `skathi:gpu` as any other.
+
+```rust
+use skathi::NativeBuffer;
+
+#[skathi::module]
+impl Camera {
+    // A Vec<u8> or Box<[u8]> becomes a buffer in its own memory.
+    pub fn snapshot(&self) -> Result<NativeBuffer, String> {
+        let pixels: Vec<u8> = self.grab().map_err(|e| e.to_string())?;
+        Ok(NativeBuffer::from(pixels))
+    }
+
+    // A function writes the app's memory in place.
+    pub fn clear(&self, mut frame: NativeBuffer) {
+        frame.fill(0);
+    }
+
+    // A task has the buffer while the app waits; returning it gives the app the same object back.
+    #[task]
+    pub fn denoise(&self, mut frame: NativeBuffer, strength: f32) -> NativeBuffer {
+        filter(&mut frame, strength);
+        frame
+    }
+}
+```
+
+```ts
+import { denoise, snapshot } from "native:camera";
+
+const frame = snapshot(); // a NativeBuffer over the Vec's memory
+const clean = await denoise(frame, 0.5); // clean === frame
+new Uint8Array(frame.buffer); // make views again after the task
+frame.free();
+```
+
+- **Made in Rust:** `NativeBuffer::from(vec)` or `from(boxed_slice)` keeps the allocation and frees it the way `Vec` would, once the app frees the buffer or it is collected. `NativeBuffer::zeroed(len)` gives zeroed memory at a multiple of 16, as `NativeBuffer.alloc()` does. It derefs to `[u8]`.
+- **A result** is the app's: a `NativeBuffer` result, or one inside a `#[skathi::data]` type, an `Option`, a `Result` or a `Vec`, hands its memory over. If Rust still holds it after the call, say the function returned a reference to one it keeps, the app gets a copy, so the two sides never write the same bytes.
+- **An event** copies the buffer: `emit_to` borrows it, and the sender may change it right after.
+- **A function's parameter** is the app's buffer, lent for the call. Freeing it from a getter during the call does not free it under Rust; the memory goes back when the call returns.
+- **A task's parameter** is the app's buffer too, not a copy. Until the task settles, its `buffer` is detached, as after a transfer, and passing it anywhere else throws `InvalidStateError`. When the task settles, panics or is dropped, the buffer comes back with a new `buffer` over the same memory, freed if the app called `free()` meanwhile.
+- **Keeping one** past the call or the task, in a field or a channel, makes it Rust's: the app sees it freed, and the memory lives until Rust drops it.
+- A freed buffer as an argument throws `InvalidStateError`.
 
 ## #[skathi::data]
 

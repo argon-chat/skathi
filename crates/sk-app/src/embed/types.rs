@@ -154,9 +154,21 @@ fn unwrap_result(types: &Types, dt: DataType) -> DataType {
 fn any_bytes(param: String) -> String {
     match param.strip_prefix("Uint8Array") {
         Some(rest) if rest.is_empty() || rest.starts_with(" | ") => {
-            format!("ArrayBufferView | ArrayBuffer{rest}")
+            format!("ArrayBufferView | ArrayBuffer | NativeBuffer{rest}")
         }
         _ => param,
+    }
+}
+
+/// `skathi::NativeBuffer` is `skathi:memory`'s, imported where a declaration names it.
+fn imports(text: &str) -> &'static str {
+    let named = text
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+        .any(|word| word == "NativeBuffer");
+    if named {
+        "  import type { NativeBuffer } from \"skathi:memory\";\n"
+    } else {
+        ""
     }
 }
 
@@ -294,8 +306,9 @@ fn module(module: &Module) -> Result<String, String> {
     }
     body.push_str(&off);
     let types = r.declarations()?;
+    let imports = imports(&format!("{types}{body}"));
     Ok(format!(
-        "declare module \"native:{}\" {{\n{types}{body}}}\n",
+        "declare module \"native:{}\" {{\n{imports}{types}{body}}}\n",
         module.name
     ))
 }
@@ -446,9 +459,25 @@ declare module "native:empty" {
             samples.iter().copied().fold(0.0, f32::max)
         }
 
+        pub fn frame(&self, width: u32) -> crate::embed::NativeBuffer {
+            crate::embed::NativeBuffer::zeroed(width as usize * 4)
+        }
+
+        pub fn fill(&self, target: &mut [u8], value: u8) {
+            target.fill(value);
+        }
+
         #[task]
         pub fn sync_now(&self) -> Result<u32, String> {
             Ok(0)
+        }
+
+        #[task]
+        pub fn encode(
+            &self,
+            pixels: crate::embed::NativeBuffer,
+        ) -> Result<crate::embed::NativeBuffer, String> {
+            Ok(pixels)
         }
     }
 
@@ -458,6 +487,7 @@ declare module "native:empty" {
         crate::embed::IntoModule::register(Store::new(), &mut m);
         let expected = r#"
 declare module "native:store" {
+  import type { NativeBuffer } from "skathi:memory";
   export type Entry = {
     entryId: number;
     thumbnail?: Uint8Array | null;
@@ -466,9 +496,12 @@ declare module "native:store" {
   export const available: boolean;
   export function fetchAll(maxCount: number, mood?: Mood | null): Entry[];
   export function label(text: string): string;
-  export function digest(data: ArrayBufferView | ArrayBuffer, key?: ArrayBufferView | ArrayBuffer | null): Uint8Array;
+  export function digest(data: ArrayBufferView | ArrayBuffer | NativeBuffer, key?: ArrayBufferView | ArrayBuffer | NativeBuffer | null): Uint8Array;
   export function peak(samples: Float32Array): number;
+  export function frame(width: number): NativeBuffer;
+  export function fill(target: ArrayBufferView | ArrayBuffer | NativeBuffer, value: number): void;
   export function syncNow(): Promise<number>;
+  export function encode(pixels: NativeBuffer): Promise<NativeBuffer>;
   export function on(event: "changed", handler: (data: Entry) => void): () => void;
   export function on(event: "mood-swing", handler: (data: Mood) => void): () => void;
   export function off(event: "changed", handler: (data: Entry) => void): void;

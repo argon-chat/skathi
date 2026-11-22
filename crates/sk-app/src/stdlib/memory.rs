@@ -6,10 +6,14 @@
 //! the buffer's own count; the bytes go back to the allocator when nothing holds them any more.
 
 use std::alloc::{self, Layout};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt::Display;
+use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 use sk_runtime::host;
 use sk_runtime::redjs::ffi::RjsAbInfo;
@@ -29,6 +33,8 @@ const ISSUED: &str = "skathi.issued";
 struct Chunk {
     ptr: NonNull<u8>,
     layout: Layout,
+    /// The `skathi::NativeBuffer`s of Rust code over this chunk.
+    rust: AtomicUsize,
 }
 
 // SAFETY: a chunk is plain bytes; who writes them when is the business of whoever holds a region.
@@ -46,7 +52,25 @@ impl Chunk {
                 alloc::alloc(layout)
             }
         };
-        NonNull::new(raw).map(|ptr| Chunk { ptr, layout })
+        NonNull::new(raw).map(|ptr| Chunk {
+            ptr,
+            layout,
+            rust: AtomicUsize::new(0),
+        })
+    }
+
+    /// The memory of `v`, freed with the layout `Vec` allocated it with.
+    fn from_vec(v: Vec<u8>) -> Chunk {
+        let mut v = ManuallyDrop::new(v);
+        // SAFETY: a `Vec<u8>` holds `capacity` bytes allocated by the global allocator with
+        // alignment 1, or nothing at a dangling pointer when its capacity is 0 (see `drop`).
+        unsafe {
+            Chunk {
+                ptr: NonNull::new_unchecked(v.as_mut_ptr()),
+                layout: Layout::from_size_align_unchecked(v.capacity(), 1),
+                rust: AtomicUsize::new(0),
+            }
+        }
     }
 
     fn size(&self) -> usize {
@@ -56,20 +80,59 @@ impl Chunk {
 
 impl Drop for Chunk {
     fn drop(&mut self) {
-        // SAFETY: allocated in `Chunk::new` with this layout.
-        unsafe { alloc::dealloc(self.ptr.as_ptr(), self.layout) }
+        if self.layout.size() != 0 {
+            // SAFETY: allocated by the global allocator with this layout.
+            unsafe { alloc::dealloc(self.ptr.as_ptr(), self.layout) }
+        }
     }
 }
 
 /// Bytes of a chunk. Holding one keeps them allocated, whatever JS has freed.
 #[derive(Clone)]
-pub(super) struct Region {
+pub(crate) struct Region {
     chunk: Arc<Chunk>,
     offset: usize,
     len: usize,
 }
 
 impl Region {
+    /// `v`'s own memory, without a copy.
+    pub(crate) fn from_vec(v: Vec<u8>) -> Region {
+        let len = v.len();
+        Region {
+            chunk: Arc::new(Chunk::from_vec(v)),
+            offset: 0,
+            len,
+        }
+    }
+
+    /// `len` bytes at a multiple of 16, zeroed or a copy of `from`.
+    fn fresh(len: usize, from: Option<&[u8]>) -> Region {
+        let Some(chunk) = Chunk::new(len, DEFAULT_ALIGNMENT, from.is_none()) else {
+            alloc::handle_alloc_error(
+                Layout::from_size_align(len.max(1), DEFAULT_ALIGNMENT)
+                    .unwrap_or(Layout::new::<u8>()),
+            );
+        };
+        if let Some(from) = from {
+            // SAFETY: the new chunk holds at least `len` bytes and nothing else sees it yet.
+            unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), chunk.ptr.as_ptr(), len) };
+        }
+        Region {
+            chunk: Arc::new(chunk),
+            offset: 0,
+            len,
+        }
+    }
+
+    pub(crate) fn zeroed(len: usize) -> Region {
+        Region::fresh(len, None)
+    }
+
+    pub(crate) fn copy_of(bytes: &[u8]) -> Region {
+        Region::fresh(bytes.len(), Some(bytes))
+    }
+
     pub fn ptr(&self) -> *mut u8 {
         // SAFETY: `offset + len` is within the chunk.
         unsafe { self.chunk.ptr.as_ptr().add(self.offset) }
@@ -79,11 +142,86 @@ impl Region {
         self.len
     }
 
+    /// The same bytes of the same chunk.
+    pub(crate) fn same(&self, other: &Region) -> bool {
+        Arc::ptr_eq(&self.chunk, &other.chunk)
+            && self.offset == other.offset
+            && self.len == other.len
+    }
+
+    /// How many `skathi::NativeBuffer`s of Rust code hold this chunk.
+    pub(crate) fn rust_holders(&self) -> usize {
+        self.chunk.rust.load(Ordering::Acquire)
+    }
+
     /// # Safety
     /// The bytes outlive the borrow only while some region of the chunk is held.
     pub unsafe fn bytes<'a>(&self) -> &'a [u8] {
         std::slice::from_raw_parts(self.ptr(), self.len)
     }
+
+    /// # Safety
+    /// As [`Region::bytes`], and nothing else reads or writes them meanwhile.
+    pub(crate) unsafe fn bytes_mut<'a>(&self) -> &'a mut [u8] {
+        std::slice::from_raw_parts_mut(self.ptr(), self.len)
+    }
+}
+
+/// A region a `skathi::NativeBuffer` of Rust code holds, counted on its chunk.
+pub(crate) struct Held(Region);
+
+impl Held {
+    pub(crate) fn new(region: Region) -> Held {
+        region.chunk.rust.fetch_add(1, Ordering::AcqRel);
+        Held(region)
+    }
+
+    pub(crate) fn region(&self) -> &Region {
+        &self.0
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.chunk.rust.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+thread_local! {
+    /// The chunks JS has had an `ArrayBuffer` over, by address, to find the chunk under a view.
+    static CHUNKS: RefCell<(BTreeMap<usize, Weak<Chunk>>, usize)> =
+        const { RefCell::new((BTreeMap::new(), 64)) };
+}
+
+fn known(chunk: &Arc<Chunk>) {
+    CHUNKS.with(|chunks| {
+        let (map, prune_at) = &mut *chunks.borrow_mut();
+        map.insert(chunk.ptr.as_ptr() as usize, Arc::downgrade(chunk));
+        if map.len() >= *prune_at {
+            map.retain(|_, chunk| chunk.strong_count() > 0);
+            *prune_at = (map.len() * 2).max(64);
+        }
+    });
+}
+
+/// The chunk of a `NativeBuffer` that `ptr` points into, if any, held for as long as the result.
+pub(crate) fn holder_of(ptr: *const u8) -> Option<Region> {
+    let at = ptr as usize;
+    // Live chunks do not overlap, but a dead one may lie inside a live one that took its place.
+    let chunk = CHUNKS.with(|chunks| {
+        chunks
+            .borrow()
+            .0
+            .range(..=at)
+            .rev()
+            .find_map(|(_, chunk)| chunk.upgrade())
+    })?;
+    let base = chunk.ptr.as_ptr() as usize;
+    (at < base + chunk.size()).then(|| Region {
+        len: chunk.size(),
+        chunk,
+        offset: 0,
+    })
 }
 
 struct NativeBuffer {
@@ -146,19 +284,12 @@ unsafe fn external(g: *mut c_void, region: &Region) -> Option<u64> {
         drop(Arc::from_raw(held as *const Chunk));
         return None;
     }
+    known(&region.chunk);
     Some(out)
 }
 
-unsafe fn issue(g: *mut c_void, region: Region, what: &str) -> Js<u64> {
-    let Some(buffer) = external(g, &region) else {
-        return range_error(
-            g,
-            &format!(
-                "{what}: {} bytes are more than an ArrayBuffer holds",
-                region.len
-            ),
-        );
-    };
+unsafe fn wrap(g: *mut c_void, region: Region) -> Option<u64> {
+    let buffer = external(g, &region)?;
     let object = host_create(
         g,
         support::host_class::<NativeBuffer>(&NATIVE_BUFFER, "NativeBuffer"),
@@ -169,12 +300,34 @@ unsafe fn issue(g: *mut c_void, region: Region, what: &str) -> Js<u64> {
         },
     );
     slot_set(g, object, BUFFER, buffer);
-    Ok(object)
+    Some(object)
+}
+
+unsafe fn issue(g: *mut c_void, region: Region, what: &str) -> Js<u64> {
+    let len = region.len;
+    match wrap(g, region) {
+        Some(object) => Ok(object),
+        None => range_error(
+            g,
+            &format!("{what}: {len} bytes are more than an ArrayBuffer holds"),
+        ),
+    }
 }
 
 unsafe fn invalid<T>(g: *mut c_void, message: &str) -> Js<T> {
     host::throw(g, "InvalidStateError", message);
     Err(Thrown)
+}
+
+/// Why the memory of a `NativeBuffer` cannot be used now, for an `InvalidStateError`.
+fn refusal(native: &NativeBuffer) -> Option<&'static str> {
+    if native.region.is_none() {
+        Some("the NativeBuffer is freed")
+    } else if native.away {
+        Some("the NativeBuffer is in use by a call on another thread; await it first")
+    } else {
+        None
+    }
 }
 
 unsafe fn usable<'a>(
@@ -186,18 +339,10 @@ unsafe fn usable<'a>(
         return Ok(None);
     };
     sync(g, v, native);
-    if native.region.is_none() {
-        return invalid(g, &format!("{what}: the NativeBuffer is freed"));
+    match refusal(native) {
+        Some(problem) => invalid(g, &format!("{what}: {problem}")),
+        None => Ok(Some(native)),
     }
-    if native.away {
-        return invalid(
-            g,
-            &format!(
-                "{what}: the NativeBuffer is in use by a call on another thread; await it first"
-            ),
-        );
-    }
-    Ok(Some(native))
 }
 
 /// The memory of `v` when it is a `NativeBuffer`, `None` for any other value. A freed buffer, or
@@ -231,24 +376,85 @@ pub(super) unsafe fn check_current(
 /// Hands the memory of a `NativeBuffer` to a call on another thread. Its `ArrayBuffer` is
 /// detached, as a transfer would, until [`come_back`].
 pub(super) unsafe fn send_away(g: *mut c_void, v: u64, what: &dyn Display) -> Js<Region> {
-    let Some(native) = usable(g, v, what)? else {
-        return type_error(g, &format!("{what} must be a NativeBuffer"));
+    match send(g, v) {
+        Ok(Some(region)) => Ok(region),
+        Ok(None) => type_error(g, &format!("{what} must be a NativeBuffer")),
+        Err(problem) => invalid(g, &format!("{what}: {problem}")),
+    }
+}
+
+/// [`send_away`] for a native module's task: `Ok(None)` for a value that is not a `NativeBuffer`,
+/// `Err` with what an `InvalidStateError` says.
+pub(crate) unsafe fn send(g: *mut c_void, v: u64) -> Result<Option<Region>, &'static str> {
+    let Some(native) = state(g, v) else {
+        return Ok(None);
     };
+    sync(g, v, native);
+    if let Some(problem) = refusal(native) {
+        return Err(problem);
+    }
     let Some(region) = native.region.clone() else {
-        return Err(Thrown);
+        return Ok(None);
     };
     if glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER)) != 0 {
-        return invalid(
-            g,
-            &format!("{what}: the NativeBuffer's ArrayBuffer cannot be detached"),
-        );
+        return Err("the NativeBuffer's ArrayBuffer cannot be detached");
     }
     native.away = true;
-    Ok(region)
+    Ok(Some(region))
+}
+
+/// The memory of `v` for the length of a native module's function call, as [`send`] answers.
+pub(crate) unsafe fn lend(g: *mut c_void, v: u64) -> Result<Option<Region>, &'static str> {
+    let Some(native) = state(g, v) else {
+        return Ok(None);
+    };
+    sync(g, v, native);
+    match refusal(native) {
+        Some(problem) => Err(problem),
+        None => Ok(native.region.clone()),
+    }
+}
+
+/// A new `NativeBuffer` over `region`; `None` when it is more than an `ArrayBuffer` holds.
+pub(crate) unsafe fn make(g: *mut c_void, region: Region) -> Option<u64> {
+    report(g, region.len);
+    wrap(g, region)
+}
+
+/// Rust code kept the memory it was lent: the `NativeBuffer` is freed as far as JS is concerned.
+pub(crate) unsafe fn keep(g: *mut c_void, v: u64) {
+    let Some(native) = state(g, v) else {
+        return;
+    };
+    if native.region.is_some() && !native.away {
+        glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER));
+    }
+    native.region = None;
+    native.away = false;
+}
+
+/// Rust code still holds the memory of a `NativeBuffer` made for JS a moment ago: JS gets a copy.
+pub(crate) unsafe fn rehome(g: *mut c_void, v: u64) {
+    let Some(native) = state(g, v) else {
+        return;
+    };
+    let Some(region) = &native.region else {
+        return;
+    };
+    let copy = Region::copy_of(region.bytes());
+    let old = slot_get(g, v, BUFFER);
+    match external(g, &copy) {
+        Some(buffer) => {
+            slot_set(g, v, BUFFER, buffer);
+            native.region = Some(copy);
+        }
+        None => native.region = None,
+    }
+    glue::rjs_arraybuffer_detach(g, old);
 }
 
 /// The call on another thread returned: a buffer not freed meanwhile gets a new `ArrayBuffer`.
-pub(super) unsafe fn come_back(g: *mut c_void, v: u64) {
+pub(crate) unsafe fn come_back(g: *mut c_void, v: u64) {
     let Some(native) = state(g, v) else {
         return;
     };
@@ -603,6 +809,29 @@ mod tests {
         assert_eq!(big.ptr() as usize % 256, 0);
         assert_eq!(arena.used, 1040);
         assert_eq!(arena.chunks.len(), 2);
+    }
+
+    #[test]
+    fn reset_in_the_engine_hands_out_the_same_chunk_again() {
+        sk_runtime::testing::on_js_thread(|| {
+            sk_runtime::JsRuntime::with(|rt| {
+                super::super::install(rt);
+                let context = rt.ctx();
+                let arena = context
+                    .eval(
+                        "globalThis.__arena = new __sk_std.memory.Arena({ chunkSize: 4096 });
+                         globalThis.__first = __arena.alloc(64);
+                         new Uint8Array(__first.buffer)[0] = 1;
+                         __arena.reset();
+                         __arena",
+                    )
+                    .unwrap();
+                let g = context.raw();
+                let state = unsafe { super::arena(g, arena.0) }.ok().unwrap();
+                assert_eq!(state.chunks.len(), 1);
+                assert_eq!(Arc::strong_count(&state.chunks[0]), 1);
+            })
+        });
     }
 
     #[test]

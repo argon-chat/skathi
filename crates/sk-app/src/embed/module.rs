@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use sk_runtime::JsRuntime;
 
-use super::marshal;
+use super::{marshal, native_buffer};
 use crate::js::{self, Context, HostArgs, Value};
 
 #[cfg(feature = "types")]
@@ -212,7 +212,7 @@ pub mod private {
     pub use super::super::marshal::{
         answer_compound, encode_bytes, encode_serde, missing, owned_compound, read_struct,
         unit_variant, Element, Error, Fields, FromJs, IntoJs, Js, Keys, Open, OutError, Owned,
-        Pick, ReadDirect, ReadSerde, Slice, Str, Tree, WriteDirect, WriteSerde,
+        Pick, ReadDirect, ReadSerde, Slice, SliceMut, Str, Tree, WriteDirect, WriteSerde,
     };
     pub use super::{Fail, Work};
     pub use crate::js::{Context, HostArgs, Value};
@@ -253,7 +253,8 @@ pub mod private {
 
 /// An event's data, made on the thread that emits it.
 pub(crate) fn event_data<T: Serialize + ?Sized>(data: &T) -> Option<marshal::Owned> {
-    marshal::owned(data, false).ok()
+    // The sender keeps `data`, so a NativeBuffer in it reaches the app as a copy.
+    native_buffer::moving(false, || marshal::owned(data, false).ok())
 }
 
 enum Invoke {
@@ -691,6 +692,7 @@ pub(crate) fn emit(module: &'static str, event: &'static str, data: marshal::Own
 struct Pending {
     resolve: Value,
     reject: Value,
+    lent: Vec<native_buffer::Lent>,
 }
 
 #[derive(Default)]
@@ -737,7 +739,10 @@ fn sync_function(
         &entry.name,
         entry.arity as u32,
         move |context, args| {
-            guarded(module, entry, || invoke(context, &args)).map_err(|f| thrown(context, f))
+            native_buffer::call(context, || {
+                guarded(module, entry, || invoke(context, &args))
+            })
+            .map_err(|f| thrown(context, f))
         },
     )
 }
@@ -753,11 +758,23 @@ fn task_function(
         &entry.name,
         entry.arity as u32,
         move |context, args| {
-            let work = match guarded(module, entry, || prepare(context, &args)) {
-                Err(Fail::Thrown(e)) => return Err(js::Error::Exception(e)),
-                work => work,
+            let (work, mut lent) =
+                native_buffer::prepare(|| guarded(module, entry, || prepare(context, &args)));
+            if work.is_err() {
+                // Nothing runs: what the arguments lent comes back at once.
+                native_buffer::settle(context, std::mem::take(&mut lent), || ());
+                if let Err(Fail::Thrown(e)) = work {
+                    return Err(js::Error::Exception(e));
+                }
+            }
+            let promise = match context.promise() {
+                Ok(promise) => promise,
+                Err(e) => {
+                    native_buffer::settle(context, lent, || ());
+                    return Err(e);
+                }
             };
-            let (promise, resolve, reject) = context.promise()?;
+            let (promise, resolve, reject) = promise;
             let work = match work {
                 Ok(work) => work,
                 Err(Fail::Thrown(e)) => return Err(js::Error::Exception(e)),
@@ -781,17 +798,36 @@ fn task_function(
             };
             let executor = STATE.with(|s| {
                 let mut s = s.borrow_mut();
-                s.pending.insert(token, Pending { resolve, reject });
+                s.pending.insert(
+                    token,
+                    Pending {
+                        resolve,
+                        reject,
+                        lent,
+                    },
+                );
                 s.executor.clone()
             });
             TASKS.fetch_add(1, Ordering::AcqRel);
-            let reply = TaskReply {
-                token,
-                settled: false,
+            // Fields drop in order: a job dropped unrun lets go of its arguments, NativeBuffers
+            // included, before its promise settles, so that they come back to the app.
+            struct Run {
+                work: Work,
+                reply: TaskReply,
+            }
+            let run = Run {
+                work,
+                reply: TaskReply {
+                    token,
+                    settled: false,
+                },
             };
             let job: Job = Box::new(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-                    .unwrap_or_else(|payload| Err(panicked(module, entry, payload.as_ref())));
+                let Run { work, reply } = run;
+                let result = native_buffer::moving(true, || {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                })
+                .unwrap_or_else(|payload| Err(panicked(module, entry, payload.as_ref())));
                 reply.settle(result)
             });
             match executor {
@@ -952,13 +988,15 @@ fn settle_task(context: &Context, token: u32, result: Result<marshal::Owned, Fai
     let Some(pending) = STATE.with(|s| s.borrow_mut().pending.remove(&token)) else {
         return;
     };
-    let (callback, value) = match result.map(|data| data.to_js(context)) {
-        Ok(Ok(value)) => (pending.resolve, value),
-        Ok(Err(marshal::Error::Thrown(e))) => (pending.reject, e),
-        Ok(Err(other)) => (pending.reject, context.error(0, &other.to_string())),
-        Err(failure) => (pending.reject, error_value(context, &failure)),
-    };
-    let _ = context.call(callback, Value::undefined(), &[value]);
+    native_buffer::settle(context, pending.lent, || {
+        let (callback, value) = match result.map(|data| data.to_js(context)) {
+            Ok(Ok(value)) => (pending.resolve, value),
+            Ok(Err(marshal::Error::Thrown(e))) => (pending.reject, e),
+            Ok(Err(other)) => (pending.reject, context.error(0, &other.to_string())),
+            Err(failure) => (pending.reject, error_value(context, &failure)),
+        };
+        let _ = context.call(callback, Value::undefined(), &[value]);
+    });
     context.unprotect(pending.resolve);
     context.unprotect(pending.reject);
 }
@@ -1040,6 +1078,7 @@ fn reset(context: &Context) {
     for p in pending.into_values() {
         context.unprotect(p.resolve);
         context.unprotect(p.reject);
+        native_buffer::abandon(context, p.lent);
     }
 }
 
@@ -1284,6 +1323,212 @@ mod tests {
                 emit("demo", "moved", event_data(&Point { x: 5, y: 5 }).unwrap());
                 settle();
                 assert_eq!(eval("JSON.stringify(__seen)"), "[7,10]");
+            })
+        });
+    }
+
+    #[test]
+    fn native_buffers_cross_without_a_copy_and_are_never_reachable_from_both_sides() {
+        use crate::embed::NativeBuffer;
+        static LAST: AtomicUsize = AtomicUsize::new(0);
+        static KEPT: Mutex<Vec<NativeBuffer>> = Mutex::new(Vec::new());
+        static SHARED: OnceLock<NativeBuffer> = OnceLock::new();
+        fn address(b: &[u8]) -> f64 {
+            b.as_ptr() as usize as f64
+        }
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|runtime| {
+                crate::stdlib::install(runtime);
+                let context = runtime.ctx();
+                let mut m = Module::new("buffers".into());
+                m.function("made", |n: u32| {
+                    let mut b = NativeBuffer::from(vec![7u8; n as usize]);
+                    b[0] = 1;
+                    LAST.store(b.as_ptr() as usize, Ordering::Relaxed);
+                    b
+                });
+                m.function("last", || LAST.load(Ordering::Relaxed) as f64);
+                // SAFETY (the closures below): borrowed parameters are used inside the call.
+                m.function("address", |b: marshal::Slice<u8>| {
+                    address(unsafe { b.get() })
+                });
+                m.function("fill", |b: marshal::SliceMut, v: u8| {
+                    unsafe { b.get() }.fill(v)
+                });
+                m.function("bump", |mut b: NativeBuffer| {
+                    b.iter_mut().for_each(|x| *x += 1);
+                    b
+                });
+                m.function("both", |a: marshal::SliceMut, b: marshal::Slice<u8>| {
+                    unsafe { a.get() }.len() + unsafe { b.get() }.len()
+                });
+                m.function("pair", |a: NativeBuffer, b: NativeBuffer| a.len() + b.len());
+                m.function("keep", |b: NativeBuffer| KEPT.lock().unwrap().push(b));
+                m.function("shared", || {
+                    SHARED.get_or_init(|| NativeBuffer::from(vec![5u8; 3]))
+                });
+                m.function("sharedAddress", || address(SHARED.get().unwrap()));
+                m.function("sum", |b: marshal::Slice<u8>, p: Point| {
+                    unsafe { b.get() }
+                        .iter()
+                        .map(|&x| i32::from(x))
+                        .sum::<i32>()
+                        + p.x
+                });
+                m.task("double", |mut b: NativeBuffer| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    b.iter_mut().for_each(|x| *x *= 2);
+                    b
+                });
+                m.task("crash", |_b: NativeBuffer| -> u8 {
+                    panic!("worker kaboom")
+                });
+                m.task("hoard", |b: NativeBuffer| KEPT.lock().unwrap().push(b));
+                m.task("scale", |mut b: NativeBuffer, by: u8| {
+                    b.iter_mut().for_each(|x| *x *= by);
+                    b
+                });
+                #[derive(serde::Serialize, serde::Deserialize)]
+                #[cfg_attr(feature = "types", derive(specta::Type))]
+                struct Frame {
+                    width: u32,
+                    pixels: Option<NativeBuffer>,
+                }
+                m.function("frameOf", |width: u32| Frame {
+                    width,
+                    pixels: Some(NativeBuffer::from(vec![9u8; width as usize])),
+                });
+                m.function("area", |f: Frame| {
+                    f.width as usize * f.pixels.map_or(0, |p| p.len())
+                });
+                m.event::<NativeBuffer>("frame");
+                let modules: &'static [Module] = Box::leak(vec![m].into_boxed_slice());
+                install(context, modules, None).unwrap();
+                let eval = |src: &str| -> String {
+                    let v = context.eval(src).unwrap();
+                    context.read_string(v).unwrap()
+                };
+                let settle = || {
+                    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                    while TASKS.load(Ordering::Acquire) != 0 || QUEUED.load(Ordering::Acquire) != 0
+                    {
+                        assert!(std::time::Instant::now() < deadline, "tasks did not settle");
+                        drain();
+                        context.drain_microtasks();
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    context.drain_microtasks();
+                };
+                eval(
+                    "globalThis.__nb = __sk_native_module('buffers');
+                     globalThis.__NB = __sk_std.memory.NativeBuffer;
+                     globalThis.__bytes = (b) => Array.from(new Uint8Array(b.buffer)).join();
+                     globalThis.__name = (f) => { try { f(); return 'ok'; } catch (e) { return e.name; } };
+                     globalThis.__frames = [];
+                     __nb.on('frame', (b) => __frames.push([b instanceof __NB, __nb.address(b), __bytes(b)]));
+                     ''",
+                );
+                // A Rust buffer is the app's, in the same memory.
+                assert_eq!(
+                    eval("const made = __nb.made(4); [made instanceof __NB, __nb.address(made) === __nb.last(), __bytes(made)].join()"),
+                    "true,true,1,7,7,7"
+                );
+                // `&mut [u8]` and a `NativeBuffer` parameter write the app's memory in place, and
+                // a buffer returned that the function was given is the app's own object.
+                assert_eq!(
+                    eval(
+                        "const a = __NB.alloc(4); const view = new Uint8Array(a.buffer);
+                         __nb.fill(a, 3); __nb.fill(view.subarray(1, 3), 9);
+                         const bumped = __nb.bump(a);
+                         [bumped === a, a.freed, view.join()].join()"
+                    ),
+                    "true,false,4,10,10,4"
+                );
+                assert_eq!(
+                    eval(
+                        "[__name(() => __nb.both(a, a)), __name(() => __nb.both(a, new Uint8Array(a.buffer, 1, 1))),
+                          __name(() => __nb.pair(a, a)), __name(() => __nb.both(a, __NB.alloc(2))),
+                          __name(() => __nb.both(view.subarray(0, 2), view.subarray(2)))].join()"
+                    ),
+                    "TypeError,TypeError,TypeError,ok,ok"
+                );
+                let gone = "const gone = __NB.alloc(2); gone.free();
+                            [__name(() => __nb.fill(gone, 1)), __name(() => __nb.bump(gone)), __name(() => __nb.address(gone))].join()";
+                assert_eq!(
+                    eval(gone),
+                    "InvalidStateError,InvalidStateError,InvalidStateError"
+                );
+                assert_eq!(
+                    eval(
+                        "const f = __nb.frameOf(2);
+                         [f.pixels instanceof __NB, __bytes(f.pixels), __nb.area(f), __nb.area({ width: 3, pixels: null })].join()"
+                    ),
+                    "true,9,9,4,0"
+                );
+                // Kept by Rust past the call: freed for the app.
+                assert_eq!(
+                    eval("const kept = __NB.alloc(2); __nb.keep(kept); String(kept.freed)"),
+                    "true"
+                );
+                // Still Rust's after the call (returned by reference): the app gets a copy.
+                assert_eq!(
+                    eval("const s = __nb.shared(); [__nb.address(s) !== __nb.sharedAddress(), __bytes(s)].join()"),
+                    "true,5,5,5"
+                );
+                // Freed by the app while the call borrows it: the memory stays until it returns.
+                assert_eq!(
+                    eval(
+                        "const freeing = (victim) => ({ get x() {
+                           victim.free();
+                           for (let i = 0; i < 8; i++) new Uint8Array(__NB.alloc(4096).buffer).fill(200);
+                           return 0;
+                         }, y: 0 });
+                         const victim = __NB.alloc(4096); new Uint8Array(victim.buffer).fill(1);
+                         const viaView = __nb.sum(new Uint8Array(victim.buffer), freeing(victim));
+                         const victim2 = __NB.alloc(4096); new Uint8Array(victim2.buffer).fill(1);
+                         const viaBuffer = __nb.sum(victim2, freeing(victim2));
+                         [viaView, viaBuffer, victim.freed, victim2.freed].join()"
+                    ),
+                    "4096,4096,true,true"
+                );
+                eval(
+                    "globalThis.__settled = {};
+                     const t = __NB.alloc(3); new Uint8Array(t.buffer).set([1, 2, 3]);
+                     const before = t.buffer;
+                     __nb.double(t).then((r) => __settled.double = [r === t, t.freed, t.buffer !== before, __bytes(t)].join());
+                     __settled.away = [before.byteLength, t.buffer.byteLength, __name(() => __nb.fill(t, 0)), __name(() => __nb.double(t))].join();
+                     const c = __NB.alloc(1);
+                     __nb.crash(c).catch(() => __settled.crash = [c.freed, c.buffer.byteLength].join());
+                     const h = __NB.alloc(1);
+                     __nb.hoard(h).then(() => __settled.hoard = String(h.freed));
+                     const unread = __NB.alloc(1);
+                     __nb.scale(unread, 'x').catch((e) => __settled.unread = e.name);
+                     __settled.back = [unread.freed, unread.buffer.byteLength].join();
+                     ''",
+                );
+                let frame = NativeBuffer::from(vec![4u8; 2]);
+                emit("buffers", "frame", event_data(&frame).unwrap());
+                settle();
+                assert_eq!(
+                    eval("__settled.away"),
+                    "0,0,InvalidStateError,InvalidStateError"
+                );
+                assert_eq!(eval("__settled.double"), "true,false,true,2,4,6");
+                assert_eq!(eval("__settled.crash"), "false,1");
+                assert_eq!(eval("__settled.hoard"), "true");
+                // A task whose other argument is wrong never runs: the buffer is back at once.
+                assert_eq!(
+                    eval("[__settled.back, __settled.unread].join()"),
+                    "false,1,TypeError"
+                );
+                // An event's buffer stays the sender's: the app gets a copy.
+                assert_eq!(
+                    eval("[__frames.length, __frames[0][0], __frames[0][2]].join()"),
+                    "1,true,4,4"
+                );
+                assert_ne!(eval("String(__frames[0][1])"), address(&frame).to_string());
+                assert_eq!(&*frame, &[4, 4]);
+                assert_eq!(KEPT.lock().unwrap().len(), 2);
             })
         });
     }

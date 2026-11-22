@@ -55,6 +55,20 @@ test.skipIf(!WINDOWS)(
       reversed: "Uint8Array:3,2,1",
       repeated: "Uint8Array:7,8,7,8",
     });
+    // A NativeBuffer crosses as its memory: written in place, lent to a task and back as the same
+    // object, and never freed under Rust by the app.
+    expect(first.nativeBuffers).toEqual({
+      made: [true, true, "Uint8Array:0,1,2,3"],
+      inverted: "Uint8Array:255,0",
+      copied: [2, "Uint8Array:7,8,0"],
+      aliased: { error: "TypeError", message: expect.any(String) },
+      aliasedView: { error: "TypeError", message: expect.any(String) },
+      away: { buffer: 0, busy: { error: "InvalidStateError", message: expect.any(String) } },
+      brightened: [true, true, "Uint8Array:11,12,255"],
+      freedDuringTask: true,
+      freedDuringCall: [4096, 4096, true, true],
+      freedArgument: { error: "InvalidStateError", message: expect.any(String) },
+    });
     // The worker's result wakes the JS thread directly, not at the next frame.
     console.log(`task round trip: median ${first.roundTrip.median} ms, p95 ${first.roundTrip.p95} ms`);
     expect(first.roundTrip.median).toBeLessThan(2);
@@ -80,10 +94,14 @@ test.skipIf(!WINDOWS)("sk types writes the declarations the embedding program gi
   expect(declared).toContain('export function on(event: "tick", handler: (data: Tick) => void): () => void;');
   expect(declared).toContain("export function uiThread(): string;");
   expect(declared).toContain("export function sum(a: number, b: number): number;");
-  expect(declared).toContain("export function checksum(data: ArrayBufferView | ArrayBuffer): number;");
+  expect(declared).toContain("export function checksum(data: ArrayBufferView | ArrayBuffer | NativeBuffer): number;");
   expect(declared).toContain(
-    "export function repeat(data: ArrayBufferView | ArrayBuffer, times: number): Promise<Uint8Array>;",
+    "export function repeat(data: ArrayBufferView | ArrayBuffer | NativeBuffer, times: number): Promise<Uint8Array>;",
   );
+  expect(declared).toContain('import type { NativeBuffer } from "skathi:memory";');
+  expect(declared).toContain("export function gradient(len: number): NativeBuffer;");
+  expect(declared).toContain("export function invert(data: ArrayBufferView | ArrayBuffer | NativeBuffer): void;");
+  expect(declared).toContain("export function brighten(image: NativeBuffer, by: number): Promise<NativeBuffer>;");
   run("bun", ["packages/cli/cli/sk.ts", "types", "packages/test/fixtures/embed", "--exe", EXE], 120_000);
   expect(readFileSync(join(REPO, "packages", "test", "fixtures", "embed", "src", "native-modules.d.ts"), "utf8")).toBe(
     declared,

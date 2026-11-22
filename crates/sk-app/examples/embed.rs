@@ -17,11 +17,12 @@
 //! the embedder.
 
 use std::io::BufRead;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use sk_app::embed::{Builder, Module};
+use sk_app::embed::{Builder, Module, NativeBuffer};
 // An embedder writes `#[skathi::data]` and `#[skathi::module]`; inside Skathi the paths go
 // through sk_app.
 use skathi_macros::{data, module};
@@ -48,6 +49,7 @@ fn thread_name() -> String {
 struct Demo {
     reports: mpsc::Sender<Value>,
     quiet: bool,
+    made_at: AtomicUsize,
 }
 
 #[module(crate = sk_app::embed, events(tick = Tick))]
@@ -78,6 +80,43 @@ impl Demo {
     #[task]
     pub fn repeat(&self, data: Vec<u8>, times: usize) -> Vec<u8> {
         data.repeat(times)
+    }
+
+    // A NativeBuffer of skathi:memory: the memory itself crosses, either way.
+    pub fn gradient(&self, len: usize) -> NativeBuffer {
+        let bytes: Vec<u8> = (0..len).map(|i| i as u8).collect();
+        self.made_at
+            .store(bytes.as_ptr() as usize, Ordering::Relaxed);
+        NativeBuffer::from(bytes)
+    }
+
+    pub fn made_at(&self) -> usize {
+        self.made_at.load(Ordering::Relaxed)
+    }
+
+    pub fn address_of(&self, data: &[u8]) -> usize {
+        data.as_ptr() as usize
+    }
+
+    pub fn invert(&self, data: &mut [u8]) {
+        data.iter_mut().for_each(|b| *b = !*b);
+    }
+
+    pub fn copy(&self, from: &[u8], mut to: NativeBuffer) -> usize {
+        let n = from.len().min(to.len());
+        to[..n].copy_from_slice(&from[..n]);
+        n
+    }
+
+    pub fn total(&self, data: &[u8], offset: Point) -> i64 {
+        data.iter().map(|&b| i64::from(b)).sum::<i64>() + i64::from(offset.x)
+    }
+
+    // The app's buffer is detached until the task settles, then the same object again.
+    #[task]
+    pub fn brighten(&self, mut image: NativeBuffer, by: u8) -> NativeBuffer {
+        image.iter_mut().for_each(|b| *b = b.saturating_add(by));
+        image
     }
 
     // Runs on a worker; the app gets a promise.
@@ -140,6 +179,7 @@ fn main() {
             Demo {
                 reports: reports_tx,
                 quiet: self_test,
+                made_at: AtomicUsize::new(0),
             },
         )
         // The closure form, for a few ad-hoc functions.

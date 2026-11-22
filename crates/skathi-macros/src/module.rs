@@ -156,12 +156,20 @@ impl Bytes {
 enum Borrowed {
     Str,
     Slice(Type),
+    /// `&mut [u8]`, written in place.
+    Bytes,
 }
 
 impl Borrowed {
     fn of(r: &syn::TypeReference) -> Option<Self> {
-        if r.mutability.is_some() || r.lifetime.as_ref().is_some_and(|l| l.ident != "_") {
+        if r.lifetime.as_ref().is_some_and(|l| l.ident != "_") {
             return None;
+        }
+        if r.mutability.is_some() {
+            return match &*r.elem {
+                Type::Slice(s) if is_ident(&s.elem, "u8") => Some(Borrowed::Bytes),
+                _ => None,
+            };
         }
         match &*r.elem {
             t if is_ident(t, "str") => Some(Borrowed::Str),
@@ -175,6 +183,7 @@ impl Borrowed {
     fn owned(&self) -> String {
         match self {
             Borrowed::Str => "`String`".into(),
+            Borrowed::Bytes => "`skathi::NativeBuffer`".into(),
             Borrowed::Slice(t) if is_ident(t, "u8") => "`Vec<u8>` or `skathi::Bytes`".into(),
             Borrowed::Slice(t) => format!("`Vec<{}>`", quote!(#t)),
         }
@@ -258,8 +267,8 @@ fn export(method: &syn::ImplItemFn, task: bool) -> syn::Result<Option<Export>> {
                 let Some(borrowed) = Borrowed::of(r) else {
                     return Err(syn::Error::new_spanned(
                         &arg.ty,
-                        "take an owned type (`String`, not `&String`): only `&str` and slices of \
-                         numbers (`&[u8]`, `&[f32]`, …) are read in place",
+                        "take an owned type (`String`, not `&String`): only `&str`, slices of \
+                         numbers (`&[u8]`, `&[f32]`, …) and `&mut [u8]` are read in place",
                     ));
                 };
                 if task {
@@ -400,6 +409,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                 Param::Bytes(_) => quote!(#krate::Bytes),
                 Param::Borrowed(Borrowed::Str) => quote!(#krate::__private::Str),
                 Param::Borrowed(Borrowed::Slice(t)) => quote!(#krate::__private::Slice<#t>),
+                Param::Borrowed(Borrowed::Bytes) => quote!(#krate::__private::SliceMut),
             })
             .collect();
         let values: Vec<_> = params
@@ -518,7 +528,8 @@ mod tests {
             quote!(impl N { pub fn f(&self, s: &'static str) {} }),
             quote!(impl N { #[task] pub fn f(&self, s: &str) {} }),
             quote!(impl N { #[task] pub fn f(&self, b: &[u8]) {} }),
-            quote!(impl N { pub fn f(&self, b: &mut [u8]) {} }),
+            quote!(impl N { #[task] pub fn f(&self, b: &mut [u8]) {} }),
+            quote!(impl N { pub fn f(&self, b: &mut [f32]) {} }),
             quote!(impl N { pub fn f(&self, b: &[bool]) {} }),
             quote!(impl N { pub fn f(&self, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8, i: u8) {} }),
             quote!(impl N { pub fn delete(&self) {} }),

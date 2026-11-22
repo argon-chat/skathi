@@ -12,7 +12,9 @@ use serde::de::{self, DeserializeSeed, IntoDeserializer, Unexpected, Visitor};
 use serde::ser::{self, Serialize};
 use serde_json::Value as Json;
 
+use super::native_buffer;
 use crate::js::{Context, TaKind, Value};
+use crate::stdlib::memory::Region;
 
 mod direct;
 pub use direct::*;
@@ -409,6 +411,16 @@ impl Buffer {
     }
 }
 
+/// # Safety
+/// `len` bytes at `ptr` stay allocated for `'s`.
+unsafe fn slice_at<'s>(ptr: *const u8, len: usize) -> &'s [u8] {
+    if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+}
+
 fn buffer(context: &Context, v: Value) -> Option<Buffer> {
     if !v.is_cell() {
         return None;
@@ -551,6 +563,58 @@ impl<T: Element> specta::Type for Slice<T> {
     }
 }
 
+const SLICE_MUT_TOKEN: &str = "\0skathi::SliceMut<u8>";
+
+thread_local! {
+    /// The memory a `SliceMut` is being read from, handed to its visitor.
+    static WRITABLE: std::cell::Cell<Option<(*mut u8, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// A macro-generated `&mut [u8]` parameter: the memory of a view, an `ArrayBuffer` or a
+/// `NativeBuffer`, written in place for the length of one call. Never a copy.
+#[doc(hidden)]
+pub struct SliceMut {
+    borrowed: (*mut u8, usize),
+}
+
+impl SliceMut {
+    /// # Safety
+    /// Only inside the call whose arguments produced it, and only once.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn get(&self) -> &mut [u8] {
+        match self.borrowed {
+            (_, 0) => &mut [],
+            (ptr, len) => unsafe { std::slice::from_raw_parts_mut(ptr, len) },
+        }
+    }
+}
+
+impl<'de> de::Deserialize<'de> for SliceMut {
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SliceMutVisitor;
+        impl<'de> Visitor<'de> for SliceMutVisitor {
+            type Value = SliceMut;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a typed array, a DataView, an ArrayBuffer or a NativeBuffer")
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<SliceMut, E> {
+                match WRITABLE.take() {
+                    Some(borrowed) => Ok(SliceMut { borrowed }),
+                    None => Err(E::invalid_type(Unexpected::Unit, &self)),
+                }
+            }
+        }
+        deserializer.deserialize_newtype_struct(SLICE_MUT_TOKEN, SliceMutVisitor)
+    }
+}
+
+#[cfg(feature = "types")]
+impl specta::Type for SliceMut {
+    fn definition(_: &mut specta::Types) -> specta::datatype::DataType {
+        specta_typescript::define("Uint8Array").into()
+    }
+}
+
 /// serde_json gives up past this many nested arrays and objects, the arguments' array included.
 const DEPTH: usize = 127;
 
@@ -675,6 +739,36 @@ impl<'w, 'a> Js<'w, 'a> {
 
     fn require<'s>(&self) -> Result<Node<'s>, Error> {
         Ok(self.node()?.unwrap_or(Node::Null))
+    }
+
+    /// A `&mut [u8]` parameter: memory written in place, never a copy.
+    fn writable<'de, V: Visitor<'de>>(&self, visitor: V) -> Result<V::Value, Error> {
+        if !native_buffer::in_call() {
+            return Err(Error::Message(
+                "a &mut [u8] is read only for a native module function's call".into(),
+            ));
+        }
+        let found = match buffer(self.context(), self.value) {
+            Some(b) if b.shared => {
+                return Err(Error::Message(
+                    "a SharedArrayBuffer cannot be written in place: another thread may use it"
+                        .into(),
+                ))
+            }
+            Some(b) => {
+                native_buffer::borrow(b.data, b.len, true)?;
+                Some((b.data as *mut u8, b.len))
+            }
+            None => native_buffer::lent_bytes(self.context(), self.value, true)?,
+        };
+        let Some(found) = found else {
+            let node = self.require()?;
+            return Err(de::Error::invalid_type(unexpected(&node), &visitor));
+        };
+        WRITABLE.set(Some(found));
+        let read = visitor.visit_unit();
+        WRITABLE.set(None);
+        read
     }
 
     fn json(&self) -> Result<Json, Error> {
@@ -1310,6 +1404,10 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
             // visitor copies the bytes before any JS runs.
             return visitor.visit_bytes(unsafe { b.bytes() });
         }
+        if let Some(region) = native_buffer::bytes_of(self.context(), self.value)? {
+            // SAFETY: `region` holds the chunk, and the visitor copies the bytes before JS runs.
+            return visitor.visit_bytes(unsafe { region.bytes() });
+        }
         match self.require()? {
             Node::Str(Cow::Borrowed(s)) => visitor.visit_str(s),
             Node::Str(Cow::Owned(s)) => visitor.visit_string(s),
@@ -1372,16 +1470,41 @@ impl<'de> de::Deserializer<'de> for Js<'_, '_> {
             return de::Deserializer::deserialize_newtype_struct(self.json()?, name, visitor)
                 .map_err(|e| Error::Message(e.to_string()));
         }
+        if name == native_buffer::TOKEN {
+            if native_buffer::read(self.context(), self.value)? {
+                let read = visitor.visit_unit();
+                native_buffer::discard_incoming();
+                return read;
+            }
+            let node = self.require()?;
+            return Err(de::Error::invalid_type(unexpected(&node), &visitor));
+        }
+        if name == SLICE_MUT_TOKEN {
+            return self.writable(visitor);
+        }
         if let Some(kind) = slice_kind(name) {
             if let Some(b) = buffer(self.context(), self.value) {
                 // SAFETY: as for `Str`; a `&[u8]` may view any buffer's bytes, other slices
                 // only their own element type, which typed arrays keep aligned.
                 let bytes: &'de [u8] = unsafe { b.bytes() };
                 if !b.shared && (kind == TA_U8 || b.kind == kind) {
+                    native_buffer::borrow(b.data, b.len, false)?;
                     return visitor.visit_borrowed_bytes(bytes);
                 }
                 if kind == TA_U8 {
                     return visitor.visit_byte_buf(bytes.to_vec());
+                }
+            } else if kind == TA_U8 {
+                if !native_buffer::in_call() {
+                    if let Some(region) = native_buffer::bytes_of(self.context(), self.value)? {
+                        // SAFETY: `region` holds the chunk while the bytes are copied.
+                        return visitor.visit_byte_buf(unsafe { region.bytes() }.to_vec());
+                    }
+                } else if let Some((ptr, len)) =
+                    native_buffer::lent_bytes(self.context(), self.value, false)?
+                {
+                    // SAFETY: the call keeps the chunk until it returns.
+                    return visitor.visit_borrowed_bytes(unsafe { slice_at(ptr, len) });
                 }
             }
         }
@@ -1576,6 +1699,8 @@ pub(crate) trait Build: Copy {
     fn string(self, v: &str) -> Self::Value;
     fn raw_json(self, json: &str) -> Result<Self::Value, Error>;
     fn bytes(self, v: &[u8]) -> Result<Self::Value, Error>;
+    /// A `NativeBuffer` over `region`.
+    fn native(self, region: Region) -> Result<Self::Value, Error>;
     fn array(self, len: usize) -> Result<Self::Array, Error>;
     fn push(self, array: &mut Self::Array, v: Self::Value) -> Result<(), Error>;
     fn end_array(self, array: Self::Array) -> Self::Value;
@@ -1635,6 +1760,9 @@ impl Build for Engine<'_> {
         }
         Ok(array)
     }
+    fn native(self, region: Region) -> Result<Value, Error> {
+        native_buffer::to_js(self.0, region)
+    }
     fn array(self, _: usize) -> Result<(), Error> {
         Err(Error::Compound)
     }
@@ -1663,7 +1791,22 @@ impl Build for Engine<'_> {
 #[doc(hidden)]
 pub struct Owned {
     code: Vec<u8>,
-    blobs: Vec<Vec<u8>>,
+    blobs: Vec<Blob>,
+}
+
+/// What a `BYTES` tag stands for: a `Uint8Array` of its own bytes, or a `NativeBuffer`.
+enum Blob {
+    Bytes(Vec<u8>),
+    Native(Region),
+}
+
+impl fmt::Debug for Blob {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Blob::Bytes(v) => write!(f, "Bytes({})", v.len()),
+            Blob::Native(r) => write!(f, "Native({})", r.len()),
+        }
+    }
 }
 
 const NULL: u8 = 0;
@@ -1732,6 +1875,14 @@ impl Tree<'_> {
     fn close(self, (at, count): (usize, u32)) {
         self.0.borrow_mut().code[at..at + 4].copy_from_slice(&count.to_le_bytes());
     }
+
+    fn blob(self, blob: Blob) {
+        let mut owned = self.0.borrow_mut();
+        let index = owned.blobs.len() as u32;
+        owned.blobs.push(blob);
+        owned.code.push(BYTES);
+        owned.code.extend_from_slice(&index.to_le_bytes());
+    }
 }
 
 impl Build for Tree<'_> {
@@ -1761,11 +1912,11 @@ impl Build for Tree<'_> {
         Ok(())
     }
     fn bytes(self, v: &[u8]) -> Result<(), Error> {
-        let mut owned = self.0.borrow_mut();
-        let index = owned.blobs.len() as u32;
-        owned.blobs.push(v.to_vec());
-        owned.code.push(BYTES);
-        owned.code.extend_from_slice(&index.to_le_bytes());
+        self.blob(Blob::Bytes(v.to_vec()));
+        Ok(())
+    }
+    fn native(self, region: Region) -> Result<(), Error> {
+        self.blob(Blob::Native(region));
         Ok(())
     }
     fn array(self, _: usize) -> Result<(usize, u32), Error> {
@@ -1799,14 +1950,17 @@ impl Build for Tree<'_> {
     }
 }
 
-fn build(context: &Context, code: &[u8], blobs: Vec<Vec<u8>>) -> Result<Value, Error> {
+fn build(context: &Context, code: &[u8], blobs: Vec<Blob>) -> Result<Value, Error> {
     let list = if blobs.is_empty() {
         Value::undefined()
     } else {
         let list = context.array(blobs.len() as u32).map_err(engine)?;
         let mut at = (list, 0);
         for b in blobs {
-            let v = uint8_array(context, b)?;
+            let v = match b {
+                Blob::Bytes(b) => uint8_array(context, b)?,
+                Blob::Native(region) => native_buffer::to_js(context, region)?,
+            };
             push_index(context, &mut at, v)?;
         }
         list
@@ -2216,9 +2370,14 @@ impl<B: Build> ser::Serializer for Out<B> {
     }
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
-        _: &'static str,
+        name: &'static str,
         v: &T,
     ) -> Result<B::Value, OutError> {
+        if name == native_buffer::TOKEN {
+            if let Some(region) = native_buffer::outgoing() {
+                return Ok(self.build.native(region)?);
+            }
+        }
         v.serialize(self.inner())
     }
     fn serialize_newtype_variant<T: Serialize + ?Sized>(

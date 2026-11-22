@@ -11,7 +11,7 @@ mod binary;
 mod collections;
 mod encoding;
 mod ffi;
-mod memory;
+pub(crate) mod memory;
 mod os;
 mod runtime;
 mod support;
