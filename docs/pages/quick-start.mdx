@@ -59,7 +59,7 @@ bun install
 
 The app depends on `@skathi-native/cli`, so its `bun run` scripts and `bunx sk` use that version of `sk`. A Svelte app also depends on `svelte`, and its own `svelte/compiler` compiles the components, so keep it on version 5.
 
-New in 0.4.0: the framework is the app's own dependency, and nothing of the other one is installed. A Vue app depends on `vue` 3.5, whose `vue/compiler-sfc` compiles its `.vue` files; the `showcase` template also depends on `vue-router` and `pinia`. A Svelte app has no Vue package at all. `tailwindcss` is installed only by an app that uses it.
+The framework is the app's own dependency, and nothing of the other one is installed. A Vue app depends on `vue` 3.5, whose `vue/compiler-sfc` compiles its `.vue` files; the `showcase` template also depends on `vue-router` and `pinia`. A Svelte app has no Vue package at all. `tailwindcss` is installed only by an app that uses it.
 
 An app created before 0.4.0 got `@vue/runtime-core`, `vue-router` and `pinia` from the runtime and `tailwindcss` from the CLI. Add what it uses:
 

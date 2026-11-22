@@ -287,18 +287,25 @@ The machine has no sound yet.
 - **Vue.** `v-model` updates before an `@input` or `@change` handler on the same element runs, so the handler reads the new value.
 - **A failed entry module** in a packaged app opens a dialog with the error instead of an empty window.
 - **macOS.** `sk build --payload-only` signs the image containers it writes.
+- **Text fields.** `setSelectionRange()` selects a range in an `<input>` or a `<textarea>`, backward selections included, and fires `select`.
+- **ASCII bundles.** A regular expression's `source` and the raw strings of a tagged template keep their spelling when the bundle is written as ASCII.
+- **AOT.** A file imported with `?raw` or `?url` is no longer compiled into the image as a module.
+- **Windows.** Closing the foreground window no longer logs `Invalid window handle`.
 - **`DataSize.format()`** prints bytes as `154 B`.
 
 ## Vite+ and tests
 
 - **Vite+.** `sk create` now writes a `vite.config.ts`, and packaged builds go through the Vite+ the app declares, with its plugins. An existing project with a Vite config beside `sk.config.json` gets the same.
 - **`@skathi-native/test`** is on npm. The harness that drives a real host in Skathi's own end-to-end tests installs into your app and runs under `bun test`. See the [testing guide](/guides/testing/).
-- **`sk check`** also reports a `console` method replaced under AOT, and a built-in written through a key that is one of a few literals.
+- **`sk check`** also reports a `console` method replaced under AOT, and a built-in written through a key that is one of a few literals. Two new warnings, SK2005 and SK2006, point at tight loops that an AOT image runs slower than the JIT; the [AOT guide](/guides/aot/) has the measurements and the fix for each.
+- **`sk ctl`.** The devtools client is a command of the CLI: `bunx sk ctl click "button.primary"` drives a running app, as the [scripting page](/devtools/scripting/) shows.
+- **Svelte templates** run `svelte-check` for scripts and markup only, and leave the CSS to `sk check`, which knows the properties Skathi adds.
 
 ## macOS
 
 - The host installs the standard menu bar: Quit, Hide, Close Window, Enter Full Screen, Minimize and Zoom, with their shortcuts.
 - A custom title bar no longer draws Windows caption buttons beside the traffic lights.
+- The traffic lights stay in place while a window fades in or out.
 - The camera and the microphone work under `sk dev`.
 - Colours outside the display's gamut survive on HDR surfaces.
 

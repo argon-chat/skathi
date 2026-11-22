@@ -6,7 +6,7 @@ order: 2
 since: "0.4"
 ---
 
-New in 0.4.0. Your program gives the app a **native module**: an `impl` block of ordinary Rust methods on one side, an `import` on the other. No names in strings, no JSON by hand, and the app's TypeScript knows every signature because it is generated from your Rust.
+Your program gives the app a **native module**: an `impl` block of ordinary Rust methods on one side, an `import` on the other. No names in strings, no JSON by hand, and the app's TypeScript knows every signature because it is generated from your Rust.
 
 ```rust title="src/main.rs"
 use std::collections::HashMap;

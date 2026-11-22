@@ -11,7 +11,7 @@ This is the part a webview cannot do. Some content is drawn by native code: a vi
 
 The program that embeds Skathi presents frames to a surface by name, and every `<sk-surface>` with that `name` shows the newest one.
 
-New in 0.4.0. On Windows a frame can be a Direct3D 11 or 12 texture, or one shared from another device, process or Vulkan; on macOS a Metal texture, an IOSurface or a CVPixelBuffer. Either way it never leaves the GPU. On Linux the element and the API exist, and frames are CPU BGRA.
+On Windows a frame can be a Direct3D 11 or 12 texture, or one shared from another device, process or Vulkan; on macOS a Metal texture, an IOSurface or a CVPixelBuffer. Either way it never leaves the GPU. On Linux the element and the API exist, and frames are CPU BGRA.
 
 ## The element
 
@@ -162,7 +162,7 @@ GPU frames stay half float in the surface's own textures. An SDR window maps a f
 
 ### HDR windows
 
-New in 0.4.0. On Windows (Direct3D 12 and Direct3D 11) and macOS, a window whose display is in HDR draws HDR while it shows a half-float surface that may be brighter than SDR white: a visible element whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 on that display (on macOS, at the screen's `potential_headroom`). The element then shows the frame's own values, clamped to that limit and to the display's headroom, instead of the 8-bit mapping. Two seconds after no such element is visible, the window goes back to standard output.
+On Windows (Direct3D 12 and Direct3D 11) and macOS, a window whose display is in HDR draws HDR while it shows a half-float surface that may be brighter than SDR white: a visible element whose [`dynamic-range-limit`](/css/dynamic-range-limit/) allows more than 1.0 on that display (on macOS, at the screen's `potential_headroom`). The element then shows the frame's own values, clamped to that limit and to the display's headroom, instead of the 8-bit mapping. Two seconds after no such element is visible, the window goes back to standard output.
 
 - **Windows** switches the swap chain to `R16G16B16A16_FLOAT` in scRGB (`DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709`).
 - **macOS** switches the window's layer to `RGBA16Float`, tagged extended sRGB (extended Display P3 for a window that asked for Display P3), and asks for EDR. Going back restores the colour space the layer had. The tag is what the layer holds; before, it was the screen's own colour space, which over-saturated colours on a P3 panel, and the layer stayed untagged after it left EDR.

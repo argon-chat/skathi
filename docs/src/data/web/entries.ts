@@ -1025,6 +1025,7 @@ const graphics = section("Graphics and media", [
       "`ChannelSplitterNode`, `ChannelMergerNode` and decoded `AudioBuffer`s keep their real channel counts.",
       "`DelayNode`, `WaveShaperNode`, `DynamicsCompressorNode`, `ConvolverNode` and `PeriodicWave` are there. Every node and `AudioBuffer` can be made by its constructor, `new GainNode(context, options)`, as well as by the factory on the context, and answers its `context`. `ConstantSourceNode`, `IIRFilterNode` and `OfflineAudioContext` are there too, and contexts and nodes are `EventTarget`s (`statechange`, `ended`, `complete`). A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.",
       "`suspend()` stops rendering and `currentTime`; `resume()` goes on from the same time.",
+      "On a machine with no audio output a context runs silently, as in a browser: `currentTime` moves, sources end and analysers and worklets see the signal. It moves to a device when the system gets a default output. A device chosen with `setSinkId()` that is gone is still an error.",
     ],
     limitations: [
       "`OfflineAudioContext` renders in one piece: `suspend(time)` and `resume()` reject with `NotSupportedError`. Scheduled starts, stops and parameter changes land on the 128-frame block they fall in. It is an `instanceof AudioContext`.",
