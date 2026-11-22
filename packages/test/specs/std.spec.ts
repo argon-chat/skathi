@@ -449,6 +449,7 @@ describe("skathi:* modules", () => {
         [5, 6, 7, 8],
       ]);
       expect([f.freedDuringCall, f.sortedInPlace]).toEqual([true, [4, 3, 2, 1]]);
+      expect(f.keptUnderView).toEqual([9, 8, 7, 6]);
       expect([f.freedArgument, f.freedPointer]).toEqual(["InvalidStateError", "InvalidStateError"]);
 
       await app.eval("__SK_TEST_STD__.startMemoryWorkers(); 1");

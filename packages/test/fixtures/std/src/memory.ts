@@ -150,9 +150,15 @@ function ffi() {
   );
   crt.symbols.qsort(sorted, 4, 4, descending.pointer);
   descending.close();
+  const viewed = NativeBuffer.alloc(64);
+  const bytes = new Uint8Array(viewed.buffer);
+  bytes.set([9, 8, 7, 6]);
+  const underView = NativePointer.of(bytes);
+  viewed.free();
   const freed = NativeBuffer.alloc(4);
   freed.free();
   return {
+    keptUnderView: [...underView.read(4)],
     copied: [...new Uint8Array(target.buffer)],
     back: [...back],
     freedDuringCall: sorted.freed,

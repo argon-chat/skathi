@@ -427,8 +427,9 @@ unsafe fn to_slot(
     }
 }
 
-/// The address of a buffer argument. The memory of a `NativeBuffer` goes into `held`, so that a
-/// callback that frees it during the call does not free it under the library.
+/// The address of a buffer argument. The memory of a `NativeBuffer`, given itself or under a view,
+/// goes into `held`, so that a callback that frees it during the call does not free it under the
+/// library.
 unsafe fn buffer_address(
     g: *mut c_void,
     v: u64,
@@ -439,7 +440,10 @@ unsafe fn buffer_address(
         return Ok(0);
     }
     let (len, address) = match buffer_source(g, v) {
-        Some(view) => (view.len, view.data as u64),
+        Some(view) => {
+            held.extend(memory::holder_of(view.data));
+            (view.len, view.data as u64)
+        }
         None => match memory::region_of(g, v, what)? {
             Some(region) => {
                 let found = (region.len(), region.ptr() as u64);
@@ -874,7 +878,11 @@ std_fn!(fn pointer_of(g, args) {
     if offset > view.len {
         return range_error(g, &format!("NativePointer.of: the offset {offset} is beyond the {} bytes of the source", view.len));
     }
-    let object = pointer_new(g, view.data as u64 + offset as u64);
+    let address = view.data as u64 + offset as u64;
+    if let Some(region) = memory::holder_of(view.data) {
+        return Ok(pointer_kept(g, address, Some(region)));
+    }
+    let object = pointer_new(g, address);
     slot_set(g, object, KEEP, source);
     Ok(object)
 });
