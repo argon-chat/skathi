@@ -29,6 +29,21 @@ mod shared;
 pub use d3d12::{D3D12Lease, D3D12Provider};
 pub use feedback::monotonic_ns;
 
+/// Has `changed` hear each window's display on the UI thread: when it is first known and when
+/// it changes, spaced as `SurfaceEvent::DisplayChanged` is. With `idle`, a shown window's
+/// display is read four times a second while nothing draws. The first call wins.
+pub fn watch_displays(
+    idle: bool,
+    changed: impl Fn(crate::windows::WinKey, SurfaceDisplay) + Send + Sync + 'static,
+) {
+    display::watch(idle, Box::new(changed));
+}
+
+/// The display [`watch_displays`] last reported for a window, or for the main one; any thread.
+pub fn watched_display(key: Option<crate::windows::WinKey>) -> Option<SurfaceDisplay> {
+    display::told(key)
+}
+
 /// Under the D3D12 renderer, how surfaces reach its device and queue. Set once by the host.
 #[cfg(windows)]
 pub fn install_d3d12_provider(provider: D3D12Provider) {

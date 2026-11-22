@@ -362,7 +362,10 @@ pub struct Builder {
     ffi: Vec<(String, String)>,
     ffi_address: bool,
     backdrop: Option<String>,
+    display_change: Option<DisplayChange>,
 }
+
+type DisplayChange = Box<dyn Fn(u64, SurfaceDisplay) + Send + Sync>;
 
 impl Default for Builder {
     fn default() -> Self {
@@ -392,6 +395,7 @@ impl Builder {
             ffi: Vec::new(),
             ffi_address: false,
             backdrop: None,
+            display_change: None,
         }
     }
 
@@ -538,6 +542,18 @@ impl Builder {
     /// applied. For an embedder that composes its own content under the window.
     pub fn backdrop(mut self, name: impl Into<String>) -> Self {
         self.backdrop = Some(name.into());
+        self
+    }
+
+    /// Hears the display of each window, by its Skathi ID: when it is first known, when its HDR
+    /// state or levels change, and when the window moves to another display. Runs on the UI
+    /// thread; keep it short. A shown window's display is then read four times a second while
+    /// nothing draws.
+    pub fn on_display_change<F>(mut self, changed: F) -> Self
+    where
+        F: Fn(u64, SurfaceDisplay) + Send + Sync + 'static,
+    {
+        self.display_change = Some(Box::new(changed));
         self
     }
 
@@ -711,6 +727,10 @@ impl Builder {
             return Err(Error::Backdrop(name.to_string()));
         }
         gpui::present_feedback::set_feedback_after_composition(self.exact_frame_feedback);
+        match self.display_change.take() {
+            Some(changed) => sk_tree::surface::watch_displays(true, changed),
+            None => sk_tree::surface::watch_displays(false, |_, _| {}),
+        }
         let config = Config {
             data_dir,
             #[cfg(feature = "storages")]
@@ -863,6 +883,17 @@ impl Handle {
     )]
     pub fn unsafe_window_handle_for(&self, id: u64) -> Option<raw_window_handle::RawWindowHandle> {
         crate::window::native_window(Some(id))
+    }
+
+    /// The main window's display as last read: `None` before the window first drew. Without
+    /// [`Builder::on_display_change`] it is read only as the window draws.
+    pub fn display(&self) -> Option<SurfaceDisplay> {
+        sk_tree::surface::watched_display(None)
+    }
+
+    /// [`Self::display`] for an open window's Skathi ID.
+    pub fn display_for(&self, id: u64) -> Option<SurfaceDisplay> {
+        sk_tree::surface::watched_display(Some(id))
     }
 
     /// Delivers `data` to the `on(event)` handlers of `native:<module>` in the app's next frame.

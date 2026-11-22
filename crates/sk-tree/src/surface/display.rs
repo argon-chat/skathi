@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Once, OnceLock};
+use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use gpui::Window;
@@ -150,18 +150,67 @@ thread_local! {
     static PROBES: RefCell<HashMap<WinKey, Probe>> = RefCell::new(HashMap::new());
 }
 
+struct Watch {
+    /// Keeps a shown window ticking every [`IDLE`], as a visible surface does.
+    idle: bool,
+    changed: Box<dyn Fn(WinKey, SurfaceDisplay) + Send + Sync>,
+}
+
+static WATCH: OnceLock<Watch> = OnceLock::new();
+static TOLD: Mutex<Option<HashMap<WinKey, SurfaceDisplay>>> = Mutex::new(None);
+static TOLD_PRIMARY: AtomicU64 = AtomicU64::new(0);
+static SHOWN: AtomicU64 = AtomicU64::new(0);
+
+/// Has `changed` hear each window's display, on the UI thread, when it is first known and as
+/// [`of`] changes. With `idle`, a shown window is read every [`IDLE`] while nothing draws.
+pub(super) fn watch(idle: bool, changed: Box<dyn Fn(WinKey, SurfaceDisplay) + Send + Sync>) {
+    let _ = WATCH.set(Watch { idle, changed });
+}
+
+/// The display last told to [`watch`] for `key`, or for the main window; from any thread.
+pub(super) fn told(key: Option<WinKey>) -> Option<SurfaceDisplay> {
+    let key = key.unwrap_or_else(|| TOLD_PRIMARY.load(Ordering::Relaxed));
+    TOLD.lock().ok()?.as_ref()?.get(&key).copied()
+}
+
+fn tell(key: WinKey, on: SurfaceDisplay) -> bool {
+    let Ok(mut told) = TOLD.lock() else {
+        return false;
+    };
+    let told = told.get_or_insert_with(HashMap::new);
+    let news = on.known && told.get(&key).is_none_or(|was| on.differs(was));
+    if news {
+        told.insert(key, on);
+    }
+    news
+}
+
 /// Reads `window`'s display.
 pub(super) fn sample(window: &Window, key: WinKey) {
     if !platform::SAMPLED {
         return;
     }
-    PROBES.with(|p| {
+    let reported = PROBES.with(|p| {
         let mut probes = p.borrow_mut();
         let probe = probes.entry(key).or_default();
         let read = platform::read(window, &mut probe.platform);
         probe.take(read, Instant::now());
+        let reported = probe.reported.display;
         ANY_CAPABLE.store(probes.values().any(Probe::capable), Ordering::Relaxed);
+        reported
     });
+    let Some(watch) = WATCH.get() else {
+        return;
+    };
+    TOLD_PRIMARY.store(crate::windows::primary(), Ordering::Relaxed);
+    if watch.idle && window.is_visible() {
+        SHOWN.store(now_ms(), Ordering::Relaxed);
+        LAST_TICK.store(now_ms(), Ordering::Relaxed);
+        keep_awake();
+    }
+    if tell(key, reported) {
+        (watch.changed)(key, reported);
+    }
 }
 
 /// A macOS screen read at `current` EDR headroom, as [`sample`] takes it.
@@ -248,6 +297,9 @@ pub(super) fn live(key: WinKey) -> SurfaceDisplay {
 
 pub(super) fn forget(key: WinKey) {
     PROBES.with(|p| p.borrow_mut().remove(&key));
+    if let Ok(mut told) = TOLD.lock() {
+        told.as_mut().map(|told| told.remove(&key));
+    }
 }
 
 static WATCHING: AtomicBool = AtomicBool::new(false);
@@ -266,19 +318,28 @@ pub(super) fn note_tick(visible: bool) {
     WATCHING.store(visible, Ordering::Relaxed);
     LAST_TICK.store(now_ms(), Ordering::Relaxed);
     if visible {
-        static SPAWN: Once = Once::new();
-        SPAWN.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("sk-surface-display".into())
-                .spawn(|| loop {
-                    std::thread::sleep(IDLE);
-                    let idle = now_ms().saturating_sub(LAST_TICK.load(Ordering::Relaxed));
-                    if WATCHING.load(Ordering::Relaxed) && idle >= IDLE.as_millis() as u64 {
-                        sk_runtime::frames::wake();
-                    }
-                });
-        });
+        keep_awake();
     }
+}
+
+fn keep_awake() {
+    static SPAWN: Once = Once::new();
+    SPAWN.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("sk-surface-display".into())
+            .spawn(|| loop {
+                std::thread::sleep(IDLE);
+                let now = now_ms();
+                let idle = now.saturating_sub(LAST_TICK.load(Ordering::Relaxed));
+                // A watched window counts while it was read shown within the last few waits.
+                let shown = SHOWN.load(Ordering::Relaxed);
+                let watched = shown > 0 && now.saturating_sub(shown) < 4 * IDLE.as_millis() as u64;
+                if (WATCHING.load(Ordering::Relaxed) || watched) && idle >= IDLE.as_millis() as u64
+                {
+                    sk_runtime::frames::wake();
+                }
+            });
+    });
 }
 
 /// `DISPLAYCONFIG_SDR_WHITE_LEVEL::SDRWhiteLevel` is in thousandths of scRGB's 80 nits.
@@ -693,6 +754,20 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_watched_display_is_told_when_known_and_again_only_when_it_changes() {
+        let key: WinKey = 0x47_0001;
+        assert!(!tell(key, SurfaceDisplay::default()), "unknown");
+        let sdr = windows_display(false, 0.0, 0.0, None, Some(60.0));
+        assert!(tell(key, sdr));
+        assert!(!tell(key, sdr));
+        let hdr = windows_display(true, 960.0, 600.0, Some(3000), Some(60.0));
+        assert!(tell(key, hdr));
+        assert_eq!(told(Some(key)).map(|d| d.headroom), Some(4.0));
+        forget(key);
+        assert_eq!(told(Some(key)), None);
+    }
 
     #[test]
     fn windows_values_are_relative_to_sdr_white_and_scrgb_one_is_80_nits() {

@@ -235,6 +235,26 @@ On an SDR display `output_headroom` is 1.0, so mpv tone-maps HDR video down to S
 
 `info.dynamic_range_limit` is the computed value itself, as weights of the three keywords, for a producer that applies it some other way: `dynamic_range_limit.headroom(display.headroom)` is the limit on the screen's own headroom. The value is the largest element's, and a change to it fires `SurfaceEvent::Changed`.
 
+### Without a surface
+
+A program that draws its picture outside `<sk-surface>`, in a native layer of its own, has no element to hear `surfacedisplaychange` from. It asks for the window's display instead:
+
+```rust
+let ui = skathi::Builder::new()
+    .on_display_change(|window, display| {
+        // On the UI thread: hand the values to the player and return.
+        player.display_changed(window, display.potential_headroom, display.sdr_white_nits, display.peak_nits);
+    })
+    .spawn()?;
+
+let now = ui.display(); // the main window's; `display_for(id)` for another
+```
+
+- The callback gets the window's Skathi ID and the same `SurfaceDisplay`: when it is first known, when a value changes, when HDR is turned on or off, and when the window moves to another screen. The reports are spaced as above.
+- It runs on Skathi's UI thread. Keep it short.
+- With the callback set, a shown window's display is read four times a second while nothing draws, as it is for a visible surface. Without it, `display()` holds what the window's last frame read.
+- `output_headroom` and `output_hdr` describe Skathi's own window. A layer of your own decides by `hdr`, `potential_headroom` and the luminance fields: on macOS `headroom` stays 1.0 until something on the screen asks for EDR.
+
 ## Knowing when a frame is on screen
 
 A present returning `Ok` means the frame is queued, not that anyone saw it. A player that keeps its own clock against the display (mpv's display-sync, a game engine's frame pacing) needs to know when each frame actually reached the screen, and which never did. Every present returns the frame's id, and `on_frame` reports what became of it:
