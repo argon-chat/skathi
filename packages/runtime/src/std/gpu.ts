@@ -18,7 +18,11 @@ export type VertexFormat =
   | "sint32x3"
   | "sint32x4"
   | "float16x2"
-  | "float16x4";
+  | "float16x4"
+  | NormalizedFormat;
+
+type NormalizedFormat =
+  "unorm8x2" | "unorm8x4" | "snorm8x2" | "snorm8x4" | "unorm16x2" | "unorm16x4" | "snorm16x2" | "snorm16x4";
 
 /** Assignable to WebGPU's `GPUVertexBufferLayout`. */
 export interface VertexBufferLayout {
@@ -36,6 +40,7 @@ type Node =
   | { kind: "vector"; scalar: Scalar; length: number }
   | { kind: "matrix"; columns: number; rows: number }
   | { kind: "atomic"; scalar: Scalar }
+  | { kind: "normalized"; format: NormalizedFormat; signed: boolean; bytes: 1 | 2; length: 2 | 4 }
   | { kind: "array"; element: FieldType; count: number | undefined; stride: number };
 
 const roundUp = (to: number, value: number) => Math.ceil(value / to) * to;
@@ -73,7 +78,7 @@ export class WgslType {
     this.wgsl = text;
     this.size = size;
     this.align = align;
-    this.vertexFormat = VERTEX[text] ?? null;
+    this.vertexFormat = node.kind === "normalized" ? node.format : (VERTEX[text] ?? null);
     this.#node = node;
     Object.freeze(this);
   }
@@ -100,6 +105,8 @@ function scalarOf(type: WgslType, what: string): Scalar {
 }
 
 function describe(type: unknown): string {
+  const node = WgslType.node(type);
+  if (node?.kind === "normalized") return `wgsl.${node.format}`;
   if (type instanceof WgslType) return type.wgsl;
   if (type instanceof Struct) return type.name;
   return typeof type === "boolean" || type === "bool" ? "a bool" : String(type);
@@ -126,6 +133,19 @@ function matrix(columns: number, rows: number): WgslType {
   return new WgslType(KEY, `mat${columns}x${rows}<f32>`, columns * column, column, { kind: "matrix", columns, rows });
 }
 
+function normalized(format: NormalizedFormat): WgslType {
+  const signed = format.startsWith("s");
+  const bytes = format.includes("16") ? 2 : 1;
+  const length = format.endsWith("4") ? 4 : 2;
+  return new WgslType(KEY, `vec${length}<f32>`, length * bytes, bytes, {
+    kind: "normalized",
+    format,
+    signed,
+    bytes,
+    length,
+  });
+}
+
 const atomics = new Map<Scalar, WgslType>();
 
 type FieldType = WgslType | Struct<Fields>;
@@ -143,6 +163,15 @@ export const wgsl = {
   mat2x2f: matrix(2, 2),
   mat3x3f: matrix(3, 3),
   mat4x4f: matrix(4, 4),
+  /** Vertex attributes stored as normalized integers: the shader sees `vec4<f32>` or `vec2<f32>` in 0..1 (unorm) or -1..1 (snorm). */
+  unorm8x2: normalized("unorm8x2"),
+  unorm8x4: normalized("unorm8x4"),
+  snorm8x2: normalized("snorm8x2"),
+  snorm8x4: normalized("snorm8x4"),
+  unorm16x2: normalized("unorm16x2"),
+  unorm16x4: normalized("unorm16x4"),
+  snorm16x2: normalized("snorm16x2"),
+  snorm16x4: normalized("snorm16x4"),
   atomic(type: WgslType): WgslType {
     const of = scalarOf(type, "wgsl.atomic()");
     if (of !== "u32" && of !== "i32") throw new TypeError(`WGSL has atomic<u32> and atomic<i32>, not atomic<${of}>`);
@@ -162,6 +191,9 @@ export const wgsl = {
       throw new RangeError(`An array has a whole number of elements, 1 or more, not ${count}`);
     }
     const inner = WgslType.node(element);
+    if (inner?.kind === "normalized") {
+      throw new TypeError(`${describe(element)} is a vertex attribute format and cannot be the element of an array`);
+    }
     if (inner?.kind === "array" && inner.count === undefined) {
       throw new TypeError("A runtime-sized array cannot be the element of an array");
     }
@@ -363,11 +395,18 @@ export class Struct<F extends Fields = Fields> {
 function place(struct: string, field: string, type: FieldType, layout: StructLayout, from: number): Member {
   const node = WgslType.node(type);
   if (layout === "vertex") {
-    if (!node || (node.kind !== "scalar" && node.kind !== "vector")) {
+    if (!node || (node.kind !== "scalar" && node.kind !== "vector" && node.kind !== "normalized")) {
       throw new TypeError(`${struct}.${field}: a vertex struct holds scalars and vectors, not ${describe(type)}`);
     }
     // WebGPU wants an attribute at a multiple of its component size, 4 at most.
-    return { name: field, type, offset: roundUp(scalarSize(node.scalar), from), alignAttribute: 0, sizeAttribute: 0 };
+    const unit = node.kind === "normalized" ? node.bytes : scalarSize(node.scalar);
+    return { name: field, type, offset: roundUp(unit, from), alignAttribute: 0, sizeAttribute: 0 };
+  }
+  if (node?.kind === "normalized") {
+    throw new TypeError(
+      `${struct}.${field}: ${describe(type)} is a vertex attribute format, which a ${layout} buffer cannot hold. ` +
+        `Use wgsl.vec${node.length}(wgsl.f32), or pack the bytes into a wgsl.u32 and unpack them in the shader.`,
+    );
   }
   let align = type.align;
   let size = 0;
@@ -448,6 +487,10 @@ export class StructWriter<F extends Fields = Fields> {
   readonly #u32: Uint32Array;
   readonly #i32: Int32Array;
   #f16: Float16Array | null = null;
+  #u8: Uint8Array | null = null;
+  #i8: Int8Array | null = null;
+  #u16: Uint16Array | null = null;
+  #i16: Int16Array | null = null;
   #base: number;
 
   /** @internal */
@@ -537,6 +580,25 @@ export class StructWriter<F extends Fields = Fields> {
     }
   }
 
+  // Clamped to the range the shader sees, then rounded to the nearest step, halves away from zero.
+  #putNormalized(node: Extract<Node, { kind: "normalized" }>, at: number, index: number, value: number, path: string) {
+    if (typeof value !== "number" || Number.isNaN(value)) throw new RangeError(`${path}: ${value} is not a number`);
+    const steps = node.signed ? (node.bytes === 1 ? 0x7f : 0x7fff) : node.bytes === 1 ? 0xff : 0xffff;
+    const clamped = Math.min(1, Math.max(node.signed ? -1 : 0, value));
+    const q = Math.round(Math.abs(clamped) * steps);
+    const stored = clamped < 0 ? -q : q;
+    if (node.bytes === 1) {
+      (node.signed ? (this.#i8 ??= new Int8Array(this.buffer)) : (this.#u8 ??= new Uint8Array(this.buffer)))[
+        at + index
+      ] = stored;
+    } else {
+      const words = this.buffer.byteLength >> 1;
+      (node.signed
+        ? (this.#i16 ??= new Int16Array(this.buffer, 0, words))
+        : (this.#u16 ??= new Uint16Array(this.buffer, 0, words)))[(at >> 1) + index] = stored;
+    }
+  }
+
   #numbers(value: unknown, path: string, expected: string): ArrayLike<number> {
     if (typeof value === "object" && value !== null && typeof (value as ArrayLike<number>).length === "number") {
       return value as ArrayLike<number>;
@@ -575,6 +637,22 @@ export class StructWriter<F extends Fields = Fields> {
         const from = this.#numbers(value, path, `${node.length} numbers or { x, y, z, w }`);
         if (from.length < node.length) throw new RangeError(`${path} takes ${node.length} numbers, got ${from.length}`);
         for (let i = 0; i < node.length; i++) this.#put(node.scalar, at + i * step, from[i] ?? 0, path);
+        return;
+      }
+      case "normalized": {
+        if (typeof value === "object" && value !== null && typeof (value as ArrayLike<number>).length !== "number") {
+          const v = value as VectorLike;
+          this.#putNormalized(node, at, 0, v.x, path);
+          this.#putNormalized(node, at, 1, v.y, path);
+          if (node.length > 2) {
+            this.#putNormalized(node, at, 2, v.z ?? 0, path);
+            this.#putNormalized(node, at, 3, v.w ?? 0, path);
+          }
+          return;
+        }
+        const from = this.#numbers(value, path, `${node.length} numbers or { x, y, z, w }`);
+        if (from.length < node.length) throw new RangeError(`${path} takes ${node.length} numbers, got ${from.length}`);
+        for (let i = 0; i < node.length; i++) this.#putNormalized(node, at, i, from[i] ?? 0, path);
         return;
       }
       case "matrix": {

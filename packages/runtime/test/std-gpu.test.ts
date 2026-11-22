@@ -140,4 +140,53 @@ describe("skathi:gpu", () => {
     expect([...new Float16Array(w.buffer, 12, 2)]).toEqual([0.5, 1]);
     expect(() => struct("V", { m: wgsl.mat4x4f }, { layout: "vertex" })).toThrow(/scalars and vectors/);
   });
+
+  test("a normalized vertex field packs its components, at its component size, and the stride stays a multiple of 4", () => {
+    const Vertex = struct(
+      "Vertex",
+      {
+        flag: wgsl.unorm8x2,
+        normal: wgsl.snorm16x4,
+        color: wgsl.unorm8x4,
+        edge: wgsl.snorm8x2,
+        uv: wgsl.unorm16x2,
+        tail: wgsl.unorm8x2,
+      },
+      { layout: "vertex" },
+    );
+    expect(Vertex.offsets).toEqual({ flag: 0, normal: 2, color: 10, edge: 14, uv: 16, tail: 20 });
+    expect(Vertex.size).toBe(24);
+    expect(Vertex.toWGSL()).toContain("  normal: vec4<f32>,\n  color: vec4<f32>,\n  edge: vec2<f32>,");
+    expect(Vertex.vertexLayout({ color: 0, normal: 1, edge: 2, uv: 3, flag: 4 }).attributes).toEqual([
+      { format: "unorm8x4", offset: 10, shaderLocation: 0 },
+      { format: "snorm16x4", offset: 2, shaderLocation: 1 },
+      { format: "snorm8x2", offset: 14, shaderLocation: 2 },
+      { format: "unorm16x2", offset: 16, shaderLocation: 3 },
+      { format: "unorm8x2", offset: 0, shaderLocation: 4 },
+    ]);
+
+    const w = Vertex.writer(undefined, { count: 2 }).at(1);
+    w.setAll({
+      color: [0, 0.5, 1, 1.5],
+      edge: { x: -1, y: -2 },
+      normal: [-1, -0.5, 0.25, 1],
+      uv: [0.5, -0.1],
+      tail: [0.501 / 255, 1.5 / 255],
+    });
+    const bytes = new Uint8Array(w.buffer, 24, 24);
+    expect([...bytes.slice(10, 14)]).toEqual([0, 128, 255, 255]);
+    expect([...new Int8Array(w.buffer, 24 + 14, 2)]).toEqual([-127, -127]);
+    expect([...new Int16Array(w.buffer, 24 + 2, 4)]).toEqual([-32767, -16384, 8192, 32767]);
+    expect([...new Uint16Array(w.buffer, 24 + 16, 2)]).toEqual([32768, 0]);
+    expect([...bytes.slice(20, 22)]).toEqual([1, 2]);
+    expect([...new Uint8Array(w.buffer, 0, 24)].every((b) => b === 0)).toBe(true);
+    expect(() => w.set("color", [1, 1, 1])).toThrow(RangeError);
+    expect(() => w.set("color", [Number.NaN, 0, 0, 0])).toThrow(RangeError);
+  });
+
+  test("a buffer struct refuses a normalized field", () => {
+    expect(() => struct("U", { color: wgsl.unorm8x4 })).toThrow(TypeError);
+    expect(() => struct("S", { color: wgsl.snorm16x2 }, { layout: "storage" })).toThrow(TypeError);
+    expect(() => wgsl.array(wgsl.unorm8x4, 4)).toThrow(TypeError);
+  });
 });

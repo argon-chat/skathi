@@ -16,6 +16,8 @@ wgsl.vec2(scalar: WgslType): WgslType
 wgsl.vec3(scalar: WgslType): WgslType
 wgsl.vec4(scalar: WgslType): WgslType
 wgsl.mat2x2f, wgsl.mat3x3f, wgsl.mat4x4f: WgslType
+wgsl.unorm8x2, wgsl.unorm8x4, wgsl.snorm8x2, wgsl.snorm8x4: WgslType
+wgsl.unorm16x2, wgsl.unorm16x4, wgsl.snorm16x2, wgsl.snorm16x4: WgslType
 wgsl.atomic(scalar: WgslType): WgslType
 wgsl.array(element: WgslType | Struct, count?: number): WgslType
 
@@ -31,6 +33,7 @@ readonly type.vertexFormat: string | null`,
       "`wgsl.atomic()` takes `wgsl.u32` or `wgsl.i32`.",
       "`wgsl.f16` needs `enable f16;` in the shader and the `shader-f16` feature on the device.",
       "`vertexFormat` is the `GPUVertexFormat` of a vertex attribute of the type, or `null` when the type cannot be one.",
+      'The normalized types are vertex attributes only: the buffer holds 8- or 16-bit integers and the shader sees `vec2<f32>` or `vec4<f32>`, from 0 to 1 for `unorm` and from -1 to 1 for `snorm`. `wgsl.unorm8x4` holds a colour in 4 bytes instead of 16. A `"uniform"` or `"storage"` struct and an array refuse them.',
       "There is no `bool`: WGSL does not allow one in a buffer. Use `wgsl.u32`.",
     ],
     examples: [
@@ -69,7 +72,7 @@ struct(
       LAYOUTS,
       'In a `"uniform"` struct a field that is a struct or an array is aligned to 16 bytes, and the declaration `toWGSL()` writes says so with `@align` and `@size`, so the shader agrees.',
       'A `"uniform"` struct refuses what a uniform buffer cannot hold, and the error says the way out: an array whose elements do not take a multiple of 16 bytes, a runtime-sized array, a struct declared with another layout.',
-      'A `"vertex"` struct holds scalars and vectors only. Each lies right after the one before, at a multiple of its component size, and the struct\'s size, the stride, is rounded up to 4.',
+      'A `"vertex"` struct holds scalars, vectors and the normalized types only. Each lies right after the one before, at a multiple of its component size, and the struct\'s size, the stride, is rounded up to 4.',
       "`struct()` throws a `TypeError` for a field that is not a type, a name WGSL does not accept, or a struct with no fields.",
     ],
     examples: [
@@ -103,13 +106,14 @@ const Vertex = struct(
   {
     position: wgsl.vec3(wgsl.f32),
     uv: wgsl.vec2(wgsl.f16),
-    color: wgsl.vec4(wgsl.f16),
+    color: wgsl.unorm8x4,
   },
   { layout: "vertex" },
 );
 
-Vertex.size; // 24
-Vertex.offsets; // { position: 0, uv: 12, color: 16 }`,
+Vertex.size; // 20
+Vertex.offsets; // { position: 0, uv: 12, color: 16 }
+Vertex.vertexLayout({ color: 2 }).attributes; // [{ format: "unorm8x4", offset: 16, shaderLocation: 2 }]`,
       },
     ],
     related: ["wgsl", "struct-class", "struct-writer"],
@@ -215,6 +219,7 @@ writer.clear(): this`,
       "A matrix takes its numbers column by column. Nine numbers for a `mat3x3f` are spread over its three padded columns; twelve are taken as the buffer holds them.",
       "An array of scalars, vectors or matrices takes one flat run of numbers, and the writer puts each element at its stride. A field that is a struct takes an object by field name, and an array of structs an array of such objects. Fields left out keep their bytes.",
       "A `u32` or `i32` field throws a `RangeError` for a number that is not a whole number in its range, instead of wrapping it.",
+      "A normalized field takes the floats the shader will see, like a vector. Each is clamped to 0..1 (`unorm`) or -1..1 (`snorm`) and rounded to the nearest step, halves away from zero: `0.5` is stored as 128 in a `unorm8x4`. `NaN` throws a `RangeError`.",
       "`at(index)` moves the writer to another struct of the buffer; the calls after it write there.",
       "`view(field, index)` gives a writer over a struct inside this one, in the same buffer: the struct in `field`, or element `index` of an array of structs. Use it where one element changes each frame.",
       "`clear()` zeroes every struct of the writer.",
