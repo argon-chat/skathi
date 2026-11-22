@@ -362,6 +362,76 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:text compares by lines and words, merges three ways, and parses, applies and cuts patches",
+    async () => {
+      const app = await start();
+      const d = JSON.parse(String(await app.eval("__SK_TEST_STD__.diffs()")));
+      expect(d.changes).toEqual([
+        { oldStart: 1, oldEnd: 2, newStart: 1, newEnd: 2 },
+        { oldStart: 3, oldEnd: 3, newStart: 3, newEnd: 4 },
+      ]);
+      expect(d.inline).toEqual([
+        { oldStart: 0, oldEnd: 1, newStart: 0, newEnd: 1, inline: [{ oldFrom: 3, oldTo: 4, newFrom: 3, newTo: 4 }] },
+      ]);
+      expect(d.ignored).toEqual([0, 0]);
+      expect(d.words).toEqual([
+        { op: "equal", text: "let " },
+        { op: "delete", text: "total" },
+        { op: "insert", text: "sum" },
+        { op: "equal", text: " = a + b;" },
+      ]);
+      expect(d.chars).toBe(1);
+      expect(d.unified).toBe("@@ -2 +2 @@\n-b\n+B\n");
+      expect(d.merged).toEqual({ text: "A\nb\nC\n", conflicts: [] });
+      expect(d.conflict).toEqual({
+        text: "<<<<<<< ours\nours\n||||||| base\na\n=======\ntheirs\n>>>>>>> theirs\n",
+        conflicts: [{ base: [0, 1], ours: [0, 1], theirs: [0, 1], at: 0 }],
+      });
+      expect(d.files).toEqual([
+        ["src/app.ts", "src/app.ts", "modified", 0o100644, 0o100644, 2],
+        ["run.sh", "run.sh", "modified", 0o100644, 0o100755, 0],
+        ["old.txt", "new.txt", "renamed", null, null, 0],
+      ]);
+      expect(d.section).toBe("export function main() {");
+      expect(d.applied).toEqual({
+        text: "one\n2\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\n",
+        rejected: [],
+      });
+      expect([d.moved, d.back, d.roundTrip]).toEqual([true, true, true]);
+      expect(d.staged).toBe(
+        "diff --git a/src/app.ts b/src/app.ts\nindex 83db48f..bf269f4 100644\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -8,3 +8,4 @@\n eight\n nine\n ten\n+eleven\n",
+      );
+      expect(d.stagedApplied).toBe("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\n");
+      expect(d.fromText).toEqual(["--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n", "a\nB\n"]);
+      expect(d.rejected).toEqual({ text: "1\nY\n3\n", rejected: [0] });
+      expect(d.errors.map((e: string) => e.split(":")[0])).toEqual([
+        "SyntaxError",
+        "TypeError",
+        "RangeError",
+        "RangeError",
+        "TypeError",
+        "TypeError",
+      ]);
+
+      await app.eval("__SK_TEST_STD__.startDiffs(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.diffsResult)"));
+      }
+      const a = JSON.parse(raw);
+      expect(a.failed).toBeUndefined();
+      expect(a.result).toEqual({
+        count: 100,
+        first: [250, 251, 250, 251],
+        part: ["compute", "changed"],
+        sameAsSync: true,
+        rejected: "TypeError",
+      });
+    },
+    T,
+  );
+
+  test(
     "skathi:collections keeps bits, numbers and keyed values",
     async () => {
       const app = await start();

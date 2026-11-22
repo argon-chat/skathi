@@ -14,7 +14,7 @@ import { connection, connectionChange } from "./network";
 import { callbacks, ffi, structs, threads, workers } from "./native";
 import { lingering, processes } from "./process";
 import { collections } from "./structures";
-import { text } from "./strings";
+import { diffs, diffsAsync, text } from "./strings";
 
 const DOCUMENT = `title = "Skathi"
 big = 9007199254740993
@@ -79,6 +79,14 @@ Object.assign(globalThis, {
     units: () => JSON.stringify(units()),
     collections: () => JSON.stringify(collections()),
     text: () => JSON.stringify(text()),
+    diffs: () => JSON.stringify(diffs()),
+    diffsResult: null as string | null,
+    startDiffs() {
+      void diffsAsync().then(
+        (result) => (this.diffsResult = JSON.stringify({ result })),
+        (error: unknown) => (this.diffsResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     ffi: () => JSON.stringify(ffi()),
     callbacks: () => JSON.stringify(callbacks()),
     memory: () => JSON.stringify(memory(), (_, v: unknown) => (typeof v === "bigint" ? String(v) : v)),

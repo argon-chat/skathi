@@ -140,92 +140,316 @@ for (let lines = reader.readLines(500); lines.length; lines = reader.readLines(5
     slug: "text-diff",
     name: "TextDiff",
     kind: "namespace",
-    summary: "The shortest set of changes that turns one text into another, by lines or by characters.",
+    summary:
+      "The changes that turn one text into another, by lines, words or characters, and a three-way merge with conflict markers.",
     syntax: `${importLine("skathi:text", "TextDiff")}
 
-TextDiff.lines(oldText: string, newText: string, options?: { context?: number }): DiffHunk[]
-TextDiff.chars(oldText: string, newText: string): DiffOp[]
-TextDiff.unified(oldText: string, newText: string, options?: {
-  context?: number
+type DiffSource = string | Uint8Array | NativeBuffer   // bytes are read as UTF-8
+
+TextDiff.changes(oldText: DiffSource, newText: DiffSource, options?: DiffOptions): DiffChange[]
+TextDiff.changesAsync(oldText: DiffSource, newText: DiffSource, options?: DiffOptions): Promise<DiffChange[]>
+TextDiff.lines(oldText: DiffSource, newText: DiffSource, options?: DiffOptions): DiffHunk[]
+TextDiff.words(oldText: string, newText: string, options?: DiffOptions): DiffOp[]
+TextDiff.chars(oldText: string, newText: string, options?: DiffOptions): DiffOp[]
+TextDiff.unified(oldText: DiffSource, newText: DiffSource, options?: DiffOptions & {
   oldName?: string
   newName?: string
 }): string
+TextDiff.merge(base: string, ours: string, theirs: string, options?: {
+  style?: "merge" | "diff3" | "zdiff3"
+  labels?: [base: string, ours: string, theirs: string]
+}): { text: string; conflicts: MergeConflict[] }
 
+interface DiffOptions {
+  algorithm?: "histogram" | "myers" | "patience"
+  ignoreWhitespace?: "none" | "trailing" | "amount" | "all"
+  ignoreCase?: boolean
+  ignoreLineEndings?: boolean
+  context?: number
+  inline?: "none" | "words" | "chars"
+}
+interface DiffChange {
+  oldStart: number; oldEnd: number      // lines from 0, the end not included
+  newStart: number; newEnd: number
+  inline?: { oldFrom: number; oldTo: number; newFrom: number; newTo: number }[]
+}
 interface DiffOp { op: "equal" | "delete" | "insert"; text: string }
 interface DiffHunk {
-  oldStart: number; oldLines: number   // line numbers start at 1
+  oldStart: number; oldLines: number    // line numbers start at 1
   newStart: number; newLines: number
   lines: DiffOp[]                       // one per line, without its "\\n"
+}
+interface MergeConflict {
+  base: [number, number]; ours: [number, number]; theirs: [number, number]
+  at: number                            // the line of "<<<<<<<" in text
 }`,
     params: [
-      { name: "oldText", type: "string", description: "The text before the change." },
-      { name: "newText", type: "string", description: "The text after it." },
+      { name: "oldText", type: "DiffSource", description: "The text before the change." },
+      { name: "newText", type: "DiffSource", description: "The text after it." },
+      {
+        name: "options.algorithm",
+        type: "string",
+        description:
+          '`"histogram"` by default: on code it gives the hunks a person would write and does not pair up unrelated closing braces. `"myers"` gives the fewest deletions and insertions; `chars()` uses it by default. `"patience"` anchors on lines that occur once on each side.',
+      },
+      {
+        name: "options.ignoreWhitespace",
+        type: "string",
+        description:
+          '`"trailing"` ignores spaces at the end of a line, `"amount"` also treats any run of spaces as one, `"all"` ignores every space and tab. Like `git diff` with `--ignore-space-at-eol`, `-b` and `-w`.',
+      },
+      { name: "options.ignoreCase", type: "boolean", description: "Compare without regard to case, for any script." },
+      {
+        name: "options.ignoreLineEndings",
+        type: "boolean",
+        description: "Treat `\\r\\n` and `\\n` as the same line ending.",
+      },
       {
         name: "options.context",
         type: "number",
-        description: "How many unchanged lines to keep around a change. 3 by default.",
+        description: "For `lines()`, `unified()` and patches: unchanged lines kept around a change. 3 by default.",
+      },
+      {
+        name: "options.inline",
+        type: "string",
+        description:
+          'For `changes()`: `"words"` or `"chars"` also compares the replaced lines inside, for the highlight GitHub and editors show within a line.',
       },
       {
         name: "options.oldName, options.newName",
         type: "string",
         description: "For `unified()`: with both, the text starts with the `---` and `+++` lines.",
       },
+      {
+        name: "options.style",
+        type: "string",
+        description:
+          'For `merge()`: `"merge"` shows both sides in a conflict, `"diff3"` adds the base lines between them, `"zdiff3"` does too and moves lines both sides share out of the conflict, as `"merge"` does.',
+      },
+      {
+        name: "options.labels",
+        type: "[string, string, string]",
+        description:
+          'For `merge()`: the names after the markers, in the order of the arguments: base, ours, theirs. `["base", "ours", "theirs"]` by default.',
+      },
     ],
     notes: [
-      "`lines()` returns hunks: each is a group of changed lines with `context` unchanged lines around it, and two changes closer than that share a hunk. Equal texts give `[]`.",
-      "`chars()` returns runs of characters in order. Joining the `equal` and `insert` runs gives the new text; joining `equal` and `delete` gives the old one. A surrogate pair is never split.",
-      '`unified()` returns the line changes as `diff -u` prints them, ready for `git apply` when the names are given. Equal texts give `""`.',
-      "The result has the fewest deletions and insertions possible (Myers' algorithm, in linear memory). The time grows with the size of the texts multiplied by the number of differences: two versions of a file compare quickly, two unrelated megabyte texts do not.",
-      "A line is what ends with `\\n`. `\\r\\n` is not treated specially, so a file whose line endings changed differs in every line. A last line without `\\n` differs from the same line with it, and `unified()` marks it with `\\ No newline at end of file`.",
-      "The call is synchronous. Compare very large texts off the first frame, after the window is shown.",
+      "`changes()` is the call for large files: it returns four numbers per change and copies no text into JS. Slice the lines yourself, or show them from the text you already have. Equal texts give `[]`.",
+      "`changesAsync()` does the same on a worker thread and answers with a promise, so a diff of tens of thousands of lines does not hold a frame.",
+      "`inline` offsets are in UTF-16 code units from the start of each whole text, so `oldText.slice(oldFrom, oldTo)` is the changed part. A change that only adds or only removes lines has an empty `inline`, and so does one longer than 16 384 code units on a side (4096 for `chars`).",
+      "`lines()` returns hunks: each is a group of changed lines with `context` unchanged lines around them, and two changes closer than that share a hunk.",
+      "`words()` compares runs of letters and digits (and `_`), runs of spaces, line breaks and every other character on its own; an emoji with its modifiers or joiners stays one piece. `chars()` compares characters. In both, joining the `equal` and `insert` runs gives the new text and joining `equal` and `delete` gives the old one.",
+      '`unified()` returns the line changes as `diff -u` prints them. Equal texts give `""`. For a patch you go on to apply, cut down or reverse, use [`Patch.from()`](/std/patch/).',
+      "Bytes are read as UTF-8 in the host, without making a string in JS first: a file read into a `NativeBuffer` is compared as it is. Bytes that are not UTF-8 count as U+FFFD.",
+      "A line is what ends with `\\n`; a `\\r` before it is part of the line unless `ignoreLineEndings` is set. A last line without `\\n` differs from the same line with it, and `unified()` marks it with `\\ No newline at end of file`.",
+      "`merge()` applies the changes from `base` to `ours` and from `base` to `theirs`. Changes to different lines merge; changes that overlap or touch conflict unless both sides made the same one, as in git. `conflicts` gives each conflict's lines in the three inputs and where its `<<<<<<<` line is in `text`, so a conflict screen does not have to parse the markers. Markers end in `\\r\\n` when the texts do.",
+      "Changes are moved to the latest place where they still fit, as git does, so a block of added lines ends before the line that follows it rather than in the middle of a repeated one.",
+      "The time grows with the size of the texts and the number of differences. Two versions of a 50 000-line file with changes all over it compare in tens of milliseconds; two unrelated texts are fast with `histogram` and slow with `myers`.",
     ],
     edgeCases: [
-      "`TypeError`: a text is not a string, or only one of `oldName` and `newName` is given.",
+      "`TypeError`: a text is not a string or bytes (`words()`, `chars()` and `merge()` take strings only), an option is not one of its values, only one of `oldName` and `newName` is given, or `labels` is not three strings without line breaks.",
       "`RangeError`: `context` is not a non-negative integer.",
+      "`changesAsync()` rejects with the same errors instead of throwing.",
     ],
     examples: [
       {
-        title: "Show what changed in a document",
+        title: "Highlight what changed in a file",
         lang: "ts",
         code: `import { TextDiff } from "skathi:text";
 
-const hunks = TextDiff.lines(saved, edited, { context: 2 });
-for (const hunk of hunks) {
-  console.log(\`line \${hunk.oldStart}:\`);
-  for (const line of hunk.lines) {
-    const mark = line.op === "insert" ? "+" : line.op === "delete" ? "-" : " ";
-    console.log(mark, line.text);
+const changes = await TextDiff.changesAsync(saved, edited, { inline: "words" });
+for (const change of changes) {
+  markLines("removed", change.oldStart, change.oldEnd);
+  markLines("added", change.newStart, change.newEnd);
+  for (const part of change.inline ?? []) {
+    markRange("removed", part.oldFrom, part.oldTo); // offsets into saved
+    markRange("added", part.newFrom, part.newTo); // offsets into edited
   }
 }`,
       },
       {
-        title: "Highlight the edit inside one line",
+        title: "Compare two files without strings",
         lang: "ts",
         code: `import { TextDiff } from "skathi:text";
 
-TextDiff.chars("color: red;", "color: darkred;");
+// Bytes as a Uint8Array or a NativeBuffer, read as UTF-8 in the host.
+const changes = TextDiff.changes(before, after, { ignoreWhitespace: "amount" });`,
+      },
+      {
+        title: "The edit inside one line",
+        lang: "ts",
+        code: `import { TextDiff } from "skathi:text";
+
+TextDiff.words("let total = a + b;", "let sum = a + b;");
 // [
-//   { op: "equal", text: "color: " },
-//   { op: "insert", text: "dark" },
-//   { op: "equal", text: "red;" },
+//   { op: "equal", text: "let " },
+//   { op: "delete", text: "total" },
+//   { op: "insert", text: "sum" },
+//   { op: "equal", text: " = a + b;" },
 // ]`,
       },
       {
-        title: "A patch file",
+        title: "Merge two edits of one text",
         lang: "ts",
         code: `import { TextDiff } from "skathi:text";
 
-const patch = TextDiff.unified("one\\ntwo\\n", "one\\n2\\n", { oldName: "a/notes.txt", newName: "b/notes.txt" });
-// --- a/notes.txt
-// +++ b/notes.txt
-// @@ -1,2 +1,2 @@
-//  one
-// -two
-// +2`,
+const { text, conflicts } = TextDiff.merge(base, mine, theirs, { style: "zdiff3" });
+if (conflicts.length) {
+  for (const c of conflicts) console.log(\`conflict at line \${c.at + 1}\`);
+} else {
+  save(text);
+}`,
       },
     ],
-    related: ["text-search", "string-reader"],
-    aliases: ["diff", "patch", "unified diff", "Myers", "compare texts", "DiffHunk", "DiffOp", "changes"],
+    related: ["patch", "text-search", "string-reader"],
+    aliases: [
+      "diff",
+      "unified diff",
+      "histogram",
+      "Myers",
+      "patience",
+      "compare texts",
+      "word diff",
+      "inline diff",
+      "three-way merge",
+      "merge",
+      "conflict",
+      "diff3",
+      "DiffHunk",
+      "DiffOp",
+      "DiffChange",
+      "changes",
+    ],
+  },
+  {
+    slug: "patch",
+    name: "Patch",
+    kind: "class",
+    summary:
+      "A unified diff as git writes and reads it: parsed from git's output or made from two texts, applied, cut down to some hunks or lines, and reversed.",
+    syntax: `${importLine("skathi:text", "Patch")}
+
+Patch.parse(text: string): Patch
+Patch.from(oldText: DiffSource, newText: DiffSource, options?: DiffOptions & {
+  oldName?: string
+  newName?: string
+}): Patch
+
+readonly patch.files: PatchFile[]
+patch.apply(text: string, options?: { file?: number; fuzz?: number; reverse?: boolean }): {
+  text: string
+  rejected: number[]
+}
+patch.select(picks: { file: number; hunks?: number[]; lines?: [hunk: number, line: number][] }[]): Patch
+patch.reverse(): Patch
+patch.toString(): string
+
+interface PatchFile {
+  oldPath: string | null; newPath: string | null   // null for /dev/null
+  status: "modified" | "added" | "deleted" | "renamed" | "copied"
+  oldMode?: number; newMode?: number               // 0o100644, 0o100755, ...
+  binary: boolean
+  hunks: DiffHunk[]                                // with section and noNewline where the patch has them
+}`,
+    params: [
+      {
+        name: "text",
+        type: "string",
+        description:
+          "For `parse()`: the output of `git diff`, `git show`, `git format-patch` or `diff -u`. Text around the diffs, such as a commit message, is skipped.",
+      },
+      {
+        name: "options",
+        type: "DiffOptions",
+        description:
+          "For `from()`: the options of [`TextDiff`](/std/text-diff/), and `oldName` and `newName` for the `---` and `+++` lines.",
+      },
+      { name: "options.file", type: "number", description: "For `apply()`: which file of the patch. 0 by default." },
+      {
+        name: "options.fuzz",
+        type: "number",
+        description:
+          "For `apply()`: how many context lines a hunk may drop at each end to find its place. 0 by default, as `git apply`.",
+      },
+      {
+        name: "options.reverse",
+        type: "boolean",
+        description: "For `apply()`: undo the patch instead.",
+      },
+      {
+        name: "picks",
+        type: "object[]",
+        description:
+          "For `select()`: per file, the hunks to take whole and single lines as `[hunk, line]`, indices into `files[file].hunks[hunk].lines`. A file given without either is taken whole.",
+      },
+    ],
+    notes: [
+      "`parse()` reads git's extended headers: new and deleted files, renames and copies with their similarity, mode changes, the `index` line, quoted paths with unusual characters, `Binary files … differ` and `GIT binary patch`, and `\\ No newline at end of file`. Paths come without git's `a/` and `b/`. `toString()` writes the same form back, so a patch read from git and cut down goes back to git.",
+      "`select()` is how a git client stages one hunk or a few lines: an unpicked deleted line stays as context, an unpicked added line is left out, and the line numbers of the hunks after it are counted again. Pass the result's `toString()` to `git apply --cached` on its standard input.",
+      "`apply()` applies one file's hunks to a text, in order. A hunk goes where its line numbers say when its lines are there; otherwise it is looked for further away in both directions, so a file that changed above it still takes it. A hunk whose context stops at the start or the end of the file stays there, as in git. A hunk that finds no place is skipped and its index is in `rejected`; the others are still applied.",
+      "`reverse()` swaps the old and new sides: paths, modes, added and deleted, the `index` hashes, and the lines of every hunk.",
+      "`files` is made on first read and kept; the patch itself does not change, and `select()` and `reverse()` return new patches.",
+      "Only text is applied: a binary file's part is kept in `toString()` but `apply()` refuses it.",
+    ],
+    edgeCases: [
+      "`SyntaxError`: `parse()` meets a hunk whose header is malformed or whose lines do not match its counts; the message names the line.",
+      "`TypeError`: `new Patch()`; a text is not a string; `apply()` on a binary file; a pick is not an object or a line is not `[hunk, line]`.",
+      "`RangeError`: a file, hunk or line index that the patch does not have, or a negative or fractional `fuzz`.",
+    ],
+    examples: [
+      {
+        title: "Stage three lines of a file",
+        lang: "ts",
+        code: `import { Process } from "skathi:process";
+import { Patch } from "skathi:text";
+
+const { stdout } = await Process.exec("git", ["diff", "--", "src/app.ts"]);
+const patch = Patch.parse(stdout);
+
+// Lines 4 to 6 of the first hunk, as the user selected them.
+const staged = patch.select([{ file: 0, lines: [[0, 4], [0, 5], [0, 6]] }]);
+
+const git = Process.spawn("git", ["apply", "--cached", "-"]);
+const input = git.stdin!.getWriter();
+await input.write(new TextEncoder().encode(staged.toString()));
+await input.close();
+await git.exited;`,
+      },
+      {
+        title: "Show a commit",
+        lang: "ts",
+        code: `import { Patch } from "skathi:text";
+
+for (const file of Patch.parse(show).files) {
+  console.log(file.status, file.newPath ?? file.oldPath, file.binary ? "(binary)" : \`\${file.hunks.length} hunks\`);
+}`,
+      },
+      {
+        title: "Apply a patch to a text, and undo it",
+        lang: "ts",
+        code: `import { Patch } from "skathi:text";
+
+const patch = Patch.from(draft, edited, { oldName: "a/notes.md", newName: "b/notes.md" });
+const { text, rejected } = patch.apply(otherCopyOfDraft);
+if (rejected.length) console.warn(\`\${rejected.length} hunks did not fit\`);
+
+const undone = patch.apply(edited, { reverse: true }).text; // draft again`,
+      },
+    ],
+    related: ["text-diff"],
+    aliases: [
+      "patch",
+      "git diff",
+      "git apply",
+      "unified diff",
+      "parse diff",
+      "apply patch",
+      "stage hunk",
+      "partial staging",
+      "add -p",
+      "reverse patch",
+      "PatchFile",
+    ],
   },
   {
     slug: "text-search",

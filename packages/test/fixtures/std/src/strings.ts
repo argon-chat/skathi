@@ -1,4 +1,5 @@
-import { Glob, StringBuilder, StringReader, StringWriter, TextDiff, TextSearch } from "skathi:text";
+import { NativeBuffer } from "skathi:memory";
+import { Glob, Patch, StringBuilder, StringReader, StringWriter, TextDiff, TextSearch } from "skathi:text";
 
 const attempt = (run: () => unknown): string => {
   try {
@@ -67,5 +68,96 @@ export function text() {
       attempt(() => TextDiff.lines("a", 1 as unknown as string)),
       attempt(() => (StringBuilder.prototype.append as (v: unknown) => unknown).call({}, "x")),
     ],
+  };
+}
+
+const GIT_DIFF = `diff --git a/src/app.ts b/src/app.ts
+index 83db48f..bf269f4 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,4 +1,4 @@ export function main() {
+ one
+-two
++2
+ three
+ four
+@@ -8,3 +8,4 @@
+ eight
+ nine
+ ten
++eleven
+diff --git a/run.sh b/run.sh
+old mode 100644
+new mode 100755
+diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt
+`;
+
+/** Differences, merges and patches, synchronous. */
+export function diffs() {
+  const file = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
+  const patch = Patch.parse(GIT_DIFF);
+  const staged = patch.select([{ file: 0, lines: [[1, 3]] }]);
+  const fromText = Patch.from("a\nb\n", "a\nB\n", { oldName: "a/x", newName: "b/x" });
+  const bytes = new Uint8Array([0xf0, 0x9f, 0x98, 0x80, 0x20, 0x62, 0x0a, 0x63, 0x0a]); // "😀 b\nc\n"
+  const buffer = NativeBuffer.alloc(bytes.length);
+  new Uint8Array(buffer.buffer).set(bytes);
+  const inline = TextDiff.changes("😀 a\nc\n", buffer, { inline: "words" });
+  buffer.free();
+  const merged = TextDiff.merge("a\nb\nc\n", "A\nb\nc\n", "a\nb\nC\n");
+  const conflict = TextDiff.merge("a\n", "ours\n", "theirs\n", { style: "diff3" });
+  return {
+    changes: TextDiff.changes("a\nb\nc\n", "a\nx\nc\nd\n"),
+    inline,
+    ignored: [
+      TextDiff.changes("a b\r\n", "a  b\n", { ignoreWhitespace: "amount", ignoreLineEndings: true }).length,
+      TextDiff.changes("A\n", "a\n", { ignoreCase: true }).length,
+    ],
+    words: TextDiff.words("let total = a + b;", "let sum = a + b;"),
+    chars: TextDiff.chars("Abc", "abc", { ignoreCase: true }).length,
+    unified: TextDiff.unified("a\nb\n", "a\nB\n", { context: 0 }),
+    merged,
+    conflict,
+    files: patch.files.map((f) => [f.oldPath, f.newPath, f.status, f.oldMode, f.newMode, f.hunks.length]),
+    section: patch.files[0]?.hunks[0]?.section,
+    applied: patch.apply(file),
+    moved: patch.apply(file.replace("five\n", "five\nfive and a half\n")).text.endsWith("ten\neleven\n"),
+    back: patch.reverse().apply(patch.apply(file).text).text === file,
+    staged: staged.toString(),
+    stagedApplied: staged.apply(file).text,
+    roundTrip: Patch.parse(patch.toString()).toString() === patch.toString(),
+    fromText: [fromText.toString(), fromText.apply("a\nb\n").text],
+    rejected: Patch.from("1\n2\n3\n", "1\nX\n3\n").apply("1\nY\n3\n"),
+    errors: [
+      attempt(() => Patch.parse("@@ -1,2 +1,2 @@\n a\n")),
+      attempt(() => new (Patch as unknown as new () => Patch)()),
+      attempt(() => patch.apply(file, { file: 9 })),
+      attempt(() => patch.select([{ file: 0, hunks: [5] }])),
+      attempt(() => TextDiff.changes("a", 5 as unknown as string)),
+      attempt(() => TextDiff.lines("a", "b", { algorithm: "fast" as "myers" })),
+    ],
+  };
+}
+
+/** A 50 000-line file with changes all over it, compared on a worker. */
+export async function diffsAsync() {
+  const lines = Array.from({ length: 50_000 }, (_, i) => `  const value${i} = compute(${i % 97}, ${i % 13});`);
+  const old = lines.join("\n") + "\n";
+  for (let i = 250; i < lines.length; i += 500) lines[i] = `  const value${i} = changed(${i});`;
+  const changed = lines.join("\n") + "\n";
+  const changes = await TextDiff.changesAsync(old, changed, { inline: "words" });
+  const first = changes[0];
+  const part = first?.inline?.[0];
+  return {
+    count: changes.length,
+    first: first && [first.oldStart, first.oldEnd, first.newStart, first.newEnd],
+    part: part && [old.slice(part.oldFrom, part.oldTo), changed.slice(part.newFrom, part.newTo)],
+    sameAsSync: JSON.stringify(TextDiff.changes(old, changed, { inline: "words" })) === JSON.stringify(changes),
+    rejected: await TextDiff.changesAsync(old, 1 as unknown as string).then(
+      () => "ok",
+      (e: Error) => e.name,
+    ),
   };
 }

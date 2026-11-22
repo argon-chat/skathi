@@ -47,7 +47,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "skathi:gpu":
     "WGSL structs described once: the layout of a uniform, storage or vertex buffer, the declaration for the shader, and a writer that puts values at the right offsets; and two things every WebGPU app writes again, GPU pass timing and reading a texture or a buffer back. It goes with [WebGPU](/web-platform/webgpu/).",
   "skathi:text":
-    "Work on strings that is slow or long to write in JS: building text from many parts, reading it line by line, the difference between two texts, a search for many words at once, and glob patterns.",
+    "Work on strings that is slow or long to write in JS: building text from many parts, reading it line by line, differences, three-way merges and git patches, a search for many words at once, and glob patterns.",
   "skathi:time":
     "Durations as values, measuring elapsed time, deadlines that travel with a call, retry delays, rate limiting and a timer that does not drift.",
   "skathi:units":

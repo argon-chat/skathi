@@ -1,16 +1,26 @@
-//! `skathi:text`: building and reading strings, differences, many-word search and glob patterns.
-//! Strings stay UTF-16 here, as the engine has them, so an index means what it means in JS.
+//! `skathi:text`: building and reading strings, differences and patches, many-word search and
+//! glob patterns. Strings stay UTF-16 here, as the engine has them, so an index means what it
+//! means in JS.
 
-use std::collections::HashMap;
+mod diff;
+mod merge;
+mod patch;
+
+use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::panic::AssertUnwindSafe;
+use std::sync::{Mutex, OnceLock};
 
 use aho_corasick::{AhoCorasick, MatchKind};
 use sk_runtime::host;
+use sk_runtime::redjs::api::HostArgs;
 use sk_runtime::redjs::capi::JSClassRef;
+use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::util::*;
 
 use super::support::{self, *};
+use diff::{Algorithm, Edit, Inline, Options, Pieces, Whitespace};
+use patch::{PatchFile, Pick};
 
 /// The longest string the engine makes.
 const MAX_UNITS: usize = i32::MAX as usize;
@@ -286,264 +296,49 @@ std_fn!(fn reader_read_to_end(g, args) {
 std_fn!(fn reader_position(g, args) { Ok(enc_f64(reader(g, args.this().0)?.at as f64)) });
 std_fn!(fn reader_length(g, args) { Ok(enc_f64(reader(g, args.this().0)?.units.len() as f64)) });
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Edit {
-    Equal,
-    Delete,
-    Insert,
+/// A text to compare as it came: bytes are read as UTF-8 where the work is done.
+enum Source {
+    Units(Vec<u16>),
+    Bytes(Vec<u8>),
 }
 
-impl Edit {
-    fn name(self) -> &'static str {
+impl Source {
+    fn units(self) -> Vec<u16> {
         match self {
-            Edit::Equal => "equal",
-            Edit::Delete => "delete",
-            Edit::Insert => "insert",
+            Source::Units(units) => units,
+            Source::Bytes(bytes) => String::from_utf8_lossy(&bytes).encode_utf16().collect(),
         }
     }
 }
 
-/// Runs of one kind of edit, in order.
-#[derive(Default)]
-struct Script(Vec<(Edit, usize)>);
-
-impl Script {
-    fn push(&mut self, edit: Edit, count: usize) {
-        if count == 0 {
-            return;
-        }
-        match self.0.last_mut() {
-            Some((last, run)) if *last == edit => *run += count,
-            _ => self.0.push((edit, count)),
-        }
+unsafe fn raw_source(g: *mut c_void, v: u64, what: &str) -> Js<Source> {
+    if kind(g, v) == KIND_STRING {
+        return read_string16(g, v).map(Source::Units).ok_or(Thrown);
+    }
+    if let Some(view) = buffer_source(g, v) {
+        return Ok(Source::Bytes(view.bytes().to_vec()));
+    }
+    match super::memory::region_of(g, v, &what)? {
+        Some(region) => Ok(Source::Bytes(region.bytes().to_vec())),
+        None => type_error(
+            g,
+            &format!("{what} must be a string, a Uint8Array or a NativeBuffer"),
+        ),
     }
 }
 
-/// The furthest-reaching paths from both ends meet in the middle of a shortest script (Myers,
-/// "An O(ND) Difference Algorithm", the linear-space refinement): `(x, y, u, v)` is that snake.
-fn middle_snake(a: &[u32], b: &[u32]) -> (usize, usize, usize, usize) {
-    let (n, m) = (a.len() as isize, b.len() as isize);
-    let delta = n - m;
-    let odd = delta & 1 != 0;
-    let max = (n + m + 1) / 2 + 1;
-    let off = max + 1;
-    let mut forward = vec![0isize; 2 * max as usize + 3];
-    let mut backward = vec![0isize; 2 * max as usize + 3];
-    let at = |k: isize| (off + k) as usize;
-    for d in 0..=max {
-        let mut k = -d;
-        while k <= d {
-            let mut x = if k == -d || (k != d && forward[at(k - 1)] < forward[at(k + 1)]) {
-                forward[at(k + 1)]
-            } else {
-                forward[at(k - 1)] + 1
-            };
-            let mut y = x - k;
-            let (x0, y0) = (x, y);
-            while x < n && y < m && a[x as usize] == b[y as usize] {
-                x += 1;
-                y += 1;
-            }
-            forward[at(k)] = x;
-            if odd && (delta - k).abs() < d && x + backward[at(delta - k)] >= n {
-                return (x0 as usize, y0 as usize, x as usize, y as usize);
-            }
-            k += 2;
-        }
-        let mut k = -d;
-        while k <= d {
-            let mut x = if k == -d || (k != d && backward[at(k - 1)] < backward[at(k + 1)]) {
-                backward[at(k + 1)]
-            } else {
-                backward[at(k - 1)] + 1
-            };
-            let mut y = x - k;
-            let (x0, y0) = (x, y);
-            while x < n && y < m && a[(n - 1 - x) as usize] == b[(m - 1 - y) as usize] {
-                x += 1;
-                y += 1;
-            }
-            backward[at(k)] = x;
-            if !odd && (delta - k).abs() <= d && x + forward[at(delta - k)] >= n {
-                return (
-                    (n - x) as usize,
-                    (m - y) as usize,
-                    (n - x0) as usize,
-                    (m - y0) as usize,
-                );
-            }
-            k += 2;
-        }
-    }
-    unreachable!("two sequences always have an edit script")
+unsafe fn two_sources(g: *mut c_void, old: u64, new: u64, what: &str) -> Js<(Source, Source)> {
+    Ok((
+        raw_source(g, old, &format!("{what}: the old text"))?,
+        raw_source(g, new, &format!("{what}: the new text"))?,
+    ))
 }
 
-fn shortest_script(a: &[u32], b: &[u32], script: &mut Script) {
-    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
-    let (a, b) = (&a[prefix..], &b[prefix..]);
-    let suffix = a
-        .iter()
-        .rev()
-        .zip(b.iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
-    let (a, b) = (&a[..a.len() - suffix], &b[..b.len() - suffix]);
-    script.push(Edit::Equal, prefix);
-    if a.is_empty() || b.is_empty() {
-        script.push(Edit::Delete, a.len());
-        script.push(Edit::Insert, b.len());
-    } else {
-        let (x, y, u, v) = middle_snake(a, b);
-        shortest_script(&a[..x], &b[..y], script);
-        script.push(Edit::Equal, u - x);
-        shortest_script(&a[u..], &b[v..], script);
-    }
-    script.push(Edit::Equal, suffix);
-}
-
-/// A text as the pieces a difference is made of, each a range of its units.
-struct Pieces<'a> {
-    units: &'a [u16],
-    ranges: Vec<(usize, usize)>,
-    /// The last line has no `\n` after it.
-    open_end: bool,
-}
-
-impl<'a> Pieces<'a> {
-    fn lines(units: &'a [u16]) -> Pieces<'a> {
-        let mut ranges = Vec::new();
-        let mut start = 0;
-        for (i, unit) in units.iter().enumerate() {
-            if *unit == NEWLINE {
-                ranges.push((start, i));
-                start = i + 1;
-            }
-        }
-        let open_end = start < units.len();
-        if open_end {
-            ranges.push((start, units.len()));
-        }
-        Pieces {
-            units,
-            ranges,
-            open_end,
-        }
-    }
-
-    fn points(units: &'a [u16]) -> Pieces<'a> {
-        let mut ranges = Vec::with_capacity(units.len());
-        let mut i = 0;
-        while i < units.len() {
-            let paired = (0xD800..0xDC00).contains(&units[i])
-                && units
-                    .get(i + 1)
-                    .is_some_and(|low| (0xDC00..0xE000).contains(low));
-            ranges.push((i, i + 1 + paired as usize));
-            i += 1 + paired as usize;
-        }
-        Pieces {
-            units,
-            ranges,
-            open_end: false,
-        }
-    }
-
-    fn piece(&self, i: usize) -> &'a [u16] {
-        let (start, end) = self.ranges[i];
-        &self.units[start..end]
-    }
-
-    fn span(&self, from: usize, count: usize) -> &'a [u16] {
-        if count == 0 {
-            return &[];
-        }
-        &self.units[self.ranges[from].0..self.ranges[from + count - 1].1]
-    }
-
-    fn unterminated(&self, i: usize) -> bool {
-        self.open_end && i + 1 == self.ranges.len()
-    }
-}
-
-/// A line that ends the text without `\n` is not the same line as one with it.
-fn script_of<'a>(a: &Pieces<'a>, b: &Pieces<'a>) -> Script {
-    fn number<'a>(pieces: &Pieces<'a>, ids: &mut HashMap<(&'a [u16], bool), u32>) -> Vec<u32> {
-        (0..pieces.ranges.len())
-            .map(|i| {
-                let next = ids.len() as u32;
-                *ids.entry((pieces.piece(i), pieces.unterminated(i)))
-                    .or_insert(next)
-            })
-            .collect()
-    }
-    let mut ids = HashMap::new();
-    let (left, right) = (number(a, &mut ids), number(b, &mut ids));
-    let mut script = Script::default();
-    shortest_script(&left, &right, &mut script);
-    script
-}
-
-struct Line {
-    edit: Edit,
-    /// Its index in the old text for `Equal` and `Delete`, in the new one for `Insert`.
-    index: usize,
-}
-
-struct Hunk {
-    old_start: usize,
-    old_count: usize,
-    new_start: usize,
-    new_count: usize,
-    lines: Vec<Line>,
-}
-
-/// The changed lines with `context` unchanged ones around them; changes closer than that share a hunk.
-fn hunks(script: &Script, context: usize) -> Vec<Hunk> {
-    let mut lines = Vec::new();
-    let (mut old, mut new) = (0, 0);
-    for (edit, count) in &script.0 {
-        for _ in 0..*count {
-            lines.push((*edit, old, new));
-            match edit {
-                Edit::Equal => (old, new) = (old + 1, new + 1),
-                Edit::Delete => old += 1,
-                Edit::Insert => new += 1,
-            }
-        }
-    }
-    let changed: Vec<usize> = (0..lines.len())
-        .filter(|i| lines[*i].0 != Edit::Equal)
-        .collect();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < changed.len() {
-        let mut j = i;
-        while j + 1 < changed.len() && changed[j + 1] - changed[j] - 1 <= context.saturating_mul(2)
-        {
-            j += 1;
-        }
-        let from = changed[i].saturating_sub(context);
-        let to = changed[j]
-            .saturating_add(context)
-            .saturating_add(1)
-            .min(lines.len());
-        let part = &lines[from..to];
-        out.push(Hunk {
-            old_start: part[0].1,
-            new_start: part[0].2,
-            old_count: part.iter().filter(|l| l.0 != Edit::Insert).count(),
-            new_count: part.iter().filter(|l| l.0 != Edit::Delete).count(),
-            lines: part
-                .iter()
-                .map(|(edit, old, new)| Line {
-                    edit: *edit,
-                    index: if *edit == Edit::Insert { *new } else { *old },
-                })
-                .collect(),
-        });
-        i = j + 1;
-    }
-    out
+unsafe fn two_texts(g: *mut c_void, old: u64, new: u64, what: &str) -> Js<(Vec<u16>, Vec<u16>)> {
+    Ok((
+        units(g, old, &format!("{what}: the old text"))?,
+        units(g, new, &format!("{what}: the new text"))?,
+    ))
 }
 
 unsafe fn context_of(g: *mut c_void, bag: u64, what: &str) -> Js<usize> {
@@ -554,25 +349,178 @@ unsafe fn context_of(g: *mut c_void, bag: u64, what: &str) -> Js<usize> {
     count(g, given, &format!("{what}: context"))
 }
 
-unsafe fn two_texts(g: *mut c_void, old: u64, new: u64, what: &str) -> Js<(Vec<u16>, Vec<u16>)> {
-    Ok((
-        units(g, old, &format!("{what}: the old text"))?,
-        units(g, new, &format!("{what}: the new text"))?,
-    ))
+unsafe fn diff_options(g: *mut c_void, bag: u64, what: &str, algorithm: Algorithm) -> Js<Options> {
+    let pick = |name: &str, names: &[&str], default: usize| {
+        choice(
+            g,
+            option(g, bag, name),
+            names,
+            default,
+            &format!("{what}: {name}"),
+        )
+    };
+    let default = match algorithm {
+        Algorithm::Histogram => 0,
+        Algorithm::Myers => 1,
+        Algorithm::Patience => 2,
+    };
+    let algorithm = match pick("algorithm", &["histogram", "myers", "patience"], default)? {
+        1 => Algorithm::Myers,
+        2 => Algorithm::Patience,
+        _ => Algorithm::Histogram,
+    };
+    let whitespace = match pick(
+        "ignoreWhitespace",
+        &["none", "trailing", "amount", "all"],
+        0,
+    )? {
+        1 => Whitespace::Trailing,
+        2 => Whitespace::Amount,
+        3 => Whitespace::All,
+        _ => Whitespace::None,
+    };
+    let inline = match pick("inline", &["none", "words", "chars"], 0)? {
+        1 => Inline::Words,
+        2 => Inline::Chars,
+        _ => Inline::None,
+    };
+    Ok(Options {
+        algorithm,
+        whitespace,
+        ignore_case: flag(g, bag, "ignoreCase"),
+        ignore_line_endings: flag(g, bag, "ignoreLineEndings"),
+        context: context_of(g, bag, what)?,
+        inline,
+    })
 }
 
+/// `oldName` and `newName`: both or neither.
+unsafe fn names_of(g: *mut c_void, bag: u64, what: &str) -> Js<Option<(Vec<u16>, Vec<u16>)>> {
+    let (old_name, new_name) = (option(g, bag, "oldName"), option(g, bag, "newName"));
+    if old_name == UNDEF && new_name == UNDEF {
+        return Ok(None);
+    }
+    Ok(Some((
+        units(g, old_name, &format!("{what}: oldName"))?,
+        units(g, new_name, &format!("{what}: newName"))?,
+    )))
+}
+
+unsafe fn number_at(g: *mut c_void, object: u64, name: &str, n: usize) {
+    define(g, object, name, enc_f64(n as f64), 0);
+}
+
+unsafe fn changes_out(g: *mut c_void, changes: &[diff::LineChange]) -> u64 {
+    let result = new_array(g);
+    for (i, c) in changes.iter().enumerate() {
+        let entry = new_object(g, UNDEF);
+        number_at(g, entry, "oldStart", c.change.old.0);
+        number_at(g, entry, "oldEnd", c.change.old.1);
+        number_at(g, entry, "newStart", c.change.new.0);
+        number_at(g, entry, "newEnd", c.change.new.1);
+        if let Some(inline) = &c.inline {
+            let parts = new_array(g);
+            for (k, [old_from, old_to, new_from, new_to]) in inline.iter().enumerate() {
+                let part = new_object(g, UNDEF);
+                number_at(g, part, "oldFrom", *old_from);
+                number_at(g, part, "oldTo", *old_to);
+                number_at(g, part, "newFrom", *new_from);
+                number_at(g, part, "newTo", *new_to);
+                set_i(g, parts, k as u32, part);
+            }
+            define(g, entry, "inline", parts, 0);
+        }
+        set_i(g, result, i as u32, entry);
+    }
+    result
+}
+
+std_fn!(fn diff_changes(g, args) {
+    let what = "TextDiff.changes";
+    let (old, new) = two_sources(g, args.arg(0).0, args.arg(1).0, what)?;
+    let o = diff_options(g, args.arg(2).0, what, Algorithm::Histogram)?;
+    let changes = diff::line_changes(&old.units(), &new.units(), &o);
+    Ok(changes_out(g, &changes))
+});
+
+type Finish = Box<dyn FnOnce() + Send>;
+
+static FINISHED: Mutex<Vec<Finish>> = Mutex::new(Vec::new());
+
+/// Runs `work` on the native-module task pool; `done` runs on the JS thread at the next pump,
+/// with `None` if the work panicked.
+fn on_worker<R: Send + 'static>(
+    g: *mut c_void,
+    work: impl FnOnce() -> R + Send + 'static,
+    done: impl FnOnce(*mut c_void, Option<R>) + Send + 'static,
+) {
+    let g = g as usize;
+    crate::embed::pool_run(Box::new(move || {
+        let result = std::panic::catch_unwind(AssertUnwindSafe(work)).ok();
+        FINISHED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Box::new(move || done(g as *mut c_void, result)));
+        sk_runtime::frames::wake();
+        crate::background::prompt();
+    }));
+}
+
+/// Settles the promises of the differences that finished since the last frame.
+pub(crate) fn pump() {
+    let finished = std::mem::take(&mut *FINISHED.lock().unwrap_or_else(|e| e.into_inner()));
+    for finish in finished {
+        finish();
+    }
+}
+
+/// The promise `run` returns, or one rejected with what it threw.
+unsafe fn promise_of(g: *mut c_void, run: impl FnOnce() -> Js<u64>) -> u64 {
+    match run() {
+        Ok(promise) => promise,
+        Err(Thrown) => {
+            let mut error = UNDEF;
+            glue::rjs_exception_pending(g, &mut error);
+            host::rejected_with(g, error)
+        }
+    }
+}
+
+std_fn!(fn diff_changes_async(g, args) {
+    let (old, new, bag) = (args.arg(0).0, args.arg(1).0, args.arg(2).0);
+    Ok(promise_of(g, || {
+        let what = "TextDiff.changesAsync";
+        let (old, new) = two_sources(g, old, new, what)?;
+        let o = diff_options(g, bag, what, Algorithm::Histogram)?;
+        let (promise, settler) = host::deferred(g);
+        on_worker(
+            g,
+            move || diff::line_changes(&old.units(), &new.units(), &o),
+            move |g, result| unsafe {
+                match result {
+                    Some(changes) => settler.resolve(g, changes_out(g, &changes)),
+                    None => settler.reject(g, host::error(g, "Error", &format!("{what}: the difference could not be computed"))),
+                }
+            },
+        );
+        Ok(promise)
+    }))
+});
+
 std_fn!(fn diff_lines(g, args) {
-    let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, "TextDiff.lines")?;
-    let context = context_of(g, args.arg(2).0, "TextDiff.lines")?;
+    let what = "TextDiff.lines";
+    let (old, new) = two_sources(g, args.arg(0).0, args.arg(1).0, what)?;
+    let o = diff_options(g, args.arg(2).0, what, Algorithm::Histogram)?;
+    let (old, new) = (old.units(), new.units());
     let (a, b) = (Pieces::lines(&old), Pieces::lines(&new));
     let result = new_array(g);
-    for (i, hunk) in hunks(&script_of(&a, &b), context).iter().enumerate() {
+    for (i, hunk) in diff::hunks(&diff::diff_pieces(&a, &b, &o), o.context).iter().enumerate() {
         let lines = new_array(g);
         let object = new_object(g, UNDEF);
-        define(g, object, "oldStart", enc_f64(hunk.old_start as f64 + 1.0), 0);
-        define(g, object, "oldLines", enc_f64(hunk.old_count as f64), 0);
-        define(g, object, "newStart", enc_f64(hunk.new_start as f64 + 1.0), 0);
-        define(g, object, "newLines", enc_f64(hunk.new_count as f64), 0);
+        number_at(g, object, "oldStart", hunk.old_start + 1);
+        number_at(g, object, "oldLines", hunk.old_count);
+        number_at(g, object, "newStart", hunk.new_start + 1);
+        number_at(g, object, "newLines", hunk.new_count);
         define(g, object, "lines", lines, 0);
         set_i(g, result, i as u32, object);
         for (j, line) in hunk.lines.iter().enumerate() {
@@ -586,13 +534,33 @@ std_fn!(fn diff_lines(g, args) {
     Ok(result)
 });
 
-std_fn!(fn diff_chars(g, args) {
-    let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, "TextDiff.chars")?;
-    let (a, b) = (Pieces::points(&old), Pieces::points(&new));
+/// The runs of `words()` and `chars()`: joining the `equal` and `insert` ones gives the new text.
+unsafe fn runs(g: *mut c_void, args: &HostArgs, what: &str, words: bool) -> Js<u64> {
+    let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, what)?;
+    let default = if words {
+        Algorithm::Histogram
+    } else {
+        Algorithm::Myers
+    };
+    let o = Options {
+        ignore_line_endings: false,
+        ..diff_options(g, args.arg(2).0, what, default)?
+    };
+    let (a, b) = if words {
+        (Pieces::words(&old), Pieces::words(&new))
+    } else {
+        (Pieces::points(&old), Pieces::points(&new))
+    };
+    let (ids, tokens) = diff::intern(&[&a, &b], &o);
+    let script = diff::diff(&ids[0], &ids[1], tokens, o.algorithm);
     let result = new_array(g);
     let (mut at_old, mut at_new) = (0, 0);
-    for (i, (edit, count)) in script_of(&a, &b).0.iter().enumerate() {
-        let text = if *edit == Edit::Insert { b.span(at_new, *count) } else { a.span(at_old, *count) };
+    for (i, (edit, count)) in script.0.iter().enumerate() {
+        let text = if *edit == Edit::Insert {
+            b.span(at_new, *count)
+        } else {
+            a.span(at_old, *count)
+        };
         let entry = new_object(g, UNDEF);
         define(g, entry, "op", js_string(g, edit.name()), 0);
         define(g, entry, "text", js_string16(g, text), 0);
@@ -605,72 +573,254 @@ std_fn!(fn diff_chars(g, args) {
         }
     }
     Ok(result)
+}
+
+std_fn!(fn diff_words(g, args) { runs(g, &args, "TextDiff.words", true) });
+std_fn!(fn diff_chars(g, args) { runs(g, &args, "TextDiff.chars", false) });
+
+std_fn!(fn diff_unified(g, args) {
+    let what = "TextDiff.unified";
+    let (old, new) = two_sources(g, args.arg(0).0, args.arg(1).0, what)?;
+    let bag = args.arg(2).0;
+    let o = diff_options(g, bag, what, Algorithm::Histogram)?;
+    let names = names_of(g, bag, what)?;
+    let file = patch::from_texts(&old.units(), &new.units(), &o, names);
+    Ok(js_string16(g, &patch::print(&[file])))
 });
 
-fn unified(a: &Pieces, b: &Pieces, context: usize, names: Option<(&[u16], &[u16])>) -> Vec<u16> {
-    let hunks = hunks(&script_of(a, b), context);
-    let mut out: Vec<u16> = Vec::new();
-    let ascii = |out: &mut Vec<u16>, text: &str| out.extend(text.encode_utf16());
-    if hunks.is_empty() {
-        return out;
-    }
-    if let Some((old, new)) = names {
-        ascii(&mut out, "--- ");
-        out.extend_from_slice(old);
-        ascii(&mut out, "\n+++ ");
-        out.extend_from_slice(new);
-        ascii(&mut out, "\n");
-    }
-    // An empty range is named by the line before it.
-    let range = |start: usize, count: usize| {
-        format!("{},{count}", if count == 0 { start } else { start + 1 })
-    };
-    for hunk in &hunks {
-        ascii(
-            &mut out,
-            &format!(
-                "@@ -{} +{} @@\n",
-                range(hunk.old_start, hunk.old_count),
-                range(hunk.new_start, hunk.new_count)
-            ),
-        );
-        for line in &hunk.lines {
-            let (mark, side) = match line.edit {
-                Edit::Equal => (" ", a),
-                Edit::Delete => ("-", a),
-                Edit::Insert => ("+", b),
-            };
-            ascii(&mut out, mark);
-            out.extend_from_slice(side.piece(line.index));
-            ascii(&mut out, "\n");
-            if side.unterminated(line.index) {
-                ascii(&mut out, "\\ No newline at end of file\n");
-            }
-        }
-    }
+unsafe fn pair(g: *mut c_void, (from, to): (usize, usize)) -> u64 {
+    let out = new_array(g);
+    set_i(g, out, 0, enc_f64(from as f64));
+    set_i(g, out, 1, enc_f64(to as f64));
     out
 }
 
-std_fn!(fn diff_unified(g, args) {
-    let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, "TextDiff.unified")?;
-    let bag = args.arg(2).0;
-    let context = context_of(g, bag, "TextDiff.unified")?;
-    let (old_name, new_name) = (option(g, bag, "oldName"), option(g, bag, "newName"));
-    let names = if old_name == UNDEF && new_name == UNDEF {
-        None
-    } else {
-        Some((
-            units(g, old_name, "TextDiff.unified: oldName")?,
-            units(g, new_name, "TextDiff.unified: newName")?,
-        ))
+std_fn!(fn diff_merge(g, args) {
+    let what = "TextDiff.merge";
+    let base = units(g, args.arg(0).0, &format!("{what}: the base text"))?;
+    let ours = units(g, args.arg(1).0, &format!("{what}: our text"))?;
+    let theirs = units(g, args.arg(2).0, &format!("{what}: their text"))?;
+    let bag = args.arg(3).0;
+    let style = match choice(g, option(g, bag, "style"), &["merge", "diff3", "zdiff3"], 0, &format!("{what}: style"))? {
+        1 => merge::Style::Diff3,
+        2 => merge::Style::Zdiff3,
+        _ => merge::Style::Merge,
     };
-    let text = unified(
-        &Pieces::lines(&old),
-        &Pieces::lines(&new),
-        context,
-        names.as_ref().map(|(o, n)| (o.as_slice(), n.as_slice())),
-    );
-    Ok(js_string16(g, &text))
+    let given = option(g, bag, "labels");
+    let labels: Vec<Vec<u16>> = if given == UNDEF {
+        ["base", "ours", "theirs"].iter().map(|l| l.encode_utf16().collect()).collect()
+    } else {
+        let what = format!("{what}: labels");
+        if list(g, given, &what)? != 3 {
+            return type_error(g, &format!("{what} must be three strings: base, ours and theirs"));
+        }
+        let mut labels = Vec::with_capacity(3);
+        for i in 0..3 {
+            let label = units(g, get_i(g, given, i), &format!("{what}: label {i}"))?;
+            if label.iter().any(|u| *u == NEWLINE || *u == RETURN) {
+                return type_error(g, &format!("{what}: label {i} has a line break, which would break the markers"));
+            }
+            labels.push(label);
+        }
+        labels
+    };
+    let merged = merge::merge(&base, &ours, &theirs, style, [&labels[0], &labels[1], &labels[2]]);
+    let result = new_object(g, UNDEF);
+    define(g, result, "text", js_string16(g, &merged.text), 0);
+    let conflicts = new_array(g);
+    for (i, c) in merged.conflicts.iter().enumerate() {
+        let entry = new_object(g, UNDEF);
+        define(g, entry, "base", pair(g, c.base), 0);
+        define(g, entry, "ours", pair(g, c.ours), 0);
+        define(g, entry, "theirs", pair(g, c.theirs), 0);
+        number_at(g, entry, "at", c.at);
+        set_i(g, conflicts, i as u32, entry);
+    }
+    define(g, result, "conflicts", conflicts, 0);
+    Ok(result)
+});
+
+struct PatchState {
+    files: Vec<PatchFile>,
+}
+
+host_state!(patch_state, patch_new, PatchState, PATCH, "Patch");
+
+const FILES: &str = "files";
+
+std_fn!(fn patch_parse(g, args) {
+    let text = units(g, args.arg(0).0, "Patch.parse: the text")?;
+    match patch::parse(&text) {
+        Ok(files) => Ok(patch_new(g, PatchState { files })),
+        Err(error) => syntax_error(g, &format!("Patch.parse: {error}")),
+    }
+});
+
+std_fn!(fn patch_from(g, args) {
+    let what = "Patch.from";
+    let (old, new) = two_sources(g, args.arg(0).0, args.arg(1).0, what)?;
+    let bag = args.arg(2).0;
+    let o = diff_options(g, bag, what, Algorithm::Histogram)?;
+    let names = names_of(g, bag, what)?;
+    let file = patch::from_texts(&old.units(), &new.units(), &o, names);
+    Ok(patch_new(g, PatchState { files: vec![file] }))
+});
+
+unsafe fn path_out(g: *mut c_void, path: &Option<String>) -> u64 {
+    path.as_deref().map_or(NULL, |p| js_string(g, p))
+}
+
+unsafe fn files_out(g: *mut c_void, files: &[PatchFile]) -> u64 {
+    let result = new_array(g);
+    for (i, f) in files.iter().enumerate() {
+        let file = new_object(g, UNDEF);
+        define(g, file, "oldPath", path_out(g, &f.old_path), 0);
+        define(g, file, "newPath", path_out(g, &f.new_path), 0);
+        define(g, file, "status", js_string(g, f.status.name()), 0);
+        if let Some(mode) = f.old_mode {
+            number_at(g, file, "oldMode", mode as usize);
+        }
+        if let Some(mode) = f.new_mode {
+            number_at(g, file, "newMode", mode as usize);
+        }
+        define(g, file, "binary", enc_bool(f.binary.is_some()), 0);
+        let hunks = new_array(g);
+        for (h, hunk) in f.hunks.iter().enumerate() {
+            let object = new_object(g, UNDEF);
+            number_at(g, object, "oldStart", hunk.old_start);
+            number_at(g, object, "oldLines", hunk.old_count);
+            number_at(g, object, "newStart", hunk.new_start);
+            number_at(g, object, "newLines", hunk.new_count);
+            if !hunk.section.is_empty() {
+                define(g, object, "section", js_string16(g, &hunk.section), 0);
+            }
+            let lines = new_array(g);
+            for (k, line) in hunk.lines.iter().enumerate() {
+                let entry = new_object(g, UNDEF);
+                define(g, entry, "op", js_string(g, line.edit.name()), 0);
+                define(g, entry, "text", js_string16(g, &line.text), 0);
+                if line.no_newline {
+                    define(g, entry, "noNewline", enc_bool(true), 0);
+                }
+                set_i(g, lines, k as u32, entry);
+            }
+            define(g, object, "lines", lines, 0);
+            set_i(g, hunks, h as u32, object);
+        }
+        define(g, file, "hunks", hunks, 0);
+        set_i(g, result, i as u32, file);
+    }
+    result
+}
+
+std_fn!(fn patch_files(g, args) {
+    let this = args.this().0;
+    let files = &patch_state(g, this)?.files;
+    let cached = slot_get(g, this, FILES);
+    if cached != UNDEF {
+        return Ok(cached);
+    }
+    let out = files_out(g, files);
+    slot_set(g, this, FILES, out);
+    Ok(out)
+});
+
+std_fn!(fn patch_apply(g, args) {
+    let what = "Patch.apply";
+    let text = units(g, args.arg(0).0, &format!("{what}: the text"))?;
+    let bag = args.arg(1).0;
+    let index = match option(g, bag, "file") {
+        UNDEF => 0,
+        v => count(g, v, &format!("{what}: file"))?,
+    };
+    let fuzz = match option(g, bag, "fuzz") {
+        UNDEF => 0,
+        v => count(g, v, &format!("{what}: fuzz"))?,
+    };
+    let reverse = flag(g, bag, "reverse");
+    let files = &patch_state(g, args.this().0)?.files;
+    let Some(file) = files.get(index) else {
+        return range_error(g, &format!("{what}: there is no file {index}; the patch has {}", files.len()));
+    };
+    let reversed;
+    let file = if reverse {
+        reversed = patch::reverse(file);
+        &reversed
+    } else {
+        file
+    };
+    let applied = match patch::apply(file, &text, fuzz) {
+        Ok(applied) => applied,
+        Err(error) => return type_error(g, &format!("{what}: {error}")),
+    };
+    let result = new_object(g, UNDEF);
+    define(g, result, "text", js_string16(g, &applied.text), 0);
+    let rejected = new_array(g);
+    for (i, h) in applied.rejected.iter().enumerate() {
+        set_i(g, rejected, i as u32, enc_f64(*h as f64));
+    }
+    define(g, result, "rejected", rejected, 0);
+    Ok(result)
+});
+
+std_fn!(fn patch_select(g, args) {
+    let what = "Patch.select";
+    let given = args.arg(0).0;
+    let n = list(g, given, &format!("{what}: the picks"))?;
+    let mut picks: BTreeMap<usize, Pick> = BTreeMap::new();
+    let mut wanted = Vec::new();
+    for i in 0..n {
+        let pick = get_i(g, given, i as u32);
+        if !is_cell(pick) {
+            return type_error(g, &format!("{what}: pick {i} must be an object"));
+        }
+        let file = count(g, get(g, pick, "file"), &format!("{what}: pick {i}: file"))?;
+        let (hunks, lines) = (get(g, pick, "hunks"), get(g, pick, "lines"));
+        let mut entry = Pick { whole: hunks == UNDEF && lines == UNDEF, ..Pick::default() };
+        if hunks != UNDEF {
+            for k in 0..list(g, hunks, &format!("{what}: pick {i}: hunks"))? {
+                entry.hunks.insert(count(g, get_i(g, hunks, k as u32), &format!("{what}: pick {i}: hunk {k}"))?);
+            }
+        }
+        if lines != UNDEF {
+            for k in 0..list(g, lines, &format!("{what}: pick {i}: lines"))? {
+                let line = get_i(g, lines, k as u32);
+                let name = format!("{what}: pick {i}: line {k}");
+                if list(g, line, &name)? != 2 {
+                    return type_error(g, &format!("{name} must be [hunk, line]"));
+                }
+                entry.lines.insert((count(g, get_i(g, line, 0), &name)?, count(g, get_i(g, line, 1), &name)?));
+            }
+        }
+        wanted.push((i, file, entry));
+    }
+    let files = &patch_state(g, args.this().0)?.files;
+    for (i, file, entry) in wanted {
+        let Some(f) = files.get(file) else {
+            return range_error(g, &format!("{what}: pick {i}: there is no file {file}; the patch has {}", files.len()));
+        };
+        if let Some(h) = entry.hunks.iter().find(|h| **h >= f.hunks.len()) {
+            return range_error(g, &format!("{what}: pick {i}: file {file} has no hunk {h}"));
+        }
+        if let Some((h, l)) = entry.lines.iter().find(|(h, l)| f.hunks.get(*h).is_none_or(|hunk| *l >= hunk.lines.len())) {
+            return range_error(g, &format!("{what}: pick {i}: file {file} has no line {l} in hunk {h}"));
+        }
+        let merged = picks.entry(file).or_default();
+        merged.whole |= entry.whole;
+        merged.hunks.extend(entry.hunks);
+        merged.lines.extend(entry.lines);
+    }
+    let selected = patch::select(files, &picks);
+    Ok(patch_new(g, PatchState { files: selected }))
+});
+
+std_fn!(fn patch_reverse(g, args) {
+    let files = patch_state(g, args.this().0)?.files.iter().map(patch::reverse).collect();
+    Ok(patch_new(g, PatchState { files }))
+});
+
+std_fn!(fn patch_to_string(g, args) {
+    Ok(js_string16(g, &patch::print(&patch_state(g, args.this().0)?.files)))
 });
 
 /// One character for one character, so that a position in the folded text is a position in the original.
@@ -1163,13 +1313,38 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
             g,
             "TextDiff",
             &[
+                ("changes", 2, diff_changes),
+                ("changesAsync", 2, diff_changes_async),
                 ("lines", 2, diff_lines),
+                ("words", 2, diff_words),
                 ("chars", 2, diff_chars),
                 ("unified", 2, diff_unified),
+                ("merge", 3, diff_merge),
             ],
         ),
         0,
     );
+
+    let patch = support::class(
+        g,
+        &ClassSpec {
+            name: "Patch",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[
+                ("apply", 1, patch_apply),
+                ("select", 1, patch_select),
+                ("reverse", 0, patch_reverse),
+                ("toString", 0, patch_to_string),
+            ],
+            getters: &[("files", patch_files)],
+            accessors: &[],
+        },
+    );
+    static_fn(g, patch.ctor, "parse", 1, patch_parse);
+    static_fn(g, patch.ctor, "from", 2, patch_from);
+    define(g, module, "Patch", patch.ctor, 0);
 
     let search = support::class(
         g,
@@ -1204,61 +1379,9 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
-
-    fn script(a: &[u32], b: &[u32]) -> Vec<(Edit, usize)> {
-        let mut script = Script::default();
-        shortest_script(a, b, &mut script);
-        script.0
-    }
-
-    fn longest_common(a: &[u32], b: &[u32]) -> usize {
-        let mut table = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-        for i in 0..a.len() {
-            for j in 0..b.len() {
-                table[i + 1][j + 1] = if a[i] == b[j] {
-                    table[i][j] + 1
-                } else {
-                    table[i][j + 1].max(table[i + 1][j])
-                };
-            }
-        }
-        table[a.len()][b.len()]
-    }
-
-    #[test]
-    fn a_script_turns_the_old_into_the_new_and_is_the_shortest() {
-        let mut seed = 0x2545_f491_4f6c_dd1du64;
-        let mut next = |below: u64| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            seed % below
-        };
-        for round in 0..4000 {
-            let letters = 2 + round % 5;
-            let a: Vec<u32> = (0..next(40)).map(|_| next(letters) as u32).collect();
-            let b: Vec<u32> = (0..next(40)).map(|_| next(letters) as u32).collect();
-            let (mut i, mut j, mut equal) = (0, 0, 0);
-            let mut rebuilt = Vec::new();
-            for (edit, count) in script(&a, &b) {
-                match edit {
-                    Edit::Equal => {
-                        assert_eq!(a[i..i + count], b[j..j + count]);
-                        rebuilt.extend_from_slice(&a[i..i + count]);
-                        (i, j, equal) = (i + count, j + count, equal + count);
-                    }
-                    Edit::Delete => i += count,
-                    Edit::Insert => {
-                        rebuilt.extend_from_slice(&b[j..j + count]);
-                        j += count;
-                    }
-                }
-            }
-            assert_eq!((i, rebuilt.as_slice()), (a.len(), b.as_slice()));
-            assert_eq!(equal, longest_common(&a, &b), "{a:?} -> {b:?}");
-        }
-    }
 
     fn units(text: &str) -> Vec<u16> {
         text.encode_utf16().collect()
@@ -1268,18 +1391,94 @@ mod tests {
     fn a_unified_difference_is_what_diff_prints() {
         let old = units("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n");
         let new = units("one\n2\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven");
-        let text = unified(&Pieces::lines(&old), &Pieces::lines(&new), 1, None);
+        let unified = |old: &[u16], new: &[u16], context: usize| {
+            let o = Options {
+                context,
+                ..Options::default()
+            };
+            String::from_utf16(&patch::print(&[patch::from_texts(old, new, &o, None)])).unwrap()
+        };
         assert_eq!(
-            String::from_utf16(&text).unwrap(),
-            "@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n@@ -10,1 +10,2 @@\n ten\n+eleven\n\\ No newline at end of file\n"
+            unified(&old, &new, 1),
+            "@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n@@ -10 +10,2 @@\n ten\n+eleven\n\\ No newline at end of file\n"
         );
-        let empty = unified(&Pieces::lines(&old), &Pieces::lines(&old), 3, None);
-        assert!(empty.is_empty());
-        let created = unified(&Pieces::lines(&[]), &Pieces::lines(&units("a\n")), 3, None);
-        assert_eq!(
-            String::from_utf16(&created).unwrap(),
-            "@@ -0,0 +1,1 @@\n+a\n"
-        );
+        assert!(unified(&old, &old, 3).is_empty());
+        assert_eq!(unified(&[], &units("a\n"), 3), "@@ -0,0 +1 @@\n+a\n");
+    }
+
+    #[test]
+    fn changes_async_runs_off_the_js_thread_and_patches_work_from_js() {
+        sk_runtime::testing::on_js_thread(move || {
+            sk_runtime::JsRuntime::with(|rt| {
+                super::super::install(rt);
+                let context = rt.ctx();
+                let eval = |src: &str| -> String {
+                    let v = context.eval(src).unwrap();
+                    context.read_string(v).unwrap()
+                };
+                eval(
+                    "(() => {
+                       const { TextDiff } = __sk_std.text;
+                       globalThis.__old = Array.from({ length: 20000 }, (_, i) => 'line ' + i).join('\\n');
+                       globalThis.__new = __old.replace('line 500\\n', 'five hundred\\n');
+                       globalThis.__out = {};
+                       const bytes = Uint8Array.from(__new, (c) => c.charCodeAt(0));
+                       TextDiff.changesAsync(__old, bytes, { inline: 'words' })
+                         .then((c) => { __out.changes = c; }, (e) => { __out.failed = String(e); });
+                       TextDiff.changesAsync(__old, 1).then(() => {}, (e) => { __out.rejected = e.name; });
+                       return 'started';
+                     })()",
+                );
+                // Nothing runs on this thread while it waits, so the work finishing proves a worker did it.
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while FINISHED.lock().unwrap().is_empty() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the difference did not finish on a worker"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert_eq!(eval("String('changes' in __out)"), "false");
+                while eval("String('changes' in __out || 'failed' in __out)") != "true" {
+                    assert!(Instant::now() < deadline, "the promise did not settle");
+                    pump();
+                    context.drain_microtasks();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert_eq!(
+                    eval(
+                        "JSON.stringify([__out.rejected, __out.changes.map((c) => [c.oldStart, c.oldEnd, c.newStart, c.newEnd,
+                           c.inline.map((p) => __old.slice(p.oldFrom, p.oldTo) + '>' + __new.slice(p.newFrom, p.newTo))])])"
+                    ),
+                    r#"["TypeError",[[500,501,500,501,["line>five","500>hundred"]]]]"#
+                );
+                assert_eq!(
+                    eval(
+                        "(() => {
+                           const { Patch, TextDiff } = __sk_std.text;
+                           const p = Patch.from('a\\nb\\nc\\n', 'a\\nB\\nc\\nd\\n', { oldName: 'a/x', newName: 'b/x', context: 0 });
+                           const parsed = Patch.parse(p.toString());
+                           const merged = TextDiff.merge('1\\n2\\n', '1\\nours\\n', '1\\ntheirs\\n', { labels: ['B', 'O', 'T'] });
+                           let illegal = 'ok';
+                           try { new Patch(); } catch (e) { illegal = e.name; }
+                           return JSON.stringify([
+                             p.toString(),
+                             parsed.files[0].status,
+                             parsed.files === parsed.files,
+                             parsed.apply('x\\na\\nb\\nc\\n').text,
+                             parsed.reverse().apply('a\\nB\\nc\\nd\\n').text,
+                             parsed.select([{ file: 0, hunks: [1] }]).toString(),
+                             parsed.apply('a\\nq\\nc\\n').rejected,
+                             merged,
+                             TextDiff.words('one two', 'one three'),
+                             illegal,
+                           ]);
+                         })()"
+                    ),
+                    r#"["--- a/x\n+++ b/x\n@@ -2 +2 @@\n-b\n+B\n@@ -3,0 +4 @@\n+d\n","modified",true,"x\na\nB\nc\nd\n","a\nb\nc\n","--- a/x\n+++ b/x\n@@ -3,0 +4 @@\n+d\n",[0],{"text":"1\n<<<<<<< O\nours\n=======\ntheirs\n>>>>>>> T\n","conflicts":[{"base":[1,2],"ours":[1,2],"theirs":[1,2],"at":1}]},[{"op":"equal","text":"one "},{"op":"delete","text":"two"},{"op":"insert","text":"three"}],"TypeError"]"#
+                );
+            })
+        });
     }
 
     fn glob(pattern: &str) -> Glob {

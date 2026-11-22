@@ -25,12 +25,13 @@ mod units;
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
 
-/// Settles the promises of nonblocking FFI calls, image work and child processes that finished on
-/// other threads.
+/// Settles the promises of nonblocking FFI calls, image work, child processes and differences
+/// that finished on other threads.
 pub(crate) fn pump() {
     ffi::pump();
     image::pump();
     process::pump();
+    text::pump();
 }
 
 /// Kills every child process `skathi:process` started.
