@@ -105,6 +105,8 @@ function configureVue(plugin: Plugin, appRoot: string): void {
       ...options.template,
       transformAssetUrls: templateAssets(options.template?.transformAssetUrls),
       compilerOptions: {
+        // A kept comment makes a comment-first template a fragment root, which loses the parent's scope id.
+        comments: false,
         ...original,
         hoistStatic: false,
         isCustomElement: (tag) => tag.startsWith("sk-") || tag === "lottie" || !!original?.isCustomElement?.(tag),
