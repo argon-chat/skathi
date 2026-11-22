@@ -110,14 +110,27 @@ describe("vue features", () => {
   test(
     "<TransitionGroup> plays enter and leave on list items",
     async () => {
+      // Recorded in the page: a slow machine can finish a transition between two polls from here.
+      await js(`(() => {
+        const seen = (globalThis.__tg = new Set());
+        const note = () => {
+          for (const e of document.querySelectorAll(".tg-item")) seen.add(e.textContent + ":" + e.className);
+        };
+        new MutationObserver(note).observe(document.querySelector("#tg"), {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ["class"],
+        });
+      })()`);
       await app.locator("#tg-add").click();
       await app.locator("#tg-remove").click();
       const items = () =>
         typed<string>(
           `Array.from(document.querySelectorAll(".tg-item"), (e) => e.textContent + ":" + e.className).join(" ")`,
         );
-      bunExpect(await until(`document.querySelector(".tg-item").classList.contains("list-leave-active")`)).toBe(true);
-      bunExpect(await items()).toContain("4:tg-item list-enter");
+      bunExpect(await until(`[...__tg].some((s) => s.startsWith("1:") && s.includes("list-leave-active"))`)).toBe(true);
+      bunExpect(await until(`[...__tg].some((s) => s.startsWith("4:tg-item list-enter"))`)).toBe(true);
       bunExpect(await until(`document.querySelectorAll(".tg-item").length === 3`)).toBe(true);
       bunExpect(await until(`!document.querySelector("#tg .list-enter-active")`)).toBe(true);
       bunExpect(await items()).toBe("2:tg-item 3:tg-item 4:tg-item");
