@@ -5373,6 +5373,7 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "redjs",
+ "regex",
  "self_cell",
  "serde",
  "serde_json",

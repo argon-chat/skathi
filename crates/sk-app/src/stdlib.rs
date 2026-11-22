@@ -14,6 +14,7 @@ mod ffi;
 mod image;
 pub(crate) mod memory;
 mod os;
+mod process;
 mod runtime;
 mod support;
 mod text;
@@ -24,10 +25,18 @@ mod units;
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
 
-/// Settles the promises of nonblocking FFI calls and image work that finished on other threads.
+/// Settles the promises of nonblocking FFI calls, image work and child processes that finished on
+/// other threads.
 pub(crate) fn pump() {
     ffi::pump();
     image::pump();
+    process::pump();
+}
+
+/// Kills every child process `skathi:process` started.
+#[cfg_attr(not(feature = "process"), allow(dead_code))]
+pub(crate) fn end_processes() {
+    process::end_all();
 }
 
 unsafe fn frozen(g: *mut c_void, object: u64) -> u64 {
@@ -49,6 +58,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         ffi::install(g, std);
         image::install(g, std);
         memory::install(g, std);
+        process::install(g, std);
         text::install(g, std);
         time::install(g, std);
         units::install(g, std);

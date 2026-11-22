@@ -1136,6 +1136,11 @@ fn run_app() {
             std::future::ready(())
         }));
         close_iframes_on_quit(cx);
+        #[cfg(feature = "process")]
+        std::mem::forget(cx.on_app_quit(|_| {
+            shutdown::step("process", stdlib::end_processes);
+            std::future::ready(())
+        }));
         // Before any text field's interceptor, so Escape leaves a pointer lock ahead of them all.
         std::mem::forget(cx.intercept_keystrokes(sk_tree::pointer_lock_intercept_escape));
         #[cfg(sk_devtools)]

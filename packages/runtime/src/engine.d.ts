@@ -463,6 +463,21 @@ interface ReadableStream<R = unknown> extends AsyncIterable<R> {
   cancel(reason?: unknown): Promise<void>;
   readonly locked: boolean;
 }
+interface WritableStreamDefaultWriter<W = unknown> {
+  write(chunk: W): Promise<void>;
+  close(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+  releaseLock(): void;
+  readonly ready: Promise<void>;
+  readonly closed: Promise<void>;
+  readonly desiredSize: number | null;
+}
+interface WritableStream<W = unknown> {
+  getWriter(): WritableStreamDefaultWriter<W>;
+  close(): Promise<void>;
+  abort(reason?: unknown): Promise<void>;
+  readonly locked: boolean;
+}
 interface Blob {
   readonly size: number;
   readonly type: string;

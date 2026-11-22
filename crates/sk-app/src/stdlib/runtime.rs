@@ -28,6 +28,7 @@ const FEATURES: &[(&str, bool)] = &[
     ("hotkeys", cfg!(feature = "hotkeys")),
     ("webview", cfg!(feature = "webview")),
     ("battery", cfg!(feature = "battery")),
+    ("process", cfg!(feature = "process")),
     ("devtools", cfg!(sk_devtools)),
     ("native-aot", cfg!(feature = "native-aot")),
     ("no-jit", cfg!(feature = "no-jit")),

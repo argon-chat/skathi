@@ -167,6 +167,7 @@ pub use sk_app::embed::{
 pub use sk_app::embed::{specta, Type};
 pub use sk_app::embed::{Composition, Layer, LayerHost, LayerPlacement};
 pub use sk_app::embed::{MetalDevice, MetalEvent, SurfaceDisplay, SurfaceFormat};
+pub use sk_app::embed::{ProcessArg, ProcessArgs};
 #[cfg(feature = "hotkeys")]
 pub use sk_app::hotkeys;
 pub use sk_app::{js, run_exe, tray, HostAllocator};

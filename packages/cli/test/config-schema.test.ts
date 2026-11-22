@@ -10,6 +10,7 @@ import {
   MACOS_KEYS,
   PACK_KEYS,
   PERMISSION_KEYS,
+  PROCESS_PERMISSION_KEYS,
   TOP_LEVEL,
   WINDOWS_KEYS,
 } from "../cli/config";
@@ -54,6 +55,7 @@ describe("the schema and the loader know the same keys", () => {
     const permissions = schema.properties?.permissions;
     expect(props(permissions)).toEqual(sorted(PERMISSION_KEYS));
     expect(props(permissions?.properties?.ffi?.items)).toEqual(sorted(FFI_PERMISSION_KEYS));
+    expect(props(permissions?.properties?.process?.items)).toEqual(sorted(PROCESS_PERMISSION_KEYS));
     for (const s of [windows, macos, pack]) {
       expect(s?.additionalProperties).toBe(false);
       expect(Object.keys(s?.patternProperties ?? {})).toEqual(["^\\$"]);

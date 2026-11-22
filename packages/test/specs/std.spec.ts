@@ -547,6 +547,51 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:process starts a listed program without a shell, streams its output and refuses the rest",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startProcess(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 30_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.processResult)"));
+      }
+      const p = JSON.parse(raw);
+      expect(p.failed).toBeUndefined();
+      const r = p.result;
+      expect(r.same).toBe(true);
+      expect(r.exit).toEqual([3, null, "to stderr"]);
+      expect(r.roundTrip).toEqual({ length: 4 * 1024 * 1024, sum: 4 * 1024 * 1024 });
+      expect(r.killed).toBeNull();
+      expect([r.unlisted, r.path, r.relative]).toEqual(["NotAllowedError", "NotAllowedError", "NotAllowedError"]);
+    },
+    T,
+  );
+
+  test(
+    "a child of skathi:process does not outlive the app",
+    async () => {
+      const app = await start();
+      const pid = Number(await app.eval("__SK_TEST_STD__.lingering()"));
+      started.push(pid);
+      const alive = () => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      expect(alive()).toBe(true);
+      void app.eval("__SK_TEST_STD__.app.quit(); 1").catch(() => {});
+      expect(await ended(app)).toBe(0);
+      const deadline = Date.now() + 5_000;
+      while (alive() && Date.now() < deadline) await Bun.sleep(50);
+      expect(alive()).toBe(false);
+    },
+    T,
+  );
+
+  test(
     "app.quit({ exitCode }) fires pagehide and ends the process with that code",
     async () => {
       const app = await start();

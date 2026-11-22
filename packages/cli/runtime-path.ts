@@ -47,6 +47,7 @@ export const STD_MODULES: readonly string[] = [
   "network",
   "numeric",
   "os",
+  "process",
   "runtime",
   "text",
   "time",

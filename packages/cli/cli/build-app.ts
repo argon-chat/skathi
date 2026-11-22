@@ -17,7 +17,7 @@
 // writes nothing beside the exe: the ICU data and every asset go in the SKPK, the images into its own sections.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parseCheckConfig } from "../check/config";
 import { cssDiagnostics, readStyleSources } from "../check/css";
@@ -28,7 +28,7 @@ import { removedFeatures } from "../aot/uses";
 import { requireAppDependencies } from "./app-deps";
 import { aotCheck, aotPlatformProblem, buildNative, hostAot, type NativeBuild } from "./aot-build";
 import { collectAssets, type AssetFile } from "./assets";
-import { appLibraries, copyAppLibraries } from "./ffi-libs";
+import { appLibraries, appPrograms, copyAppLibraries } from "./ffi-libs";
 import {
   ConfigError,
   loadAppConfig,
@@ -407,6 +407,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
     );
   }
   const libraries = appLibraries(config, "macos");
+  const programs = appPrograms(config, "macos");
   const info = macInfoFor(config, !!icon);
   const noJit = host.info.features.includes("no-jit");
   const entitlementsPath = join(work, "entitlements.plist");
@@ -416,9 +417,9 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
   const onMac = process.platform === "darwin";
   const codesign = onMac ? Bun.which("codesign") : null;
   const plan = signPlan({ want: options.sign ?? m.sign, app: out, entitlements: entitlementsPath, codesign, onMac });
-  if (libraries.length && !onMac) {
+  if ((libraries.length || programs.length) && !onMac) {
     warnings.push(
-      `"permissions.ffi": ${libraries.join(", ")} went into Contents/Frameworks unsigned — on the Mac, codesign each of them before the bundle`,
+      `"permissions": ${[...libraries, ...programs].join(", ")} went into Contents/Frameworks unsigned — on the Mac, codesign each of them before the bundle`,
     );
   }
 
@@ -445,7 +446,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
         );
       }
       // Signed with the app's identity, so the hardened runtime's library validation accepts them.
-      for (const file of libraries) {
+      for (const file of [...libraries, ...programs]) {
         const relativePath = join("Contents", "Frameworks", file);
         writeSignedImage(
           join(app, relativePath),
@@ -456,6 +457,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
           plan.identity,
           log,
         );
+        if (programs.includes(file)) chmodSync(join(app, relativePath), 0o755);
       }
       if (codesign && plan.identity) signBundle(codesign, app, plan.identity, entitlementsPath, log);
     },

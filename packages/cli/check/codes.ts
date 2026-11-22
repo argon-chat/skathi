@@ -386,20 +386,20 @@ const CODES: CodeInfo[] = [
   {
     code: "SK6001",
     severity: "error",
-    title: "`skathi:ffi` is imported, but the app allows no library",
+    title: "`skathi:ffi` or `skathi:process` is imported, but the app allows nothing for it",
     explanation:
-      'A library is loaded by a name from "permissions.ffi" in sk.config.json. The list is missing or empty, so every `dlopen()` in this file throws NotAllowedError. `check.allow` cannot hide this error.',
+      'A library is loaded by a name from "permissions.ffi" in sk.config.json, and a program is started by a name from "permissions.process". The list for the imported module is missing or empty, so every `dlopen()` or `Process.spawn()` in this file throws NotAllowedError. `check.allow` cannot hide this error.',
     example:
       'import { dlopen } from "skathi:ffi";\n\nconst user32 = dlopen("user32", { GetSystemMetrics: { args: ["i32"], returns: "i32" } });',
-    fix: 'List the libraries the app loads: "permissions": { "ffi": [{ "name": "user32", "path": "$SYSTEM/user32" }] }.',
+    fix: 'List what the app loads or starts: "permissions": { "ffi": [{ "name": "user32", "path": "$SYSTEM/user32" }] }, or "permissions": { "process": [{ "name": "ffmpeg", "path": "$APP/bin/ffmpeg", "args": true }] }.',
     firm: true,
   },
   {
     code: "SK6002",
     severity: "error",
-    title: "`dlopen()` names a library the app does not allow",
+    title: "`dlopen()` or `Process.spawn()` names something the app does not allow",
     explanation:
-      'The name given to `dlopen()` is not a path: it must be the "name" of an entry in "permissions.ffi" of sk.config.json. This one is not there, so the call throws NotAllowedError. `check.allow` cannot hide this error.',
+      'The name given to `dlopen()`, `Process.spawn()` or `Process.exec()` is not a path: it must be the "name" of an entry in "permissions.ffi" or "permissions.process" of sk.config.json. This one is not there, so the call throws NotAllowedError. An absolute path given to `Process.spawn()` is not checked here: the host compares it with the list when the app runs. `check.allow` cannot hide this error.',
     example:
       '// sk.config.json lists "sqlite3" only\nconst curl = dlopen("curl", { curl_version: { returns: "cstring" } });',
     fix: 'Add an entry for the name ({ "name": "curl", "path": "$APP/lib/curl" }), or use a name that is listed.',
@@ -408,20 +408,29 @@ const CODES: CodeInfo[] = [
   {
     code: "SK6003",
     severity: "warning",
-    title: "the library name given to `dlopen()` is not a literal",
+    title: "the name given to `dlopen()` or `Process.spawn()` is not a literal",
     explanation:
-      'The check compares the name with "permissions.ffi". A name computed at run time cannot be compared, so a name that is not in the list shows up only as a NotAllowedError while the app runs. A constant, or a value whose type is a union of string literals, is checked.',
+      'The check compares the name with "permissions.ffi" or "permissions.process". A name computed at run time cannot be compared, so a name that is not in the list shows up only as a NotAllowedError while the app runs. A constant, or a value whose type is a union of string literals, is checked.',
     example: 'const library = dlopen(settings.codec, { decode: { args: ["buffer", "usize"], returns: "i32" } });',
     fix: 'Pass the name as a string literal, or type it as a union of the listed names ("codec" | "codec-fast").',
   },
   {
+    code: "SK6004",
+    severity: "warning",
+    title: 'a "permissions.process" entry finds its program on PATH or takes any arguments',
+    explanation:
+      'An entry with "$PATH/<name>" starts whichever program of that name comes first on PATH when the app runs, so whoever can change PATH or write to a folder on it chooses the program. An entry with "args": true lets the app\'s code pass any arguments, so a program meant for one job can be made to do another (`git -c core.sshCommand=…` runs a command of its own). The warning is reported where `skathi:process` is imported.',
+    example: '"permissions": { "process": [{ "name": "git", "path": "$PATH/git", "args": true }] }',
+    fix: 'Ship the program in the app ("$APP/bin/tool") or give its absolute path, and list the arguments it may take: "args": ["status", { "pattern": "--porcelain(=v[12])?" }]. Allow SK6004 once the entry is what you mean.',
+  },
+  {
     code: "SK6005",
     severity: "warning",
-    title: "a dependency imports `skathi:ffi`",
+    title: "a dependency imports `skathi:ffi` or `skathi:process`",
     explanation:
-      "Code in node_modules loads native libraries and calls them inside the app's process, with the permissions the app's sk.config.json gives. It can load any library in the list, not only the one the package is for.",
+      "Code in node_modules loads native libraries and calls them inside the app's process, or starts programs, with the permissions the app's sk.config.json gives. It can use any entry in the list, not only the one the package is for.",
     example: 'node_modules/some-codec/index.js: import { dlopen } from "skathi:ffi";',
-    fix: "Read what the package loads and calls; allow SK6005 for the package once you trust it.",
+    fix: "Read what the package loads, calls or starts; allow SK6005 for the package once you trust it.",
   },
   {
     code: "SK7001",

@@ -44,6 +44,10 @@ declare module "skathi:os" {
   export * from "@skathi-native/runtime/std/os";
 }
 
+declare module "skathi:process" {
+  export * from "@skathi-native/runtime/std/process";
+}
+
 declare module "skathi:runtime" {
   export * from "@skathi-native/runtime/std/runtime";
 }

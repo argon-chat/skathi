@@ -67,6 +67,7 @@ test('"permissions.ffi" keeps the path of the platform and refuses one that leav
       { name: "crt", path: "$SYSTEM/msvcrt" },
     ],
     ffiAddress: false,
+    process: [],
   });
   expect(on("macos")?.ffi).toEqual([{ name: "db", path: "$APP/lib/db" }]);
   expect(loadAppConfig(app("ffi-none", {})).permissions).toBeUndefined();
@@ -81,7 +82,48 @@ test('"permissions.ffi" keeps the path of the platform and refuses one that leav
   ]) {
     expect(() => loadAppConfig(app("ffi-bad", { permissions: { ffi: [{ name: "db", path }] } }))).toThrow(ConfigError);
   }
-  expect(() => loadAppConfig(app("ffi-key", { permissions: { process: [] } }))).toThrow(ConfigError);
+  expect(() => loadAppConfig(app("ffi-key", { permissions: { files: [] } }))).toThrow(ConfigError);
+});
+
+test('"permissions.process" keeps the path of the platform and its argument rules, and refuses batch files and bad patterns', () => {
+  const process = [
+    {
+      name: "git",
+      path: { windows: "C:/Program Files/Git/bin/git.exe", linux: "/usr/bin/git" },
+      args: ["status", { pattern: "--porcelain" }],
+    },
+    { name: "tool", path: "$APP/bin/tool", args: true },
+    { name: "where", path: "$SYSTEM/where", args: false },
+  ];
+  const on = (platform: "windows" | "macos") =>
+    loadAppConfig(app(`process-${platform}`, { permissions: { process } }), { platform }).permissions?.process;
+  expect(on("windows")).toEqual([
+    { name: "git", path: "C:/Program Files/Git/bin/git.exe", args: ["status", { pattern: "--porcelain" }] },
+    { name: "tool", path: "$APP/bin/tool", args: true },
+    { name: "where", path: "$SYSTEM/where" },
+  ]);
+  expect(on("macos")?.map((e) => e.name)).toEqual(["tool", "where"]);
+  const bad = (entry: Record<string, unknown>, platform: "windows" | "linux" = "windows") =>
+    expect(() => loadAppConfig(app("process-bad", { permissions: { process: [entry] } }), { platform })).toThrow(
+      ConfigError,
+    );
+  for (const path of [
+    "bin/tool",
+    "$APP/../tool",
+    "$PATH/sub/tool",
+    "$SYSTEM/../cmd",
+    "$APP/run.bat",
+    "C:/x/run.cmd",
+    "//host/x.exe",
+  ]) {
+    bad({ name: "t", path });
+  }
+  bad({ name: "t", path: { linux: "C:/x" } }, "linux");
+  bad({ name: "t", path: "$APP/t", args: "any" });
+  bad({ name: "t", path: "$APP/t", args: [{ pattern: "(" }] });
+  bad({ name: "t", path: "$APP/t", args: [{ pattern: "(?=x)" }] });
+  bad({ name: "t", path: "$APP/t", args: [{ regex: "x" }] });
+  bad({ name: ".t", path: "$APP/t" });
 });
 
 test('"intl" is "full" unless the config says "invariant", and nothing else is accepted', () => {

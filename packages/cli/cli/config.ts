@@ -17,6 +17,8 @@
 //   "memory": "low"              the engine's allocator keeps no memory in reserve (default "default")
 //   "permissions": { "ffi": [{ "name": "sqlite3", "path": "$APP/lib/sqlite3" }] }
 //                                the libraries skathi:ffi may load; none without it
+//   "permissions": { "process": [{ "name": "git", "path": "$PATH/git", "args": ["status"] }] }
+//                                the programs skathi:process may start, and their arguments
 //   "windows": { exeName, icon, company, copyright, description, console }
 //   "macos": { bundleId, exeName, icon, category, minimumSystemVersion, copyright,
 //              microphoneUsageDescription, cameraUsageDescription, sign }
@@ -407,15 +409,147 @@ export interface FfiPermission {
   path: string;
 }
 
+/** The rule for one argument of a program: the string itself, or a pattern the whole argument matches. */
+export type ProcessArgRule = string | { pattern: string };
+
+/** A program `skathi:process` may start: the name `Process.spawn()` takes, where it is, and its arguments. */
+export interface ProcessPermission {
+  name: string;
+  path: string;
+  /** `true`: any; a list: exactly these, one rule per position; left out: none. */
+  args?: true | ProcessArgRule[];
+}
+
 export interface Permissions {
   ffi: FfiPermission[];
   /** Whether code may make a `NativePointer` from a bare address. */
   ffiAddress: boolean;
+  process: ProcessPermission[];
 }
 
-export const PERMISSION_KEYS: ReadonlySet<string> = new Set(["ffi", "ffiAddress"]);
+export const PERMISSION_KEYS: ReadonlySet<string> = new Set(["ffi", "ffiAddress", "process"]);
 export const FFI_PERMISSION_KEYS: ReadonlySet<string> = new Set(["name", "path"]);
+export const PROCESS_PERMISSION_KEYS: ReadonlySet<string> = new Set(["name", "path", "args"]);
 const FFI_PLATFORMS: ReadonlySet<string> = new Set(["windows", "macos", "linux"]);
+
+/** Lookaround and backreferences: JS has them, the host's matcher does not. */
+const UNSUPPORTED_PATTERN = /\(\?<?[=!]|\\[1-9]|\\k</;
+
+function processPath(value: string, where: string, os: Platform | null): string {
+  const named = (prefix: string) => {
+    const name = value.slice(prefix.length);
+    return /^[\w-][\w.-]*$/.test(name);
+  };
+  const absolute =
+    os === "windows"
+      ? /^[A-Za-z]:[\\/]/.test(value)
+      : os === null
+        ? /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("/")
+        : value.startsWith("/");
+  const inside = value.startsWith("$APP/") && ffiInside(value.slice(5));
+  if (!(
+    inside ||
+    (value.startsWith("$SYSTEM/") && named("$SYSTEM/")) ||
+    (value.startsWith("$PATH/") && named("$PATH/")) ||
+    (absolute && !/^[\\/]{2}/.test(value) && !/[\\/]\.\.([\\/]|$)/.test(value))
+  )) {
+    throw new ConfigError(
+      `${where} must be "$APP/<a path inside the app>", "$SYSTEM/<a program name>", "$PATH/<a program name>" or an absolute path, not ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+function ffiInside(rest: string): boolean {
+  const parts = rest.split("/");
+  return parts.length > 0 && parts.every((part) => part !== "" && part !== "." && part !== "..") && !/[\\:]/.test(rest);
+}
+
+function processArgs(value: unknown, where: string): true | ProcessArgRule[] | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (value === true) return true;
+  if (!Array.isArray(value)) {
+    throw new ConfigError(`${where} must be true, or a list of strings and { "pattern": "<regular expression>" }`);
+  }
+  return value.map((rule: unknown, i) => {
+    if (typeof rule === "string") return rule;
+    const pattern =
+      rule && typeof rule === "object" && !Array.isArray(rule) && Object.keys(rule).length === 1
+        ? (rule as Record<string, unknown>).pattern
+        : undefined;
+    if (typeof pattern !== "string") {
+      throw new ConfigError(`${where}[${i}] must be a string, or { "pattern": "<regular expression>" }`);
+    }
+    try {
+      new RegExp(pattern, "u");
+    } catch (e) {
+      throw new ConfigError(
+        `${where}[${i}]: ${JSON.stringify(pattern)} is not a regular expression: ${(e as Error).message}`,
+      );
+    }
+    if (UNSUPPORTED_PATTERN.test(pattern)) {
+      throw new ConfigError(
+        `${where}[${i}]: lookaround and backreferences are not supported in ${JSON.stringify(pattern)}`,
+      );
+    }
+    return { pattern };
+  });
+}
+
+function readProcess(raw: unknown, platform: Platform): ProcessPermission[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new ConfigError('sk.config.json "permissions.process" must be an array of { "name", "path", "args" }');
+  }
+  const out: ProcessPermission[] = [];
+  const names = new Set<string>();
+  for (const [i, entry] of raw.entries()) {
+    const where = `sk.config.json "permissions.process": entry ${i}`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ConfigError(`${where} must be { "name", "path", "args" }`);
+    }
+    const e = entry as Record<string, unknown>;
+    const extra = Object.keys(e).filter((key) => !PROCESS_PERMISSION_KEYS.has(key));
+    if (extra.length) {
+      throw new ConfigError(`${where} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")}`);
+    }
+    if (typeof e.name !== "string" || !/^[\w-][\w.-]*$/.test(e.name)) {
+      throw new ConfigError(
+        `${where}: "name" must be letters, digits, ".", "_" or "-": it is what Process.spawn() takes`,
+      );
+    }
+    if (names.has(e.name)) throw new ConfigError(`${where}: the name ${JSON.stringify(e.name)} is listed twice`);
+    names.add(e.name);
+    let path: string | undefined;
+    if (typeof e.path === "string") {
+      path = processPath(e.path, `${where}: "path"`, null);
+    } else if (e.path && typeof e.path === "object" && !Array.isArray(e.path)) {
+      for (const [os, value] of Object.entries(e.path)) {
+        if (!FFI_PLATFORMS.has(os)) {
+          throw new ConfigError(
+            `${where}: "path" has unknown platform ${JSON.stringify(os)} — windows, macos or linux`,
+          );
+        }
+        if (typeof value !== "string") throw new ConfigError(`${where}: "path.${os}" must be a string`);
+        processPath(value, `${where}: "path.${os}"`, os as Platform);
+        if (os === platform) path = value;
+      }
+    } else {
+      throw new ConfigError(`${where}: "path" must be a string, or an object of paths by platform`);
+    }
+    const args = processArgs(e.args, `${where}: "args"`);
+    if (path === undefined) continue;
+    const file = path.split(/[\\/]/).pop() ?? "";
+    const extension = file.includes(".") ? file.slice(file.lastIndexOf(".") + 1).toLowerCase() : "";
+    if (platform === "windows" && extension !== "" && extension !== "exe") {
+      throw new ConfigError(
+        `${where}: "path" names a .${extension} file; on Windows only .exe programs are started, never batch files or scripts`,
+      );
+    }
+    out.push({ name: e.name, path, ...(args !== undefined && { args }) });
+  }
+  return out;
+}
 
 function ffiPath(value: string, where: string): string {
   const rest = value.startsWith("$APP/") ? value.slice(5) : value.startsWith("$SYSTEM/") ? value.slice(8) : null;
@@ -485,7 +619,7 @@ export function readPermissions(raw: unknown, platform: Platform): Permissions |
     }
     if (path !== undefined) ffi.push({ name: e.name, path });
   }
-  return { ffi, ffiAddress: p.ffiAddress === true };
+  return { ffi, ffiAddress: p.ffiAddress === true, process: readProcess(p.process, platform) };
 }
 
 export function nativeSvelteRenderer(config: unknown): boolean {

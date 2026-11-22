@@ -30,6 +30,7 @@ mod module;
 mod native_buffer;
 #[cfg(feature = "types")]
 mod types;
+pub use crate::permissions::{ProcessArg, ProcessArgs};
 pub use bytes::Bytes;
 pub use host_context::{HostContext, HostCookie, SameSite};
 pub use host_file::HostFile;
@@ -118,6 +119,7 @@ struct Config {
     desktop_id: Option<String>,
     ffi: Vec<(String, String)>,
     ffi_address: bool,
+    process: Vec<crate::permissions::ProcessEntry>,
     backdrop: Option<String>,
 }
 
@@ -233,6 +235,7 @@ pub(crate) fn permissions() -> crate::permissions::Permissions {
     crate::permissions::Permissions {
         ffi: config.map(|c| c.ffi.clone()).unwrap_or_default(),
         ffi_address: config.is_some_and(|c| c.ffi_address),
+        process: config.map(|c| c.process.clone()).unwrap_or_default(),
         app_dir: std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(PathBuf::from))
@@ -371,6 +374,7 @@ pub struct Builder {
     app_menu: bool,
     ffi: Vec<(String, String)>,
     ffi_address: bool,
+    process: Vec<crate::permissions::ProcessEntry>,
     backdrop: Option<String>,
     display_change: Option<DisplayChange>,
     drawable_count: Option<u8>,
@@ -405,6 +409,7 @@ impl Builder {
             app_menu: true,
             ffi: Vec::new(),
             ffi_address: false,
+            process: Vec::new(),
             backdrop: None,
             display_change: None,
             drawable_count: None,
@@ -606,6 +611,23 @@ impl Builder {
         self
     }
 
+    /// Lets the app's `skathi:process` start one program under `name`. `path` is `$APP/<path>`,
+    /// `$SYSTEM/<name>`, `$PATH/<name>` or an absolute path, as in `"permissions.process"` of sk.config.json.
+    /// The payload's own list is not read: an embedded app starts what is allowed here and nothing else.
+    pub fn allow_process(
+        mut self,
+        name: impl Into<String>,
+        path: impl Into<String>,
+        args: ProcessArgs,
+    ) -> Self {
+        self.process.push(crate::permissions::ProcessEntry {
+            name: name.into(),
+            path: path.into(),
+            args,
+        });
+        self
+    }
+
     /// Starts Skathi on a thread of its own and returns at once; events emitted before the app
     /// is ready wait for it. On macOS this returns `Error::MainThreadRequired`: use
     /// `Self::run_on_main_thread` instead.
@@ -772,6 +794,7 @@ impl Builder {
             desktop_id: self.desktop_id,
             ffi: self.ffi,
             ffi_address: self.ffi_address,
+            process: self.process,
             app_menu: self.app_menu,
             backdrop: self.backdrop,
         };

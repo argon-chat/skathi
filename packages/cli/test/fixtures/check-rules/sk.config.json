@@ -1,7 +1,10 @@
 {
   "name": "check-rules",
   "version": "1.0.0",
-  "permissions": { "ffi": [{ "name": "crt", "path": "$SYSTEM/msvcrt" }] },
+  "permissions": {
+    "ffi": [{ "name": "crt", "path": "$SYSTEM/msvcrt" }],
+    "process": [{ "name": "git", "path": "$PATH/git", "args": ["status"] }]
+  },
   "check": {
     "allow": {
       "SK2003": ["src/legacy/**"],

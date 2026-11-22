@@ -13,6 +13,7 @@ export const categories = [
   "skathi:binary",
   "skathi:encoding",
   "skathi:ffi",
+  "skathi:process",
   "skathi:memory",
   "skathi:image",
   "skathi:gpu",

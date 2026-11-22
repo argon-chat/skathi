@@ -12,8 +12,62 @@ pub(crate) struct Permissions {
     pub ffi: Vec<(String, String)>,
     /// Whether a pointer may be made from a bare address.
     pub ffi_address: bool,
+    /// The programs `skathi:process` may start.
+    #[cfg_attr(not(feature = "process"), allow(dead_code))]
+    pub process: Vec<ProcessEntry>,
     /// What `$APP` stands for.
     pub app_dir: PathBuf,
+}
+
+/// The arguments a program of `"permissions.process"` may be started with.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ProcessArgs {
+    /// None at all.
+    #[default]
+    None,
+    /// Any.
+    Any,
+    /// Exactly these, one rule per position.
+    Only(Vec<ProcessArg>),
+}
+
+/// The rule for one argument.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProcessArg {
+    /// This string and no other.
+    Is(String),
+    /// A regular expression the whole argument matches (Rust `regex` syntax).
+    Matches(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProcessEntry {
+    pub name: String,
+    pub path: String,
+    pub args: ProcessArgs,
+}
+
+fn process_entry(e: &Json) -> Option<ProcessEntry> {
+    let args = match e.get("args") {
+        None | Some(Json::Bool(false)) => ProcessArgs::None,
+        Some(Json::Bool(true)) => ProcessArgs::Any,
+        Some(Json::Arr(list)) => ProcessArgs::Only(
+            list.iter()
+                .map(|rule| match rule {
+                    Json::Str(s) => Some(ProcessArg::Is(s.clone())),
+                    other => Some(ProcessArg::Matches(
+                        other.get("pattern")?.as_str()?.to_string(),
+                    )),
+                })
+                .collect::<Option<_>>()?,
+        ),
+        Some(_) => return None,
+    };
+    Some(ProcessEntry {
+        name: e.get("name")?.as_str()?.to_string(),
+        path: e.get("path")?.as_str()?.to_string(),
+        args,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +95,11 @@ impl Permissions {
                 .map(|list| list.iter().filter_map(entry).collect())
                 .unwrap_or_default(),
             ffi_address: v.get("ffiAddress").and_then(Json::as_bool) == Some(true),
+            process: v
+                .get("process")
+                .and_then(Json::as_arr)
+                .map(|list| list.iter().filter_map(process_entry).collect())
+                .unwrap_or_default(),
             app_dir,
         }
     }
@@ -170,6 +229,39 @@ mod tests {
         assert_eq!(
             allowed("$SYSTEM/user32").library("db"),
             Ok(Library::System(expected.into()))
+        );
+    }
+
+    #[test]
+    fn a_process_entry_with_a_malformed_argument_rule_allows_nothing() {
+        let p = Permissions::parse(
+            r#"{"process":[
+                {"name":"a","path":"$APP/a"},
+                {"name":"b","path":"$APP/b","args":true},
+                {"name":"c","path":"$APP/c","args":["status",{"pattern":"^-"}]},
+                {"name":"d","path":"$APP/d","args":["x",{"regex":"y"}]},
+                {"name":"e","path":"$APP/e","args":"any"}
+            ]}"#,
+            PathBuf::new(),
+        );
+        let args: Vec<_> = p
+            .process
+            .iter()
+            .map(|e| (e.name.as_str(), &e.args))
+            .collect();
+        assert_eq!(
+            args,
+            [
+                ("a", &ProcessArgs::None),
+                ("b", &ProcessArgs::Any),
+                (
+                    "c",
+                    &ProcessArgs::Only(vec![
+                        ProcessArg::Is("status".into()),
+                        ProcessArg::Matches("^-".into())
+                    ])
+                ),
+            ]
         );
     }
 

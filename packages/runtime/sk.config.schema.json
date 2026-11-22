@@ -192,6 +192,44 @@
           "description": "Lets code make a NativePointer from a bare address with NativePointer.fromAddress(). Without it a pointer comes only from a call or from a buffer.",
           "type": "boolean",
           "default": false
+        },
+        "process": {
+          "description": "The programs skathi:process may start. Granting an entry lets the app's code, and anything that runs in it, start that program with the user's rights, outside the app's sandbox; with \"args\": true it also chooses every argument. Process.spawn() takes a name from this list, or an absolute path an entry resolves to, and nothing else. Programs start without a shell.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "path"],
+            "properties": {
+              "name": {
+                "description": "What Process.spawn() takes: letters, digits, \".\", \"_\" and \"-\", not starting with \".\".",
+                "type": "string"
+              },
+              "path": {
+                "description": "Where the program is. \"$APP/<path>\": a file in the app's folder, which sk build copies beside the executable at the same path. \"$SYSTEM/<name>\": System32 on Windows; /usr/bin, /bin, /usr/sbin or /sbin elsewhere. \"$PATH/<name>\": the first match on PATH when the program starts (sk check warns, SK6004). Or an absolute path. On Windows .exe is added when there is no extension, and only .exe files start: never .bat, .cmd or scripts. An object gives a path for each of windows, macos and linux; a platform left out does not have the program."
+              },
+              "args": {
+                "description": "The arguments it may take. Left out or false: none. true: any (sk check warns, SK6004). A list: exactly as many arguments as rules, each a string the argument must equal or { \"pattern\": \"<regular expression>\" } the whole argument must match.",
+                "oneOf": [
+                  { "type": "boolean" },
+                  {
+                    "type": "array",
+                    "items": {
+                      "oneOf": [
+                        { "type": "string" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["pattern"],
+                          "properties": { "pattern": { "type": "string" } }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
         }
       }
     },

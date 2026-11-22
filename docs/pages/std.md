@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, native memory, images, strings, time, units and collections."
+description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, programs, native memory, images, strings, time, units and collections."
 section: Reference
 order: 6
 since: "0.7"
@@ -30,6 +30,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
 | [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `struct()`, callbacks     |
+| [`skathi:process`](#skathiprocess)         | `Process.spawn()`, `Process.exec()`: the programs the config allows, without a shell  |
 | [`skathi:memory`](#skathimemory)           | `NativeBuffer`, `Arena`, `MemoryView`: native memory without a copy, freed on demand  |
 | [`skathi:image`](#skathiimage)             | `ImageDecoder`, `ImageEncoder`, `Image`: image files decoded and encoded off-thread   |
 | [`skathi:gpu`](#skathigpu)                 | `wgsl` types, `struct()`, `GpuTimer`, `readTexture()`, `readBuffer()` for WebGPU      |

@@ -9,6 +9,7 @@ import { memory } from "./memory";
 import { network } from "./network";
 import { numeric } from "./numeric";
 import { os } from "./os";
+import { process } from "./process";
 import { runtime } from "./runtime";
 import { text } from "./text";
 import { categories, type Category, type StdEntry } from "./shared";
@@ -37,6 +38,8 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "Bytes to text and back: hex, Base32, Base64, the legacy text encodings `TextDecoder` knows and can also encode here, and MIME types by extension or content.",
   "skathi:ffi":
     "C functions of a library the app ships or the system has, called from JS without a Rust build. Only the libraries sk.config.json lists under `permissions.ffi` load. A fault in the library ends the app; for your own native code, write a [native module](/embedding/native-modules/).",
+  "skathi:process":
+    "Programs started from JS without a shell: their output and input as streams, their exit code, and a run-to-the-end form that answers with the output as text. Only the programs sk.config.json lists under `permissions.process` start, with the arguments the list allows.",
   "skathi:memory":
     "Native memory JS reads and writes without a copy and frees when it says so: buffers the host allocates, an arena that frees a frame's buffers at once, and strided views over them. FFI, `skathi:binary` and `skathi:gpu` take the buffers as they are.",
   "skathi:image":
@@ -63,6 +66,7 @@ export const entries: readonly StdEntry[] = [
   ...binary,
   ...encoding,
   ...ffi,
+  ...process,
   ...memory,
   ...image,
   ...gpu,

@@ -28,6 +28,7 @@ export const RULES_MODULES = [
   "src/plain.js",
   "src/App.vue",
   "src/native.ts",
+  "src/process.ts",
   "src/numeric.ts",
   "node_modules/native-kit/index.js",
   "node_modules/patchy/index.js",

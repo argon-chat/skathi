@@ -142,6 +142,12 @@ describe("SK6xxx: permissions", () => {
     expect(lines(report(), "node_modules/native-kit/index.js")).toEqual(["1:SK6005"]);
   });
 
+  test("Process.spawn() and Process.exec() names are compared with permissions.process", () => {
+    expect(lines(report(), "src/process.ts")).toEqual(["1:SK6004", "8:SK6002", "9:SK6003"]);
+    const none = analyzeRules({ permissions: undefined });
+    expect(lines(none, "src/process.ts")).toEqual(["1:SK6001"]);
+  });
+
   test("without permissions the import is the error, and check.allow cannot hide it", () => {
     const none = analyzeRules({ permissions: undefined, allow: new Map([["SK6001", ["src/**"]]]) });
     expect(lines(none, "src/native.ts")).toEqual(["1:SK6001"]);

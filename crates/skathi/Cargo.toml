@@ -51,6 +51,8 @@ video = ["sk-app/video"]
 # `appHotkeys` and `skathi::hotkeys`.
 hotkeys = ["sk-app/hotkeys"]
 ffi = ["sk-app/ffi"]
+# `skathi:process`: starting the programs sk.config.json or `Builder::allow_process` lists.
+process = ["sk-app/process"]
 # `<iframe>` (WebView2).
 webview = ["sk-app/webview"]
 

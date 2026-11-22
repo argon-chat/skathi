@@ -11,6 +11,7 @@ import * as memory from "./memory";
 import * as network from "./network";
 import * as numeric from "./numeric";
 import * as os from "./os";
+import * as process from "./process";
 import * as runtime from "./runtime";
 import * as text from "./text";
 import * as time from "./time";
@@ -29,6 +30,7 @@ export const stdModules: Readonly<Record<string, Record<string, unknown>>> = {
   network,
   numeric,
   os,
+  process,
   runtime,
   text,
   time,

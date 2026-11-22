@@ -17,7 +17,7 @@ Runtime.isAot(): boolean
 Runtime.isSingleFile(): boolean`,
     notes: [
       '`runtime.version` is the version of Skathi the host was built from, for example `"0.7.0"`. It is not the app\'s own version, which is [`app.getVersion()`](/std/app-get-version/).',
-      "`runtime.features` names the optional parts this host has: `audio`, `spatial-audio`, `storages`, `clipboard`, `indexeddb`, `webgpu`, `lottie`, `video`, `hotkeys`, `webview`, `battery`, `devtools`, `native-aot`, `no-jit`, `no-wasm`. A name is in the set only when the host was built with that part.",
+      "`runtime.features` names the optional parts this host has: `audio`, `spatial-audio`, `storages`, `clipboard`, `indexeddb`, `webgpu`, `lottie`, `video`, `hotkeys`, `webview`, `battery`, `process`, `devtools`, `native-aot`, `no-jit`, `no-wasm`. A name is in the set only when the host was built with that part.",
       "An embedder chooses the features ([Features](/embedding/features/)). The hosts `sk build` uses have the default set.",
       "Use `features` for diagnostics and bug reports. To decide whether to call an API, test the API itself (`typeof localStorage`, `appHotkeys.available`), as on the web.",
       "`Runtime` is the class of `runtime`. It has no constructor to call; it carries the static methods [`Runtime.isAot()`](/std/runtime-is-aot/) and [`Runtime.isSingleFile()`](/std/runtime-is-single-file/).",

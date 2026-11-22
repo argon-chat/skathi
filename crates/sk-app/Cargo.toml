@@ -38,6 +38,9 @@ icu-root = ["redjs/icu-root"]
 # `skathi:ffi`: the app may load the libraries its sk.config.json lists and call their C functions.
 # Without it the module is there and `dlopen()` throws NotSupportedError.
 ffi = []
+# `skathi:process`: programs listed under `"permissions.process"` in sk.config.json, started without a
+# shell. Off, `Process.spawn()` throws `NotSupportedError` and no spawning code is linked.
+process = ["dep:regex"]
 
 # Compiles out the devtools protocol listener, the embedded inspector and the F12 key, which every
 # build includes otherwise (an app can also disable them at runtime). For a build that must prove
@@ -50,7 +53,7 @@ devtools = []
 
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
-default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview", "ffi"]
+default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview", "ffi", "process"]
 audio = ["sk-runtime/audio", "sk-permissions/audio"]
 # `panningModel: "spatial"` and `AudioContext.spatialAudio`: Windows spatial audio objects.
 spatial-audio = ["audio", "dep:sk-audio"]
@@ -94,6 +97,8 @@ encoding_rs = "0.8"
 toml = { version = "1.1", features = ["preserve_order"] }
 # `TextSearch` of `skathi:text`.
 aho-corasick = "1"
+# The argument patterns of `"permissions.process"`.
+regex = { version = "1", optional = true }
 sk-css = { path = "../sk-css", version = "0.7.0" }
 sk-effects = { path = "../sk-effects", version = "0.7.0" }
 sk-elements = { path = "../sk-elements", version = "0.7.0" }
@@ -222,5 +227,11 @@ windows-sys = { version = "0.61", features = [
     # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
     "Wdk_System_SystemServices",
     "Win32_System_SystemInformation",
+    # `skathi:process`: CreateProcessW, a job object per child, pipes.
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
 ] }
 
