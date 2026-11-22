@@ -134,16 +134,16 @@ describe("beforeinput from the keyboard", () => {
   );
 
   test.skipIf(MACOS)(
-    "Ctrl+Z and Ctrl+Y: historyUndo and historyRedo",
+    "Ctrl+Z and Ctrl+Y: historyUndo and historyRedo, the typed run as one step",
     async () => {
       await app.locator("#ta").press("Ctrl+Z");
       await app.locator("#ta").press("Ctrl+Y");
       bunExpect(await fresh()).toEqual([
         "keydown@ta|z",
         bi("historyUndo", null, "xy"),
-        inp("historyUndo", null, "x"),
+        inp("historyUndo", null, ""),
         "keydown@ta|y",
-        bi("historyRedo", null, "x"),
+        bi("historyRedo", null, ""),
         inp("historyRedo", null, "xy"),
       ]);
     },

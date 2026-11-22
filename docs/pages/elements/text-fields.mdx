@@ -124,7 +124,7 @@ An empty name falls back to the last saved one. [Vue support](/guides/vue-suppor
 
 ## A field that accepts only digits
 
-No constraint validation runs, and `maxlength`, `pattern` and `type="number"` do not filter what is typed. Clean the value in the `input` handler instead. This verification-code field keeps digits only, at most six, and enables the button when it is complete:
+No constraint validation runs, and `pattern` and `type="number"` do not filter what is typed; `maxlength` only caps the length. Clean the value in the `input` handler instead. This verification-code field keeps digits only, at most six, and enables the button when it is complete:
 
 ```vue title="CodeField.vue" framework="vue"
 <script setup lang="ts">
@@ -164,10 +164,73 @@ function clean(e: Event) {
 
 Setting `value` from script replaces the text and clears the undo history, which is why the handler writes only when something was removed. `beforeinput` is cancelable too, if you would rather refuse an edit than repair it.
 
+## A chat composer
+
+A message box sends on Enter, takes Shift+Enter as a new line, and puts an emoji where the caret is. Enter and Shift+Enter both insert a line break in a `<textarea>`, so the `keydown` handler tells them apart by `shiftKey`. `setRangeText()` replaces the selection and moves the caret past the new text:
+
+```vue title="Composer.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const box = ref<HTMLTextAreaElement | null>(null);
+const text = ref("");
+const sent = ref<string[]>([]);
+
+function onKey(e: KeyboardEvent) {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  if (text.value.trim()) sent.value.push(text.value);
+  text.value = "";
+}
+
+function insert(emoji: string) {
+  const el = box.value!;
+  el.setRangeText(emoji, el.selectionStart, el.selectionEnd, "end");
+  text.value = el.value;
+  el.focus();
+}
+</script>
+
+<template>
+  <p v-for="(m, i) in sent" :key="i">{{ m }}</p>
+  <textarea ref="box" v-model="text" rows="3" @keydown="onKey" />
+  <button @click="insert('🙂')">🙂</button>
+</template>
+```
+
+```svelte title="Composer.svelte" framework="svelte"
+<script lang="ts">
+  let box = $state<HTMLTextAreaElement>();
+  let text = $state("");
+  let sent = $state<string[]>([]);
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    if (text.trim()) sent.push(text);
+    text = "";
+  }
+
+  function insert(emoji: string) {
+    box!.setRangeText(emoji, box!.selectionStart, box!.selectionEnd, "end");
+    text = box!.value;
+    box!.focus();
+  }
+</script>
+
+{#each sent as m, i (i)}
+  <p>{m}</p>
+{/each}
+<textarea bind:this={box} bind:value={text} rows="3" onkeydown={onKey}></textarea>
+<button onclick={() => insert("🙂")}>🙂</button>
+```
+
+`selectionStart` and `selectionEnd` count UTF-16 code units, like `String.prototype.length`, so an emoji outside the Basic Multilingual Plane counts as two. Inside `keydown` and `beforeinput` they give the selection the key is about to act on. `setRangeText()` does not fire `input`, which is why the handler copies the new value into the model, and like any assignment to `value` it clears the undo history.
+
 ## Things to watch for
 
 - **No `change` event** on text fields. Use `blur` or Enter.
-- **No caret API.** `selectionStart`, `selectionEnd`, `setSelectionRange()` and `setRangeText()` do not exist; `select()` selects everything.
+- **No `selectionchange` event** from a text field. Read `selectionStart` and `selectionEnd` when you need them, in `keydown`, `keyup`, `input` or `click`.
 - **No context menu.** Right-click does nothing unless you handle `contextmenu` and draw a menu yourself.
 - **Disabled fields stay focusable**, and their text can still be selected and copied.
 - **A `disabled` `<fieldset>` does not disable the fields inside it.** Disable each one.
@@ -188,15 +251,16 @@ A `<textarea>` is the same editor with several lines. Its initial value comes fr
 
 ## Attributes
 
-| Attribute              | Behavior                                                                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `value`                | The text. Setting it from script replaces the text and clears the undo history.                                                          |
-| `placeholder`          | Shown while empty. In a single-line field, a line break in it shows as a space.                                                          |
-| `disabled`, `readonly` | Both stop editing: no typing, paste, cut, undo or IME, and no caret. The field can still be focused, and text in it selected and copied. |
-| `rows`                 | A `<textarea>`'s minimum height in lines, 2 by default. CSS `height` wins.                                                               |
-| `tabindex`             | As on any element.                                                                                                                       |
+| Attribute              | Behavior                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `value`                | The text. Setting it from script replaces the text and clears the undo history.                                                           |
+| `placeholder`          | Shown while empty. In a single-line field, a line break in it shows as a space.                                                           |
+| `disabled`, `readonly` | Both stop editing: no typing, paste, cut, undo or IME, and no caret. The field can still be focused, and text in it selected and copied.  |
+| `rows`                 | A `<textarea>`'s minimum height in lines, 2 by default. CSS `height` wins.                                                                |
+| `maxlength`            | The most UTF-16 code units the user can type, paste or commit from an IME; what does not fit is cut off. A value set from script is kept. |
+| `tabindex`             | As on any element.                                                                                                                        |
 
-`maxlength`, `minlength`, `pattern`, `min`, `max`, `step` and `required` are reflected as properties but not enforced, and no constraint validation runs: there is no `checkValidity()` or `validity`, and a form's `submit` fires whatever the fields hold.
+`minlength`, `pattern`, `min`, `max`, `step` and `required` are reflected as properties but not enforced, and no constraint validation runs: there is no `checkValidity()` or `validity`, and a form's `submit` fires whatever the fields hold.
 
 `autofocus` does nothing. `cols` and `wrap` are ignored: a textarea always wraps lines to its width. `spellcheck`, `autocorrect`, `autocapitalize`, `enterkeyhint` and `inputmode` are passed to the platform's text input, which ignores them on desktop: there is no spell-check underline.
 
@@ -209,16 +273,17 @@ A `<textarea>` is the same editor with several lines. Its initial value comes fr
 | Ctrl+C, Ctrl+X, Ctrl+V / Cmd+C, Cmd+X, Cmd+V | Copy, cut, paste                                                         |
 | Ctrl+Insert, Shift+Delete, Shift+Insert      | Copy, cut, paste, on Windows and Linux                                   |
 | Enter                                        | A new line in a `<textarea>`; in an `<input>`, fires the form's `submit` |
+| Shift+Enter                                  | A new line in a `<textarea>`                                             |
 | Up, Down in an `<input>`                     | Move to the start or the end                                             |
 | Escape                                       | Collapses the selection; with none, the key goes on to the app           |
 | Tab                                          | Moves focus; it is never typed                                           |
 | Ctrl+Cmd+Space                               | The character palette, on macOS                                          |
 
-Undo keeps 256 steps. Each edit is its own step; a whole IME composition is one.
+Undo keeps 256 steps. Typing one character after another is one step, and so is a run of Backspace or a run of Delete; moving the caret starts a new step. Any other edit, a paste or a cut for example, is its own step, and a whole IME composition is one.
 
 With the mouse, a double-click selects a word, a triple-click selects everything, Shift+click extends the selection, and a drag that leaves the field keeps selecting.
 
-The clipboard carries plain text. Pasting into a single-line field turns line breaks into spaces.
+The field copies and pastes plain text. Pasting into a single-line field turns line breaks into spaces. A `copy` or `cut` handler that cancels the event can put other types on `clipboardData` with `setData()`, such as `application/x-my-format`; a `paste` in a Skathi app reads them back with `getData()`, while other apps get only the `text/plain`.
 
 ## IME
 
@@ -242,7 +307,7 @@ Composition input works on every platform, with the candidate window placed at t
 | `compositionstart`, `compositionupdate`, `compositionend` | See [IME](#ime).                                                                     |
 | `copy`, `cut`, `paste`                                    | Fire first; `preventDefault()` cancels the action.                                   |
 | `focus`, `blur`                                           |                                                                                      |
-| `select`                                                  | After `select()`.                                                                    |
+| `select`                                                  | After `select()`, `setSelectionRange()` and `setRangeText()`.                        |
 
 `change` never fires on a text field.
 
@@ -259,8 +324,8 @@ The field is styled like any box: `font`, `color`, `padding`, `border`, `backgro
 ## Compared with the browser
 
 - No `change` event on text fields.
-- No selection API beyond `select()`, and no context menu.
-- No constraint validation; `maxlength` is not enforced.
+- No `selectionchange` events from text fields, and no context menu.
+- No constraint validation beyond `maxlength`.
 - No spell checking, no `autofocus`, no date or time pickers, no number spinner.
 - Disabled fields stay focusable.
 - No `contenteditable`, so no rich text or code editor libraries.

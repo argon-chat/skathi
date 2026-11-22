@@ -249,6 +249,8 @@ declare function __sk_bounds(id: SkNodeId): SkRect;
 declare function __sk_focus(id: SkNodeId, op: 0 | 1): string;
 declare function __sk_input_select(id: SkNodeId): boolean;
 declare function __sk_input_select(id: SkNodeId, start: number, end: number, backward: boolean): boolean;
+/** Puts the native `selectionStart`, `selectionEnd`, `selectionDirection` and `setRangeText` on the text-control prototype. */
+declare function __sk_text_control_install(proto: object): void;
 /** Opens the in-window color picker for a color input; `false` when the app configured the OS dialog. */
 declare function __sk_color_picker(id: SkNodeId): boolean;
 /** A color input's sanitized value for its `alpha`, `colorspace` and `hdr` attributes. */

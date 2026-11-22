@@ -952,6 +952,12 @@ fn start_wanted(cx: &mut App) -> bool {
 thread_local! {
     /// Web fonts handed to the text system since boot: `(faces, bytes)`; DirectWrite keeps its own copy.
     static REGISTERED: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+    static EPOCH: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Changes whenever the text system's fonts do: text shaped under another epoch is stale.
+pub(crate) fn epoch() -> u64 {
+    EPOCH.get()
 }
 
 /// Devtools `mem`: (faces declared, loaded and waiting, bytes waiting, registered since boot, bytes registered).
@@ -1060,6 +1066,7 @@ fn register_finished(cx: &mut App) {
         );
         return;
     }
+    EPOCH.set(EPOCH.get() + 1);
     FONTS.with(|f| {
         f.borrow_mut()
             .changed_since
@@ -1068,6 +1075,7 @@ fn register_finished(cx: &mut App) {
 }
 
 fn refresh_font_source(cx: &mut App) {
+    EPOCH.set(EPOCH.get() + 1);
     let text_system = cx.text_system().clone();
     let limited = range_limited();
     let composed = compositions();

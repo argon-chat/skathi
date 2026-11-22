@@ -25,7 +25,7 @@ use gpui::{
 };
 
 pub use config::{configuration, InputAttributes, MappedConfiguration};
-pub use state::TextInputState;
+pub use state::{CaretMirror, CaretUtf16, TextInputState};
 
 use element::TextElement;
 
@@ -245,6 +245,10 @@ pub struct TextInputOptions {
     /// tracked focus handle costs the tab stop but keeps hidden overlaid panels from swallowing input.
     pub inert: bool,
     pub masked: bool,
+    /// HTML `maxlength`, in UTF-16 code units.
+    pub max_length: Option<usize>,
+    /// Bumped by the caller when installed fonts change, so cached shaping is redone.
+    pub font_epoch: u64,
 }
 
 impl Default for TextInputOptions {
@@ -266,6 +270,8 @@ impl Default for TextInputOptions {
             input_config: TextInputConfiguration::default(),
             inert: false,
             masked: false,
+            max_length: None,
+            font_epoch: 0,
         }
     }
 }
@@ -288,7 +294,13 @@ pub fn text_input(
     // The focus handle carries the tab order, so update it before `track_focus` clones it.
     let focus_handle = state.update(cx, |this, _| {
         this.set_tab_index(options.tab_index);
-        this.set_frame_params(handlers, disabled, multiline, input_config);
+        this.set_frame_params(
+            handlers,
+            disabled,
+            multiline,
+            input_config,
+            options.max_length,
+        );
         this.set_masked(options.masked);
         this.focus_handle()
     });
@@ -533,12 +545,11 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-down", SelectDown, context),
     ]);
 
-    // `enter` is bound in the TEXTAREA context only, so a single-line input leaves Return to the app.
-    bindings.push(KeyBinding::new(
-        "enter",
-        Newline,
-        Some(TEXTAREA_KEY_CONTEXT),
-    ));
+    // Bound in the TEXTAREA context only, so a single-line input leaves Return to the app.
+    bindings.extend([
+        KeyBinding::new("enter", Newline, Some(TEXTAREA_KEY_CONTEXT)),
+        KeyBinding::new("shift-enter", Newline, Some(TEXTAREA_KEY_CONTEXT)),
+    ]);
 
     bindings
 }

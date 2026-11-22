@@ -533,7 +533,7 @@ function onBeforeInput(e: InputEvent) {
     ],
     edgeCases: [
       'Typing fires `keydown`, `beforeinput`, the edit, then `input`, each with `inputType: "insertText"` and the character in `data`.',
-      "Enter in a `<textarea>` is `insertLineBreak` with `data` `null`; Backspace, Ctrl+Backspace and Delete are deletion types with no `data`, and with nothing to delete no event fires.",
+      "Enter and Shift+Enter in a `<textarea>` are `insertLineBreak` with `data` `null`; Backspace, Ctrl+Backspace and Delete are deletion types with no `data`, and with nothing to delete no event fires.",
       "Paste and cut fire after their clipboard event, as `insertFromPaste` with the text and `deleteByCut`.",
       "During an IME composition, `beforeinput` cannot be cancelled, and `v-model` leaves the model alone until the composition ends.",
     ],

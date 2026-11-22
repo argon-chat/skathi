@@ -3,8 +3,10 @@
 //! root's key listener fires them at the focused node (or `document.body`), and an uncancelled
 //! `copy` copies the document selection.
 //!
-//! `clipboardData` is a real `DataTransfer`: read-only text/files/`image.png` for `paste` (gpui reads
-//! no HTML, RTF or custom formats), and for a cancelled `copy`/`cut` only `text/plain` can be written.
+//! `clipboardData` is a real `DataTransfer`: read-only text/files/`image.png` for `paste`, and for a
+//! cancelled `copy`/`cut` what `setData` put there. Types other than `text/plain` ride along with
+//! the text as gpui clipboard metadata ([`encode_types`]), so they reach a `paste` in a Skathi app
+//! only; HTML, RTF and other apps' formats are not read.
 
 use gpui::{
     App, ClipboardEntry, ClipboardItem, ImageFormat, InteractiveElement, KeyDownEvent, Keystroke,
@@ -112,9 +114,10 @@ pub(crate) fn exchange(
         warn_compat(
             "clipboard-paste-types",
             "a `paste` event's clipboardData holds what this host reads off the system clipboard: \
-             text/plain, the files of a file copy, and a bitmap as image.png. HTML (text/html), rich \
-             text and custom formats are not read, so getData(\"text/html\") is \"\" where a browser \
-             would return the copied markup",
+             text/plain, the files of a file copy, a bitmap as image.png, and the other types a \
+             Skathi app's copy handler set. HTML (text/html), rich text and other apps' formats are \
+             not read, so getData(\"text/html\") is \"\" where a browser would return markup copied \
+             from another app",
         );
     }
     let proceed = crate::dispatch_event_with(target, verb.code(), &EventPayload::default(), data);
@@ -154,6 +157,14 @@ fn fill(rt: &JsRuntime, dt: Value, item: &ClipboardItem) {
                 "setData",
                 &[ctx.string("text/plain"), ctx.string(&s.text)],
             );
+            for (ty, data) in s
+                .metadata
+                .as_deref()
+                .and_then(decode_types)
+                .unwrap_or_default()
+            {
+                call(rt, dt, "setData", &[ctx.string(&ty), ctx.string(&data)]);
+            }
             break;
         }
     }
@@ -260,27 +271,67 @@ fn written(rt: &JsRuntime, dt: Value) -> Option<ClipboardItem> {
             list.push(s);
         }
     }
-    let dropped: Vec<&str> = list
-        .iter()
-        .map(String::as_str)
-        .filter(|t| *t != "text/plain")
-        .collect();
-    if !dropped.is_empty() {
-        warn_compat(
-            "clipboard-write-types",
-            &format!(
-                "a cancelled copy/cut set {} on clipboardData; only text/plain reaches the system \
-                 clipboard here (gpui writes text and images, not HTML or custom formats), so the \
-                 rest is dropped",
-                dropped.join(", ")
+    let data =
+        |ty: &str| call(rt, dt, "getData", &[ctx.string(ty)]).and_then(|v| ctx.read_string(v).ok());
+    let mut text = None;
+    let mut others = Vec::new();
+    for ty in &list {
+        match ty.as_str() {
+            "Files" => warn_compat(
+                "clipboard-write-files",
+                "a cancelled copy/cut added files to clipboardData; files are not written to the \
+                 system clipboard here, only text/plain and the other string types",
             ),
-        );
+            "text/plain" => text = data(ty),
+            _ => others.extend(data(ty).map(|d| (ty.clone(), d))),
+        }
     }
-    if !list.iter().any(|t| t == "text/plain") {
-        return None;
+    if others.is_empty() {
+        return text.map(ClipboardItem::new_string);
     }
-    let text = call(rt, dt, "getData", &[ctx.string("text/plain")])?;
-    Some(ClipboardItem::new_string(ctx.read_string(text).ok()?))
+    warn_compat(
+        "clipboard-write-types",
+        "a cancelled copy/cut set types other than text/plain on clipboardData; they reach a paste \
+         in a Skathi app, while other apps see only the text/plain",
+    );
+    Some(ClipboardItem::new_string_with_metadata(
+        text.unwrap_or_default(),
+        encode_types(&others),
+    ))
+}
+
+const TYPES_HEADER: &str = "skathi-data-transfer/1\n";
+
+/// The non-`text/plain` types of a copy as clipboard metadata: a header, then `<len>:<type><len>:<data>`
+/// per type with UTF-8 byte lengths.
+fn encode_types(types: &[(String, String)]) -> String {
+    let mut out = String::from(TYPES_HEADER);
+    for (ty, data) in types {
+        for part in [ty, data] {
+            out.push_str(&part.len().to_string());
+            out.push(':');
+            out.push_str(part);
+        }
+    }
+    out
+}
+
+/// [`encode_types`] read back; `None` for metadata another program wrote.
+fn decode_types(metadata: &str) -> Option<Vec<(String, String)>> {
+    let mut rest = metadata.strip_prefix(TYPES_HEADER)?;
+    let mut take = || -> Option<String> {
+        let (len, tail) = rest.split_once(':')?;
+        let len: usize = len.parse().ok()?;
+        let part = tail.get(..len)?.to_owned();
+        rest = &tail[len..];
+        Some(part)
+    };
+    let mut out = Vec::new();
+    loop {
+        let Some(ty) = take() else { break };
+        out.push((ty, take()?));
+    }
+    rest.is_empty().then_some(out)
 }
 
 pub(crate) fn bind_root<E: InteractiveElement>(e: E, root: u32) -> E {
@@ -409,6 +460,21 @@ mod tests {
         assert_eq!(as_png(&ImageFormat::Bmp, b"not a bmp"), None);
     }
 
+    #[test]
+    fn copied_types_survive_the_metadata_round_trip_and_foreign_metadata_is_ignored() {
+        let types = vec![
+            (
+                "application/x-argon-composer".to_string(),
+                r#"{"t":"a:b","e":[1]}"#.to_string(),
+            ),
+            ("text/html".to_string(), "<b>ж🙂</b>".to_string()),
+            ("x/empty".to_string(), String::new()),
+        ];
+        assert_eq!(decode_types(&encode_types(&types)), Some(types));
+        assert_eq!(decode_types(r#"{"zed":true}"#), None);
+        assert_eq!(decode_types(&format!("{TYPES_HEADER}5:abc")), None);
+    }
+
     fn eval(src: &str) -> String {
         JsRuntime::with(|rt| {
             let v = rt
@@ -482,7 +548,21 @@ mod tests {
             eval("globalThis.cancel = true; ''");
             let (proceed, write) = exchange(node, Verb::Cut, None);
             assert!(!proceed);
-            assert_eq!(write.and_then(|w| w.text()).as_deref(), Some("from js"));
+            let write = write.expect("a cancelled cut writes");
+            assert_eq!(write.text().as_deref(), Some("from js"));
+            let carried = write.metadata().and_then(|m| decode_types(m));
+            assert_eq!(
+                carried,
+                Some(vec![("text/html".to_string(), "<b>x</b>".to_string())])
+            );
+
+            eval("globalThis.cancel = false; ''");
+            let (_, _) = exchange(node, Verb::Paste, Some(&write));
+            assert_eq!(
+                eval("JSON.stringify([seen[seen.length - 1].types, globalThis.kept.types.length])"),
+                r#"[["text/plain","text/html"],0]"#,
+                "a Skathi copy's own types are read back"
+            );
             assert_eq!(
                 eval("kept.types.length + ''"),
                 "0",

@@ -22,9 +22,9 @@ pub mod text_input;
 pub use scrollbar::{undo_wheel_scroll, ChainSpan, Gesture, Overscroll, Scrollbar, ScrollbarStyle};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
-    configuration, text_input, ClipboardCommand, CompositionPhase, ControlledValue,
-    InputAttributes, InputIntent, InputType, MappedConfiguration, OnBeforeInput, OnChange,
-    OnClipboard, OnComposition, OnKeyDown, OnKeyUp, TextInputHandlers, TextInputOptions,
+    configuration, text_input, CaretMirror, CaretUtf16, ClipboardCommand, CompositionPhase,
+    ControlledValue, InputAttributes, InputIntent, InputType, MappedConfiguration, OnBeforeInput,
+    OnChange, OnClipboard, OnComposition, OnKeyDown, OnKeyUp, TextInputHandlers, TextInputOptions,
     TextInputState, DEFAULT_ROWS, KEY_CONTEXT, TEXTAREA_KEY_CONTEXT,
 };
 

@@ -47,16 +47,49 @@ pub(crate) struct TextPrepaint {
     scrollbar: Option<PaintQuad>,
 }
 
+/// Everything shaping depends on; equal keys give equal lines, so a frame that changes none of it
+/// reuses the last frame's.
+#[derive(Clone, PartialEq)]
+pub(crate) struct ShapeKey {
+    revision: u64,
+    masked: bool,
+    placeholder: Option<SharedString>,
+    font_size: Pixels,
+    runs: Vec<TextRun>,
+    wrap_width: Option<Pixels>,
+    font_epoch: u64,
+}
+
 impl TextElement {
-    fn display_for(&self, content: String) -> SharedString {
-        if !content.is_empty() {
-            return content.into();
+    /// The text drawn and, when it is the placeholder, that placeholder.
+    fn display(&self, state: &mut TextInputState) -> (SharedString, Option<SharedString>) {
+        if !state.text().is_empty() {
+            return (state.display_shared(), None);
         }
         let placeholder = &self.options.placeholder;
-        if self.options.multiline || !placeholder.contains(['\r', '\n']) {
+        let shown: SharedString = if self.options.multiline || !placeholder.contains(['\r', '\n']) {
             placeholder.clone()
         } else {
             placeholder.replace(['\r', '\n'], " ").into()
+        };
+        (shown.clone(), Some(shown))
+    }
+
+    fn key(
+        &self,
+        state: &TextInputState,
+        placeholder: Option<SharedString>,
+        runs: Vec<TextRun>,
+        wrap_width: Option<Pixels>,
+    ) -> ShapeKey {
+        ShapeKey {
+            revision: state.revision(),
+            masked: self.options.masked,
+            placeholder,
+            font_size: self.options.font_size,
+            runs,
+            wrap_width,
+            font_epoch: self.options.font_epoch,
         }
     }
 
@@ -96,10 +129,15 @@ impl Element for TextElement {
             if !self.options.multiline {
                 style.size.height = line_height.into();
             }
-            let display = self.display_for(self.state.read(cx).display_text());
             let text_style = window.text_style();
             let font_size = self.options.font_size;
             let multiline = self.options.multiline;
+            let (display, key, cache) = self.state.update(cx, |state, _| {
+                let (display, placeholder) = self.display(state);
+                let runs = runs(display.len(), text_style.color, None, &text_style);
+                let key = self.key(state, placeholder, runs, None);
+                (display, key, state.measure_cache())
+            });
             let layout =
                 window.request_measured_layout(style, move |known, available, window, _| {
                     let width = known.width.or(match available.width {
@@ -110,20 +148,25 @@ impl Element for TextElement {
                     let wrap = width
                         .filter(|_| multiline)
                         .map(|w| (w - CARET_WIDTH).max(px(0.0)));
-                    let lines = shape(
-                        display.clone(),
-                        text_style.color,
-                        font_size,
-                        None,
-                        wrap,
-                        &text_style,
-                        window,
-                    );
-                    let text_width = lines
-                        .iter()
-                        .map(|line| line.line.width())
-                        .fold(px(0.0), Pixels::max);
-                    let rows = lines.iter().map(|line| line.rows).sum::<usize>().max(1);
+                    let key = ShapeKey {
+                        wrap_width: wrap,
+                        ..key.clone()
+                    };
+                    let cached = cache
+                        .borrow()
+                        .as_ref()
+                        .filter(|(cached, _, _)| *cached == key)
+                        .map(|&(_, width, rows)| (width, rows));
+                    let (text_width, rows) = cached.unwrap_or_else(|| {
+                        let lines = shape(display.clone(), font_size, &key.runs, wrap, window);
+                        let text_width = lines
+                            .iter()
+                            .map(|line| line.line.width())
+                            .fold(px(0.0), Pixels::max);
+                        let rows = lines.iter().map(|line| line.rows).sum::<usize>().max(1);
+                        *cache.borrow_mut() = Some((key, text_width, rows));
+                        (text_width, rows)
+                    });
                     size(text_width.ceil() + CARET_WIDTH, line_height * rows as f32)
                 });
             return (layout, ());
@@ -157,39 +200,39 @@ impl Element for TextElement {
                 ..inherited
             };
         }
-        let state = self.state.read(cx);
-        let content = state.display_text();
-        let marked_range = state
-            .marked_range()
-            .map(|range| state.display_index(range.start)..state.display_index(range.end));
-        let is_placeholder = content.is_empty();
-        let display = self.display_for(content);
-        let color = if is_placeholder {
-            self.options.placeholder_color
-        } else {
-            self.options.text_color
-        };
-
         let wrap_width = self
             .options
             .multiline
             .then(|| self.wrap_width(bounds.size.width));
-        let lines = shape(
-            display,
-            color,
-            self.options.font_size,
-            marked_range.filter(|_| !is_placeholder),
-            wrap_width,
-            &window.text_style(),
-            window,
-        );
+        let text_style = window.text_style();
+        let (display, is_placeholder, key, reuse) = self.state.update(cx, |state, _| {
+            let (display, placeholder) = self.display(state);
+            let is_placeholder = placeholder.is_some();
+            let marked_range = state
+                .marked_range()
+                .filter(|_| !is_placeholder)
+                .map(|range| state.display_index(range.start)..state.display_index(range.end));
+            let color = if is_placeholder {
+                self.options.placeholder_color
+            } else {
+                self.options.text_color
+            };
+            let runs = runs(display.len(), color, marked_range, &text_style);
+            let key = self.key(state, placeholder, runs, wrap_width);
+            let reuse = state.shaped_key() == Some(&key);
+            (display, is_placeholder, key, reuse)
+        });
+        let shaped = (!reuse).then(|| {
+            let lines = shape(display, key.font_size, &key.runs, wrap_width, window);
+            (lines, key)
+        });
 
         let (scroll_top, selection_range, cursor, content_height) =
             self.state.update(cx, |state, _| {
                 state.set_input_transform(window.element_transform(), window.scale_factor());
                 state.set_layout(
                     bounds,
-                    lines,
+                    shaped,
                     line_height,
                     is_placeholder,
                     self.options.text_align,
@@ -405,16 +448,13 @@ fn last_on_row(
     low.max(lo)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn shape(
-    display: SharedString,
+/// One run over `len` bytes, split to underline an IME pre-edit.
+fn runs(
+    len: usize,
     color: Hsla,
-    font_size: Pixels,
     marked_range: Option<Range<usize>>,
-    wrap_width: Option<Pixels>,
     text_style: &TextStyle,
-    window: &mut Window,
-) -> Vec<LineBox> {
+) -> Vec<TextRun> {
     let font = text_style.font();
     // Runs are shaped here rather than via `StyledText`, so CSS `letter-spacing` must be carried across.
     let (tracking, word_spacing) = (text_style.letter_spacing, text_style.word_spacing);
@@ -434,22 +474,32 @@ fn shape(
         tracking,
         word_spacing,
         text_shadow: text_shadow.clone(),
+        ..Default::default()
     };
-    let runs: Vec<TextRun> = match marked_range {
-        Some(marked) if marked.end <= display.len() => vec![
+    match marked_range {
+        Some(marked) if marked.end <= len => vec![
             run(marked.start, false),
             run(marked.end - marked.start, true),
-            run(display.len() - marked.end, false),
+            run(len - marked.end, false),
         ]
         .into_iter()
         .filter(|run| run.len > 0)
         .collect(),
-        _ => vec![run(display.len(), false)],
-    };
+        _ => vec![run(len, false)],
+    }
+}
+
+fn shape(
+    display: SharedString,
+    font_size: Pixels,
+    runs: &[TextRun],
+    wrap_width: Option<Pixels>,
+    window: &mut Window,
+) -> Vec<LineBox> {
     let text = display.clone();
     let Ok(lines) = window
         .text_system()
-        .shape_text(display, font_size, &runs, wrap_width, None)
+        .shape_text(display, font_size, runs, wrap_width, None)
     else {
         return Vec::new();
     };

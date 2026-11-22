@@ -63,6 +63,7 @@ mod style_decl;
 pub mod surface;
 mod svg;
 mod text_box;
+mod text_control;
 mod toggle;
 mod tree;
 #[cfg(feature = "video")]
@@ -538,6 +539,7 @@ pub fn install(rt: &JsRuntime) {
     geometry_js::install(rt);
     toggle::install(rt);
     pointer_lock::install(rt);
+    text_control::install(rt);
     observe::install(rt);
     font_api::install(rt);
     effect_texture::install();

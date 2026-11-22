@@ -31,6 +31,8 @@ thread_local! {
     static INPUT_FOCUS: RefCell<HashMap<u32, FocusHandle>> = RefCell::new(HashMap::new());
     /// Selection can be requested before the first native build or inside the editor's own update.
     static INPUT_SELECTIONS: RefCell<HashMap<u32, InputSelection>> = RefCell::new(HashMap::new());
+    /// Each editor's caret mirror: `selectionStart` read from inside the editor's own update.
+    static INPUT_CARETS: RefCell<HashMap<u32, sk_elements::CaretMirror>> = RefCell::new(HashMap::new());
     /// Persistent scroll offset per container; owning the handle lets us read the offset back for
     /// `e.target.scrollTop`.
     static SCROLL_HANDLES: RefCell<HashMap<u32, ScrollHandle>> = RefCell::new(HashMap::new());
@@ -419,6 +421,7 @@ pub(crate) fn gc_node_state() {
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_FOCUS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_SELECTIONS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    INPUT_CARETS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -4603,34 +4606,90 @@ impl InputSelection {
     }
 }
 
+/// For a node built as the native text widget: whether it is a `<textarea>`, and the value the
+/// framework last assigned it with that write's counter.
+fn text_widget_value(t: &Tree, id: u32) -> Option<(bool, Option<(String, u32)>)> {
+    let node = t.node(id)?;
+    let multiline = t.name(node.tag) == "textarea";
+    if !multiline
+        && (t.name(node.tag) != "input"
+            || matches!(
+                t.prop(id, "type")
+                    .unwrap_or("text")
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "file" | "range" | "color"
+            ))
+    {
+        return None;
+    }
+    let value = t
+        .prop_write(id, "value")
+        .map(|(v, write)| (v.to_string(), write))
+        .or_else(|| (multiline && !node.text.is_empty()).then(|| (node.text.clone(), 0)));
+    Some((multiline, value))
+}
+
+/// A text field's selection in UTF-16 code units, `(start, end, backward)`: a requested selection
+/// not applied yet, the caret the editor published while it runs a handler, the editor's own, or,
+/// for a value assigned since the editor last saw one, the end of that value.
+pub(crate) fn input_caret(id: u32) -> Option<(usize, usize, bool)> {
+    let (_, value) = tree::read_tree(|t| text_widget_value(t, id))?;
+    let write = value.as_ref().map(|(_, write)| *write);
+    let len = value.as_ref().map_or(0, |(v, _)| v.encode_utf16().count());
+    let at_end = Some((len, len, false));
+    if let Some((range, backward, requested_write)) = INPUT_SELECTIONS.with(|m| {
+        m.borrow().get(&id).map(|s| {
+            let requested = s.value.as_ref().map(|(_, write)| *write);
+            (s.range_utf16.clone(), s.backward, requested)
+        })
+    }) {
+        if requested_write != write {
+            return at_end;
+        }
+        return Some(match range {
+            None => (0, len, false),
+            Some(r) => {
+                let end = r.end.min(len);
+                let start = if r.start >= r.end {
+                    end
+                } else {
+                    r.start.min(len)
+                };
+                (start, end, backward)
+            }
+        });
+    }
+    if let Some(caret) = INPUT_CARETS.with(|m| m.borrow().get(&id).and_then(|c| c.get())) {
+        return if caret.synced_write == write {
+            Some((caret.start, caret.end, caret.backward))
+        } else {
+            at_end
+        };
+    }
+    let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) else {
+        return at_end;
+    };
+    let live = sk_runtime::with_app(|cx| {
+        let s = state.read(cx);
+        let caret = s.caret_utf16();
+        let current =
+            caret.synced_write == write || value.as_ref().is_some_and(|(v, _)| v == s.text());
+        current.then_some(caret)
+    });
+    match live {
+        Some(Some(c)) => Some((c.start, c.end, c.backward)),
+        _ => at_end,
+    }
+}
+
 pub(crate) fn select_input_text(
     id: u32,
     range_utf16: Option<std::ops::Range<usize>>,
     backward: bool,
 ) -> bool {
-    let info = tree::read_tree(|t| {
-        let node = t.node(id)?;
-        let multiline = t.name(node.tag) == "textarea";
-        if !multiline
-            && (t.name(node.tag) != "input"
-                || matches!(
-                    t.prop(id, "type")
-                        .unwrap_or("text")
-                        .trim()
-                        .to_ascii_lowercase()
-                        .as_str(),
-                    "file" | "range" | "color"
-                ))
-        {
-            return None;
-        }
-        let value = t
-            .prop_write(id, "value")
-            .map(|(v, write)| (v.to_string(), write))
-            .or_else(|| (multiline && !node.text.is_empty()).then(|| (node.text.clone(), 0)));
-        Some((multiline, value))
-    });
-    let Some((multiline, value)) = info else {
+    let Some((multiline, value)) = tree::read_tree(|t| text_widget_value(t, id)) else {
         return false;
     };
     let selection = InputSelection {
@@ -5745,6 +5804,9 @@ fn build_input<V: 'static>(
         if let Some(selection) = INPUT_SELECTIONS.with(|m| m.borrow_mut().remove(&id)) {
             selection.apply(s, cx);
         }
+        INPUT_CARETS.with(|m| {
+            m.borrow_mut().entry(id).or_insert_with(|| s.caret_mirror());
+        });
     });
     for shown in [
         t.prop(id, "value"),
@@ -5859,6 +5921,8 @@ fn build_input<V: 'static>(
             .computed
             .as_ref()
             .is_some_and(|cs| cs.extras.pointer_events_none == Some(true)),
+        max_length: crate::text_control::max_length(t, id),
+        font_epoch: crate::fonts::epoch(),
     };
 
     let mask = pointer_mask(node);

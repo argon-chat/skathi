@@ -118,6 +118,8 @@ defineDom(
   [TextControlProto],
 );
 
+__sk_text_control_install(TextControlProto);
+
 function queueSelectEvent(el: MirrorElement): void {
   // HTML queues a bubbling, non-cancelable select event. It is not an edit:
   // no input/change event or value assignment is manufactured here.

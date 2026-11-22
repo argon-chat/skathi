@@ -712,8 +712,19 @@ declare global {
     colorSpace: string;
     /** Skathi, `type="color"`: the value is linear light past 1, and the picker has an intensity in stops. */
     hdr: boolean;
+    /** UTF-16 code units; `null` for a type without text selection (`number`, `email`, ...). */
+    selectionStart: number | null;
+    selectionEnd: number | null;
+    selectionDirection: "forward" | "backward" | "none" | null;
     select(): void;
     setSelectionRange(start: number | null, end: number | null, direction?: "forward" | "backward" | "none"): void;
+    setRangeText(replacement: string): void;
+    setRangeText(
+      replacement: string,
+      start: number,
+      end: number,
+      selectionMode?: "select" | "start" | "end" | "preserve",
+    ): void;
     stepUp(n?: number): void;
     stepDown(n?: number): void;
     /** Needs a user activation (NotAllowedError otherwise). */
@@ -729,8 +740,19 @@ declare global {
     placeholder: string;
     maxLength: number;
     minLength: number;
+    /** UTF-16 code units. */
+    selectionStart: number;
+    selectionEnd: number;
+    selectionDirection: "forward" | "backward" | "none";
     select(): void;
     setSelectionRange(start: number | null, end: number | null, direction?: "forward" | "backward" | "none"): void;
+    setRangeText(replacement: string): void;
+    setRangeText(
+      replacement: string,
+      start: number,
+      end: number,
+      selectionMode?: "select" | "start" | "end" | "preserve",
+    ): void;
   }
   interface HTMLSelectElement extends HTMLElement {
     value: string;

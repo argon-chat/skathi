@@ -1,0 +1,11 @@
+{
+  "name": "text-caret",
+
+  "window": {
+    "title": "Skathi — text caret (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

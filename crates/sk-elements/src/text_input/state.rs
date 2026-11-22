@@ -7,15 +7,20 @@
 //! (MIT); the caret blink is ported from Comet's `crates/ui/src/composer.rs`. API usage follows
 //! gpui's own `crates/gpui/examples/input.rs` (Apache-2.0, zed-industries/zed).
 
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
     px, App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable,
-    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription,
-    Task, TextInputConfiguration, TransformationMatrix, UTF16Selection, Window, WrappedLine,
+    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString,
+    Subscription, Task, TextInputConfiguration, TransformationMatrix, UTF16Selection, Window,
+    WrappedLine,
 };
+
+use super::element::ShapeKey;
 
 /// GPUI paints affine matrices in device pixels while pointer events and IME queries use logical
 /// window pixels, so the untransformed layout bounds alone cannot map either way.
@@ -185,6 +190,87 @@ fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
     }
 }
 
+fn utf16_len(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
+}
+
+/// Cuts `text` to at most `room` UTF-16 code units, never inside a character.
+fn truncate_utf16(text: &mut String, room: usize) {
+    let mut units = 0;
+    for (at, character) in text.char_indices() {
+        units += character.len_utf16();
+        if units > room {
+            text.truncate(at);
+            return;
+        }
+    }
+}
+
+/// The run of edits the last one belongs to, by where the caret ended up (a byte offset).
+/// Consecutive typing, or consecutive single-grapheme deletes in one direction, is one undo step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UndoGroup {
+    Typing(usize),
+    Backward(usize),
+    Forward(usize),
+}
+
+impl UndoGroup {
+    fn continued_by(
+        prev: Option<Self>,
+        content: &str,
+        range: &Range<usize>,
+        ty: InputType,
+    ) -> bool {
+        match (prev, ty) {
+            (Some(Self::Typing(at)), InputType::InsertText) => {
+                range.is_empty() && range.start == at
+            }
+            (Some(Self::Backward(at)), InputType::DeleteContentBackward) => {
+                range.end == at && boundaries::previous_grapheme(content, at) == range.start
+            }
+            (Some(Self::Forward(at)), InputType::DeleteContentForward) => {
+                range.start == at && boundaries::next_grapheme(content, at) == range.end
+            }
+            _ => false,
+        }
+    }
+
+    fn after(range: &Range<usize>, inserted: usize, ty: InputType) -> Option<Self> {
+        match ty {
+            InputType::InsertText => Some(Self::Typing(range.start + inserted)),
+            InputType::DeleteContentBackward => Some(Self::Backward(range.start)),
+            InputType::DeleteContentForward => Some(Self::Forward(range.start)),
+            _ => None,
+        }
+    }
+}
+
+/// The selection in UTF-16 code units, as the DOM's `selectionStart` / `selectionEnd` report it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaretUtf16 {
+    pub start: usize,
+    pub end: usize,
+    pub backward: bool,
+    /// The framework write the content corresponds to ([`TextInputState::sync_value`]).
+    pub synced_write: Option<u32>,
+}
+
+/// The caret as it stood when a hook was called from inside an update of the state, readable while
+/// the entity is leased. `None` outside such a hook.
+pub type CaretMirror = Rc<Cell<Option<CaretUtf16>>>;
+
+/// A size-to-content field's last measurement: its key, text width and row count.
+pub(crate) type MeasureCache = Rc<RefCell<Option<(ShapeKey, Pixels, usize)>>>;
+
+struct ExposedCaret(CaretMirror);
+
+impl Drop for ExposedCaret {
+    fn drop(&mut self) {
+        self.0.set(None);
+    }
+}
+
 #[derive(Clone)]
 struct EditSnapshot {
     content: String,
@@ -224,6 +310,12 @@ pub struct TextInputState {
 
     undo_stack: Vec<EditSnapshot>,
     redo_stack: Vec<EditSnapshot>,
+    undo_group: Option<UndoGroup>,
+    /// HTML `maxlength` in UTF-16 code units: caps what the user inserts, not assigned values.
+    max_length: Option<usize>,
+    /// Bumped on every content change; keys the shaped-layout cache.
+    revision: u64,
+    caret_mirror: CaretMirror,
 
     is_selecting: bool,
 
@@ -237,6 +329,10 @@ pub struct TextInputState {
 
     // Written by the element during prepaint; one entry per hard line (`WrappedLine` is not `Clone`).
     lines: Vec<LineBox>,
+    /// What `lines` were shaped from; the same key next frame reuses them.
+    shaped: Option<ShapeKey>,
+    display: Option<(u64, bool, SharedString)>,
+    measured: MeasureCache,
     last_bounds: Option<Bounds<Pixels>>,
     input_transform: InputTransform,
     line_height: Pixels,
@@ -308,6 +404,10 @@ impl TextInputState {
             controlled_value: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group: None,
+            max_length: None,
+            revision: 0,
+            caret_mirror: Rc::default(),
             is_selecting: false,
             multiline: false,
             input_config: TextInputConfiguration::default(),
@@ -315,6 +415,9 @@ impl TextInputState {
             config_queries: 0,
             reported_config: None,
             lines: Vec::new(),
+            shaped: None,
+            display: None,
+            measured: Rc::default(),
             last_bounds: None,
             input_transform: InputTransform::default(),
             line_height: px(20.0),
@@ -405,6 +508,26 @@ impl TextInputState {
         self.selected_range.clone()
     }
 
+    pub fn caret_utf16(&self) -> CaretUtf16 {
+        CaretUtf16 {
+            start: self.offset_to_utf16(self.selected_range.start),
+            end: self.offset_to_utf16(self.selected_range.end),
+            backward: self.selection_reversed,
+            synced_write: self.last_synced_write,
+        }
+    }
+
+    pub fn caret_mirror(&self) -> CaretMirror {
+        self.caret_mirror.clone()
+    }
+
+    /// Publishes the caret to [`Self::caret_mirror`] until the guard drops, around a hook that runs
+    /// JS while this entity is being updated.
+    fn expose_caret(&self) -> ExposedCaret {
+        self.caret_mirror.set(Some(self.caret_utf16()));
+        ExposedCaret(self.caret_mirror.clone())
+    }
+
     pub fn marked_range(&self) -> Option<Range<usize>> {
         self.marked_range.clone()
     }
@@ -415,6 +538,7 @@ impl TextInputState {
         read_only: bool,
         multiline: bool,
         input_config: TextInputConfiguration,
+        max_length: Option<usize>,
     ) {
         self.on_change = handlers.on_change;
         self.on_before_input = handlers.on_before_input;
@@ -424,6 +548,15 @@ impl TextInputState {
         self.read_only = read_only;
         self.multiline = multiline;
         self.input_config = input_config;
+        self.max_length = max_length;
+    }
+
+    /// How many UTF-16 code units `maxlength` leaves for text replacing `range`; `None` unlimited.
+    /// As in Chromium, the cut happens after `beforeinput`: a full field fires it and then no `input`.
+    fn room_for(&self, range: &Range<usize>) -> Option<usize> {
+        let max = self.max_length?;
+        let kept = utf16_len(&self.content) - utf16_len(self.content.get(range.clone())?);
+        Some(max.saturating_sub(kept))
     }
 
     /// `Some((configuration, queries))` the first time gpui has queried a configuration not yet
@@ -476,7 +609,11 @@ impl TextInputState {
         else {
             return;
         };
-        if on_key_down(key_down, window, cx) {
+        let proceed = {
+            let _caret = self.expose_caret();
+            on_key_down(key_down, window, cx)
+        };
+        if proceed {
             self.resync_controlled(cx);
             self.flush_abandoned_composition(window, cx);
             return;
@@ -508,6 +645,8 @@ impl TextInputState {
         }
         self.abandon_composition();
         self.content = value;
+        self.revision += 1;
+        self.undo_group = None;
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
@@ -542,7 +681,10 @@ impl TextInputState {
         let Some(hook) = self.on_before_input.clone() else {
             return true;
         };
-        let proceed = hook(intent, window, cx);
+        let proceed = {
+            let _caret = self.expose_caret();
+            hook(intent, window, cx)
+        };
         if intent.input_type.composing() {
             return true;
         }
@@ -579,6 +721,7 @@ impl TextInputState {
                 hook(CompositionPhase::End, &data, window, cx)
             });
         } else {
+            let _caret = self.expose_caret();
             hook(phase, data, window, cx);
         }
     }
@@ -624,6 +767,8 @@ impl TextInputState {
     ) {
         self.finish_composition(window, cx);
         self.content = snapshot.content;
+        self.revision += 1;
+        self.undo_group = None;
         self.selected_range = snapshot.selected_range;
         self.selection_reversed = snapshot.selection_reversed;
         self.reset_blink(cx);
@@ -631,12 +776,14 @@ impl TextInputState {
         cx.notify();
     }
 
-    /// The one place content is mutated by the user. `range` is a byte range into the content.
+    /// The one place content is mutated by the user. `range` is a byte range into the content;
+    /// `limited` applies `maxlength` (not to an IME pre-edit, which is capped when it commits).
     fn edit(
         &mut self,
         range: Range<usize>,
         new_text: &str,
         intent: InputIntent,
+        limited: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
@@ -644,16 +791,26 @@ impl TextInputState {
         let end = boundaries::snap(&self.content, range.end).max(start);
         let range = start..end;
 
-        let replacement = self.sanitize(new_text);
+        let mut replacement = self.sanitize(new_text);
+        if let Some(room) = self.room_for(&range).filter(|_| limited) {
+            truncate_utf16(&mut replacement, room);
+        }
         if replacement.is_empty() && range.is_empty() {
             return None;
         }
         // An IME composition is one undo step: only its first edit pushes a snapshot.
+        let ty = intent.input_type;
         if self.marked_range.is_none() {
-            self.push_undo();
+            if !UndoGroup::continued_by(self.undo_group, &self.content, &range, ty) {
+                self.push_undo();
+            }
+            self.undo_group = UndoGroup::after(&range, replacement.len(), ty);
+        } else {
+            self.undo_group = None;
         }
         self.content =
             self.content[..range.start].to_owned() + &replacement + &self.content[range.end..];
+        self.revision += 1;
         let inserted = range.start..range.start + replacement.len();
         self.reset_blink(cx);
         self.emit_change(intent, window, cx);
@@ -675,7 +832,7 @@ impl TextInputState {
             .marked_range
             .clone()
             .unwrap_or_else(|| self.selected_range.clone());
-        let Some(inserted) = self.edit(range, text, intent, window, cx) else {
+        let Some(inserted) = self.edit(range, text, intent, true, window, cx) else {
             return;
         };
         self.selected_range = inserted.end..inserted.end;
@@ -722,6 +879,7 @@ impl TextInputState {
         let offset = boundaries::snap(&self.content, offset);
         self.selected_range = offset..offset;
         self.selection_reversed = false;
+        self.undo_group = None;
         self.reset_blink(cx);
         cx.notify();
     }
@@ -746,6 +904,7 @@ impl TextInputState {
         let end = boundaries::snap(&self.content, range.end);
         self.selected_range = start.min(end)..start.max(end);
         self.selection_reversed = false;
+        self.undo_group = None;
         self.reset_blink(cx);
         cx.notify();
     }
@@ -1081,22 +1240,55 @@ impl TextInputState {
         };
     }
 
-    /// Called by the element every frame once the text is shaped; the lines are moved in.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// What is drawn for the content (masked for a password), kept until the content changes.
+    pub(crate) fn display_shared(&mut self) -> SharedString {
+        match &self.display {
+            Some((revision, masked, text))
+                if *revision == self.revision && *masked == self.masked =>
+            {
+                text.clone()
+            }
+            _ => {
+                let text = SharedString::from(self.display_text());
+                self.display = Some((self.revision, self.masked, text.clone()));
+                text
+            }
+        }
+    }
+
+    pub(crate) fn shaped_key(&self) -> Option<&ShapeKey> {
+        self.shaped.as_ref()
+    }
+
+    pub(crate) fn measure_cache(&self) -> MeasureCache {
+        self.measured.clone()
+    }
+
+    /// Called by the element every frame; `shaped` is `None` when the lines from the last frame
+    /// still match ([`Self::shaped_key`]).
     pub(crate) fn set_layout(
         &mut self,
         bounds: Bounds<Pixels>,
-        lines: Vec<LineBox>,
+        shaped: Option<(Vec<LineBox>, ShapeKey)>,
         line_height: Pixels,
         display_is_placeholder: bool,
         text_align: gpui::TextAlign,
     ) {
-        self.content_width = lines
+        if let Some((lines, key)) = shaped {
+            self.lines = lines;
+            self.shaped = Some(key);
+        }
+        self.content_width = self
+            .lines
             .iter()
             .map(|l| l.line.width())
             .fold(px(0.0), Pixels::max);
-        let rows: usize = lines.iter().map(|l| l.rows).sum();
+        let rows: usize = self.lines.iter().map(|l| l.rows).sum();
         self.content_height = line_height * rows.max(1) as f32;
-        self.lines = lines;
         self.last_bounds = Some(bounds);
         self.line_height = line_height;
         self.display_is_placeholder = display_is_placeholder;
@@ -1434,7 +1626,7 @@ impl EntityInputHandler for TextInputState {
             let intent = InputIntent::with(InputType::InsertCompositionText, new_text);
             self.before_input(&intent, window, cx);
             self.composition(CompositionPhase::Update, new_text, window, cx);
-            if let Some(inserted) = self.edit(range_of(self), new_text, intent, window, cx) {
+            if let Some(inserted) = self.edit(range_of(self), new_text, intent, true, window, cx) {
                 self.selected_range = inserted.end..inserted.end;
                 self.selection_reversed = false;
             }
@@ -1456,7 +1648,7 @@ impl EntityInputHandler for TextInputState {
         if !self.before_input(&intent, window, cx) {
             return;
         }
-        let Some(inserted) = self.edit(range_of(self), new_text, intent, window, cx) else {
+        let Some(inserted) = self.edit(range_of(self), new_text, intent, true, window, cx) else {
             return;
         };
         self.selected_range = inserted.end..inserted.end;
@@ -1492,7 +1684,7 @@ impl EntityInputHandler for TextInputState {
                     return;
                 }
                 let range = self.selected_range.clone();
-                if let Some(inserted) = self.edit(range, "", intent, window, cx) {
+                if let Some(inserted) = self.edit(range, "", intent, false, window, cx) {
                     self.selected_range = inserted.end..inserted.end;
                     self.selection_reversed = false;
                 }
@@ -1510,7 +1702,7 @@ impl EntityInputHandler for TextInputState {
         self.before_input(&intent, window, cx);
         self.composition(CompositionPhase::Update, new_text, window, cx);
 
-        let Some(inserted) = self.edit(range, new_text, intent, window, cx) else {
+        let Some(inserted) = self.edit(range, new_text, intent, false, window, cx) else {
             if self.marked_range.take().is_some() {
                 cx.notify();
             }
@@ -1621,6 +1813,71 @@ fn unmasked_offset(content: &str, masked: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_at_the_caret_is_one_undo_step_until_the_caret_jumps() {
+        let ty = InputType::InsertText;
+        let after_a = UndoGroup::after(&(0..0), 1, ty);
+        assert_eq!(after_a, Some(UndoGroup::Typing(1)));
+        assert!(UndoGroup::continued_by(after_a, "a", &(1..1), ty));
+        assert!(
+            !UndoGroup::continued_by(after_a, "ab", &(0..0), ty),
+            "elsewhere"
+        );
+        assert!(
+            !UndoGroup::continued_by(after_a, "ab", &(1..2), ty),
+            "over a selection"
+        );
+        assert!(!UndoGroup::continued_by(None, "a", &(1..1), ty));
+        assert!(!UndoGroup::continued_by(
+            after_a,
+            "a",
+            &(1..1),
+            InputType::InsertFromPaste
+        ));
+        assert_eq!(
+            UndoGroup::after(&(1..1), 1, InputType::InsertLineBreak),
+            None
+        );
+    }
+
+    #[test]
+    fn single_deletes_group_per_direction_and_per_grapheme() {
+        let text = "aé🙂b";
+        let back = InputType::DeleteContentBackward;
+        let at = text.len() - 1;
+        let group = UndoGroup::after(&(at..text.len()), 0, back);
+        let emoji = at - "🙂".len()..at;
+        assert!(UndoGroup::continued_by(group, text, &emoji, back));
+        assert!(
+            !UndoGroup::continued_by(group, text, &(1..at), back),
+            "a word, not one grapheme"
+        );
+        let fwd = InputType::DeleteContentForward;
+        assert!(!UndoGroup::continued_by(group, text, &emoji, fwd));
+        let group = UndoGroup::after(&(1..1 + "é".len()), 0, fwd);
+        assert!(UndoGroup::continued_by(
+            group,
+            "a🙂b",
+            &(1..1 + "🙂".len()),
+            fwd
+        ));
+    }
+
+    #[test]
+    fn maxlength_truncation_counts_utf16_units_and_keeps_characters_whole() {
+        let cut = |s: &str, room| {
+            let mut s = s.to_owned();
+            truncate_utf16(&mut s, room);
+            s
+        };
+        assert_eq!(cut("abc", 2), "ab");
+        assert_eq!(cut("a🙂b", 2), "a", "the emoji takes two units");
+        assert_eq!(cut("a🙂b", 3), "a🙂");
+        assert_eq!(cut("abc", 0), "");
+        assert_eq!(cut("abc", 9), "abc");
+        assert_eq!(utf16_len("я🙂"), 3);
+    }
 
     #[test]
     fn masked_offsets_round_trip_across_multibyte_characters() {
