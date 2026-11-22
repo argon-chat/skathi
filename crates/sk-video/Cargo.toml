@@ -23,7 +23,7 @@ name = "gstreamer"
 harness = false
 
 [dependencies]
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.6.0", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.7.0", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
 sk-resample = { path = "../sk-resample", version = "0.7.0" }

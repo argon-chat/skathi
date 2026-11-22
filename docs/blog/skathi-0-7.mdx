@@ -2,8 +2,8 @@
 title: Skathi 0.7
 metaTitle: "Skathi 0.7: AOT on macOS, a standard library, and C libraries from JS"
 description: Ahead-of-time compilation on Apple Silicon and for an embedder's own executable, the skathi:* standard library, calls into C libraries with permissions, effects that follow CPU pressure and the power profile, CSS entry transitions, Vite+ builds, and the end-to-end test harness on npm.
-date: 2026-11-21
-draft: true
+date: 2026-11-22
+draft: false
 tags: [release, aot, std, css]
 release:
   version: "0.7.0"
@@ -141,6 +141,7 @@ sqlite.symbols.sqlite3_libversion(); // "3.46.0"
 
 - **Permissions.** A library loads only by a name the config lists, from the app's own folder (`$APP`) or from the system's (`$SYSTEM`). `sk build` copies `$APP` libraries beside the exe, and into `Contents/Frameworks` of a macOS bundle. `sk check` compares every `dlopen()` with the list before the app runs (the new `SK6` codes).
 - **Types from the signature.** TypeScript types each function from the literal you pass. A value of the wrong type is a `TypeError` that names the function and the argument; nothing is converted silently.
+- **Structs.** `struct({ x: "i32", y: "i32" })` describes a C struct with the layout a C compiler gives it. The type goes in a signature for a struct passed or returned by value, and packs the bytes for a parameter that is a pointer to one.
 - **Callbacks.** `new NativeCallback(fn, signature)` gives the library a function pointer. The thunks are built into the host, so callbacks work without a JIT.
 - **Off the JS thread.** `nonblocking: true` runs a call on a worker thread and returns a promise.
 - **Cost.** A call with numbers, pointers or buffers takes 0.1 to 0.2 µs and allocates nothing.
@@ -181,6 +182,7 @@ delay.connect(context.destination);
 - A feedback loop works with a `DelayNode` in it, as in the spec.
 - A `ConvolverNode` takes mono, stereo and four-channel impulse responses and adds no latency.
 - `suspend()` now stops `currentTime` as well as the output, and `resume()` goes on from the same time.
+- A machine with no audio output runs a context silently: `currentTime` moves and sources end, as in a browser.
 - A window that is minimized or covered keeps its timers while an `AudioContext` plays, so a scheduler that looks a few tens of milliseconds ahead keeps time.
 
 The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser.
