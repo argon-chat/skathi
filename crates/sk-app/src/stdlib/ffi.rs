@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-use sk_ffi::{Signature, Type};
+use sk_ffi::{Argument, Returning, Signature, StructLayout, Type};
 use sk_runtime::host;
 use sk_runtime::redjs::capi::{self, JSClassRef};
 use sk_runtime::redjs::glue;
@@ -37,6 +37,8 @@ enum Kind {
     CString,
     /// The same as NUL-terminated UTF-16.
     WString,
+    /// A struct by value, of the layout the function keeps beside the kind.
+    Struct,
 }
 
 const KINDS: &[(&str, Kind)] = &[
@@ -72,7 +74,7 @@ impl Kind {
         KINDS
             .iter()
             .find(|(_, k)| *k == self)
-            .map_or("?", |(n, _)| n)
+            .map_or("struct", |(n, _)| n)
     }
 }
 
@@ -82,6 +84,11 @@ struct Function {
     signature: Signature,
     args: Vec<Kind>,
     returns: Kind,
+    /// The layout of every argument that is a struct.
+    structs: Vec<Option<Arc<StructDef>>>,
+    returned: Option<Arc<StructDef>>,
+    /// Some argument or the return is a struct.
+    by_value: bool,
     errno: bool,
     /// The call runs on a worker thread and answers with a promise.
     nonblocking: bool,
@@ -147,7 +154,17 @@ unsafe fn length(g: *mut c_void, array: u64) -> usize {
     to_number(g, get(g, array, "length")).unwrap_or(0.0) as usize
 }
 
+unsafe fn parse_type(g: *mut c_void, v: u64, what: &str) -> Js<(Kind, Option<Arc<StructDef>>)> {
+    if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
+        return Ok((Kind::Struct, Some(of.def.clone())));
+    }
+    Ok((parse_kind(g, v, what)?, None))
+}
+
 unsafe fn parse_kind(g: *mut c_void, v: u64, what: &str) -> Js<Kind> {
+    if host_data::<StructType>(g, struct_class(), v).is_some() {
+        return type_error(g, &format!("{what}: a callback takes and returns no struct by value; a struct arrives as a \"pointer\""));
+    }
     let name = if kind(g, v) == KIND_STRING {
         read_string(g, v).unwrap_or_default()
     } else {
@@ -158,12 +175,6 @@ unsafe fn parse_kind(g: *mut c_void, v: u64, what: &str) -> Js<Kind> {
     }
     if name == "callback" {
         return type_error(g, &format!("{what}: \"callback\" is not a type; make a NativeCallback and pass its pointer to a \"pointer\" parameter"));
-    }
-    if name.is_empty() || name.starts_with("struct") {
-        return type_error(
-            g,
-            &format!("{what}: a struct cannot be passed or returned by value; pass a \"pointer\" or a \"buffer\" that holds it"),
-        );
     }
     let known: Vec<&str> = KINDS.iter().map(|(n, _)| *n).collect();
     type_error(
@@ -186,14 +197,17 @@ unsafe fn parse_function(
     let what = format!("dlopen: {library}.{name}");
     let types = get_i(g, def, 1);
     let mut args = Vec::new();
+    let mut structs = Vec::new();
     for i in 0..length(g, types) {
-        let kind = parse_kind(g, get_i(g, types, i as u32), &what)?;
+        let (kind, of) = parse_type(g, get_i(g, types, i as u32), &what)?;
+        structs.push(of);
         if kind == Kind::Plain(Type::Void) {
             return type_error(g, &format!("{what}: \"void\" is not an argument type"));
         }
         args.push(kind);
     }
-    let returns = parse_kind(g, get_i(g, def, 2), &what)?;
+    let (returns, returned) = parse_type(g, get_i(g, def, 2), &what)?;
+    let by_value = returned.is_some() || structs.iter().any(Option::is_some);
     if returns == Kind::Buffer {
         return type_error(
             g,
@@ -209,6 +223,8 @@ unsafe fn parse_function(
     let buffers = args.contains(&Kind::Buffer);
     let fixed = if variadic == UNDEF {
         None
+    } else if by_value {
+        return type_error(g, &format!("{what}: a variadic function takes and returns no struct by value; pass a \"pointer\" to the struct"));
     } else {
         let named = count(g, variadic, &format!("{what}: variadic"))?;
         if named > args.len() {
@@ -243,6 +259,9 @@ unsafe fn parse_function(
         address: address as usize,
         args,
         returns,
+        structs,
+        returned,
+        by_value,
         errno,
         nonblocking,
         buffers,
@@ -352,7 +371,7 @@ unsafe fn to_slot(
 ) -> Js<u64> {
     let nothing = v == NULL || v == UNDEF;
     match kind_of {
-        Kind::Buffer => Ok(0),
+        Kind::Buffer | Kind::Struct => Ok(0),
         Kind::CString if nothing => Ok(0),
         Kind::CString => {
             if kind(g, v) != KIND_STRING {
@@ -440,7 +459,7 @@ unsafe fn w_string(g: *mut c_void, address: u64, limit: Option<usize>) -> u64 {
 
 unsafe fn from_slot(g: *mut c_void, value: u64, kind_of: Kind) -> Js<u64> {
     Ok(match kind_of {
-        Kind::Buffer | Kind::Plain(Type::Void) => UNDEF,
+        Kind::Buffer | Kind::Struct | Kind::Plain(Type::Void) => UNDEF,
         Kind::CString if value == 0 => NULL,
         Kind::CString => c_string(g, value, None),
         Kind::WString if value == 0 => NULL,
@@ -462,6 +481,7 @@ struct Job {
     address: usize,
     signature: Signature,
     slots: Vec<u64>,
+    structs: Vec<Packed>,
     label: &'static CStr,
     done: Done,
     _arena: Arena,
@@ -472,6 +492,7 @@ struct Done {
     g: usize,
     settler: host::Settler,
     returns: Kind,
+    returned: Packed,
     errno: bool,
     /// A buffer argument and the copy the library worked on, which is written back to it.
     buffers: Vec<(u64, Vec<u8>)>,
@@ -500,7 +521,7 @@ static FINISHED: Mutex<Vec<(Done, sk_ffi::Outcome)>> = Mutex::new(Vec::new());
 
 fn work() {
     loop {
-        let job = {
+        let mut job = {
             let mut guard = POOL.lock().unwrap_or_else(|e| e.into_inner());
             loop {
                 let pool = guard.get_or_insert_with(Pool::default);
@@ -515,7 +536,17 @@ fn work() {
             }
         };
         let outcome = sk_ffi::in_call(job.label, || unsafe {
-            sk_ffi::call(job.address as *const (), &job.signature, &job.slots)
+            if job.structs.is_empty() && job.done.returned.is_none() {
+                sk_ffi::call(job.address as *const (), &job.signature, &job.slots)
+            } else {
+                perform(
+                    job.address,
+                    &job.signature,
+                    &job.slots,
+                    &job.structs,
+                    &mut job.done.returned,
+                )
+            }
         });
         FINISHED
             .lock()
@@ -557,6 +588,7 @@ unsafe fn call_on_worker(
     function: &Function,
     values: &[u64],
     mut slots: Vec<u64>,
+    structs: Vec<Packed>,
     arena: Arena,
     what: &str,
 ) -> Js<u64> {
@@ -593,11 +625,16 @@ unsafe fn call_on_worker(
         address: function.address,
         signature: function.signature.clone(),
         slots,
+        structs,
         label: function.label,
         done: Done {
             g: g as usize,
             settler,
             returns: function.returns,
+            returned: function
+                .returned
+                .as_ref()
+                .map(|def| (def.clone(), def.room())),
             errno: function.errno,
             buffers: buffers.into_iter().map(|(_, v, copy)| (v, copy)).collect(),
         },
@@ -614,7 +651,7 @@ unsafe fn finish(done: Done, outcome: sk_ffi::Outcome) {
         }
         capi::JSValueUnprotect(g as _, *v as usize as _);
     }
-    let value = match from_slot(g, outcome.value, done.returns) {
+    let value = match returned_value(g, outcome.value, done.returns, &done.returned) {
         Ok(value) if done.errno => with_errno(g, value, outcome.os_error),
         Ok(value) => value,
         Err(Thrown) => {
@@ -686,9 +723,19 @@ std_fn!(fn library_call(g, args) {
         let what = Site { arg: Some((i, *kind_of)), ..what };
         slots[i] = to_slot(g, args.arg(i as u32 + 1).0, *kind_of, &mut arena, &what)?;
     }
+    let mut structs: Vec<Packed> = Vec::new();
+    if function.by_value {
+        for (i, def) in function.structs.iter().enumerate() {
+            let what = Site { arg: Some((i, Kind::Struct)), ..what };
+            structs.push(match def {
+                Some(def) => Some((def.clone(), fill(g, def, args.arg(i as u32 + 1).0, &what)?)),
+                None => None,
+            });
+        }
+    }
     if function.nonblocking {
         let values: Vec<u64> = (0..given).map(|i| args.arg(i as u32 + 1).0).collect();
-        return call_on_worker(g, function, &values, slots.to_vec(), arena, &what.to_string());
+        return call_on_worker(g, function, &values, slots.to_vec(), structs, arena, &what.to_string());
     }
     if function.buffers {
         for (i, kind_of) in function.args.iter().enumerate() {
@@ -700,8 +747,13 @@ std_fn!(fn library_call(g, args) {
     }
     let entered = ENTERED.get();
     DEPTH.set(DEPTH.get() + 1);
+    let mut returned: Packed = function.returned.as_ref().map(|def| (def.clone(), def.room()));
     let outcome = sk_ffi::in_call(function.label, || {
-        sk_ffi::call(function.address as *const (), &function.signature, slots)
+        if function.by_value {
+            perform(function.address, &function.signature, slots, &structs, &mut returned)
+        } else {
+            sk_ffi::call(function.address as *const (), &function.signature, slots)
+        }
     });
     DEPTH.set(DEPTH.get() - 1);
     drop(arena);
@@ -713,7 +765,7 @@ std_fn!(fn library_call(g, args) {
             return Err(Thrown);
         }
     }
-    let value = from_slot(g, outcome.value, function.returns)?;
+    let value = returned_value(g, outcome.value, function.returns, &returned)?;
     if !function.errno {
         return Ok(value);
     }
@@ -1095,9 +1147,351 @@ std_fn!(fn callback_close(g, args) {
 std_fn!(fn callback_closed(g, args) { Ok(enc_bool(callback(g, args.this().0)?.callback.is_none())) });
 std_fn!(fn callback_live(_g, _args) { Ok(enc_f64(sk_ffi::live_callbacks() as f64)) });
 
+/// What a field of a struct holds.
+enum Shape {
+    Scalar(Type),
+    Struct(Arc<StructDef>),
+    Array(Box<Shape>, usize),
+}
+
+struct Field {
+    name: String,
+    offset: usize,
+    shape: Shape,
+}
+
+struct StructDef {
+    fields: Vec<Field>,
+    layout: StructLayout,
+}
+
+struct StructType {
+    def: Arc<StructDef>,
+}
+
+/// The bytes of a struct for a call, aligned for any field.
+type Room = Vec<u64>;
+/// A struct argument or return of one call.
+type Packed = Option<(Arc<StructDef>, Room)>;
+
+const STRUCT_LIMIT: usize = 65536;
+
+impl Shape {
+    fn size(&self) -> usize {
+        match self {
+            Shape::Scalar(ty) => ty.size(),
+            Shape::Struct(def) => def.layout.size,
+            Shape::Array(of, count) => of.size() * count,
+        }
+    }
+
+    fn align(&self) -> usize {
+        match self {
+            Shape::Scalar(ty) => ty.size(),
+            Shape::Struct(def) => def.layout.align,
+            Shape::Array(of, _) => of.align(),
+        }
+    }
+
+    fn flatten(&self, at: usize, into: &mut Vec<(Type, usize)>) {
+        match self {
+            Shape::Scalar(ty) => into.push((*ty, at)),
+            Shape::Struct(def) => {
+                into.extend(
+                    def.layout
+                        .fields
+                        .iter()
+                        .map(|(ty, offset)| (*ty, at + offset)),
+                );
+            }
+            Shape::Array(of, count) => {
+                for i in 0..*count {
+                    of.flatten(at + i * of.size(), into);
+                }
+            }
+        }
+    }
+}
+
+impl StructDef {
+    fn room(&self) -> Room {
+        vec![0; self.layout.size.div_ceil(8)]
+    }
+}
+
+static STRUCT: OnceLock<usize> = OnceLock::new();
+
+fn struct_class() -> JSClassRef {
+    host_class::<StructType>(&STRUCT, "StructType")
+}
+
+unsafe fn struct_of<'a>(g: *mut c_void, this: u64) -> Js<&'a StructDef> {
+    match host_data::<StructType>(g, struct_class(), this) {
+        Some(state) => Ok(&state.def),
+        None => type_error(g, "this is not a struct type"),
+    }
+}
+
+unsafe fn is_object(g: *mut c_void, v: u64) -> bool {
+    is_cell(v) && kind(g, v) != KIND_STRING
+}
+
+unsafe fn parse_shape(g: *mut c_void, v: u64, what: &str) -> Js<Shape> {
+    if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
+        return Ok(Shape::Struct(of.def.clone()));
+    }
+    if kind(g, v) == KIND_STRING {
+        let name = read_string(g, v).unwrap_or_default();
+        return match KINDS.iter().find(|(n, _)| *n == name) {
+            Some((_, Kind::Plain(ty))) if *ty != Type::Void => Ok(Shape::Scalar(*ty)),
+            _ => type_error(g, &format!("{what}: \"{name}\" is not a type of a field; a field is \"bool\", a number type, \"pointer\", a struct or [type, count]")),
+        };
+    }
+    if is_object(g, v) && length(g, v) == 2 {
+        let of = parse_shape(g, get_i(g, v, 0), what)?;
+        let count = count(g, get_i(g, v, 1), &format!("{what}: the count of an array"))?;
+        if count == 0 || count > STRUCT_LIMIT {
+            return range_error(
+                g,
+                &format!("{what}: an array has from 1 to {STRUCT_LIMIT} elements"),
+            );
+        }
+        return Ok(Shape::Array(Box::new(of), count));
+    }
+    type_error(
+        g,
+        &format!(
+            "{what}: a field is \"bool\", a number type, \"pointer\", a struct or [type, count]"
+        ),
+    )
+}
+
+// `struct(entries, fields)`: the fields as `[name, type]` in order, and the object they came from.
+std_fn!(fn struct_new(g, args) {
+    let entries = args.arg(0).0;
+    let offsets = new_object(g, UNDEF);
+    let mut fields = Vec::new();
+    let mut flat = Vec::new();
+    let (mut size, mut align) = (0usize, 1usize);
+    for i in 0..length(g, entries) {
+        let entry = get_i(g, entries, i as u32);
+        let name = string(g, get_i(g, entry, 0), "struct: a field's name")?;
+        let shape = parse_shape(g, get_i(g, entry, 1), &format!("struct: field {name}"))?;
+        let offset = size.next_multiple_of(shape.align());
+        size = offset + shape.size();
+        if size > STRUCT_LIMIT {
+            return range_error(g, &format!("struct: a struct is at most {STRUCT_LIMIT} bytes"));
+        }
+        align = align.max(shape.align());
+        shape.flatten(offset, &mut flat);
+        define(g, offsets, &name, enc_f64(offset as f64), 0);
+        fields.push(Field { name, offset, shape });
+    }
+    if fields.is_empty() {
+        return type_error(g, "struct: a struct has at least one field, as { name: type }");
+    }
+    let layout = StructLayout { size: size.next_multiple_of(align), align, fields: flat };
+    let state = StructType { def: Arc::new(StructDef { fields, layout }) };
+    let object = host_create(g, struct_class(), prototype(g, "StructType"), state);
+    define(g, object, "fields", args.arg(1).0, 0);
+    define(g, object, "offsets", offsets, 0);
+    Ok(object)
+});
+
+/// A field of a struct, for an error message.
+struct Within<'a> {
+    outer: &'a dyn Display,
+    field: &'a str,
+}
+
+impl Display for Within<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: field {}", self.outer, self.field)
+    }
+}
+
+/// Writes the fields `v` has; one it leaves out stays zero.
+unsafe fn pack(g: *mut c_void, def: &StructDef, v: u64, to: *mut u8, what: &dyn Display) -> Js<()> {
+    if !is_object(g, v) {
+        return type_error(
+            g,
+            &format!("{what} must be an object of the struct's fields"),
+        );
+    }
+    for field in &def.fields {
+        let given = get(g, v, &field.name);
+        if given != UNDEF {
+            let what = Within {
+                outer: what,
+                field: &field.name,
+            };
+            write_field(g, &field.shape, given, to.add(field.offset), &what)?;
+        }
+    }
+    Ok(())
+}
+
+unsafe fn write_field(
+    g: *mut c_void,
+    shape: &Shape,
+    v: u64,
+    to: *mut u8,
+    what: &dyn Display,
+) -> Js<()> {
+    match shape {
+        Shape::Scalar(ty) => {
+            let bits = to_slot(g, v, Kind::Plain(*ty), &mut Arena::default(), what)?;
+            std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to, ty.size());
+        }
+        Shape::Struct(def) => pack(g, def, v, to, what)?,
+        Shape::Array(of, count) => {
+            if !is_object(g, v) || length(g, v) != *count {
+                return type_error(g, &format!("{what} must be an array of {count} elements"));
+            }
+            for i in 0..*count {
+                write_field(g, of, get_i(g, v, i as u32), to.add(i * of.size()), what)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A struct argument: an object of its fields, or bytes that already hold it.
+unsafe fn fill(g: *mut c_void, def: &StructDef, v: u64, what: &dyn Display) -> Js<Room> {
+    let mut room = def.room();
+    match buffer_source(g, v) {
+        Some(view) if view.len == def.layout.size => {
+            std::ptr::copy_nonoverlapping(
+                view.data as *const u8,
+                room.as_mut_ptr().cast(),
+                view.len,
+            );
+        }
+        Some(view) => {
+            return type_error(
+                g,
+                &format!(
+                    "{what} is {} bytes, and the struct is {}",
+                    view.len, def.layout.size
+                ),
+            );
+        }
+        None => pack(g, def, v, room.as_mut_ptr().cast(), what)?,
+    }
+    Ok(room)
+}
+
+/// `trusted` bytes came from a native call; a pointer out of any others is one made from an address.
+unsafe fn unpack(g: *mut c_void, def: &StructDef, from: *const u8, trusted: bool) -> Js<u64> {
+    let object = new_object(g, UNDEF);
+    for field in &def.fields {
+        let value = read_field(g, &field.shape, from.add(field.offset), trusted)?;
+        define(g, object, &field.name, value, 0);
+    }
+    Ok(object)
+}
+
+unsafe fn read_field(g: *mut c_void, shape: &Shape, from: *const u8, trusted: bool) -> Js<u64> {
+    match shape {
+        Shape::Scalar(ty) => {
+            let mut raw = [0u8; 8];
+            std::ptr::copy_nonoverlapping(from, raw.as_mut_ptr(), ty.size());
+            let bits = ty.normalize(u64::from_le_bytes(raw));
+            if *ty == Type::Pointer && bits != 0 && !trusted && !permissions::current().ffi_address
+            {
+                return dom(g, "NotAllowedError", "unpack: a pointer read from bytes needs \"permissions\": { \"ffiAddress\": true } in sk.config.json");
+            }
+            from_slot(g, bits, Kind::Plain(*ty))
+        }
+        Shape::Struct(def) => unpack(g, def, from, trusted),
+        Shape::Array(of, count) => {
+            let array = new_array(g);
+            for i in 0..*count {
+                let value = read_field(g, of, from.add(i * of.size()), trusted)?;
+                set_i(g, array, i as u32, value);
+            }
+            Ok(array)
+        }
+    }
+}
+
+std_fn!(fn struct_size(g, args) { Ok(enc_f64(struct_of(g, args.this().0)?.layout.size as f64)) });
+std_fn!(fn struct_align(g, args) { Ok(enc_f64(struct_of(g, args.this().0)?.layout.align as f64)) });
+
+std_fn!(fn struct_pack(g, args) {
+    let def = struct_of(g, args.this().0)?;
+    // Packed aside: reading the fields may allocate, and an allocation may move a new array's bytes.
+    let mut room = def.room();
+    pack(g, def, args.arg(0).0, room.as_mut_ptr().cast(), &"pack: the value")?;
+    let (array, out) = typed_array(g, TA_U8, def.layout.size)?;
+    std::ptr::copy_nonoverlapping(room.as_ptr().cast::<u8>(), out.as_mut_ptr(), out.len());
+    Ok(array)
+});
+
+std_fn!(fn struct_unpack(g, args) {
+    let def = struct_of(g, args.this().0)?;
+    let bytes = bytes_arg(g, args.arg(0).0, "unpack: the bytes")?;
+    let offset = if args.arg(1).0 == UNDEF { 0 } else { count(g, args.arg(1).0, "unpack: the offset")? };
+    let size = def.layout.size;
+    if offset > bytes.len() || bytes.len() - offset < size {
+        return range_error(g, &format!("unpack: the struct is {size} bytes, and {} are left at offset {offset}", bytes.len().saturating_sub(offset)));
+    }
+    let mut room = def.room();
+    std::ptr::copy_nonoverlapping(bytes.as_ptr().add(offset), room.as_mut_ptr().cast(), size);
+    unpack(g, def, room.as_ptr().cast(), false)
+});
+
+/// A call with a struct among its arguments or as its return.
+unsafe fn perform(
+    address: usize,
+    signature: &Signature,
+    slots: &[u64],
+    structs: &[Packed],
+    returned: &mut Packed,
+) -> sk_ffi::Outcome {
+    let args: Vec<Argument<'_>> = signature
+        .args
+        .iter()
+        .zip(slots)
+        .enumerate()
+        .map(
+            |(i, (ty, bits))| match structs.get(i).and_then(Option::as_ref) {
+                Some((def, room)) => Argument::Struct(&def.layout, room.as_ptr().cast()),
+                None => Argument::Scalar(*ty, *bits),
+            },
+        )
+        .collect();
+    let returning = match returned {
+        Some((def, room)) => Returning::Struct(&def.layout, room.as_mut_ptr().cast()),
+        None => Returning::Scalar(signature.returns),
+    };
+    sk_ffi::call_with(address as *const (), &args, returning, signature.fixed)
+}
+
+unsafe fn returned_value(g: *mut c_void, value: u64, kind_of: Kind, returned: &Packed) -> Js<u64> {
+    match returned {
+        Some((def, room)) => unpack(g, def, room.as_ptr().cast(), true),
+        None => from_slot(g, value, kind_of),
+    }
+}
+
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
     let module = new_object(g, UNDEF);
     static_fn(g, module, "open", 2, ffi_open);
+    static_fn(g, module, "struct", 2, struct_new);
+
+    support::class(
+        g,
+        &ClassSpec {
+            name: "StructType",
+            arity: 0,
+            construct: None,
+            parent_proto: 0,
+            methods: &[("pack", 1, struct_pack), ("unpack", 1, struct_unpack)],
+            getters: &[("size", struct_size), ("align", struct_align)],
+            accessors: &[],
+        },
+    );
 
     support::class(
         g,

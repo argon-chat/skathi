@@ -8,7 +8,7 @@ import { TOML } from "skathi:toml";
 import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
 import { EXPECTED, gpu } from "./gpu";
-import { callbacks, ffi, threads, workers } from "./native";
+import { callbacks, ffi, structs, threads, workers } from "./native";
 import { collections } from "./structures";
 import { text } from "./strings";
 
@@ -85,6 +85,13 @@ Object.assign(globalThis, {
       );
     },
     workersResult: null as string | null,
+    structsResult: null as string | null,
+    startStructs() {
+      void structs().then(
+        (result) => (this.structsResult = JSON.stringify({ result })),
+        (error: unknown) => (this.structsResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     startWorkers() {
       void workers().then(
         (result) => (this.workersResult = JSON.stringify({ result })),

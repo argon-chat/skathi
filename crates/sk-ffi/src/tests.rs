@@ -581,3 +581,343 @@ fn more_stack_arguments_than_the_frame_holds_inline() {
     let outcome = unsafe { call(many as *const (), &signature, &args) };
     assert_eq!(outcome.value, expected);
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct One {
+    a: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pair {
+    a: i32,
+    b: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Three {
+    a: i32,
+    b: i32,
+    c: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Mixed {
+    d: f64,
+    i: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Vec2 {
+    x: f32,
+    y: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Quad {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Big {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Odd {
+    tag: u8,
+    f: f32,
+    wide: u64,
+}
+
+trait Layouted: Copy + PartialEq + std::fmt::Debug {
+    fn layout() -> StructLayout;
+    fn sample(seed: i32) -> Self;
+}
+
+macro_rules! layouts {
+    ($($name:ident { $($field:ident: $ty:ident = $value:expr),* })*) => {$(
+        impl Layouted for $name {
+            fn layout() -> StructLayout {
+                StructLayout {
+                    size: std::mem::size_of::<$name>(),
+                    align: std::mem::align_of::<$name>(),
+                    fields: vec![$((Type::$ty, std::mem::offset_of!($name, $field))),*],
+                }
+            }
+            fn sample(seed: i32) -> Self {
+                let s = seed;
+                let _ = s;
+                $name { $($field: $value(s)),* }
+            }
+        }
+    )*};
+}
+
+layouts! {
+    One { a: I32 = |s: i32| s * 7 - 3 }
+    Pair { a: I32 = |s: i32| s + 11, b: I32 = |s: i32| -s * 5 }
+    Three { a: I32 = |s: i32| s, b: I32 = |s: i32| s * 100, c: I32 = |s: i32| -s - 9 }
+    Mixed { d: F64 = |s: i32| s as f64 * 1.5e9 + 0.25, i: I32 = |s: i32| s ^ 0x55aa }
+    Vec2 { x: F32 = |s: i32| s as f32 + 0.5, y: F32 = |s: i32| -(s as f32) * 2.25 }
+    Quad { a: F64 = |s: i32| s as f64, b: F64 = |s: i32| s as f64 * -3.5, c: F64 = |s: i32| 1e-3 * s as f64, d: F64 = |s: i32| 7.0 + s as f64 }
+    Big { a: I64 = |s: i32| s as i64 * 0x1_0000_0001, b: I64 = |s: i32| -(s as i64) - 1, c: I64 = |s: i32| s as i64 * 31 }
+    Odd { tag: U8 = |s: i32| s as u8, f: F32 = |s: i32| s as f32 / 8.0, wide: U64 = |s: i32| s as u64 * 0x0101_0101_0101 }
+}
+
+fn fold(state: &mut u64, bits: u64) {
+    *state = state.rotate_left(13) ^ bits.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+}
+
+macro_rules! digest {
+    ($state:ident, $($value:expr),*) => {$( fold(&mut $state, ($value) as u64); )*};
+}
+
+#[allow(clippy::too_many_arguments)]
+extern "C" fn structs_among_scalars(
+    a: i32,
+    v: Vec2,
+    p: Pair,
+    d: f64,
+    m: Mixed,
+    b: Big,
+    q: Quad,
+    one: One,
+    t: Three,
+    o: Odd,
+    last: i64,
+) -> u64 {
+    let mut s = 0u64;
+    digest!(
+        s,
+        a,
+        v.x.to_bits(),
+        v.y.to_bits(),
+        p.a,
+        p.b,
+        d.to_bits(),
+        m.d.to_bits(),
+        m.i
+    );
+    digest!(
+        s,
+        b.a,
+        b.b,
+        b.c,
+        q.a.to_bits(),
+        q.b.to_bits(),
+        q.c.to_bits(),
+        q.d.to_bits()
+    );
+    digest!(s, one.a, t.a, t.b, t.c, o.tag, o.f.to_bits(), o.wide, last);
+    s
+}
+
+fn by_value<'a, T: Layouted>(layout: &'a StructLayout, value: &'a T) -> Argument<'a> {
+    Argument::Struct(layout, (value as *const T).cast())
+}
+
+#[test]
+fn structs_of_every_class_arrive_among_scalars() {
+    let (v, p, m, b) = (
+        Vec2::sample(1),
+        Pair::sample(2),
+        Mixed::sample(3),
+        Big::sample(4),
+    );
+    let (q, one, t, o) = (
+        Quad::sample(5),
+        One::sample(6),
+        Three::sample(7),
+        Odd::sample(8),
+    );
+    let layouts = (
+        Vec2::layout(),
+        Pair::layout(),
+        Mixed::layout(),
+        Big::layout(),
+        Quad::layout(),
+        One::layout(),
+        Three::layout(),
+        Odd::layout(),
+    );
+    let args = [
+        Argument::Scalar(Type::I32, -17i64 as u64),
+        by_value(&layouts.0, &v),
+        by_value(&layouts.1, &p),
+        Argument::Scalar(Type::F64, 6.5f64.to_bits()),
+        by_value(&layouts.2, &m),
+        by_value(&layouts.3, &b),
+        by_value(&layouts.4, &q),
+        by_value(&layouts.5, &one),
+        by_value(&layouts.6, &t),
+        by_value(&layouts.7, &o),
+        Argument::Scalar(Type::I64, 0x1122_3344_5566u64),
+    ];
+    let got = unsafe {
+        call_with(
+            structs_among_scalars as *const (),
+            &args,
+            Returning::Scalar(Type::U64),
+            None,
+        )
+    };
+    assert_eq!(
+        got.value,
+        structs_among_scalars(-17, v, p, 6.5, m, b, q, one, t, o, 0x1122_3344_5566)
+    );
+}
+
+extern "C" fn many_pairs(
+    a: Pair,
+    b: Pair,
+    c: Pair,
+    d: Pair,
+    e: Pair,
+    f: Pair,
+    g: Pair,
+    h: Pair,
+    i: Pair,
+    j: Pair,
+) -> u64 {
+    let mut s = 0u64;
+    for p in [a, b, c, d, e, f, g, h, i, j] {
+        digest!(s, p.a, p.b);
+    }
+    s
+}
+
+extern "C" fn many_floats(
+    a: Vec2,
+    b: Quad,
+    c: Vec2,
+    d: Quad,
+    e: Vec2,
+    f: Vec2,
+    g: Quad,
+    h: Vec2,
+) -> u64 {
+    let mut s = 0u64;
+    for v in [a, c, e, f, h] {
+        digest!(s, v.x.to_bits(), v.y.to_bits());
+    }
+    for q in [b, d, g] {
+        digest!(
+            s,
+            q.a.to_bits(),
+            q.b.to_bits(),
+            q.c.to_bits(),
+            q.d.to_bits()
+        );
+    }
+    s
+}
+
+#[test]
+fn structs_past_the_registers_go_to_the_stack_whole() {
+    let pair = Pair::layout();
+    let pairs: Vec<Pair> = (0..10).map(Pair::sample).collect();
+    let args: Vec<Argument> = pairs.iter().map(|p| by_value(&pair, p)).collect();
+    let got = unsafe {
+        call_with(
+            many_pairs as *const (),
+            &args,
+            Returning::Scalar(Type::U64),
+            None,
+        )
+    };
+    let p = &pairs;
+    assert_eq!(
+        got.value,
+        many_pairs(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9])
+    );
+
+    let (vec2, quad) = (Vec2::layout(), Quad::layout());
+    let v: Vec<Vec2> = (0..5).map(Vec2::sample).collect();
+    let q: Vec<Quad> = (0..3).map(Quad::sample).collect();
+    let args = [
+        by_value(&vec2, &v[0]),
+        by_value(&quad, &q[0]),
+        by_value(&vec2, &v[1]),
+        by_value(&quad, &q[1]),
+        by_value(&vec2, &v[2]),
+        by_value(&vec2, &v[3]),
+        by_value(&quad, &q[2]),
+        by_value(&vec2, &v[4]),
+    ];
+    let got = unsafe {
+        call_with(
+            many_floats as *const (),
+            &args,
+            Returning::Scalar(Type::U64),
+            None,
+        )
+    };
+    assert_eq!(
+        got.value,
+        many_floats(v[0], q[0], v[1], q[1], v[2], v[3], q[2], v[4])
+    );
+}
+
+macro_rules! returns_struct {
+    ($($function:ident -> $name:ident;)*) => {
+        $(extern "C" fn $function(seed: i32, scale: f64) -> $name {
+            $name::sample(seed + scale as i32)
+        })*
+
+        #[test]
+        fn a_struct_of_every_class_comes_back() {
+            $({
+                let layout = $name::layout();
+                let mut got = std::mem::MaybeUninit::<$name>::zeroed();
+                let args = [Argument::Scalar(Type::I32, 40), Argument::Scalar(Type::F64, 2.0f64.to_bits())];
+                unsafe {
+                    call_with($function as *const (), &args, Returning::Struct(&layout, got.as_mut_ptr().cast()), None);
+                    assert_eq!(got.assume_init(), $function(40, 2.0), stringify!($name));
+                }
+            })*
+        }
+    };
+}
+
+returns_struct! {
+    return_one -> One;
+    return_pair -> Pair;
+    return_three -> Three;
+    return_mixed -> Mixed;
+    return_vec2 -> Vec2;
+    return_quad -> Quad;
+    return_big -> Big;
+    return_odd -> Odd;
+}
+
+extern "C" fn takes_big_returns_big(scale: i64, big: Big) -> Big {
+    Big {
+        a: big.a * scale,
+        b: big.b - scale,
+        c: big.c ^ scale,
+    }
+}
+
+#[test]
+fn a_struct_returned_through_a_pointer_does_not_shift_the_arguments() {
+    let layout = Big::layout();
+    let big = Big::sample(9);
+    let mut got = std::mem::MaybeUninit::<Big>::zeroed();
+    let args = [Argument::Scalar(Type::I64, 3), by_value(&layout, &big)];
+    unsafe {
+        call_with(
+            takes_big_returns_big as *const (),
+            &args,
+            Returning::Struct(&layout, got.as_mut_ptr().cast()),
+            None,
+        );
+        assert_eq!(got.assume_init(), takes_big_returns_big(3, big));
+    }
+    assert_eq!(big, Big::sample(9), "the callee got a copy");
+}

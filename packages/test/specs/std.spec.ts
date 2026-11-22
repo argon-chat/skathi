@@ -109,6 +109,41 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:ffi passes and returns structs by value",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startStructs(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.structsResult)"));
+      }
+      const s = JSON.parse(raw);
+      expect(s.failed).toBeUndefined();
+      const r = s.result;
+      expect([r.div, r.later]).toEqual([
+        { quot: -3, rem: -2 },
+        { quot: 3, rem: 2 },
+      ]);
+      expect(r.far).toEqual(["-1048576", "-3"]);
+      expect(r.layout).toEqual([48, 8, { tag: 0, inner: 8, list: 24, next: 40 }, 16]);
+      expect(r.packed).toEqual([48, 7, 255, 1, 254]);
+      expect(r.read).toEqual([7, { a: 255, b: 0.5 }, [1, -2, 3], true]);
+      if (platform() === "win32") expect(r.windows).toEqual([1, 0, 1]);
+      else expect(r.dotted).toBe("127.0.0.1");
+      const e = r.errors;
+      expect(e.pointer).toStartWith("NotAllowedError: unpack: a pointer read from bytes");
+      expect(e.short).toStartWith("RangeError: unpack: the struct is 48 bytes");
+      expect(e.field).toBe("TypeError: pack: the value: field list must be an array of 3 elements");
+      expect(e.value).toBe("RangeError: pack: the value: field inner: field a: 256 does not fit u8");
+      expect([e.empty, e.type, e.variadic, e.callback].map((m) => m.split(":")[0])).toEqual(Array(4).fill("TypeError"));
+      if (platform() !== "win32") {
+        expect(e.bytes).toBe("TypeError: crt.inet_ntoa: argument 1 (struct) is 8 bytes, and the struct is 4");
+      }
+    },
+    T,
+  );
+
+  test(
     "a NativeCallback is called by the library, on its thread or from another",
     async () => {
       const app = await start();

@@ -1,7 +1,8 @@
 //! The invoke stubs. Each takes a [`Frame`], copies its stack area below the stack pointer, loads
 //! every argument register, calls, and stores both return registers.
 //!
-//! Frame offsets: function 0, stack 8, stack_len 16, gpr 24, fpr 88, ret_gpr 152, ret_fpr 160.
+//! Frame offsets: function 0, stack 8, stack_len 16, gpr 24, fpr 88, ret_gpr 152 and 160,
+//! ret_fpr 168 to 192, indirect 200.
 
 use crate::abi::Frame;
 use std::arch::naked_asm;
@@ -37,7 +38,7 @@ pub(crate) unsafe extern "C" fn sk_ffi_invoke(frame: *mut Frame) {
         "movq xmm3, qword ptr [rbx + 112]",
         "call qword ptr [rbx]",
         "mov [rbx + 152], rax",
-        "movq qword ptr [rbx + 160], xmm0",
+        "movq qword ptr [rbx + 168], xmm0",
         "lea rsp, [rbp - 8]",
         "pop rbx",
         "pop rbp",
@@ -84,7 +85,9 @@ pub(crate) unsafe extern "C" fn sk_ffi_invoke(frame: *mut Frame) {
         "mov eax, 8",
         "call qword ptr [rbx]",
         "mov [rbx + 152], rax",
-        "movq qword ptr [rbx + 160], xmm0",
+        "mov [rbx + 160], rdx",
+        "movq qword ptr [rbx + 168], xmm0",
+        "movq qword ptr [rbx + 176], xmm1",
         "lea rsp, [rbp - 8]",
         "pop rbx",
         "pop rbp",
@@ -120,10 +123,12 @@ pub(crate) unsafe extern "C" fn sk_ffi_invoke(frame: *mut Frame) {
         "ldp d2, d3, [x19, #104]",
         "ldp d4, d5, [x19, #120]",
         "ldp d6, d7, [x19, #136]",
+        "ldr x8, [x19, #200]",
         "ldr x9, [x19]",
         "blr x9",
-        "str x0, [x19, #152]",
-        "str d0, [x19, #160]",
+        "stp x0, x1, [x19, #152]",
+        "stp d0, d1, [x19, #168]",
+        "stp d2, d3, [x19, #184]",
         "mov sp, x29",
         "ldr x19, [sp, #16]",
         "ldp x29, x30, [sp], #32",

@@ -50,7 +50,7 @@ interface Signature {
       "A [`NativeCallback`](/std/native-callback/) that a nonblocking call invokes is called from another thread: it runs on the JS thread a frame later, and only a `void` callback works.",
       "`errno: true` makes the call answer `{ value, errno }`. `errno` is the C `errno`, or `GetLastError()` on Windows, read on the same thread right after the call. It is whatever the last failing call left there: read it only when `value` says the call failed.",
       "`variadic` is for functions such as `printf`: list every argument of this call site in `args` and give the number of named parameters. Declaring a variadic function without it passes the arguments the wrong way on Windows and on Apple silicon.",
-      "A struct cannot be passed or returned by value. Lay it out in a buffer, with [`BinaryWriter`](/std/binary-writer/) for example, and pass the buffer. A [struct layout](/std/struct-layout/) has no padding, so write the padding the C compiler adds as fields of its own.",
+      "A struct is described with [`struct()`](/std/ffi-struct/). The type it gives goes in `args` or `returns` for a struct by value, and packs the bytes for a parameter that is a pointer to a struct.",
       "To hand the library a function of yours, make a [`NativeCallback`](/std/native-callback/) and pass its `pointer`.",
       CRASH,
     ],
@@ -58,7 +58,7 @@ interface Signature {
       '`NotAllowedError`: `name` is not in `"permissions.ffi"`, or the list is empty. The message has the entry to add.',
       "`NotFoundError`: the library, or a library it needs, could not be loaded, or it has no such symbol and the entry is not `optional`. The message has the system's own words.",
       "`NotSupportedError`: the host was built without the `ffi` feature. Hosts that `sk build` uses have it; an embedder turns it on.",
-      '`TypeError`: a type that is not in the list, `"void"` as an argument, `"buffer"` as a return type, a struct.',
+      '`TypeError`: a type that is not in the list, `"void"` as an argument, `"buffer"` as a return type, a struct by value in a variadic function.',
       "Calling a function with the wrong number of arguments, or with a value that is not of the declared type, throws a `TypeError` that names the function and the argument. An integer that does not fit throws a `RangeError`. Nothing is converted silently.",
       "A nonblocking call rejects with a `TypeError` for a `buffer` that is resizable or growable, since it could shrink before the bytes are written back. If its length changed anyway (the buffer was transferred), nothing is written back.",
       "`QuotaExceededError`: 256 nonblocking calls are already waiting or running.",
@@ -137,7 +137,7 @@ const code = await codec.symbols.codec_decode(file, file.length, pixels, pixels.
 if (code !== 0) throw new Error(\`codec_decode: \${code}\`);`,
       },
     ],
-    related: ["ffi-types", "native-library", "native-pointer", "native-callback"],
+    related: ["ffi-types", "ffi-struct", "native-library", "native-pointer", "native-callback"],
     aliases: [
       "FFI",
       "foreign function interface",
@@ -209,7 +209,8 @@ if (code !== 0) throw new Error(\`codec_decode: \${code}\`);`,
       "A `cstring` argument with a NUL character in it is a `TypeError`: the C side would see the text cut short.",
       "A string argument is encoded on every call. For a string passed many times, encode it once, keep it in a typed array and declare the parameter as `buffer`.",
       "A returned `cstring` or `wstring` is read up to its NUL. If the library allocated it and expects you to free it, declare the return as `pointer`, read it with `readCString()` and pass the pointer to the library's free function.",
-      "There is no struct type. A function pointer is a `pointer`: pass the `pointer` of a [`NativeCallback`](/std/native-callback/).",
+      "A struct by value is not one of these names: it is a type made with [`struct()`](/std/ffi-struct/), put in the signature where a name would be.",
+      "A function pointer is a `pointer`: pass the `pointer` of a [`NativeCallback`](/std/native-callback/).",
     ],
     examples: [
       {
@@ -242,8 +243,108 @@ const length = kernel32.symbols.GetEnvironmentVariableW("SystemRoot", out, out.l
 String.fromCharCode(...out.subarray(0, length)); // "C:\\\\Windows"`,
       },
     ],
-    related: ["dlopen", "native-pointer", "struct-layout"],
+    related: ["dlopen", "ffi-struct", "native-pointer", "struct-layout"],
     aliases: ["cstring", "wstring", "buffer", "pointer", "usize", "size_t", "wchar_t", "LPCWSTR", "char*"],
+  },
+  {
+    slug: "ffi-struct",
+    name: "struct()",
+    kind: "function",
+    summary: "Describes a C struct, to pass or return it by value and to pack and unpack its bytes.",
+    syntax: `${importLine("skathi:ffi", "struct")}
+
+struct(fields: { [name: string]: FieldType }): StructType
+
+type FieldType =
+  | "bool"
+  | "i8" | "u8" | "i16" | "u16" | "i32" | "u32"
+  | "i64" | "u64" | "isize" | "usize"
+  | "f32" | "f64"
+  | "pointer"
+  | StructType           // a nested struct
+  | [FieldType, number]  // a fixed array
+
+readonly type.size: number
+readonly type.align: number
+readonly type.offsets: { [name: string]: number }
+readonly type.fields: { [name: string]: FieldType }
+type.pack(value: object): Uint8Array
+type.unpack(bytes: ArrayBuffer | ArrayBufferView, byteOffset?: number): object`,
+    notes: [
+      "The fields are laid out in the order they are written, as a C compiler lays them out: each at a multiple of its own size, and the struct padded to a multiple of its widest field. `size`, `align` and `offsets` say where everything landed. A packed struct (`#pragma pack`) is not this layout.",
+      "A struct type in `args` or as `returns` of a [`dlopen()`](/std/dlopen/) signature is a struct **by value**. The host follows the calling convention of the platform: registers, the stack or a hidden pointer, whichever the C compiler would use for that struct.",
+      "An argument is an object of the fields. A field left out is zero, and so is the padding. Bytes that already hold the struct, an `ArrayBuffer` or a typed array of exactly `size` bytes, are taken as they are.",
+      "A returned struct is a new object. Fields convert as the [types](/std/ffi-types/) do: the 64-bit integers are bigints, a `pointer` is a [`NativePointer`](/std/native-pointer/), a nested struct is an object and an array is an array.",
+      "For a function that takes a **pointer** to a struct, declare the parameter as `buffer` and pass `type.pack(value)`; after the call `type.unpack(bytes)` reads what the function wrote.",
+      '`unpack()` of bytes that hold a pointer that is not null needs `"permissions": { "ffiAddress": true }`, as `NativePointer.fromAddress()` does: the bytes could have come from anywhere. A struct a function returns by value has no such limit.',
+      "A string is not a field type: in C the field is a `pointer`, or a fixed array of `u8` or `u16` for text stored in the struct.",
+      "A struct by value does not go with `variadic`, and a [`NativeCallback`](/std/native-callback/) takes and returns none. A struct is at most 65536 bytes.",
+    ],
+    edgeCases: [
+      "`TypeError`: no fields, a field type that is not in the list, a value that does not fit its field's type, an array of another length, bytes of another size than the struct.",
+      "`RangeError`: an integer that does not fit its field, a struct over 65536 bytes, `unpack()` past the end of the bytes.",
+      '`NotAllowedError`: `unpack()` met a pointer that is not null, and the config has no `"ffiAddress"`.',
+    ],
+    examples: [
+      {
+        title: "A struct returned by value",
+        lang: "ts",
+        note: 'sk.config.json: "permissions": { "ffi": [{ "name": "crt", "path": { "windows": "$SYSTEM/msvcrt", "macos": "$SYSTEM/libSystem.B.dylib", "linux": "$SYSTEM/libc.so.6" } }] }',
+        code: `import { dlopen, struct } from "skathi:ffi";
+
+// typedef struct { int quot; int rem; } div_t;
+const DivT = struct({ quot: "i32", rem: "i32" });
+
+const crt = dlopen("crt", {
+  div: { args: ["i32", "i32"], returns: DivT },
+});
+
+crt.symbols.div(17, 5); // { quot: 3, rem: 2 }`,
+      },
+      {
+        title: "By value and by pointer in one call",
+        lang: "ts",
+        note: 'sk.config.json: "permissions": { "ffi": [{ "name": "user32", "path": "$SYSTEM/user32" }] }',
+        code: `import { dlopen, struct } from "skathi:ffi";
+
+const Point = struct({ x: "i32", y: "i32" });
+const Rect = struct({ left: "i32", top: "i32", right: "i32", bottom: "i32" });
+
+const user32 = dlopen("user32", {
+  // BOOL GetCursorPos(POINT *out);
+  GetCursorPos: { args: ["buffer"], returns: "i32" },
+  // BOOL PtInRect(const RECT *rect, POINT point);
+  PtInRect: { args: ["buffer", Point], returns: "i32" },
+});
+
+const at = new Uint8Array(Point.size);
+user32.symbols.GetCursorPos(at);
+const cursor = Point.unpack(at); // { x, y }
+
+const area = Rect.pack({ left: 0, top: 0, right: 800, bottom: 600 });
+export const inside = user32.symbols.PtInRect(area, cursor) !== 0;`,
+      },
+      {
+        title: "Nested structs and arrays",
+        lang: "ts",
+        code: `import { struct } from "skathi:ffi";
+
+const Color = struct({ r: "u8", g: "u8", b: "u8", a: "u8" });
+const Vertex = struct({
+  position: ["f32", 3],
+  color: Color,
+  id: "u64",
+});
+
+Vertex.size;    // 24
+Vertex.offsets; // { position: 0, color: 12, id: 16 }
+
+const bytes = Vertex.pack({ position: [0, 1, 0], color: { r: 255, a: 255 }, id: 7n });
+Vertex.unpack(bytes).color; // { r: 255, g: 0, b: 0, a: 255 }`,
+      },
+    ],
+    related: ["dlopen", "ffi-types", "native-pointer", "struct-layout"],
+    aliases: ["struct by value", "StructType", "pack", "unpack", "POINT", "RECT", "div_t", "sizeof", "offsetof"],
   },
   {
     slug: "native-library",

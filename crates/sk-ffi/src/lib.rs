@@ -94,6 +94,32 @@ pub struct Outcome {
     pub os_error: i32,
 }
 
+/// A struct passed or returned by value: its size, its alignment and where each scalar in it lies,
+/// nested structs and arrays flattened. Fields sit at multiples of their size, as a C compiler puts them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructLayout {
+    pub size: usize,
+    pub align: usize,
+    pub fields: Vec<(Type, usize)>,
+}
+
+/// An argument of [`call_with`].
+#[derive(Clone, Copy)]
+pub enum Argument<'a> {
+    /// An integer's value or a float's bits.
+    Scalar(Type, u64),
+    /// The bytes of a struct, `size` of them.
+    Struct(&'a StructLayout, *const u8),
+}
+
+/// What [`call_with`] returns.
+#[derive(Clone, Copy)]
+pub enum Returning<'a> {
+    Scalar(Type),
+    /// Where to write the struct, room for `size` bytes.
+    Struct(&'a StructLayout, *mut u8),
+}
+
 /// Calls `function` with `args`, one 64-bit slot per argument: an integer's value, a float's bits.
 ///
 /// # Safety
@@ -101,20 +127,64 @@ pub struct Outcome {
 pub unsafe fn call(function: *const (), signature: &Signature, args: &[u64]) -> Outcome {
     assert_eq!(args.len(), signature.args.len());
     assert!(!signature.args.contains(&Type::Void));
-    let mut frame = abi::lay_out(signature, args);
+    let values = signature
+        .args
+        .iter()
+        .zip(args)
+        .map(|(ty, bits)| abi::Value::Scalar(*ty, ty.normalize(*bits)));
+    let returns = abi::Returns::Scalar(signature.returns);
+    invoke(
+        function,
+        abi::lay_out(values, returns, signature.fixed),
+        returns,
+    )
+}
+
+/// [`call`] for a function that takes or returns structs by value. The value of the outcome is 0
+/// when a struct comes back.
+///
+/// # Safety
+/// As [`call`]; and every struct argument points at the bytes of its layout, a struct return at room for them.
+pub unsafe fn call_with(
+    function: *const (),
+    args: &[Argument<'_>],
+    returning: Returning<'_>,
+    fixed: Option<usize>,
+) -> Outcome {
+    let values = args.iter().map(|arg| match *arg {
+        Argument::Scalar(ty, bits) => {
+            assert!(ty != Type::Void);
+            abi::Value::Scalar(ty, ty.normalize(bits))
+        }
+        Argument::Struct(layout, bytes) => abi::Value::Struct(layout, bytes),
+    });
+    let returns = match returning {
+        Returning::Scalar(ty) => abi::Returns::Scalar(ty),
+        Returning::Struct(layout, to) => abi::Returns::Struct(layout, to),
+    };
+    invoke(function, abi::lay_out(values, returns, fixed), returns)
+}
+
+unsafe fn invoke(function: *const (), mut frame: abi::Frame, returns: abi::Returns<'_>) -> Outcome {
     frame.function = function as usize;
     frame.seal();
     invoke::sk_ffi_invoke(&mut frame);
     let os_error = library::last_os_error();
-    let raw = if signature.returns.is_float() {
-        frame.ret_fpr
-    } else {
-        frame.ret_gpr
+    let value = match returns {
+        abi::Returns::Scalar(ty) => {
+            let raw = if ty.is_float() {
+                frame.ret_fpr[0]
+            } else {
+                frame.ret_gpr[0]
+            };
+            ty.normalize(raw)
+        }
+        abi::Returns::Struct(layout, to) => {
+            abi::collect(&frame, layout, to);
+            0
+        }
     };
-    Outcome {
-        value: signature.returns.normalize(raw),
-        os_error,
-    }
+    Outcome { value, os_error }
 }
 
 #[cfg(test)]

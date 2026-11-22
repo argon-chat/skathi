@@ -8,7 +8,9 @@
         "name": "crt",
         "path": { "windows": "$SYSTEM/msvcrt", "macos": "$SYSTEM/libSystem.B.dylib", "linux": "$SYSTEM/libc.so.6" }
       },
-      { "name": "kernel32", "path": { "windows": "$SYSTEM/kernel32" } }
+      { "name": "kernel32", "path": { "windows": "$SYSTEM/kernel32" } },
+      { "name": "user32", "path": { "windows": "$SYSTEM/user32" } },
+      { "name": "ucrt", "path": { "windows": "$SYSTEM/ucrtbase" } }
     ]
   },
 

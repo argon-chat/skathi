@@ -11,10 +11,36 @@ type Text = "cstring" | "wstring";
  */
 export type FFIType = "void" | "bool" | Small | Wide | "f32" | "f64" | "pointer" | "buffer" | Text;
 
+/** What a field of a struct holds: a scalar, another struct, or `[type, count]` for an array. */
+export type FieldType = "bool" | Small | Wide | "f32" | "f64" | "pointer" | StructType | readonly [FieldType, number];
+export type StructFields = Readonly<Record<string, FieldType>>;
+
+type Given<T> =
+  T extends StructType<infer F> ? Packed<F> : T extends readonly [infer E, number] ? ArrayLike<Given<E>> : ArgOf<T>;
+type Read<T> =
+  T extends StructType<infer F> ? Unpacked<F> : T extends readonly [infer E, number] ? Read<E>[] : ValueOf<T>;
+/** What a struct is written from. A field left out is zero. */
+export type Packed<F extends StructFields> = { readonly [K in keyof F]?: Given<F[K]> };
+/** What a struct reads as. */
+export type Unpacked<F extends StructFields> = { -readonly [K in keyof F]: Read<F[K]> };
+
+/** A C struct: fields in order, each at a multiple of its size, as a C compiler lays them out. */
+export interface StructType<F extends StructFields = StructFields> {
+  readonly fields: F;
+  readonly size: number;
+  readonly align: number;
+  readonly offsets: { readonly [K in keyof F]: number };
+  /** The bytes of a struct, for a `buffer` parameter that takes a pointer to it. */
+  pack(value: Packed<F>): Uint8Array;
+  /** Reads a struct from bytes. A pointer field that is not null needs `"permissions": { "ffiAddress": true }`. */
+  unpack(bytes: ArrayBuffer | ArrayBufferView, byteOffset?: number): Unpacked<F>;
+}
+
 export interface Signature {
-  readonly args?: readonly Exclude<FFIType, "void">[];
-  /** `"void"` when left out. A `buffer` cannot be returned. */
-  readonly returns?: Exclude<FFIType, "buffer">;
+  /** A struct type is a struct passed by value: an object of its fields, or bytes that hold it. */
+  readonly args?: readonly (Exclude<FFIType, "void"> | StructType)[];
+  /** `"void"` when left out. A `buffer` cannot be returned. A struct type is a struct returned by value. */
+  readonly returns?: Exclude<FFIType, "buffer"> | StructType;
   /** The call answers `{ value, errno }`: `errno`, or `GetLastError()` on Windows, read right after it. */
   readonly errno?: boolean;
   /** A library without the symbol loads all the same, and the function is `null`. */
@@ -28,35 +54,41 @@ export interface Signature {
   readonly nonblocking?: boolean;
 }
 
-type ArgOf<T> = T extends "bool"
-  ? boolean
-  : T extends Small | Wide
-    ? number | bigint
-    : T extends "f32" | "f64"
-      ? number
-      : T extends "pointer"
-        ? NativePointer | null
-        : T extends "buffer"
-          ? ArrayBuffer | ArrayBufferView | null
-          : T extends Text
-            ? string | null
-            : never;
+type ArgOf<T> =
+  T extends StructType<infer F>
+    ? Packed<F> | ArrayBuffer | ArrayBufferView
+    : T extends "bool"
+      ? boolean
+      : T extends Small | Wide
+        ? number | bigint
+        : T extends "f32" | "f64"
+          ? number
+          : T extends "pointer"
+            ? NativePointer | null
+            : T extends "buffer"
+              ? ArrayBuffer | ArrayBufferView | null
+              : T extends Text
+                ? string | null
+                : never;
 
-type ValueOf<T> = T extends "bool"
-  ? boolean
-  : T extends Small | "f32" | "f64"
-    ? number
-    : T extends Wide
-      ? bigint
-      : T extends "pointer"
-        ? NativePointer
-        : T extends Text
-          ? string | null
-          : void;
+type ValueOf<T> =
+  T extends StructType<infer F>
+    ? Unpacked<F>
+    : T extends "bool"
+      ? boolean
+      : T extends Small | "f32" | "f64"
+        ? number
+        : T extends Wide
+          ? bigint
+          : T extends "pointer"
+            ? NativePointer
+            : T extends Text
+              ? string | null
+              : void;
 
 type Each<A extends readonly unknown[]> = { -readonly [I in keyof A]: ArgOf<A[I]> };
 type ArgsOf<S extends Signature> = S["args"] extends readonly unknown[] ? Each<S["args"]> : [];
-type Returned<S extends Signature> = ValueOf<S["returns"] extends FFIType ? S["returns"] : "void">;
+type Returned<S extends Signature> = ValueOf<S["returns"] extends FFIType | StructType ? S["returns"] : "void">;
 type Answered<S extends Signature> = S["errno"] extends true ? { value: Returned<S>; errno: number } : Returned<S>;
 type ReturnOf<S extends Signature> = S["nonblocking"] extends true ? Promise<Answered<S>> : Answered<S>;
 
@@ -144,11 +176,19 @@ declare const __sk_std: {
     NativePointer: NativePointerStatics;
     NativeCallback: NativeCallbackConstructor;
     open(name: string, definitions: readonly unknown[]): HostLibrary;
+    struct(entries: readonly (readonly [string, FieldType])[], fields: StructFields): StructType;
   };
 };
 
 export const NativePointer: NativePointerStatics = __sk_std.ffi.NativePointer;
 export const NativeCallback: NativeCallbackConstructor = __sk_std.ffi.NativeCallback;
+
+/** A C struct of `fields`, in the order they are written. */
+export function struct<const F extends StructFields>(fields: F): StructType<F> {
+  if (!fields || typeof fields !== "object")
+    throw new TypeError("struct: the fields must be an object of { name: type }");
+  return __sk_std.ffi.struct(Object.entries(fields), fields) as StructType<F>;
+}
 
 /**
  * A function of exactly `arity` parameters: a rest parameter would make an array on every call.

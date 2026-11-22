@@ -1,5 +1,5 @@
 import { Encoding } from "skathi:encoding";
-import { dlopen, NativeCallback, NativePointer } from "skathi:ffi";
+import { dlopen, NativeCallback, NativePointer, struct } from "skathi:ffi";
 import { os } from "skathi:os";
 
 const attempt = (run: () => unknown): string => {
@@ -185,6 +185,61 @@ export async function workers() {
     };
   }
   return result;
+}
+
+/** Structs passed and returned by value. */
+export async function structs() {
+  const Div = struct({ quot: "i32", rem: "i32" });
+  const Wide = struct({ quot: "i64", rem: "i64" });
+  const Inner = struct({ a: "u8", b: "f64" });
+  const Outer = struct({ tag: "u16", inner: Inner, list: ["i32", 3], next: "pointer" });
+  const crt = dlopen("crt", {
+    div: { args: ["i32", "i32"], returns: Div },
+    lldiv: { args: ["i64", "i64"], returns: Wide, optional: true },
+    inet_ntoa: { args: [struct({ address: "u32" })], returns: "cstring", optional: true },
+  });
+  const divide = { args: ["i64", "i64"], returns: Wide } as const;
+  const wide = os.platform === "win32" ? dlopen("ucrt", { lldiv: divide }).symbols.lldiv : crt.symbols.lldiv;
+  const far = wide!(-(2n ** 40n) - 3n, 2n ** 20n);
+
+  const packed = Outer.pack({ tag: 7, inner: { a: 255, b: 0.5 }, list: [1, -2, 3] });
+  const read = Outer.unpack(packed);
+  const pointing = new Uint8Array(Outer.size);
+  pointing[Outer.offsets.next] = 8;
+
+  let windows = null;
+  if (os.platform === "win32") {
+    const Point = struct({ x: "i32", y: "i32" });
+    const Rect = struct({ left: "i32", top: "i32", right: "i32", bottom: "i32" });
+    const user = dlopen("user32", { PtInRect: { args: ["buffer", Point], returns: "i32" } });
+    const rect = Rect.pack({ left: 10, top: 10, right: 20, bottom: 20 });
+    windows = [
+      user.symbols.PtInRect(rect, { x: 15, y: 19 }),
+      user.symbols.PtInRect(rect, { x: 15, y: 20 }),
+      user.symbols.PtInRect(rect, Point.pack({ x: 10, y: 10 })),
+    ];
+  }
+  return {
+    div: crt.symbols.div(-17, 5),
+    later: await dlopen("crt", { div: { args: ["i32", "i32"], returns: Div, nonblocking: true } }).symbols.div(17, 5),
+    far: [String(far.quot), String(far.rem)],
+    dotted: crt.symbols.inet_ntoa ? crt.symbols.inet_ntoa({ address: 0x0100007f }) : null,
+    layout: [Outer.size, Outer.align, Outer.offsets, Inner.size],
+    packed: [packed.length, packed[0], packed[8], packed[24], packed[28]],
+    read: [read.tag, read.inner, read.list, read.next.isNull()],
+    windows,
+    errors: {
+      pointer: attempt(() => Outer.unpack(pointing)),
+      short: attempt(() => Outer.unpack(new Uint8Array(47))),
+      field: attempt(() => Outer.pack({ list: [1, 2] })),
+      value: attempt(() => Outer.pack({ inner: { a: 256 } })),
+      empty: attempt(() => struct({})),
+      type: attempt(() => struct({ text: "cstring" as "pointer" })),
+      variadic: attempt(() => dlopen("crt", { div: { args: ["i32", "i32"], returns: Div, variadic: 1 } })),
+      callback: attempt(() => new NativeCallback(() => {}, { args: [Div as unknown as "pointer"] })),
+      bytes: attempt(() => crt.symbols.inet_ntoa?.(new Uint8Array(8))),
+    },
+  };
 }
 
 export function ffi() {
