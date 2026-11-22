@@ -210,3 +210,27 @@ describe("file dialogs on the host (SK_DIALOGS=scripted)", () => {
     T,
   );
 });
+
+test(
+  "an imported .toml file is what TOML.parse gives for its text",
+  async () => {
+    const text = readFileSync(join(import.meta.dir, "..", "fixtures", "files", "src", "settings.toml"), "utf8");
+    const got = JSON.parse(await app.eval(`__SK_TEST_FILES__.toml(${JSON.stringify(text)})`));
+    bunExpect(got.same).toBe(true);
+    bunExpect(got.shape).toEqual({
+      title: "string",
+      big: "bigint",
+      small: "bigint",
+      ratio: "number",
+      missing: "number",
+      zero: "number",
+      when: "Date",
+      local: "Temporal.PlainDateTime",
+      day: "Temporal.PlainDate",
+      alarm: "Temporal.PlainTime",
+      window: { size: ["number", "number"], inline: { a: "number", b: ["boolean", "string"] } },
+      servers: [{ name: "string" }, { name: "string", port: "number" }],
+    });
+  },
+  T,
+);

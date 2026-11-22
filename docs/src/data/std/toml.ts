@@ -53,6 +53,10 @@ TOML.stringify(value: Record<string, unknown>, options?: { pretty?: boolean }): 
       "A `Date` is written as an offset date-time in UTC: `new Date(0)` becomes `1970-01-01T00:00:00.0Z`. `Temporal.PlainDateTime`, `PlainDate` and `PlainTime` are written as the local forms.",
       "A nested object is written as a table, an array of objects as an array of tables. Any other object is written as a table of its own enumerable keys.",
       "An integer beyond the safe integers survives `parse`, `stringify` and `parse` again as the same `bigint`.",
+      'An app can import a `.toml` file: `import config from "./config.toml"`. `sk dev`, `sk build` and a build with a Vite config all treat it the same way.',
+      "The default export is `TOML.parse` of the file's text, run when the module loads, so it holds the same values as the table above: `bigint`, `Date` and `Temporal` included. There are no named exports. TypeScript types it as `Record<string, unknown>`.",
+      "Invalid TOML in an imported file fails the build with the file, line and column. A Vite config run by Node cannot check it at build time, so the import throws the `SyntaxError` when the module loads.",
+      "In `sk dev`, saving an imported `.toml` file under `src/` reloads the modules that import it.",
     ],
     examples: [
       {
@@ -81,6 +85,19 @@ config.when; // Date 1979-05-27T07:32:00.000Z
 config.day; // Temporal.PlainDate 1979-05-27
 config.window; // { width: 800, resizable: true }
 config.servers; // [{ name: "one" }]`,
+      },
+      {
+        title: "Import a config file",
+        lang: "ts",
+        code: `// src/config.toml:
+// title = "Skathi"
+// [window]
+// width = 800
+
+import config from "./config.toml";
+
+const window = config.window as { width: number };
+window.width; // 800`,
       },
       {
         title: "Write an object as a document",
@@ -139,6 +156,8 @@ readSettings('a = 1\\nb = "unclosed\\n'); // "TOML.parse: line 2, column 14: …
       "pyproject.toml",
       "Temporal.PlainDate",
       "pretty",
+      "import .toml",
+      "config.toml",
     ],
   },
 ]);

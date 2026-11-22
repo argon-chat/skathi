@@ -1,5 +1,7 @@
 // `run` starts a scenario that needs no gesture (`nogesture`: every picker must reject).
 import { createApp, h, onMounted, ref } from "@skathi-native/runtime";
+import { TOML } from "skathi:toml";
+import settings from "./settings.toml";
 
 type Handle = {
   kind: "file" | "directory";
@@ -125,11 +127,32 @@ async function noGesture() {
   results.nogesture = out.join("|");
 }
 
+const tag = (v: unknown) => Object.prototype.toString.call(v).slice(8, -1);
+function same(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || tag(a) !== tag(b)) return false;
+  if (a instanceof Date) return Object.is(a.getTime(), (b as Date).getTime());
+  if (tag(a).startsWith("Temporal.")) return String(a) === String(b);
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && same(ra[k], rb[k]));
+}
+function shape(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(shape);
+  if (tag(v) === "Object") return Object.fromEntries(Object.entries(v as object).map(([k, x]) => [k, shape(x)]));
+  return typeof v === "object" ? tag(v) : typeof v;
+}
+
 g.__SK_TEST_FILES__ = {
   events,
   results,
   run(name: string) {
     if (name === "nogesture") void noGesture();
+  },
+  toml(text: string) {
+    return JSON.stringify({ same: same(settings, TOML.parse(text)), shape: shape(settings) });
   },
 };
 

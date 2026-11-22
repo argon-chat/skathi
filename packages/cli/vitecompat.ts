@@ -2,7 +2,7 @@
 // ?raw (text), ?url / assets (URL; `sk build` packs the file), .svg (a component with
 // vite-svg-loader, else a URL), import.meta.glob (expanded at load time), ?worker (a constructor
 // throwing a named NotSupportedError), ?worklet (the URL of the module bundled into one classic script),
-// .wasm (a stub with an advisory). Unsupported shapes fail by name.
+// .wasm (a stub with an advisory), .toml (`TOML.parse` of the text). Unsupported shapes fail by name.
 
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
@@ -140,6 +140,64 @@ export const TEMPLATE_ASSET_URLS = {
     lottie: ["src"],
   },
 };
+
+const TOML_INTEGER = /(?<![\w.])[+-]?(?:0x[\da-fA-F_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*)(?![\w.:-])/g;
+
+/**
+ * Bun's TOML parser rejects an integer beyond ±(2^53 - 1), which `skathi:toml` reads as a `bigint`:
+ * each such literal becomes `0` padded to its length, so positions in the result are the file's own.
+ */
+export function maskWideTomlIntegers(text: string): string {
+  return text.replace(TOML_INTEGER, (token) => {
+    let value: bigint;
+    try {
+      const digits = token.replace(/^[+-]/, "").replace(/_/g, "");
+      value = token.startsWith("-") ? -BigInt(digits) : BigInt(digits);
+    } catch {
+      return token;
+    }
+    const wide = value > 2n ** 53n - 1n || value < -(2n ** 53n - 1n);
+    const fits = value >= -(2n ** 63n) && value < 2n ** 63n;
+    return wide && fits ? "0".padEnd(token.length) : token;
+  });
+}
+
+/**
+ * `import config from "./a.toml"`: the default export is `TOML.parse` of the text at run time, so it
+ * is exactly what `skathi:toml` gives. Invalid TOML goes to Bun's TOML loader, whose error has the
+ * file, line and column. Under Node (a Vite config run by Node) there is no parser to check with,
+ * and the run-time `SyntaxError` reports the position instead.
+ */
+export function tomlModule(text: string): { contents: string; loader: "js" | "toml" } {
+  if (typeof Bun !== "undefined") {
+    const checked = maskWideTomlIntegers(text);
+    try {
+      Bun.TOML.parse(checked);
+    } catch {
+      return { contents: checked, loader: "toml" };
+    }
+  }
+  return {
+    contents: `import { TOML as __sk_toml } from "skathi:toml";\nexport default __sk_toml.parse(${J(text)});\n`,
+    loader: "js",
+  };
+}
+
+/** Where Bun's TOML parser stops on `text`, for a builder that is not Bun's own. */
+export async function tomlError(
+  file: string,
+  text: string,
+): Promise<{ message: string; line: number; column: number } | null> {
+  if (typeof Bun === "undefined") return null;
+  const result = await Bun.build({
+    entrypoints: [file],
+    files: { [file]: maskWideTomlIntegers(text) },
+    throw: false,
+  });
+  const log = result.logs.find((l) => l.level === "error");
+  if (!log) return null;
+  return { message: log.message, line: log.position?.line ?? 1, column: log.position?.column ?? 1 };
+}
 
 /** A template's `<lottie src="./a.json">` import must be the file's URL, not the parsed JSON. */
 export function templateJsonUrls(code: string): string {
@@ -833,6 +891,9 @@ export function viteShapesPlugin(o: ShapesOptions) {
         note(o, `asset URL (packed as an asset)`);
         return { contents: urlModule(args.path), loader: "js" };
       });
+      build.onLoad({ filter: /\.toml$/i }, async (args: Bun.OnLoadArgs) =>
+        tomlModule(await Bun.file(args.path).text()),
+      );
       build.onLoad({ filter: /\.wasm$/i }, (args: Bun.OnLoadArgs) => {
         note(o, `.wasm stubbed (WebAssembly out of scope)`);
         return { contents: wasmStubModule(idOf(args.path), new Set()), loader: "js" };
@@ -850,7 +911,7 @@ export function viteShapesPlugin(o: ShapesOptions) {
   };
 }
 
-export const LEAF_IMPORT = new RegExp(`\\.(?:json|svg|wasm)$|${ASSET_EXT.source}`, "i");
+export const LEAF_IMPORT = new RegExp(`\\.(?:json|toml|svg|wasm)$|${ASSET_EXT.source}`, "i");
 
 export interface DevImportsOptions {
   srcDir: string;

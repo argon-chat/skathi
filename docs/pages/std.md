@@ -26,7 +26,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:os`](#skathios)                   | Platform, architecture, OS release, host name, home and temp                          |
 | [`skathi:network`](#skathinetwork)         | Online, internet reachability, connection type, metered and roaming                   |
 | [`skathi:numeric`](#skathinumeric)         | Fixed-width integers and floats: `i8`…`u64`, `f16`, `f32`                             |
-| [`skathi:toml`](#skathitoml)               | `TOML.parse()` and `TOML.stringify()`                                                 |
+| [`skathi:toml`](#skathitoml)               | `TOML.parse()`, `TOML.stringify()`, and `import config from "./config.toml"`          |
 | [`skathi:binary`](#skathibinary)           | Byte and bit readers and writers, byte order, LEB128, CRC-32 and CRC-64               |
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
 | [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `struct()`, callbacks     |

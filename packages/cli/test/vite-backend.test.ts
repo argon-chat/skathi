@@ -472,6 +472,28 @@ test("audio worklet modules are built into classic scripts and packed under the 
   expect(levels).toEqual({ meter: 42, gate: 63 });
 }, 120_000);
 
+test("a .toml import in a Vite build is TOML.parse of its text, and invalid TOML fails at its line and column", () => {
+  const settings = 'big = 9007199254740993\n[window]\ntitle = "x"\n';
+  const app = appWith({
+    "vite.config.mjs": "export default {};",
+    "src/main.ts": 'import settings from "./settings.toml"; globalThis.settings = settings;',
+    "src/settings.toml": settings,
+  });
+  const out = join(scratch, "native-toml");
+  const result = run("build", app, "--out", out, "--payload-only");
+  expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
+  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
+  const globals: Record<string, unknown> = {};
+  new Function("globalThis", "__sk_std", script)(globals, { TOML: { parse: (text: string) => ({ parsed: text }) } });
+  expect(globals.settings).toEqual({ parsed: settings });
+
+  writeFileSync(join(app, "src", "settings.toml"), 'big = 9007199254740993\n\n  title "x"\n');
+  const broken = run("build", app, "--out", join(scratch, "native-toml-broken"), "--payload-only");
+  expect(broken.exitCode).not.toBe(0);
+  expect(broken.stdout.toString() + broken.stderr.toString()).toContain("settings.toml:3:9");
+}, 120_000);
+
 test("a worklet module Vite cannot bundle fails the build and is named", () => {
   const app = appWith({
     "vite.config.mjs": "export default {};",

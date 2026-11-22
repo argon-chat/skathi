@@ -1,0 +1,21 @@
+title = "Skathi"
+big = 9007199254740993
+small = -9223372036854775808
+ratio = inf
+missing = nan
+zero = -0.0
+when = 1979-05-27T07:32:00-08:00
+local = 1979-05-27T07:32:00
+day = 1979-05-27
+alarm = 07:32:00
+
+[window]
+size = [800, 600]
+inline = { a = 1, b = [true, "x"] }
+
+[[servers]]
+name = "one"
+
+[[servers]]
+name = "two"
+port = 0x1F90

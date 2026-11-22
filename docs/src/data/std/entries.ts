@@ -30,7 +30,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "Whether there is a connection, whether it reaches the internet, what kind it is, and whether it is metered or roaming, with an event when any of that changes.",
   "skathi:numeric":
     "Fixed-width integers and floats with the arithmetic of the width: wrapping, checked and saturating operations, bit operations and exact conversions.",
-  "skathi:toml": "TOML 1.0 to JS values and back.",
+  "skathi:toml": "TOML 1.1 to JS values and back, and `.toml` imports.",
   "skathi:binary":
     "Reading and writing binary formats: byte and bit cursors over a buffer, byte order, LEB128 integers, and CRC-32 and CRC-64 checksums.",
   "skathi:encoding":

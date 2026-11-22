@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Api as VuePluginApi } from "@vitejs/plugin-vue";
 import {
@@ -28,6 +29,8 @@ import {
   stubWorkerUrls,
   TEMPLATE_ASSET_URLS,
   templateJsonUrls,
+  tomlError,
+  tomlModule,
   wasmStubModule,
   workerStubModule,
   workletAsset,
@@ -229,6 +232,17 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
       if (id.startsWith(WORKLET)) {
         const file = decodeURIComponent(id.slice(WORKLET.length, -".js".length));
         return `export default ${JSON.stringify(await workletUrl((asset) => this.emitFile(asset), file))};\n`;
+      }
+      if (/\.toml$/i.test(id) && !id.startsWith("\0")) {
+        const text = await readFile(id, "utf8");
+        const module = tomlModule(text);
+        if (module.loader === "js") return module.contents;
+        const at = await tomlError(id, text);
+        this.error({
+          message: `${normalizePath(relative(options.appRoot, id))}:${at?.line ?? 1}:${at?.column ?? 1}: ${at?.message ?? "invalid TOML"}`,
+          id,
+          ...(at && { loc: { file: id, line: at.line, column: at.column } }),
+        });
       }
       if (!id.startsWith(NATIVE)) return stubs.get(id);
       const name = id.slice(NATIVE.length, -".cjs".length);
