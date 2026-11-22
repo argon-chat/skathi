@@ -17,7 +17,28 @@ const inside = (root: string, path: string) => {
 export class Packages {
   private readonly dirs = new Map<string, PackageInfo | null>();
 
+  private floor: [number, number] | null | undefined;
+
   constructor(readonly appRoot: string) {}
+
+  /** The lowest `@skathi-native/runtime` the app's package.json admits, as [major, minor]; null when it does not say. */
+  runtimeFloor(): [number, number] | null {
+    if (this.floor !== undefined) return this.floor;
+    this.floor = null;
+    try {
+      const json = JSON.parse(readFileSync(join(this.appRoot, "package.json"), "utf8")) as Record<string, unknown>;
+      for (const key of ["dependencies", "devDependencies", "peerDependencies"]) {
+        const range = (json[key] as Record<string, unknown> | undefined)?.["@skathi-native/runtime"];
+        const lowest =
+          typeof range === "string" && !range.includes("||") && /^\s*(?:[\^~=]|>=)?\s*v?(\d+)\.(\d+)/.exec(range);
+        if (lowest) {
+          this.floor = [Number(lowest[1]), Number(lowest[2])];
+          break;
+        }
+      }
+    } catch {}
+    return this.floor;
+  }
 
   ownerOf(file: string): PackageInfo | null {
     if (inside(this.appRoot, file) && !relative(this.appRoot, file).split(sep).includes("node_modules")) return null;

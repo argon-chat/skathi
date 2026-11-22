@@ -322,7 +322,10 @@ export function cssFindings(input: {
   const out: Finding[] = [];
   const byPackage = new Map<string, { name: string; found: Finding[] }>();
   // Scope and PostCSS transforms can remove source warnings or introduce new ones.
-  const emitted = input.compiled && fileFindings(input.compiled.entry + ".css", input.compiled.css, false);
+  const floor = input.packages.runtimeFloor();
+  const hostHasIt = floor !== null && (floor[0] > 0 || floor[1] >= 6);
+  const wanted = (found: Finding[]) => (hostHasIt ? found.filter((f) => f.code !== "SK4007") : found);
+  const emitted = input.compiled && wanted(fileFindings(input.compiled.entry + ".css", input.compiled.css, false));
   const messages = emitted && new Set(emitted.map((finding) => finding.message));
   const located = new Set<string>();
   let skippedDependency = false;
@@ -332,7 +335,7 @@ export function cssFindings(input: {
       skippedDependency = true;
       continue;
     }
-    const found = fileFindings(file, text, input.tailwind, messages);
+    const found = wanted(fileFindings(file, text, input.tailwind, messages));
     if (emitted) for (const finding of found) located.add(finding.message);
     if (!owner) {
       out.push(...found);

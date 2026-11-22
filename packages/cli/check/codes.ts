@@ -270,7 +270,7 @@ const CODES: CodeInfo[] = [
     explanation:
       "This declaration or selector relies on rendering introduced in 0.6. Earlier hosts can drop it or draw a different result.",
     example: ".dialog { width: min(32rem, 100%); }",
-    fix: "Distribute a 0.6 or later host. Once every supported host has the feature, check.allow can silence SK4007 for the covered files.",
+    fix: 'Distribute a 0.6 or later host. An app whose package.json asks for "@skathi-native/runtime" 0.6 or later, such as "^0.7.0", is not warned.',
   },
   {
     code: "SK5001",

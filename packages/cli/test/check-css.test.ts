@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { appendFileSync, cpSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCheck } from "../check";
-import { fileFindings } from "../check/css";
+import { cssFindings, fileFindings } from "../check/css";
+import { Packages } from "../check/packages";
 import type { CheckReport } from "../check/schema";
 import { buildApp } from "../cli/build-app";
 import { packageDir } from "../runtime-path";
@@ -162,6 +163,20 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
       "29:3:SK4006",
       "32:3:SK4007",
     ]);
+  });
+
+  test("a host-version advisory is for an app whose runtime range admits an older host", () => {
+    const codes = (range: string) => {
+      const root = tempDir("sk-check-floor-");
+      writeFileSync(join(root, "package.json"), JSON.stringify({ dependencies: { "@skathi-native/runtime": range } }));
+      const sources = [{ file: join(root, "a.css"), text: ".a { position: relative } .b { float: left }" }];
+      return cssFindings({ sources, packages: new Packages(root), deps: true, tailwind: false }).map((f) => f.code);
+    };
+    expect(codes("^0.5.0")).toEqual(["SK4007", "SK4001"]);
+    expect(codes("^0.7.0")).toEqual(["SK4001"]);
+    expect(codes(">=0.6.2")).toEqual(["SK4001"]);
+    expect(codes("^1.0.0")).toEqual(["SK4001"]);
+    expect(codes("workspace:*")).toEqual(["SK4007", "SK4001"]);
   });
 
   test("source ranges in static Svelte SVG styles count UTF-16 code units", () => {
