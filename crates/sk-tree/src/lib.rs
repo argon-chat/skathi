@@ -67,6 +67,7 @@ mod text_box;
 mod text_control;
 mod toggle;
 mod tree;
+mod vertical_align;
 #[cfg(feature = "video")]
 mod video;
 #[cfg(not(feature = "video"))]

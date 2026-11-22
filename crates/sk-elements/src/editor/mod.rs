@@ -138,20 +138,12 @@ pub struct LineStyle {
     pub background: Option<Hsla>,
 }
 
-/// How an atom sits on its line (CSS `vertical-align` on the atom element).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AtomAlign {
-    #[default]
-    Baseline,
-    Middle,
-    TextBottom,
-}
-
-/// An atom's element, built by the framework from the editor's child with `atom="<id>"`.
+/// An atom's element, built by the framework from the editor's child with `atom="<id>"`. Its
+/// baseline is its bottom edge, as for a replaced element.
 pub struct AtomChild {
     pub id: String,
     pub element: AnyElement,
-    pub align: AtomAlign,
+    pub align: crate::vertical_align::VerticalAlign,
 }
 
 #[derive(Clone, Debug)]

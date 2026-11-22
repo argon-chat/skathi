@@ -530,7 +530,7 @@ pub const CATALOG: &[Entry] = &[
     e("unicode-bidi", Unsupported, &[], &["isolate"], "Left-to-right text only"),
     e("user-select", Partial, &["none", "text"], &["contain"], "`contain` selects like `text`"),
     e("vector-effect", Unsupported, &[], &["non-scaling-stroke"], ""),
-    e("vertical-align", Partial, &["baseline"], &["middle"], "Use `align-items` / `align-self` on a flex parent"),
+    e("vertical-align", Partial, &["baseline", "middle", "top", "bottom", "text-top", "text-bottom", "sub", "super", "4px", "-0.2em", "50%"], &[], "Places the items of a line of mixed inline content and the atoms of `<sk-editor>`. Ignored where CSS ignores it: on block-level, flex and grid items"),
     e("view-transition-class", Supported, &["card", "a b"], &[], ""),
     e("view-transition-group", Unsupported, &[], &["normal"], ""),
     e("view-transition-name", Supported, &["card", "none"], &[], ""),

@@ -4,7 +4,7 @@
 
 use crate::buffer::{utf16_len, TextBuffer};
 use crate::doc::{Document, Meta};
-use crate::transaction::{Applied, Selection, TextOp};
+use crate::transaction::{compose, Applied, ChangeDesc, Selection, TextOp};
 
 const LIMIT: usize = 256;
 
@@ -120,30 +120,61 @@ impl History {
         }
     }
 
-    /// Reverts the last step; answers the selections to restore.
-    pub fn undo<B: TextBuffer>(&mut self, doc: &mut Document<B>) -> Option<Vec<Selection>> {
+    /// Reverts the last step; answers the selections to restore and the text changes it made.
+    pub fn undo<B: TextBuffer>(&mut self, doc: &mut Document<B>) -> Option<Restored> {
         let step = self.undo.pop()?;
-        for op in step.ops.iter().rev() {
-            doc.replace_text_raw(op.at, op.at + utf16_len(&op.inserted), &op.removed);
-        }
+        let len = doc.len();
+        let inverse = step
+            .ops
+            .iter()
+            .rev()
+            .map(|op| (op.at, utf16_len(&op.inserted), op.removed.as_str()));
+        let changes = replay(doc, len, inverse);
         doc.restore_meta(&step.before);
-        let sel = step.sel_before.clone();
+        let selections = step.sel_before.clone();
         self.redo.push(step);
         self.sealed = true;
-        Some(sel)
+        Some(Restored {
+            selections,
+            changes,
+        })
     }
 
-    pub fn redo<B: TextBuffer>(&mut self, doc: &mut Document<B>) -> Option<Vec<Selection>> {
+    pub fn redo<B: TextBuffer>(&mut self, doc: &mut Document<B>) -> Option<Restored> {
         let step = self.redo.pop()?;
-        for op in &step.ops {
-            doc.replace_text_raw(op.at, op.at + utf16_len(&op.removed), &op.inserted);
-        }
+        let len = doc.len();
+        let ops = step
+            .ops
+            .iter()
+            .map(|op| (op.at, utf16_len(&op.removed), op.inserted.as_str()));
+        let changes = replay(doc, len, ops);
         doc.restore_meta(&step.after);
-        let sel = step.sel_after.clone();
+        let selections = step.sel_after.clone();
         self.undo.push(step);
         self.sealed = true;
-        Some(sel)
+        Some(Restored {
+            selections,
+            changes,
+        })
     }
+}
+
+/// What an undo or redo did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restored {
+    pub selections: Vec<Selection>,
+    pub changes: Vec<ChangeDesc>,
+}
+
+fn replay<'a, B: TextBuffer>(
+    doc: &mut Document<B>,
+    len: usize,
+    ops: impl Iterator<Item = (usize, usize, &'a str)> + Clone,
+) -> Vec<ChangeDesc> {
+    for (at, removed, inserted) in ops.clone() {
+        doc.replace_text_raw(at, at + removed, inserted);
+    }
+    compose(len, ops)
 }
 
 #[cfg(test)]
@@ -180,14 +211,26 @@ mod tests {
         h.seal();
         type_at(&mut d, &mut h, 3, "d");
         assert_eq!(d.text(), "abcd");
-        assert_eq!(h.undo(&mut d), Some(vec![Selection::caret(3)]));
+        assert_eq!(
+            h.undo(&mut d).map(|r| r.selections),
+            Some(vec![Selection::caret(3)])
+        );
         assert_eq!(d.text(), "abc");
-        assert_eq!(h.undo(&mut d), Some(vec![Selection::caret(0)]));
+        assert_eq!(
+            h.undo(&mut d).map(|r| r.selections),
+            Some(vec![Selection::caret(0)])
+        );
         assert_eq!(d.text(), "");
-        assert_eq!(h.undo(&mut d), None);
-        assert_eq!(h.redo(&mut d), Some(vec![Selection::caret(3)]));
+        assert!(h.undo(&mut d).is_none());
+        assert_eq!(
+            h.redo(&mut d).map(|r| r.selections),
+            Some(vec![Selection::caret(3)])
+        );
         assert_eq!(d.text(), "abc");
-        assert_eq!(h.redo(&mut d), Some(vec![Selection::caret(4)]));
+        assert_eq!(
+            h.redo(&mut d).map(|r| r.selections),
+            Some(vec![Selection::caret(4)])
+        );
         assert_eq!(d.text(), "abcd");
     }
 
@@ -262,7 +305,10 @@ mod tests {
             );
         }
         assert_eq!(d.text(), "a");
-        assert_eq!(h.undo(&mut d), Some(vec![Selection::caret(4)]));
+        assert_eq!(
+            h.undo(&mut d).map(|r| r.selections),
+            Some(vec![Selection::caret(4)])
+        );
         assert_eq!(d.text(), "abcd");
     }
 }

@@ -188,6 +188,7 @@ pub struct Extras {
     /// the list, up to the one used, that [`set_web_font_families`] named, in order.
     pub web_font: Option<Rc<[String]>>,
     pub underline_offset: Option<f32>,
+    pub vertical_align: Option<VerticalAlign>,
     pub decoration: DecorationPatch,
     pub outline: OutlinePatch,
     /// `currentColor` is the computed `color`, unknown while a declaration is mapped (no inherited
@@ -321,6 +322,26 @@ impl OverscrollBehavior {
     pub fn chains(self) -> bool {
         matches!(self, Self::Auto)
     }
+}
+
+/// The computed `vertical-align`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    TextTop,
+    TextBottom,
+    Middle,
+    Top,
+    Bottom,
+    /// The baseline raised by `fraction` of the element's line height plus `px` (lowered when
+    /// negative).
+    Shift {
+        fraction: f32,
+        px: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -705,6 +726,9 @@ impl Extras {
         }
         if other.underline_offset.is_some() {
             self.underline_offset = other.underline_offset;
+        }
+        if other.vertical_align.is_some() {
+            self.vertical_align = other.vertical_align;
         }
         self.decoration.refine(&other.decoration);
         self.outline.refine(&other.outline);
@@ -6572,21 +6596,25 @@ fn apply_property(
         VerticalAlign(v) => {
             use lightningcss::properties::font::VerticalAlign as VA;
             use lightningcss::properties::font::VerticalAlignKeyword as VK;
-            // `vertical-align` applies only to inline-level boxes and table cells, so it is inert
-            // on a block; Tailwind's preflight pairs `display: block` with `vertical-align: middle`
-            // on that basis.
-            let block_level = matches!(
-                r.display,
-                Some(gpui::Display::Block | gpui::Display::Flex | gpui::Display::Grid)
-            ) && x.inline_level != Some(true);
-            if !matches!(v, VA::Keyword(VK::Baseline)) && !block_level {
-                warn_once(
-                    diagnostics,
-                    "`vertical-align` is not applied (v1) — it aligns boxes inside a LINE box, \
-                     and taffy has no inline formatting context. `align-items` / `align-self` on \
-                     the flex parent is the equivalent that works",
-                );
-            }
+            x.vertical_align = match v {
+                VA::Keyword(k) => Some(match k {
+                    VK::Baseline => self::VerticalAlign::Baseline,
+                    VK::Sub => self::VerticalAlign::Sub,
+                    VK::Super => self::VerticalAlign::Super,
+                    VK::TextTop => self::VerticalAlign::TextTop,
+                    VK::TextBottom => self::VerticalAlign::TextBottom,
+                    VK::Middle => self::VerticalAlign::Middle,
+                    VK::Top => self::VerticalAlign::Top,
+                    VK::Bottom => self::VerticalAlign::Bottom,
+                }),
+                VA::Length(lp) => match lp_linear(lp) {
+                    Some((fraction, px)) => Some(self::VerticalAlign::Shift { fraction, px }),
+                    None => {
+                        calc_dropped();
+                        None
+                    }
+                },
+            };
         }
         TextIndent(v) => {
             if lp_definite(&v.value).is_none_or(|l| l != gpui::px(0.0).into()) {

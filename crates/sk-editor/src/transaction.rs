@@ -157,6 +157,86 @@ pub fn map_pos(changes: &[ChangeDesc], pos: usize, after: bool) -> usize {
     (pos as isize + delta).max(0) as usize
 }
 
+enum Piece {
+    Kept { from: usize, len: usize },
+    Inserted(String),
+}
+
+impl Piece {
+    fn len(&self) -> usize {
+        match self {
+            Piece::Kept { len, .. } => *len,
+            Piece::Inserted(s) => crate::buffer::utf16_len(s),
+        }
+    }
+}
+
+/// Splits `pieces` so that one starts at `pos`; answers its index.
+fn split_at(pieces: &mut Vec<Piece>, pos: usize) -> usize {
+    let mut start = 0;
+    for i in 0..pieces.len() {
+        let len = pieces[i].len();
+        if pos == start {
+            return i;
+        }
+        if pos < start + len {
+            let k = pos - start;
+            let tail = match &mut pieces[i] {
+                Piece::Kept { from, len } => {
+                    let tail = Piece::Kept {
+                        from: *from + k,
+                        len: *len - k,
+                    };
+                    *len = k;
+                    tail
+                }
+                Piece::Inserted(s) => Piece::Inserted(s.split_off(crate::buffer::byte_at(s, k))),
+            };
+            pieces.insert(i + 1, tail);
+            return i + 1;
+        }
+        start += len;
+    }
+    pieces.len()
+}
+
+/// The replacements `(at, removed length, inserted)` applied one after another, each at a position
+/// in the document as the ones before left it, as one list of changes in the document of length
+/// `len` before them all: sorted, not overlapping, as [`Document::apply`] reports a transaction.
+pub fn compose<'a>(
+    len: usize,
+    ops: impl IntoIterator<Item = (usize, usize, &'a str)>,
+) -> Vec<ChangeDesc> {
+    let mut pieces = vec![Piece::Kept { from: 0, len }];
+    for (at, removed, inserted) in ops {
+        let i = split_at(&mut pieces, at);
+        let j = split_at(&mut pieces, at + removed);
+        let insert = (!inserted.is_empty()).then(|| Piece::Inserted(inserted.to_owned()));
+        pieces.splice(i..j, insert);
+    }
+    let mut out = Vec::new();
+    let mut old = 0;
+    let mut pending: Option<(usize, String)> = None;
+    let mut flush = |old: usize, to: usize, pending: &mut Option<(usize, String)>| {
+        let (from, insert) = pending.take().unwrap_or((old, String::new()));
+        if from < to || !insert.is_empty() {
+            out.push(ChangeDesc { from, to, insert });
+        }
+    };
+    for piece in pieces {
+        match piece {
+            Piece::Kept { len: 0, .. } => {}
+            Piece::Kept { from, len } => {
+                flush(old, from, &mut pending);
+                old = from + len;
+            }
+            Piece::Inserted(s) => pending.get_or_insert((old, String::new())).1.push_str(&s),
+        }
+    }
+    flush(old, len, &mut pending);
+    out
+}
+
 impl<B: TextBuffer> Document<B> {
     /// Applies `tr`'s document part (not selections), recording what history needs.
     pub fn apply(&mut self, tr: &Transaction) -> Result<Applied, TxError> {

@@ -125,6 +125,18 @@ pub fn utf16_len(s: &str) -> usize {
     s.chars().map(char::len_utf16).sum()
 }
 
+/// The byte offset in `s` of UTF-16 offset `pos`; inside a surrogate pair rounds down.
+pub(crate) fn byte_at(s: &str, pos: usize) -> usize {
+    let mut units = 0;
+    for (at, c) in s.char_indices() {
+        if units + c.len_utf16() > pos {
+            return at;
+        }
+        units += c.len_utf16();
+    }
+    s.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

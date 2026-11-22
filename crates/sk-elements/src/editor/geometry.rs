@@ -139,6 +139,21 @@ impl Geometry {
         Some(line.caret(byte))
     }
 
+    /// The left edge of the character at `pos` in content coordinates, on the top of its row,
+    /// and that row. Unlike a caret, a character at a wrap point is on the row it starts.
+    pub fn glyph_at(&self, pos: usize) -> Option<(Point<Pixels>, gpui::LineBox)> {
+        let line = self.line_of(pos)?;
+        let byte = line.to_utf8(pos.saturating_sub(line.start).min(line.len16()));
+        let starts = line.row_starts();
+        let r = starts.partition_point(|&s| s <= byte).saturating_sub(1);
+        let row = line.row(r);
+        let x = line.x_at(byte) - line.x_at(starts[r]);
+        Some((
+            point(line.inset.left + x, line.top + line.inset.top + row.top),
+            row,
+        ))
+    }
+
     /// The position closest to a point in content coordinates.
     pub fn index_at(&self, p: Point<Pixels>) -> usize {
         let Some(first) = self.lines.first() else {

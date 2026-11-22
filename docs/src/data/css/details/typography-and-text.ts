@@ -919,17 +919,27 @@ const expanded = ref(false);
   "vertical-align": {
     examples: [
       {
-        title: "Instead: center an icon beside its label",
+        title: "Center custom emoji on the text of a chat composer",
         lang: "css",
-        code: `.button-with-icon {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+        code: `sk-editor .emoji {
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
 }`,
+      },
+      {
+        title: "Footnote marks and an icon in a sentence",
+        lang: "html",
+        code: `<p>E = mc<sup>2</sup>, H<sub>2</sub>O
+  <img src="info.svg" width="16" height="16" style="vertical-align: middle" />
+</p>`,
       },
     ],
     edgeCases: [
-      "`baseline` is accepted without an advisory, and so is any value in a rule that also sets `display: block`, `flex` or `grid`, as Tailwind's preflight does. Other uses log an advisory.",
+      "An atom's baseline is its bottom edge, as for an image, even when the atom element holds text.",
+      "In an editor, a `bottom` atom taller than its row pushes the row's baseline down and a `top` atom the row's bottom. In other lines, the text of a line with a tall `bottom` box stays at the top.",
+      "`overflow: hidden` on an `inline-block` does not move its baseline to its bottom edge as CSS does; it still aligns by its first line.",
+      "Tailwind's preflight sets `vertical-align: middle` together with `display: block` on images, so it changes nothing, as in a browser.",
     ],
   },
   "tab-size": {

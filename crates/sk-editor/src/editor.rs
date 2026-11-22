@@ -410,30 +410,32 @@ impl Editor {
     }
 
     fn restore(&mut self, undo: bool) -> Option<Outcome> {
-        let before_text = self.doc.text().to_owned();
-        let before_len = self.doc.len();
-        let sel = if undo {
+        let before_doc = (!self.line_decorations.is_empty()).then(|| self.doc.clone());
+        let restored = if undo {
             self.history.undo(&mut self.doc)?
         } else {
             self.history.redo(&mut self.doc)?
         };
+        let changes = restored.changes;
+        if let Some(before) = &before_doc {
+            self.map_line_decorations(before, &changes);
+        }
         self.revision += 1;
+        if !changes.is_empty() {
+            self.map_decorations(&changes);
+        }
+        self.decoration_revision += 1;
         self.typing_marks = None;
-        let before_sel = std::mem::replace(&mut self.selections, Vec::new());
-        self.selections = sel.into_iter().take(1).map(|s| self.clamp(s)).collect();
+        let before_sel = std::mem::take(&mut self.selections);
+        self.selections = restored
+            .selections
+            .into_iter()
+            .take(1)
+            .map(|s| self.clamp(s))
+            .collect();
         if self.selections.is_empty() {
             self.selections = vec![Selection::caret(self.doc.len())];
         }
-        let changes = if before_text == self.doc.text() {
-            Vec::new()
-        } else {
-            vec![ChangeDesc {
-                from: 0,
-                to: before_len,
-                insert: self.doc.text().to_owned(),
-            }]
-        };
-        self.decoration_revision += 1;
         Some(Outcome {
             changes,
             doc_changed: true,
@@ -636,6 +638,178 @@ mod tests {
         assert!(e.undo().is_some());
         assert_eq!(e.doc().text(), "hello");
         assert_eq!(e.selection(), Selection::caret(3));
+    }
+
+    fn apply_changes(text: &str, changes: &[ChangeDesc]) -> String {
+        let mut units: Vec<u16> = text.encode_utf16().collect();
+        for c in changes.iter().rev() {
+            units.splice(c.from..c.to, c.insert.encode_utf16());
+        }
+        String::from_utf16(&units).expect("changes keep surrogate pairs whole")
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n.max(1) as u64) as usize
+        }
+    }
+
+    fn atom_value(id: usize) -> Insert {
+        Insert::Value(EditorValue {
+            text: "\u{FFFC}".into(),
+            atoms: vec![crate::value::Atom {
+                id: format!("a{id}"),
+                at: 0,
+                kind: "mention".into(),
+                text: Some("@x".into()),
+                data: None,
+            }],
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn the_changes_of_every_edit_undo_and_redo_turn_the_old_text_into_the_new() {
+        let pieces = ["a", "bc", "🙂", "\n", "xyz ", ""];
+        for seed in 1..40u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut e = Editor::new();
+            e.set_value(EditorValue {
+                text: "one \u{FFFC} two\nthree".into(),
+                marks: vec![Mark::new("bold", 0, 3)],
+                atoms: vec![crate::value::Atom {
+                    id: "start".into(),
+                    at: 4,
+                    kind: "mention".into(),
+                    text: None,
+                    data: None,
+                }],
+                ..Default::default()
+            });
+            let start = e.doc().to_value();
+            let mut next_atom = 0;
+            for _ in 0..60 {
+                let before = e.doc().text().to_owned();
+                let len = e.doc().len();
+                let outcome = match rng.below(7) {
+                    0 | 1 => {
+                        let at = rng.below(len + 1);
+                        let end = at + rng.below(3);
+                        let text = pieces[rng.below(pieces.len())];
+                        e.user_replace(
+                            at,
+                            end,
+                            Insert::Text(text.into()),
+                            StepKind::Typing { end: 0 },
+                            true,
+                        )
+                    }
+                    2 => {
+                        let at = rng.below(len + 1);
+                        next_atom += 1;
+                        e.user_replace(at, at, atom_value(next_atom), StepKind::Other, true)
+                    }
+                    3 => {
+                        let mut cuts: Vec<usize> = (0..4).map(|_| rng.below(len + 1)).collect();
+                        cuts.sort_unstable();
+                        let mut changes = Vec::new();
+                        for pair in cuts.chunks(2) {
+                            next_atom += 1;
+                            let insert = if rng.below(3) == 0 {
+                                atom_value(next_atom)
+                            } else {
+                                Insert::Text(pieces[rng.below(pieces.len())].into())
+                            };
+                            changes.push(ChangeSpec {
+                                from: e.doc().snap(pair[0]),
+                                to: Some(e.doc().snap(pair[1])),
+                                insert,
+                            });
+                        }
+                        changes.reverse();
+                        e.dispatch(&Transaction {
+                            changes,
+                            ..Default::default()
+                        })
+                        .ok()
+                    }
+                    4 => e.undo(),
+                    5 => e.redo(),
+                    _ => {
+                        e.seal_history();
+                        None
+                    }
+                };
+                if let Some(out) = outcome {
+                    assert_eq!(
+                        apply_changes(&before, &out.changes),
+                        e.doc().text(),
+                        "seed {seed}"
+                    );
+                    let mut sorted = true;
+                    for w in out.changes.windows(2) {
+                        sorted &= w[0].to <= w[1].from;
+                    }
+                    assert!(sorted, "seed {seed}: {:?}", out.changes);
+                }
+                assert!(e.doc().atoms_consistent(), "seed {seed}");
+            }
+            let end = e.doc().to_value();
+            let mut undone = 0;
+            while e.undo().is_some() {
+                undone += 1;
+            }
+            assert_eq!(
+                e.doc().to_value(),
+                start,
+                "seed {seed}: undo all the way back"
+            );
+            for _ in 0..undone {
+                e.redo();
+            }
+            assert_eq!(
+                e.doc().to_value(),
+                end,
+                "seed {seed}: redo all the way forward"
+            );
+        }
+    }
+
+    #[test]
+    fn undo_reports_the_inverse_of_a_multi_range_transaction() {
+        let mut e = Editor::new();
+        e.set_value(EditorValue::plain("hello world"));
+        let tr = Transaction {
+            changes: vec![
+                ChangeSpec {
+                    from: 6,
+                    to: Some(11),
+                    insert: Insert::Text("there".into()),
+                },
+                ChangeSpec {
+                    from: 0,
+                    to: Some(5),
+                    insert: Insert::Text("Hi".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        e.dispatch(&tr).unwrap();
+        let undo = e.undo().unwrap();
+        assert_eq!(e.doc().text(), "hello world");
+        let ch = |from, to, insert: &str| ChangeDesc {
+            from,
+            to,
+            insert: insert.into(),
+        };
+        assert_eq!(undo.changes, [ch(0, 2, "hello"), ch(3, 8, "world")]);
+        let redo = e.redo().unwrap();
+        assert_eq!(redo.changes, [ch(0, 5, "Hi"), ch(6, 11, "there")]);
     }
 
     #[test]

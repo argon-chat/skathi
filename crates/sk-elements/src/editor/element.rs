@@ -16,7 +16,8 @@ use sk_editor::ATOM_CHAR;
 
 use super::geometry::LineGeom;
 use super::state::EditorState;
-use super::{AtomAlign, AtomChild, EditorOptions, LineStyle, RunStyle};
+use super::{AtomChild, EditorOptions, LineStyle, RunStyle};
+use crate::vertical_align::{top_above_baseline, Alignment, LineText, VerticalAlign};
 
 const CARET_WIDTH: Pixels = px(2.0);
 
@@ -29,6 +30,17 @@ pub(crate) fn line_height_for(window: &Window, font_size: Pixels) -> Pixels {
         .max(font_size)
 }
 
+/// An atom aligned to its row's top or bottom (`vertical-align: top | bottom`), which needs the
+/// row's height and so a second shaping.
+#[derive(Clone, Copy, PartialEq)]
+struct RowAtom {
+    run: usize,
+    byte: usize,
+    width: Pixels,
+    height: Pixels,
+    top: bool,
+}
+
 /// One hard line ready to shape.
 #[derive(Clone, PartialEq)]
 struct LinePlan {
@@ -39,24 +51,124 @@ struct LinePlan {
     line_height: Pixels,
     inset: Edges<Pixels>,
     style: Option<LineStyle>,
+    row_atoms: Vec<RowAtom>,
+}
+
+/// The byte index each visual row of `wrapped` starts at.
+fn row_starts(wrapped: &gpui::WrappedLine) -> Vec<usize> {
+    let runs = wrapped.runs();
+    let mut out = vec![0];
+    for b in wrapped.wrap_boundaries() {
+        if let Some(g) = runs.get(b.run_ix).and_then(|r| r.glyphs.get(b.glyph_ix)) {
+            out.push(g.index);
+        }
+    }
+    out
 }
 
 impl LinePlan {
-    fn shape(&self, width: Pixels, window: &mut Window) -> Option<gpui::WrappedLine> {
+    fn shape(
+        &self,
+        runs: &[TextRun],
+        width: Pixels,
+        window: &mut Window,
+    ) -> Option<gpui::WrappedLine> {
         let wrap = (width - self.inset.left - self.inset.right - CARET_WIDTH).max(px(1.0));
         window
             .text_system()
-            .shape_text(
-                self.text.clone(),
-                self.font_size,
-                &self.runs,
-                Some(wrap),
-                None,
-            )
+            .shape_text(self.text.clone(), self.font_size, runs, Some(wrap), None)
             .ok()?
             .into_iter()
             .next()
     }
+
+    /// The wrapped line and its rows. Top- and bottom-aligned atoms first hold their row's
+    /// strut; once the rows are known, each reserves the extent CSS gives its row: the bottom
+    /// ones push the baseline down, the top ones the row's bottom.
+    fn layout(
+        &self,
+        width: Pixels,
+        window: &mut Window,
+    ) -> Option<(gpui::WrappedLine, Vec<gpui::LineBox>)> {
+        let wrapped = self.shape(&self.runs, width, window)?;
+        let rows: Vec<gpui::LineBox> = wrapped.line_boxes(self.line_height).into_iter().collect();
+        if self.row_atoms.is_empty() || rows.is_empty() {
+            return Some((wrapped, rows));
+        }
+        let starts = row_starts(&wrapped);
+        let row_of = |byte: usize| {
+            (starts.partition_point(|&s| s <= byte).saturating_sub(1)).min(rows.len() - 1)
+        };
+        let mut tallest = vec![(px(0.0), px(0.0)); rows.len()];
+        for a in &self.row_atoms {
+            let t = &mut tallest[row_of(a.byte)];
+            if a.top {
+                t.0 = t.0.max(a.height);
+            } else {
+                t.1 = t.1.max(a.height);
+            }
+        }
+        let extents: Vec<(Pixels, Pixels)> = rows
+            .iter()
+            .zip(&tallest)
+            .map(|(row, &(top, bottom))| {
+                let (above, below) = (row.baseline, row.height - row.baseline);
+                let above = above.max(bottom - below);
+                (above, below.max(top - above))
+            })
+            .collect();
+        if rows
+            .iter()
+            .zip(&extents)
+            .all(|(row, &(above, below))| row.height >= above + below)
+        {
+            return Some((wrapped, rows));
+        }
+        let mut runs = self.runs.clone();
+        for a in &self.row_atoms {
+            let (ascent, descent) = extents[row_of(a.byte)];
+            runs[a.run].inline_box = Some(InlineBox {
+                width: a.width,
+                ascent,
+                descent,
+            });
+        }
+        let wrapped = self.shape(&runs, width, window)?;
+        let rows = wrapped.line_boxes(self.line_height).into_iter().collect();
+        Some((wrapped, rows))
+    }
+}
+
+/// Where an atom's box goes in its row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Place {
+    /// Its top this far above the baseline.
+    Above(Pixels),
+    Top,
+    Bottom,
+}
+
+/// The room an atom of `size` reserves in its line, and where its box goes.
+fn atom_box(size: Size<Pixels>, align: VerticalAlign, line: &LineText) -> (InlineBox, Place) {
+    let h = size.height;
+    let place = match align.alignment(line) {
+        Alignment::Baseline(shift) => Place::Above(top_above_baseline(shift, h, h)),
+        Alignment::Top => Place::Top,
+        Alignment::Bottom => Place::Bottom,
+    };
+    let (above, below) = line.strut();
+    let (ascent, descent) = match place {
+        Place::Above(a) => (a.max(above), (h - a).max(below)),
+        Place::Top | Place::Bottom => (above, below),
+    };
+    (
+        InlineBox {
+            width: size.width,
+            ascent,
+            descent,
+        },
+        place,
+    )
 }
 
 pub(crate) struct EditorElement {
@@ -83,6 +195,7 @@ pub(crate) struct Layout {
     plans: Rc<Vec<LinePlan>>,
     /// Atom id → (index into `atoms`, measured size).
     atom_sizes: HashMap<String, (usize, Size<Pixels>)>,
+    places: HashMap<String, Place>,
     placeholder: bool,
 }
 
@@ -131,28 +244,6 @@ fn run_for(
     }
 }
 
-fn atom_box(size: Size<Pixels>, align: AtomAlign, font_size: Pixels) -> InlineBox {
-    let h = size.height;
-    let (ascent, descent) = match align {
-        AtomAlign::Baseline => (h, px(0.0)),
-        AtomAlign::Middle => {
-            let mid = font_size * 0.3;
-            let half = h / 2.0;
-            let descent = (half - mid).max(px(0.0));
-            (h - descent, descent)
-        }
-        AtomAlign::TextBottom => {
-            let descent = (font_size * 0.2).min(h);
-            (h - descent, descent)
-        }
-    };
-    InlineBox {
-        width: size.width,
-        ascent,
-        descent,
-    }
-}
-
 /// UTF-8 offset in `text` of a UTF-16 offset.
 fn to8(text: &str, pos: usize) -> usize {
     let mut units = 0;
@@ -171,6 +262,7 @@ impl EditorElement {
         window: &Window,
         cx: &App,
         atom_sizes: &HashMap<String, (usize, Size<Pixels>)>,
+        places: &mut HashMap<String, Place>,
     ) -> (Vec<LinePlan>, bool) {
         let text_style = window.text_style();
         let base = base_font(&text_style);
@@ -203,6 +295,7 @@ impl EditorElement {
                     line_height,
                     inset,
                     style,
+                    row_atoms: Vec::new(),
                 }],
                 true,
             );
@@ -251,6 +344,7 @@ impl EditorElement {
             cuts.dedup();
             let line_run = style.as_ref().map(|s| s.run.clone()).unwrap_or_default();
             let mut runs = Vec::with_capacity(cuts.len());
+            let mut row_atoms = Vec::new();
             for w in cuts.windows(2) {
                 let (a, b) = (w[0], w[1]);
                 if a >= b {
@@ -291,8 +385,27 @@ impl EditorElement {
                         .and_then(|a| atom_sizes.get(&a.id))
                         .map(|&(i, size)| (size, self.atoms[i].align))
                         .unwrap_or_default();
-                    run.inline_box =
-                        Some(atom_box(size, align, run.font_size.unwrap_or(font_size)));
+                    let run_size = run.font_size.unwrap_or(font_size);
+                    let run_line_height = if font_size > px(0.0) {
+                        line_height * (run_size / font_size)
+                    } else {
+                        line_height
+                    };
+                    let line = LineText::measure(&run.font, run_size, run_line_height, window);
+                    let (inline_box, place) = atom_box(size, align, &line);
+                    if matches!(place, Place::Top | Place::Bottom) {
+                        row_atoms.push(RowAtom {
+                            run: runs.len(),
+                            byte: a,
+                            width: size.width,
+                            height: size.height,
+                            top: place == Place::Top,
+                        });
+                    }
+                    if let Some(atom) = atom {
+                        places.insert(atom.id.clone(), place);
+                    }
+                    run.inline_box = Some(inline_box);
                 }
                 runs.push(run);
             }
@@ -304,6 +417,7 @@ impl EditorElement {
                 line_height,
                 inset,
                 style,
+                row_atoms,
             });
         }
         (plans, false)
@@ -338,8 +452,9 @@ fn total_height(plans: &[LinePlan], width: Pixels, window: &mut Window) -> Pixel
     let mut h = px(0.0);
     for plan in plans {
         let rows = plan
-            .shape(width, window)
-            .map_or(plan.line_height, |l| l.size(plan.line_height).height);
+            .layout(width, window)
+            .and_then(|(_, rows)| rows.last().map(|r| r.top + r.height))
+            .unwrap_or(plan.line_height);
         h += rows.max(plan.line_height) + plan.inset.top + plan.inset.bottom;
     }
     h
@@ -379,7 +494,8 @@ impl Element for EditorElement {
             let s = atom.element.layout_as_root(max, window, cx);
             atom_sizes.insert(atom.id.clone(), (i, s));
         }
-        let (plans, placeholder) = self.plans(window, cx, &atom_sizes);
+        let mut places = HashMap::new();
+        let (plans, placeholder) = self.plans(window, cx, &atom_sizes, &mut places);
         let plans = Rc::new(plans);
         let mut style = Style::default();
         style.flex_grow = 1.0;
@@ -414,6 +530,7 @@ impl Element for EditorElement {
             Layout {
                 plans,
                 atom_sizes,
+                places,
                 placeholder,
             },
         )
@@ -439,11 +556,9 @@ impl Element for EditorElement {
         let mut lines = Vec::with_capacity(layout.plans.len());
         let mut top = px(0.0);
         for plan in layout.plans.iter() {
-            let Some(wrapped) = plan.shape(bounds.size.width, window) else {
+            let Some((wrapped, rows)) = plan.layout(bounds.size.width, window) else {
                 continue;
             };
-            let rows: Vec<gpui::LineBox> =
-                wrapped.line_boxes(plan.line_height).into_iter().collect();
             let text_h = rows
                 .last()
                 .map_or(plan.line_height, |r| r.top + r.height)
@@ -592,16 +707,17 @@ impl Element for EditorElement {
                 let Some(&(i, s)) = layout.atom_sizes.get(&atom.id) else {
                     continue;
                 };
-                let Some((p, _, baseline)) = g.caret_at(atom.at) else {
+                let (Some((p, row)), Some(place)) =
+                    (g.glyph_at(atom.at), layout.places.get(&atom.id))
+                else {
                     continue;
                 };
-                let line = core.doc().line_at(atom.at);
-                let Some(plan) = layout.plans.get(line) else {
-                    continue;
-                };
-                let fs = plan.font_size;
-                let ib = atom_box(s, self.atoms[i].align, fs);
-                let top = p.y + baseline - ib.ascent;
+                let top = p.y
+                    + match *place {
+                        Place::Above(a) => row.baseline - a,
+                        Place::Top => px(0.0),
+                        Place::Bottom => row.height - s.height,
+                    };
                 let o = at(point(p.x, top));
                 self.atoms[i].element.prepaint_at(o, window, cx);
                 placed.push(i);

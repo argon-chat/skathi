@@ -1,0 +1,11 @@
+{
+  "name": "vertical-align",
+
+  "window": {
+    "title": "Skathi — vertical-align (fixture)",
+    "width": 480,
+    "height": 600,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

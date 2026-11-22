@@ -19,6 +19,7 @@ pub mod editor;
 pub mod scrollbar;
 pub mod tab_nav;
 pub mod text_input;
+pub mod vertical_align;
 
 pub use scrollbar::{undo_wheel_scroll, ChainSpan, Gesture, Overscroll, Scrollbar, ScrollbarStyle};
 pub use tab_nav::{FocusNext, FocusPrev};

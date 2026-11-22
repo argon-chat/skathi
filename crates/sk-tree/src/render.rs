@@ -2104,6 +2104,9 @@ fn build_node<V: 'static>(
         .then(|| crate::sticky::spec(t, node, root))
         .flatten();
     let split = Cell::new(false);
+    if node.kind == Kind::Element && synthetic_inline_item(t, node) {
+        crate::vertical_align::note_line_item(t, id, node, window);
+    }
     match node.kind {
         // An empty text node takes no space in a browser but gpui lays it out as a full line box,
         // and Vue anchors every Fragment with `createText("")`: leaving it in adds a blank line per
@@ -2480,7 +2483,7 @@ fn build_node<V: 'static>(
                     let inert = extras.pointer_events_none == Some(true);
                     let (input, focus_target) = if is_editor {
                         let children = laid_out_children(t, node);
-                        let atoms = crate::editor::atom_children(t, &children)
+                        let atoms = crate::editor::atom_children(t, &children, window.rem_size())
                             .into_iter()
                             .map(|(c, atom, atom_align)| {
                                 let element = build_node(
@@ -3712,6 +3715,7 @@ where
 {
     use gpui::Refineable as _;
     *e.style() = (*cs.base).clone();
+    crate::vertical_align::apply(e.style(), id);
     if let Some(capture) = crate::view_transition::capture_of(id) {
         e.style().vn_capture = Some(capture);
     }

@@ -11,9 +11,10 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, ClipboardItem, Context, FocusHandle, KeyUpEvent, Window};
 use sk_editor::{json, EditorValue};
 use sk_elements::editor::{
-    AtomAlign, AtomChild, EditorEvent, EditorHandlers, EditorIntent, EditorOptions, EditorShared,
-    EditorState, LineStyle, RunStyle,
+    AtomChild, EditorEvent, EditorHandlers, EditorIntent, EditorOptions, EditorShared, EditorState,
+    LineStyle, RunStyle,
 };
+use sk_elements::vertical_align::VerticalAlign;
 use sk_runtime::host::{global, throw};
 use sk_runtime::host_fn;
 use sk_runtime::redjs::ffi::{redjs_protect, redjs_unprotect};
@@ -168,21 +169,20 @@ fn part_styles(node: &crate::tree::Node, rem: gpui::Pixels) -> PartMaps {
     (Rc::new(marks), Rc::new(decorations), Rc::new(lines))
 }
 
-fn atom_align(t: &Tree, id: u32) -> AtomAlign {
-    match t.prop(id, "atom-align").map(str::trim) {
-        Some("middle") => AtomAlign::Middle,
-        Some("text-bottom") => AtomAlign::TextBottom,
-        _ => AtomAlign::Baseline,
-    }
-}
-
 /// The editor's children that stand on an atom: `(child, atom id, its vertical alignment)`.
-pub(crate) fn atom_children(t: &Tree, children: &[u32]) -> Vec<(u32, String, AtomAlign)> {
+pub(crate) fn atom_children(
+    t: &Tree,
+    children: &[u32],
+    rem: gpui::Pixels,
+) -> Vec<(u32, String, VerticalAlign)> {
     children
         .iter()
         .filter_map(|&c| {
             let atom = t.prop(c, "atom")?.trim();
-            (!atom.is_empty()).then(|| (c, atom.to_owned(), atom_align(t, c)))
+            let align = t.node(c).map_or_else(VerticalAlign::default, |n| {
+                crate::vertical_align::of(n, rem)
+            });
+            (!atom.is_empty()).then(|| (c, atom.to_owned(), align))
         })
         .collect()
 }
@@ -243,7 +243,7 @@ pub(crate) fn build<V: 'static>(
     id: u32,
     node: &crate::tree::Node,
     tab_index: Option<isize>,
-    atoms: Vec<(String, AnyElement, AtomAlign)>,
+    atoms: Vec<(String, AnyElement, VerticalAlign)>,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> (AnyElement, FocusHandle) {

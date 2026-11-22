@@ -181,7 +181,13 @@ editor.dispatch({
 });
 ```
 
-An atom sits on the text's baseline. Set `atom-align="middle"` or `atom-align="text-bottom"` on its element to move it. A child without `atom` is not shown, and an atom with no child takes no space.
+An atom's bottom edge sits on the text's baseline. `vertical-align` on its element moves it as it moves an inline image on the web: `middle` centres it on the lowercase letters, `text-top` and `text-bottom` line it up with the text, `top` and `bottom` with its row, `sub`, `super`, a length or a percentage of its line height shift it. The row grows to hold it. A child without `atom` is not shown, and an atom with no child takes no space.
+
+```css
+.chip {
+  vertical-align: middle;
+}
+```
 
 To open a mention popup at the caret, read `caretRect()`; it is in window coordinates, like `getBoundingClientRect()`.
 
@@ -263,12 +269,24 @@ interface SkEditorTransaction {
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `beforeinput`                                             | Before a user edit. Cancellable, except during IME composition. `inputType`, `data`, and `getTargetRanges()` with the UTF-16 range it replaces as `startOffset`/`endOffset`. |
 | `input`                                                   | After a user edit, with the same `inputType` and `data`.                                                                                                                     |
-| `change`                                                  | After any edit, the user's or `dispatch()`'s, with `changes`: `{ from, to, insert }` in the document before it. Undo reports the whole document as replaced.                 |
+| `change`                                                  | After any edit, the user's, `dispatch()`'s, `undo()`'s or `redo()`'s, with `changes`: `{ from, to, insert }` in the document before it. Assigning `value` fires none.        |
 | `selectionchange`                                         | After the selection moves; one per burst of moves. Does not bubble.                                                                                                          |
 | `viewportchange`                                          | When the lines on screen change. Does not bubble.                                                                                                                            |
 | `compositionstart`, `compositionupdate`, `compositionend` | Around IME input, as on a text field.                                                                                                                                        |
 | `copy`, `cut`, `paste`                                    | Before the clipboard is used; cancel to handle it yourself.                                                                                                                  |
 | `keydown`, `keyup`                                        | Before the editor handles the key; cancelling `keydown` stops it.                                                                                                            |
+
+A `change` event's `changes` are sorted and do not overlap, and every `from` and `to` is a position in the text before the edit, as in a transaction. Applying them from the last to the first turns the old text into the new one, which is how a copy of the text elsewhere stays in step:
+
+```ts
+editor.addEventListener("change", (e) => {
+  for (const { from, to, insert } of [...e.changes].reverse()) {
+    mirror = mirror.slice(0, from) + insert + mirror.slice(to);
+  }
+});
+```
+
+An undo or redo reports the text it put back, not the whole document, and a merged run of typing comes back as one change.
 
 The `inputType` values are the web's: `insertText`, `insertParagraph` (Enter), `insertLineBreak` (Shift+Enter), `insertFromPaste`, `insertCompositionText`, `deleteContentBackward`, `deleteContentForward`, `deleteWordBackward`, `deleteWordForward`, `deleteSoftLineBackward`, `deleteSoftLineForward`, `deleteByCut`, `historyUndo` and `historyRedo`.
 

@@ -1172,10 +1172,29 @@ const typography = section("Typography and text", [
     aliases: ["-webkit-line-clamp"],
     related: ["text-overflow"],
   }),
-  prop("vertical-align", PART, "Accepts `baseline`. Other values cannot move an element up or down.", {
-    values: [v("baseline", OK, "Accepted with the default layout."), v("middle, top, bottom and offsets", NO)],
-    limitations: ["The renderer has no inline line boxes in which to shift an element."],
-    workaround: "Use `align-items` / `align-self` on a flex parent.",
+  prop("vertical-align", PART, "Moves an inline box up or down in its line of text.", {
+    values: [
+      v("baseline", OK, "The box's baseline on the line's; a box with no text aligns its bottom edge."),
+      v("middle", OK, "The box's middle at the baseline plus half the x-height of the line's text."),
+      v("text-top, text-bottom", OK, "The box's top or bottom on the top or bottom of the line's font."),
+      v("top, bottom", OK, "The box's top or bottom on the top or bottom of its line."),
+      v("sub, super", OK, "`<sub>` and `<sup>` have them by default, with `font-size: smaller`."),
+      v(
+        "<length>, <percentage>",
+        OK,
+        "Raises the box; a percentage is of its line height. A negative value lowers it.",
+      ),
+    ],
+    notes: [
+      "Applies to the elements in a line of mixed inline content (text beside `<span>`, `<sup>`, `<img>`, an `inline-block`) and to the atoms of an `<sk-editor>`. The line grows to hold what moves.",
+      "Not inherited. Ignored on block-level, flex and grid items, as in CSS.",
+    ],
+    limitations: [
+      "A line of mixed inline content is a wrapping row of boxes: text wraps inside each element, not across elements, so a shifted `<span>` that wraps moves all its lines together.",
+      "A box's baseline is its first line's; an `inline-block` with several lines aligns by its first, not its last.",
+      "A `bottom` box taller than its line puts the line's text at the top, not the bottom.",
+      "Table cells: there is no table layout.",
+    ],
   }),
   prop("tab-size", NO, "Sets the width of a tab character.", { limitations: ["Ignored without an advisory."] }),
   prop("-webkit-text-fill-color", OK, "Sets the fill color of text, separately from `color`.", {
