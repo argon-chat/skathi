@@ -402,17 +402,24 @@ fn note_headroom(id: u32, node: &mut Node, headroom: f32, touch: &mut Vec<u32>) 
 /// Puts `here` in HDR while a visible half-float surface in it may be brighter than SDR white,
 /// asking for the most headroom such a surface's `dynamic-range-limit` allows on its display.
 fn update_output(window: &Window, here: WinKey) -> bool {
-    let reach = display::reach(here);
-    let headroom = NODES.with(|m| {
+    let headroom = wanted_headroom(here, display::reach(here));
+    display::update_output(window, here, headroom)
+}
+
+/// A surface that holds no frame asks for nothing: an idle window stays 8-bit.
+fn wanted_headroom(here: WinKey, reach: f32) -> f32 {
+    NODES.with(|m| {
         m.borrow()
             .iter()
             .filter(|(_, n)| {
-                n.window == here && n.visible && n.surface.format() == SurfaceFormat::Rgba16Float
+                n.window == here
+                    && n.visible
+                    && n.surface.format() == SurfaceFormat::Rgba16Float
+                    && n.surface.lock_state().frame.is_some()
             })
             .map(|(&id, _)| crate::inherit::dynamic_range_limit(id).headroom(reach))
             .fold(1.0, f32::max)
-    });
-    display::update_output(window, here, headroom)
+    })
 }
 
 /// A pop-out's half of [`tick`], from its own draw: its nodes' tiles live in its atlas.
@@ -855,6 +862,27 @@ mod tests {
         }
         assert!(reports.len() <= 10, "{reports:?}");
         display::forget(win);
+        note_build(id, win, "");
+    }
+
+    #[test]
+    fn a_half_float_surface_asks_for_hdr_output_once_it_holds_a_frame() {
+        let (id, win) = (0x7ffe_0004, 0x7ffd);
+        note_build(id, win, "tests:idle-hdr");
+        let surface = NODES.with(|m| {
+            let mut m = m.borrow_mut();
+            let node = m.get_mut(&id).expect("built");
+            node.visible = true;
+            node.surface.clone()
+        });
+        surface.set_format(SurfaceFormat::Rgba16Float);
+        assert_eq!(wanted_headroom(win, 4.0), 1.0, "no frame yet");
+        surface
+            .present_rgba16f(&[0x3c00; 4], 1, 1, 4)
+            .expect("presented");
+        assert_eq!(wanted_headroom(win, 4.0), 4.0);
+        surface.clear();
+        assert_eq!(wanted_headroom(win, 4.0), 1.0, "cleared");
         note_build(id, win, "");
     }
 
