@@ -50,7 +50,7 @@ Skathi 0.7 is about what an app can reach without leaving JavaScript. Ahead-of-t
     New apps build with Vite+; `@skathi-native/test` is on npm.
   </Feature>
   <Feature icon="volume" title="Web Audio" href="#web-audio" tone="pink">
-    Delay, wave shaper, compressor, convolver and periodic waves.
+    Delay, compressor, convolver, offline rendering and audio worklets.
   </Feature>
   <Feature icon="shapes" title="Two templates" href="#two-new-templates" tone="blue">
     A drum machine in Svelte and a RISC-V emulator in Vue that runs Doom.
@@ -186,6 +186,36 @@ delay.connect(context.destination);
 - A window that is minimized or covered keeps its timers while an `AudioContext` plays, so a scheduler that looks a few tens of milliseconds ahead keeps time.
 
 The [Web Audio page](/web-platform/web-audio/) lists what differs from a browser.
+
+### Audio worklets
+
+Processing of your own runs inside the graph, written in JavaScript or in Rust.
+
+```ts title="src/crush.worklet.ts"
+class Crush extends AudioWorkletProcessor {
+  process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
+    const [input, output] = [inputs[0] ?? [], outputs[0] ?? []];
+    output.forEach((channel, c) => {
+      for (let i = 0; i < channel.length; i++) channel[i] = Math.round((input[c]?.[i] ?? 0) * 8) / 8;
+    });
+    return true;
+  }
+}
+registerProcessor("crush", Crush);
+```
+
+```ts
+import crush from "./crush.worklet.ts?worklet";
+
+await context.audioWorklet.addModule(crush);
+source.connect(new AudioWorkletNode(context, "crush")).connect(context.destination);
+```
+
+- **In JavaScript.** The processors of a context run on one thread, in a JavaScript VM of their own, with `parameters`, a `port` in both directions and `processorOptions`. `?worklet`, or `new URL("./file.ts", import.meta.url)`, bundles the file and what it imports.
+- **In Rust.** An embedder registers a processor with `audio_processor()` on the builder, and the page makes its node with `context.loadNativeAudioWorklet(name)`. It runs in the audio callback itself: no added delay, no JavaScript for its samples.
+- **Under AOT** the worklet file is interpreted in its VM beside the app's image.
+
+JavaScript worklets are experimental: a node has one input and one output, and its output arrives at least 256 frames later than in a browser. The [audio worklets guide](/guides/audio-worklets/) has both variants in full.
 
 ## Two new templates
 
