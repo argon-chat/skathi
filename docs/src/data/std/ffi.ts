@@ -45,7 +45,7 @@ interface Signature {
       "Use it for a library you already have as a binary. For code you write yourself, a [native module](/embedding/native-modules/) is the better path: it is typed from Rust, and a panic becomes a JS error instead of ending the app.",
       "A call is synchronous and runs on the JS thread: the window does not paint until it returns. For a function that takes long (a query, a decode, anything that waits), set `nonblocking: true`.",
       "A call with numbers, pointers or buffers costs 0.1 to 0.2 µs on a desktop CPU, a little more than any call into the host, and allocates nothing. A `cstring` or `wstring` argument is encoded and copied on every call, which costs several times more. A loop of millions of calls is better moved into the library.",
-      "`nonblocking: true` runs the call on one of four worker threads and the function returns a promise. A wrong argument rejects the promise instead of throwing. A string is copied for the call. A `buffer` is copied too: the library works on the copy, and the bytes are written back into your buffer when the call returns, before the promise settles. Until then your buffer is unchanged, and what you write into it in the meantime is overwritten. A `pointer` is passed as it is: the memory must stay valid until the promise settles.",
+      "`nonblocking: true` runs the call on one of four worker threads and the function returns a promise. A wrong argument rejects the promise instead of throwing. A string is copied for the call. A `buffer` is copied too: the library works on the copy, and the bytes are written back into your buffer when the call returns, before the promise settles. Until then your buffer is unchanged, and what you write into it in the meantime is overwritten. A `pointer` is passed as it is: the memory must stay valid until the promise settles. A [`NativeBuffer`](/std/native-buffer/) is not copied: the library works on its memory, and its `buffer` is detached until the promise settles, as a transfer would detach it, so views made before the call read as empty. Its `buffer` is a new `ArrayBuffer` afterwards. Passing it to another call meanwhile throws `InvalidStateError`.",
       "Calls of one library may run at the same time on different threads, in any order. If the library is not safe for that, wait for one promise before you make the next call.",
       "A [`NativeCallback`](/std/native-callback/) that a nonblocking call invokes is called from another thread: it runs on the JS thread a frame later, and only a `void` callback works.",
       "`errno: true` makes the call answer `{ value, errno }`. `errno` is the C `errno`, or `GetLastError()` on Windows, read on the same thread right after the call. It is whatever the last failing call left there: read it only when `value` says the call failed.",
@@ -189,7 +189,7 @@ if (code !== 0) throw new Error(\`codec_decode: \${code}\`);`,
       {
         value: '"buffer"',
         status: "supported",
-        note: "An argument only. Takes an `ArrayBuffer`, a typed array or a `DataView` and passes the address of its bytes, without a copy; `null` passes `NULL`. The address is good for this call only.",
+        note: "An argument only. Takes an `ArrayBuffer`, a typed array, a `DataView` or a [`NativeBuffer`](/std/native-buffer/) and passes the address of its bytes, without a copy; `null` passes `NULL`. The address is good for this call only. A `NativeBuffer` freed during the call, by a callback, stays allocated until the call returns; one already freed throws `InvalidStateError`.",
       },
       {
         value: '"cstring"',
@@ -398,7 +398,7 @@ console.log(codec.path, encode.name);`,
     syntax: `${importLine("skathi:ffi", "NativePointer")}
 
 static readonly NativePointer.NULL: NativePointer
-static NativePointer.of(source: ArrayBuffer | ArrayBufferView, offset?: number): NativePointer
+static NativePointer.of(source: ArrayBuffer | ArrayBufferView | NativeBuffer, offset?: number): NativePointer
 static NativePointer.fromAddress(address: bigint | number): NativePointer
 
 readonly pointer.address: bigint
@@ -408,10 +408,11 @@ pointer.equals(other: NativePointer): boolean
 pointer.readCString(maxBytes?: number): string
 pointer.readWString(maxUnits?: number): string
 pointer.read(length: number): Uint8Array
-pointer.write(bytes: ArrayBuffer | ArrayBufferView): void`,
+pointer.write(bytes: ArrayBuffer | ArrayBufferView | NativeBuffer): void`,
     notes: [
       "A pointer comes from a call that returns `pointer`, or from a buffer with `NativePointer.of()`. It cannot be constructed.",
       "`NativePointer.of(buffer)` is for an address the library keeps after the call returns. The pointer keeps the buffer alive, and so does every pointer made from it with `offset()`. For an address used only during a call, declare the parameter as `buffer` and pass the buffer itself.",
+      "A pointer taken from a [`NativeBuffer`](/std/native-buffer/) holds its memory even after `free()`, so a library that kept the address never writes into memory handed out again. The memory goes back once the buffer is freed and the pointer is collected.",
       "A returned `NULL` is a pointer object whose `isNull()` is `true`, not `null`. As an argument, `null` and `NativePointer.NULL` are the same.",
       "`address` is a `bigint`: addresses do not fit a `number` on every system.",
       "`read(length)` copies bytes out, and `write(bytes)` copies bytes in. Parse what `read()` returns with [`BinaryReader`](/std/binary-reader/). There is no view over native memory: a copy cannot outlive the memory it came from.",
@@ -420,7 +421,7 @@ pointer.write(bytes: ArrayBuffer | ArrayBufferView): void`,
       '`NativePointer.fromAddress()` needs `"permissions": { "ffiAddress": true }` in sk.config.json. Without it code can only reach memory a listed library handed out or a buffer it owns.',
     ],
     edgeCases: [
-      "`NativePointer.of()` throws a `TypeError` for an empty or detached buffer and a `RangeError` for an offset past its end.",
+      "`NativePointer.of()` throws a `TypeError` for an empty or detached buffer, `InvalidStateError` for a freed `NativeBuffer` and a `RangeError` for an offset past its end.",
       "`NativePointer.fromAddress()` throws `NotAllowedError` without the permission.",
       "`readCString()`, `readWString()`, `read()` and `write()` throw a `TypeError` on a null pointer.",
       "`new NativePointer()` throws a `TypeError`.",

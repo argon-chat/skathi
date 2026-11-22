@@ -1,8 +1,14 @@
 // `skathi:gpu`: WGSL struct layouts and writers for them, so the offsets in JS and in the shader agree.
 // TS on purpose: a layout is computed once, and `set` is a store or two per frame that the JIT inlines.
 
+import type { NativeBuffer } from "./memory";
+
 export { GpuTimer, readBuffer, readTexture } from "./gpu-device";
 export type { GpuTimes, ReadTextureOptions, TexturePixels } from "./gpu-device";
+
+// By its tag: importing `skathi:memory` here would need the host, and this module runs without one.
+const isNativeBuffer = (target: object): target is NativeBuffer =>
+  Object.prototype.toString.call(target) === "[object NativeBuffer]";
 
 export type VertexFormat =
   | "float32"
@@ -351,8 +357,8 @@ export class Struct<F extends Fields = Fields> {
     return { arrayStride: this.size, stepMode, attributes };
   }
 
-  /** A writer over `target`, or over a new buffer of its own. */
-  writer(target?: ArrayBufferLike | ArrayBufferView, options: WriterOptions = {}): StructWriter<F> {
+  /** A writer over `target`, or over a new buffer of its own. Over a `NativeBuffer`, writes go nowhere once it is freed. */
+  writer(target?: ArrayBufferLike | ArrayBufferView | NativeBuffer, options: WriterOptions = {}): StructWriter<F> {
     const offset = options.byteOffset ?? 0;
     let buffer: ArrayBufferLike;
     let start = offset;
@@ -361,6 +367,10 @@ export class Struct<F extends Fields = Fields> {
     if (target === undefined) {
       room = this.runtimeArray ? this.sizeOf(elements) : this.size * (options.count ?? 1);
       buffer = new ArrayBuffer(offset + room);
+    } else if (isNativeBuffer(target)) {
+      if (target.freed) throw new DOMException("writer: the NativeBuffer is freed", "InvalidStateError");
+      buffer = target.buffer;
+      room = buffer.byteLength - offset;
     } else if (ArrayBuffer.isView(target)) {
       buffer = target.buffer;
       start = target.byteOffset + offset;

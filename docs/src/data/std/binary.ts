@@ -6,7 +6,7 @@ const BATCH =
 const BIT_ORDER =
   'The order is `"msb"` by default: a byte\'s high bit comes first, as in most network formats and in JPEG. `"lsb"` takes the low bit first, as DEFLATE does. Pass the same order to the reader and the writer.';
 const NOT_BYTES =
-  "A `bytes` argument that is not an `ArrayBuffer`, a typed array or a `DataView` throws a `TypeError`.";
+  "A `bytes` argument that is not an `ArrayBuffer`, a typed array, a `DataView` or a `NativeBuffer` throws a `TypeError`; a freed `NativeBuffer` throws `InvalidStateError`.";
 
 export const binary = section("skathi:binary", [
   {
@@ -16,7 +16,7 @@ export const binary = section("skathi:binary", [
     summary: "A cursor that reads typed arrays, structs, byte ranges, text and LEB128 values from a buffer in place.",
     syntax: `${importLine("skathi:binary", "BinaryReader")}
 
-new BinaryReader(source: BufferSource, options?: { endian?: "little" | "big" })
+new BinaryReader(source: BufferSource | NativeBuffer, options?: { endian?: "little" | "big" })
 
 reader.position: number
 readonly reader.remaining: number
@@ -30,8 +30,9 @@ reader.varUints(count: number): Uint32Array`,
     params: [
       {
         name: "source",
-        type: "BufferSource",
-        description: "An `ArrayBuffer`, a typed array or a `DataView`. It is read in place, without a copy.",
+        type: "BufferSource | NativeBuffer",
+        description:
+          "An `ArrayBuffer`, a typed array, a `DataView` or a [`NativeBuffer`](/std/native-buffer/). It is read in place, without a copy.",
       },
       {
         name: "options.endian",
@@ -70,6 +71,7 @@ reader.varUints(count: number): Uint32Array`,
     notes: [
       `${BATCH} For one scalar at a time, read it from \`reader.view\`, a standard \`DataView\`, at \`reader.position\`, and move \`position\` yourself.`,
       "The reader does not copy the source. A reader over a typed array or a `DataView` covers that view's bytes only, and `position` counts from the view's start.",
+      "A reader over a `NativeBuffer` throws `InvalidStateError` from every read once the buffer is freed, or once it has been handed to a nonblocking FFI call; make a new reader after such a call.",
       "`readArray` returns a new typed array that owns its data. It takes any typed array constructor, the `BigInt64Array`, `BigUint64Array` and `Float16Array` ones included.",
       "`bytes(n)` returns a view that shares the source's buffer: a write through it changes the source.",
       "`string` does not remove a byte order mark, and bytes that are not valid in the encoding decode to U+FFFD.",

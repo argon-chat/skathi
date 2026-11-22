@@ -16,6 +16,7 @@ use sk_runtime::redjs::capi::{self, JSClassRef};
 use sk_runtime::redjs::glue;
 use sk_runtime::redjs::webapi::util::*;
 
+use super::memory::{self, Region};
 use super::support::{self, *};
 use crate::permissions::{self, Library};
 
@@ -107,6 +108,8 @@ struct NativeLibrary {
 
 struct NativePointer {
     address: u64,
+    /// The memory of the `NativeBuffer` the pointer was taken from, kept even after `free()`.
+    keep: Option<Region>,
 }
 
 static LIBRARY: OnceLock<usize> = OnceLock::new();
@@ -137,11 +140,15 @@ unsafe fn pointer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativePointer> {
 }
 
 unsafe fn pointer_new(g: *mut c_void, address: u64) -> u64 {
+    pointer_kept(g, address, None)
+}
+
+unsafe fn pointer_kept(g: *mut c_void, address: u64, keep: Option<Region>) -> u64 {
     host_create(
         g,
         pointer_class(),
         prototype(g, "NativePointer"),
-        NativePointer { address },
+        NativePointer { address, keep },
     )
 }
 
@@ -420,21 +427,40 @@ unsafe fn to_slot(
     }
 }
 
-unsafe fn buffer_address(g: *mut c_void, v: u64, what: &dyn Display) -> Js<u64> {
+/// The address of a buffer argument. The memory of a `NativeBuffer` goes into `held`, so that a
+/// callback that frees it during the call does not free it under the library.
+unsafe fn buffer_address(
+    g: *mut c_void,
+    v: u64,
+    what: &dyn Display,
+    held: &mut Vec<Region>,
+) -> Js<u64> {
     if v == NULL || v == UNDEF {
         return Ok(0);
     }
-    match buffer_source(g, v) {
-        Some(view) if view.len > 0 => Ok(view.data as u64),
-        Some(_) => type_error(
+    let (len, address) = match buffer_source(g, v) {
+        Some(view) => (view.len, view.data as u64),
+        None => match memory::region_of(g, v, what)? {
+            Some(region) => {
+                let found = (region.len(), region.ptr() as u64);
+                held.push(region);
+                found
+            }
+            None => {
+                return type_error(
+                    g,
+                    &format!("{what} must be an ArrayBuffer, a typed array, a DataView, a NativeBuffer or null"),
+                )
+            }
+        },
+    };
+    if len == 0 {
+        return type_error(
             g,
             &format!("{what} is empty or detached; pass null for no buffer"),
-        ),
-        None => type_error(
-            g,
-            &format!("{what} must be an ArrayBuffer, a typed array, a DataView or null"),
-        ),
+        );
     }
+    Ok(address)
 }
 
 unsafe fn c_string(g: *mut c_void, address: u64, limit: Option<usize>) -> u64 {
@@ -496,6 +522,8 @@ struct Done {
     errno: bool,
     /// A buffer argument and the copy the library worked on, which is written back to it.
     buffers: Vec<(u64, Vec<u8>)>,
+    /// A `NativeBuffer` argument, worked on in place, and its memory, held until the call returns.
+    lent: Vec<(u64, Region)>,
 }
 
 // SAFETY: the engine's values in `Done` are touched on the JS thread only; the worker reads the
@@ -593,13 +621,19 @@ unsafe fn call_on_worker(
     what: &str,
 ) -> Js<u64> {
     let mut buffers = Vec::new();
+    let mut natives = Vec::new();
     for (i, kind_of) in function.args.iter().enumerate() {
         let v = values[i];
         if *kind_of != Kind::Buffer || v == NULL || v == UNDEF {
             continue;
         }
         let what = format!("{what}: argument {} (buffer)", i + 1);
-        buffer_address(g, v, &what)?;
+        let mut held = Vec::new();
+        buffer_address(g, v, &what, &mut held)?;
+        if !held.is_empty() {
+            natives.push((i, v, what));
+            continue;
+        }
         if resizable(g, v) {
             return type_error(g, &format!("{what} is resizable, which a call on another thread cannot take; pass a buffer of a fixed length"));
         }
@@ -614,6 +648,27 @@ unsafe fn call_on_worker(
                 "{what}: {IN_FLIGHT_LIMIT} calls on other threads are already waiting or running"
             ),
         );
+    }
+    let mut lent: Vec<(u64, Region)> = Vec::new();
+    for (i, v, what) in &natives {
+        let region = match lent.iter().find(|(given, _)| given == v) {
+            Some((_, region)) => region.clone(),
+            None => match memory::send_away(g, *v, what) {
+                Ok(region) => {
+                    capi::JSValueProtect(g as _, *v as usize as _);
+                    lent.push((*v, region.clone()));
+                    region
+                }
+                Err(Thrown) => {
+                    for (v, _) in &lent {
+                        memory::come_back(g, *v);
+                        capi::JSValueUnprotect(g as _, *v as usize as _);
+                    }
+                    return Err(Thrown);
+                }
+            },
+        };
+        slots[*i] = region.ptr() as u64;
     }
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     for (i, v, copy) in &mut buffers {
@@ -637,6 +692,7 @@ unsafe fn call_on_worker(
                 .map(|def| (def.clone(), def.room())),
             errno: function.errno,
             buffers: buffers.into_iter().map(|(_, v, copy)| (v, copy)).collect(),
+            lent,
         },
         _arena: arena,
     });
@@ -649,6 +705,10 @@ unsafe fn finish(done: Done, outcome: sk_ffi::Outcome) {
         if let Some(view) = buffer_source(g, *v).filter(|view| view.len == copy.len()) {
             view.bytes_mut().copy_from_slice(copy);
         }
+        capi::JSValueUnprotect(g as _, *v as usize as _);
+    }
+    for (v, _) in &done.lent {
+        memory::come_back(g, *v);
         capi::JSValueUnprotect(g as _, *v as usize as _);
     }
     let value = match returned_value(g, outcome.value, done.returns, &done.returned) {
@@ -737,11 +797,12 @@ std_fn!(fn library_call(g, args) {
         let values: Vec<u64> = (0..given).map(|i| args.arg(i as u32 + 1).0).collect();
         return call_on_worker(g, function, &values, slots.to_vec(), structs, arena, &what.to_string());
     }
+    let mut held = Vec::new();
     if function.buffers {
         for (i, kind_of) in function.args.iter().enumerate() {
             if *kind_of == Kind::Buffer {
                 let what = Site { arg: Some((i, *kind_of)), ..what };
-                slots[i] = buffer_address(g, args.arg(i as u32 + 1).0, &what)?;
+                slots[i] = buffer_address(g, args.arg(i as u32 + 1).0, &what, &mut held)?;
             }
         }
     }
@@ -757,6 +818,7 @@ std_fn!(fn library_call(g, args) {
     });
     DEPTH.set(DEPTH.get() - 1);
     drop(arena);
+    drop(held);
     // Only a callback that ran during the call can have left an exception.
     if ENTERED.get() != entered {
         let mut thrown = UNDEF;
@@ -788,6 +850,19 @@ std_fn!(fn library_closed(g, args) { Ok(enc_bool(library(g, args.this().0)?.clos
 
 std_fn!(fn pointer_of(g, args) {
     let source = args.arg(0).0;
+    let at = args.arg(1).0;
+    if memory::region_of(g, source, &"NativePointer.of: the source")?.is_some() {
+        let offset = if at == UNDEF { 0 } else { count(g, at, "NativePointer.of: the offset")? };
+        // Again: reading the offset may have run code that freed the buffer.
+        let Some(region) = memory::region_of(g, source, &"NativePointer.of: the source")?.filter(|r| r.len() > 0) else {
+            return type_error(g, "NativePointer.of: the NativeBuffer is empty");
+        };
+        if offset > region.len() {
+            return range_error(g, &format!("NativePointer.of: the offset {offset} is beyond the {} bytes of the source", region.len()));
+        }
+        let address = region.ptr() as u64 + offset as u64;
+        return Ok(pointer_kept(g, address, Some(region)));
+    }
     if typed_view(g, source).is_some() {
         // Reading `buffer` moves a small typed array's bytes out of the collector's heap for good.
         let _ = get(g, source, "buffer");
@@ -822,7 +897,8 @@ std_fn!(fn pointer_offset(g, args) {
     if by.fract() != 0.0 || by.abs() > 9_007_199_254_740_991.0 {
         return range_error(g, "NativePointer.offset: the offset must be an integer");
     }
-    let object = pointer_new(g, address.wrapping_add(by as i64 as u64));
+    let keep = pointer(g, this)?.keep.clone();
+    let object = pointer_kept(g, address.wrapping_add(by as i64 as u64), keep);
     slot_set(g, object, KEEP, slot_get(g, this, KEEP));
     Ok(object)
 });

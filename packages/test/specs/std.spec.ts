@@ -290,6 +290,7 @@ describe("skathi:* modules", () => {
       expect(got.read).toEqual(got.expected);
       expect(got.pixels).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
       expect(got.row).toBe(12);
+      expect(got.vertex).toEqual([255, 128, 0, 255]);
       if (got.timed !== null) expect(got.timed).toEqual(["copy"]);
     },
     T,
@@ -403,6 +404,69 @@ describe("skathi:* modules", () => {
       expect(["ethernet", "wifi", "cellular", "other", "none", "unknown"]).toContain(n.type);
       for (const flag of [n.metered, n.roaming, n.overDataLimit]) expect([true, false, null]).toContain(flag);
       expect(n.wrapped).toBe(1);
+    },
+    T,
+  );
+
+  test(
+    "skathi:memory frees on demand, and nothing reads memory a freed buffer gave back",
+    async () => {
+      const app = await start();
+      const m = JSON.parse(String(await app.eval("__SK_TEST_STD__.memory()")));
+      const b = m.buffers;
+      expect([b.zeroed, b.before, b.after, b.again]).toEqual([true, [16, 16, false], [0, 0, true, 0], "ok"]);
+      expect([b.aligned, b.empty, b.transferred]).toEqual(["0", 0, [true, 8]]);
+      expect(b.errors).toEqual(["RangeError", "RangeError", "TypeError"]);
+
+      const r = m.binary;
+      expect([r.header, r.copied, r.crc]).toEqual([{ magic: 0x01020304, count: 7 }, [4, 3, 2, 1, 7, 0, 0, 0], true]);
+      expect([r.readFreed, r.newFreed, r.crcFreed]).toEqual(Array(3).fill("InvalidStateError"));
+
+      const v = m.views;
+      expect(v.uv).toEqual([0.5, 1, 0.25, 0.75, 1, 2]);
+      expect(v.interleaved).toEqual(v.uv);
+      expect([v.untouched, v.bytes]).toEqual([
+        [0, 0, 0],
+        [1, 255, 0, 0],
+      ]);
+      expect(v.errors).toEqual(["RangeError", "RangeError", "RangeError", "RangeError"]);
+      expect([v.midway, v.afterFree, v.onFreed]).toEqual([
+        "InvalidStateError",
+        ["TypeError", "TypeError", "InvalidStateError"],
+        "InvalidStateError",
+      ]);
+
+      // A write through a typed array over a detached buffer goes nowhere, as the language has it.
+      expect(m.gpu).toEqual({ written: [1, 2, 3, 0.5], afterFree: ["ok", 0], onFreed: "InvalidStateError" });
+
+      const a = m.arenas;
+      expect([a.used, a.aligned, a.freed]).toEqual([108, "0", [true, true, 0]]);
+      expect([a.notReused, a.kept, a.zeroed]).toEqual([true, [1, 2, 3, 4], true]);
+
+      const f = m.ffi;
+      expect([f.copied, f.back]).toEqual([
+        [5, 6, 7, 8],
+        [5, 6, 7, 8],
+      ]);
+      expect([f.freedDuringCall, f.sortedInPlace]).toEqual([true, [4, 3, 2, 1]]);
+      expect([f.freedArgument, f.freedPointer]).toEqual(["InvalidStateError", "InvalidStateError"]);
+
+      await app.eval("__SK_TEST_STD__.startMemoryWorkers(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.memoryWorkersResult)"));
+      }
+      const w = JSON.parse(raw);
+      expect(w.failed).toBeUndefined();
+      expect(w.result).toEqual({
+        during: [0, false, 0],
+        twice: "InvalidStateError",
+        readDuring: "InvalidStateError",
+        after: [4, 3, 2, 1],
+        earlier: 0,
+        droppedStaysFreed: [true, 0],
+      });
+      expect(app.child.exitCode).toBeNull();
     },
     T,
   );

@@ -42,6 +42,7 @@ export const STD_MODULES: readonly string[] = [
   "encoding",
   "ffi",
   "gpu",
+  "memory",
   "network",
   "numeric",
   "os",

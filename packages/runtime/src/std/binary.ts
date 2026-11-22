@@ -1,5 +1,9 @@
 // `skathi:binary`: cursors over bytes, bit streams, byte order, LEB128 and CRCs. The host installs the objects.
 
+import type { NativeBuffer } from "./memory";
+
+/** Bytes read in place: a `NativeBuffer` freed by then throws `InvalidStateError`. */
+export type Bytes = BufferSource | NativeBuffer;
 export type Endian = "little" | "big";
 export type BitOrder = "msb" | "lsb";
 
@@ -45,8 +49,11 @@ export interface BinaryReader {
 
 export interface BinaryReaderConstructor {
   readonly prototype: BinaryReader;
-  /** A reader over `source` itself, without a copy. `endian` is `"little"` by default. */
-  new (source: BufferSource, options?: { endian?: Endian }): BinaryReader;
+  /**
+   * A reader over `source` itself, without a copy. `endian` is `"little"` by default. Over a
+   * `NativeBuffer`, a read once it is freed throws `InvalidStateError`.
+   */
+  new (source: Bytes, options?: { endian?: Endian }): BinaryReader;
 }
 
 export interface BinaryWriter {
@@ -57,7 +64,7 @@ export interface BinaryWriter {
   writeAll(values: ArrayLike<number>, type: "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "f32" | "f64"): this;
   /** The layout's fields of `value`, one after another, with no padding between them. */
   writeStruct<L extends StructLayout>(layout: L, value: { [K in keyof L]: number | bigint }): this;
-  bytes(source: BufferSource): this;
+  bytes(source: Bytes): this;
   /** The bytes written, handed over without a copy; the writer is empty again. */
   finish(): Uint8Array;
 }
@@ -107,21 +114,21 @@ export interface VarIntOps {
   /** LEB128. Values are integers within ±2^53; negative ones need `zigzag`. */
   encodeAll(values: ArrayLike<number>, zigzag?: boolean): Uint8Array;
   /** Every value in `bytes`. Throws a `RangeError` for a value cut short or beyond 2^53. */
-  decodeAll(bytes: BufferSource, zigzag?: boolean): Float64Array;
+  decodeAll(bytes: Bytes, zigzag?: boolean): Float64Array;
   /** The bytes `value` takes. */
   size(value: number, zigzag?: boolean): number;
 }
 
 export interface Crc32Ops {
   /** CRC-32 as zlib and PNG compute it. `seed` is the CRC of the bytes before these. */
-  compute(bytes: BufferSource, seed?: number): number;
-  create(): { update(bytes: BufferSource): void; digest(): number };
+  compute(bytes: Bytes, seed?: number): number;
+  create(): { update(bytes: Bytes): void; digest(): number };
 }
 
 export interface Crc64Ops {
   /** `"ecma"` is CRC-64/XZ (the ECMA-182 polynomial, as xz and Go compute it); `"nvme"` is CRC-64/NVME. */
-  compute(bytes: BufferSource, variant?: "ecma" | "nvme"): bigint;
-  create(variant?: "ecma" | "nvme"): { update(bytes: BufferSource): void; digest(): bigint };
+  compute(bytes: Bytes, variant?: "ecma" | "nvme"): bigint;
+  create(variant?: "ecma" | "nvme"): { update(bytes: Bytes): void; digest(): bigint };
 }
 
 declare const __sk_std: {

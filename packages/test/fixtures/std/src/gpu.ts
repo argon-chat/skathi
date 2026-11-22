@@ -12,6 +12,7 @@ const Scene = struct("Scene", {
   lights: wgsl.array(Light, 2),
   tail: wgsl.f32,
 });
+const Vertex = struct("Vertex", { position: wgsl.vec2(wgsl.f32), color: wgsl.unorm8x4 }, { layout: "vertex" });
 
 const READS = [
   "u.normal[0].x",
@@ -41,6 +42,7 @@ export async function gpu(): Promise<{
   timed: string[] | null;
   pixels: number[];
   row: number;
+  vertex: number[];
 }> {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error("no adapter");
@@ -108,7 +110,47 @@ ${READS.map((read, i) => `  out.values[${i}] = ${read};`).join("\n")}
   const texels = Uint8Array.from({ length: 24 }, (_, i) => i + 1);
   device.queue.writeTexture({ texture }, texels, { bytesPerRow: 12 }, [3, 2]);
   const got = await readTexture(device, texture);
+
+  const vertices = Vertex.writer(undefined, { count: 3 });
+  const corners = [
+    [-1, -1],
+    [3, -1],
+    [-1, 3],
+  ];
+  corners.forEach((position, i) => vertices.at(i).setAll({ position, color: [1, 0.5, 0, 1] }));
+  const vertexBuffer = device.createBuffer({
+    size: vertices.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(vertexBuffer, 0, vertices.buffer, vertices.byteOffset, vertices.byteLength);
+  const drawn = device.createShaderModule({
+    code: `struct V { @builtin(position) position: vec4f, @location(1) color: vec4f }
+@vertex fn vs(@location(0) position: vec2f, @location(1) color: vec4f) -> V { return V(vec4f(position, 0, 1), color); }
+@fragment fn fs(v: V) -> @location(0) vec4f { return v.color; }`,
+  });
+  const target = device.createTexture({
+    size: [1, 1],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const render = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: drawn, entryPoint: "vs", buffers: [Vertex.vertexLayout({ position: 0, color: 1 })] },
+    fragment: { module: drawn, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] },
+  });
+  const drawEncoder = device.createCommandEncoder();
+  const draw = drawEncoder.beginRenderPass({
+    colorAttachments: [{ view: target.createView(), loadOp: "clear", storeOp: "store" }],
+  });
+  draw.setPipeline(render);
+  draw.setVertexBuffer(0, vertexBuffer);
+  draw.draw(3);
+  draw.end();
+  device.queue.submit([drawEncoder.finish()]);
+  const colour = await readTexture(device, target);
+
   return {
+    vertex: [...colour.data],
     read,
     size: Scene.size,
     messages,

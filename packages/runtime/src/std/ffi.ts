@@ -1,12 +1,14 @@
 // `skathi:ffi`: C functions of the libraries sk.config.json allows. The host loads, converts and
 // calls; the functions of `symbols` are closures, which is why this part is JS.
 
+import type { NativeBuffer } from "./memory";
+
 type Small = "i8" | "u8" | "i16" | "u16" | "i32" | "u32";
 type Wide = "i64" | "u64" | "isize" | "usize";
 type Text = "cstring" | "wstring";
 
 /**
- * A C type. `buffer` is the address of a typed array's bytes for the length of the call; `cstring`
+ * A C type. `buffer` is the address of a typed array's or a `NativeBuffer`'s bytes for the length of the call; `cstring`
  * and `wstring` are a JS string as NUL-terminated UTF-8 and UTF-16.
  */
 export type FFIType = "void" | "bool" | Small | Wide | "f32" | "f64" | "pointer" | "buffer" | Text;
@@ -33,7 +35,7 @@ export interface StructType<F extends StructFields = StructFields> {
   /** The bytes of a struct, for a `buffer` parameter that takes a pointer to it. */
   pack(value: Packed<F>): Uint8Array;
   /** Reads a struct from bytes. A pointer field that is not null needs `"permissions": { "ffiAddress": true }`. */
-  unpack(bytes: ArrayBuffer | ArrayBufferView, byteOffset?: number): Unpacked<F>;
+  unpack(bytes: ArrayBuffer | ArrayBufferView | NativeBuffer, byteOffset?: number): Unpacked<F>;
 }
 
 export interface Signature {
@@ -49,7 +51,8 @@ export interface Signature {
   readonly variadic?: number;
   /**
    * The call runs on a worker thread and answers with a promise, so the window keeps painting.
-   * A `buffer` argument is copied for the call and written back when it returns.
+   * A `buffer` argument is copied for the call and written back when it returns; a `NativeBuffer`
+   * is not copied, and its `buffer` is detached until the call returns, as a transfer would.
    */
   readonly nonblocking?: boolean;
 }
@@ -66,7 +69,7 @@ type ArgOf<T> =
           : T extends "pointer"
             ? NativePointer | null
             : T extends "buffer"
-              ? ArrayBuffer | ArrayBufferView | null
+              ? ArrayBuffer | ArrayBufferView | NativeBuffer | null
               : T extends Text
                 ? string | null
                 : never;
@@ -116,14 +119,17 @@ export interface NativePointer {
   /** A copy of `length` bytes. */
   read(length: number): Uint8Array;
   /** Copies `bytes` to the address. */
-  write(bytes: ArrayBuffer | ArrayBufferView): void;
+  write(bytes: ArrayBuffer | ArrayBufferView | NativeBuffer): void;
 }
 
 export interface NativePointerStatics {
   readonly prototype: NativePointer;
   readonly NULL: NativePointer;
-  /** The address of a buffer's bytes, `offset` bytes in. The pointer keeps the buffer alive. */
-  of(source: ArrayBuffer | ArrayBufferView, offset?: number): NativePointer;
+  /**
+   * The address of a buffer's bytes, `offset` bytes in. The pointer keeps the buffer alive; one
+   * taken from a `NativeBuffer` keeps its memory even after `free()`.
+   */
+  of(source: ArrayBuffer | ArrayBufferView | NativeBuffer, offset?: number): NativePointer;
   /** Needs `"permissions": { "ffiAddress": true }`; throws `NotAllowedError` without it. */
   fromAddress(address: bigint | number): NativePointer;
 }

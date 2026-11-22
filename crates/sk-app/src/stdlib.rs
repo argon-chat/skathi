@@ -11,6 +11,7 @@ mod binary;
 mod collections;
 mod encoding;
 mod ffi;
+mod memory;
 mod os;
 mod runtime;
 mod support;
@@ -40,6 +41,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         collections::install(g, std);
         encoding::install(g, std);
         ffi::install(g, std);
+        memory::install(g, std);
         text::install(g, std);
         time::install(g, std);
         units::install(g, std);

@@ -8,6 +8,7 @@ import { TOML } from "skathi:toml";
 import { binary, encoding } from "./bytes";
 import { time, units } from "./clock";
 import { EXPECTED, gpu } from "./gpu";
+import { memory, memoryWorkers } from "./memory";
 import { callbacks, ffi, structs, threads, workers } from "./native";
 import { collections } from "./structures";
 import { text } from "./strings";
@@ -77,6 +78,14 @@ Object.assign(globalThis, {
     text: () => JSON.stringify(text()),
     ffi: () => JSON.stringify(ffi()),
     callbacks: () => JSON.stringify(callbacks()),
+    memory: () => JSON.stringify(memory(), (_, v: unknown) => (typeof v === "bigint" ? String(v) : v)),
+    memoryWorkersResult: null as string | null,
+    startMemoryWorkers() {
+      void memoryWorkers().then(
+        (result) => (this.memoryWorkersResult = JSON.stringify({ result })),
+        (error: unknown) => (this.memoryWorkersResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
     gpuResult: null as string | null,
     startGpu() {
       void gpu().then(

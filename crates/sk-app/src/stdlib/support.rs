@@ -198,9 +198,14 @@ pub(super) unsafe fn buffer_source(g: *mut c_void, v: u64) -> Option<View> {
     })
 }
 
+/// A buffer source or a `NativeBuffer`; one freed throws `InvalidStateError`.
 pub(super) unsafe fn bytes_arg<'a>(g: *mut c_void, v: u64, what: &str) -> Js<&'a [u8]> {
-    match buffer_source(g, v) {
-        Some(view) => Ok(view.bytes()),
+    if let Some(view) = buffer_source(g, v) {
+        return Ok(view.bytes());
+    }
+    match super::memory::region_of(g, v, &what)? {
+        // SAFETY: the buffer keeps the bytes until code runs that could free it.
+        Some(region) => Ok(region.bytes()),
         None => type_error(
             g,
             &format!("{what} must be an ArrayBuffer, a typed array or a DataView"),

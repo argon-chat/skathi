@@ -136,13 +136,13 @@ readonly struct.fields: Record<string, WgslType | Struct>
 struct.sizeOf(elements: number): number
 struct.toWGSL(): string
 struct.vertexLayout(locations: { [field: string]: number }, stepMode?: "vertex" | "instance"): GPUVertexBufferLayout
-struct.writer(target?: ArrayBuffer | ArrayBufferView, options?: { count?: number; byteOffset?: number; elements?: number }): StructWriter`,
+struct.writer(target?: ArrayBuffer | ArrayBufferView | NativeBuffer, options?: { count?: number; byteOffset?: number; elements?: number }): StructWriter`,
     notes: [
       "A struct is made by [`struct()`](/std/struct/) and is immutable.",
       "`size` is in bytes with the padding at the end, so it is also the distance between two structs in an array. `offsets` gives each field's first byte.",
       "`toWGSL()` gives the declaration to paste into a shader, with the structs it holds declared first. The layout in JS and in the shader come from the same description, so they cannot drift apart.",
       "`vertexLayout()` gives a `GPUVertexBufferLayout` for a render pipeline: `arrayStride` is the struct's size, and each field named in `locations` becomes an attribute at that shader location. A field that cannot be an attribute throws a `TypeError`.",
-      "`writer()` with no target makes a buffer for one struct, or for `count` of them. With a target it writes into that buffer, from `byteOffset`, which must be a multiple of 4; `count` defaults to as many structs as fit.",
+      "`writer()` with no target makes a buffer for one struct, or for `count` of them. With a target it writes into that buffer, from `byteOffset`, which must be a multiple of 4; `count` defaults to as many structs as fit. A [`NativeBuffer`](/std/native-buffer/) target that is freed throws `InvalidStateError`; once it is freed later, the writer's writes go nowhere.",
       "For a struct that ends in a runtime-sized array, `size` counts no elements and `sizeOf(n)` gives the size with `n`. A writer over a target takes the array's length from the room there is; a writer with a buffer of its own takes it from `elements`.",
     ],
     examples: [

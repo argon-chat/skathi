@@ -12,6 +12,8 @@ use super::support::{self, *};
 
 const SAFE: f64 = 9_007_199_254_740_992.0;
 const NATIVE_LITTLE: bool = cfg!(target_endian = "little");
+/// The `NativeBuffer` a reader is over, checked before every read.
+const SOURCE: &str = "skathi.source";
 
 fn host_class<T>(cell: &OnceLock<usize>, name: &str) -> JSClassRef {
     *cell.get_or_init(|| unsafe { make_host_class::<T>(name) } as usize) as JSClassRef
@@ -138,7 +140,7 @@ impl Scalar {
 }
 
 /// The numbers of an array or of a typed array that holds numbers.
-unsafe fn numbers(g: *mut c_void, v: u64, what: &str) -> Js<Vec<f64>> {
+pub(super) unsafe fn numbers(g: *mut c_void, v: u64, what: &str) -> Js<Vec<f64>> {
     if let Some(view) = typed_view(g, v) {
         let bytes = view.bytes();
         macro_rules! each {
@@ -219,6 +221,10 @@ unsafe fn reader<'a>(g: *mut c_void, this: u64) -> Js<(&'a mut Reader, u64, View
         return type_error(g, "this is not a BinaryReader");
     };
     let data_view = get(g, this, "view");
+    let native = slot_get(g, this, SOURCE);
+    if native != UNDEF {
+        super::memory::check_current(g, native, get(g, data_view, "buffer"), &"BinaryReader")?;
+    }
     match typed_view(g, data_view) {
         Some(view) => Ok((state, data_view, view)),
         None => Err(Thrown),
@@ -244,20 +250,27 @@ std_fn!(fn reader_new(g, args) {
     let source = args.arg(0).0;
     let global = glue::rjs_global(g);
     let data_view = get(g, global, "DataView");
+    let mut native = UNDEF;
     let view = if let Some(view) = typed_view(g, source) {
         let offset = enc_f64(view.byte_offset as f64);
         let length = enc_f64(view.len as f64);
         construct(g, data_view, &[get(g, source, "buffer"), offset, length])?
     } else if buffer_source(g, source).is_some() {
         construct(g, data_view, &[source])?
+    } else if let Some(buffer) = super::memory::buffer_of(g, source, &"BinaryReader: the source")? {
+        native = source;
+        construct(g, data_view, &[buffer])?
     } else {
-        return type_error(g, "BinaryReader: the source must be an ArrayBuffer, a typed array or a DataView");
+        return type_error(g, "BinaryReader: the source must be an ArrayBuffer, a typed array, a DataView or a NativeBuffer");
     };
     let endian = option(g, args.arg(1).0, "endian");
     let little = choice(g, endian, &["little", "big"], 0, "BinaryReader: endian")? == 0;
     let class = host_class::<Reader>(&READER, "BinaryReader");
     let object = host_create(g, class, prototype(g, "BinaryReader"), Reader { position: 0, little });
     define(g, object, "view", view, 1 | 4);
+    if native != UNDEF {
+        slot_set(g, object, SOURCE, native);
+    }
     Ok(object)
 });
 
