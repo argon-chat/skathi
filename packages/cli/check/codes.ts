@@ -21,6 +21,7 @@ export const RANGES = [
   { from: 4000, to: 4999, what: "CSS support and rendering compatibility" },
   { from: 5000, to: 5999, what: "Vue and Svelte features that do not work, or work differently, in Skathi" },
   { from: 6000, to: 6999, what: "permissions and modules that reach outside the app" },
+  { from: 7000, to: 7999, what: "the number types of skathi:numeric" },
 ] as const;
 
 const CODES: CodeInfo[] = [
@@ -421,6 +422,16 @@ const CODES: CodeInfo[] = [
       "Code in node_modules loads native libraries and calls them inside the app's process, with the permissions the app's sk.config.json gives. It can load any library in the list, not only the one the package is for.",
     example: 'node_modules/some-codec/index.js: import { dlopen } from "skathi:ffi";',
     fix: "Read what the package loads and calls; allow SK6005 for the package once you trust it.",
+  },
+  {
+    code: "SK7001",
+    severity: "error",
+    title: "two `skathi:numeric` types meet in one operator",
+    explanation:
+      "`i8`…`u64`, `f16` and `f32` are numbers (`i64` and `u64` bigints) branded with their type. TypeScript accepts `a + b` for a `u8` and an `i32` because both are numbers, but the result is neither: it wraps at neither width, and the AOT compiler cannot pick one machine operation for it. As in Rust, one side has to be converted first. Reported for arithmetic, bitwise, shift and comparison operators and their compound assignments when the two sides have different `skathi:numeric` types; a plain `number` or a literal on one side is not reported.",
+    example:
+      'import { i32, u8 } from "skathi:numeric";\n\nconst level = u8(200);\nconst offset = i32(-5);\nconst sum = level + offset;',
+    fix: "Convert one side with the other type's function: `i32(level) + offset`, or `i32.add(i32(level), offset)` for a sum that wraps as an `i32`.",
   },
 ];
 

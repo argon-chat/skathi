@@ -149,6 +149,13 @@ describe("SK6xxx: permissions", () => {
   });
 });
 
+describe("SK7xxx: skathi:numeric", () => {
+  test("two different number types in one operator, and not a type with itself, a literal or a plain number", () => {
+    expect(lines(report(), "src/numeric.ts")).toEqual(["6:SK7001", "6:SK7001", "6:SK7001", "6:SK7001", "7:SK7001"]);
+    expect(only(report(), "SK7001")[0]!.range.start.character).toBe("export const mixed = [".length);
+  });
+});
+
 describe("suppression and scope", () => {
   test('"check.allow" hides diagnostics by package name and by glob, and counts them', () => {
     expect(report().summary.suppressed).toBe(2);

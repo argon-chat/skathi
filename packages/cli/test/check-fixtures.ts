@@ -6,6 +6,7 @@ import { parseCheckConfig } from "../check/config";
 import { allowedOf } from "../check/permissions";
 import type { CheckReport, Diagnostic } from "../check/schema";
 import { ensureCssEngine } from "../check/css-engine";
+import { stdModuleFile } from "../runtime-path";
 
 // Outside any test, so a first build is not cut short by a test timeout.
 ensureCssEngine();
@@ -27,6 +28,7 @@ export const RULES_MODULES = [
   "src/plain.js",
   "src/App.vue",
   "src/native.ts",
+  "src/numeric.ts",
   "node_modules/native-kit/index.js",
   "node_modules/patchy/index.js",
   "node_modules/loose-types/index.js",
@@ -47,6 +49,7 @@ export function analyzeRules(options: Partial<AnalyzeInput> = {}): CheckReport {
     modules: RULES_MODULES,
     allow: parseCheckConfig(config.check).allow,
     permissions: allowedOf(config.permissions),
+    aliases: { "skathi:numeric": stdModuleFile("skathi:numeric") },
     toolVersion: "test",
     ...options,
   });

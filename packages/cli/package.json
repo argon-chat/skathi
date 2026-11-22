@@ -83,7 +83,7 @@
     "@vitejs/plugin-vue": "Bundled at prepack for the default Vue compiler. An installed CLI must not pull the Vue peer into Svelte applications.",
     "tailwindcss": "Optional peer, 3.x only: v3 emits literal declarations that crates/sk-css maps onto gpui; v4 uses var(--tw-*) + calc() + @property, which the engine does not fully resolve yet (see tailwind.ts). Loaded from the app, only when it has a tailwind.config.*.",
     "@modelcontextprotocol/sdk": "devDependency: used only by devtools/mcp.ts. devtools/ctl.ts is dependency-free so an agent can drive the app through Bash without bun install.",
-    "typescript": "sk check and the AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly.",
+    "typescript": "sk check and the AOT input inventory (sk build --aot-inputs). Builds do not invoke tsc: bun transpiles .ts directly. sk build loads it only for the files that import skathi:numeric, to inline its calls.",
     "svelte": "devDependency: types and tests. A Svelte app compiles with its own svelte/compiler, the version its runtime is.",
     "vue": "devDependency: types and tests. A Vue app compiles its .vue files with its own vue/compiler-sfc, the version its runtime is."
   },

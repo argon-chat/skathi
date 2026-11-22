@@ -26,6 +26,7 @@ import { pruneVendorPrefixes } from "./css-prefixes";
 import { SVELTE_SOURCE, compileSvelte, SvelteRendererError } from "./svelte";
 import { nativeSvelteRenderer, viteConfigFile } from "./cli/config";
 import { protectHapticPatterns } from "./haptic-patterns";
+import { importsNumeric, NumericLowering } from "./numeric";
 import {
   DOM_ENTRY,
   FRAMEWORK_LIBS,
@@ -53,6 +54,7 @@ import {
   htmlPreludeModule,
   inlineCssImports,
   liftIndexHtml,
+  loaderOf,
   readPackageJson,
   svgDefaultOf,
   tagModuleNamespaces,
@@ -501,6 +503,30 @@ const SHAPES = {
   worklets: { outDir: join(dirname(OUT_FILE), "worklets"), minify, define: DEFINES, pending: new Set<string>() },
 };
 
+let numeric: NumericLowering | null = null;
+/** `skathi:numeric` calls inlined into the bundle; the module graph for `sk check` keeps the source as written. */
+const numericPlugin = {
+  name: "sk-numeric",
+  setup(build: Bun.PluginBuilder) {
+    build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: Bun.OnLoadArgs) => {
+      if (/\.svelte\.[jt]s$/.test(args.path)) return undefined;
+      const source = await Bun.file(args.path).text();
+      if (!importsNumeric(source)) return undefined;
+      numeric ??= new NumericLowering({
+        typescript: cliRequire("typescript"),
+        appRoot: SK_CONFIG_DIR,
+        entry: ENTRY_ABS,
+        aliases: buildAliases(),
+      });
+      const lowered = numeric.lower(args.path, source);
+      if (lowered === null) return undefined;
+      const code = transformSource(lowered, args.path, SHAPES) ?? lowered;
+      SHAPES.sourceLoaded?.(args.path, source, code);
+      return { contents: code, loader: loaderOf(args.path) };
+    });
+  },
+};
+
 const vuePlugin = {
   name: "vue-sfc-prod",
   setup(build: Bun.PluginBuilder) {
@@ -707,7 +733,7 @@ async function build() {
     format: "iife",
     target: "browser",
     define: DEFINES,
-    plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
+    plugins: [numericPlugin, viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
     conditions: PROD_CONDITIONS,
     minify: minify ? { whitespace: true, identifiers: true, syntax: true } : false,
     sourcemap: "none",
@@ -793,6 +819,7 @@ async function build() {
   writeAotInputs(out, DEFINES);
 
   for (const [what, n] of SHAPE_NOTES) console.log(`[prod] ${what}: ${n}`);
+  if (numeric?.inlined) console.log(`[prod] skathi:numeric calls inlined: ${numeric.inlined}`);
   if (LIFTED) {
     console.log(
       `[prod] index.html: ${LIFTED.headCss.length + LIFTED.bodyCss.length} stylesheet(s), ` +

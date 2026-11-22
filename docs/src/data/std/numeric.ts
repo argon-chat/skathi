@@ -4,6 +4,10 @@ const BRAND =
   "The brand is a compile-time check only. Passing a plain `number` where a `u8` is expected is a type error, and the way in is the type's function. At run time a value is an ordinary `number` or `bigint`, so it costs nothing to hold.";
 const PLAIN_JS = "The module is plain JavaScript and works the same on every platform.";
 const COMPARE = "Values compare with the ordinary operators (`<`, `===`). `lt(a, b)` is there for symmetry.";
+const OPERATORS = (type: string, plain: string, unlike: string) =>
+  `Operators on two values of one type are plain JavaScript: \`a + b\` for two \`${type}\`s is a \`${plain}\` and is not ${unlike}. Pass it through the type's function, \`${type}(a + b)\`, or call \`${type}.add(a, b)\`. Two different types in one operator, such as a \`u8\` and an \`i32\`, are an \`sk check\` error ([SK7001](/sk-check/sk7001/)): convert one side first.`;
+const INLINED = (forms: string, example: string) =>
+  `\`sk build\` inlines ${forms} in the files that import \`skathi:numeric\`, with the same result for every input: ${example}. In a .vue or .svelte component, in an app with a Vite config, and under \`sk dev\`, they stay calls.`;
 
 export const numeric = section("skathi:numeric", [
   {
@@ -88,6 +92,11 @@ u8.lt(a: u8, b: u8): boolean`,
       "Bits: `and`, `or`, `xor`, `not`, `shl`, `shr`, `rotl`, `rotr`, `clz`, `ctz`, `popcount`. `shr` is arithmetic for the signed types and logical for the unsigned ones. A shift or rotation count is taken modulo `BITS`.",
       "`clz` and `ctz` count within the type's width: `u8.clz(u8(1))` is 7, and `u8.ctz(u8(0))` is 8.",
       COMPARE,
+      OPERATORS("i32", "number", "wrapped"),
+      INLINED(
+        "the conversion, `MIN`, `MAX`, `BITS`, `add`, `sub`, `mul`, `neg`, `and`, `or`, `xor`, `not`, `shl`, `shr`, `clz` and `lt`",
+        "`i32.add(a, b)` becomes `(a + b) | 0`",
+      ),
       BRAND,
       PLAIN_JS,
     ],
@@ -244,6 +253,11 @@ u64.lt(a: u64, b: u64): boolean`,
       "`clz`, `ctz` and `popcount` return a `number`. `u64.ctz(u64(0))` is 64.",
       "`MIN`, `MAX` are `bigint`s; `BITS` is the number 64.",
       COMPARE,
+      OPERATORS("u64", "bigint", "wrapped"),
+      INLINED(
+        "the conversion of a `bigint`, `MIN`, `MAX`, `BITS`, `add`, `sub`, `mul`, `neg`, `and`, `or`, `xor`, `not` and `lt`",
+        "`u64.add(a, b)` becomes `BigInt.asUintN(64, a + b)`",
+      ),
       BRAND,
       PLAIN_JS,
     ],
@@ -323,6 +337,8 @@ f32.fma(a: f32, b: f32, c: f32): f32`,
       "`add`, `sub`, `mul` and `div` compute the result and round it to the type. A chain of them gives what the same chain gives in a language with native floats of that width.",
       "`fma(a, b, c)` is `a * b + c`, rounded once at the end.",
       "`f64` is exported as a type only. It is an alias of `number`.",
+      OPERATORS("f32", "number", "rounded"),
+      INLINED("the conversion, `add`, `sub`, `mul`, `div` and `fma`", "`f32.add(a, b)` becomes `Math.fround(a + b)`"),
       BRAND,
       PLAIN_JS,
     ],

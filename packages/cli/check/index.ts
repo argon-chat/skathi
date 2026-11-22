@@ -18,6 +18,9 @@ import { Packages } from "./packages";
 import { allowedOf, PermissionRules, type Allowed } from "./permissions";
 import { buildProgram, readUnits, type TypeScript } from "./program";
 import { Rules } from "./rules";
+import { NumericRules } from "./numeric";
+import { NUMERIC_MODULE } from "../numeric";
+import { stdModuleFile } from "../runtime-path";
 import type { CheckReport } from "./schema";
 import { Typing } from "./typing";
 
@@ -251,6 +254,8 @@ export function analyze(input: AnalyzeInput): CheckReport {
     const { program, checker } = built;
     const rules = new Rules(typescript, checker, new Builtins(typescript, program, checker));
     const permissions = new PermissionRules(typescript, checker, input.permissions ?? allowedOf(undefined));
+    const numericFile = stdModuleFile(NUMERIC_MODULE);
+    const numeric = program.getSourceFile(numericFile) ? new NumericRules(typescript, checker, numericFile) : null;
     const liveness = input.bundle ? new BundleLiveness(typescript, input.bundle) : null;
     progress.step("AOT rules", units.length);
     for (const unit of units) {
@@ -285,6 +290,7 @@ export function analyze(input: AnalyzeInput): CheckReport {
         const found: Finding[] = [];
         rules.run(unit, file, found);
         permissions.run(unit, file, found);
+        numeric?.run(unit, file, found);
         findings.push(...found.filter((f) => !liveness || liveness.live(f.file, f.range)));
       }
     }

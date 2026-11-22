@@ -111,6 +111,11 @@ export interface ProgramInput {
   aliases: Record<string, string>;
   declarations: string[];
   onFile?: (() => void) | undefined;
+  /** The tsconfig as read by `programConfig`; read again when left out. */
+  config?: ProgramConfig;
+  oldProgram?: ts.Program | undefined;
+  /** Parsed files other than the units, kept across programs built one after another. */
+  sourceFiles?: Map<string, ts.SourceFile>;
 }
 
 export interface BuiltProgram {
@@ -119,11 +124,14 @@ export interface BuiltProgram {
   configNote: string | null;
 }
 
-function compilerOptions(
-  typescript: TypeScript,
-  appRoot: string,
-  entry: string,
-): { options: ts.CompilerOptions; roots: string[]; note: string | null } {
+export interface ProgramConfig {
+  options: ts.CompilerOptions;
+  /** The files the tsconfig includes, roots of the program besides the units. */
+  roots: string[];
+  note: string | null;
+}
+
+export function programConfig(typescript: TypeScript, appRoot: string, entry: string): ProgramConfig {
   const fallback: ts.CompilerOptions = {
     target: typescript.ScriptTarget.ESNext,
     module: typescript.ModuleKind.ESNext,
@@ -158,7 +166,7 @@ function compilerOptions(
 
 export function buildProgram(input: ProgramInput): BuiltProgram {
   const { typescript, units, aliases } = input;
-  const { options: base, roots, note } = compilerOptions(typescript, input.appRoot, input.entry);
+  const { options: base, roots, note } = input.config ?? programConfig(typescript, input.appRoot, input.entry);
   const options: ts.CompilerOptions = {
     ...base,
     noEmit: true,
@@ -181,7 +189,13 @@ export function buildProgram(input: ProgramInput): BuiltProgram {
   host.fileExists = (path) => own.has(key(path)) || fileExists(path);
   host.getSourceFile = (path, language, onError, create) => {
     const unit = own.get(key(path));
-    if (!unit) return getSourceFile(path, language, onError, create);
+    if (!unit) {
+      const cached = input.sourceFiles?.get(key(path));
+      if (cached) return cached;
+      const file = getSourceFile(path, language, onError, create);
+      if (file) input.sourceFiles?.set(key(path), file);
+      return file;
+    }
     input.onFile?.();
     unit.sourceFile = typescript.createSourceFile(
       path,
@@ -228,6 +242,7 @@ export function buildProgram(input: ProgramInput): BuiltProgram {
     rootNames: [...new Set([...units.map((u) => u.programPath), ...input.declarations, ...roots])],
     options,
     host,
+    ...(input.oldProgram && { oldProgram: input.oldProgram }),
   });
   return { program, checker: program.getTypeChecker(), configNote: note };
 }
