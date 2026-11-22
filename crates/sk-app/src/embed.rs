@@ -114,6 +114,7 @@ struct Config {
     desktop_id: Option<String>,
     ffi: Vec<(String, String)>,
     ffi_address: bool,
+    backdrop: Option<String>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -143,6 +144,11 @@ pub(crate) fn app_menu() -> bool {
 
 pub(crate) fn visible() -> bool {
     CONFIG.get().is_none_or(|c| c.visible)
+}
+
+/// The main window's backdrop when the embedder fixed it with [`Builder::backdrop`].
+pub(crate) fn pinned_backdrop() -> Option<&'static str> {
+    CONFIG.get()?.backdrop.as_deref()
 }
 
 /// Seals a dormant profile's localStorage with the OS provider, no plaintext fallback.
@@ -281,6 +287,8 @@ pub enum Error {
     DataDirectory(String),
     /// A native module is misdeclared: a bad or repeated name.
     Module(String),
+    /// [`Builder::backdrop`] was given a name that is not a backdrop.
+    Backdrop(String),
     Spawn(std::io::Error),
     /// AppKit needs the process main thread: use `run_on_main_thread`.
     MainThreadRequired,
@@ -305,6 +313,10 @@ impl std::fmt::Display for Error {
             Error::LaunchExit(code) => write!(f, "desktop launch finished with exit code {code}"),
             Error::DataDirectory(e) => write!(f, "data directory: {e}"),
             Error::Module(e) => write!(f, "{e}"),
+            Error::Backdrop(name) => write!(
+                f,
+                "unknown backdrop {name:?}: expected mica, mica-alt, tabbed, acrylic, blur, transparent or none"
+            ),
             Error::Spawn(e) => write!(f, "the Skathi thread did not start: {e}"),
             Error::MainThreadRequired => write!(
                 f,
@@ -349,6 +361,7 @@ pub struct Builder {
     app_menu: bool,
     ffi: Vec<(String, String)>,
     ffi_address: bool,
+    backdrop: Option<String>,
 }
 
 impl Default for Builder {
@@ -378,6 +391,7 @@ impl Builder {
             app_menu: true,
             ffi: Vec::new(),
             ffi_address: false,
+            backdrop: None,
         }
     }
 
@@ -516,6 +530,14 @@ impl Builder {
     /// application's update, but every window present reaches the screen one refresh later.
     pub fn exact_frame_feedback(mut self, on: bool) -> Self {
         self.exact_frame_feedback = on;
+        self
+    }
+
+    /// Fixes the main window's backdrop (`"transparent"`, `"acrylic"`, the names of sk.config.json):
+    /// it replaces the payload's `window.backdrop`, and the page's `appWindow.backdrop = …` is not
+    /// applied. For an embedder that composes its own content under the window.
+    pub fn backdrop(mut self, name: impl Into<String>) -> Self {
+        self.backdrop = Some(name.into());
         self
     }
 
@@ -681,6 +703,13 @@ impl Builder {
             }
         }
         prepare_directory(data_dir.as_deref(), self.prepare_data_dir.take())?;
+        if let Some(name) = self
+            .backdrop
+            .as_deref()
+            .filter(|n| !crate::window::Backdrop::known(n))
+        {
+            return Err(Error::Backdrop(name.to_string()));
+        }
         gpui::present_feedback::set_feedback_after_composition(self.exact_frame_feedback);
         let config = Config {
             data_dir,
@@ -698,6 +727,7 @@ impl Builder {
             ffi: self.ffi,
             ffi_address: self.ffi_address,
             app_menu: self.app_menu,
+            backdrop: self.backdrop,
         };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);

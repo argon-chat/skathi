@@ -61,6 +61,10 @@ impl Backdrop {
         })
     }
 
+    pub(crate) fn known(name: &str) -> bool {
+        Backdrop::from_str(name).is_some()
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Backdrop::None => "none",
@@ -471,6 +475,9 @@ pub fn load_config(raw: Option<String>) -> Config {
         cfg.title_bar_fallback = false;
     }
 
+    if let Some((pinned, _)) = crate::embed::pinned_backdrop().and_then(Backdrop::from_str) {
+        cfg.backdrop = pinned;
+    }
     let (backdrop, note) = cfg.backdrop.resolve_for_os();
     cfg.backdrop = backdrop;
     advisories.extend(note.map(str::to_string));
@@ -2441,6 +2448,10 @@ host_fn!(fn sk_window_set_always_on_top(_g, args) {
 });
 
 host_fn!(fn sk_window_set_backdrop(g, args) {
+    if crate::embed::pinned_backdrop().is_some() {
+        advise("`appWindow.backdrop` is not applied: the embedding program fixed the window's backdrop.");
+        return UNDEF;
+    }
     let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     match Backdrop::from_str(&name) {
         Some((b, note)) => {

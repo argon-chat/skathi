@@ -137,4 +137,14 @@ On macOS Skathi installs the standard menu bar when its window opens: Quit, Hide
 let builder = skathi::Builder::new().app_menu(false);
 ```
 
+## A backdrop the page cannot change
+
+A program that composes content of its own under the window, such as a video layer, depends on the window staying transparent. `Builder::backdrop` fixes the main window's backdrop: it replaces `window.backdrop` of the payload's configuration, and the page's `appWindow.backdrop = …` is not applied and prints an advisory.
+
+```rust
+let builder = skathi::Builder::new().backdrop("transparent");
+```
+
+The names are those of [`backdrop`](/window-api/config-window-backdrop/) in sk.config.json; another name makes `spawn()` return `Error::Backdrop`. Pop-out windows keep the backdrop their `<SkWindow>` asks for.
+
 Next: [Dev loop and devtools](/embedding/dev-loop/).
