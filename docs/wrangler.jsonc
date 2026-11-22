@@ -12,5 +12,6 @@
     "run_worker_first": ["/api/*"],
   },
   "build": { "command": "bun run build" },
+  "analytics_engine_datasets": [{ "binding": "VISITS", "dataset": "skathi_visits" }],
   "observability": { "enabled": true },
 }

@@ -75,4 +75,11 @@ const graph = {
     document.documentElement.dataset.os =
       os === "windows" || os === "unix" ? os : /win/i.test(navigator.platform) ? "windows" : "unix";
   } catch {}
+  try {
+    const query = new URLSearchParams(location.search);
+    if (query.has("utm_source")) {
+      query.set("path", location.pathname);
+      fetch("/api/visit?" + query, { method: "POST", keepalive: true });
+    }
+  } catch {}
 </script>
