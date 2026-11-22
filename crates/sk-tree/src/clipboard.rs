@@ -304,7 +304,7 @@ const TYPES_HEADER: &str = "skathi-data-transfer/1\n";
 
 /// The non-`text/plain` types of a copy as clipboard metadata: a header, then `<len>:<type><len>:<data>`
 /// per type with UTF-8 byte lengths.
-fn encode_types(types: &[(String, String)]) -> String {
+pub(crate) fn encode_types(types: &[(String, String)]) -> String {
     let mut out = String::from(TYPES_HEADER);
     for (ty, data) in types {
         for part in [ty, data] {
@@ -317,7 +317,7 @@ fn encode_types(types: &[(String, String)]) -> String {
 }
 
 /// [`encode_types`] read back; `None` for metadata another program wrote.
-fn decode_types(metadata: &str) -> Option<Vec<(String, String)>> {
+pub(crate) fn decode_types(metadata: &str) -> Option<Vec<(String, String)>> {
     let mut rest = metadata.strip_prefix(TYPES_HEADER)?;
     let mut take = || -> Option<String> {
         let (len, tail) = rest.split_once(':')?;

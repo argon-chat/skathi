@@ -2,7 +2,7 @@ import type { MirrorElement } from "./types";
 import { warnCompat } from "../compat";
 import { syncListenerFlag } from "./listeners";
 import { defineDom } from "./dom-members";
-import { TextControlProto } from "./protos";
+import { SkEditorProto, TextControlProto } from "./protos";
 import { I } from "./event-names";
 import { patchProp } from "./patch-prop";
 import { activation, fsHost } from "./activation";
@@ -119,6 +119,7 @@ defineDom(
 );
 
 __sk_text_control_install(TextControlProto);
+__sk_editor_install(SkEditorProto);
 
 function queueSelectEvent(el: MirrorElement): void {
   // HTML queues a bubbling, non-cancelable select event. It is not an edit:

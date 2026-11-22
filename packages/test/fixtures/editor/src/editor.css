@@ -1,0 +1,26 @@
+sk-editor {
+  width: 320px;
+  max-height: 120px;
+  padding: 4px;
+  font-size: 14px;
+  color: #111;
+  background: #fff;
+}
+sk-editor::mark(bold) {
+  font-weight: 700;
+}
+sk-editor::mark(big) {
+  font-size: 32px;
+}
+sk-editor::line(quote) {
+  padding-left: 16px;
+  border-left: 3px solid #36f;
+}
+sk-editor::decoration(kw) {
+  color: rgb(200 0 0);
+}
+.chip {
+  width: 48px;
+  height: 22px;
+  background: #9cf;
+}

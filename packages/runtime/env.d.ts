@@ -970,6 +970,75 @@ declare global {
     readonly loops: number;
   }
 
+  /** An `<sk-editor>` document. Offsets are UTF-16 code units; an atom stands on one U+FFFC in `text`. */
+  interface SkEditorValue {
+    text: string;
+    marks: { type: string; from: number; to: number; data?: unknown }[];
+    atoms: { id: string; at: number; type: string; text?: string; data?: unknown }[];
+    /** Line blocks by hard-line index. */
+    lines?: { line: number; type: string; data?: unknown }[];
+  }
+  interface SkEditorSelection {
+    anchor: number;
+    head: number;
+  }
+  /** Changes are in the document before the transaction and must not overlap. */
+  interface SkEditorTransaction {
+    changes?: { from: number; to?: number; insert?: string | SkEditorValue }[];
+    selections?: { anchor: number; head?: number }[];
+    addMarks?: SkEditorValue["marks"];
+    /** No `type`: every mark in the range. */
+    removeMarks?: { type?: string; from: number; to: number }[];
+    /** Every line touching `from`..`to` (positions) gets the block, `null` clears it. */
+    setLines?: { from: number; to: number; type: string | null; data?: unknown }[];
+    /** `false`: not undoable; a text change made so clears the undo history. */
+    history?: boolean;
+    scrollIntoView?: boolean;
+  }
+  /** One replaced range of an `<sk-editor>`, in the document before the change. */
+  interface SkEditorChange {
+    from: number;
+    to: number;
+    insert: string;
+  }
+  /** `<sk-editor>`'s `change`: every edit, the user's and `dispatch()`'s. Not web API. */
+  interface SkEditorChangeEvent extends Event {
+    readonly changes: SkEditorChange[];
+  }
+  /** `<sk-editor>`: rich text with marks, atoms and line blocks. Not web API. */
+  interface SkEditorElement extends HTMLElement {
+    /** The whole document; assigning one equal to the current value does nothing. */
+    value: SkEditorValue;
+    readonly length: number;
+    readonly lineCount: number;
+    slice(from: number, to?: number): string;
+    line(n: number): { from: number; to: number; text: string };
+    lineAt(pos: number): number;
+    /** Always one selection. */
+    readonly selections: SkEditorSelection[];
+    /** Throws a `RangeError` when changes overlap. */
+    dispatch(tr: SkEditorTransaction): void;
+    undo(): boolean;
+    redo(): boolean;
+    /** The marks the next typed character gets; reset when the selection moves. */
+    typingMarks: string[];
+    /** Mark types that do not grow when typing at their end (links, code). */
+    exclusiveMarks: string[];
+    marksAt(pos: number): string[];
+    setDecorations(layer: string, ranges: { from: number; to: number; name: string }[]): void;
+    setLineDecorations(layer: string, lines: { line: number; name: string; gutter?: string }[]): void;
+    /** In window coordinates, one per visual row. */
+    rectsFor(from: number, to: number): DOMRect[];
+    caretRect(): DOMRect;
+    positionAt(x: number, y: number): number;
+    /** Hard lines `fromLine` to `toLine` (exclusive) are on screen. */
+    readonly viewport: { fromLine: number; toLine: number };
+    readOnly: boolean;
+    placeholder: string;
+    /** In UTF-16 code units; the editor truncates edits to it. */
+    maxLength: number;
+  }
+
   interface CanvasGradient {
     addColorStop(offset: number, color: string): void;
   }
@@ -1203,6 +1272,7 @@ declare global {
     script: HTMLScriptElement;
     section: HTMLElement;
     select: HTMLSelectElement;
+    "sk-editor": SkEditorElement;
     "sk-sticker": HTMLElement;
     "sk-surface": HTMLElement;
     slot: HTMLSlotElement;

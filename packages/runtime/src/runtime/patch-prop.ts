@@ -113,6 +113,8 @@ export function patchProp(el: MirrorElement, key: string, prev: unknown, next: u
   } else if (key === "key" || key === "ref") {
   } else if (key === "textContent" && !foreignNamespace(namespace)) {
     if (next != null) (el as { textContent: unknown }).textContent = next;
+  } else if (key === "value" && el.tag === "sk-editor") {
+    if (next != null) (el as { value: unknown }).value = next;
   } else if (key === "value" && isRangeInput(el) && !foreignNamespace(namespace)) {
     writeControlValue(el, next);
   } else if (key === "value" && (isSelectEl(el) || isOptionEl(el)) && !foreignNamespace(namespace)) {

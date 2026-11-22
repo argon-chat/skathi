@@ -297,6 +297,14 @@ interface InputEvent extends UIEvent {
   readonly data: string | null;
   readonly inputType: string;
   readonly isComposing: boolean;
+  /** `<sk-editor>`'s edits report the range they replace, in UTF-16 offsets; a text field's report none, as in a browser. */
+  getTargetRanges(): {
+    readonly startContainer: null;
+    readonly startOffset: number;
+    readonly endContainer: null;
+    readonly endOffset: number;
+    readonly collapsed: boolean;
+  }[];
 }
 declare var InputEvent: { new (type: string, eventInitDict?: InputEventInit): InputEvent; prototype: InputEvent };
 

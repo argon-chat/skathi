@@ -162,6 +162,7 @@ pub struct ComputedStates {
     /// Only `background-color` reaches the widget: gpui's selection is a quad behind the glyphs.
     pub selection: Option<Rc<StyleRefinement>>,
     pub file_selector_button: Option<Rc<StyleRefinement>>,
+    pub editor_parts: Option<Rc<Vec<EditorPartStyle>>>,
     pub range_track: Option<Rc<ControlPseudo>>,
     pub range_thumb: Option<Rc<ControlPseudo>>,
     pub color_swatch: Option<Rc<ControlPseudo>>,
@@ -237,6 +238,41 @@ pub enum PseudoElement {
     RangeThumb,
     ColorSwatch,
     ColorSwatchWrapper,
+    /// `<sk-editor>`'s `::mark(name)`, `::line(name)` and `::decoration(name)`: styles for the
+    /// runs and lines the editor paints, keyed by name.
+    EditorPart(EditorPartKind, &'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EditorPartKind {
+    Mark,
+    Line,
+    Decoration,
+}
+
+/// One `::mark()` / `::line()` / `::decoration()` rule set, folded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorPartStyle {
+    pub kind: EditorPartKind,
+    pub name: &'static str,
+    pub style: Rc<StyleRefinement>,
+}
+
+/// Part names live as long as the stylesheets that name them, which is the process in practice.
+fn intern_part(name: &str) -> &'static str {
+    thread_local! {
+        static NAMES: std::cell::RefCell<std::collections::HashSet<&'static str>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+    }
+    NAMES.with(|n| {
+        let mut n = n.borrow_mut();
+        if let Some(&s) = n.get(name) {
+            return s;
+        }
+        let s: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        n.insert(s);
+        s
+    })
 }
 
 impl PseudoElement {
@@ -1141,6 +1177,13 @@ fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
                 .iter()
                 .filter(|e| {
                     let text = e.to_string();
+                    if ["'mark'", "'line'", "'decoration'"].iter().any(|n| {
+                        text.strip_prefix(n).is_some_and(|r| {
+                            r.starts_with(" is not recognized as a valid pseudo-element")
+                        })
+                    }) {
+                        return false;
+                    }
                     let name = text
                         .strip_prefix("Unknown at rule: @")
                         .and_then(|v| v.split_whitespace().next());
@@ -1664,7 +1707,9 @@ impl Engine {
                     continue;
                 };
                 let pseudo = sel.pseudo_element().and_then(pseudo_box);
-                let control_origin = if pseudo.is_some_and(|p| p.control_index().is_some()) {
+                let control_origin = if pseudo.is_some_and(|p| {
+                    p.control_index().is_some() || matches!(p, PseudoElement::EditorPart(..))
+                }) {
                     let Some(origin) = control_origin_selector(sel) else {
                         continue;
                     };
@@ -2345,6 +2390,8 @@ impl Engine {
         let mut selection = (StyleRefinement::default(), Extras::default());
         let mut file_button = (StyleRefinement::default(), Extras::default());
         let mut controls: [Option<ControlFold>; 4] = Default::default();
+        let mut editor_parts: Vec<(EditorPartKind, &'static str, (StyleRefinement, Extras))> =
+            Vec::new();
         let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
         let (mut any_selection, mut any_file_button) = (false, false);
         let mut rung_outline = [mapper::OutlinePatch::default(); STATE_RUNGS];
@@ -2431,6 +2478,34 @@ impl Engine {
                                 diagnostics,
                             );
                         }
+                        continue;
+                    }
+                    if let PseudoElement::EditorPart(kind, name) = which {
+                        let at = match editor_parts.iter().position(|p| p.0 == kind && p.1 == name)
+                        {
+                            Some(at) => at,
+                            None => {
+                                editor_parts.push((kind, name, Default::default()));
+                                editor_parts.len() - 1
+                            }
+                        };
+                        let slot = &mut editor_parts[at].2;
+                        slot.1.refine(if important_pass {
+                            &r.important_extras
+                        } else {
+                            &r.normal_extras
+                        });
+                        r.half(important_pass).apply(
+                            &vars,
+                            env,
+                            font_size,
+                            font_size,
+                            &computed_font,
+                            &computed_font,
+                            &mut slot.0,
+                            &mut slot.1,
+                            diagnostics,
+                        );
                         continue;
                     }
                     let (slot, seen) = match which {
@@ -2849,6 +2924,9 @@ impl Engine {
         ] {
             own.decoration.apply(&mut refinement.text);
         }
+        for (_, _, (refinement, own)) in &mut editor_parts {
+            own.decoration.apply(&mut refinement.text);
+        }
         mapper::compute_overflow(&mut base, &mut extras);
         mapper::apply_size_containment(&mut base, &extras);
         mapper::compute_overflow(&mut before.0, &mut before.1);
@@ -2925,6 +3003,18 @@ impl Engine {
             placeholder: any_placeholder.then(|| Rc::new(placeholder.0)),
             selection: any_selection.then(|| Rc::new(selection.0)),
             file_selector_button: any_file_button.then(|| Rc::new(file_button.0)),
+            editor_parts: (!editor_parts.is_empty()).then(|| {
+                Rc::new(
+                    editor_parts
+                        .into_iter()
+                        .map(|(kind, name, (style, _))| EditorPartStyle {
+                            kind,
+                            name,
+                            style: Rc::new(style),
+                        })
+                        .collect(),
+                )
+            }),
             range_track: controls[0].take().map(ControlFold::finish),
             range_thumb: controls[1].take().map(ControlFold::finish),
             color_swatch: controls[2].take().map(ControlFold::finish),
@@ -3351,6 +3441,25 @@ fn pseudo_box(
         PE::Placeholder(_) => Some(PseudoElement::Placeholder),
         PE::Selection(_) => Some(PseudoElement::Selection),
         PE::FileSelectorButton(_) => Some(PseudoElement::FileSelectorButton),
+        PE::CustomFunction { name, arguments } => {
+            let kind = match name.as_ref() {
+                "mark" => EditorPartKind::Mark,
+                "line" => EditorPartKind::Line,
+                "decoration" => EditorPartKind::Decoration,
+                _ => return None,
+            };
+            use lightningcss::properties::custom::{Token, TokenOrValue};
+            let mut idents = arguments
+                .0
+                .iter()
+                .filter(|t| !matches!(t, TokenOrValue::Token(Token::WhiteSpace(_))));
+            match (idents.next(), idents.next()) {
+                (Some(TokenOrValue::Token(Token::Ident(name))), None) => {
+                    Some(PseudoElement::EditorPart(kind, intern_part(name.as_ref())))
+                }
+                _ => None,
+            }
+        }
         PE::Custom { name } => match name.as_ref() {
             "-webkit-slider-runnable-track" | "-moz-range-track" => Some(PseudoElement::RangeTrack),
             "-webkit-slider-thumb" | "-moz-range-thumb" => Some(PseudoElement::RangeThumb),
@@ -3367,13 +3476,20 @@ fn pseudo_box(
 fn control_origin_selector(sel: &Selector<'_>) -> Option<Selector<'static>> {
     use lightningcss::selector::PseudoElement as PE;
     use lightningcss::traits::IntoOwned as _;
-    let PE::Custom { name } = sel.pseudo_element()? else {
-        return None;
-    };
     let mut text = sel_text(sel);
-    let marker = format!("::{name}");
-    let start = text.rfind(&marker)?;
-    text.replace_range(start..start + marker.len(), "");
+    match sel.pseudo_element()? {
+        PE::Custom { name } => {
+            let marker = format!("::{name}");
+            let start = text.rfind(&marker)?;
+            text.replace_range(start..start + marker.len(), "");
+        }
+        PE::CustomFunction { name, .. } => {
+            let start = text.rfind(&format!("::{name}("))?;
+            let end = start + text[start..].find(')')? + 1;
+            text.replace_range(start..end, "");
+        }
+        _ => return None,
+    }
     if text.trim().is_empty() || text.ends_with(char::is_whitespace) {
         text.push('*');
     }
@@ -3760,6 +3876,9 @@ impl Engine {
                     PseudoElement::RangeThumb => "::-webkit-slider-thumb",
                     PseudoElement::ColorSwatch => "::-webkit-color-swatch",
                     PseudoElement::ColorSwatchWrapper => "::-webkit-color-swatch-wrapper",
+                    PseudoElement::EditorPart(EditorPartKind::Mark, _) => "::mark()",
+                    PseudoElement::EditorPart(EditorPartKind::Line, _) => "::line()",
+                    PseudoElement::EditorPart(EditorPartKind::Decoration, _) => "::decoration()",
                 }),
                 declarations: r.decls.as_deref().cloned().unwrap_or_default(),
                 diagnostics: r.diagnostics.as_deref().cloned().unwrap_or_default(),
@@ -6376,6 +6495,40 @@ mod tests {
         let input = &states[3];
         assert!(input.placeholder.as_ref().unwrap().text.color.is_some());
         assert_eq!(input.base.text.color, None, "the input itself is untouched");
+    }
+
+    #[test]
+    fn editor_parts_fold_per_name_without_touching_the_element() {
+        let engine = Engine::compile(
+            "input::mark(bold) { font-weight: 700 } \
+             input::mark( bold ) { color: rgb(1 2 3) } \
+             input::line(h1) { font-size: 2em; padding-left: 4px } \
+             input::decoration(kw) { text-decoration: underline } \
+             input::mark(a b) { color: red }",
+        );
+        assert_eq!(engine.diagnostics.len(), 1, "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let input = &states[3];
+        let parts = input.editor_parts.as_ref().unwrap();
+        assert_eq!(parts.len(), 3);
+        let bold = parts
+            .iter()
+            .find(|p| p.kind == EditorPartKind::Mark && p.name == "bold")
+            .unwrap();
+        assert!(bold.style.text.font_weight.is_some() && bold.style.text.color.is_some());
+        let h1 = parts
+            .iter()
+            .find(|p| p.kind == EditorPartKind::Line)
+            .unwrap();
+        assert_eq!(h1.name, "h1");
+        assert!(h1.style.text.font_size.is_some() && h1.style.padding.left.is_some());
+        let kw = parts
+            .iter()
+            .find(|p| p.kind == EditorPartKind::Decoration)
+            .unwrap();
+        assert!(kw.style.text.underline.is_some());
+        assert_eq!(input.base.text.font_weight, None);
     }
 
     #[test]

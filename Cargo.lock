@@ -5471,6 +5471,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sk-editor"
+version = "0.7.0"
+
+[[package]]
 name = "sk-effects"
 version = "0.7.0"
 dependencies = [
@@ -5483,6 +5487,7 @@ dependencies = [
 name = "sk-elements"
 version = "0.7.0"
 dependencies = [
+ "sk-editor",
  "skathi-gpui",
 ]
 
@@ -5609,6 +5614,7 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "sk-css",
+ "sk-editor",
  "sk-effects",
  "sk-elements",
  "sk-lottie",

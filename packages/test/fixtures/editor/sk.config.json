@@ -1,0 +1,11 @@
+{
+  "name": "editor",
+
+  "window": {
+    "title": "Skathi — sk-editor (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

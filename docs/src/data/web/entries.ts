@@ -535,7 +535,7 @@ const domAndEvents = section("DOM and events", [
       "Editors built on contenteditable do not work: CodeMirror, ProseMirror, Tiptap, Lexical, Quill, Slate and the like.",
     ],
     workaround:
-      "Use `<input>` or `<textarea>`, Skathi's native text editor with IME, undo and the clipboard. For formatted text, edit the source (Markdown, for example) in a `<textarea>` and render a preview beside it.",
+      "For formatted text use [`<sk-editor>`](/elements/sk-editor/): marks, inline elements as atoms, line blocks and transactions, with IME, undo and the clipboard. For plain text use `<input>` or `<textarea>`.",
     related: ["selection", "input-event"],
     aliases: [
       "contentEditable",

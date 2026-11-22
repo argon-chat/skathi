@@ -70,6 +70,7 @@ export function adviseJsSourced(el: MirrorElement, name: string, via: string): v
           (name === "showpicker" && isColorInput(n)) ||
           (name === "change" &&
             (isSelectEl(n) ||
+              n.tag === "sk-editor" ||
               isToggleInput(n) ||
               isColorInput(n) ||
               (n.tag === "input" && String(n.attrs.type).toLowerCase() === "range"))),
@@ -79,7 +80,7 @@ export function adviseJsSourced(el: MirrorElement, name: string, via: string): v
     warnCompat(
       key,
       `${via} — this event type is not delivered by the native host yet: only <input type=file> ` +
-        `(and <select>, checkboxes, radios, <input type=range/color>, for \`change\`) fires it here, so on this element it will never fire`,
+        `(and <select>, checkboxes, radios, <input type=range/color>, <sk-editor>, for \`change\`) fires it here, so on this element it will never fire`,
     );
   });
 }

@@ -56,6 +56,7 @@ export const RUNTIME_FIRED_EVENTS = new Set<string>([
   "dragleave",
   "drop",
   "dragend",
+  "viewportchange",
 ]);
 
 const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";

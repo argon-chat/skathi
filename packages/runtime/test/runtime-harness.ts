@@ -687,6 +687,7 @@ export function createRuntime(
     "__sk_focus",
     "__sk_input_select",
     "__sk_text_control_install",
+    "__sk_editor_install",
     "__sk_reload",
     "__sk_media_state",
     "__sk_media_call",
@@ -797,6 +798,7 @@ export function createRuntime(
       host.inputSelectCalls.push(id);
       return host.inputSelectAnswer;
     },
+    () => {},
     () => {},
     () => {
       host.reloads++;

@@ -1,0 +1,320 @@
+---
+title: "<sk-editor>"
+label: "<sk-editor>"
+metaTitle: "<sk-editor>: rich text editing with marks and atoms"
+description: A native rich text editor for chat composers and small documents. Marks, atoms backed by real elements, line blocks, decorations, transactions, undo, IME and the clipboard, styled with ::mark(), ::line() and ::decoration().
+section: Elements
+order: 12
+---
+
+A chat composer with bold and links, mentions shown as chips, custom emoji in the line, a quote block: that is what `<sk-editor>` is for. It is not `contenteditable`. The editor owns the text, the layout, the caret, IME input and the undo history, and your app decides what each piece of formatting means.
+
+A document has four layers:
+
+| Layer       | What it is                                                            | Examples                       | In the value and the clipboard |
+| ----------- | --------------------------------------------------------------------- | ------------------------------ | ------------------------------ |
+| Text        | One string; offsets are UTF-16 code units, as in JavaScript strings   | `Hi, ￼!`                       | yes                            |
+| Marks       | Named ranges with optional data that move with the text               | `bold`, `code`, `link {href}`  | yes                            |
+| Atoms       | One U+FFFC character where a real child element is drawn              | a mention chip, a custom emoji | yes                            |
+| Decorations | Ranges and lines the app paints, such as syntax colors or search hits | `kw`, `string`, `match`        | no                             |
+
+Each hard line (between two `\n`) can also have a block name, such as `quote`, `code`, `h1` or `li`. There is no nested block tree and no tables.
+
+## A message composer
+
+Bind the document with `v-model`, or with `value` and `input` in Svelte. Enter sends here: cancel the `beforeinput` whose `inputType` is `insertParagraph`. Shift+Enter still inserts a line break.
+
+```vue title="Composer.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const draft = ref<SkEditorValue>({ text: "", marks: [], atoms: [] });
+const emit = defineEmits<{ send: [value: SkEditorValue] }>();
+
+function onBeforeInput(e: InputEvent) {
+  if (e.inputType === "insertParagraph") {
+    e.preventDefault();
+    emit("send", draft.value);
+    draft.value = { text: "", marks: [], atoms: [] };
+  }
+}
+</script>
+
+<template>
+  <sk-editor v-model="draft" class="composer" placeholder="Message" @beforeinput="onBeforeInput" />
+</template>
+
+<style scoped>
+.composer {
+  max-height: 160px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--field);
+}
+.composer::mark(bold) {
+  font-weight: 700;
+}
+.composer::mark(code) {
+  font-family: var(--mono);
+  background: var(--code-bg);
+}
+</style>
+```
+
+```svelte title="Composer.svelte" framework="svelte"
+<script lang="ts">
+  let { onsend }: { onsend: (value: SkEditorValue) => void } = $props();
+  let draft = $state<SkEditorValue>({ text: "", marks: [], atoms: [] });
+
+  function onbeforeinput(e: InputEvent) {
+    if (e.inputType === "insertParagraph") {
+      e.preventDefault();
+      onsend(draft);
+      draft = { text: "", marks: [], atoms: [] };
+    }
+  }
+</script>
+
+<sk-editor
+  class="composer"
+  placeholder="Message"
+  value={draft}
+  oninput={(e) => (draft = (e.currentTarget as SkEditorElement).value)}
+  {onbeforeinput}
+></sk-editor>
+
+<style>
+  .composer {
+    max-height: 160px;
+    padding: 8px 12px;
+  }
+  .composer::mark(bold) {
+    font-weight: 700;
+  }
+</style>
+```
+
+The editor grows with its text. With a `max-height` it stops growing there and scrolls, keeping the caret in view.
+
+## Formatting
+
+Marks are names; what they look like is CSS. Toggle one over the selection with a transaction, and with no selection set `typingMarks` so the next typed character gets it, as Ctrl+B does in a word processor. The editor has no formatting shortcuts of its own.
+
+```ts
+function toggleBold(editor: SkEditorElement) {
+  const [{ anchor, head }] = editor.selections;
+  const from = Math.min(anchor, head);
+  const to = Math.max(anchor, head);
+  const on = editor.marksAt(from).includes("bold");
+  if (from === to) {
+    editor.typingMarks = on ? editor.typingMarks.filter((m) => m !== "bold") : [...editor.typingMarks, "bold"];
+  } else if (on) {
+    editor.dispatch({ removeMarks: [{ type: "bold", from, to }] });
+  } else {
+    editor.dispatch({ addMarks: [{ type: "bold", from, to }] });
+  }
+}
+```
+
+A mark grows when you type at its end, so a bold word stays bold as you continue it. List the marks that should not grow, such as links and inline code, in `exclusiveMarks`. Typing just after a mark's end never extends a mark of a type listed there.
+
+Typed Markdown can become marks too: listen to `input`, and when a pair of `**` closes, dispatch one transaction that removes the asterisks and adds the mark.
+
+## Atoms: mentions, custom emoji, stickers
+
+An atom is one U+FFFC character in `text` with an entry in `atoms`. Give the editor a child element with `atom="<id>"` for each atom: the editor measures it like any box, puts it on its U+FFFC in the line, and the line grows to fit it. The arrow keys step over an atom and Backspace deletes it whole. An atom's `text` is what plain-text copies get, such as `@Ann` or `:party:`.
+
+```vue title="ComposerWithMentions.vue" framework="vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const draft = ref<SkEditorValue>({
+  text: "Hi ￼!",
+  marks: [],
+  atoms: [{ id: "m1", at: 3, type: "mention", text: "@Ann", data: { userId: 42 } }],
+});
+</script>
+
+<template>
+  <sk-editor v-model="draft">
+    <span v-for="a in draft.atoms" :key="a.id" :atom="a.id" class="chip">{{ a.text }}</span>
+  </sk-editor>
+</template>
+
+<style scoped>
+.chip {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+</style>
+```
+
+```svelte title="ComposerWithMentions.svelte" framework="svelte"
+<script lang="ts">
+  let draft = $state<SkEditorValue>({
+    text: "Hi ￼!",
+    marks: [],
+    atoms: [{ id: "m1", at: 3, type: "mention", text: "@Ann", data: { userId: 42 } }],
+  });
+</script>
+
+<sk-editor value={draft} oninput={(e) => (draft = (e.currentTarget as SkEditorElement).value)}>
+  {#each draft.atoms as a (a.id)}
+    <span atom={a.id} class="chip">{a.text}</span>
+  {/each}
+</sk-editor>
+```
+
+To insert an atom at the caret, insert a value with one U+FFFC and the atom in it:
+
+```ts
+const [{ anchor, head }] = editor.selections;
+editor.dispatch({
+  changes: [
+    {
+      from: Math.min(anchor, head),
+      to: Math.max(anchor, head),
+      insert: { text: "￼", marks: [], atoms: [{ id: crypto.randomUUID(), at: 0, type: "emoji", text: ":party:" }] },
+    },
+  ],
+});
+```
+
+An atom sits on the text's baseline. Set `atom-align="middle"` or `atom-align="text-bottom"` on its element to move it. A child without `atom` is not shown, and an atom with no child takes no space.
+
+To open a mention popup at the caret, read `caretRect()`; it is in window coordinates, like `getBoundingClientRect()`.
+
+## Decorations: syntax colors and search hits
+
+Decorations are ranges painted by name. They are not part of the value, never enter the undo history and never change the layout: `::decoration()` takes color, background and text decoration only. They are kept in layers, so a syntax highlighter and a search can set theirs independently, and they move with edits until you replace them.
+
+```ts
+editor.setDecorations("syntax", [
+  { from: 0, to: 3, name: "kw" },
+  { from: 8, to: 15, name: "string" },
+]);
+editor.setLineDecorations("diff", [{ line: 2, name: "added" }]);
+```
+
+```css
+sk-editor::decoration(kw) {
+  color: var(--syntax-keyword);
+}
+sk-editor::decoration(added) {
+  background: var(--diff-added);
+}
+```
+
+A line decoration paints its line's background. Highlighting is the app's job; the editor only paints what it is given.
+
+## Styling
+
+| Selector                      | What it styles                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `sk-editor::mark(name)`       | Text under the mark: font family, weight, style and size, color, background, underline, line-through.  |
+| `sk-editor::line(name)`       | Lines with the block: the same text properties, plus padding, border and background of the line's box. |
+| `sk-editor::decoration(name)` | Text under the decoration: color, background, underline and line-through only.                         |
+| `sk-editor::placeholder`      | The placeholder text.                                                                                  |
+| `sk-editor::selection`        | The selection's `background-color`.                                                                    |
+
+A mark with a larger `font-size` makes its row taller, and so does a tall atom. When marks and decorations overlap, the line's style is applied first, then marks, then decorations. Inherited text properties of the editor itself, such as `font-size` and `color`, are the base.
+
+## The value
+
+```ts
+interface SkEditorValue {
+  text: string;
+  marks: { type: string; from: number; to: number; data?: unknown }[];
+  atoms: { id: string; at: number; type: string; text?: string; data?: unknown }[];
+  lines?: { line: number; type: string; data?: unknown }[];
+}
+```
+
+Assigning `value` replaces the document, clears the undo history and puts the caret at the end. Assigning a value equal to the current one does nothing, which is what keeps `v-model` cheap: each keystroke reads the value and writes it back. Before it is stored a value is cleaned up: `\r\n` becomes `\n`, control characters other than `\n` and `\t` are dropped, a U+FFFC with no atom is dropped, as is an atom not on a U+FFFC, marks are clipped to the text, and touching marks of one type with equal data are merged. An inserted atom whose id is already in the document is renamed `id~2`, `id~3` and so on.
+
+`data` can be any JSON value; it is stored as JSON, so functions, `undefined` and class instances do not survive.
+
+## Transactions
+
+`dispatch()` applies changes, selection and formatting as one step that undo reverses as a whole.
+
+```ts
+interface SkEditorTransaction {
+  changes?: { from: number; to?: number; insert?: string | SkEditorValue }[];
+  selections?: { anchor: number; head?: number }[];
+  addMarks?: { type: string; from: number; to: number; data?: unknown }[];
+  removeMarks?: { type?: string; from: number; to: number }[];
+  setLines?: { from: number; to: number; type: string | null; data?: unknown }[];
+  history?: boolean;
+  scrollIntoView?: boolean;
+}
+```
+
+- `changes` are positions in the document before the transaction and must not overlap; overlapping changes throw a `RangeError`. `to` defaults to `from`, an insert.
+- `selections`, `addMarks`, `removeMarks` and `setLines` are positions after the changes. Without `selections` the selection is mapped through the changes.
+- `addMarks` replaces marks of the same type over its range. `removeMarks` without `type` removes every mark in the range.
+- `setLines` gives every hard line touching `from`..`to` the block `type`; `null` clears it.
+- `history: false` keeps the step out of undo. A text change made that way clears the undo history, since the steps before it no longer apply.
+
+## Events
+
+| Event                                                     | When                                                                                                                                                                         |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `beforeinput`                                             | Before a user edit. Cancellable, except during IME composition. `inputType`, `data`, and `getTargetRanges()` with the UTF-16 range it replaces as `startOffset`/`endOffset`. |
+| `input`                                                   | After a user edit, with the same `inputType` and `data`.                                                                                                                     |
+| `change`                                                  | After any edit, the user's or `dispatch()`'s, with `changes`: `{ from, to, insert }` in the document before it. Undo reports the whole document as replaced.                 |
+| `selectionchange`                                         | After the selection moves; one per burst of moves. Does not bubble.                                                                                                          |
+| `viewportchange`                                          | When the lines on screen change. Does not bubble.                                                                                                                            |
+| `compositionstart`, `compositionupdate`, `compositionend` | Around IME input, as on a text field.                                                                                                                                        |
+| `copy`, `cut`, `paste`                                    | Before the clipboard is used; cancel to handle it yourself.                                                                                                                  |
+| `keydown`, `keyup`                                        | Before the editor handles the key; cancelling `keydown` stops it.                                                                                                            |
+
+The `inputType` values are the web's: `insertText`, `insertParagraph` (Enter), `insertLineBreak` (Shift+Enter), `insertFromPaste`, `insertCompositionText`, `deleteContentBackward`, `deleteContentForward`, `deleteWordBackward`, `deleteWordForward`, `deleteSoftLineBackward`, `deleteSoftLineForward`, `deleteByCut`, `historyUndo` and `historyRedo`.
+
+## Properties and methods
+
+| Member                                 | What it does                                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `value`                                | The whole document. See [The value](#the-value).                                                   |
+| `length`, `lineCount`                  | Text length in UTF-16 code units, and the number of hard lines.                                    |
+| `slice(from, to?)`                     | Text between two positions; atoms are U+FFFC.                                                      |
+| `line(n)`, `lineAt(pos)`               | `{ from, to, text }` of hard line `n`, and the line a position is on.                              |
+| `selections`                           | `[{ anchor, head }]`; always one selection.                                                        |
+| `dispatch(tr)`                         | Applies a transaction.                                                                             |
+| `undo()`, `redo()`                     | `true` if there was a step. Typing runs undo as one step.                                          |
+| `typingMarks`                          | The marks the next typed character gets. Reset when the selection moves.                           |
+| `exclusiveMarks`                       | Mark types that do not grow when typing at their end.                                              |
+| `marksAt(pos)`                         | Mark types the character before `pos` has; at a line start, the character after.                   |
+| `setDecorations(layer, ranges)`        | Replaces a layer of `{ from, to, name }` decorations.                                              |
+| `setLineDecorations(layer, lines)`     | Replaces a layer of `{ line, name }` line decorations.                                             |
+| `rectsFor(from, to)`, `caretRect()`    | `DOMRect`s in window coordinates, one per visual row, for popups and tooltips.                     |
+| `positionAt(x, y)`                     | The position nearest a point in window coordinates.                                                |
+| `viewport`                             | `{ fromLine, toLine }`: the hard lines on screen, `toLine` exclusive.                              |
+| `readOnly`, `placeholder`, `maxLength` | Reflect the `readonly`, `placeholder` and `maxlength` attributes. `maxLength` counts UTF-16 units. |
+
+Geometry is from the last frame, so read it after the editor has been shown.
+
+## Keys
+
+The editing keys are a text field's (arrows, Home and End, word moves with Ctrl or Alt, Ctrl+A, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z, Ctrl+C, X and V), with Cmd on macOS. Up and Down move by visual row. A double click selects a word, a triple click a line. Enter inserts a paragraph and Shift+Enter a line break; both are `\n` in the text and differ only in `inputType`.
+
+## Clipboard
+
+A copy writes the plain text, with each atom as its `text`, and the selection as an `SkEditorValue` in JSON under `application/x-skathi-editor`. A paste into an editor takes the JSON when it is there, so marks and atoms survive a copy between editors of one app, and the plain text otherwise. Other apps see the plain text only; no HTML is written.
+
+## Things to watch for
+
+- **Bring your own child for each atom.** Without one the atom is a zero-width character.
+- **Positions are UTF-16.** An emoji outside the Basic Multilingual Plane is two units, as in a JavaScript string.
+- **There is no spell check and no right-to-left text.** Paint squiggles with decorations if you check spelling yourself.
+- **Accessibility is not exposed**, as with the rest of Skathi.
+
+## Platforms
+
+`<sk-editor>` is tested on Windows. The model and layout are shared code; IME input goes through the same gpui text input as `<textarea>` on macOS and Linux.
+
+## See also
+
+- [`<input>` and `<textarea>`](/elements/text-fields/): plain text fields.
+- [`<sk-sticker>`](/elements/sk-sticker/): animated stickers, which can be atoms.

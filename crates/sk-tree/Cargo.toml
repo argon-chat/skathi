@@ -19,6 +19,7 @@ video = ["dep:sk-video", "sk-sticker?/video"]
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.7.0", default-features = false }
 keycode = "1.0"
 sk-css = { path = "../sk-css", version = "0.7.0" }
+sk-editor = { path = "../sk-editor", version = "0.7.0" }
 sk-effects = { path = "../sk-effects", version = "0.7.0" }
 sk-elements = { path = "../sk-elements", version = "0.7.0" }
 sk-lottie = { path = "../sk-lottie", version = "0.7.0", optional = true }

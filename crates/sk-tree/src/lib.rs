@@ -18,6 +18,7 @@ mod containers;
 mod css_namespace;
 mod cull;
 mod dom;
+mod editor;
 mod effect_texture;
 mod filter;
 mod font_api;
@@ -540,6 +541,7 @@ pub fn install(rt: &JsRuntime) {
     toggle::install(rt);
     pointer_lock::install(rt);
     text_control::install(rt);
+    editor::install(rt);
     observe::install(rt);
     font_api::install(rt);
     effect_texture::install();

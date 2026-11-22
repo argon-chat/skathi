@@ -25,6 +25,11 @@ interface VNodeLike {
 }
 
 function setElValue(el: MirrorElement, value: unknown): void {
+  // `<sk-editor>`'s value is a document object; the editor ignores one equal to what it holds.
+  if (el.tag === "sk-editor") {
+    if (value != null) (el as { value: unknown }).value = value;
+    return;
+  }
   const v = value == null ? "" : String(value);
   // Compared with what the field holds now — typing keeps `_value` current —
   // so a model reset to the string the user has since typed over still lands.
@@ -45,6 +50,10 @@ export const vModelText = {
     }
     addModelListener(el, "input", () => {
       if (el.composing) return;
+      if (el.tag === "sk-editor") {
+        if (el[assignKey]) (el[assignKey] as (value: unknown) => void)((el as { value: unknown }).value);
+        return;
+      }
       // `.trim` runs before `.number`, so `v` is still a string at both casts.
       let v: string | number = el.value;
       if (modifiers.trim) v = (v as string).trim();

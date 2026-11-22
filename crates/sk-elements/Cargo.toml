@@ -9,3 +9,4 @@ homepage.workspace = true
 
 [dependencies]
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.7.0", default-features = false }
+sk-editor = { path = "../sk-editor", version = "0.7.0" }

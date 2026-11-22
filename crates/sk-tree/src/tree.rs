@@ -1254,6 +1254,12 @@ impl Tree {
         }
     }
 
+    /// [`Tree::touch`] plus a flush, for native state the tree does not hold (an editor's text).
+    pub(crate) fn touch_repaint(&mut self, id: u32) {
+        self.touch(id);
+        self.dirty = true;
+    }
+
     /// [`Tree::touch`] for a mutation that can change selector matching: the same walk also tells
     /// every `:has()` anchor above.
     /// One read by a descendant's selector ([`sel::HAS_DESC`]) is marked whole; one only its own

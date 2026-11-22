@@ -5,6 +5,7 @@ members = [
     "crates/sk-tree",       # retained node tree + renderer host fns
     "crates/sk-css",        # stylesheets, cascade, per-state refinements
     "crates/sk-elements",   # native widgets (text input, ...)
+    "crates/sk-editor",     # <sk-editor>'s document model: marks, atoms, transactions, history
     "crates/sk-effects",    # `--shading` registry + .slang sources + generated HLSL
     "crates/sk-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
     "crates/sk-sticker",    # <sk-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
@@ -66,6 +67,7 @@ sk-runtime.opt-level = 3
 sk-tree.opt-level = 3
 sk-css.opt-level = 3
 sk-elements.opt-level = 3
+sk-editor.opt-level = 3
 sk-effects.opt-level = 3
 skathi-gpui.opt-level = 3
 skathi-gpui-windows.opt-level = 3

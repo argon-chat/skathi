@@ -77,6 +77,22 @@ interface SkElements {
       segment?: string | undefined;
       objectfit?: "fill" | "contain" | "cover" | "scale-down" | "none" | undefined;
     };
+  /** Rich text: marks, atoms (children with `atom="<id>"`) and line blocks; `v-model` binds its `SkEditorValue`. */
+  "sk-editor": ElementAttributes<{
+    beforeinput: InputEvent;
+    input: InputEvent;
+    change: SkEditorChangeEvent;
+    selectionchange: Event;
+    viewportchange: Event;
+  }> & {
+    value?: SkEditorValue | undefined;
+    modelValue?: SkEditorValue | undefined;
+    placeholder?: string | undefined;
+    readonly?: Booleanish | undefined;
+    readOnly?: Booleanish | undefined;
+    maxlength?: Numberish | undefined;
+    maxLength?: Numberish | undefined;
+  };
   /** An animated sticker from Lottie (`.json`, `.tgs`) or WebM with alpha; copies of one source share a decode. */
   "sk-sticker": ElementAttributes<{ error: Event; ended: Event }> &
     SizeHints & {
@@ -104,5 +120,6 @@ declare module "@vue/runtime-core" {
     lottie: FunctionalComponent<SkElements["lottie"]>;
     "sk-surface": FunctionalComponent<SkElements["sk-surface"]>;
     "sk-sticker": FunctionalComponent<SkElements["sk-sticker"]>;
+    "sk-editor": FunctionalComponent<SkElements["sk-editor"]>;
   }
 }

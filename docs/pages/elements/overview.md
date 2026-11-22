@@ -23,6 +23,7 @@ Each page opens with what you would build with the element and short recipes in 
 | [`<sk-surface>`](/elements/sk-surface/) | Shows frames that native code renders (a video player, a game engine), composited like any other element.  |
 | [`<lottie>`](/elements/lottie/)         | Plays a Lottie animation from JSON or `.tgs`, rasterized off the UI thread.                                |
 | [`<sk-sticker>`](/elements/sk-sticker/) | Plays many small animated stickers at once from Lottie or WebM, sharing decodes and frames between copies. |
+| [`<sk-editor>`](/elements/sk-editor/)   | Rich text editing: named marks, inline elements as atoms, line blocks, transactions, undo and IME.         |
 
 ## HTML elements with a native implementation
 

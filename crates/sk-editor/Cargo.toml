@@ -1,0 +1,10 @@
+[package]
+name = "sk-editor"
+description = "The document model behind Skathi's <sk-editor>: text, marks, atoms, line blocks, transactions and history"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]

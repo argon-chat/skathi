@@ -97,6 +97,16 @@ type SurfaceDisplayEvent = Event & {
 /** `SkLottieFrameEvent`, `SkLottieLoopEvent` and `SkLottieCompleteEvent` in the app's types (env.d.ts). */
 type LottieEvent<T> = Event & { readonly currentTime: number; readonly totalTime: number } & T;
 
+/** `SkEditorValue` in the app's types (env.d.ts). */
+type EditorValue = {
+  text: string;
+  marks: { type: string; from: number; to: number; data?: unknown }[];
+  atoms: { id: string; at: number; type: string; text?: string; data?: unknown }[];
+  lines?: { line: number; type: string; data?: unknown }[];
+};
+/** `SkEditorChangeEvent` in the app's types (env.d.ts). */
+type EditorChangeEvent = Event & { readonly changes: { from: number; to: number; insert: string }[] };
+
 type Numberish = number | `${number}`;
 type SizeHints = { width?: Numberish | undefined; height?: Numberish | undefined };
 
@@ -152,6 +162,18 @@ declare module "svelte/elements" {
         kind?: "auto" | "lottie" | "video" | "image" | undefined;
         onended?: ((event: Event) => void) | undefined;
       };
+    /** Rich text: marks, atoms (children with `atom="<id>"`) and line blocks. `value` is set as a property. */
+    "sk-editor": HTMLAttributes<HTMLElement> & {
+      value?: EditorValue | undefined;
+      placeholder?: string | undefined;
+      readonly?: Booleanish | undefined;
+      maxlength?: Numberish | undefined;
+      onbeforeinput?: ((event: InputEvent) => void) | undefined;
+      oninput?: ((event: InputEvent) => void) | undefined;
+      onchange?: ((event: EditorChangeEvent) => void) | undefined;
+      onselectionchange?: ((event: Event) => void) | undefined;
+      onviewportchange?: ((event: Event) => void) | undefined;
+    };
   }
 }
 

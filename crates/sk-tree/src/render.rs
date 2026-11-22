@@ -420,6 +420,7 @@ pub(crate) fn gc_node_state() {
     FOCUS_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_FOCUS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    crate::editor::gc(&live);
     INPUT_SELECTIONS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_CARETS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -1080,7 +1081,7 @@ fn settle_owed_later(window: &Window, cx: &mut App) {
 
 /// A text field's default action must see what its event's handlers did (a browser runs the
 /// checkpoint between them), so settle here, under the listener, before the widget edits.
-fn settle_before_default(window: &mut Window, cx: &mut App) {
+pub(crate) fn settle_before_default(window: &mut Window, cx: &mut App) {
     if sk_runtime::bridge::drain_owed() {
         js_wave_app(window, cx, || true);
     }
@@ -1098,7 +1099,7 @@ fn intent_payload(intent: &sk_elements::InputIntent) -> EventPayload<'static> {
     }
 }
 
-fn path_listens(t: &Tree, id: u32, code: u32) -> bool {
+pub(crate) fn path_listens(t: &Tree, id: u32, code: u32) -> bool {
     let bit = 1u64 << code;
     let mut cur = id;
     for _ in 0..4096 {
@@ -1116,7 +1117,7 @@ fn path_listens(t: &Tree, id: u32, code: u32) -> bool {
 
 /// [`js_dispatch_app`] for an event with a string beside its payload (InputEvent / CompositionEvent
 /// `data`), passed as the dispatcher's eighth argument; `None` reads as `null`.
-fn js_dispatch_text(
+pub(crate) fn js_dispatch_text(
     id: u32,
     event: u32,
     payload: &EventPayload,
@@ -1509,7 +1510,7 @@ fn tab_index_of(t: &Tree, id: u32) -> Option<isize> {
 fn default_tab_index(t: &Tree, id: u32) -> Option<isize> {
     let n = t.node(id)?;
     let focusable = match t.name(n.tag) {
-        "button" | "select" | "iframe" => true,
+        "button" | "select" | "iframe" | crate::editor::TAG => true,
         "a" | "area" => t.prop(id, "href").is_some(),
         "summary" => summarizes_details(t, id),
         _ => false,
@@ -2364,11 +2365,13 @@ fn build_node<V: 'static>(
                     && t.prop(id, "type")
                         .is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
                 let toggle = crate::toggle::kind(t, id);
-                let is_input = matches!(t.name(node.tag), "input" | "textarea")
-                    && !is_file_input
-                    && !is_range
-                    && !is_color
-                    && toggle.is_none();
+                let is_editor = t.name(node.tag) == crate::editor::TAG;
+                let is_input =
+                    matches!(t.name(node.tag), "input" | "textarea" | crate::editor::TAG)
+                        && !is_file_input
+                        && !is_range
+                        && !is_color
+                        && toggle.is_none();
                 // Both are tabbable by default in HTML; a plain <div> is not. A disabled file input is
                 // not focusable at all.
                 let file_tab =
@@ -2475,8 +2478,37 @@ fn build_node<V: 'static>(
                         .into_any_element()
                 } else if is_input {
                     let inert = extras.pointer_events_none == Some(true);
-                    let (input, focus_target) =
-                        build_input(t, id, node, tab_index, size_to_content, window, cx);
+                    let (input, focus_target) = if is_editor {
+                        let children = laid_out_children(t, node);
+                        let atoms = crate::editor::atom_children(t, &children)
+                            .into_iter()
+                            .map(|(c, atom, atom_align)| {
+                                let element = build_node(
+                                    t,
+                                    c,
+                                    root,
+                                    window,
+                                    cx,
+                                    now,
+                                    drag,
+                                    case,
+                                    ws,
+                                    align,
+                                    stacking.clone(),
+                                );
+                                (atom, element, atom_align)
+                            })
+                            .collect();
+                        let built = crate::editor::build(t, id, node, tab_index, atoms, window, cx);
+                        INPUT_FOCUS.with(|m| m.borrow_mut().insert(id, built.1.clone()));
+                        if matches!(d.style().display, None | Some(gpui::Display::Block)) {
+                            d.style().display = Some(gpui::Display::Flex);
+                            d.style().flex_direction = Some(gpui::FlexDirection::Column);
+                        }
+                        built
+                    } else {
+                        build_input(t, id, node, tab_index, size_to_content, window, cx)
+                    };
                     // The editor's own handle carries this node's focus identity (mouse, Tab,
                     // programmatic), so focus/blur events hang off it.
                     watch_focus(id, &focus_target, window, cx);
@@ -4571,6 +4603,9 @@ pub(crate) fn ime(
     cx: &mut App,
 ) -> Result<(), String> {
     use gpui::EntityInputHandler;
+    if let Some(done) = crate::editor::ime(id, text, commit, window, cx) {
+        return done;
+    }
     let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) else {
         return Err(format!("node {id} is not a built <input> or <textarea>"));
     };
@@ -6070,7 +6105,11 @@ fn build_input<V: 'static>(
     (text_input(&state, options, handlers, cx), focus_target)
 }
 
-fn input_configuration(t: &Tree, id: u32, multiline: bool) -> gpui::TextInputConfiguration {
+pub(crate) fn input_configuration(
+    t: &Tree,
+    id: u32,
+    multiline: bool,
+) -> gpui::TextInputConfiguration {
     let attributes = sk_elements::InputAttributes {
         autocorrect: t.prop(id, "autocorrect"),
         autocapitalize: t.prop(id, "autocapitalize"),

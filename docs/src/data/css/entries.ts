@@ -2651,6 +2651,18 @@ const selectors = section("Selectors", [
     related: ["pseudo-placeholder-shown"],
   }),
   pe("::selection", OK, "Selects the part of the document the user has selected."),
+  pe("::mark()", OK, "Skathi: styles the text under a named mark of an `<sk-editor>`.", {
+    notes: ["Font family, weight, style and size, color, background, underline and line-through apply."],
+    related: ["pseudo-line", "pseudo-decoration"],
+  }),
+  pe("::line()", OK, "Skathi: styles the lines of an `<sk-editor>` that have a named block.", {
+    notes: ["The text properties of `::mark()` apply, plus padding, border and background of the line's box."],
+    related: ["pseudo-mark", "pseudo-decoration"],
+  }),
+  pe("::decoration()", OK, "Skathi: styles the text under a named decoration of an `<sk-editor>`.", {
+    notes: ["Only properties that do not move glyphs apply: color, background, underline and line-through."],
+    related: ["pseudo-mark", "pseudo-line"],
+  }),
   pe("::file-selector-button", OK, 'Selects the button of an `<input type="file">`.'),
   ...(
     [

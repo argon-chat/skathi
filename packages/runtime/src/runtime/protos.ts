@@ -3,6 +3,7 @@
 export const ElementProto: object =
   typeof HTMLElement === "function" ? HTMLElement.prototype : Object.create(Object.prototype);
 export const TextControlProto: object = Object.create(ElementProto);
+export const SkEditorProto: object = Object.create(ElementProto);
 export const TextProto: object = Object.create(Object.prototype);
 /** `Node.prototype` once interfaces.ts installs `Node`: it carries the Node members too, so `Object.getOwnPropertyDescriptor(Node.prototype, "firstChild")` answers as in a browser. */
 export const NodeProto: object = Object.create(Object.prototype);

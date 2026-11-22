@@ -11,7 +11,7 @@
 //! recomputes per frame, and [`TextInputHandlers`] the per-frame event sinks. [`text_input`] builds
 //! the element.
 
-mod boundaries;
+pub(crate) mod boundaries;
 pub mod config;
 mod element;
 mod state;
@@ -94,6 +94,7 @@ pub enum InputType {
     DeleteByCut = 11,
     HistoryUndo = 12,
     HistoryRedo = 13,
+    InsertParagraph = 14,
 }
 
 impl InputType {
@@ -112,6 +113,7 @@ impl InputType {
             InputType::DeleteByCut => "deleteByCut",
             InputType::HistoryUndo => "historyUndo",
             InputType::HistoryRedo => "historyRedo",
+            InputType::InsertParagraph => "insertParagraph",
         }
     }
 
@@ -584,6 +586,7 @@ mod tests {
             InputType::DeleteByCut,
             InputType::HistoryUndo,
             InputType::HistoryRedo,
+            InputType::InsertParagraph,
         ];
         for (i, t) in all.iter().enumerate() {
             assert_eq!(usize::from(t.code()), i + 1, "{t:?}");

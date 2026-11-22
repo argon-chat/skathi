@@ -111,6 +111,7 @@ export const EDIT_TYPES = [
   "deleteByCut",
   "historyUndo",
   "historyRedo",
+  "insertParagraph",
 ] as const;
 
 type HostEventName = keyof typeof EV_CODES;

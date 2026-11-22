@@ -312,12 +312,20 @@ export function detailFor(name: string, d: number): number {
 function inputInit(name: string, a: number, b: number, data: unknown) {
   return {
     bubbles: true,
-    cancelable: name === "beforeinput" && !b,
+    cancelable: name === "beforeinput" && !(b & 1),
     composed: true,
     inputType: EDIT_TYPES[a] ?? "",
     data: typeof data === "string" ? data : null,
-    isComposing: !!b,
+    isComposing: !!(b & 1),
   };
+}
+
+/** `<sk-editor>`'s edits carry their range (bit 2 of `b`, offsets in `c`/`d`): `getTargetRanges()` reports it. */
+function withTargetRange<E extends Event>(ev: E, b: number, c: number, d: number): E {
+  if (!(b & 2)) return ev;
+  const range = { startContainer: null, startOffset: c, endContainer: null, endOffset: d, collapsed: c === d };
+  Object.defineProperty(ev, "getTargetRanges", { value: () => [{ ...range }], configurable: true });
+  return ev;
 }
 
 /** A `mousemove` / `pointermove`'s `movementX` / `movementY`, passed to `synthesize` as `data`; nothing for any other event. */
@@ -431,7 +439,8 @@ export function synthesize(
         break;
       case "input":
       case "beforeinput":
-        if (typeof InputEvent === "function") return new InputEvent(name, inputInit(name, a, b, data));
+        if (typeof InputEvent === "function")
+          return withTargetRange(new InputEvent(name, inputInit(name, a, b, data)), b, c, d);
         break;
       case "compositionstart":
       case "compositionupdate":

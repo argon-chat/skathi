@@ -15,6 +15,7 @@
 //! let element = text_input(&state, options, handlers, cx);
 //! ```
 
+pub mod editor;
 pub mod scrollbar;
 pub mod tab_nav;
 pub mod text_input;
@@ -31,5 +32,6 @@ pub use text_input::{
 /// One-time setup (key bindings, actions, `Tab`/`Shift-Tab` focus traversal); call before opening a window.
 pub fn init(cx: &mut gpui::App) {
     text_input::init(cx);
+    editor::init(cx);
     tab_nav::init(cx);
 }

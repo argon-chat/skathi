@@ -48,7 +48,18 @@ defineDomGet(
 
 // `REFLECTED` properties as accessors over their attributes. An element whose tag lacks the property
 // reads `undefined` and keeps an assignment as an expando.
-const TAB_INDEX_ZERO = new Set(["a", "area", "button", "frame", "iframe", "input", "object", "select", "textarea"]);
+const TAB_INDEX_ZERO = new Set([
+  "a",
+  "area",
+  "button",
+  "frame",
+  "iframe",
+  "input",
+  "object",
+  "select",
+  "textarea",
+  "sk-editor",
+]);
 function parseHtmlInt(s: string | undefined): number | null {
   const m = s === undefined ? null : /^[\t\n\f\r ]*([-+]?\d+)/.exec(s);
   if (!m) return null;
