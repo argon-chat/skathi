@@ -5388,6 +5388,7 @@ dependencies = [
  "sk-locale",
  "sk-payload",
  "sk-permissions",
+ "sk-resample",
  "sk-runtime",
  "sk-sticker",
  "sk-storage",

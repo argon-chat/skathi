@@ -23,7 +23,7 @@ use crate::permissions::{self, Library};
 const KIND_BOOL: u32 = 2;
 const KIND_INT32: u32 = 3;
 const KIND_DOUBLE: u32 = 4;
-const KIND_FUNCTION: u32 = 9;
+
 const TA_U8: u32 = 2;
 
 /// The buffer a pointer was taken from, kept alive for as long as the pointer is.

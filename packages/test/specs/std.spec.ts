@@ -473,6 +473,41 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:image decodes, resizes and encodes on workers, from bytes, a NativeBuffer or a stream",
+    async () => {
+      const app = await start();
+      await app.eval("__SK_TEST_STD__.startImage(); 1");
+      let raw = "null";
+      for (const end = Date.now() + 20_000; raw === "null" && Date.now() < end; await Bun.sleep(50)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.imageResult)"));
+      }
+      const i = JSON.parse(raw);
+      expect(i.failed).toBeUndefined();
+      expect(i.result).toEqual({
+        streamed: [false, true, "image/png", 1, false],
+        decoded: [true, true, 32, true],
+        thumb: [2, 1, "image/png"],
+        small: [2, 1, 8],
+        jpeg: [0xff, 0xd8, 2, 1],
+        bitmap: [4, 2, "255,0,0,255"],
+        supported: [true, false, true, false],
+        errors: {
+          truncated: "EncodingError",
+          wrongType: "EncodingError",
+          noFrame: "RangeError",
+          enlarge: "RangeError",
+          gif: "NotSupportedError",
+          closed: "InvalidStateError",
+          aborted: "AbortError",
+          freed: "InvalidStateError",
+        },
+      });
+      expect(app.child.exitCode).toBeNull();
+    },
+    T,
+  );
+
+  test(
     "app.quit({ exitCode }) fires pagehide and ends the process with that code",
     async () => {
       const app = await start();

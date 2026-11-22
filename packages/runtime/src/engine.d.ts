@@ -464,6 +464,11 @@ interface Blob {
   stream(): ReadableStream<Uint8Array>;
 }
 declare var Blob: { new (blobParts?: Iterable<BlobPart>, options?: BlobPropertyBag): Blob; prototype: Blob };
+interface ImageBitmap {
+  readonly width: number;
+  readonly height: number;
+  close(): void;
+}
 
 interface File extends Blob {
   readonly name: string;

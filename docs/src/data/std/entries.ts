@@ -4,6 +4,7 @@ import { collections } from "./collections";
 import { encoding } from "./encoding";
 import { ffi } from "./ffi";
 import { gpu } from "./gpu";
+import { image } from "./image";
 import { memory } from "./memory";
 import { network } from "./network";
 import { numeric } from "./numeric";
@@ -38,6 +39,8 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "C functions of a library the app ships or the system has, called from JS without a Rust build. Only the libraries sk.config.json lists under `permissions.ffi` load. A fault in the library ends the app; for your own native code, write a [native module](/embedding/native-modules/).",
   "skathi:memory":
     "Native memory JS reads and writes without a copy and frees when it says so: buffers the host allocates, an arena that frees a frame's buffers at once, and strided views over them. FFI, `skathi:binary` and `skathi:gpu` take the buffers as they are.",
+  "skathi:image":
+    "Image files decoded and encoded on worker threads, without a canvas: PNG, JPEG, WebP, GIF and BMP in, PNG, JPEG and WebP out, every frame of an animation, and decoded pixels in native memory that JS reads without a copy.",
   "skathi:gpu":
     "WGSL structs described once: the layout of a uniform, storage or vertex buffer, the declaration for the shader, and a writer that puts values at the right offsets; and two things every WebGPU app writes again, GPU pass timing and reading a texture or a buffer back. It goes with [WebGPU](/web-platform/webgpu/).",
   "skathi:text":
@@ -61,6 +64,7 @@ export const entries: readonly StdEntry[] = [
   ...encoding,
   ...ffi,
   ...memory,
+  ...image,
   ...gpu,
   ...text,
   ...time,

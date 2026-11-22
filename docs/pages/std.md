@@ -1,7 +1,7 @@
 ---
 title: Skathi modules
 label: skathi:* modules
-description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, native memory, strings, time, units and collections."
+description: "The modules every Skathi host provides under the skathi: prefix, each export with its own page: ending and restarting the app, its version, the Skathi it runs on, the operating system, the network, fixed-width numbers, TOML, binary data, encodings, C libraries, native memory, images, strings, time, units and collections."
 section: Reference
 order: 6
 since: "0.7"
@@ -31,6 +31,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:encoding`](#skathiencoding)       | Hex, Base32, Base64, legacy text encodings and MIME types                             |
 | [`skathi:ffi`](#skathiffi)                 | `dlopen()`: C functions of the libraries the config allows, `struct()`, callbacks     |
 | [`skathi:memory`](#skathimemory)           | `NativeBuffer`, `Arena`, `MemoryView`: native memory without a copy, freed on demand  |
+| [`skathi:image`](#skathiimage)             | `ImageDecoder`, `ImageEncoder`, `Image`: image files decoded and encoded off-thread   |
 | [`skathi:gpu`](#skathigpu)                 | `wgsl` types, `struct()`, `GpuTimer`, `readTexture()`, `readBuffer()` for WebGPU      |
 | [`skathi:text`](#skathitext)               | `StringBuilder`, `StringReader`, `StringWriter`, `TextDiff`, `TextSearch`, `Glob`     |
 | [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `Timer` |
@@ -51,7 +52,7 @@ platforms differ, what each one does.
 - **Classes are not globals.** `BitSet`, `TimeSpan` and the rest exist only as imports, so they
   never clash with a name in your code or in a library.
 - **Bytes.** Where bytes are taken, any `ArrayBuffer`, typed array or `DataView` works, and in
-  `skathi:binary` and `skathi:ffi` a [`NativeBuffer`](/std/native-buffer/) too.
+  `skathi:binary`, `skathi:ffi` and `skathi:image` a [`NativeBuffer`](/std/native-buffer/) too.
 - **Time.** Where a time is taken, it is milliseconds or a [`TimeSpan`](/std/time-span/).
 - **The `app*` objects.** `skathi:app` also exports `appTray`, `appShell`, `appWindow` and the rest.
   They have their own references: [App APIs](/app-api/) and the [Window API](/window-api/).

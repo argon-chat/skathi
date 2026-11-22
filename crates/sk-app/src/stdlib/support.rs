@@ -15,6 +15,7 @@ pub(super) const SYNTAX_ERROR: u32 = 3;
 
 pub(super) const KIND_STRING: u32 = 5;
 pub(super) const KIND_BIGINT: u32 = 7;
+pub(super) const KIND_FUNCTION: u32 = 9;
 
 pub(super) const TA_U32: u32 = 7;
 pub(super) const TA_F64: u32 = 9;

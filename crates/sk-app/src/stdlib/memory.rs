@@ -133,6 +133,29 @@ impl Region {
         Region::fresh(bytes.len(), Some(bytes))
     }
 
+    /// The bytes as a `Vec` without a copy, when this region is the whole of a chunk nothing else
+    /// holds and the chunk was allocated as a `Vec` would be; the region back otherwise.
+    pub(crate) fn into_vec(self) -> Result<Vec<u8>, Region> {
+        if self.offset != 0 || self.chunk.layout.align() != 1 {
+            return Err(self);
+        }
+        let len = self.len;
+        match Arc::try_unwrap(self.chunk) {
+            Ok(chunk) => {
+                let chunk = ManuallyDrop::new(chunk);
+                // SAFETY: the chunk is ours alone, and its memory came from the global allocator
+                // with alignment 1 and `layout.size()` bytes, as a `Vec<u8>` of that capacity holds;
+                // a zero size never allocated, which a `Vec` of capacity 0 does not free either.
+                Ok(unsafe { Vec::from_raw_parts(chunk.ptr.as_ptr(), len, chunk.layout.size()) })
+            }
+            Err(chunk) => Err(Region {
+                chunk,
+                offset: 0,
+                len,
+            }),
+        }
+    }
+
     pub fn ptr(&self) -> *mut u8 {
         // SAFETY: `offset + len` is within the chunk.
         unsafe { self.chunk.ptr.as_ptr().add(self.offset) }
@@ -419,6 +442,15 @@ pub(crate) unsafe fn lend(g: *mut c_void, v: u64) -> Result<Option<Region>, &'st
 pub(crate) unsafe fn make(g: *mut c_void, region: Region) -> Option<u64> {
     report(g, region.len);
     wrap(g, region)
+}
+
+/// An `ArrayBuffer` over `region` with no `NativeBuffer` around it, detached to let go of it early.
+/// `fresh` tells the collector about memory it has not been told of yet.
+pub(super) unsafe fn array_buffer(g: *mut c_void, region: &Region, fresh: bool) -> Option<u64> {
+    if fresh {
+        report(g, region.len);
+    }
+    external(g, region)
 }
 
 /// Rust code kept the memory it was lent: the `NativeBuffer` is freed as far as JS is concerned.

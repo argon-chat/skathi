@@ -33,6 +33,7 @@ mod types;
 pub use bytes::Bytes;
 pub use host_context::{HostContext, HostCookie, SameSite};
 pub use host_file::HostFile;
+pub(crate) use module::pool_run;
 pub use module::{Declared, Function, IntoModule, Job, Module, Task, Typed};
 pub use native_buffer::NativeBuffer;
 pub use serde;

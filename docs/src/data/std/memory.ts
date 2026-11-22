@@ -50,7 +50,7 @@ buffer.free(): void`,
     notes: [
       "The memory lives until `free()` or until the buffer is collected, whichever comes first. The collector is told the size, but it runs when it decides to: free a large buffer as soon as you are done with it.",
       "After `free()` no JS view can reach the memory: views of a detached buffer have length 0, a read or a write through a `DataView` throws a `TypeError`, and a write through a typed array goes nowhere.",
-      "Passing a freed buffer to `BinaryReader`, an FFI call, `NativePointer.of()` or a `MemoryView` throws `InvalidStateError`. A `BinaryReader` made before throws it from its next read.",
+      "Passing a freed buffer to `BinaryReader`, an FFI call, `NativePointer.of()`, an `ImageDecoder` or a `MemoryView` throws `InvalidStateError`. A `BinaryReader` made before throws it from its next read.",
       "An FFI call takes a `NativeBuffer` for a `buffer` parameter. A callback that frees it during the call does not free it under the library: the memory goes back once the call returns.",
       "A nonblocking FFI call works on the memory in place, without the copy a typed array gets. Until it settles, `buffer` is detached, as after a transfer, and the buffer cannot be passed anywhere else; afterwards `buffer` is a new `ArrayBuffer` over the same memory. Make views again after the call.",
       "`buffer.transfer()` moves the memory to the new `ArrayBuffer`, and the `NativeBuffer` counts as freed.",

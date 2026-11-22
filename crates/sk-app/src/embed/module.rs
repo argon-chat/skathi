@@ -596,7 +596,7 @@ pub(crate) type Executor = Arc<dyn Fn(Job) + Send + Sync + 'static>;
 const POOL_THREADS: usize = 4;
 static POOL: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
 
-fn pool_run(job: Job) {
+pub(crate) fn pool_run(job: Job) {
     let sender = POOL.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));

@@ -11,6 +11,7 @@ mod binary;
 mod collections;
 mod encoding;
 mod ffi;
+mod image;
 pub(crate) mod memory;
 mod os;
 mod runtime;
@@ -20,9 +21,14 @@ mod time;
 mod toml;
 mod units;
 
-pub(crate) use ffi::pump as pump_ffi;
 #[cfg(feature = "native-aot")]
 pub(crate) use runtime::set_app_native;
+
+/// Settles the promises of nonblocking FFI calls and image work that finished on other threads.
+pub(crate) fn pump() {
+    ffi::pump();
+    image::pump();
+}
 
 unsafe fn frozen(g: *mut c_void, object: u64) -> u64 {
     let freeze = get(g, get(g, host::global(g), "Object"), "freeze");
@@ -41,6 +47,7 @@ pub(crate) fn install(rt: &JsRuntime) {
         collections::install(g, std);
         encoding::install(g, std);
         ffi::install(g, std);
+        image::install(g, std);
         memory::install(g, std);
         text::install(g, std);
         time::install(g, std);

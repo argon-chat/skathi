@@ -14,6 +14,7 @@ export const categories = [
   "skathi:encoding",
   "skathi:ffi",
   "skathi:memory",
+  "skathi:image",
   "skathi:gpu",
   "skathi:text",
   "skathi:time",
