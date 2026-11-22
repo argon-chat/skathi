@@ -1,0 +1,67 @@
+[package]
+name = "compare-skathi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["minimal"]
+minimal = ["skathi/prod", "skathi/icu-root", "skathi/no-devtools"]
+full = ["skathi/default"]
+aot = ["skathi/native-aot"]
+trimmed = ["skathi/no-wasm"]
+direct = []
+
+[dependencies]
+skathi = { path = "../../../crates/skathi", default-features = false }
+
+[build-dependencies]
+embed-resource = "=3.0.11"
+
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
+skathi-taffy = { path = "../../../vendor/taffy" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "symbols"
+
+[profile.release.package]
+compare-skathi.opt-level = 3
+sk-app.opt-level = 3
+sk-runtime.opt-level = 3
+sk-tree.opt-level = 3
+sk-css.opt-level = 3
+sk-elements.opt-level = 3
+sk-effects.opt-level = 3
+skathi-gpui.opt-level = 3
+skathi-gpui-windows.opt-level = 3
+skathi-gpui-wgpu.opt-level = 3
+skathi-gpui-refineable.opt-level = 3
+skathi-gpui-sum-tree.opt-level = 3
+skathi-gpui-collections.opt-level = 3
+skathi-gpui-util.opt-level = 3
+skathi-gpui-scheduler.opt-level = 3
+skathi-taffy.opt-level = 3
+sk-resample.opt-level = 3
+sk-yuv.opt-level = 3
+image.opt-level = 3
+png.opt-level = 3
+zune-jpeg.opt-level = 3
+zune-inflate.opt-level = 3
+image-webp.opt-level = 3
+fdeflate.opt-level = 3
+miniz_oxide.opt-level = 3
+tiny-skia.opt-level = 3
+tiny-skia-path.opt-level = 3
+rubato.opt-level = 3
+fixed-resample.opt-level = 3
+symphonia-core.opt-level = 3
+symphonia-codec-vorbis.opt-level = 3
+symphonia-bundle-mp3.opt-level = 3
+symphonia-codec-aac.opt-level = 3

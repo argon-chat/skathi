@@ -1,0 +1,9 @@
+skathi-min: 70.8 MiB (74,205,184 bytes) in 1 files, zip 28.7 MiB (30,068,961 bytes)
+    compare-skathi.exe 74,205,184
+skathi-full: 96.9 MiB (101,635,584 bytes) in 1 files, zip 42.9 MiB (45,018,073 bytes)
+    compare-skathi.exe 101,635,584
+electron: 357.0 MiB (374,352,846 bytes) in 73 files, zip 155.0 MiB (162,482,444 bytes)
+tauri: 4.1 MiB (4,294,656 bytes) in 1 files, zip 1.7 MiB (1,784,453 bytes)
+    compare-tauri.exe 4,294,656
+tauri nsis installer: 1.33 MiB
+webview2 runtime 157.0.4341.46: 878.2 MiB in 918 files

@@ -1,0 +1,9 @@
+{"run":1,"scheme":"balanced","pressure":"nominal","tier":0,"attempt":1,"frames":723,"elapsed_ms":10008,"fps":72.24220623501199,"cpu_pct":100.30227250655531,"system_cpu_pct":10.89982951964653}
+{"run":1,"scheme":"saving","pressure":"nominal","tier":1,"attempt":1,"frames":333,"elapsed_ms":10005,"fps":33.28335832083958,"cpu_pct":37.025347188501506,"system_cpu_pct":12.250364243771061}
+{"run":1,"scheme":"saving","pressure":"critical","tier":2,"attempt":1,"frames":162,"elapsed_ms":10004,"fps":16.193522590963614,"cpu_pct":21.246114996114997,"system_cpu_pct":15.264492369959882}
+{"run":2,"scheme":"saving","pressure":"nominal","tier":1,"attempt":1,"frames":310,"elapsed_ms":10003,"fps":30.99070278916325,"cpu_pct":43.634248036458835,"system_cpu_pct":13.3855281416845}
+{"run":2,"scheme":"saving","pressure":"critical","tier":2,"attempt":2,"frames":192,"elapsed_ms":10004,"fps":19.192323070771693,"cpu_pct":22.071358986848516,"system_cpu_pct":19.843848987540767}
+{"run":2,"scheme":"balanced","pressure":"nominal","tier":0,"attempt":1,"frames":918,"elapsed_ms":10010,"fps":91.70829170829171,"cpu_pct":100.30378582494191,"system_cpu_pct":16.029660741990483}
+{"run":3,"scheme":"saving","pressure":"critical","tier":2,"attempt":1,"frames":188,"elapsed_ms":10009,"fps":18.783095214307124,"cpu_pct":19.329583089811027,"system_cpu_pct":13.092384015571401}
+{"run":3,"scheme":"balanced","pressure":"nominal","tier":0,"attempt":1,"frames":788,"elapsed_ms":10012,"fps":78.70555333599681,"cpu_pct":99.99515175021817,"system_cpu_pct":15.349455175028881}
+{"run":3,"scheme":"saving","pressure":"nominal","tier":1,"attempt":1,"frames":310,"elapsed_ms":10004,"fps":30.987604958016792,"cpu_pct":37.42242800349074,"system_cpu_pct":18.00910610541574}

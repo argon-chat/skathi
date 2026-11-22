@@ -1,0 +1,49 @@
+{
+  "date": "2026-11-22",
+  "os": "Microsoft Windows 11 Pro Insider Preview",
+  "os_build": "29683",
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "cores": 16,
+  "logical_cpus": 32,
+  "installed_ram_bytes": 103079215104.0,
+  "graphics": [
+    {
+      "name": "NVIDIA GeForce RTX 5070",
+      "driver": "32.0.16.1692",
+      "width": 2560,
+      "height": 1440,
+      "hz": 164
+    },
+    {
+      "name": "NVIDIA GeForce RTX 3070 Ti",
+      "driver": "32.0.16.1692",
+      "width": 2560,
+      "height": 1440,
+      "hz": 164
+    },
+    {
+      "name": "AMD Radeon(TM) Graphics",
+      "driver": "32.0.21043.1005",
+      "width": null,
+      "height": null,
+      "hz": null
+    }
+  ],
+  "windows_power_scheme": "Power Scheme GUID: 9c4fe4d6-637b-4f7f-8996-3d4e1eaa542f  (Ultimate Performance)",
+  "skathi_revision": "2a884cbe9f6dcef6766bde995566757652f70e89",
+  "bun": "1.4.4",
+  "node": "v24.19.0",
+  "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "electron": "45.3.3",
+  "tauri": "2.12.6",
+  "wry": "0.57.2",
+  "vue": "3.5.45",
+  "vite": "8.3.8",
+  "comparison_runs": 5,
+  "profile_runs": 3,
+  "native_runs": 5,
+  "power_runs": 3,
+  "max_prelaunch_system_cpu_pct": 10,
+  "max_average_system_cpu_pct": 20,
+  "standalone_memory_runs": 3
+}

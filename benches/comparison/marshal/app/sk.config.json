@@ -1,0 +1,10 @@
+{
+  "name": "compare-bench",
+  "intl": "invariant",
+  "window": {
+    "title": "Marshal",
+    "width": 480,
+    "height": 240,
+    "titleBarStyle": "default"
+  }
+}

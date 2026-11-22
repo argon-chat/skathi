@@ -1,0 +1,2 @@
+{"app":"electron","run":1,"attempt":1,"reason":"Window did not finish scrolling"}
+{"app":"electron","run":2,"attempt":1,"reason":"System CPU stayed above 10% for three minutes"}

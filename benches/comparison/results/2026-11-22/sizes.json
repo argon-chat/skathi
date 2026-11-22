@@ -1,0 +1,46 @@
+{
+  "jit": {
+    "files": 1,
+    "bytes": 77334528,
+    "zip_bytes": 31285122
+  },
+  "full": {
+    "files": 1,
+    "bytes": 104773120,
+    "zip_bytes": 46227942
+  },
+  "aot": {
+    "files": 2,
+    "bytes": 81212416,
+    "zip_bytes": 32731876
+  },
+  "trimmed": {
+    "files": 2,
+    "bytes": 66784768,
+    "zip_bytes": 26531965
+  },
+  "tauri": {
+    "files": 1,
+    "bytes": 4267008,
+    "zip_bytes": 1761404
+  },
+  "electron": {
+    "files": 73,
+    "bytes": 374352866,
+    "zip_bytes": 162482455
+  },
+  "nsis_bytes": 1379857,
+  "evergreen": {
+    "version": "157.0.4341.60",
+    "files": 918,
+    "bytes": 920683993,
+    "installer_bytes": 294099168,
+    "installer_sha256": "47bc51387aff95c1275ce38cfbbb5fbab99b43b33214049877bbcdbcc7a970d5"
+  },
+  "fixed": {
+    "runtime": "Microsoft.WebView2.FixedVersionRuntime.157.0.4341.60.x64",
+    "files": 257,
+    "bytes": 711058264,
+    "cab_bytes": 310954844
+  }
+}

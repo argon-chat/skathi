@@ -1,0 +1,2 @@
+{"app":"standalone-default","run":0,"attempt":1,"reason":"System CPU stayed above 10% for three minutes"}
+{"app":"standalone-default","run":0,"attempt":2,"reason":"System CPU stayed above 10% for three minutes"}

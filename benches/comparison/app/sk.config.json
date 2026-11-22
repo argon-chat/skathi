@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/@skathi-native/runtime/sk.config.schema.json",
+  "name": "skathi-app",
+  "productName": "Compare Skathi",
+  "version": "0.1.0",
+  "platforms": ["windows"],
+  "publishDevtools": false,
+  "intl": "invariant",
+  "window": {
+    "title": "Compare",
+    "width": 760,
+    "height": 520,
+    "titleBarStyle": "default"
+  },
+  "assets": ["assets"],
+  "windows": {
+    "exeName": "compare-skathi",
+    "icon": "icon.png"
+  }
+}

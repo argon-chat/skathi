@@ -1,0 +1,20 @@
+{
+  "name": "compare-electron",
+  "productName": "compare-electron",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "vite build",
+    "package": "electron-packager . compare-electron --platform=win32 --arch=x64 --out=../../../target/comparison/apps --overwrite --asar --ignore=\"^/(src|node_modules|out|index\\.html|vite\\.config)\""
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@vitejs/plugin-vue": "^6",
+    "electron": "45.3.3",
+    "vite": "8.3.8",
+    "vue": "3.5.45"
+  },
+  "type": "module"
+}
