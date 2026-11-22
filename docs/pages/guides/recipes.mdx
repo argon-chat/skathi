@@ -1,0 +1,114 @@
+---
+title: Recipes
+label: Recipes
+description: "Short, complete answers to things a desktop app does: open the files it was started with, handle a deep link, show the window on a global shortcut, badge the icon, remember the theme, open and save a file, react to going offline, fill an About box, open a link in the browser."
+section: Guides
+order: 19
+---
+
+import Sample from "../../src/components/Sample.astro";
+
+Each recipe is one file you can copy. They use no framework, so the same file works in a Vue and in
+a Svelte app: call the function where the app starts, and keep what a template shows in a `ref` or
+`$state`. Every recipe links to the reference for the platforms and the edge cases.
+
+## Open the files the app was started with
+
+A file dropped on the app's icon, or passed on the command line, arrives in
+[`appLaunch.paths`](/app-api/launch-argv/). With [`"singleInstance": true`](/window-api/config-single-instance/)
+in sk.config.json a later launch does not start a second copy: its files arrive in the
+[`launch`](/app-api/launch-event/) event of the one that is running.
+
+<Sample src="recipes/openFiles.ts" />
+
+The paths come from whoever started the app, so treat them as input: check the extension and that
+the file opens before trusting its contents.
+
+## Handle a deep link
+
+A link such as `notes://open/42` in a browser or a chat starts the app, or reaches the running one.
+[`registerProtocol()`](/app-api/launch-register-protocol/) claims the scheme for the current user;
+the link is [`appLaunch.url`](/app-api/launch-url/) at start and `url` of the `launch` event later.
+
+<Sample src="recipes/deepLink.ts" />
+
+Custom schemes work on Windows. On macOS and Linux `registerProtocol()` throws, which the recipe
+ignores, and no link arrives. A link is input too: route only the paths the app knows.
+
+## Show the window on a global shortcut
+
+[`appHotkeys`](/app-api/app-hotkeys/) fires while another app has the focus. Keys are Windows
+virtual-key codes on every platform, so the same binding works on macOS.
+
+<Sample src="recipes/showHotkey.ts" />
+
+Call the function it returns to stop listening. On macOS the user has to grant Accessibility access
+first: [`appHotkeys.status()`](/app-api/hotkeys-status/) says whether they have. Let the user choose
+the chord with [`captureOnce()`](/app-api/hotkeys-capture-once/) when the default can collide with
+another app's.
+
+## Show an unread count
+
+[`navigator.setAppBadge()`](/web-platform/navigator-set-app-badge/) puts a number on the taskbar
+button or the Dock icon, on Windows and macOS. The tray tooltip says the same in words.
+
+<Sample src="recipes/unreadBadge.ts" />
+
+[`appTray.set()`](/app-api/tray-set/) replaces the whole tray: an app with a tray menu passes the
+menu in the same call.
+
+## Remember the theme
+
+[`appWindow.theme`](/window-api/theme/) forces light or dark, or follows the system. It starts at
+`system` on every launch, so the choice is the app's to keep.
+
+<Sample src="recipes/themeChoice.ts" />
+
+Call `restoreTheme()` before the app mounts, so the first frame is already in the right scheme.
+Stylesheets need nothing special: `@media (prefers-color-scheme: dark)` follows the property.
+
+## Open and save a text file
+
+The [File System Access](/web-platform/file-system-access/) pickers are the system's dialogs. A
+handle keeps the access, so the second save writes to the same file without asking again.
+
+<Sample src="recipes/textFile.ts" />
+
+A picker rejects when the user cancels it, which is why both calls are in a `try`. Open one from a
+click or a key press: it needs a user activation, as in a browser.
+
+## React to going offline
+
+[`network`](/std/network/) knows more than `navigator.onLine`: a Wi-Fi network without internet and
+a hotel's sign-in page are both "online" to the browser API.
+
+<Sample src="recipes/offline.ts" />
+
+This is the operating system's opinion. An app that needs its own server still finds out by asking
+its server.
+
+## Fill an About box
+
+<Sample src="recipes/about.ts" />
+
+[`app.getVersion()`](/std/app-get-version/) is the app's version from sk.config.json or
+package.json, [`runtime.version`](/std/runtime/) is Skathi's, and [`os`](/std/os/) describes the
+machine. The same three lines belong in a bug report.
+
+## Open a link in the browser
+
+`window.open()` never opens a window in a Skathi app: an `http:`, `https:` or `mailto:` URL goes to
+the system browser or mail client. A plain [`<a href>`](/elements/links/) does the same without code.
+
+<Sample src="recipes/openLink.ts" />
+
+The check matters when the address comes from a message or a server. For other schemes, and for
+opening a file or showing it in its folder, there is [`appShell`](/app-api/app-shell/).
+
+## More
+
+Longer walkthroughs of the same kind are guides of their own:
+[hiding to the tray on close](/guides/closing-and-background/#hide-instead-of-quitting),
+[asking before closing with unsaved changes](/guides/closing-and-background/#ask-before-closing-with-unsaved-changes),
+[remembering the window's place](/guides/windows/), [a custom title bar](/guides/custom-title-bar/)
+and [dropping files into the window](/guides/file-drop/).
