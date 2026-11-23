@@ -26,7 +26,7 @@ bun add -d @skathi-native/test @types/bun
 
 Keep the tests outside `src/`, with a tsconfig of their own that has `"types": ["bun"]`: the app's code runs in Skathi, not in Bun.
 
-In a checkout of the Skathi repository the harness runs the checkout's debug host instead, built with `cargo build -p sk-app` (with `--target` on macOS and Linux), and `app` can name a folder under `apps/`.
+In a checkout of the Skathi repository the harness runs the checkout's debug host instead, built with `cargo build -p sk-app` (with `--target` on macOS and Linux), and `app` can name a folder under `apps/`. `SK_TEST_HOST=<path>` runs another dev host instead of either.
 
 ### What works where
 
@@ -116,7 +116,7 @@ Pass a locator to `expect` and you get matchers that retry until they pass or th
 
 To check how something looks, assert on the class or attribute that drives the style, as the test above does with `done`, rather than on the style itself.
 
-When an assertion fails, its message shows what it expected, what it last saw and the app's last log lines, with the path to a screenshot of the window and to the host's full log. Screenshots go to `.sk-test-artifacts/`, which is emptied at the start of each run. `app.screenshot(path?)` takes one yourself.
+When an assertion fails, its message shows what it expected, what it last saw and the app's last log lines, with the path to a screenshot of the window and to the host's full log. Screenshots go to `.sk-test-artifacts/`; each run clears what finished runs left there. `app.screenshot(path?)` takes one yourself.
 
 ## Evaluating code in the app
 

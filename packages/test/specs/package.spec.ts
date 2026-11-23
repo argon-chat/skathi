@@ -39,9 +39,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 afterAll(async () => {
   for (const app of opened) await app.close();
-  for (const child of strays) {
-    if (child.pid) killTree(child.pid);
-  }
+  for (const child of strays) killTree(child);
   await sleep(300);
   rmSync(OUT, { recursive: true, force: true });
 });
@@ -372,7 +370,7 @@ describe("the no-devtools host", () => {
         .split(/\r?\n/)
         .filter((l) => /LISTENING/.test(l) && l.trim().split(/\s+/).pop() === String(child.pid));
       bunExpect(listening).toEqual([]);
-      if (child.pid) killTree(child.pid);
+      killTree(child);
     },
     T,
   );

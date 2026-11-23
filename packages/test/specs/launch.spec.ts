@@ -2,7 +2,7 @@
 // user's second double-click (or the shell, for a `myapp://` link) would start it.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,9 +25,9 @@ const scratch = join(realpathSync(tmpdir()), `sk-test-launch-${process.pid}`);
 mkdirSync(scratch, { recursive: true });
 const doc = join(scratch, "x.txt");
 writeFileSync(doc, "a document the second launch names\n");
-const extra: number[] = [];
+const extra: ChildProcess[] = [];
 afterAll(() => {
-  for (const pid of extra) killTree(pid);
+  for (const child of extra) killTree(child);
   app.close();
   rmSync(scratch, { recursive: true, force: true });
 });
@@ -265,7 +265,7 @@ describe("opting out", () => {
         stdio: "ignore",
       });
       child.unref();
-      if (child.pid) extra.push(child.pid);
+      extra.push(child);
       let exited: number | null = null;
       child.on("exit", (code) => (exited = code ?? -1));
       await new Promise((res) => setTimeout(res, 2_500));

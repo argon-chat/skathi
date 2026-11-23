@@ -3,7 +3,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { loadAppConfig } from "@skathi-native/cli/cli/config";
@@ -128,36 +128,73 @@ export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<st
   const existing = builds.get(key);
   if (existing) return existing;
 
-  const promise = (async () => {
-    const name = appNameOf(entry);
-    const cache = cacheDistFor(entry);
-    const manifest = join(cache, "manifest.json");
-    const stamp = existsSync(manifest) ? statSync(manifest).mtimeMs : 0;
-    const newest = newestInput(entry);
-    if (stamp && newest <= stamp) {
-      log(`[sk-test] ${name}: dist is current (newest source ${new Date(newest).toISOString()})`);
-      return cache;
-    }
-    log(`[sk-test] ${name}: building ${stamp ? "(sources moved)" : "(no dist yet)"} …`);
-    const t0 = Date.now();
-    const r = spawnSync("bun", ["--no-install", "build.ts", entry, cache], {
-      cwd: CLI_PKG,
-      encoding: "utf8",
-      timeout: BUILD_TIMEOUT_MS,
-    });
-    if (r.status !== 0 || !existsSync(manifest)) {
-      throw new Error(
-        `build failed for ${entry}${r.error ? ` (${r.error.message})` : ""}\n` +
-          `  bun build.ts ${entry} ${cache}  (cwd ${CLI_PKG})\n` +
-          `${r.stdout ?? ""}${r.stderr ?? ""}`,
-      );
-    }
-    log(`[sk-test] ${name}: built in ${Date.now() - t0} ms`);
-    return cache;
-  })();
+  const promise = (async () => withCacheLock(cacheDistFor(entry), () => build(entry, log)))();
 
   builds.set(key, promise);
   return promise;
+}
+
+function build(entry: string, log: BuildLog): string {
+  const name = appNameOf(entry);
+  const cache = cacheDistFor(entry);
+  const manifest = join(cache, "manifest.json");
+  const stamp = existsSync(manifest) ? statSync(manifest).mtimeMs : 0;
+  const newest = newestInput(entry);
+  if (stamp && newest <= stamp) {
+    log(`[sk-test] ${name}: dist is current (newest source ${new Date(newest).toISOString()})`);
+    return cache;
+  }
+  log(`[sk-test] ${name}: building ${stamp ? "(sources moved)" : "(no dist yet)"} …`);
+  const t0 = Date.now();
+  const r = spawnSync("bun", ["--no-install", "build.ts", entry, cache], {
+    cwd: CLI_PKG,
+    encoding: "utf8",
+    timeout: BUILD_TIMEOUT_MS,
+  });
+  if (r.status !== 0 || !existsSync(manifest)) {
+    throw new Error(
+      `build failed for ${entry}${r.error ? ` (${r.error.message})` : ""}\n` +
+        `  bun build.ts ${entry} ${cache}  (cwd ${CLI_PKG})\n` +
+        `${r.stdout ?? ""}${r.stderr ?? ""}`,
+    );
+  }
+  log(`[sk-test] ${name}: built in ${Date.now() - t0} ms`);
+  return cache;
+}
+
+/**
+ * Runs `fn` holding `<dir>.lock`, for a cache dist under {@link WORK_DIR}: runs in other processes
+ * build into and copy out of the same one.
+ */
+function withCacheLock<T>(dir: string, fn: () => T): T {
+  if (!resolve(dir).toLowerCase().startsWith(resolve(WORK_DIR).toLowerCase())) return fn();
+  const lock = `${dir}.lock`;
+  const owner = join(lock, "pid");
+  mkdirSync(dirname(lock), { recursive: true });
+  const deadline = Date.now() + BUILD_TIMEOUT_MS;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    let holder = 0;
+    try {
+      holder = Number(readFileSync(owner, "utf8"));
+    } catch {}
+    if ((holder && !runnerAlive(holder)) || Date.now() > deadline) {
+      rmSync(lock, { recursive: true, force: true });
+      continue;
+    }
+    Bun.sleepSync(50);
+  }
+  try {
+    writeFileSync(owner, String(process.pid));
+    return fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
 }
 
 let slotSeq = 0;
@@ -168,13 +205,23 @@ export function allocateSlot(cacheDist: string, label: string): string {
   const dir = join(WORK_DIR, "slots", `${slug}-${process.pid}-${++slotSeq}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dirname(dir), { recursive: true });
-  cpSync(cacheDist, dir, { recursive: true });
+  withCacheLock(cacheDist, () => cpSync(cacheDist, dir, { recursive: true }));
   rmSync(join(dir, "devtools.json"), { force: true });
   return dir;
 }
 
-/** The dev host a launch runs: the checkout's debug build, else the one `sk dev` uses (cached or downloaded). */
+/**
+ * The dev host a launch runs: `SK_TEST_HOST`, else the checkout's debug build, else the one `sk dev`
+ * uses (cached or downloaded).
+ */
 export async function devHostExe(log: BuildLog = () => {}): Promise<string> {
+  const named = process.env.SK_TEST_HOST;
+  if (named) {
+    const exe = resolve(named);
+    if (!existsSync(exe)) throw new Error(`SK_TEST_HOST=${named}: no such file`);
+    await requireCurrentHost(exe, "rebuild the host SK_TEST_HOST names, or unset SK_TEST_HOST");
+    return exe;
+  }
   if (CHECKOUT) {
     if (existsSync(DEFAULT_EXE)) await requireCurrentHost(DEFAULT_EXE, `cargo build -p sk-app --target ${TARGET}`);
     return DEFAULT_EXE;

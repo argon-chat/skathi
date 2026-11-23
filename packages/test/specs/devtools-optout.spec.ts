@@ -24,7 +24,7 @@ const MARKER = "Skathi devtools";
 const strays: ChildProcess[] = [];
 
 afterAll(() => {
-  for (const child of strays) if (child.pid) killTree(child.pid);
+  for (const child of strays) killTree(child);
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

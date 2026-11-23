@@ -20,7 +20,7 @@ import {
   WORK_DIR,
 } from "./dist";
 import { artifactPath } from "./artifacts";
-import { killTree } from "./reap";
+import { killsOf, killTree } from "./reap";
 
 export interface LaunchOptions {
   /**
@@ -146,6 +146,7 @@ export class SkApp {
     readonly timeout: number,
     private readonly keepAlive: boolean,
     private readonly logFd: number,
+    readonly startedAt: number,
   ) {
     this.locatorDefaults = { timeout };
   }
@@ -180,8 +181,45 @@ export class SkApp {
   }
 
   /** One devtools command, unwrapped to its `data`. */
-  send(cmd: string, args: Record<string, unknown> = {}, timeoutMs?: number): Promise<any> {
-    return this.wire.send(cmd, args, timeoutMs);
+  async send(cmd: string, args: Record<string, unknown> = {}, timeoutMs?: number): Promise<any> {
+    try {
+      return await this.wire.send(cmd, args, timeoutMs);
+    } catch (e) {
+      if (e instanceof SkCommandError || this.#closed) throw e;
+      const deadline = Date.now() + 1_000;
+      while (this.child.exitCode === null && this.child.signalCode === null && Date.now() < deadline) await sleep(25);
+      const report = this.exitReport();
+      if (!report) throw e;
+      throw new Error(`${(e as Error).message}\n${report}`);
+    }
+  }
+
+  /** Why the host ended while this run still had it open, or `null` while it runs. */
+  exitReport(): string | null {
+    const { exitCode: code, signalCode: signal } = this.child;
+    if (code === null && signal === null) return null;
+    let log = "";
+    try {
+      log = readFileSync(this.hostLog, "utf8");
+    } catch {}
+    const kills = killsOf(this.pid, this.startedAt);
+    const lines = [`${this.label}: the host (pid ${this.pid}) exited with ${code ?? signal} in the middle of the run.`];
+    if (kills.length) lines.push(`  another test run killed it:\n${kills.map((k) => `    ${k}`).join("\n")}`);
+    else if (signal !== null)
+      lines.push(
+        "  This process killed it: `bun test` ends every process spawned inside a test or hook when a\n" +
+          "  test or hook times out. Launch a host that later tests share at the top level of the file.",
+      );
+    else if (code !== null && code >= 0xc0000000)
+      lines.push(`  it crashed: unhandled exception 0x${code.toString(16).toUpperCase()}.`);
+    else if (code === 1 && !/^\[(shutdown|crash)\]/m.test(log)) {
+      lines.push(
+        "  The host logs a reason before every exit of its own, and there is none: it was ended from outside\n" +
+          "  (TerminateProcess; `taskkill /F` exits a process with code 1) by a script, another run or a person.",
+      );
+    }
+    lines.push(hostLogTail(this.hostLog, 12), `  host log: ${this.hostLog}`);
+    return lines.join("\n");
   }
 
   query(selector: string): Promise<{ count: number; nodes: NodeInfo[]; warnings?: string[] }> {
@@ -353,7 +391,7 @@ export class SkApp {
     } catch {}
     if (!this.keepAlive) {
       try {
-        killTree(this.pid);
+        killTree(this.child);
       } catch {}
     }
     try {
@@ -492,12 +530,14 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   // A test window opens BEHIND the person's windows and never takes the foreground: no activation
   // at open, no `window.focus()` raise or taskbar flash (crates/sk-app/src/quiet.rs).
   if (env.SK_WINDOW_FOCUS === undefined) env.SK_WINDOW_FOCUS = "never";
+  if (env.SK_CRASH_DUMPS === undefined) env.SK_CRASH_DUMPS = join(WORK_DIR, "crashdumps");
   Object.assign(env, options.env ?? {});
   if (env.SK_MEDIA_CAPTURE?.trim().toLowerCase() !== "fake") env.SK_MEDIA_CAPTURE = "deny";
   // Never the real cursor: the person at the machine keeps it. `fake` simulates the lock in gpui.
   if (env.SK_POINTER_LOCK?.trim().toLowerCase() !== "fake") env.SK_POINTER_LOCK = "deny";
 
   log(`[sk-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
+  const startedAt = Date.now();
   const child = spawn(exe, options.args ?? [], {
     cwd: REPO,
     detached: true,
@@ -512,8 +552,14 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   }
 
   let exited: number | null = null;
+  let app: SkApp | null = null;
   child.on("exit", (code) => {
     exited = code ?? -1;
+    // Not every exit: plenty of specs make the app quit on purpose.
+    if (app && !app.closed && (code === null || code === 1 || code >= 0xc0000000)) {
+      const report = app.exitReport();
+      if (report) console.error(`[sk-test] ${report}`);
+    }
   });
 
   if (options.packaged !== undefined) slotDir = packagedSlot(options.packaged, pid);
@@ -521,7 +567,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   const deadline = Date.now() + launchTimeout;
   const fail = (why: string) => {
     try {
-      killTree(pid);
+      killTree(child);
       closeSync(logFd);
     } catch {}
     return new Error(
@@ -562,7 +608,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   }
 
   const wire = new Wire(handshake, Math.max(timeout, 15_000));
-  const app = new SkApp(
+  app = new SkApp(
     wire,
     child,
     pid,
@@ -573,6 +619,7 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
     timeout,
     options.keepAlive ?? false,
     logFd,
+    startedAt,
   );
   live.add(app);
 

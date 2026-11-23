@@ -2,7 +2,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { stagedExe } from "../src/dist";
 import { killTree, launch, REPO, type SkApp, WINDOWS } from "../src/index";
@@ -13,10 +13,10 @@ const user32 =
   process.platform === "win32"
     ? dlopen("user32.dll", { IsWindowVisible: { args: [FFIType.u64], returns: FFIType.i32 } })
     : null;
-const extra: number[] = [];
+const extra: ChildProcess[] = [];
 const apps: SkApp[] = [];
 afterAll(async () => {
-  for (const pid of extra) killTree(pid);
+  for (const child of extra) killTree(child);
   for (const a of apps) await a.close();
   user32?.close();
 });
@@ -119,7 +119,7 @@ describe("closing the app", () => {
         stdio: "ignore",
       });
       second.unref();
-      if (second.pid) extra.push(second.pid);
+      extra.push(second);
       let exited: number | null = null;
       second.on("exit", (code) => (exited = code ?? -1));
       // It was not handed to the closing instance (that would exit 0 at once)…

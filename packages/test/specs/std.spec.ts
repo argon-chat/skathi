@@ -5,9 +5,9 @@ import { killTree, launch, type SkApp } from "../src/index";
 
 const T = 60_000;
 const apps: SkApp[] = [];
-const started: number[] = [];
+const started = new Map<number, RegExp>();
 afterAll(async () => {
-  for (const pid of started) killTree(pid);
+  for (const [pid, image] of started) killTree(pid, image);
   for (const a of apps) await a.close();
 });
 
@@ -642,7 +642,7 @@ describe("skathi:* modules", () => {
     async () => {
       const app = await start();
       const pid = Number(await app.eval("__SK_TEST_STD__.lingering()"));
-      started.push(pid);
+      started.set(pid, /^bun\.exe$/i);
       const alive = () => {
         try {
           process.kill(pid, 0);
@@ -657,6 +657,7 @@ describe("skathi:* modules", () => {
       const deadline = Date.now() + 5_000;
       while (alive() && Date.now() < deadline) await Bun.sleep(50);
       expect(alive()).toBe(false);
+      started.delete(pid);
     },
     T,
   );
@@ -683,7 +684,7 @@ describe("skathi:* modules", () => {
       expect(await ended(app)).toBe(0);
       const pid = /app\.restart: started process (\d+)/.exec(readFileSync(app.hostLog, "utf8"))?.[1];
       expect(pid).toBeDefined();
-      started.push(Number(pid));
+      started.set(Number(pid), new RegExp(`^sk-app-sktest-${process.pid}\\.exe$`, "i"));
     },
     T,
   );

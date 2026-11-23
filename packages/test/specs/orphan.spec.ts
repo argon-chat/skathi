@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { findOrphans, reapOrphans, REPO } from "../src/index";
+import { findOrphans, killTree, reapOrphans, REPO } from "../src/index";
 
 const T = 120_000;
 const RUNNER = join(import.meta.dir, "_orphan-runner.ts");
 
-type Run = { runner: number; host: number; slot: string };
+type Run = { child: ChildProcess; runner: number; host: number; slot: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,11 +17,11 @@ function alive(pid: number): boolean {
 }
 
 /**
- * `TerminateProcess` on exactly this pid — no `/T`, or the tree kill would answer the question for
+ * `TerminateProcess` on exactly this runner — no `/T`, or the tree kill would answer the question for
  * us.
  */
-function terminate(pid: number) {
-  spawnSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "ignore" });
+function terminate(run: Run) {
+  run.child.kill();
 }
 
 async function goneWithin(pid: number, ms: number): Promise<boolean> {
@@ -35,9 +35,10 @@ async function goneWithin(pid: number, ms: number): Promise<boolean> {
 
 const runs: Run[] = [];
 afterAll(() => {
+  // Most of these ended inside their test, and a pid is recycled: only what is still ours goes.
   for (const r of runs) {
-    terminate(r.runner);
-    spawnSync("taskkill", ["/PID", String(r.host), "/T", "/F"], { stdio: "ignore" });
+    killTree(r.child);
+    killTree(r.host, `sk-app-sktest-${r.runner}.exe`);
     try {
       rmSync(r.slot, { recursive: true, force: true });
     } catch {}
@@ -57,7 +58,7 @@ async function startRunner(keep: boolean): Promise<Run> {
   for (;;) {
     const m = /RUNNER (\d+) HOST (\d+) SLOT (.+)/.exec(out);
     if (m) {
-      const run = { runner: Number(m[1]), host: Number(m[2]), slot: m[3]!.trim() };
+      const run = { child, runner: Number(m[1]), host: Number(m[2]), slot: m[3]!.trim() };
       runs.push(run);
       return run;
     }
@@ -74,7 +75,7 @@ describe.skipIf(process.platform !== "win32")("orphans", () => {
     async () => {
       const run = await startRunner(false);
       expect(alive(run.host)).toBe(true);
-      terminate(run.runner);
+      terminate(run);
       expect(await goneWithin(run.host, 5_000)).toBe(true);
     },
     T,
@@ -88,7 +89,7 @@ describe.skipIf(process.platform !== "win32")("orphans", () => {
       const live = await startRunner(false);
       const orphan = await startRunner(true);
 
-      terminate(orphan.runner);
+      terminate(orphan);
       await sleep(1_500);
       expect(alive(orphan.host)).toBe(true);
 
@@ -100,7 +101,7 @@ describe.skipIf(process.platform !== "win32")("orphans", () => {
       expect(await goneWithin(orphan.host, 5_000)).toBe(true);
       expect(alive(live.host)).toBe(true);
 
-      terminate(live.runner);
+      terminate(live);
       expect(await goneWithin(live.host, 5_000)).toBe(true);
     },
     T,
