@@ -205,7 +205,7 @@ Smaller additions:
 
 - **`<sk-layer>`.** A native layer of your own under an element of the page, for a program that must present by itself, such as a video player. See [a native layer under the page](/embedding/native-layer/).
 - **The window's display.** `on_display_change` reports the display a window is on, its HDR headroom and white levels. See [native frames](/embedding/native-frames/).
-- **`Builder::backdrop`** fixes the main window's backdrop, and `Builder::metal_drawable_count` sets the layer's drawable count on macOS.
+- **`Builder::backdrop`** fixes the main window's backdrop, and `Builder::metal_frame_source` keeps macOS windows on one source of drawables.
 - **`skathi::NativeBuffer`** in a [native module](/embedding/native-modules/): a parameter of that type borrows the page's memory for the call, a `&mut [u8]` writes into it, and a task takes it over until it finishes. `Handle::emit_into()` moves an event's data to the page where `emit_to()` copies it.
 - **`Builder::allow_process`** is the embedder's side of `permissions.process`.
 

@@ -39,7 +39,8 @@ pub struct Composition {
 }
 
 /// A native layer under one `<sk-layer>` element. Its methods run on the UI thread inside the
-/// page's paint: return quickly and do not call back into Skathi. Dropped when the element goes.
+/// page's paint or present: return quickly and do not call back into Skathi. Dropped when the
+/// element goes.
 pub trait Layer {
     /// The element is painted in `host` for the first time, in another window (or its view moved
     /// to another native window or superview), or after the window rebuilt what it composes

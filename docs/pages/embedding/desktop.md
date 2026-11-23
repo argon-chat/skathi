@@ -147,21 +147,33 @@ let builder = skathi::Builder::new().backdrop("transparent");
 
 The names are those of [`backdrop`](/window-api/config-window-backdrop/) in sk.config.json; another name makes `spawn()` return `Error::Backdrop`. Pop-out windows keep the backdrop their `<SkWindow>` asks for.
 
-## The drawable maximum on macOS
+## The frame source on macOS
 
-This sets the `maximumDrawableCount` of every window's Metal layer, 3 by default:
+A macOS window gets the drawables it draws into in one of two ways: from a `CAMetalDisplayLink` update, which hands out a drawable early enough for the frame to reach the screen on time, or from the layer's `nextDrawable`, which waits for one when all are in use. `Builder::metal_frame_source` chooses, for every window:
 
 ```rust
-let builder = skathi::Builder::new().metal_drawable_count(2);
+let builder = skathi::Builder::new().metal_frame_source(skathi::MetalFrameSource::NextDrawable);
 ```
 
-**It has not been shown to save memory.** The maximum caps how many drawables the layer hands out at once, not how many window-sized buffers Core Animation keeps resident, and every measurement so far found the same number at 2 as at 3:
+| Value                | What it does                                                                                                                                                                                                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Auto` (the default) | The display link paces frames. A resize, an activation, a surface frame after a pause and a view moved to another window are drawn at once with `nextDrawable`; so is a covered window that keeps drawing, and a link that stops delivering is replaced by `CVDisplayLink`. |
+| `DisplayLink`        | Only the display link. Those frames wait for its next update instead.                                                                                                                                                                                                       |
+| `NextDrawable`       | Only `nextDrawable`, paced by `CVDisplayLink`. No display link is created.                                                                                                                                                                                                  |
 
-- An embedder's player window on an M3 Max (screen-sized, 3456 × 1994, 2160p PQ video in an [`<sk-layer>`](/embedding/native-layer/)): the layer read back a maximum of 2, and `footprint -v` still listed five `CAMetalLayer Display Drawable` regions, 133 MiB, as at 3, while playing, paused, and at 1080p. Frame pacing was no worse at 2.
-- A plain window on an Apple Silicon Mac mini (macOS 26.4, 1600 × 1000 at scale 1): three resident drawables drawn with `nextDrawable` and four with `CAMetalDisplayLink`, at 2 and at 3, idle and repainting every frame. After a resize, buffers of the old size stayed resident beside the new ones until the total was back at that number. These ran with the screen locked, where the display link delivered only a few frames a second.
+What a pinned source costs, from what each path does:
 
-A window that switches between `CAMetalDisplayLink` and `nextDrawable` (a resize, activation, a surface frame after a pause) keeps one buffer more; see [GPU frames, Windows and macOS](/embedding/native-frames/#gpu-frames-windows-and-macos).
+- **`DisplayLink`.** During a live resize the frame at the new size is drawn after the window has taken that size, not in the same Core Animation transaction, so an edge can show the previous frame stretched for up to a refresh. The first frame after an activation and a surface frame after a pause come up to one refresh later. A covered window that asked to keep drawing gets only the frames the link still delivers while covered, which can be none. A link that stops delivering is created again rather than replaced. Without `CAMetalDisplayLink` (macOS 13) the window uses `nextDrawable`.
+- **`NextDrawable`.** A frame that finds every drawable in use waits on the UI thread for the compositor to release one, and present feedback has no target time from a link, so frame pacing under load can be worse than with the display link. This is the path macOS 13 always takes.
 
-The setting is kept as a cap. With two drawables a frame that misses its refresh leaves the next one waiting for a buffer, so measure your own app before you use it. 2 and 3 are the only values; another makes `spawn()` return `Error::DrawableCount`. It applies to every window and does nothing on Windows and Linux.
+Resident `CAMetalLayer Display Drawable` buffers in `footprint -v`, on an Apple Silicon Mac mini with macOS 26.4, a 1600 × 1000 window at scale 1, with the screen locked:
+
+| Value          | Repainting every frame | Idle | After a resize        |
+| -------------- | ---------------------- | ---- | --------------------- |
+| `Auto`         | 3                      | 3    | 3 (2 of the old size) |
+| `DisplayLink`  | 4                      | 4    | 4 (2 of the old size) |
+| `NextDrawable` | 3                      | 3    | 3 (2 of the old size) |
+
+A locked screen counts as covering the window, so `Auto` drew through `nextDrawable` there and measured as `NextDrawable`; a visible window under `Auto` switches between the two paths and kept four or five on another machine (see [GPU frames, Windows and macOS](/embedding/native-frames/#gpu-frames-windows-and-macos)). Under `DisplayLink` the link delivered only a few frames a second while locked. Measure your own window before you pin a source. It does nothing on Windows and Linux.
 
 Next: [Dev loop and devtools](/embedding/dev-loop/).

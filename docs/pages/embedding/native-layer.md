@@ -99,6 +99,17 @@ What Skathi commits is the visual: its offset, clip and transform. If the layer'
 
 When your program moves that view, or the content view holding it, into a window of its own, the page is redrawn there and `attach` is called again with the same `window` and `handle` and the new `native_window`, then `place`. Read the view's `superview` again then: a view of yours that moved with the content view needs nothing more; one left behind belongs under the view's new superview.
 
+### A window Skathi did not create
+
+While the page's view is in a window of yours, Skathi's window follows the view there:
+
+- **Goes to your window:** what the page asks of its window (title, size and position, minimize, zoom, fullscreen, always on top, opacity, size limits, the backdrop's window colour), and what Skathi reads from it (bounds, screen and scale, appearance, key status, occlusion, the mouse position).
+- **Heard from your window by notification:** moves, screen changes, occlusion, becoming and resigning key, and entering and leaving fullscreen. Skathi does not replace your window's delegate.
+- **Stays with Skathi's own window:** its delegate, window tabs, restorable state, the page's own request to close, and Skathi's titlebar chrome (button positions, titlebar transparency, the fullscreen desktop picture), which your window keeps as you set it.
+- **Not handled:** files dragged onto your window, which reach the page only in Skathi's own window.
+
+Skathi's own window keeps no part in the page meanwhile: its delegate is ignored, and closing it closes only that empty window. Skathi retains your window while the view is in it. Move the view back, or remove it, before Skathi closes its window: the page ends with that window.
+
 **Linux.** `attach` and `place` are called, but there is no place under the page yet.
 
 Next: [Window, tray and hotkeys](/embedding/desktop/).

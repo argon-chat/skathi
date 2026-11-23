@@ -296,8 +296,6 @@ pub enum Error {
     Module(String),
     /// [`Builder::backdrop`] was given a name that is not a backdrop.
     Backdrop(String),
-    /// [`Builder::metal_drawable_count`] was given a count other than 2 or 3.
-    DrawableCount(u8),
     Spawn(std::io::Error),
     /// AppKit needs the process main thread: use `run_on_main_thread`.
     MainThreadRequired,
@@ -325,10 +323,6 @@ impl std::fmt::Display for Error {
             Error::Backdrop(name) => write!(
                 f,
                 "unknown backdrop {name:?}: expected mica, mica-alt, tabbed, acrylic, blur, transparent or none"
-            ),
-            Error::DrawableCount(count) => write!(
-                f,
-                "metal_drawable_count({count}): Core Animation takes 2 or 3"
             ),
             Error::Spawn(e) => write!(f, "the Skathi thread did not start: {e}"),
             Error::MainThreadRequired => write!(
@@ -377,7 +371,20 @@ pub struct Builder {
     process: Vec<crate::permissions::ProcessEntry>,
     backdrop: Option<String>,
     display_change: Option<DisplayChange>,
-    drawable_count: Option<u8>,
+    metal_frame_source: MetalFrameSource,
+}
+
+/// macOS: where a window's frames get their Metal drawables ([`Builder::metal_frame_source`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MetalFrameSource {
+    /// `CAMetalDisplayLink` paces frames; a resize, an activation, a surface frame after a pause,
+    /// a covered window and a stalled link draw with `nextDrawable` instead.
+    #[default]
+    Auto,
+    /// Only `CAMetalDisplayLink` (macOS 14+; `nextDrawable` where it does not exist).
+    DisplayLink,
+    /// Only `nextDrawable`, paced by `CVDisplayLink`.
+    NextDrawable,
 }
 
 type DisplayChange = Box<dyn Fn(u64, SurfaceDisplay) + Send + Sync>;
@@ -412,7 +419,7 @@ impl Builder {
             process: Vec::new(),
             backdrop: None,
             display_change: None,
-            drawable_count: None,
+            metal_frame_source: MetalFrameSource::Auto,
         }
     }
 
@@ -562,11 +569,11 @@ impl Builder {
         self
     }
 
-    /// macOS: the `maximumDrawableCount` of every window's Metal layer, 2 or 3 (the default). It
-    /// caps drawables in flight, not the buffers Core Animation keeps resident, so it has not been
-    /// shown to save memory, and 2 can cost frame pacing. Elsewhere it does nothing.
-    pub fn metal_drawable_count(mut self, count: u8) -> Self {
-        self.drawable_count = Some(count);
+    /// macOS: where every window's frames get their drawables. [`MetalFrameSource::Auto`] (the
+    /// default) switches between the display link and `nextDrawable`; a pinned source never takes
+    /// the other path. Elsewhere it does nothing.
+    pub fn metal_frame_source(mut self, source: MetalFrameSource) -> Self {
+        self.metal_frame_source = source;
         self
     }
 
@@ -768,12 +775,15 @@ impl Builder {
         {
             return Err(Error::Backdrop(name.to_string()));
         }
-        if let Some(count) = self.drawable_count {
-            if !(2..=3).contains(&count) {
-                return Err(Error::DrawableCount(count));
+        gpui::metal_frame_source::set_metal_frame_source(match self.metal_frame_source {
+            MetalFrameSource::Auto => gpui::metal_frame_source::MetalFrameSource::Auto,
+            MetalFrameSource::DisplayLink => {
+                gpui::metal_frame_source::MetalFrameSource::DisplayLink
             }
-            gpui::drawables::set_metal_drawable_count(count);
-        }
+            MetalFrameSource::NextDrawable => {
+                gpui::metal_frame_source::MetalFrameSource::NextDrawable
+            }
+        });
         gpui::present_feedback::set_feedback_after_composition(self.exact_frame_feedback);
         match self.display_change.take() {
             Some(changed) => sk_tree::surface::watch_displays(true, changed),
