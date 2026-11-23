@@ -1,10 +1,12 @@
 //! A `<video>` that goes away takes its Media Foundation pipeline with it.
 //!
 //! Releasing an `IMFMediaEngine` without `Shutdown()` leaves its pipeline (source, decoders,
-//! work-queue threads) alive. This mounts and drops a clip several times and counts the process's threads.
+//! work-queue threads) alive. This mounts and drops a clip many times and checks that the threads
+//! the process gains do not grow with the number of elements.
 
 #![cfg(windows)]
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -28,9 +30,66 @@ extern "system" {
     fn Thread32Next(snapshot: isize, entry: *mut ThreadEntry32) -> i32;
     fn CloseHandle(handle: isize) -> i32;
     fn GetCurrentProcessId() -> u32;
+    fn OpenThread(access: u32, inherit: i32, id: u32) -> isize;
+    fn GetModuleHandleExW(flags: u32, address: *const u16, module: *mut isize) -> i32;
+    fn GetModuleFileNameW(module: isize, name: *mut u16, size: u32) -> u32;
 }
 
-fn threads() -> usize {
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQueryInformationThread(
+        thread: isize,
+        class: u32,
+        info: *mut usize,
+        length: u32,
+        returned: *mut u32,
+    ) -> i32;
+}
+
+/// The module a thread started in (`ntdll.dll` for the OS thread pool's workers).
+fn start_module(thread_id: u32) -> String {
+    const THREAD_QUERY_INFORMATION: u32 = 0x40;
+    const THREAD_QUERY_SET_WIN32_START_ADDRESS: u32 = 9;
+    const FROM_ADDRESS: u32 = 0x4;
+    const UNCHANGED_REFCOUNT: u32 = 0x2;
+    let handle = unsafe { OpenThread(THREAD_QUERY_INFORMATION, 0, thread_id) };
+    if handle == 0 {
+        return "?".into();
+    }
+    let mut start = 0usize;
+    let status = unsafe {
+        NtQueryInformationThread(
+            handle,
+            THREAD_QUERY_SET_WIN32_START_ADDRESS,
+            &mut start,
+            std::mem::size_of::<usize>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    let mut module = 0isize;
+    if status < 0
+        || unsafe {
+            GetModuleHandleExW(
+                FROM_ADDRESS | UNCHANGED_REFCOUNT,
+                start as *const u16,
+                &mut module,
+            )
+        } == 0
+    {
+        return "?".into();
+    }
+    let mut name = [0u16; 260];
+    let n = unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) };
+    let path = String::from_utf16_lossy(&name[..n as usize]);
+    path.rsplit('\\')
+        .next()
+        .unwrap_or(&path)
+        .to_ascii_lowercase()
+}
+
+/// The process's threads, counted by the module each started in.
+fn threads() -> BTreeMap<String, usize> {
     const TH32CS_SNAPTHREAD: u32 = 0x4;
     let me = unsafe { GetCurrentProcessId() };
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
@@ -44,16 +103,20 @@ fn threads() -> usize {
         delta_priority: 0,
         flags: 0,
     };
-    let mut n = 0;
+    let mut by_module = BTreeMap::new();
     let mut ok = unsafe { Thread32First(snap, &mut e) };
     while ok != 0 {
         if e.owner_process_id == me {
-            n += 1;
+            *by_module.entry(start_module(e.thread_id)).or_insert(0) += 1;
         }
         ok = unsafe { Thread32Next(snap, &mut e) };
     }
     unsafe { CloseHandle(snap) };
-    n
+    by_module
+}
+
+fn total(by_module: &BTreeMap<String, usize>) -> usize {
+    by_module.values().sum()
 }
 
 /// Mounts a `<video>` on the clip, plays it until it has a frame (or 5 s), and drops it; `false` when there is no media backend.
@@ -81,13 +144,14 @@ fn one_element(clip: &PathBuf) -> bool {
     true
 }
 
-fn settled_threads(ms: u64) -> usize {
+/// The thread census once the count has stopped falling for a while, or after `ms`.
+fn settled_threads(ms: u64) -> BTreeMap<String, usize> {
     let until = Instant::now() + Duration::from_millis(ms);
     let mut last = threads();
     while Instant::now() < until {
         std::thread::sleep(Duration::from_millis(100));
         let now = threads();
-        if now >= last && Instant::now() + Duration::from_millis(300) >= until {
+        if total(&now) >= total(&last) && Instant::now() + Duration::from_millis(300) >= until {
             return now;
         }
         last = now;
@@ -108,14 +172,26 @@ fn an_element_that_goes_leaves_no_pipeline_behind() {
         return;
     }
     let baseline = settled_threads(1500);
-    const CYCLES: usize = 6;
+    const CYCLES: usize = 4;
     for _ in 0..CYCLES {
         assert!(one_element(&clip));
     }
-    let after = settled_threads(3000);
-    eprintln!("threads: {baseline} after the first element, {after} after {CYCLES} more");
+    let after_few = settled_threads(3000);
+    for _ in 0..2 * CYCLES {
+        assert!(one_element(&clip));
+    }
+    let after_many = settled_threads(3000);
+    eprintln!("threads by start module: {baseline:?} after the first element");
+    eprintln!(
+        "  {after_few:?} after {CYCLES} more, {after_many:?} after {} more",
+        2 * CYCLES
+    );
+    // Thread pools grow and shrink with load by themselves; a pipeline left behind per element
+    // adds at least one thread for each of the last 2 * CYCLES elements.
+    let (few, many) = (total(&after_few), total(&after_many));
     assert!(
-        after <= baseline + 3,
-        "{CYCLES} elements mounted and dropped took the process from {baseline} to {after} threads"
+        many < few + CYCLES,
+        "{} more elements took the process from {few} to {many} threads",
+        2 * CYCLES
     );
 }
