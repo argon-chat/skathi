@@ -638,6 +638,21 @@ describe("skathi:* modules", () => {
   );
 
   test(
+    "skathi:process hands a flood of output to JS frame after frame, under the engine's lock",
+    async () => {
+      const app = await start();
+      const size = 48 * 1024 * 1024;
+      await app.eval(`__SK_TEST_STD__.startFlood(${size}); 1`);
+      let raw = "null";
+      for (const end = Date.now() + 25_000; raw === "null" && Date.now() < end; await Bun.sleep(100)) {
+        raw = String(await app.eval("String(__SK_TEST_STD__.floodResult)"));
+      }
+      expect(JSON.parse(raw)).toEqual({ length: size });
+    },
+    T,
+  );
+
+  test(
     "a child of skathi:process does not outlive the app",
     async () => {
       const app = await start();

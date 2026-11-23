@@ -189,6 +189,24 @@ impl JsRuntime {
         stats
     }
 
+    /// Runs `f` holding the engine's API lock, as [`Self::pump`] does. Host code that settles
+    /// into JS from outside the pump needs it: Bun's JavaScriptCore C API does not take the lock
+    /// itself, and an allocation that starts a collection without it fails a release assertion.
+    /// Releasing the lock runs the microtask checkpoint.
+    pub fn locked<R>(&self, f: impl FnOnce() -> R) -> R {
+        struct Unlock(*mut c_void);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                // SAFETY: the lock `locked` took on this thread.
+                unsafe { ffi::redjs_unlock(self.0) };
+            }
+        }
+        // SAFETY: the context is live and this is its VM thread.
+        unsafe { ffi::redjs_lock(self.ctx.raw()) };
+        let _unlock = Unlock(self.ctx.raw());
+        f()
+    }
+
     pub fn drain_errors(&self) -> Vec<JsError> {
         ERRORS.with(|e| e.borrow_mut().drain(..).collect())
     }

@@ -62,6 +62,16 @@ export async function processes() {
   };
 }
 
+/** Reads `size` bytes a child writes as fast as it can: every frame hands JS a fresh chunk. */
+export async function flood(size: number): Promise<number> {
+  const writer = `const b = Buffer.alloc(65536, 120); for (let left = ${size}; left > 0; left -= b.length) process.stdout.write(b.subarray(0, Math.min(left, b.length)))`;
+  const child = Process.spawn("bun", ["-e", writer]);
+  let length = 0;
+  for await (const chunk of child.stdout!) length += chunk.length;
+  await child.exited;
+  return length;
+}
+
 /** A child that would outlive the app if nothing ended it. */
 export function lingering(): number {
   return Process.spawn("bun", ["-e", "setTimeout(() => {}, 120000)"], { stdout: "ignore", stderr: "ignore" }).pid;

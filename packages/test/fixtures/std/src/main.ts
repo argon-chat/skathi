@@ -12,7 +12,7 @@ import { image } from "./image";
 import { memory, memoryWorkers } from "./memory";
 import { connection, connectionChange } from "./network";
 import { callbacks, ffi, structs, threads, workers } from "./native";
-import { lingering, processes } from "./process";
+import { flood, lingering, processes } from "./process";
 import { collections } from "./structures";
 import { diffs, diffsAsync, text } from "./strings";
 
@@ -137,6 +137,13 @@ Object.assign(globalThis, {
       void processes().then(
         (result) => (this.processResult = JSON.stringify({ result })),
         (error: unknown) => (this.processResult = JSON.stringify({ failed: String(error) })),
+      );
+    },
+    floodResult: null as string | null,
+    startFlood(size: number) {
+      void flood(size).then(
+        (length) => (this.floodResult = JSON.stringify({ length })),
+        (error: unknown) => (this.floodResult = JSON.stringify({ failed: String(error) })),
       );
     },
     lingering: () => lingering(),
