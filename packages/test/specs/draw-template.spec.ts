@@ -53,6 +53,23 @@ async function crashAndRestart() {
   app = await host();
 }
 
+/** The editor, whatever a failed test or attempt left behind: a host that is gone, an open replay. */
+async function backToEditor() {
+  if (app.child.exitCode !== null || app.child.signalCode !== null) app = await host();
+  await attrIs("ready", "true");
+  if ((await attr("player")) === "true") {
+    await press("Escape");
+    await click("#player-close");
+    await attrIs("player", "false");
+  }
+  if (["recording", "paused"].includes(await attr("recording"))) {
+    await click("#recording");
+    await click("#record-stop");
+    await attrIs("recording", "stopped");
+    await click("#recording");
+  }
+}
+
 async function until<T>(read: () => Promise<T>, matches: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 10_000;
   for (;;) {
@@ -389,6 +406,7 @@ describe.if(SCREENSHOTS)("the draw template", () => {
       await line(...xy, { tiltX: 25, tiltY: -12, twist: 22 });
       await attrIs("strokes", String(count));
     };
+    await backToEditor();
     await click("#menu");
     await click("#new-drawing");
     await attrIs("strokes", "0");
@@ -491,25 +509,34 @@ describe.if(SCREENSHOTS)("the draw template", () => {
     await app.answerDialog((await app.waitForDialog()).id, file);
     await attrIs("player", "true");
     const duration = Number(await attr("duration", "#player-transport"));
-    await app.eval(`window.__draw.seek(${duration})`);
+    await app.eval(
+      `globalThis.__seeked = false; window.__draw.seek(${duration}).then(() => globalThis.__seeked = true)`,
+    );
+    await until(async () => await app.eval("globalThis.__seeked"), Boolean);
     await attrIs("strokes", "11");
-    await Bun.sleep(250);
-    const last = readPng(await app.screenshot(join(dir, "last-frame.png")));
-    expect(last.width).toBe(source.width);
-    expect(last.height).toBe(source.height);
     const scale = source.width / Number(await app.eval("innerWidth"));
-    let different = 0,
-      painted = 0;
     const paper = source.at(Math.round(185 * scale), Math.round(140 * scale));
-    for (let y = Math.round(150 * scale); y < 490 * scale; y++)
-      for (let x = Math.round(220 * scale); x < 820 * scale; x++) {
-        const a = source.at(x, y),
-          b = last.at(x, y);
-        if (a.some((c, i) => Math.abs(c - paper[i]!) > 40)) painted++;
-        if (a.some((c, i) => Math.abs(c - b[i]!) > 12)) different++;
-      }
-    expect(painted).toBeGreaterThan(5000);
-    expect(different / painted).toBeLessThan(0.005);
+    // The renderer draws on its next animation frame after the seek settles.
+    const compared = await until(
+      async () => {
+        const last = readPng(await app.screenshot(join(dir, "last-frame.png")));
+        let different = 0,
+          painted = 0;
+        if (last.width !== source.width || last.height !== source.height)
+          return { size: [last.width, last.height], painted, ratio: 1 };
+        for (let y = Math.round(150 * scale); y < 490 * scale; y++)
+          for (let x = Math.round(220 * scale); x < 820 * scale; x++) {
+            const a = source.at(x, y),
+              b = last.at(x, y);
+            if (a.some((c, i) => Math.abs(c - paper[i]!) > 40)) painted++;
+            if (a.some((c, i) => Math.abs(c - b[i]!) > 12)) different++;
+          }
+        return { size: [last.width, last.height], painted, ratio: different / painted };
+      },
+      (c) => c.ratio < 0.005,
+    );
+    expect(compared.size).toEqual([source.width, source.height]);
+    expect(compared.painted).toBeGreaterThan(5000);
     await app.eval("window.__draw.seek(0)");
     await app.eval(
       "globalThis.__pauseResult = ''; window.__draw.play({ speed: 0.1 }).then(() => globalThis.__pauseResult = 'paused');window.__draw.pause()",
@@ -552,7 +579,7 @@ describe.if(SCREENSHOTS)("the draw template", () => {
     await app.expectNoErrors();
   }, 150_000);
   test("a hard kill during pen contact restores the durable live checkpoint", async () => {
-    await attrIs("ready", "true");
+    await backToEditor();
     await app.eval('__SK_WINDOW__.appWindow.theme = "light"');
     await click("#menu");
     await click("#new-drawing");

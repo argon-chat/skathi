@@ -2,9 +2,9 @@
 // handlers — and all three are idempotent.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, openSync, closeSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { Locator, type LocatorOptions } from "./locator";
 import { Wire, readHandshake, pingOnce, SkCommandError } from "./wire";
 import {
@@ -211,7 +211,16 @@ export class SkApp {
     const kills = killsOf(this.pid, this.startedAt);
     const lines = [`${this.label}: the host (pid ${this.pid}) exited with ${code ?? signal} in the middle of the run.`];
     if (kills.length) lines.push(`  another test run killed it:\n${kills.map((k) => `    ${k}`).join("\n")}`);
-    else if (signal !== null)
+    else if (signal !== null && CRASH_SIGNALS[signal]) {
+      lines.push(`  it crashed: ${signal} is ${CRASH_SIGNALS[signal]}.`);
+      const reports = crashReports(this.child.spawnfile, this.startedAt);
+      if (reports.length) lines.push(`  crash report:\n${reports.map((r) => `    ${r}`).join("\n")}`);
+      else if (process.platform === "darwin")
+        lines.push(
+          `  macOS writes its crash report (${basename(this.child.spawnfile)}-*.ips) to ~/Library/Logs/DiagnosticReports a few seconds later`,
+        );
+      else if (process.platform === "linux") lines.push("  a core dump, if the system keeps them: `coredumpctl list`");
+    } else if (signal !== null)
       lines.push(
         "  This process killed it: `bun test` ends every process spawned inside a test or hook when a\n" +
           "  test or hook times out. Launch a host that later tests share at the top level of the file.",
@@ -434,6 +443,31 @@ export class SkApp {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Signals a process gets from its own fault, not from whoever ended it. */
+const CRASH_SIGNALS: Record<string, string> = {
+  SIGTRAP: "a trap instruction: a failed release assertion (JavaScriptCore, WTF) or a Rust/C abort intrinsic",
+  SIGABRT: "an abort: a Rust panic that could not unwind, or abort() in native code",
+  SIGSEGV: "an invalid memory access",
+  SIGBUS: "an invalid memory access",
+  SIGILL: "an illegal instruction, often a trap compiled as one",
+  SIGFPE: "an arithmetic fault",
+};
+
+/** The crash reports macOS wrote for `exe` since `since`. */
+function crashReports(exe: string, since: number): string[] {
+  if (process.platform !== "darwin") return [];
+  const dir = join(homedir(), "Library", "Logs", "DiagnosticReports");
+  const name = basename(exe);
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.startsWith(`${name}-`) && f.endsWith(".ips"))
+      .map((f) => join(dir, f))
+      .filter((p) => statSync(p).mtimeMs >= since);
+  } catch {
+    return [];
+  }
+}
 
 function hostLogTail(path: string, lines = 25): string {
   try {

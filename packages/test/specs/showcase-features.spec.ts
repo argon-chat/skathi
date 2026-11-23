@@ -49,13 +49,18 @@ test("Files accepts disk files and exports both the originals and the current ed
   await ui(app.locator(".dropped-export")).toHaveText("Drag drop-example.txt out");
 
   async function dragToZone(selector: string) {
-    await app.eval(`globalThis.droppedNote = null;
+    // A retry after a failure finds the earlier drag still pending.
+    await app.send("drag-document", { kind: "cancel" }).catch(() => {});
+    await app.eval(`globalThis.droppedNote = null; globalThis.dragStarted = false;
+      document.addEventListener("dragstart", () => { globalThis.dragStarted = true; }, {once:true, capture:true});
       document.querySelector(".drop-zone").addEventListener("drop", async e => {
         const f = e.dataTransfer.files[0]; globalThis.droppedNote = [f.name, await f.text()];
       }, {once:true})`);
     await app.send("drag-document", { kind: "arm" });
     const down = await app.send("mouse", { kind: "down", selector });
     await app.send("mouse", { kind: "move", x: Number(down.x) + 9, y: Number(down.y), held: true });
+    // The move is coalesced into the next frame, whose dispatch starts the drag.
+    await waitFor("dragStarted");
     await app.send("drag-document", { kind: "enter", ...zone });
     expect((await app.send("drag-document", { kind: "over", ...zone })).dropEffect).toBe("copy");
     expect((await app.send("drag-document", { kind: "drop", ...zone })).dropEffect).toBe("copy");

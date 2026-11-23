@@ -1,7 +1,7 @@
 import { createApp, h, reactive } from "@skathi-native/runtime";
 
 const events: string[] = [];
-const frames = { play: 0 };
+const frames = { play: 0, toggle: 0 };
 const state = reactive({ toggle: false, extra: [] as { id: string; src: string; left: number }[] });
 (globalThis as unknown as { __SK_TEST_LOTTIE__: unknown }).__SK_TEST_LOTTIE__ = {
   events,
@@ -28,6 +28,7 @@ const lottie = (id: string, src: string, style: Record<string, string>, extra: R
     onLoopComplete: (e: CustomEvent<Detail>) => events.push(`loopComplete:${id}:${e.detail?.currentLoop}`),
     onComplete: (e: CustomEvent<Detail>) => events.push(`complete:${id}:${e.detail?.loops}`),
     ...(id === "play" ? { onEnterFrame: () => frames.play++ } : {}),
+    ...(id === "toggle" ? { onEnterFrame: () => frames.toggle++ } : {}),
   });
 
 createApp({

@@ -175,22 +175,21 @@ test(
       const tail = Math.min(buf.length, Math.round(rate * 0.01));
       let peak = 0, loud = 0, polls = 0, checked = 0, silent = 0, gap = 0, n = 0;
       let last = performance.now();
+      // currentTime advances once per device callback, as the callback starts: the analyser's
+      // newest sample can trail it by up to one callback.
+      let callback = Infinity, lastNow = ctx.currentTime;
+      const windows = [];
       const poll = setInterval(() => {
         const t = performance.now(); gap = Math.max(gap, t - last); last = t;
         const windowStart = ctx.currentTime - tail / rate;
         meter.getFloatTimeDomainData(buf);
         const windowEnd = ctx.currentTime;
+        if (windowEnd > lastNow) { callback = Math.min(callback, windowEnd - lastNow); lastNow = windowEnd; }
         let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; }
         if (p > peak) peak = p;
         if (p > 0.6) loud++;
-        // A delayed JS timer can leave a real gap between presses. Check the newest
-        // 10 ms only when a scheduled tone covers the window at its sustained gain.
-        if (starts.length && windowStart > starts[0] + 0.25 &&
-            starts.some(start => start + attack <= windowStart && windowEnd <= start + duration - release)) {
-          checked++;
-          let e = 0; for (let i = buf.length - tail; i < buf.length; i++) e += buf[i] * buf[i];
-          if (Math.sqrt(e / tail) < 0.005) silent++;
-        }
+        let e = 0; for (let i = buf.length - tail; i < buf.length; i++) e += buf[i] * buf[i];
+        windows.push([windowStart, windowEnd, Math.sqrt(e / tail)]);
         polls++;
       }, 10);
       const t0 = ctx.currentTime;
@@ -203,7 +202,17 @@ test(
       clearInterval(poll);
       const moved = ctx.currentTime - t0 > 1;
       ctx.close();
-      return { moved, presses: n, peak: Math.round(peak * 1000) / 1000, loud, checked, silent, polls, gapMs: Math.round(gap) };
+      const lead = Number.isFinite(callback) ? callback : 0;
+      // A delayed JS timer can leave a real gap between presses. A window counts only when a
+      // scheduled tone holds its sustained gain over it wherever in the last callback it was rendered.
+      for (const [windowStart, windowEnd, rms] of windows) {
+        if (windowStart - lead > starts[0] + 0.25 &&
+            starts.some(start => start + attack <= windowStart - lead && windowEnd <= start + duration - release)) {
+          checked++;
+          if (rms < 0.005) silent++;
+        }
+      }
+      return { moved, presses: n, peak: Math.round(peak * 1000) / 1000, loud, checked, silent, polls, gapMs: Math.round(gap), callbackMs: Math.round(lead * 10000) / 10 };
     })().then(v => { globalThis.__dial = JSON.stringify({ ok: v }); },
               e => { globalThis.__dial = JSON.stringify({ err: String(e && e.message) }); });
     'started'`);

@@ -124,9 +124,20 @@ test.skipIf(!SCREENSHOTS)(
     await app.eval("__SK_TEST_LOTTIE__.state.toggle = true; 'ok'");
     await until("#toggle left red", async () => step((await centres([b]))[0]!) !== "r", 5000);
     await app.eval("__SK_TEST_LOTTIE__.state.toggle = false; 'ok'");
-    await sleep(300);
+    // The pause lands with the next frame that syncs the element, which a slow host can take a
+    // while to reach; the frame it stops on is drawn and presented after that.
+    const entered = async () => Number(await app.eval("__SK_TEST_LOTTIE__.frames.toggle"));
+    let last = await entered();
+    let still = 0;
+    await until("#toggle stopped entering frames", async () => {
+      const now = await entered();
+      still = now === last ? still + 1 : 0;
+      last = now;
+      return still >= 3;
+    });
     const held = step((await centres([b]))[0]!);
     await sleep(1200);
+    expect(await entered()).toBe(last);
     expect(step((await centres([b]))[0]!)).toBe(held);
   },
   T,
