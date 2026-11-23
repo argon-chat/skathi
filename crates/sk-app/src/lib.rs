@@ -53,6 +53,7 @@ pub mod crash_window;
 mod dialogs;
 mod effect_quality;
 pub mod embed;
+mod fault;
 /// Audio processors written in Rust: DSP that runs in the audio callback, behind a node the
 /// app makes with `audioContext.loadNativeAudioWorklet(name)`.
 #[cfg(feature = "audio")]
@@ -988,7 +989,6 @@ fn on_device_loss(event: gpui_windows::DeviceLoss<'_>) {
                  The app has to close; update or reinstall the graphics driver if this repeats."
             );
             log::error!("{msg}");
-            eprintln!("[gpu] {msg}");
             shutdown::failed(msg.clone());
             payload::message_box(&msg);
         }
@@ -1005,6 +1005,7 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 pub fn run_exe() {
     #[cfg(target_os = "macos")]
     responsible::claim();
+    fault::install();
     // First, so a host whose runner is already gone never opens a window.
     owner::watch();
     // The one parse of the command line; consumers never read `std::env::args()`.

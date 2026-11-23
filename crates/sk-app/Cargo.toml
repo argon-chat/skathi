@@ -233,5 +233,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    # `MiniDumpWriteDump`, `SetUnhandledExceptionFilter` (src/fault.rs).
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
 ] }
 

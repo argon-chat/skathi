@@ -51,6 +51,9 @@ pub(crate) fn exit_code() -> i32 {
 /// it ended unclean.
 pub(crate) fn failed(why: String) {
     FAILED.store(true, Ordering::SeqCst);
+    let line = format!("[shutdown] the app will exit with code 1: {why}");
+    eprintln!("{line}");
+    sk_tree::log::record("shutdown", line);
     if crate::embed::active() {
         crate::embed::finished(false, why);
     }
@@ -92,8 +95,9 @@ pub fn begin(why: &'static str) {
                 return;
             }
             eprintln!(
-                "[shutdown] the teardown passed its {} s deadline; ending the process. {}",
+                "[shutdown] the teardown passed its {} s deadline; ending the process (exit code {}). {}",
                 DEADLINE.as_secs(),
+                exit_code(),
                 timeline()
             );
             terminate();
@@ -120,7 +124,11 @@ pub fn finish() -> ! {
             std::thread::park();
         }
     }
-    eprintln!("[shutdown] closed. {}", timeline());
+    eprintln!(
+        "[shutdown] closed. {}; exit code {}",
+        timeline(),
+        exit_code()
+    );
     // Embedded: the embedder's process goes on. This thread may not end —
     // its thread-locals are the JS realm, whose teardown this JSC build
     // fast-fails (sk-runtime's invariants) — so it reports and sleeps.

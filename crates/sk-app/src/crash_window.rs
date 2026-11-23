@@ -327,7 +327,6 @@ pub(crate) fn on_entry_failed(cx: &mut App) {
     );
     crate::shutdown::failed(format!("the app could not start: {reason}"));
     if decision == Decision::Log {
-        eprintln!("[crash] the app could not start: closing with exit code 1");
         cx.defer(|cx| quit(Action::Close, cx));
     }
     if decision != Decision::Dialog {
