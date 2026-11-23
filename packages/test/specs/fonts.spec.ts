@@ -187,3 +187,27 @@ describe("FontFace from script", () => {
     T,
   );
 });
+
+describe("text that no installed face covers", () => {
+  test(
+    "a long paragraph of it lays out without holding the frame",
+    async () => {
+      const started = Date.now();
+      // Supplementary Private Use Area-A: no system face and no face of this fixture has it.
+      await app.eval(`(() => {
+        const el = document.createElement("div");
+        el.id = "uncovered";
+        el.style.width = "400px";
+        el.textContent = "\\u{F0000} ".repeat(20000);
+        document.body.appendChild(el);
+        return 1;
+      })()`);
+      const height = (await app.query("#uncovered")).nodes[0]?.bounds?.h ?? 0;
+      const elapsed = Date.now() - started;
+      await app.eval(`document.getElementById("uncovered").remove(), 1`);
+      expect(height).toBeGreaterThan(0);
+      expect(elapsed).toBeLessThan(3_000);
+    },
+    T,
+  );
+});
