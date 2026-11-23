@@ -1,0 +1,248 @@
+---
+title: Skathi 0.8
+metaTitle: "Skathi 0.8: a rich text editor, a full text diff, and child processes"
+description: A native rich text element with marks, atoms and decorations, a full text diff with three-way merge and patches, vertical-align, child processes behind an allow-list, image decoding and native memory in the standard library, and apps that say why they could not start.
+date: 2026-11-23
+draft: true
+tags: [release, text, std, css]
+release:
+  version: "0.8.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.8.0 && bun add -d @skathi-native/cli@^0.8.0
+    - label: Rust program
+      command: cargo add skathi@0.8
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+
+Skathi 0.8 is about text. There is a native rich text element, `<sk-editor>`, for a chat composer with formatting, mentions and custom emoji in the field, or for an editor of your own, without `contenteditable`. `skathi:text` gets a complete diff: line, word and character changes, a three-way merge, and patches that can be parsed, cut down to a few lines and applied. Text fields report their caret, and `vertical-align` works. Beside the text work, the standard library learns to start programs, decode images and hold memory outside the JavaScript heap.
+
+<FeatureGrid label="What is new in 0.8">
+  <Feature icon="braces" title="Rich text" href="#a-rich-text-element" tone="pink">
+    `<sk-editor>`: marks, atoms, line blocks and decorations, styled in CSS.
+  </Feature>
+  <Feature icon="code" title="Diff and patches" href="#a-full-text-diff" tone="blue">
+    `TextDiff` with options, a three-way merge, and `Patch`.
+  </Feature>
+  <Feature icon="layers" title="Text fields" href="#text-fields" tone="lilac">
+    The caret from script, Shift+Enter, `maxlength`, one undo step per run of typing.
+  </Feature>
+  <Feature icon="shapes" title="vertical-align" href="#css" tone="yellow">
+    Every value, for elements in a line of text and for `<sub>` and `<sup>`.
+  </Feature>
+  <Feature icon="terminal" title="Child processes" href="#programs-from-js" tone="pink">
+    `skathi:process` starts the programs the config lists, without a shell.
+  </Feature>
+  <Feature icon="package" title="Images and memory" href="#images-and-memory" tone="blue">
+    `skathi:image` and `skathi:memory`, and `NativeBuffer` for native modules.
+  </Feature>
+  <Feature icon="plug" title="For embedders" href="#for-embedders" tone="lilac">
+    `<sk-layer>`, the window's display, a fixed backdrop.
+  </Feature>
+  <Feature icon="monitor" title="Startup errors" href="#an-app-that-cannot-start" tone="yellow">
+    An app that cannot start says why and exits.
+  </Feature>
+</FeatureGrid>
+
+## A rich text element
+
+[`<sk-editor>`](/elements/sk-editor/) is a native editing element. It owns the text, the layout, the caret, IME input and the undo history; your app decides what each piece of formatting means.
+
+A document is one string with three things over it:
+
+- **Marks** are named ranges that move with the text: `bold`, `code`, a `link` with its `href`.
+- **Atoms** are single characters where a real child element is drawn: a mention chip, a sticker, a custom emoji. The child is an ordinary element of your component, with its own events and styles.
+- **Decorations** are ranges and lines the app paints and the value does not contain: syntax colours, search hits, a spelling underline. Highlighting is the app's job, so the editor has no grammar of its own.
+
+Each line can also carry a block name such as `quote`, `code` or `h1`.
+
+```vue title="Composer.vue"
+<script setup lang="ts">
+import { ref } from "vue";
+
+const draft = ref<SkEditorValue>({ text: "", marks: [], atoms: [] });
+const emit = defineEmits<{ send: [value: SkEditorValue] }>();
+
+function onBeforeInput(e: InputEvent) {
+  if (e.inputType === "insertParagraph") {
+    e.preventDefault();
+    emit("send", draft.value);
+    draft.value = { text: "", marks: [], atoms: [] };
+  }
+}
+</script>
+
+<template>
+  <sk-editor v-model="draft" class="composer" placeholder="Message" @beforeinput="onBeforeInput" />
+</template>
+
+<style scoped>
+.composer::mark(bold) {
+  font-weight: 700;
+}
+.composer::mark(code) {
+  font-family: var(--mono);
+  background: var(--code-bg);
+}
+.composer::line(quote) {
+  padding-left: 12px;
+  border-left: 3px solid var(--accent);
+}
+</style>
+```
+
+- **Styled in CSS.** [`::mark()`](/css/pseudo-mark/), [`::line()`](/css/pseudo-line/) and [`::decoration()`](/css/pseudo-decoration/) select the pieces by name. A mark can change the font size, so a heading and body text share a line box correctly.
+- **Edits are transactions.** `dispatch()` applies a set of changes at once, and `selections` is an array, with one selection in this release.
+- **Events.** `beforeinput` is cancellable and names what is about to happen, `change` lists the edits as `{ from, to, insert }`, after undo and redo as well, so a model kept elsewhere can follow without comparing documents.
+- **Geometry.** `rectsFor()`, `caretRect()` and `positionAt()` place a popup at a mention or under the caret.
+- **Clipboard.** Copy and paste keep marks and atoms between editors of Skathi apps; other apps get the plain text.
+
+The element is built for documents of a few thousand characters. Large files, line numbers and several cursors are [in the works](https://github.com/argon-chat/skathi/issues/66).
+
+## A full text diff
+
+`TextDiff` in [`skathi:text`](/std/text-diff/) compared two texts line by line. It now takes options and answers in the shapes an editor needs.
+
+```ts
+import { TextDiff, Patch } from "skathi:text";
+
+const changes = TextDiff.changes(before, after, { algorithm: "histogram", inline: "words" });
+for (const change of changes) {
+  // lines [oldStart, oldEnd) became [newStart, newEnd); change.inline has the words that differ
+}
+
+const merged = TextDiff.merge(base, ours, theirs, { style: "diff3" });
+if (merged.conflicts.length) showConflicts(merged);
+```
+
+- **Algorithms.** `histogram` (the default), `myers` and `patience`, written for Skathi with no added dependency. Two files of 50,000 lines with 500 scattered changes compare in about 15 ms.
+- **Options.** Whitespace, case and line-ending rules, context lines, and inline changes by word or character.
+- **Off the JS thread.** `changesAsync()` returns a promise and computes on a worker.
+- **Three-way merge.** `merge()` with `merge`, `diff3` and `zdiff3` conflict styles, and the conflicts as line ranges.
+
+[`Patch`](/std/patch/) reads and writes unified diffs as git makes them:
+
+```ts
+const patch = Patch.parse(await gitDiff());
+const oneLine = patch.select([{ file: 0, lines: [[0, 4]] }]);
+await gitApplyCached(oneLine.toString());
+```
+
+`parse`, `from`, `apply` (with `fuzz`, and the hunks it rejected), `reverse`, and `select`, which cuts a patch down to chosen hunks or single lines: what a "stage this line" button needs.
+
+## Text fields
+
+A `<textarea>` or a text `<input>` now tells script where its caret is. See [text fields](/elements/text-fields/).
+
+- `selectionStart`, `selectionEnd` and `selectionDirection`, read and write, in UTF-16 units. Inside `keydown` and `beforeinput` they give the selection the key is about to act on.
+- `setRangeText()` with its four selection modes.
+- Shift+Enter inserts a line break in a `<textarea>`.
+- `maxlength` is enforced on typing, paste and IME commits, and never splits a character.
+- A run of typing is one undo step, and so is a run of Backspace or Delete.
+- Types a `copy` or `cut` handler sets besides `text/plain` reach the system clipboard and come back in a paste in a Skathi app.
+- A field keeps its shaped text between frames instead of shaping it on every one.
+
+## CSS
+
+- [`vertical-align`](/css/vertical-align/) takes `baseline`, `sub`, `super`, `text-top`, `text-bottom`, `middle`, `top`, `bottom`, a length and a percentage. It applies to an element in a line of mixed inline content (a `<span>`, an `<img>`, an inline-block, a `<sk-sticker>`) and to an atom of an `<sk-editor>`.
+- `<sub>` and `<sup>` have their usual default style.
+- Text aligns by its real first baseline in a row with `align-items: baseline`, so texts of two sizes share a baseline as they do in a browser.
+
+## Programs from JS
+
+[`skathi:process`](/std/process/) starts a program and talks to it over its standard streams.
+
+```json title="sk.config.json"
+{
+  "permissions": {
+    "process": [{ "name": "ffmpeg", "path": "$APP/bin/ffmpeg", "args": true }]
+  }
+}
+```
+
+```ts
+import { Process } from "skathi:process";
+
+const ffmpeg = Process.spawn("ffmpeg", ["-i", input, "-progress", "pipe:1", output]);
+for await (const chunk of ffmpeg.stdout!) report(chunk);
+const code = await ffmpeg.exited;
+```
+
+- **An allow-list.** Only a program the config names can start: from the app's folder (`$APP`), the system's (`$SYSTEM`), the `PATH`, or an absolute path. With no entries every call throws.
+- **Arguments are constrained per entry**: none, any, or an exact list of strings and patterns. `sk check` warns about entries that allow any argument or search the `PATH` (SK6004).
+- **No shell, ever.** Arguments reach the program as an array. Batch files are refused on Windows.
+- **Bounded.** A child gets only its three streams, lives no longer than the app, and at most 32 run at once. [`Process.exec()`](/std/process-exec/) collects the output with a timeout and a size limit.
+
+## Images and memory
+
+[`skathi:image`](/std/image/) decodes and encodes pictures off the JS thread.
+
+```ts
+import { ImageDecoder, ImageEncoder } from "skathi:image";
+
+const decoder = new ImageDecoder({ data: file.stream(), type: file.type });
+const { image } = await decoder.decode({ maxSide: 256 });
+const jpeg = await ImageEncoder.encode(image, { type: "image/jpeg", quality: 0.8 });
+```
+
+Frames of a GIF, an APNG or an animated WebP by index, the pixels as an RGBA view, a resize that shrinks, and PNG, JPEG and lossless WebP out.
+
+[`skathi:memory`](/std/native-buffer/) holds bytes outside the JavaScript heap: `NativeBuffer.alloc()` for memory with an address that does not move, an [`Arena`](/std/arena/) for many short-lived buffers freed at once, and a [`MemoryView`](/std/memory-view/) to read and write typed values. A `NativeBuffer` goes straight into a `"buffer"` argument of `skathi:ffi` and into the writers of `skathi:gpu`, which also gets the 8- and 16-bit normalized vertex formats (`wgsl.unorm8x4` and the rest).
+
+Smaller additions:
+
+- `import settings from "./settings.toml"` in `sk dev` and `sk build`: the value is what `TOML.parse()` returns.
+- [`navigator.connection`](/web-platform/navigator-connection/) with `type` and a `change` event, from the same source as `skathi:network`.
+- `sk build` inlines calls of `skathi:numeric` such as `i32.add(a, b)` where the result is the same either way, and `sk check` reports two different numeric types in one operator (SK7001).
+
+## For embedders
+
+- **`<sk-layer>`.** A native layer of your own under an element of the page, for a program that must present by itself, such as a video player. See [a native layer under the page](/embedding/native-layer/).
+- **The window's display.** `on_display_change` reports the display a window is on, its HDR headroom and white levels. See [native frames](/embedding/native-frames/).
+- **`Builder::backdrop`** fixes the main window's backdrop, and `Builder::metal_drawable_count` sets the layer's drawable count on macOS.
+- **`skathi::NativeBuffer`** in a [native module](/embedding/native-modules/): a parameter of that type borrows the page's memory for the call, a `&mut [u8]` writes into it, and a task takes it over until it finishes. `Handle::emit_into()` moves an event's data to the page where `emit_to()` copies it.
+- **`Builder::allow_process`** is the embedder's side of `permissions.process`.
+
+## An app that cannot start
+
+An uncaught error from an app's entry module used to leave a blank window and a process that never ended.
+
+- The error and its stack go to stderr and the devtools log in every mode, under AOT too.
+- A packaged app that put nothing on screen shows the error and exits with code 1. An embedder sees an unclean `Exit` from `Handle::wait()`.
+- `sk dev` keeps the host running, so the console and HMR can recover.
+- A host and a runtime from different builds are named as such before any script runs, and `sk build` and `sk dev` refuse a host that does not match the runtime. Both sides carry an id derived from the host functions the runtime uses, so there is no number to keep in step by hand.
+- `@skathi-native/test` fails a launch at once when the app's entry throws or the host exits.
+
+## Fixes worth knowing
+
+- **Text fields.** Assigning `value` a string the user had typed on the way (type "abcde", then `value = "ab"`) is no longer ignored.
+- **`skathi:ffi`.** A typed array over a `NativeBuffer` keeps its memory alive for as long as a pointer made from it lives.
+- **Surfaces.** A half-float `<sk-surface>` without a frame keeps the window at 8 bits.
+- **`sk check`.** SK4007 is no longer reported for an app that requires a runtime of 0.6 or later.
+- **Vite builds** drop template comments, as `sk build` did.
+- **Linux.** A font whose tables state no x-height, such as DejaVu Sans, is measured from its glyphs.
+- **Windows.** A copy or paste is retried while another program holds the clipboard.
+
+<Aside kind="warning" title="What 0.8 does not do yet">
+
+- **`<sk-editor>`** is for small documents: no line numbers, no viewport-only layout and one cursor. Its IME and clipboard paths were tested most on Windows.
+- **Inline layout.** A line of mixed text and elements is still a wrapping row: text does not flow across element boundaries, and a bare text node cannot be shifted by `vertical-align`. [#94](https://github.com/argon-chat/skathi/issues/94) tracks a real inline layout.
+- **`Patch.apply()`** does not apply binary patches or combined diffs.
+- **`skathi:process`** has no pseudo-terminal.
+
+</Aside>
+
+## Upgrading
+
+Run the commands at the top of this post and `bunx sk check`.
+
+- `TextDiff.lines()` and `TextDiff.unified()` now use the histogram algorithm, and `unified()` writes a count of one as git does (`@@ -10 +10,2 @@`). Pass `algorithm: "myers"` for the old pairing of lines.
+- A row with `align-items: baseline` aligns text by its baseline and not by its bottom edge. A layout that relied on the old result may move by a few pixels.
+- Typing in a text field is one undo step per run, and `maxlength` is now enforced.
+- For embedders: build the host and the payload from the same release. A payload built with `sk` 0.8 names its runtime, and a host from another build refuses it with a message that says so.

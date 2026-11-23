@@ -13,7 +13,7 @@ export type Kind =
   | "media-feature"
   | "unit"
   | "feature";
-export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0";
+export type Release = "0.2.0" | "0.3.0" | "0.4.0" | "0.5.0" | "0.6.0" | "0.7.0" | "0.8.0";
 /** The release a platform's support arrived in, for the platforms where it differs from the entry's `since`. */
 export type PlatformSince = Partial<Record<Platform, Release>>;
 
@@ -2672,14 +2672,17 @@ const selectors = section("Selectors", [
   pe("::selection", OK, "Selects the part of the document the user has selected."),
   pe("::mark()", OK, "Skathi: styles the text under a named mark of an `<sk-editor>`.", {
     notes: ["Font family, weight, style and size, color, background, underline and line-through apply."],
+    since: "0.8.0",
     related: ["pseudo-line", "pseudo-decoration"],
   }),
   pe("::line()", OK, "Skathi: styles the lines of an `<sk-editor>` that have a named block.", {
     notes: ["The text properties of `::mark()` apply, plus padding, border and background of the line's box."],
+    since: "0.8.0",
     related: ["pseudo-mark", "pseudo-decoration"],
   }),
   pe("::decoration()", OK, "Skathi: styles the text under a named decoration of an `<sk-editor>`.", {
     notes: ["Only properties that do not move glyphs apply: color, background, underline and line-through."],
+    since: "0.8.0",
     related: ["pseudo-mark", "pseudo-line"],
   }),
   pe("::file-selector-button", OK, 'Selects the button of an `<input type="file">`.'),
