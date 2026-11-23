@@ -103,12 +103,14 @@ When your program moves that view, or the content view holding it, into a window
 
 While the page's view is in a window of yours, Skathi's window follows the view there:
 
-- **Goes to your window:** what the page asks of its window (title, size and position, minimize, zoom, fullscreen, always on top, opacity, size limits, the backdrop's window colour), and what Skathi reads from it (bounds, screen and scale, appearance, key status, occlusion, the mouse position).
+- **Goes to your window:** what the page asks of its window (title, size and position, minimize, zoom, fullscreen, always on top, opacity, size limits), and what Skathi reads from it (bounds, screen and scale, appearance, key status, occlusion, the mouse position).
 - **Heard from your window by notification:** moves, screen changes, occlusion, becoming and resigning key, and entering and leaving fullscreen. Skathi does not replace your window's delegate.
-- **Stays with Skathi's own window:** its delegate, window tabs, restorable state, the page's own request to close, and Skathi's titlebar chrome (button positions, titlebar transparency, the fullscreen desktop picture), which your window keeps as you set it.
+- **Stays with Skathi's own window:** its delegate, window tabs, restorable state, the backdrop (the window's background colour, whether it is opaque, and the blur behind it), and Skathi's titlebar chrome (button positions, titlebar transparency, the fullscreen desktop picture). Your window keeps all of these as you set them. A see-through backdrop still makes the page's own layer see-through, so your window shows under the page.
 - **Not handled:** files dragged onto your window, which reach the page only in Skathi's own window.
 
-Skathi's own window keeps no part in the page meanwhile: its delegate is ignored, and closing it closes only that empty window. Skathi retains your window while the view is in it. Move the view back, or remove it, before Skathi closes its window: the page ends with that window.
+Skathi's own window keeps no part in the page meanwhile: its delegate is ignored, and closing it by hand closes only that empty window. Skathi retains your window while the view is in it.
+
+When the page closes, by `appWindow.close()`, by `Handle::close` or by a close request from its own window controls, it ends as it does in its own window: a close that asks first (`close-requested`, `beforeunload`) asks here too and can be refused, the [close events](/guides/closing-and-background/) fire, and your close hooks run. Skathi then takes its view out of your window, stops listening to it and releases it, and its own empty window goes with the page. Your window is not closed, hidden or changed otherwise. The view goes back into Skathi's window; if you moved Skathi's content view into your window too, only the page's view is taken out of it, and the content view stays where you put it. Do not keep using the view after the page has closed.
 
 **Linux.** `attach` and `place` are called, but there is no place under the page yet.
 
