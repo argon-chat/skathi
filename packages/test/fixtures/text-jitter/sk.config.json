@@ -1,0 +1,11 @@
+{
+  "name": "text-jitter",
+
+  "window": {
+    "title": "Skathi — text-jitter (fixture)",
+    "width": 1280,
+    "height": 800,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
