@@ -3,7 +3,7 @@
 
 @font-face {
   font-family: "SK Pixel";
-  src: url("../../fonts/src/fonts/PressStart2P-Regular.ttf") format("truetype");
+  src: url("./fonts/PressStart2P-Regular.ttf") format("truetype");
 }
 
 #root {

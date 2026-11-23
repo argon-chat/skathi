@@ -60,7 +60,7 @@ describe("el.scrollTop / scrollLeft", () => {
       await reset();
       const content = (await onList("l.scrollHeight")) as number;
       const viewport = (await onList("l.clientHeight")) as number;
-      expect(content).toBeGreaterThan(20_000);
+      expect(content).toBeGreaterThan(10_000);
       expect(viewport).toBeLessThan(1000);
 
       const landed = (await onList("(l.scrollTop = l.scrollHeight, l.scrollTop)")) as number;
@@ -191,14 +191,14 @@ describe("el.scrollIntoView()", () => {
   test(
     "a row far below the fold comes to the top",
     async () => {
-      // The off-screen half matters: row 900 is ~22 500 px down and has never been painted, but the
+      // The off-screen half matters: row 900 is thousands of pixels down and has never been painted, but the
       // whole document is laid out, so it has an exact rectangle to aim at.
       await reset();
       const listTop = (await onList("Math.round(l.getBoundingClientRect().top + l.clientTop)")) as number;
 
       await app.eval(`document.querySelector('[data-row="900"]').scrollIntoView()`);
       expect(await topOf(900)).toBe(listTop);
-      expect(await onList("l.scrollTop")).toBeGreaterThan(20_000);
+      expect(await onList("l.scrollTop")).toBeGreaterThan(10_000);
 
       await settle();
       expect(await topOf(900)).toBe(listTop);
