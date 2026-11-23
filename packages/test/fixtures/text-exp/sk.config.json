@@ -1,0 +1,11 @@
+{
+  "name": "text-exp",
+
+  "window": {
+    "title": "Skathi — text-exp (fixture)",
+    "width": 900,
+    "height": 640,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
