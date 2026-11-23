@@ -513,6 +513,35 @@ declare var File: {
   prototype: File;
 };
 
+interface TextEncoderEncodeIntoResult {
+  read: number;
+  written: number;
+}
+interface TextEncoder {
+  readonly encoding: "utf-8";
+  encode(input?: string): Uint8Array<ArrayBuffer>;
+  encodeInto(source: string, destination: Uint8Array): TextEncoderEncodeIntoResult;
+}
+declare var TextEncoder: { new (): TextEncoder; prototype: TextEncoder };
+
+interface TextDecoderOptions {
+  fatal?: boolean;
+  ignoreBOM?: boolean;
+}
+interface TextDecodeOptions {
+  /** More input follows: a character split at the end is held for the next call, which a call without it flushes. */
+  stream?: boolean;
+}
+interface TextDecoder {
+  /** The encoding's canonical name, such as `"utf-8"` or `"windows-1252"`, whatever label was given. */
+  readonly encoding: string;
+  readonly fatal: boolean;
+  readonly ignoreBOM: boolean;
+  decode(input?: BufferSource, options?: TextDecodeOptions): string;
+}
+/** `label` is any label of the Encoding Standard; an unknown one throws a `RangeError`. */
+declare var TextDecoder: { new (label?: string, options?: TextDecoderOptions): TextDecoder; prototype: TextDecoder };
+
 interface Headers {
   get(name: string): string | null;
   has(name: string): boolean;

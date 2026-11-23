@@ -762,10 +762,7 @@ const streams = section("Streams, binary data and encoding", [
   iface("TextEncoder", OK, "Encodes a string into UTF-8 bytes.", {
     related: ["text-decoder"],
   }),
-  iface("TextDecoder", PART, "Decodes bytes in a text encoding into a string.", {
-    limitations: [
-      "`{ stream: true }` is ignored: every `decode()` call is complete input, so a character split across two calls decodes as U+FFFD. Split on newline bytes first, or join the bytes before decoding.",
-    ],
+  iface("TextDecoder", OK, "Decodes bytes in a text encoding into a string.", {
     related: ["text-encoder"],
   }),
   fn("atob", OK, "Decodes a Base64 string.", {

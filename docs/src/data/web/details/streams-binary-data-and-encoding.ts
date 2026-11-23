@@ -270,6 +270,7 @@ try {
       'An unknown label throws a `RangeError`. `encoding` reports the canonical name, such as `"windows-1251"` for `"cp1251"`.',
       "A leading BOM of the decoder's own encoding is removed unless `ignoreBOM` is `true`. A BOM never switches the encoding.",
       "With `fatal: true`, invalid input throws a `TypeError`.",
+      "With `{ stream: true }` a character cut between two chunks is held until the next call, in every encoding. A call without it, or `decode()` with no input, flushes: a dangling partial character becomes U+FFFD, or a `TypeError` with `fatal`.",
     ],
   },
   atob: {
