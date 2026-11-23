@@ -1,0 +1,13 @@
+{
+  "$comment": "CSS `box-shadow` around rounded boxes with no background: spread rings, blur, per-corner and elliptical radii, a square box, `inset` and `overflow: hidden`.",
+
+  "name": "sk-test-box-shadow",
+
+  "window": {
+    "title": "Skathi — box-shadow (fixture)",
+    "width": 640,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
