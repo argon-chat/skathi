@@ -1275,10 +1275,10 @@ const typography = section("Typography and text", [
         "ClearType",
         "subpixel antialiasing",
       ],
-      related: ["text-rendering", "text-contrast"],
+      related: ["text-rendering", "font-dilation"],
     },
   ),
-  prop("text-contrast", OK, "Sets how much weight glyph edges get for the colour of the text.", {
+  prop("font-dilation", OK, "Sets how much weight glyph edges get for the colour of the text.", {
     skathiOnly: true,
     platforms: { windows: OK, macos: NO, linux: PART },
     values: [
@@ -1290,7 +1290,7 @@ const typography = section("Typography and text", [
       v("luminance", OK, "More weight the lighter the text, in five steps of its luminance; dark text is unchanged."),
     ],
     notes: [
-      "Inherited. Set it on the root to apply it across the app: `html { text-contrast: luminance }`.",
+      "Inherited. Set it on the root to apply it across the app: `html { font-dilation: luminance }`.",
       "It works with grayscale and ClearType text alike. Light-on-dark text at 14px gains about 6 to 15% ink, depending on the display scale and `font-smoothing`.",
       "It changes how the rasterized glyph is blended, not the glyph itself, so it costs no glyph cache space.",
       "It is not an accessibility contrast setting: it does not change colours, and `prefers-contrast` is unrelated.",

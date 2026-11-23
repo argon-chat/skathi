@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Bounds, launch, readPng, type SkApp, WINDOWS } from "../src/index";
 
-// `text-contrast: luminance` gives light text on a dark ground more weight and leaves dark text alone.
+// `font-dilation: luminance` gives light text on a dark ground more weight and leaves dark text alone.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** How far the text in `b` is from its background, summed over its pixels. */
@@ -22,7 +22,7 @@ for (const scale of WINDOWS ? [1, 2] : []) {
   describe(`at scale ${scale}`, () => {
     let app: SkApp;
     beforeAll(async () => {
-      app = await launch({ app: "packages/test/fixtures/text-contrast/src/main.ts", scale, label: "text-contrast" });
+      app = await launch({ app: "packages/test/fixtures/font-dilation/src/main.ts", scale, label: "font-dilation" });
     }, 60_000);
     afterAll(() => app.close());
 
@@ -33,7 +33,7 @@ for (const scale of WINDOWS ? [1, 2] : []) {
         const [darkAuto, darkLum, lightAuto, lightLum] = (await app.query(".line")).nodes.flatMap((n) =>
           n.bounds ? [n.bounds] : [],
         );
-        const file = join(tmpdir(), `sk-text-contrast-${process.pid}.png`);
+        const file = join(tmpdir(), `sk-font-dilation-${process.pid}.png`);
         await app.send("screenshot", { path: file, backend: "render_to_image" });
         const dark = ink(file, darkLum!, scale) / ink(file, darkAuto!, scale);
         const light = ink(file, lightLum!, scale) / ink(file, lightAuto!, scale);

@@ -61,9 +61,9 @@ html {
 
 A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text in a default window is grayscale even when ClearType is on in the system. `subpixel-antialiased` draws ClearType in such a window anyway. It is right only where the text sits on opaque content, such as a panel with a solid background; over a see-through part of the window the colour fringes of the glyph edges stay visible. On macOS the property does nothing yet.
 
-### `text-contrast`
+### `font-dilation`
 
-Windows gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. `text-contrast: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
+Windows gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. `font-dilation: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
 
 ### `will-change: transform` moves text as a layer
 

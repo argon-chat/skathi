@@ -1,8 +1,8 @@
 {
-  "name": "text-contrast",
+  "name": "font-dilation",
 
   "window": {
-    "title": "Skathi — text-contrast (fixture)",
+    "title": "Skathi — font-dilation (fixture)",
     "width": 640,
     "height": 360,
     "titleBarStyle": "hidden",

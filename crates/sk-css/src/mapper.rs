@@ -6311,15 +6311,15 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if name.0.as_ref() == "text-contrast" =>
+                if name.0.as_ref() == "font-dilation" =>
             {
-                match single_ident(&c.value, "text-contrast", diagnostics) {
+                match single_ident(&c.value, "font-dilation", diagnostics) {
                     Some("auto") => r.text.text_contrast = Some(gpui::TextContrast::Auto),
                     Some("luminance") => r.text.text_contrast = Some(gpui::TextContrast::Luminance),
                     other => unsupported(
                         diagnostics,
                         &format!(
-                            "text-contrast: {} — use auto or luminance",
+                            "font-dilation: {} — use auto or luminance",
                             other.unwrap_or("<not a keyword>")
                         ),
                     ),
@@ -10444,23 +10444,23 @@ mod prefix_tests {
     }
 
     #[test]
-    fn text_contrast_and_a_will_change_transform_reach_the_text_style() {
+    fn font_dilation_and_a_will_change_transform_reach_the_text_style() {
         let text = |css: &str| {
             let mut d = Vec::new();
             let s = parse_inline(css, &mut d);
             (s.text.text_contrast, s.text.will_change_transform, d.len())
         };
         assert_eq!(
-            text("text-contrast: luminance"),
+            text("font-dilation: luminance"),
             (Some(gpui::TextContrast::Luminance), None, 0)
         );
-        assert_eq!(text("text-contrast: high"), (None, None, 1));
+        assert_eq!(text("font-dilation: high"), (None, None, 1));
         assert_eq!(
             text("will-change: opacity, Transform"),
             (None, Some(true), 0)
         );
         assert_eq!(text("will-change: scroll-position"), (None, Some(false), 0));
-        assert!(inherits("text-contrast"));
+        assert!(inherits("font-dilation"));
     }
 
     #[test]

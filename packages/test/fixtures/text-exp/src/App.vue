@@ -136,7 +136,7 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
   line-height: 22px;
 }
 .contrast {
-  text-contrast: luminance;
+  font-dilation: luminance;
 }
 .layer .card {
   will-change: transform;

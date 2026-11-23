@@ -126,7 +126,7 @@ body {
   font-smoothing: subpixel-antialiased;
 }
 .contrast {
-  text-contrast: luminance;
+  font-dilation: luminance;
 }
 .tall {
   line-height: 1.618;

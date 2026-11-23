@@ -50,6 +50,6 @@ const smoothing = ref("antialiased");
   font-smoothing: subpixel-antialiased;
 }
 .luminance {
-  text-contrast: luminance;
+  font-dilation: luminance;
 }
 </style>
