@@ -362,6 +362,7 @@ describe.skipIf(!hasGit)("the git template", () => {
       writeFileSync(
         join(repoDir, ".git", "hooks", "pre-commit"),
         "#!/bin/sh\necho 'pre-commit hook: lint failed' >&2\nexit 1\n",
+        { mode: 0o755 },
       );
       await app!.locator("#commit-button").click();
       await expect(app!.locator("#commit-error pre")).toContainText("lint failed");
