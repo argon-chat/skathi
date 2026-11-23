@@ -138,6 +138,14 @@ describe("line-metrics and line-leading", () => {
     expect(Math.abs(autoAbove - want.autoAbove)).toBeLessThanOrEqual(0.5);
   });
 
+  test("text-box-trim to the text edges leaves the font's ascent and descent", async () => {
+    const png = await shot();
+    const trim = await box("trim");
+    console.log("trim", trim.h, baseline(png, trim), MANROPE.ascent * 20, MANROPE.descent * 20);
+    expect(Math.abs(trim.h - (MANROPE.ascent + MANROPE.descent) * 20)).toBeLessThanOrEqual(1);
+    expect(Math.abs(baseline(png, trim) - MANROPE.ascent * 20)).toBeLessThanOrEqual(1);
+  });
+
   test("runs of two sizes share a baseline; the line takes the most each reaches above and below it", async () => {
     const png = await shot();
     const [a13, d13] = snapped(13);

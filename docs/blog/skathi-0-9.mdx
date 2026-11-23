@@ -90,6 +90,7 @@ The rules are the same on every platform, and the defaults, `auto` and `split`, 
 
 ## Fixes
 
+- `text-box-trim` trimmed the font's descent too much from the top of a line, and with a `text` or `cap` bottom edge from the bottom too, so a trimmed box was shorter than its glyphs. It now leaves exactly the edges `text-box-edge` names.
 - A `transform-origin` from a class now applies to a `transform` set in a `style` attribute or by `@keyframes`; before, it was replaced by the default `50% 50%`. A rule that sets only `transform-origin` no longer cancels a `transform` from an earlier rule.
 
 - Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, `requestAnimationFrame`, animations, video, `<sk-surface>`) instead of freezing until the button is released. The move starts after the `mousedown` handler returns, and only while the left button is still held. ([#110](https://github.com/argon-chat/skathi/issues/110))

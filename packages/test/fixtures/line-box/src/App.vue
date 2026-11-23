@@ -10,6 +10,7 @@
       <span id="r13" class="r13">HH</span>
       <span id="r26" class="r26">HH</span>
     </div>
+    <p id="trim" class="tall trim">HHHH</p>
     <input id="field" class="field snapped above" value="HH" />
   </div>
 </template>
@@ -38,6 +39,10 @@ p {
 .tall {
   font-size: 20px;
   line-height: 60px;
+}
+.trim {
+  text-box-trim: trim-both;
+  text-box-edge: text;
 }
 .mixed {
   font-size: 13px;

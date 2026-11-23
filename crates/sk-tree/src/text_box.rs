@@ -74,7 +74,7 @@ impl Element for Text {
         let mut metrics = TextBoxMetrics {
             line_height: f32::from(line_height),
             ascent: f32::from(text.ascent(face, size)),
-            descent: f32::from(text.descent(face, size)),
+            descent: f32::from(text.descent(face, size).abs()),
             cap_height: f32::from(text.cap_height(face, size)),
             x_height: f32::from(text.x_height(face, size)),
             leading_above: None,
