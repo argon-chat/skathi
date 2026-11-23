@@ -1,0 +1,167 @@
+---
+import type { ImageMetadata } from "astro";
+import { Image } from "astro:assets";
+
+interface Props {
+  /** Shown left of the divider. Both images must have the same pixel size. */
+  before: ImageMetadata;
+  /** Shown right of the divider. */
+  after: ImageMetadata;
+  /** What the pair shows, for screen readers. */
+  alt: string;
+  beforeLabel?: string;
+  afterLabel?: string;
+  caption?: string;
+  /** Where the divider starts, in percent from the left. */
+  start?: number;
+  /** Keep hard pixel edges when the pair is a zoomed crop. */
+  pixelated?: boolean;
+}
+
+const {
+  before,
+  after,
+  alt,
+  beforeLabel = "Before",
+  afterLabel = "After",
+  caption,
+  start = 50,
+  pixelated = false,
+} = Astro.props;
+const widths = [Math.round(before.width / 2), before.width];
+const sizes = "(max-width: 1250px) 100vw, 1000px";
+---
+
+<figure class="demo compare" class:list={{ pixelated }}>
+  <div class="demo-frame compare-frame" data-rail-bend style={`--at: ${start}%`}>
+    <Image src={after} alt={alt} widths={widths} sizes={sizes} format="webp" quality={95} />
+    <Image class="compare-before" src={before} alt="" widths={widths} sizes={sizes} format="webp" quality={95} />
+    <span class="compare-label compare-label-before" aria-hidden="true">{beforeLabel}</span>
+    <span class="compare-label compare-label-after" aria-hidden="true">{afterLabel}</span>
+    <span class="compare-divider" aria-hidden="true">
+      <span class="compare-handle">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M6 4 2.5 8 6 12M10 4l3.5 4-3.5 4" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </span>
+    </span>
+    <input
+      type="range"
+      min="0"
+      max="100"
+      step="0.1"
+      value={start}
+      aria-label={`${beforeLabel} and ${afterLabel}: position of the divider`}
+      data-compare
+    />
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+  .compare-frame {
+    position: relative;
+    touch-action: pan-y;
+    user-select: none;
+  }
+  .compare-frame :global(img) {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 0;
+  }
+  .pixelated .compare-frame :global(img) {
+    image-rendering: pixelated;
+  }
+  .compare-frame :global(.compare-before) {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    clip-path: inset(0 calc(100% - var(--at)) 0 0);
+  }
+  .compare-divider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: var(--at);
+    width: 1px;
+    background: var(--text);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .compare-handle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    translate: -50% -50%;
+    box-shadow: var(--lift);
+  }
+  .compare-label {
+    position: absolute;
+    top: 10px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .compare-label-before {
+    left: 10px;
+  }
+  .compare-label-after {
+    right: 10px;
+  }
+  .compare-frame input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: ew-resize;
+  }
+  .compare-frame:has(input:focus-visible) .compare-handle {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+
+<script>
+  // Delegated: pages are swapped in by the client router.
+  const slider = (target: EventTarget | null) =>
+    target instanceof HTMLInputElement && target.matches("input[data-compare]") ? target : null;
+  const place = (input: HTMLInputElement, percent: number) => {
+    input.value = String(percent);
+    input.parentElement?.style.setProperty("--at", `${percent}%`);
+  };
+  // The pointer sets the divider under itself; a range thumb's travel is inset by half its width.
+  const follow = (e: PointerEvent) => {
+    const input = slider(e.target);
+    if (!input || (e.type === "pointermove" && !input.hasPointerCapture(e.pointerId))) return;
+    if (e.type === "pointerdown") {
+      // Keeps the range from also dragging its own thumb.
+      e.preventDefault();
+      input.focus({ preventScroll: true });
+      input.setPointerCapture(e.pointerId);
+    }
+    const box = input.getBoundingClientRect();
+    place(input, Math.min(100, Math.max(0, ((e.clientX - box.left) / box.width) * 100)));
+  };
+  document.addEventListener("pointerdown", follow);
+  document.addEventListener("pointermove", follow);
+  document.addEventListener("input", (e) => {
+    const input = slider(e.target);
+    if (input) place(input, Number(input.value));
+  });
+</script>
