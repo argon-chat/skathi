@@ -301,7 +301,7 @@ pub(crate) fn placeholder(
     {
         return None;
     }
-    let size = (width, height);
+    let size = crate::render::prev_exact_size_of(id).unwrap_or((width, height));
     let parent_size = (parent_width, parent_height);
     let sub_rev = node.sub_rev;
     let ctx = ctx();
@@ -413,6 +413,9 @@ impl Element for Placeholder {
                     }
                     if let Some(r) = w.prev_transformed.get(&node).copied() {
                         w.transformed.insert(node, shifted(r));
+                    }
+                    if let Some(s) = w.prev_exact_sizes.get(&node).copied() {
+                        w.exact_sizes.insert(node, s);
                     }
                 }
             });

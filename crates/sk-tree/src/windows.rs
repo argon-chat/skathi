@@ -50,6 +50,10 @@ pub struct WindowState {
     pub prev_bounds: IdMap<Rect>,
     pub transformed: IdMap<Rect>,
     pub prev_transformed: IdMap<Rect>,
+    /// Each box's border-box size before snapping, which a cache boundary standing in for it
+    /// must lay out at to match the frames that lay it out inline.
+    pub exact_sizes: IdMap<(f32, f32)>,
+    pub prev_exact_sizes: IdMap<(f32, f32)>,
 
     pub pending_mouse_move: Option<PendingMouseMove>,
     /// The moves since the last delivered `mousemove`: its `movementX`/`movementY`.

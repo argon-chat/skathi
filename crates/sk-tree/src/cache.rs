@@ -347,6 +347,7 @@ pub(crate) fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinem
     let mut st = gpui::StyleRefinement::default();
     st.size.width = Some(gpui::Length::Definite(gpui::px(size.0).into()));
     st.size.height = Some(gpui::Length::Definite(gpui::px(size.1).into()));
+    st.vn_exact_size = Some(gpui::size(gpui::px(size.0), gpui::px(size.1)));
     st.flex_grow = Some(0.0);
     st.flex_shrink = Some(0.0);
     if let Some(cs) = &node.computed {
@@ -373,6 +374,7 @@ pub(crate) fn normalize_inner_root(id: u32, style: &mut gpui::StyleRefinement) {
 fn pin_inner_style(style: &mut gpui::StyleRefinement, size: (f32, f32)) {
     style.size.width = Some(gpui::px(size.0).into());
     style.size.height = Some(gpui::px(size.1).into());
+    style.vn_exact_size = Some(gpui::size(gpui::px(size.0), gpui::px(size.1)));
     style.min_size.width = Some(gpui::px(0.0).into());
     style.min_size.height = Some(gpui::px(0.0).into());
     style.max_size.width = Some(gpui::Length::Auto);
@@ -419,7 +421,12 @@ pub(crate) fn boundary<V: 'static>(
         return None;
     }
     let shape = stats(t, id);
-    if shape.blocked || shape.nodes < min_nodes() || margin_leaks(t, node) {
+    // The wrapper is a leaf without a baseline: one placed by its baseline would move.
+    if shape.blocked
+        || shape.nodes < min_nodes()
+        || margin_leaks(t, node)
+        || render::placed_by_baseline(t, node)
+    {
         return None;
     }
     if hot(id) {
@@ -428,7 +435,7 @@ pub(crate) fn boundary<V: 'static>(
     }
     let rect =
         render::prev_rect_of(id).filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)?;
-    let size = (rect.2, rect.3);
+    let size = render::prev_exact_size_of(id).unwrap_or((rect.2, rect.3));
 
     let parent_rect = (node.parent != 0)
         .then(|| render::prev_rect_of(node.parent))
@@ -619,6 +626,9 @@ fn carry_bounds(id: u32, win: WinKey) {
                 }
                 if let Some(r) = w.prev_transformed.get(id).copied() {
                     w.transformed.insert(*id, r);
+                }
+                if let Some(s) = w.prev_exact_sizes.get(id).copied() {
+                    w.exact_sizes.insert(*id, s);
                 }
             }
         });

@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import AtomPage from "./AtomPage.vue";
+import FractionsPage from "./FractionsPage.vue";
+import ScrollPage from "./ScrollPage.vue";
 
 const draft = ref<SkEditorValue>({ text: "", marks: [], atoms: [] });
 const tick = ref(0);
+const page = ref("chat");
 let ticking = false;
 
 function step() {
@@ -20,6 +24,9 @@ function step() {
     ticking = false;
   },
   tick: () => tick.value,
+  show(name: string) {
+    page.value = name;
+  },
 };
 
 function onInput(e: Event) {
@@ -29,7 +36,10 @@ function onInput(e: Event) {
 
 <template>
   <div class="app">
-    <div class="page">
+    <FractionsPage v-if="page === 'fractions'" :tick="tick" />
+    <ScrollPage v-else-if="page === 'scroll'" />
+    <AtomPage v-else-if="page === 'atom'" :tick="tick" />
+    <div v-else class="page">
       <div class="head">
         <span class="tag">&lt;sk-editor&gt;</span>
         <p>Rich text: marks, mentions as real elements, decorations, undo.</p>

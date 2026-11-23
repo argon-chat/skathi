@@ -132,6 +132,8 @@ fn reset_bounds(win: WinKey) {
         if w.bounds.capacity() > w.prev_bounds.len().saturating_mul(4).max(1024) {
             w.bounds.shrink_to(w.prev_bounds.len().saturating_mul(2));
         }
+        std::mem::swap(&mut w.exact_sizes, &mut w.prev_exact_sizes);
+        w.exact_sizes.clear();
         std::mem::swap(&mut w.transformed, &mut w.prev_transformed);
         w.transformed.clear();
         if w.transformed.capacity() > w.prev_transformed.len().saturating_mul(4).max(1024) {
@@ -291,6 +293,12 @@ pub(crate) fn prev_rect_of(id: u32) -> Option<Rect> {
     windows::peek(k, |w| w.prev_bounds.get(&id).copied()).flatten()
 }
 
+/// The previous frame's border-box size before snapping (see [`windows::WindowState::exact_sizes`]).
+pub(crate) fn prev_exact_size_of(id: u32) -> Option<(f32, f32)> {
+    let k = windows::window_of_node(id);
+    windows::peek(k, |w| w.prev_exact_sizes.get(&id).copied()).flatten()
+}
+
 /// Transparent wrapper recording the bounds gpui laid its inner element out at; adds no layout.
 struct BoundsProbe {
     id: u32,
@@ -346,6 +354,10 @@ impl gpui::Element for BoundsProbe {
         // prepainted.
         let ancestors = window.element_transform();
         record_bounds(self.id, bounds, ancestors, window);
+        if let Some(size) = window.vn_unrounded_layout_size(*layout) {
+            let size = (f32::from(size.width), f32::from(size.height));
+            windows::here(window, |w| w.exact_sizes.insert(self.id, size));
+        }
         crate::containers::record_percentage_basis(self.id, || {
             let size = window.vn_percentage_basis(*layout)?;
             Some((f32::from(size.width), f32::from(size.height)))
@@ -445,6 +457,8 @@ pub(crate) fn gc_node_state() {
         w.prev_bounds.retain(|&id, _| live(id));
         w.transformed.retain(|&id, _| live(id));
         w.prev_transformed.retain(|&id, _| live(id));
+        w.exact_sizes.retain(|&id, _| live(id));
+        w.prev_exact_sizes.retain(|&id, _| live(id));
         w.focus_subs.retain(|&id, _| live(id));
         w.haptics.gc(&live);
         if w.pointer_capture
@@ -2918,6 +2932,24 @@ fn apply_inline_item_minimum(
     {
         style.min_size.width.get_or_insert(gpui::px(0.0).into());
     }
+}
+
+/// Does the box's position in its parent follow its baseline (a baseline-aligned flex or grid
+/// item, or an item of a line)?
+pub(crate) fn placed_by_baseline(t: &Tree, node: &crate::tree::Node) -> bool {
+    let own = node.computed.as_ref().and_then(|cs| cs.base.align_self);
+    if own == Some(gpui::AlignSelf::Baseline) {
+        return true;
+    }
+    let Some(parent) = t.node(node.parent) else {
+        return false;
+    };
+    let Some(pcs) = parent.computed.as_ref() else {
+        return false;
+    };
+    own.is_none()
+        && (pcs.base.align_items == Some(gpui::AlignItems::Baseline)
+            || inline_row_applies(t, parent, pcs.base.display))
 }
 
 fn inline_row_applies(t: &Tree, node: &crate::tree::Node, display: Option<gpui::Display>) -> bool {

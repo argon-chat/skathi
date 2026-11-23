@@ -30,6 +30,8 @@ export interface LaunchOptions {
   app: string;
   /** `[width, height]` in CSS px — becomes `SK_WINDOW`. */
   window?: [number, number];
+  /** The window's scale factor in place of the monitor's (Windows only), e.g. `1.25`. */
+  scale?: number;
   /** Extra environment for the host process. */
   env?: Record<string, string>;
   /** Default timeout for auto-waiting locators and assertions (ms). */
@@ -95,7 +97,11 @@ export type PendingQuestion = {
 };
 /** `permissions list` (crates/sk-permissions `describe_json`). */
 export type PermissionsInfo = {
-  states: { name: string; state: "granted" | "denied" | "prompt" | "unsupported"; prompts: boolean }[];
+  states: {
+    name: string;
+    state: "granted" | "denied" | "prompt" | "unsupported";
+    prompts: boolean;
+  }[];
   decisions: { name: string; decision: "allow" | "block"; at: number }[];
   file: string | null;
 };
@@ -227,7 +233,10 @@ export class SkApp {
   }
 
   tree(selector?: string, depth?: number): Promise<any> {
-    return this.send("tree", { ...(selector ? { selector } : {}), ...(depth ? { depth } : {}) });
+    return this.send("tree", {
+      ...(selector ? { selector } : {}),
+      ...(depth ? { depth } : {}),
+    });
   }
 
   /** Evaluates `js` in the app's JSC, in global scope. */
@@ -245,7 +254,12 @@ export class SkApp {
    * The host's log ring since `since` (a cursor from a previous call). 500 entries deep; `next` is
    * the cursor to pass next time.
    */
-  logs(since = 0): Promise<{ entries: LogEntry[]; next: number; status: string | null; dropped?: number }> {
+  logs(since = 0): Promise<{
+    entries: LogEntry[];
+    next: number;
+    status: string | null;
+    dropped?: number;
+  }> {
     return this.send("logs", { since });
   }
 
@@ -264,7 +278,10 @@ export class SkApp {
   async screenshot(path?: string, backend?: "auto" | "render_to_image" | "print_window"): Promise<string> {
     const target = path ? resolve(path) : artifactPath(`${this.label}-screenshot`, "png");
     mkdirSync(dirname(target), { recursive: true });
-    const data = await this.send("screenshot", { path: target, ...(backend ? { backend } : {}) });
+    const data = await this.send("screenshot", {
+      path: target,
+      ...(backend ? { backend } : {}),
+    });
     return data.path as string;
   }
 
@@ -275,13 +292,17 @@ export class SkApp {
 
   /** The file dialogs waiting for an answer, oldest first (questions are `questions()`). */
   async dialogs(): Promise<PendingDialog[]> {
-    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", { op: "list" });
+    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", {
+      op: "list",
+    });
     return all.filter((d): d is PendingDialog => d.kind !== "ask");
   }
 
   /** The questions waiting for a button, oldest first: the permission prompt. */
   async questions(): Promise<PendingQuestion[]> {
-    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", { op: "list" });
+    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", {
+      op: "list",
+    });
     return all.filter((d): d is PendingQuestion => d.kind === "ask");
   }
 
@@ -330,7 +351,11 @@ export class SkApp {
 
   /** Finishes dialog `id` with absolute paths, as the user picking them would. */
   answerDialog(id: number, paths: string | string[]): Promise<{ id: number; answered: number }> {
-    return this.send("dialog", { op: "answer", id, paths: Array.isArray(paths) ? paths : [paths] });
+    return this.send("dialog", {
+      op: "answer",
+      id,
+      paths: Array.isArray(paths) ? paths : [paths],
+    });
   }
 
   /** Dismisses dialog `id`, as Esc would. */
@@ -513,11 +538,15 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   const hostLog = join(logsDir, `${label}-${process.pid}-${Date.now()}.log`);
   const logFd = openSync(hostLog, "w");
 
-  const env: Record<string, string> = { ...(process.env as Record<string, string>), SK_DIST: slotDir };
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    SK_DIST: slotDir,
+  };
   if (options.packaged !== undefined) {
     for (const name of ["SK_DIST", "SK_APP_ROOT", "SK_PAYLOAD", "SK_APP_NAME"]) delete env[name];
   }
   if (options.window) env.SK_WINDOW = `${options.window[0]}x${options.window[1]}`;
+  if (options.scale !== undefined) env.GPUI_SCALE_FACTOR = String(options.scale);
   if (options.keepAlive) delete env.SK_OWNER_PID;
   else env.SK_OWNER_PID = String(process.pid);
   // A dev host's instance key includes its slot, so parallel slots never collide anyway — but a
