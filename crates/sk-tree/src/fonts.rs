@@ -151,6 +151,29 @@ fn is_face_family(name: &str) -> bool {
     name.ends_with(')') && name.contains(" (sk face ")
 }
 
+/// The bytes face `id` is handed to the text system as, and the family it is registered under when
+/// that is its own.
+fn registration(bytes: Vec<u8>, desc: &Descriptors, id: u32) -> (Vec<u8>, Option<String>) {
+    let own = face_family(&desc.family, id);
+    if COMPOSES_FAMILIES {
+        return match rename_family(&bytes, &own, &own) {
+            Some(renamed) => (renamed, Some(own)),
+            None => (bytes, None),
+        };
+    }
+    // Core Text and fontdb find a face by the family in its name table, never by the one the
+    // page declared. Nothing composes `unicode-range` subsets here, and cosmic-text shapes with
+    // any face of a family at the asked weight, so only a face that draws Latin text takes it.
+    // The PostScript name stays unique per face, as both key faces by it.
+    let family = if desc.covers_latin() {
+        &desc.family
+    } else {
+        &own
+    };
+    let renamed = rename_family(&bytes, family, &own);
+    (renamed.unwrap_or(bytes), None)
+}
+
 type Done = (u32, Result<Vec<u8>, String>);
 
 #[derive(Default)]
@@ -1027,21 +1050,8 @@ fn register_finished(cx: &mut App) {
                     );
                 }
             });
-            let own = face_family(&x.desc.family, x.id);
-            // Elsewhere a renamed face is found by no name the page uses (`Inter` would fall back to
-            // the system font), so it keeps its declared family.
-            let renamed = if COMPOSES_FAMILIES {
-                rename_family(&bytes, &own)
-            } else {
-                None
-            };
-            let bytes = match renamed {
-                Some(renamed) => {
-                    x.registered_as = Some(own);
-                    renamed
-                }
-                None => bytes,
-            };
+            let (bytes, registered_as) = registration(bytes, &x.desc, x.id);
+            x.registered_as = registered_as;
             fresh.push(Cow::Owned(bytes));
             names.push(x.desc.family.clone());
             x.registered = true;
@@ -1388,9 +1398,9 @@ pub(crate) fn own_family(sfnt: &[u8]) -> Option<String> {
     None
 }
 
-/// The font with its family names (1, 4, 6, 16, 21) replaced by `family`; `None` for a collection or
-/// a font without a readable `name` table.
-pub(crate) fn rename_family(sfnt: &[u8], family: &str) -> Option<Vec<u8>> {
+/// The font with its family names (1, 4, 16, 21) replaced by `family` and its PostScript name (6)
+/// made from `postscript`; `None` for a collection or a font without a readable `name` table.
+pub(crate) fn rename_family(sfnt: &[u8], family: &str, postscript: &str) -> Option<Vec<u8>> {
     let dir = tables(sfnt)?;
     let mut records: Vec<NameRecord> = name_records(sfnt)?
         .into_iter()
@@ -1401,7 +1411,7 @@ pub(crate) fn rename_family(sfnt: &[u8], family: &str) -> Option<Vec<u8>> {
             .flat_map(|u| u.to_be_bytes())
             .collect::<Vec<u8>>()
     };
-    let ps: String = family
+    let ps: String = postscript
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect();
@@ -2251,15 +2261,76 @@ mod tests {
     fn a_font_is_renamed_to_the_declared_family_and_keeps_its_style() {
         let f = font("Inter 18pt");
         assert_eq!(own_family(&f).as_deref(), Some("Inter 18pt"));
-        let renamed = rename_family(&f, "Brand Sans").unwrap();
+        let renamed = rename_family(&f, "Brand Sans", "Brand Sans 3").unwrap();
         assert_eq!(own_family(&renamed).as_deref(), Some("Brand Sans"));
         let recs = name_records(&renamed).unwrap();
         assert!(recs.iter().any(|r| r.3 == 2 && utf16be(&r.4) == "Bold"));
         assert!(recs
             .iter()
-            .any(|r| r.3 == 6 && utf16be(&r.4) == "BrandSans"));
+            .any(|r| r.3 == 6 && utf16be(&r.4) == "BrandSans3"));
         assert_eq!(checksum(&renamed), 0xB1B0_AFBA);
-        assert_eq!(rename_family(b"ttcf....", "x"), None);
+        assert_eq!(rename_family(b"ttcf....", "x", "x"), None);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn a_web_face_is_drawn_under_the_family_it_was_declared_as() {
+        #[cfg(target_os = "macos")]
+        let platform: Arc<dyn gpui::PlatformTextSystem> =
+            Arc::new(gpui_apple::AppleTextSystem::new());
+        #[cfg(not(target_os = "macos"))]
+        let platform: Arc<dyn gpui::PlatformTextSystem> =
+            Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans"));
+        let text = gpui::TextSystem::new(platform.clone());
+        let declared = gpui::font("SK Pixel");
+        let size = gpui::px(20.0);
+        // Layout resolves the family before its face is in.
+        text.normal_line_height(&declared, size);
+
+        let fixture = |path: &str| {
+            std::fs::read(format!(
+                "{}/../../packages/test/fixtures/{path}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap()
+        };
+        let pixel = fixture("fonts/src/fonts/PressStart2P-Regular.ttf");
+        let cyrillic = sfnt(fixture(
+            "font-subsets/src/fonts/manrope-cyrillic-wght-normal.woff2",
+        ))
+        .unwrap();
+        let face = |family: &str, unicode_range: Vec<(u32, u32)>| Descriptors {
+            family: family.into(),
+            unicode_range,
+            ..Descriptors::default()
+        };
+        let faces = [
+            (cyrillic, face("SK Pixel", vec![(0x400, 0x45F)])),
+            (pixel.clone(), face("SK Pixel", Vec::new())),
+            (pixel, face("SK Late", Vec::new())),
+        ];
+        let faces = faces
+            .into_iter()
+            .zip(1..)
+            .map(|((bytes, desc), id)| Cow::Owned(registration(bytes, &desc, id).0))
+            .collect();
+        text.add_fonts(faces).unwrap();
+
+        let names = text.all_font_names();
+        assert!(names.iter().any(|n| n == "SK Pixel"), "{names:?}");
+        for family in ["SK Pixel", "SK Late"] {
+            let font = gpui::font(family);
+            let id = text.resolve_font(&font);
+            assert_eq!(text.normal_line_height(&font, size), size, "{family}");
+            let run = gpui::FontRun {
+                len: 5,
+                font_id: id,
+                tracking: gpui::px(0.0),
+                word_spacing: gpui::px(0.0),
+            };
+            let line = platform.layout_line("Frame", size, &[run]);
+            assert_eq!(line.width, size * 5.0, "{family}");
+        }
     }
 }
 

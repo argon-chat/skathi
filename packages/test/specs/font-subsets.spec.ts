@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, readPng, SCREENSHOTS } from "../src/index";
+import { launch, MACOS, readPng, SCREENSHOTS } from "../src/index";
 
 const WIDTH = 420;
 const app = await launch({
@@ -97,7 +97,9 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test.skipIf(!SCREENSHOTS)(
+  // macOS: the faces of a family are not composed by unicode-range; what the latin face lacks
+  // takes the system's fallback.
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "Cyrillic text is drawn with the cyrillic subset's glyphs",
     async () => {
       await settled();
@@ -118,7 +120,7 @@ describe("a family cut into unicode-range subsets", () => {
     T,
   );
 
-  test.skipIf(!SCREENSHOTS)(
+  test.skipIf(!SCREENSHOTS || MACOS)(
     "a PUA-only family that leads the stack draws its own glyphs, and the next family the rest",
     async () => {
       await settled();

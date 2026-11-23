@@ -5624,6 +5624,8 @@ dependencies = [
  "sk-sticker",
  "sk-video",
  "skathi-gpui",
+ "skathi-gpui-apple",
+ "skathi-gpui-wgpu",
  "svgtypes",
  "usvg",
  "windows 0.62.2",

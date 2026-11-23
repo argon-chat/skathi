@@ -1,7 +1,7 @@
 // Faces load lazily, when text drawn with them asks, so the widths also say when a face arrived.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch, WINDOWS } from "../src/index";
+import { launch } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/fonts/src/main.ts",
@@ -68,8 +68,7 @@ describe("@font-face in the stylesheet", () => {
     T,
   );
 
-  // macOS and Linux: text keeps the fallback face's width (78 px, not 128).
-  test.skipIf(!WINDOWS)(
+  test(
     "text in the declared family is drawn in the font, under the family it was declared as",
     async () => {
       expect(
@@ -83,7 +82,7 @@ describe("@font-face in the stylesheet", () => {
     T,
   );
 
-  test.skipIf(!WINDOWS)(
+  test(
     "an inline style that names the family is parsed again once the font is in",
     async () => {
       expect(
@@ -96,7 +95,7 @@ describe("@font-face in the stylesheet", () => {
     T,
   );
 
-  test.skipIf(!WINDOWS)(
+  test(
     "a PUA-only family that leads a stack leaves the Latin text to the next family",
     async () => {
       expect(
@@ -111,7 +110,7 @@ describe("@font-face in the stylesheet", () => {
     T,
   );
 
-  test.skipIf(!WINDOWS)(
+  test(
     "a face loads when text is first drawn with it, and the text swaps to it",
     async () => {
       expect(await width("#late")).toBe(-1);
@@ -149,7 +148,7 @@ describe("@font-face in the stylesheet", () => {
 });
 
 describe("FontFace from script", () => {
-  test.skipIf(!WINDOWS)(
+  test(
     "an ArrayBuffer face loads at once, joins the set, and an element naming it takes it",
     async () => {
       expect(await width("#script")).not.toBe(PIXEL);
@@ -173,7 +172,7 @@ describe("FontFace from script", () => {
     T,
   );
 
-  test.skipIf(!WINDOWS)(
+  test(
     "the app logged nothing broken, and no missing-font advisory for a declared family",
     async () => {
       expect(await status("SK Unused")).toBe("unloaded");
