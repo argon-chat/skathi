@@ -1008,7 +1008,15 @@ const typography = section("Typography and text", [
     NO,
     "Selects East Asian glyph variants such as simplified, traditional or ruby forms.",
   ),
-  prop("line-height", OK, "Sets the height of a line of text.", { related: ["font"] }),
+  prop("line-height", OK, "Sets the height of a line of text.", {
+    notes: [
+      "`normal`, the initial value, comes from the first available font of the element's `font-family`: its ascent, descent and line gap, each rounded to a pixel as Chromium does. It inherits as the keyword, so each element resolves it for its own font and size.",
+    ],
+    limitations: [
+      "A line whose glyphs fall back to another font does not grow to that font's `normal` height: `normal` is the first font's alone.",
+    ],
+    related: ["font"],
+  }),
   sh("text-box", PART, "Sets the trimmed sides and the font metrics used for trimming.", {
     since: "0.7.0",
     notes: ["`normal` resets both longhands. Supplying only an edge sets `text-box-trim: trim-both`."],

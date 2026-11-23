@@ -241,14 +241,14 @@ fn wraps(node: &crate::tree::Node) -> bool {
 pub(crate) fn atom_children(
     t: &Tree,
     children: &[u32],
-    rem: gpui::Pixels,
+    window: &gpui::Window,
 ) -> Vec<(u32, String, VerticalAlign)> {
     children
         .iter()
         .filter_map(|&c| {
             let atom = t.prop(c, "atom")?.trim();
             let align = t.node(c).map_or_else(VerticalAlign::default, |n| {
-                crate::vertical_align::of(n, rem)
+                crate::vertical_align::of(n, window)
             });
             (!atom.is_empty()).then(|| (c, atom.to_owned(), align))
         })

@@ -15,10 +15,11 @@ thread_local! {
 }
 
 /// Node `n`'s computed `vertical-align`, a percentage against its own line height when it sets one.
-pub(crate) fn of(n: &Node, rem: Pixels) -> VerticalAlign {
+pub(crate) fn of(n: &Node, window: &Window) -> VerticalAlign {
     let Some(cs) = n.computed.as_ref() else {
         return VerticalAlign::default();
     };
+    let rem = window.rem_size();
     use sk_css::VerticalAlign as V;
     match cs.extras.vertical_align.unwrap_or_default() {
         V::Baseline => VerticalAlign::Baseline,
@@ -32,26 +33,27 @@ pub(crate) fn of(n: &Node, rem: Pixels) -> VerticalAlign {
         V::Shift { fraction, px: by } => VerticalAlign::Shift {
             fraction,
             px: px(by),
-            line_height: cs
-                .base
-                .text
-                .line_height
-                .map(|lh| lh.to_pixels(px(cs.font_size).into(), rem)),
+            line_height: cs.base.text.line_height.map(|lh| {
+                window.text_system().resolve_line_height(
+                    lh,
+                    &cs.computed_font,
+                    px(cs.font_size),
+                    rem,
+                )
+            }),
         },
     }
 }
 
 /// The line height `id`'s text has: the nearest declared `line-height`, a number or percentage
-/// of `id`'s own font size as CSS inherits it, else the window's.
-fn line_height(t: &Tree, id: u32, font_size: Pixels, window: &Window) -> Pixels {
-    let rem = window.rem_size();
+/// of `id`'s own font size as CSS inherits it, else the document's initial `normal`.
+fn line_height(t: &Tree, id: u32, font: &gpui::Font, font_size: Pixels, window: &Window) -> Pixels {
     let mut at = id;
+    let mut declared = gpui::line_height_normal();
     while let Some(n) = t.node(at) {
         if let Some(lh) = n.computed.as_ref().and_then(|cs| cs.base.text.line_height) {
-            return match lh {
-                gpui::DefiniteLength::Absolute(lh) => lh.to_pixels(rem),
-                relative => relative.to_pixels(font_size.into(), rem),
-            };
+            declared = lh;
+            break;
         }
         if n.parent == 0 || n.parent == at {
             break;
@@ -59,15 +61,14 @@ fn line_height(t: &Tree, id: u32, font_size: Pixels, window: &Window) -> Pixels 
         at = n.parent;
     }
     window
-        .text_style()
-        .line_height
-        .to_pixels(font_size.into(), rem)
+        .text_system()
+        .resolve_line_height(declared, font, font_size, window.rem_size())
 }
 
 /// Records where item `id` of a line goes, when its `vertical-align` moves it: the line is its
 /// parent's, so its text is the parent's text.
 pub(crate) fn note_line_item(t: &Tree, id: u32, node: &Node, window: &Window) {
-    let align = of(node, window.rem_size());
+    let align = of(node, window);
     if align.is_baseline() {
         PENDING.with(|p| p.borrow_mut().remove(&id));
         return;
@@ -82,7 +83,7 @@ pub(crate) fn note_line_item(t: &Tree, id: u32, node: &Node, window: &Window) {
     let line = LineText::measure(
         &cs.computed_font,
         font_size,
-        line_height(t, node.parent, font_size, window),
+        line_height(t, node.parent, &cs.computed_font, font_size, window),
         window,
     );
     PENDING.with(|p| p.borrow_mut().insert(id, align.alignment(&line)));

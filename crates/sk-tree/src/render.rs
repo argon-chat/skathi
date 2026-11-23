@@ -1816,7 +1816,73 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
-    el
+    DocumentText(el).into_any()
+}
+
+/// The document's initial text style: CSS's initial `line-height` is `normal`, where a gpui view's
+/// is φ. Pushed around the document rather than set on its root element, so the root's own
+/// declarations (and a fullscreen element's ancestors') still win.
+struct DocumentText(AnyElement);
+
+impl gpui::Element for DocumentText {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let child = &mut self.0;
+        (
+            window.with_text_style(document_text(), |window| child.request_layout(window, cx)),
+            (),
+        )
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.0;
+        window.with_text_style(document_text(), |window| child.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: gpui::Bounds<gpui::Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let child = &mut self.0;
+        window.with_text_style(document_text(), |window| child.paint(window, cx));
+    }
+}
+
+fn document_text() -> Option<gpui::TextStyleRefinement> {
+    Some(gpui::TextStyleRefinement {
+        line_height: Some(gpui::line_height_normal()),
+        ..Default::default()
+    })
 }
 
 fn build_fullscreen<V: 'static>(
@@ -1959,7 +2025,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
             }
             ancestor = node.parent;
         }
-        element
+        DocumentText(element).into_any()
     })
 }
 
@@ -2497,7 +2563,7 @@ fn build_node<V: 'static>(
                     let inert = extras.pointer_events_none == Some(true);
                     let (input, focus_target) = if is_editor {
                         let children = laid_out_children(t, node);
-                        let atoms = crate::editor::atom_children(t, &children, window.rem_size())
+                        let atoms = crate::editor::atom_children(t, &children, window)
                             .into_iter()
                             .map(|(c, atom, atom_align)| {
                                 let element = build_node(
@@ -3040,7 +3106,7 @@ fn blank_collapses_away(t: &Tree, id: u32, node: &crate::tree::Node) -> bool {
     ) {
         return true;
     }
-    if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
+    if joins_parent_lines(t, parent) {
         return false;
     }
     let content = |c: u32| {
@@ -3447,16 +3513,42 @@ pub(crate) fn trim_edges<'a>(
     let Some(parent) = t.node(node.parent) else {
         return text;
     };
-    if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
+    if joins_parent_lines(t, parent) {
         return text;
     }
-    let mut boxes = parent
+    let boxes = parent
         .children
         .iter()
         .copied()
         .filter(|&c| generates_a_box(t, c));
-    let first = boxes.next();
-    let last = boxes.last().or(first);
+    let (first, last) = if lays_out_items(parent) {
+        // Contiguous text is one anonymous item; its ends are where the run meets an element.
+        let mut prev = None;
+        let mut next = None;
+        let mut seen = false;
+        for c in boxes {
+            if c == id {
+                seen = true;
+            } else if seen {
+                next = Some(c);
+                break;
+            } else {
+                prev = Some(c);
+            }
+        }
+        let text_node = |c: Option<u32>| {
+            c.and_then(|c| t.node(c))
+                .is_some_and(|n| n.kind == Kind::Text)
+        };
+        (
+            (!text_node(prev)).then_some(id),
+            (!text_node(next)).then_some(id),
+        )
+    } else {
+        let mut boxes = boxes;
+        let first = boxes.next();
+        (first, boxes.last().or(first))
+    };
     let text = if first == Some(id) {
         text.trim_start_matches(COLLAPSIBLE)
     } else {
@@ -3482,7 +3574,7 @@ pub(crate) fn trim_own_edges<'a>(
     {
         return text;
     }
-    if INLINE_LEVEL_TAGS.contains(&t.name(node.tag))
+    if joins_parent_lines(t, node)
         && t.node(node.parent).is_some_and(|parent| {
             parent
                 .children
@@ -3495,6 +3587,38 @@ pub(crate) fn trim_own_edges<'a>(
         return text;
     }
     text.trim_matches(COLLAPSIBLE)
+}
+
+/// A flex or grid container: each run of its text is an item of its own, with lines of its own.
+fn lays_out_items(node: &crate::tree::Node) -> bool {
+    node.kind == Kind::Element
+        && matches!(
+            node.computed.as_ref().and_then(|cs| cs.base.display),
+            Some(gpui::Display::Flex) | Some(gpui::Display::Grid)
+        )
+}
+
+/// An inline-level element whose content sits in its parent's lines, so the edges of its text are
+/// not line edges. A box that is block-level or blockified (`display: block | inline-block`, a
+/// flex or grid container or item, out of flow) has lines of its own.
+fn joins_parent_lines(t: &Tree, node: &crate::tree::Node) -> bool {
+    if node.kind != Kind::Element || !INLINE_LEVEL_TAGS.contains(&t.name(node.tag)) {
+        return false;
+    }
+    // A button is `inline-block` by default: atomic in its parent's line.
+    if t.name(node.tag) == "button" {
+        return false;
+    }
+    let cs = node.computed.as_ref();
+    let display = cs.and_then(|cs| cs.base.display);
+    let inline = match display {
+        None => true,
+        Some(gpui::Display::Block) => cs.is_some_and(|cs| cs.extras.inline_flow == Some(true)),
+        _ => false,
+    };
+    inline
+        && !cs.is_some_and(|cs| cs.base.position == Some(gpui::Position::Absolute))
+        && !t.node(node.parent).is_some_and(lays_out_items)
 }
 
 /// Does this node produce a box the parent's layout makes room for? Vue anchors every Fragment with
@@ -7437,6 +7561,117 @@ mod tests {
                     None
                 ),
                 " b "
+            );
+        });
+    }
+
+    #[test]
+    fn an_inline_tag_that_lays_out_its_own_lines_trims_its_text() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let button = t.intern("button");
+            let span = t.intern("span");
+            let svg = t.intern("svg");
+            fn shown(t: &Tree, id: u32) -> String {
+                let n = t.node(id).unwrap();
+                let collapsed = processed_text(&n.text, sk_css::WhiteSpaceMode::Normal);
+                trim_edges(t, n, id, &collapsed, None).to_string()
+            }
+            fn text_in(t: &mut Tree, parent: u32, s: &str) -> u32 {
+                let id = t.create_text();
+                t.set_text(id, s.to_string());
+                t.insert(id, parent, 0);
+                id
+            }
+            let inline_flex = || {
+                Some(computed(
+                    displayed(gpui::Display::Flex),
+                    sk_css::Extras {
+                        inline_level: Some(true),
+                        inline_flow: Some(false),
+                        ..Default::default()
+                    },
+                ))
+            };
+
+            let row = t.create_element(div);
+            t.node_mut(row).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Flex), Default::default()));
+
+            let alone = t.create_element(button);
+            t.insert(alone, row, 0);
+            t.node_mut(alone).unwrap().computed = inline_flex();
+            let label = text_in(t, alone, "\n  Open a link\n");
+            assert_eq!(shown(t, label), "Open a link");
+
+            let icon = t.create_element(button);
+            t.insert(icon, row, 0);
+            t.node_mut(icon).unwrap().computed = inline_flex();
+            let glyph = t.create_element(svg);
+            t.insert(glyph, icon, 0);
+            let after = text_in(t, icon, "\n  Open a link\n");
+            assert_eq!(shown(t, after), "Open a link");
+
+            let item = t.create_element(span);
+            t.insert(item, row, 0);
+            let inside = text_in(t, item, "\n  Open a link\n");
+            assert_eq!(shown(t, inside), "Open a link");
+
+            let run = t.create_element(div);
+            t.node_mut(run).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Flex), Default::default()));
+            let first = text_in(t, run, " Count: ");
+            let second = text_in(t, run, "3 ");
+            assert_eq!(shown(t, first), "Count: ");
+            assert_eq!(shown(t, second), "3");
+
+            let para = t.create_element(div);
+            text_in(t, para, "a");
+            let declared_inline = t.create_element(span);
+            t.insert(declared_inline, para, 0);
+            t.node_mut(declared_inline).unwrap().computed = Some(computed(
+                displayed(gpui::Display::Block),
+                sk_css::Extras {
+                    inline_level: Some(true),
+                    inline_flow: Some(true),
+                    ..Default::default()
+                },
+            ));
+            let kept = text_in(t, declared_inline, " b ");
+            text_in(t, para, "c");
+            assert_eq!(shown(t, kept), " b ");
+
+            let chip = t.create_element(span);
+            t.insert(chip, para, 0);
+            t.node_mut(chip).unwrap().computed = Some(computed(
+                displayed(gpui::Display::Block),
+                sk_css::Extras {
+                    inline_level: Some(true),
+                    inline_flow: Some(false),
+                    ..Default::default()
+                },
+            ));
+            let boxed = text_in(t, chip, " d ");
+            assert_eq!(shown(t, boxed), "d");
+
+            let badge = t.create_element(span);
+            t.insert(badge, para, 0);
+            t.node_mut(badge).unwrap().computed = Some(computed(
+                gpui::StyleRefinement {
+                    position: Some(gpui::Position::Absolute),
+                    ..Default::default()
+                },
+                Default::default(),
+            ));
+            t.set_element_text(badge, " 9 ".to_string());
+            assert_eq!(
+                trim_own_edges(
+                    t,
+                    t.node(badge).unwrap(),
+                    &t.node(badge).unwrap().text,
+                    None
+                ),
+                "9"
             );
         });
     }

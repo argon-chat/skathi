@@ -152,6 +152,9 @@ pub struct Extras {
     /// The `display` had an inline outer type. taffy lays the box out block-level, which ignores
     /// the parent's `text-align`; the renderer advises (`advise_inline_level`).
     pub inline_level: Option<bool>,
+    /// The `display` was `inline`: the box's content joins the parent's lines instead of
+    /// starting its own (`inline-block` and `inline-flex` start their own).
+    pub inline_flow: Option<bool>,
     pub appearance_none: Option<bool>,
     pub field_sizing: Option<crate::LayoutValue<crate::FieldSizing>>,
     pub text_box_trim: Option<crate::LayoutValue<crate::TextBoxTrim>>,
@@ -656,6 +659,9 @@ impl Extras {
         }
         if other.inline_level.is_some() {
             self.inline_level = other.inline_level;
+        }
+        if other.inline_flow.is_some() {
+            self.inline_flow = other.inline_flow;
         }
         if other.fill.is_some() {
             self.fill = other.fill;
@@ -4800,6 +4806,11 @@ fn apply_property(
                 d,
                 D::Pair(p) if matches!(p.outside, DisplayOutside::Inline)
             ));
+            x.inline_flow = Some(matches!(
+                d,
+                D::Pair(p) if matches!(p.outside, DisplayOutside::Inline)
+                    && matches!(p.inside, DisplayInside::Flow)
+            ));
             r.display = Some(match d {
                 D::Keyword(DisplayKeyword::None) => gpui::Display::None,
                 D::Pair(pair) => match pair.inside {
@@ -6013,7 +6024,7 @@ fn apply_property(
                     Some(px(p.0 * em_basis()).into())
                 }
                 CssLineHeight::Length(lp) => lp_definite(lp),
-                CssLineHeight::Normal => Some(relative(1.2)),
+                CssLineHeight::Normal => Some(gpui::line_height_normal()),
             };
         }
         FontStyle(v) => {

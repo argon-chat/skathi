@@ -1,0 +1,40 @@
+---
+title: Skathi 0.9
+metaTitle: "Skathi 0.9"
+description: Text that matches the browsers' line boxes.
+date: 2026-11-23
+draft: true
+tags: [release, text, css]
+release:
+  version: "0.9.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.9.0 && bun add -d @skathi-native/cli@^0.9.0
+    - label: Rust program
+      command: cargo add skathi@0.9
+---
+
+## Upgrading
+
+### Text with no `line-height` is `normal`
+
+A document's text now starts at CSS's initial `line-height: normal`. Before, text whose line height no rule declared got 1.618 of its font size, so every line was about 0.4 em taller than in a browser. Interfaces that never declare `line-height` (most of those written for the web) now come out at the browsers' heights: buttons, menu rows and labels lose the extra room.
+
+To keep the old look, declare it once:
+
+```css
+html {
+  line-height: 1.618;
+}
+```
+
+### `normal` follows the font
+
+`line-height: normal` is no longer a fixed 1.2 of the font size. It comes from the first available font of the element's `font-family`: its ascent, descent and line gap, rounded as Chromium rounds them, so Segoe UI at 16px is 21px tall and Arial 18px, as in Chromium. It inherits as the keyword, and each element resolves it for its own font and size. A line whose glyphs fall back to another font, such as Chinese text in a Latin font, does not yet grow to that font's height.
+
+### White space at the edges of a flex item
+
+A space at the start or end of a flex or grid item's text is removed, as in the browsers. A label written on its own line after an icon (`<svg/>\n  Open a link\n`) no longer makes the button a space wider. The same holds for the text of a `display: block` or `inline-block` element and of an absolutely positioned one; text inside an inline `<span>` beside other text keeps its spaces.

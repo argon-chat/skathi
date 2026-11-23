@@ -1,0 +1,31 @@
+/* Fixture for specs/line-height.spec.ts. Press Start 2P's ascent, descent and line gap are 1000, 0
+   and 0 of 1000 units in hhea and in OS/2 (USE_TYPO_METRICS), so `normal` is exactly its size. */
+
+@font-face {
+  font-family: "SK Pixel";
+  src: url("../../fonts/src/fonts/PressStart2P-Regular.ttf") format("truetype");
+}
+
+#root {
+  font-family: serif;
+  font-size: 16px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px 9px 16px;
+  border: 1px solid;
+  font-size: 15px;
+}
+
+.pixel {
+  font-family: "SK Pixel", serif;
+  font-size: 20px;
+}

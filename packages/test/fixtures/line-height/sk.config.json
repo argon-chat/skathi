@@ -1,0 +1,11 @@
+{
+  "name": "line-height",
+
+  "window": {
+    "title": "Skathi — line-height (fixture)",
+    "width": 480,
+    "height": 600,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
