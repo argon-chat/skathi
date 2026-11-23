@@ -104,3 +104,44 @@ test("transition delays follow the element order and skip text siblings", async 
   expect(first[0]).toBeGreaterThan(first[1] ?? 0);
   expect(first[2]).toBeCloseTo(0.2);
 });
+
+const shadowOf = (id: string, prop = "boxShadow"): Promise<string> =>
+  app.eval(`getComputedStyle(document.getElementById(${JSON.stringify(id)})).${prop}`);
+const lengths = (css: string) => [...css.matchAll(/(-?[\d.]+)px/g)].map((m) => Number(m[1]));
+
+test("box-shadow transitions per shadow, pads the shorter list, and snaps when inset differs", async () => {
+  expect(await shadowOf("shadow")).toBe("rgb(255, 0, 0) 0px 0px 0px 0px");
+  await app.eval(`(document.getElementById("shadow").classList.add("on"), 0)`);
+  const mid = await until(
+    () => shadowOf("shadow"),
+    (css) => (lengths(css)[0] ?? 0) > 3,
+  );
+  const [x = 0, y = 0, blur = 0, spread = 0] = lengths(mid);
+  expect(x).toBeLessThan(10);
+  expect(y).toBeCloseTo(2 * x, 0);
+  expect(blur).toBeCloseTo(0.8 * x, 0);
+  expect(spread).toBeCloseTo(0.4 * x, 0);
+  expect(mid).toMatch(/^rgba?\(\d+, 0, \d+(, [\d.]+)?\) [^,]+, rgba\(0, 0, 255, [\d.]+\) [^,]+ inset$/);
+  expect(
+    await until(
+      () => shadowOf("shadow"),
+      (css) => !css.includes("rgba"),
+    ),
+  ).toBe("rgb(0, 0, 255) 10px 20px 8px 4px, rgb(0, 0, 255) 2px 2px 0px 0px inset");
+
+  await app.eval(`(document.getElementById("shadow-inset").classList.add("inset"), 0)`);
+  expect(await shadowOf("shadow-inset")).toBe("rgb(255, 0, 0) 0px 0px 0px 0px inset");
+});
+
+test("box-shadow and text-shadow interpolate in @keyframes and element.animate()", async () => {
+  expect(await shadowOf("glow")).toBe("rgb(128, 0, 128) 0px 0px 10px 5px");
+  expect(await shadowOf("ink", "textShadow")).toBe("rgb(128, 0, 128) 5px 0px 2px");
+  await app.eval(`(() => {
+    const el = document.getElementById("shadow-inset");
+    const a = el.animate([{ boxShadow: "0 0 0 0 rgb(255 0 0)" }, { boxShadow: "4px 8px 0 0 rgb(0 0 255)" }], 2000);
+    a.pause();
+    a.currentTime = 500;
+    return 0;
+  })()`);
+  expect(await shadowOf("shadow-inset")).toBe("rgb(191, 0, 64) 1px 2px 0px 0px");
+});

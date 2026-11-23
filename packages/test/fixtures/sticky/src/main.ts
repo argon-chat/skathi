@@ -50,6 +50,19 @@ const Root = defineComponent({
           ]),
           h("div", { class: "outer-tail" }),
         ]),
+        h("div", { class: "abs-wrap" }, [
+          h("div", { id: "abs", class: "abs" }, [
+            h("div", { class: "abs-canvas" }, [
+              h("div", { id: "abs-block", class: "abs-block" }, [
+                h("div", { id: "abs-head", class: "abs-head" }),
+                h("div", { class: "abs-chunk" }, [
+                  h("div", { id: "abs-gutter", class: "abs-gutter" }),
+                  h("div", { class: "abs-line" }),
+                ]),
+              ]),
+            ]),
+          ]),
+        ]),
       ]);
   },
 });

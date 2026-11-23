@@ -24,6 +24,9 @@ const state = {
   align,
   ed: () => document.querySelector("#ed") as Editor,
   ed2: () => document.querySelector("#ed2") as Editor,
+  code: () => document.querySelector("#code") as Editor,
+  tall: () => document.querySelector("#tall") as Editor,
+  tabs: shallowRef(4),
   reset(value?: Value) {
     state.log.length = 0;
     state.changes.length = 0;
@@ -46,10 +49,18 @@ function onBeforeinput(e: InputEvent) {
   }
 }
 
+const tabs = (globalThis as { __SK_TEST_EDITOR__?: { tabs: { value: number } } }).__SK_TEST_EDITOR__!.tabs;
+
 createApp({
   setup() {
     return () =>
       h("div", { id: "root", style: { padding: "8px", display: "flex", flexDirection: "column", gap: "8px" } }, [
+        h("sk-editor", { id: "code", readonly: true }),
+        h("div", { class: "scroller", id: "scroller" }, [h("sk-editor", { id: "tall", readonly: true })]),
+        h("div", { class: "tabs" }, [
+          h("span", { id: "tabbed", style: { tabSize: String(tabs.value) } }, "\tx"),
+          h("span", { id: "spaced" }, "    x"),
+        ]),
         h(
           "sk-editor",
           {

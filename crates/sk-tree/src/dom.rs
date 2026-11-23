@@ -239,6 +239,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "font-size",
     "color",
     "text-shadow",
+    "box-shadow",
     "color-scheme",
     "image-rendering",
     "aspect-ratio",
@@ -317,6 +318,8 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "display"
             | "content-visibility"
             | "opacity"
+            | "box-shadow"
+            | "text-shadow"
             | "translate"
             | "rotate"
             | "overflow"
@@ -436,6 +439,13 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             .and_then(|style| style.vn_rotate)
             .or(cs.base.vn_rotate)
             .map_or_else(|| "none".into(), sk_css::rotate_css),
+        "box-shadow" => sk_css::box_shadow_css(
+            overlay
+                .as_ref()
+                .and_then(|style| style.box_shadow.as_deref())
+                .or(cs.base.box_shadow.as_deref())
+                .unwrap_or_default(),
+        ),
         "scale" | "perspective" | "filter" => "none".into(),
         "will-change" => "auto".into(),
         "contain" => "none".into(),
@@ -589,7 +599,12 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         .into(),
         "cursor" => cursor_keyword(t, id).into(),
         "text-shadow" => {
-            let (mut shadows, mut color) = (None, None);
+            let (mut shadows, mut color) = (
+                overlay
+                    .as_ref()
+                    .and_then(|style| style.text.text_shadow.clone()),
+                None,
+            );
             let mut at = id;
             while let Some(n) = t.node(at) {
                 if let Some(c) = n.computed.as_ref() {

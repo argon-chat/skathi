@@ -44,7 +44,7 @@ export type Category = (typeof categories)[number];
 /** Section prose from the coverage page that applies to the whole category. Inline code is Markdown. */
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Transitions and animations":
-    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `corner-shape` and its corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
+    "These properties animate (transitions, `@keyframes`, `element.animate()`): `opacity`, `color`, `background-color`, `border-color`, `text-decoration-color`, `text-shadow`, `box-shadow`, `fill`, `stroke`, `width`, `height`, `min-*`, `max-*`, `padding-*`, `margin-*`, the `border-*-radius` corners, `corner-shape` and its corners, `border-*-width`, `row-gap`, `column-gap`, `font-size`, `object-position`, `aspect-ratio`, `transform` and `--shading`. `@property` custom properties with the `<percentage>` syntax animate in `@keyframes` only. `overflow` animates discretely in `@keyframes` and `element.animate()`. Any other property snaps to its end value.",
   "SVG properties in CSS":
     "App stylesheets use Skathi's cascade. An inline `<svg>` also has its own renderer, which reads presentation attributes, element styles and a `<style>` inside the SVG.",
   "Media features": "A query that uses an unsupported feature drops its whole `@media` block, with an advisory.",
@@ -748,6 +748,7 @@ const layout = section("Layout", [
     notes: [
       "A `sticky` box's offset is applied when the frame is painted, from that frame's scroll position: no scroll listener or re-render is involved.",
       "`getBoundingClientRect()`, `offsetTop`, `elementFromPoint()` and `IntersectionObserver` see a stuck box where it is painted.",
+      "As in browsers, an ancestor with `overflow: hidden` is a scroll container, so a `sticky` box inside it sticks to that ancestor. Use `overflow: clip` to clip without becoming the reference.",
     ],
     limitations: [
       "Under an ancestor with a `transform` that sits between a `sticky` box and its scroll container, the box is held against the untransformed edges.",
@@ -1126,9 +1127,12 @@ const typography = section("Typography and text", [
   }),
   sh("text-emphasis", NO, "Draws emphasis marks above or below characters."),
   prop("white-space", OK, "Sets how white space and line breaks in text are collapsed and wrapped.", {
-    notes: ["All values are supported."],
+    notes: [
+      "All values are supported.",
+      "On an `<sk-editor>`, `pre` and `nowrap` turn off soft wrapping and lines scroll sideways; the other values wrap. Spaces are always kept there, and an ancestor's value does not reach it.",
+    ],
     values: [v("break-spaces", PART, "Behaves as `pre-wrap`.")],
-    related: ["white-space-collapse", "text-wrap"],
+    related: ["white-space-collapse", "text-wrap", "tab-size"],
   }),
   prop("white-space-collapse", NO, "Sets how white space in text is collapsed.", {
     workaround: "Use `white-space: nowrap` for no wrapping.",
@@ -1196,7 +1200,14 @@ const typography = section("Typography and text", [
       "Table cells: there is no table layout.",
     ],
   }),
-  prop("tab-size", NO, "Sets the width of a tab character.", { limitations: ["Ignored without an advisory."] }),
+  prop("tab-size", OK, "Sets the width of a tab character.", {
+    notes: [
+      "A number is that many space widths of the tab's font, letter and word spacing included; a length is a fixed distance. Applies to text, `<textarea>` and `<sk-editor>`.",
+    ],
+    limitations: ["In wrapped text, tab stops are measured from the start of the hard line, not of each wrapped row."],
+    since: "0.8.0",
+    related: ["white-space"],
+  }),
   prop("-webkit-text-fill-color", OK, "Sets the fill color of text, separately from `color`.", {
     notes: ["Use it with `background-clip: text` for gradient text."],
     related: ["background-clip", "webkit-text-stroke"],
@@ -1615,8 +1626,15 @@ const backgrounds = section("Backgrounds and borders", [
 
 const effects = section("Effects", [
   prop("box-shadow", PART, "Adds shadows around or inside an element's box.", {
-    notes: ["Several shadows, `inset`, spread and `none` are supported."],
-    limitations: ["`currentColor` is not supported inside `box-shadow`."],
+    notes: [
+      "Several shadows, `inset`, spread and `none` are supported.",
+      "Shadow lists interpolate shadow by shadow, the shorter list padded with transparent shadows; a pair where only one is `inset` snaps.",
+    ],
+    limitations: [
+      "`currentColor` is not supported inside `box-shadow`.",
+      "A list of more than six shadows snaps instead of animating.",
+    ],
+    animates: "interpolated",
     aliases: ["-webkit-box-shadow"],
     related: ["text-shadow", "keyword-currentcolor"],
   }),
@@ -2671,7 +2689,10 @@ const selectors = section("Selectors", [
   }),
   pe("::selection", OK, "Selects the part of the document the user has selected."),
   pe("::mark()", OK, "Skathi: styles the text under a named mark of an `<sk-editor>`.", {
-    notes: ["Font family, weight, style and size, color, background, underline and line-through apply."],
+    notes: [
+      "Font family, weight, style and size, color, background, underline and line-through apply.",
+      "`border-radius` rounds the background; a mark over several rows rounds only its outer ends.",
+    ],
     since: "0.8.0",
     related: ["pseudo-line", "pseudo-decoration"],
   }),
@@ -2681,9 +2702,32 @@ const selectors = section("Selectors", [
     related: ["pseudo-mark", "pseudo-decoration"],
   }),
   pe("::decoration()", OK, "Skathi: styles the text under a named decoration of an `<sk-editor>`.", {
-    notes: ["Only properties that do not move glyphs apply: color, background, underline and line-through."],
+    notes: [
+      "Only properties that do not move glyphs apply: color, background, `border-radius`, underline and line-through.",
+      "A rounded background over several rows rounds only its outer ends, as `box-decoration-break: slice` does.",
+    ],
+    limitations: ["`border-radius` takes lengths; a percentage is ignored."],
     since: "0.8.0",
-    related: ["pseudo-mark", "pseudo-line"],
+    related: ["pseudo-mark", "pseudo-line", "pseudo-gutter"],
+  }),
+  pe(
+    "::gutter",
+    OK,
+    "Skathi: styles the gutter column of an `<sk-editor>`; `::gutter(name)` styles the gutter of lines with that line decoration.",
+    {
+      notes: [
+        "`::gutter` takes background, color, font, horizontal padding, `border-right`, `width` and `min-width` (the whole column, padding and border included); `display: none` hides the gutter.",
+        "`::gutter(name)` takes background, color, font weight and style.",
+        "The gutter shows when there is a `::gutter` or `::line-number` rule, or a line decoration has gutter text. It does not scroll sideways.",
+      ],
+      since: "0.8.0",
+      related: ["pseudo-line-number", "pseudo-decoration"],
+    },
+  ),
+  pe("::line-number", OK, "Skathi: shows and styles the line numbers in the gutter of an `<sk-editor>`.", {
+    notes: ["Color, font and `text-align` apply; numbers are right-aligned by default. `display: none` hides them."],
+    since: "0.8.0",
+    related: ["pseudo-gutter"],
   }),
   pe("::file-selector-button", OK, 'Selects the button of an `<input type="file">`.'),
   ...(

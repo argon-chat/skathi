@@ -4,6 +4,7 @@
 
 mod element;
 mod geometry;
+mod layout;
 mod state;
 
 use std::cell::{Cell, RefCell};
@@ -11,9 +12,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui::{
-    actions, div, px, AnyElement, App, Context, CursorStyle, Edges, Entity, FontStyle, FontWeight,
-    Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels,
-    SharedString, StrikethroughStyle, Styled, TextInputConfiguration, UnderlineStyle, Window,
+    actions, div, px, AnyElement, App, Context, Corners, CursorStyle, Edges, Entity, FontStyle,
+    FontWeight, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement,
+    Pixels, SharedString, StrikethroughStyle, Styled, TextAlign, TextInputConfiguration,
+    UnderlineStyle, Window,
 };
 
 pub use geometry::Geometry;
@@ -97,6 +99,9 @@ pub struct RunStyle {
     pub background: Option<Hsla>,
     pub underline: Option<UnderlineStyle>,
     pub strikethrough: Option<StrikethroughStyle>,
+    /// `border-radius` of the background. A range over several rows is one box sliced at the
+    /// breaks: only its outer ends are rounded.
+    pub radius: Option<Corners<Pixels>>,
 }
 
 impl RunStyle {
@@ -107,8 +112,19 @@ impl RunStyle {
             background: self.background,
             underline: self.underline,
             strikethrough: self.strikethrough,
+            radius: self.radius,
             ..Default::default()
         }
+    }
+
+    pub(crate) fn rounded(&self) -> bool {
+        self.background.is_some()
+            && self.radius.is_some_and(|r| {
+                r.top_left
+                    .max(r.top_right)
+                    .max(r.bottom_left.max(r.bottom_right))
+                    > px(0.0)
+            })
     }
 
     pub(crate) fn over(&mut self, top: &RunStyle) {
@@ -126,6 +142,32 @@ impl RunStyle {
             strikethrough
         );
     }
+}
+
+/// The gutter: `::gutter` for the column, `::line-number` for the numbers in it, and
+/// `::gutter(name)` for the cell of a line with that line decoration.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GutterStyle {
+    /// A `::gutter` rule exists; `display: none` there hides the gutter whatever else asks for it.
+    pub declared: bool,
+    pub hidden: bool,
+    pub run: RunStyle,
+    pub background: Option<Hsla>,
+    pub padding: Edges<Pixels>,
+    pub border_right: Pixels,
+    pub border_color: Option<Hsla>,
+    /// The whole column's width, padding and border included.
+    pub width: Option<Pixels>,
+    pub min_width: Option<Pixels>,
+    /// `Some` when a `::line-number` rule shows the numbers.
+    pub numbers: Option<LineNumberStyle>,
+    pub cells: Rc<HashMap<String, RunStyle>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LineNumberStyle {
+    pub run: RunStyle,
+    pub align: TextAlign,
 }
 
 /// A `::line()` rule: the run style of the whole line plus its box.
@@ -163,6 +205,10 @@ pub struct EditorOptions {
     pub marks: Rc<HashMap<String, RunStyle>>,
     pub decorations: Rc<HashMap<String, RunStyle>>,
     pub lines: Rc<HashMap<String, LineStyle>>,
+    pub gutter: GutterStyle,
+    /// Lines break to fit the width (`white-space: pre-wrap` and the other wrapping values);
+    /// otherwise they scroll sideways.
+    pub wrap: bool,
     pub font_epoch: u64,
 }
 
@@ -183,6 +229,8 @@ impl Default for EditorOptions {
             marks: Rc::default(),
             decorations: Rc::default(),
             lines: Rc::default(),
+            gutter: GutterStyle::default(),
+            wrap: true,
             font_epoch: 0,
         }
     }
@@ -285,8 +333,13 @@ pub fn editor(
 
     let scroll_state = state.clone();
     element = element.on_scroll(move |event, window, cx| {
-        let delta = event.delta.pixel_delta(px(20.0)).y;
-        scroll_state.update(cx, |this, cx| this.scroll_by(-delta, window, cx));
+        let d = event.delta.pixel_delta(px(20.0));
+        let (dx, dy) = if d.x == px(0.0) && event.modifiers.shift {
+            (d.y, px(0.0))
+        } else {
+            (d.x, d.y)
+        };
+        scroll_state.update(cx, |this, cx| this.scroll_by(-dx, -dy, window, cx));
     });
     if let Some(on_key_up) = on_key_up {
         element = element.on_key_up(move |event, window, cx| on_key_up(event, window, cx));

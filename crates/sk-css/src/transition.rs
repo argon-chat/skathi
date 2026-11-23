@@ -18,6 +18,7 @@ pub enum TransitionProperty {
     BorderColor,
     TextDecorationColor,
     TextShadow,
+    BoxShadow,
     /// Used value is the element's `color`: gpui tints SVG sprites with one colour; `fill: none` is
     /// a discrete endpoint.
     Fill,
@@ -74,7 +75,7 @@ pub enum TransitionProperty {
     Other(Rc<str>),
 }
 
-pub const ANIMATABLE_COUNT: usize = 42;
+pub const ANIMATABLE_COUNT: usize = 43;
 
 impl TransitionProperty {
     /// By value: the enum carries an `Rc`, so it is neither `Sync` nor const-promotable.
@@ -87,6 +88,7 @@ impl TransitionProperty {
             BorderColor,
             TextDecorationColor,
             TextShadow,
+            BoxShadow,
             Fill,
             Stroke,
             Width,
@@ -158,6 +160,7 @@ impl TransitionProperty {
             BorderColor => "border-color",
             TextDecorationColor => "text-decoration-color",
             TextShadow => "text-shadow",
+            BoxShadow => "box-shadow",
             Fill => "fill",
             Stroke => "stroke",
             Width => "width",
@@ -761,6 +764,7 @@ fn expand(id: &PropertyId) -> Expansion {
         "overflow-y" => one(OverflowY),
         "text-decoration-color" => one(TextDecorationColor),
         "text-shadow" => one(TextShadow),
+        "box-shadow" => one(BoxShadow),
         "fill" => one(Fill),
         "stroke" => one(Stroke),
         "width" => one(Width),

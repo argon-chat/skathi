@@ -91,8 +91,8 @@ pub use mapper::{
     WindowDrag, INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use mapper::{
-    parse_color, parse_color_in, rotate_css, set_composed_font_families, take_unreached_fonts,
-    text_shadow_css, transform_css, translate_css,
+    box_shadow_css, parse_color, parse_color_in, rotate_css, set_composed_font_families,
+    take_unreached_fonts, text_shadow_css, transform_css, translate_css,
 };
 pub use mapper::{svg_length_text, svg_user_length};
 pub use media::{
@@ -238,8 +238,9 @@ pub enum PseudoElement {
     RangeThumb,
     ColorSwatch,
     ColorSwatchWrapper,
-    /// `<sk-editor>`'s `::mark(name)`, `::line(name)` and `::decoration(name)`: styles for the
-    /// runs and lines the editor paints, keyed by name.
+    /// `<sk-editor>`'s `::mark(name)`, `::line(name)`, `::decoration(name)`, `::gutter`,
+    /// `::gutter(name)` and `::line-number`: styles for the runs, lines and gutter the editor
+    /// paints, keyed by name (empty for the bare forms).
     EditorPart(EditorPartKind, &'static str),
 }
 
@@ -248,6 +249,8 @@ pub enum EditorPartKind {
     Mark,
     Line,
     Decoration,
+    Gutter,
+    LineNumber,
 }
 
 /// One `::mark()` / `::line()` / `::decoration()` rule set, folded.
@@ -3448,6 +3451,7 @@ fn pseudo_box(
                 "mark" => EditorPartKind::Mark,
                 "line" => EditorPartKind::Line,
                 "decoration" => EditorPartKind::Decoration,
+                "gutter" => EditorPartKind::Gutter,
                 _ => return None,
             };
             use lightningcss::properties::custom::{Token, TokenOrValue};
@@ -3467,6 +3471,8 @@ fn pseudo_box(
             "-webkit-slider-thumb" | "-moz-range-thumb" => Some(PseudoElement::RangeThumb),
             "-webkit-color-swatch" | "-moz-color-swatch" => Some(PseudoElement::ColorSwatch),
             "-webkit-color-swatch-wrapper" => Some(PseudoElement::ColorSwatchWrapper),
+            "gutter" => Some(PseudoElement::EditorPart(EditorPartKind::Gutter, "")),
+            "line-number" => Some(PseudoElement::EditorPart(EditorPartKind::LineNumber, "")),
             _ => None,
         },
         _ => None,
@@ -3881,6 +3887,9 @@ impl Engine {
                     PseudoElement::EditorPart(EditorPartKind::Mark, _) => "::mark()",
                     PseudoElement::EditorPart(EditorPartKind::Line, _) => "::line()",
                     PseudoElement::EditorPart(EditorPartKind::Decoration, _) => "::decoration()",
+                    PseudoElement::EditorPart(EditorPartKind::Gutter, "") => "::gutter",
+                    PseudoElement::EditorPart(EditorPartKind::Gutter, _) => "::gutter()",
+                    PseudoElement::EditorPart(EditorPartKind::LineNumber, _) => "::line-number",
                 }),
                 declarations: r.decls.as_deref().cloned().unwrap_or_default(),
                 diagnostics: r.diagnostics.as_deref().cloned().unwrap_or_default(),

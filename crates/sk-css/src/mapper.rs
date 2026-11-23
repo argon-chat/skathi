@@ -1405,7 +1405,7 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
 pub enum Verdict {
     /// It changes the computed style.
     Applied,
-    /// Accepted without an advisory, and changes nothing here (`tab-size`, `scroll-margin`).
+    /// Accepted without an advisory, and changes nothing here (`scroll-margin`).
     Inert,
     /// Parsed, then not applied: the first advisory the mapper gave.
     Rejected(String),
@@ -3825,32 +3825,59 @@ fn text_shadows(
     Some(out)
 }
 
+fn css_rgb(c: Hsla) -> String {
+    let c = gpui::Rgba::from(c);
+    let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b) = (channel(c.r), channel(c.g), channel(c.b));
+    if c.a >= 1.0 {
+        format!("rgb({r}, {g}, {b})")
+    } else {
+        let a = (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
+        format!("rgba({r}, {g}, {b}, {a})")
+    }
+}
+
 /// A `text-shadow` list as `getComputedStyle` writes it: colour first, every length, `none` when empty.
 pub fn text_shadow_css(shadows: &[gpui::TextShadow], current_color: Hsla) -> String {
     if shadows.is_empty() {
         return "none".into();
     }
-    let rgb = |c: Hsla| {
-        let c = gpui::Rgba::from(c);
-        let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let (r, g, b) = (channel(c.r), channel(c.g), channel(c.b));
-        if c.a >= 1.0 {
-            format!("rgb({r}, {g}, {b})")
-        } else {
-            let a = (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
-            format!("rgba({r}, {g}, {b}, {a})")
-        }
-    };
     shadows
         .iter()
         .map(|s| {
             format!(
                 "{} {}px {}px {}px",
-                rgb(s.color.unwrap_or(current_color)),
+                css_rgb(s.color.unwrap_or(current_color)),
                 f32::from(s.offset.x),
                 f32::from(s.offset.y),
                 f32::from(s.blur_radius)
             )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A `box-shadow` list as `getComputedStyle` writes it: colour, the four lengths, then `inset`.
+pub fn box_shadow_css(shadows: &[gpui::BoxShadow]) -> String {
+    if shadows.is_empty() {
+        return "none".into();
+    }
+    let round = |v: gpui::Pixels| (f32::from(v) * 1000.0).round() / 1000.0;
+    shadows
+        .iter()
+        .map(|s| {
+            let mut out = format!(
+                "{} {}px {}px {}px {}px",
+                css_rgb(s.color),
+                round(s.offset.x),
+                round(s.offset.y),
+                round(s.blur_radius),
+                round(s.spread_radius)
+            );
+            if s.inset {
+                out.push_str(" inset");
+            }
+            out
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -6686,9 +6713,21 @@ fn apply_property(
         Appearance(a, _) => {
             x.appearance_none = Some(matches!(a, lightningcss::properties::ui::Appearance::None))
         }
-        // Whitespace is always collapsed here, so a tab is one space and `tab-size` could not
-        // change the result.
-        TabSize(..) => {}
+        TabSize(v, _) => {
+            use lightningcss::values::length::LengthOrNumber;
+            match v {
+                LengthOrNumber::Number(n) if *n >= 0.0 => {
+                    r.text.tab_size = Some(gpui::TabSize::Spaces(*n));
+                }
+                LengthOrNumber::Length(l) => match css_length_px(l) {
+                    Some(px) if px >= 0.0 => {
+                        r.text.tab_size = Some(gpui::TabSize::Length(gpui::px(px)))
+                    }
+                    _ => calc_dropped(),
+                },
+                _ => {}
+            }
+        }
         // `text-size-adjust` exists to stop MOBILE BROWSERS inflating text.
         TextSizeAdjust(..) => {}
         // The screen-reader-only idiom, `inset(50%)`, encloses nothing and so paints nothing, while
@@ -8772,6 +8811,18 @@ mod tests {
         x.refine(&later);
         assert_eq!(x.resolve_background_stack(), None);
         assert_eq!(x.resolve_background_layers().len(), 1);
+    }
+
+    #[test]
+    fn tab_size_reaches_the_text_style_as_spaces_or_a_length() {
+        assert_eq!(
+            clean("tab-size: 4").text.tab_size,
+            Some(gpui::TabSize::Spaces(4.0))
+        );
+        assert_eq!(
+            clean("tab-size: 24px").text.tab_size,
+            Some(gpui::TabSize::Length(px(24.0)))
+        );
     }
 
     #[test]

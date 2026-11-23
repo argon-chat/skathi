@@ -12,7 +12,7 @@ use gpui::{AnyElement, App, ClipboardItem, Context, FocusHandle, KeyUpEvent, Win
 use sk_editor::{json, EditorValue};
 use sk_elements::editor::{
     AtomChild, EditorEvent, EditorHandlers, EditorIntent, EditorOptions, EditorShared, EditorState,
-    LineStyle, RunStyle,
+    GutterStyle, LineNumberStyle, LineStyle, RunStyle,
 };
 use sk_elements::vertical_align::VerticalAlign;
 use sk_runtime::host::{global, throw};
@@ -87,6 +87,9 @@ fn intent_payload(intent: &EditorIntent) -> EventPayload<'static> {
 
 fn run_style(r: &gpui::StyleRefinement, rem: gpui::Pixels) -> RunStyle {
     let t = &r.text;
+    let c = &r.corner_radii;
+    let radius = |l: Option<gpui::AbsoluteLength>| l.map_or(gpui::px(0.0), |l| l.to_pixels(rem));
+    let corners = [c.top_left, c.top_right, c.bottom_right, c.bottom_left];
     RunStyle {
         font_family: t.font_family.clone(),
         font_weight: t.font_weight,
@@ -101,25 +104,57 @@ fn run_style(r: &gpui::StyleRefinement, rem: gpui::Pixels) -> RunStyle {
             .or(t.background_color),
         underline: t.underline,
         strikethrough: t.strikethrough,
+        radius: corners.iter().any(Option::is_some).then(|| gpui::Corners {
+            top_left: radius(c.top_left),
+            top_right: radius(c.top_right),
+            bottom_right: radius(c.bottom_right),
+            bottom_left: radius(c.bottom_left),
+        }),
     }
 }
 
-type PartMaps = (
-    Rc<HashMap<String, RunStyle>>,
-    Rc<HashMap<String, RunStyle>>,
-    Rc<HashMap<String, LineStyle>>,
-);
+struct PartStyles {
+    marks: Rc<HashMap<String, RunStyle>>,
+    decorations: Rc<HashMap<String, RunStyle>>,
+    lines: Rc<HashMap<String, LineStyle>>,
+    gutter: GutterStyle,
+}
 
-/// `::mark()`, `::decoration()` and `::line()` styles by name.
-fn part_styles(node: &crate::tree::Node, rem: gpui::Pixels) -> PartMaps {
+fn edges_px(
+    e: &gpui::EdgesRefinement<gpui::DefiniteLength>,
+    rem: gpui::Pixels,
+) -> gpui::Edges<gpui::Pixels> {
+    let zero = gpui::AbsoluteLength::Pixels(gpui::px(0.0));
+    let pad = |l: Option<gpui::DefiniteLength>| l.map_or(gpui::px(0.0), |l| l.to_pixels(zero, rem));
+    gpui::Edges {
+        top: pad(e.top),
+        right: pad(e.right),
+        bottom: pad(e.bottom),
+        left: pad(e.left),
+    }
+}
+
+fn length_px(l: Option<gpui::Length>, rem: gpui::Pixels) -> Option<gpui::Pixels> {
+    match l? {
+        gpui::Length::Definite(gpui::DefiniteLength::Absolute(a)) => Some(a.to_pixels(rem)),
+        _ => None,
+    }
+}
+
+/// The editor's part styles: `::mark()`, `::decoration()`, `::line()` by name, and the gutter's.
+fn part_styles(node: &crate::tree::Node, rem: gpui::Pixels) -> PartStyles {
     let (mut marks, mut decorations, mut lines) = (HashMap::new(), HashMap::new(), HashMap::new());
+    let mut gutter = GutterStyle::default();
+    let mut cells = HashMap::new();
     let parts = node
         .computed
         .as_ref()
         .and_then(|cs| cs.editor_parts.clone());
+    let border = |l: Option<gpui::AbsoluteLength>| l.map_or(gpui::px(0.0), |l| l.to_pixels(rem));
     for part in parts.iter().flat_map(|p| p.iter()) {
         let r = &part.style;
         let run = run_style(r, rem);
+        let hidden = r.display == Some(gpui::Display::None);
         match part.kind {
             sk_css::EditorPartKind::Mark => {
                 marks.insert(part.name.to_owned(), run);
@@ -127,27 +162,45 @@ fn part_styles(node: &crate::tree::Node, rem: gpui::Pixels) -> PartMaps {
             sk_css::EditorPartKind::Decoration => {
                 decorations.insert(part.name.to_owned(), run.paint_only());
             }
-            sk_css::EditorPartKind::Line => {
-                let zero = gpui::AbsoluteLength::Pixels(gpui::px(0.0));
-                let pad = |l: Option<gpui::DefiniteLength>| {
-                    l.map_or(gpui::px(0.0), |l| l.to_pixels(zero, rem))
+            sk_css::EditorPartKind::Gutter if !part.name.is_empty() => {
+                cells.insert(part.name.to_owned(), run.paint_only());
+            }
+            sk_css::EditorPartKind::Gutter => {
+                gutter.declared = true;
+                gutter.hidden = hidden;
+                gutter.background = run.background;
+                gutter.run = RunStyle {
+                    background: None,
+                    radius: None,
+                    ..run
                 };
-                let border =
-                    |l: Option<gpui::AbsoluteLength>| l.map_or(gpui::px(0.0), |l| l.to_pixels(rem));
+                gutter.padding = edges_px(&r.padding, rem);
+                gutter.border_right = border(r.border_widths.right);
+                gutter.border_color = r.vn_border_colors.right.flatten().or(r.border_color);
+                gutter.width = length_px(r.size.width, rem);
+                gutter.min_width = length_px(r.min_size.width, rem);
+            }
+            sk_css::EditorPartKind::LineNumber => {
+                gutter.numbers = (!hidden).then(|| LineNumberStyle {
+                    run: RunStyle {
+                        background: None,
+                        radius: None,
+                        ..run
+                    },
+                    align: r.text.text_align.unwrap_or(gpui::TextAlign::Right),
+                });
+            }
+            sk_css::EditorPartKind::Line => {
                 let background = run.background;
                 lines.insert(
                     part.name.to_owned(),
                     LineStyle {
                         run: RunStyle {
                             background: None,
+                            radius: None,
                             ..run
                         },
-                        padding: gpui::Edges {
-                            top: pad(r.padding.top),
-                            right: pad(r.padding.right),
-                            bottom: pad(r.padding.bottom),
-                            left: pad(r.padding.left),
-                        },
+                        padding: edges_px(&r.padding, rem),
                         border: gpui::Edges {
                             top: border(r.border_widths.top),
                             right: border(r.border_widths.right),
@@ -166,7 +219,22 @@ fn part_styles(node: &crate::tree::Node, rem: gpui::Pixels) -> PartMaps {
             }
         }
     }
-    (Rc::new(marks), Rc::new(decorations), Rc::new(lines))
+    gutter.cells = Rc::new(cells);
+    PartStyles {
+        marks: Rc::new(marks),
+        decorations: Rc::new(decorations),
+        lines: Rc::new(lines),
+        gutter,
+    }
+}
+
+/// Whether the editor's own `white-space` lets lines wrap. Its default is `pre-wrap`, as a
+/// `<textarea>`'s: an ancestor's value does not reach it.
+fn wraps(node: &crate::tree::Node) -> bool {
+    !matches!(
+        node.computed.as_ref().and_then(|cs| cs.extras.white_space),
+        Some(sk_css::WhiteSpaceMode::Pre | sk_css::WhiteSpaceMode::Nowrap)
+    )
 }
 
 /// The editor's children that stand on an atom: `(child, atom id, its vertical alignment)`.
@@ -295,7 +363,12 @@ pub(crate) fn build<V: 'static>(
             a: 0.35,
         });
     let flag = |name: &str| t.prop(id, name).is_some_and(|v| v != "false");
-    let (marks, decorations, lines) = part_styles(node, rem);
+    let PartStyles {
+        marks,
+        decorations,
+        lines,
+        gutter,
+    } = part_styles(node, rem);
     let options = EditorOptions {
         placeholder: t.prop(id, "placeholder").unwrap_or("").to_string().into(),
         text_color,
@@ -311,6 +384,8 @@ pub(crate) fn build<V: 'static>(
         marks,
         decorations,
         lines,
+        gutter,
+        wrap: wraps(node),
         font_epoch: crate::fonts::epoch(),
     };
 
@@ -775,6 +850,22 @@ unsafe fn dom_rect(g: *mut c_void, b: gpui::Bounds<gpui::Pixels>) -> u64 {
     )
 }
 
+/// Lines past this many are answered from their estimated boxes rather than laid out for a read.
+const LAY_OUT_FOR_READ: usize = 512;
+
+/// Before a geometry read about lines off screen: lays them out in a frame drawn now, as a
+/// browser's forced reflow does. Long spans keep their estimates.
+fn lay_out_for_read(id: u32, shared: &EditorShared, lines: std::ops::Range<usize>) {
+    {
+        let mut g = shared.geometry.borrow_mut();
+        if !g.is_shown() || lines.len() > LAY_OUT_FOR_READ || !g.request(lines) {
+            return;
+        }
+    }
+    repaint(id);
+    crate::sync_layout();
+}
+
 /// A content rectangle in window coordinates, as `getBoundingClientRect()` reports.
 fn to_client(
     g: &sk_elements::editor::Geometry,
@@ -786,10 +877,12 @@ fn to_client(
 
 host_fn!(fn rects_for(g, args) {
     unsafe {
-        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let (id, shared) = editor_or_throw!(g, args.this().0);
         let (Ok(from), Ok(to)) = (position(g, args.arg(0).0), position(g, args.arg(1).0)) else {
             return UNDEF;
         };
+        let lines = shared.geometry.borrow().lines_of(from.min(to), to.max(from));
+        lay_out_for_read(id, &shared, lines);
         let geometry = shared.geometry.borrow();
         let rects: Vec<_> = geometry
             .rects(from.min(to), to.max(from))
@@ -807,8 +900,10 @@ host_fn!(fn rects_for(g, args) {
 
 host_fn!(fn caret_rect(g, args) {
     unsafe {
-        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let (id, shared) = editor_or_throw!(g, args.this().0);
         let head = shared.core.borrow().selection().head;
+        let lines = shared.geometry.borrow().lines_of(head, head);
+        lay_out_for_read(id, &shared, lines);
         let geometry = shared.geometry.borrow();
         let b = geometry
             .caret_at(head)
@@ -821,12 +916,19 @@ host_fn!(fn caret_rect(g, args) {
 
 host_fn!(fn position_at(g, args) {
     unsafe {
-        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let (id, shared) = editor_or_throw!(g, args.this().0);
         let (Ok(x), Ok(y)) = (to_number(g, args.arg(0).0), to_number(g, args.arg(1).0)) else {
             return UNDEF;
         };
-        let geometry = shared.geometry.borrow();
         let p = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+        let line = {
+            let geometry = shared.geometry.borrow();
+            geometry.client_to_content(p).map(|c| geometry.line_at_y(c.y))
+        };
+        if let Some(n) = line {
+            lay_out_for_read(id, &shared, n..n + 1);
+        }
+        let geometry = shared.geometry.borrow();
         let pos = geometry
             .client_to_content(p)
             .map_or(0, |p| geometry.index_at(p));
@@ -839,6 +941,62 @@ host_fn!(fn viewport_get(g, args) {
         let (_, shared) = editor_or_throw!(g, args.this().0);
         let (from, to) = shared.geometry.borrow().viewport();
         parse_json(g, &format!("{{\"fromLine\":{from},\"toLine\":{to}}}"))
+    }
+});
+
+host_fn!(fn scroll_top_get(g, args) {
+    unsafe {
+        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let top = shared.geometry.borrow().scroll_top();
+        enc_f64(f64::from(f32::from(top)))
+    }
+});
+
+host_fn!(fn scroll_left_get(g, args) {
+    unsafe {
+        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let left = shared.geometry.borrow().scroll_left();
+        enc_f64(f64::from(f32::from(left)))
+    }
+});
+
+unsafe fn set_scroll(g: *mut c_void, this: u64, v: u64, top: bool) -> u64 {
+    let (id, shared) = editor_or_throw!(g, this);
+    let Ok(n) = to_number(g, v) else { return UNDEF };
+    let n = gpui::px(if n.is_finite() { n as f32 } else { 0.0 });
+    let (t, l) = if top {
+        (Some(n), None)
+    } else {
+        (None, Some(n))
+    };
+    shared.geometry.borrow_mut().set_scroll(t, l);
+    repaint(id);
+    UNDEF
+}
+
+host_fn!(fn scroll_top_set(g, args) {
+    unsafe { set_scroll(g, args.this().0, args.arg(0).0, true) }
+});
+
+host_fn!(fn scroll_left_set(g, args) {
+    unsafe { set_scroll(g, args.this().0, args.arg(0).0, false) }
+});
+
+host_fn!(fn scroll_height_get(g, args) {
+    unsafe {
+        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let g2 = shared.geometry.borrow();
+        let h = g2.content_height().max(g2.client_size().1);
+        enc_f64(f64::from(f32::from(h)))
+    }
+});
+
+host_fn!(fn scroll_width_get(g, args) {
+    unsafe {
+        let (_, shared) = editor_or_throw!(g, args.this().0);
+        let mut g2 = shared.geometry.borrow_mut();
+        let w = (g2.gutter_width() + g2.content_width()).max(g2.client_size().0);
+        enc_f64(f64::from(f32::from(w)))
     }
 });
 
@@ -855,6 +1013,10 @@ host_fn!(fn install_on(g, args) {
         accessor(g, proto, "typingMarks", typing_marks_get, Some(typing_marks_set));
         accessor(g, proto, "exclusiveMarks", exclusive_marks_get, Some(exclusive_marks_set));
         accessor(g, proto, "viewport", viewport_get, None);
+        accessor(g, proto, "scrollTop", scroll_top_get, Some(scroll_top_set));
+        accessor(g, proto, "scrollLeft", scroll_left_get, Some(scroll_left_set));
+        accessor(g, proto, "scrollHeight", scroll_height_get, None);
+        accessor(g, proto, "scrollWidth", scroll_width_get, None);
         method(g, proto, "slice", 2, slice);
         method(g, proto, "line", 1, line);
         method(g, proto, "lineAt", 1, line_at);

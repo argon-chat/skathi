@@ -943,7 +943,22 @@ const expanded = ref(false);
     ],
   },
   "tab-size": {
-    edgeCases: ['`CSS.supports("tab-size", "4")` returns `true`, though the value changes nothing.'],
+    examples: [
+      {
+        title: "Indent code with four-space tabs",
+        lang: "css",
+        code: `.snippet {
+  white-space: pre;
+  font-family: ui-monospace, monospace;
+  tab-size: 4;
+}`,
+      },
+    ],
+    edgeCases: [
+      "Tabs show only where white space is kept: under `white-space: pre`, `pre-wrap` and `break-spaces`, in a `<textarea>` and in an `<sk-editor>`. Elsewhere a tab collapses to a space.",
+      "A tab whose next stop is closer than half a space advances to the stop after it.",
+      "`tab-size: 0` makes tabs zero width; a negative value is invalid.",
+    ],
   },
   "webkit-text-fill-color": {
     examples: [

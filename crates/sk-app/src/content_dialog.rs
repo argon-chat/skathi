@@ -198,8 +198,8 @@ pub(crate) struct Fonts {
     pub text: &'static str,
     pub small: &'static str,
     pub icons: &'static str,
-    /// Code: Consolas. Not Windows 11's Cascadia Mono: gpui draws that variable font a weight
-    /// heavier than the body text at 12 px.
+    /// Code: Consolas. Not Windows 11's Cascadia Mono: its regular weight carries nearly the ink of
+    /// Consolas Bold, too heavy beside the body text at 12 px.
     pub mono: &'static str,
 }
 

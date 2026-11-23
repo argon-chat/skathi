@@ -42,6 +42,8 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "pseudo-mark": null,
   "pseudo-line": null,
   "pseudo-decoration": null,
+  "pseudo-gutter": null,
+  "pseudo-line-number": null,
   "selector-type": "css.selectors.type",
   "selector-class": "css.selectors.class",
   "selector-id": "css.selectors.id",

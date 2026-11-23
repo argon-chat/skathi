@@ -484,7 +484,7 @@ pub const CATALOG: &[Entry] = &[
     e("stroke-miterlimit", Supported, &["4"], &[], ""),
     e("stroke-opacity", Supported, &["0.5"], &[], ""),
     e("stroke-width", Supported, &["0", "2"], &[], ""),
-    e("tab-size", Ignored, &["4"], &[], "Whitespace is collapsed, so a tab is one space"),
+    e("tab-size", Supported, &["4", "2.5", "24px", "1em"], &[], ""),
     e("table-layout", Unsupported, &[], &["fixed"], "Tables lay out as blocks"),
     e("text-align", Supported, &["center", "start"], &[], ""),
     e("text-align-last", Unsupported, &[], &["center"], ""),

@@ -45,3 +45,39 @@
 #tiles.active .tile {
   opacity: 1;
 }
+.shadow {
+  width: 40px;
+  height: 40px;
+  box-shadow: 0 0 0 0 rgb(255 0 0);
+  transition: box-shadow 1200ms linear;
+}
+.shadow.on {
+  box-shadow:
+    10px 20px 8px 4px rgb(0 0 255),
+    inset 2px 2px 0 0 rgb(0 0 255);
+}
+.shadow.inset {
+  box-shadow: inset 0 0 0 0 rgb(255 0 0);
+}
+@keyframes glow {
+  from {
+    box-shadow: 0 0 0 0 rgb(255 0 0);
+  }
+  to {
+    box-shadow: 0 0 20px 10px rgb(0 0 255);
+  }
+}
+@keyframes ink {
+  from {
+    text-shadow: 0 0 0 rgb(255 0 0);
+  }
+  to {
+    text-shadow: 10px 0 4px rgb(0 0 255);
+  }
+}
+.glow {
+  animation: glow 2s linear -1s paused;
+}
+.ink {
+  animation: ink 2s linear -1s paused;
+}

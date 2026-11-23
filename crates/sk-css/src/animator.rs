@@ -38,6 +38,7 @@ enum Animatable {
     ObjectPosition(gpui::ObjectPosition),
     CornerShape(gpui::CornerShape),
     TextShadows(TextShadows),
+    BoxShadows(BoxShadows),
     /// A sizing length with a `calc-size()` or an intrinsic keyword on one side.
     Size(SizeForm),
 }
@@ -205,6 +206,67 @@ impl PartialEq for TextShadows {
     }
 }
 
+/// A longer `box-shadow` list snaps instead of interpolating.
+const MAX_ANIMATED_BOX_SHADOWS: usize = 6;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Shadow {
+    color: Hsla,
+    x: Pixels,
+    y: Pixels,
+    blur: Pixels,
+    spread: Pixels,
+    inset: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BoxShadows {
+    shadows: [Shadow; MAX_ANIMATED_BOX_SHADOWS],
+    len: usize,
+}
+
+impl BoxShadows {
+    fn new(list: &[gpui::BoxShadow]) -> Option<Self> {
+        if list.len() > MAX_ANIMATED_BOX_SHADOWS {
+            return None;
+        }
+        let mut shadows = [Shadow::default(); MAX_ANIMATED_BOX_SHADOWS];
+        for (slot, s) in shadows.iter_mut().zip(list) {
+            *slot = Shadow {
+                color: s.color,
+                x: s.offset.x,
+                y: s.offset.y,
+                blur: s.blur_radius,
+                spread: s.spread_radius,
+                inset: s.inset,
+            };
+        }
+        Some(Self {
+            shadows,
+            len: list.len(),
+        })
+    }
+
+    fn list(&self) -> Vec<gpui::BoxShadow> {
+        self.shadows[..self.len]
+            .iter()
+            .map(|s| gpui::BoxShadow {
+                color: s.color,
+                offset: gpui::point(s.x, s.y),
+                blur_radius: s.blur,
+                spread_radius: s.spread,
+                inset: s.inset,
+            })
+            .collect()
+    }
+
+    /// The shorter list is padded with transparent zero shadows of the longer one's `inset`, so
+    /// only a pair that disagrees on `inset` at some index cannot interpolate.
+    fn interpolates_with(&self, other: &Self) -> bool {
+        (0..self.len.min(other.len)).all(|i| self.shadows[i].inset == other.shadows[i].inset)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Opaque {
     Auto,
@@ -218,6 +280,8 @@ enum Opaque {
     SvgColour(Hsla),
     /// A `text-shadow` list longer than [`MAX_ANIMATED_TEXT_SHADOWS`].
     LongTextShadowList,
+    /// A `box-shadow` list longer than [`MAX_ANIMATED_BOX_SHADOWS`].
+    LongBoxShadowList,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -284,6 +348,16 @@ fn slot_text_shadow(r: &StyleRefinement, current: Hsla) -> Slot {
     }
 }
 
+fn slot_box_shadow(r: &StyleRefinement) -> Slot {
+    match &r.box_shadow {
+        None => Slot::Missing,
+        Some(list) => BoxShadows::new(list)
+            .map_or(Slot::Opaque(Opaque::LongBoxShadowList), |shadows| {
+                Slot::Value(Animatable::BoxShadows(shadows))
+            }),
+    }
+}
+
 fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
     use TransitionProperty::*;
     match p {
@@ -325,6 +399,7 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
                 .or_else(|| r.text.strikethrough.as_ref().and_then(|st| st.color)),
         ),
         TextShadow => slot_text_shadow(r, r.text.color.unwrap_or_else(gpui::black)),
+        BoxShadow => slot_box_shadow(r),
         // A refinement carries no SVG paint; `slot_inherited` answers these from the node's
         // `Extras`.
         Fill | Stroke => Slot::Missing,
@@ -512,6 +587,11 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
                 r.text.text_shadow = Some(shadows.list().to_vec());
             }
         }
+        BoxShadow => {
+            if let Animatable::BoxShadows(shadows) = v {
+                r.box_shadow = Some(shadows.list());
+            }
+        }
         Fill | Stroke => r.text.color = color().or(r.text.color),
         Width => r.size.width = length(),
         Height => r.size.height = length(),
@@ -634,6 +714,7 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
             }
         }
         TextShadow => r.text.text_shadow = None,
+        BoxShadow => r.box_shadow = None,
         // Take a transitioned property out of the `:hover` rung so gpui cannot snap it.
         // `fill`/`stroke` paint `color`, which only `transition: color` may animate, so stripping
         // it here would leave a hover colour painted by nobody.
@@ -702,6 +783,7 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
             dst.text.strikethrough = src.text.strikethrough.clone();
         }
         TextShadow => dst.text.text_shadow = src.text.text_shadow.clone(),
+        BoxShadow => dst.box_shadow = src.box_shadow.clone(),
         Fill | Stroke => {}
         BackgroundColor => dst.background = src.background.clone(),
         BorderColor => {
@@ -822,6 +904,7 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         | CornerBottomLeftShape => Some(Animatable::CornerShape(gpui::CornerShape::ROUND)),
         Shading => Some(Animatable::Effect(EffectSpec::NONE)),
         TextShadow => TextShadows::new(&[], gpui::black()).map(Animatable::TextShadows),
+        BoxShadow => BoxShadows::new(&[]).map(Animatable::BoxShadows),
         _ => None,
     }
 }
@@ -845,6 +928,7 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (ObjectPosition(_), ObjectPosition(_)) => Some((a, b)),
         (CornerShape(_), CornerShape(_)) => Some((a, b)),
         (TextShadows(_), TextShadows(_)) => Some((a, b)),
+        (BoxShadows(x), BoxShadows(y)) if x.interpolates_with(&y) => Some((a, b)),
         (Size(x), Size(y)) if x.basis.is_none() || y.basis.is_none() || x.basis == y.basis => {
             Some((a, b))
         }
@@ -888,6 +972,7 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         }),
         (CornerShape(a), CornerShape(b)) => CornerShape(a.interpolate(b, t)),
         (TextShadows(a), TextShadows(b)) => TextShadows(lerp_text_shadows(a, b, t)),
+        (BoxShadows(a), BoxShadows(b)) => BoxShadows(lerp_box_shadows(a, b, t)),
         (Size(a), Size(b)) => Size(SizeForm::lerp(a, b, t)),
         _ => to,
     }
@@ -921,6 +1006,42 @@ fn lerp_text_shadows(from: TextShadows, to: TextShadows, t: f32) -> TextShadows 
                 Pixels::interpolate(a.offset.y, b.offset.y, t),
             ),
             blur_radius: Pixels::interpolate(a.blur_radius, b.blur_radius, t).max(gpui::px(0.)),
+        };
+    }
+    out
+}
+
+fn lerp_box_shadows(from: BoxShadows, to: BoxShadows, t: f32) -> BoxShadows {
+    let len = from.len.max(to.len);
+    let mut out = to;
+    out.len = len;
+    for index in 0..len {
+        let pad = |longer: &BoxShadows| {
+            let s = longer.shadows[index];
+            Shadow {
+                color: s.color.opacity(0.0),
+                inset: s.inset,
+                ..Shadow::default()
+            }
+        };
+        let a = if index < from.len {
+            from.shadows[index]
+        } else {
+            pad(&to)
+        };
+        let b = if index < to.len {
+            to.shadows[index]
+        } else {
+            pad(&from)
+        };
+        let px = |x: Pixels, y: Pixels| Pixels::interpolate(x, y, t);
+        out.shadows[index] = Shadow {
+            color: lerp_color(a.color, b.color, t),
+            x: px(a.x, b.x),
+            y: px(a.y, b.y),
+            blur: px(a.blur, b.blur).max(gpui::px(0.)),
+            spread: px(a.spread, b.spread),
+            inset: b.inset,
         };
     }
     out
@@ -1457,6 +1578,15 @@ impl Animator {
                 ));
                 return Endpoints::Snap;
             }
+            (Slot::Opaque(Opaque::LongBoxShadowList), _)
+            | (_, Slot::Opaque(Opaque::LongBoxShadowList)) => {
+                self.warn_once(format!(
+                    "transition of {} with more than {MAX_ANIMATED_BOX_SHADOWS} shadows is not \
+                     animatable — snapping. Animate a shorter list",
+                    property.name()
+                ));
+                return Endpoints::Snap;
+            }
             (Slot::Opaque(Opaque::SvgColour(_)), _) | (_, Slot::Opaque(Opaque::SvgColour(_))) => {
                 self.warn_once(format!(
                     "transition of {} to or from a concrete SVG paint colour is not animatable \
@@ -1479,6 +1609,14 @@ impl Animator {
         }
         match unify(from, to) {
             Some((from, to)) => Endpoints::Pair(from, to),
+            // `inset` against an outer shadow is discrete in CSS: a transition does not run.
+            None if matches!(
+                (from, to),
+                (Animatable::BoxShadows(_), Animatable::BoxShadows(_))
+            ) =>
+            {
+                Endpoints::Snap
+            }
             None => {
                 self.warn_once(format!(
                     "transition of {} between different length units is not animatable yet (v1) \
@@ -2001,6 +2139,92 @@ mod tests {
             (second.a - 0.5).abs() < 1e-3 && second.h == red.h,
             "{second:?}"
         );
+    }
+
+    #[test]
+    fn box_shadows_interpolate_pairwise_pad_with_transparent_and_snap_on_inset_mismatch() {
+        fn shadowed(shadows: &[gpui::BoxShadow]) -> StyleRefinement {
+            let mut r = StyleRefinement::default();
+            r.box_shadow = Some(shadows.to_vec());
+            r
+        }
+        let shadow = |x: f32, blur: f32, spread: f32, color: Hsla, inset: bool| gpui::BoxShadow {
+            color,
+            offset: gpui::point(px(x), px(2.0 * x)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset,
+        };
+        let red = Hsla::from(Rgba {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        });
+        let blue = Hsla::from(Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        });
+        let css = "transition: box-shadow 1s linear";
+        let now = t0();
+        let mut a = Animator::new();
+        let old = states(shadowed(&[shadow(0.0, 0.0, 0.0, red, false)]), css);
+        let new = states(
+            shadowed(&[
+                shadow(4.0, 8.0, -2.0, blue, false),
+                shadow(2.0, 2.0, 4.0, blue, true),
+            ]),
+            css,
+        );
+        a.on_computed(1, Some(&old), &new, now);
+        let half = a
+            .overlay_test(1, now + Duration::from_millis(500))
+            .and_then(|r| r.box_shadow)
+            .expect("box-shadow transitions");
+        assert_eq!(half.len(), 2);
+        assert_eq!(half[0].offset, gpui::point(px(2.0), px(4.0)));
+        assert_eq!(half[0].blur_radius, px(4.0));
+        assert_eq!(half[0].spread_radius, px(-1.0));
+        assert!(!half[0].inset);
+        let mixed = Rgba::from(half[0].color);
+        assert!(
+            (mixed.r - 0.5).abs() < 0.01 && (mixed.b - 0.5).abs() < 0.01,
+            "{mixed:?}"
+        );
+        assert!(half[1].inset, "the padding takes the longer list's inset");
+        assert_eq!(half[1].offset, gpui::point(px(1.0), px(2.0)));
+        assert_eq!(half[1].spread_radius, px(2.0));
+        let padded = Rgba::from(half[1].color);
+        assert!(
+            (padded.a - 0.5).abs() < 1e-3 && padded.b > 0.99,
+            "{padded:?}"
+        );
+
+        let mut a = Animator::new();
+        let outer = states(shadowed(&[shadow(4.0, 4.0, 0.0, red, false)]), css);
+        let inset = states(shadowed(&[shadow(4.0, 4.0, 0.0, red, true)]), css);
+        a.on_computed(1, Some(&outer), &inset, now);
+        assert_eq!(
+            a.overlay_test(1, now + Duration::from_millis(500))
+                .and_then(|r| r.box_shadow),
+            None
+        );
+
+        let mut a = Animator::new();
+        a.on_computed(
+            1,
+            Some(&states(StyleRefinement::default(), css)),
+            &states(shadowed(&[shadow(4.0, 8.0, 0.0, red, false)]), css),
+            now,
+        );
+        let from_none = a
+            .overlay_test(1, now + Duration::from_millis(250))
+            .and_then(|r| r.box_shadow)
+            .expect("from `none`");
+        assert_eq!(from_none[0].offset.x, px(1.0));
+        assert!((from_none[0].color.a - 0.25).abs() < 1e-3);
     }
 
     #[test]

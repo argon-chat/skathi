@@ -6,6 +6,8 @@ import {
   clipboardSnapshot,
   launch,
   MACOS,
+  readPng,
+  SCREENSHOTS,
   WINDOWS,
 } from "../src/index";
 
@@ -239,6 +241,176 @@ describe("<sk-editor> JS API", () => {
       expect(Math.abs(top.chip.y - top.row.y)).toBeLessThan(1.5);
       const bottom = await measure("bottom");
       expect(Math.abs(bottom.chip.y + bottom.chip.h - (bottom.row.y + bottom.row.height))).toBeLessThan(1.5);
+    },
+    T,
+  );
+});
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+async function code(text: string) {
+  await app.eval(
+    `(() => { const c = __SK_TEST_EDITOR__.code(); c.value = ${JSON.stringify({ text, marks: [], atoms: [] })}; c.setLineDecorations("d", []); c.dispatch({ selections: [{ anchor: 0 }] }) })()`,
+  );
+  await sleep(200);
+}
+
+describe("<sk-editor> long documents and code", () => {
+  test(
+    "a long document lays out the lines on screen, and geometry reads still answer anywhere",
+    async () => {
+      const n = 20_000;
+      await code(Array.from({ length: n }, (_, i) => `L${i}`).join("\n"));
+      const view = await read<{ fromLine: number; toLine: number }>("E.code().viewport");
+      expect(view.toLine - view.fromLine).toBeLessThanOrEqual(8);
+      expect(Math.abs((await read<number>("E.code().scrollHeight")) - n * 16)).toBeLessThan(2);
+
+      await app.eval("__SK_TEST_EDITOR__.code().scrollTop = 160000");
+      const moved = await until<{ fromLine: number }>("E.code().viewport", (v) => v.fromLine > 9000);
+      expect(Math.abs(moved.fromLine - 10_000)).toBeLessThanOrEqual(1);
+
+      const box = await app.locator("#code").boundingBox();
+      const near = await read<Rect>(
+        "(() => { const l = E.code().line(10001); return E.code().rectsFor(l.from, l.from + 1)[0] })()",
+      );
+      const far = await read<Rect>(
+        "(() => { const l = E.code().line(19000); return E.code().rectsFor(l.from, l.from + 1)[0] })()",
+      );
+      expect(Math.abs(far.y - box.y - (19_000 * 16 - 160_000))).toBeLessThan(1);
+      expect(far.x).toBeCloseTo(near.x, 1);
+      expect(far.width).toBeCloseTo(near.width, 1);
+
+      await app.eval(
+        "(() => { const c = __SK_TEST_EDITOR__.code(); c.dispatch({ selections: [{ anchor: c.line(500).from }] }) })()",
+      );
+      const caret = await until<Rect>("E.code().caretRect()", (r) => r.y >= box.y && r.y < box.y + box.h);
+      expect(caret.y).toBeGreaterThanOrEqual(box.y);
+      expect(caret.y + caret.height).toBeLessThanOrEqual(box.y + box.h + 0.5);
+    },
+    T,
+  );
+
+  test(
+    "scrolling over wrapped lines whose estimated heights get corrected moves the text by the wheel delta",
+    async () => {
+      const lines = Array.from({ length: 3000 }, (_, i) =>
+        i % 5 === 0 ? `${i} ${"wrapping words go on ".repeat(1 + (i % 7))}` : `${i} short`,
+      );
+      await reset({ text: lines.join("\n"), marks: [], atoms: [] });
+      await app.eval("__SK_TEST_EDITOR__.ed().dispatch({ selections: [{ anchor: 0 }] })");
+      await sleep(200);
+      const at = (src: string) =>
+        read<{ line: number; y: number }>(
+          `(() => { const e = E.ed(); const n = ${src}; const l = e.line(n); return { line: n, y: e.rectsFor(l.from, l.from + 1)[0].y } })()`,
+        );
+      for (const dy of [90, 90, 2000, 90, 5000, 90]) {
+        const before = await at("E.ed().viewport.fromLine + 1");
+        await app.send("wheel", { selector: "#ed", dx: 0, dy });
+        await sleep(80);
+        const after = await at(String(before.line));
+        expect(before.y - after.y).toBeCloseTo(dy, 0);
+      }
+    },
+    T,
+  );
+
+  test(
+    "an editor as tall as its text inside a scroller lays out the lines the scroller shows",
+    async () => {
+      const n = 6000;
+      await app.eval(
+        `(() => { const t = __SK_TEST_EDITOR__.tall(); t.value = ${JSON.stringify({ text: Array.from({ length: n }, (_, i) => `row ${i}`).join("\n"), marks: [], atoms: [] })}; t.dispatch({ selections: [{ anchor: 0 }] }) })()`,
+      );
+      await sleep(300);
+      const box = await app.locator("#tall").boundingBox();
+      expect(Math.abs(box.h - 8 - n * 16)).toBeLessThan(2);
+      const view = await read<{ fromLine: number; toLine: number }>("E.tall().viewport");
+      expect(view.toLine - view.fromLine).toBeLessThanOrEqual(5);
+      await app.eval("document.querySelector('#scroller').scrollTop = 48000");
+      const moved = await until<{ fromLine: number }>("E.tall().viewport", (v) => v.fromLine > 2000);
+      expect(Math.abs(moved.fromLine - 3000)).toBeLessThanOrEqual(1);
+    },
+    T,
+  );
+
+  test(
+    "white-space: pre keeps a long line on one row and scrolls it sideways; pre-wrap wraps it",
+    async () => {
+      await code("x".repeat(200));
+      expect((await read<Rect[]>("E.code().rectsFor(0, 200)")).length).toBe(1);
+      expect(await read<number>("E.code().scrollWidth")).toBeGreaterThan(await read<number>("E.code().clientWidth"));
+      const before = await read<Rect>("E.code().rectsFor(5, 6)[0]");
+      await app.eval("__SK_TEST_EDITOR__.code().scrollLeft = 100");
+      const after = await until<Rect>("E.code().rectsFor(5, 6)[0]", (r) => r.x < before.x - 50);
+      expect(after.x).toBeCloseTo(before.x - 100, 0);
+
+      await reset({ text: "word ".repeat(40), marks: [], atoms: [] });
+      await sleep(200);
+      expect((await read<Rect[]>("E.ed().rectsFor(0, 200)")).length).toBeGreaterThan(1);
+    },
+    T,
+  );
+
+  test(
+    "the gutter numbers the lines and makes room for line decorations' gutter text",
+    async () => {
+      await code("a\nb");
+      const box = await app.locator("#code").boundingBox();
+      const plain = await read<Rect>("E.code().rectsFor(0, 1)[0]");
+      expect(plain.x - box.x).toBeGreaterThan(20);
+      await app.eval(
+        "__SK_TEST_EDITOR__.code().setLineDecorations('d', [{ line: 1, name: 'added', gutter: '+12345' }])",
+      );
+      const wider = await until<Rect>("E.code().rectsFor(0, 1)[0]", (r) => r.x > plain.x + 20);
+      expect(wider.x - plain.x).toBeGreaterThan(30);
+    },
+    T,
+  );
+
+  test.skipIf(!SCREENSHOTS)(
+    "a rounded decoration over two lines rounds only its outer ends",
+    async () => {
+      const blank = " ".repeat(10);
+      await code(`${blank}\n${blank}\nx`);
+      await app.eval(
+        "(() => { const c = __SK_TEST_EDITOR__.code(); c.dispatch({ selections: [{ anchor: 23 }] }); c.setDecorations('d', [{ from: 0, to: 21, name: 'hit' }]) })()",
+      );
+      await sleep(200);
+      const [first, second] = await read<Rect[]>("E.code().rectsFor(0, 21)");
+      const shot = readPng(await app.screenshot());
+      const k = shot.width / 480;
+      const blue = (x: number, y: number) => shot.at(Math.floor(x * k), Math.floor(y * k))[2];
+      const inside = 1 / k;
+      const right = (r: Rect) => r.x + r.width - inside;
+      const bottom = (r: Rect) => r.y + r.height - inside;
+      expect(blue(first!.x + 3, first!.y + 8)).toBeLessThan(60);
+      expect(blue(first!.x, first!.y)).toBeGreaterThan(150);
+      expect(blue(right(second!), bottom(second!))).toBeGreaterThan(150);
+      expect(blue(second!.x, bottom(second!))).toBeLessThan(60);
+      expect(blue(right(first!) - 3, first!.y)).toBeLessThan(60);
+      await app.eval("__SK_TEST_EDITOR__.code().setDecorations('d', [])");
+    },
+    T,
+  );
+
+  test(
+    "tab-size: a tab stops where that many spaces end, in the editor and in text",
+    async () => {
+      await code("\tx\n    x");
+      const tabbed = await read<Rect>("E.code().rectsFor(1, 2)[0]");
+      const spaced = await read<Rect>(
+        "(() => { const l = E.code().line(1); return E.code().rectsFor(l.from + 4, l.from + 5)[0] })()",
+      );
+      expect(tabbed.x).toBeCloseTo(spaced.x, 0);
+
+      const four = await app.locator("#tabbed").boundingBox();
+      const spaces = await app.locator("#spaced").boundingBox();
+      expect(Math.abs(four.w - spaces.w)).toBeLessThan(1);
+      await app.eval("__SK_TEST_EDITOR__.tabs.value = 8");
+      await sleep(200);
+      const eight = await app.locator("#tabbed").boundingBox();
+      expect(eight.w).toBeGreaterThan(spaces.w * 1.6);
+      await app.eval("__SK_TEST_EDITOR__.tabs.value = 4");
     },
     T,
   );

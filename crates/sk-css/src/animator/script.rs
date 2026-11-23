@@ -435,6 +435,7 @@ fn css_value(v: Animatable) -> Option<String> {
         }
         Animatable::CornerShape(s) => crate::corner_shape::to_css(s),
         Animatable::TextShadows(shadows) => crate::text_shadow_css(shadows.list(), shadows.current),
+        Animatable::BoxShadows(shadows) => crate::box_shadow_css(&shadows.list()),
         Animatable::Size(form) => form.length().to_string(),
         Animatable::Display(_)
         | Animatable::ContentHidden(_)

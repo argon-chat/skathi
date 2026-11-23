@@ -94,7 +94,7 @@ function onBeforeInput(e: InputEvent) {
 </style>
 ```
 
-The editor grows with its text. With a `max-height` it stops growing there and scrolls, keeping the caret in view.
+The editor grows with its text. With a `max-height` it stops growing there and scrolls, keeping the caret in view. A long document costs what is on screen: only the lines in view, and a margin around them, are laid out. See [Code and long documents](#code-and-long-documents).
 
 ## Formatting
 
@@ -193,26 +193,78 @@ To open a mention popup at the caret, read `caretRect()`; it is in window coordi
 
 ## Decorations: syntax colors and search hits
 
-Decorations are ranges painted by name. They are not part of the value, never enter the undo history and never change the layout: `::decoration()` takes color, background and text decoration only. They are kept in layers, so a syntax highlighter and a search can set theirs independently, and they move with edits until you replace them.
+Decorations are ranges painted by name. They are not part of the value, never enter the undo history and never change the layout: `::decoration()` takes color, background, `border-radius` and text decoration only. They are kept in layers, so a syntax highlighter and a search can set theirs independently, and they move with edits until you replace them.
 
 ```ts
 editor.setDecorations("syntax", [
   { from: 0, to: 3, name: "kw" },
   { from: 8, to: 15, name: "string" },
 ]);
-editor.setLineDecorations("diff", [{ line: 2, name: "added" }]);
+editor.setDecorations("search", [{ from: 20, to: 26, name: "match" }]);
+editor.setLineDecorations("diff", [{ line: 2, name: "added", gutter: "+" }]);
 ```
 
 ```css
 sk-editor::decoration(kw) {
   color: var(--syntax-keyword);
 }
+sk-editor::decoration(match) {
+  background: var(--search-hit);
+  border-radius: 3px;
+}
 sk-editor::decoration(added) {
   background: var(--diff-added);
 }
 ```
 
-A line decoration paints its line's background. Highlighting is the app's job; the editor only paints what it is given.
+A rounded background that wraps onto another row is one box cut at the break: only its first and last ends are rounded. The same goes for `border-radius` on `::mark()`.
+
+A line decoration paints its line's background, and its `gutter` text is drawn in the [gutter](#the-gutter). Highlighting is the app's job; the editor only paints what it is given.
+
+## Code and long documents
+
+`<sk-editor>` lays out only the lines on screen and a margin around them. The other lines have an estimated height until they come into view, when they are measured; the line at the top of the view stays where it is while estimates above it are corrected. A 100,000-line document scrolls at the cost of the 50 lines it shows. Geometry reads about lines off screen (`rectsFor()`, `caretRect()`, `positionAt()`) lay those lines out first, as a forced reflow does in a browser.
+
+An editor as tall as its text, inside a scroll container of your own, does the same with the part of it that container shows. Give long wrapped documents an editor with its own height, though: the editor cannot move your container's scroll position when estimated lines above the view turn out taller or shorter, so they can shift the text a little as you scroll up to them. Lines that do not wrap in a monospace font have exact estimates and never shift.
+
+### Wrapping
+
+The editor wraps lines by default (`white-space: pre-wrap`, as a `<textarea>`). `white-space: pre` or `nowrap` on the editor turns soft wrapping off: long lines run past the edge and the text scrolls sideways, with Shift and the wheel, a horizontal wheel or a touchpad, and to follow the caret. Spaces are kept whatever the value, and an ancestor's `white-space` does not reach the editor.
+
+```css
+.code {
+  white-space: pre;
+  font-family: var(--mono);
+  tab-size: 4;
+}
+```
+
+[`tab-size`](/css/tab-size/) sets how far a tab advances, in spaces or as a length.
+
+### The gutter
+
+A `::line-number` rule numbers the lines in a gutter at the editor's left edge, and a `::gutter` rule styles that column. Line decorations with `gutter` text show it there too, after the number, styled by `::gutter(name)`. The gutter stays put when the text scrolls sideways; its width fits the widest number and gutter text unless `width` or `min-width` sets it.
+
+```css
+.code::gutter {
+  padding: 0 8px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.code::line-number {
+  color: var(--faint);
+}
+.code::gutter(added) {
+  color: var(--diff-added-text);
+  background: var(--diff-added);
+}
+```
+
+`display: none` on `::gutter` hides the gutter, and on `::line-number` the numbers.
+
+### Scrolling
+
+`scrollTop` and `scrollLeft` read and set the editor's own scroll position, and `scrollHeight` and `scrollWidth` give the size of its content, as on any scroll container. The `viewportchange` event and the `viewport` property say which lines are on screen.
 
 ## Styling
 
@@ -220,11 +272,14 @@ A line decoration paints its line's background. Highlighting is the app's job; t
 | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `sk-editor::mark(name)`       | Text under the mark: font family, weight, style and size, color, background, underline, line-through.  |
 | `sk-editor::line(name)`       | Lines with the block: the same text properties, plus padding, border and background of the line's box. |
-| `sk-editor::decoration(name)` | Text under the decoration: color, background, underline and line-through only.                         |
+| `sk-editor::decoration(name)` | Text under the decoration: color, background, `border-radius`, underline and line-through only.        |
+| `sk-editor::gutter`           | The gutter column: background, color, font, horizontal padding, `border-right`, `width`, `min-width`.  |
+| `sk-editor::gutter(name)`     | The gutter of lines with that line decoration: background, color, font weight and style.               |
+| `sk-editor::line-number`      | Shows the line numbers: color, font and `text-align` (right by default).                               |
 | `sk-editor::placeholder`      | The placeholder text.                                                                                  |
 | `sk-editor::selection`        | The selection's `background-color`.                                                                    |
 
-A mark with a larger `font-size` makes its row taller, and so does a tall atom. When marks and decorations overlap, the line's style is applied first, then marks, then decorations. Inherited text properties of the editor itself, such as `font-size` and `color`, are the base.
+`border-radius` on `::mark()` and `::decoration()` rounds their background. `width` and `min-width` on `::gutter` are the whole column, padding and border included. A mark with a larger `font-size` makes its row taller, and so does a tall atom. When marks and decorations overlap, the line's style is applied first, then marks, then decorations. Inherited text properties of the editor itself, such as `font-size` and `color`, are the base.
 
 ## The value
 
@@ -305,13 +360,15 @@ The `inputType` values are the web's: `insertText`, `insertParagraph` (Enter), `
 | `exclusiveMarks`                       | Mark types that do not grow when typing at their end.                                              |
 | `marksAt(pos)`                         | Mark types the character before `pos` has; at a line start, the character after.                   |
 | `setDecorations(layer, ranges)`        | Replaces a layer of `{ from, to, name }` decorations.                                              |
-| `setLineDecorations(layer, lines)`     | Replaces a layer of `{ line, name }` line decorations.                                             |
+| `setLineDecorations(layer, lines)`     | Replaces a layer of `{ line, name, gutter? }` line decorations; `gutter` is text for the gutter.   |
 | `rectsFor(from, to)`, `caretRect()`    | `DOMRect`s in window coordinates, one per visual row, for popups and tooltips.                     |
 | `positionAt(x, y)`                     | The position nearest a point in window coordinates.                                                |
 | `viewport`                             | `{ fromLine, toLine }`: the hard lines on screen, `toLine` exclusive.                              |
+| `scrollTop`, `scrollLeft`              | The editor's own scroll position; assigning one scrolls.                                           |
+| `scrollHeight`, `scrollWidth`          | The size of the content, gutter included in the width.                                             |
 | `readOnly`, `placeholder`, `maxLength` | Reflect the `readonly`, `placeholder` and `maxlength` attributes. `maxLength` counts UTF-16 units. |
 
-Geometry is from the last frame, so read it after the editor has been shown.
+Geometry is from the last frame, so read it after the editor has been shown. A read about lines off screen lays them out first; a span of more than 512 lines answers from estimated boxes past the ones on screen.
 
 ## Keys
 

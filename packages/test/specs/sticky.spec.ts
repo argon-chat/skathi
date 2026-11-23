@@ -227,3 +227,28 @@ describe("nested scroll containers", () => {
     T,
   );
 });
+
+describe("a sticky box inside an absolutely positioned, `overflow: clip` block in a scroller", () => {
+  // macOS CI: as for the grid, the sticky boxes do not stay put when the scroller scrolls.
+  test.skipIf(MACOS)(
+    "sticks to the scroller on both axes: neither the absolute box nor `clip` is the reference",
+    async () => {
+      await painted();
+      const abs = await rect("#abs");
+      await scroll("#abs", 300, 100);
+      await sleep(300);
+      bunExpect((await rect("#abs-block")).left).toBe(abs.left + 8 - 300);
+      bunExpect((await rect("#abs-head")).top).toBe(abs.top);
+      const gutter = await rect("#abs-gutter");
+      bunExpect(gutter.left).toBe(abs.left);
+      bunExpect(gutter.top).toBe(abs.top + 40 + 20 - 100);
+      if (!SCREENSHOTS) return;
+      const at = await shoot();
+      bunExpect(blue(at(abs.left + 200, abs.top + 10))).toBe(true);
+      bunExpect(red(at(abs.left + 30, abs.top + 100))).toBe(true);
+      bunExpect(lime(at(abs.left + 90, abs.top + 100))).toBe(true);
+      bunExpect(await hitId(abs.left + 30, abs.top + 100)).toBe("abs-gutter");
+    },
+    T,
+  );
+});

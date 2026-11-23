@@ -933,13 +933,13 @@ impl EditorState {
         self.is_selecting = false;
     }
 
-    pub fn scroll_by(&mut self, dy: Pixels, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn scroll_by(&mut self, dx: Pixels, dy: Pixels, _: &mut Window, cx: &mut Context<Self>) {
         let mut g = self.shared.geometry.borrow_mut();
-        let viewport = g.bounds.map_or(px(0.0), |b| b.size.height);
-        let max = (g.content_height - viewport).max(px(0.0));
-        let next = (g.scroll_top + dy).clamp(px(0.0), max);
-        if next != g.scroll_top {
-            g.scroll_top = next;
+        let top = (g.scroll_top + dy).clamp(px(0.0), g.max_scroll_top());
+        let left = (g.scroll_left + dx).clamp(px(0.0), g.max_scroll_left());
+        if top != g.scroll_top || left != g.scroll_left {
+            g.scroll_top = top;
+            g.scroll_left = left;
             cx.notify();
         }
     }

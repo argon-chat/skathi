@@ -19,6 +19,50 @@ sk-editor::line(quote) {
 sk-editor::decoration(kw) {
   color: rgb(200 0 0);
 }
+#code {
+  width: 300px;
+  height: 64px;
+  max-height: none;
+  padding: 0;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  line-height: 16px;
+  white-space: pre;
+  tab-size: 4;
+}
+#code::line-number {
+  color: #999;
+}
+#code::gutter {
+  padding: 0 6px;
+  border-right: 1px solid #ccc;
+}
+#code::gutter(added) {
+  color: #080;
+}
+#code::decoration(hit) {
+  background: #fd0;
+  border-radius: 6px;
+}
+.scroller {
+  width: 300px;
+  height: 48px;
+  overflow: auto;
+}
+#tall {
+  max-height: none;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  line-height: 16px;
+}
+.tabs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-family: Consolas, monospace;
+  font-size: 13px;
+  white-space: pre;
+}
 .chip {
   width: 48px;
   height: 22px;

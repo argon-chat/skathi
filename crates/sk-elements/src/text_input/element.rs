@@ -497,9 +497,13 @@ fn shape(
     window: &mut Window,
 ) -> Vec<LineBox> {
     let text = display.clone();
+    let rules = gpui::TextWrap {
+        tab_size: window.text_style().tab_size,
+        ..gpui::TextWrap::BREAK_WORD
+    };
     let Ok(lines) = window
         .text_system()
-        .shape_text(display, font_size, runs, wrap_width, None)
+        .shape_text_with(display, font_size, runs, wrap_width, None, rules)
     else {
         return Vec::new();
     };
