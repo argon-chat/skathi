@@ -386,7 +386,19 @@ Geometry is from the last frame, so read it after the editor has been shown. A r
 
 ## Keys
 
-The editing keys are a text field's (arrows, Home and End, word moves with Ctrl or Alt, Ctrl+A, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z, Ctrl+C, X and V), with Cmd on macOS. Up and Down move by visual row. A double click selects a word, a triple click a line. Enter inserts a paragraph and Shift+Enter a line break; both are `\n` in the text and differ only in `inputType`.
+The editing keys are a text field's (arrows, Home and End, word moves with Ctrl or Alt, Ctrl+A, Ctrl+Z and Ctrl+Y or Ctrl+Shift+Z, Ctrl+C, X and V), with Cmd on macOS. Up and Down move by visual row and keep the column across short lines.
+
+| Key                          | Windows and Linux           | macOS                     |
+| ---------------------------- | --------------------------- | ------------------------- |
+| Start or end of the document | Ctrl+Home, Ctrl+End         | Cmd+Up, Cmd+Down          |
+| A page up or down            | PageUp, PageDown            | PageUp, PageDown          |
+| Start or end of the row      | Home, End                   | Cmd+Left, Cmd+Right       |
+| Word left or right           | Ctrl+Left, Ctrl+Right       | Alt+Left, Alt+Right       |
+| Delete a word                | Ctrl+Backspace, Ctrl+Delete | Alt+Backspace, Alt+Delete |
+
+Shift with any of the moves extends the selection. PageUp and PageDown move the caret by the visible height less one line and scroll by the same distance, so the caret keeps its place in the view. On a long document the jump to either end lays out only the lines it lands on. A `<textarea>` takes the same keys.
+
+A double click selects a word, a triple click a line. Enter inserts a paragraph and Shift+Enter a line break; both are `\n` in the text and differ only in `inputType`.
 
 ## Clipboard
 

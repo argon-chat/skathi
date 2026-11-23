@@ -85,9 +85,10 @@ impl InputTransform {
 use super::boundaries;
 use super::{
     Backspace, ClearSelection, CompositionPhase, ControlledValue, Copy, Cut, Delete, DeleteToEnd,
-    DeleteToStart, DeleteWordLeft, DeleteWordRight, Down, End, Home, InputIntent, InputType, Left,
-    Newline, OnBeforeInput, OnChange, OnComposition, OnKeyDown, Paste, Redo, Right, SelectAll,
-    SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
+    DeleteToStart, DeleteWordLeft, DeleteWordRight, DocEnd, DocStart, Down, End, Home, InputIntent,
+    InputType, Left, Newline, OnBeforeInput, OnChange, OnComposition, OnKeyDown, PageDown, PageUp,
+    Paste, Redo, Right, SelectAll, SelectDocEnd, SelectDocStart, SelectDown, SelectEnd, SelectHome,
+    SelectLeft, SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft,
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
 
@@ -1011,6 +1012,74 @@ impl TextInputState {
         self.select_to(offset, cx);
     }
 
+    pub(crate) fn doc_start(&mut self, _: &DocStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+    }
+
+    pub(crate) fn doc_end(&mut self, _: &DocEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.content.len(), cx);
+    }
+
+    pub(crate) fn select_doc_start(
+        &mut self,
+        _: &SelectDocStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(0, cx);
+    }
+
+    pub(crate) fn select_doc_end(
+        &mut self,
+        _: &SelectDocEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.content.len(), cx);
+    }
+
+    pub(crate) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.page(false);
+        self.move_to(offset, cx);
+    }
+
+    pub(crate) fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.page(true);
+        self.move_to(offset, cx);
+    }
+
+    pub(crate) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let offset = self.page(false);
+        self.select_to(offset, cx);
+    }
+
+    pub(crate) fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let offset = self.page(true);
+        self.select_to(offset, cx);
+    }
+
+    /// The caret a page above or below, scrolling by the same distance so it keeps its place in
+    /// the view.
+    fn page(&mut self, down: bool) -> usize {
+        let viewport = self.last_bounds.map_or(px(0.0), |b| b.size.height);
+        let step = (viewport - self.line_height).max(self.line_height);
+        let dy = if down { step } else { -step };
+        if self.multiline {
+            self.scroll_top += dy;
+        }
+        self.offset_rows(self.cursor_offset(), dy)
+    }
+
     pub(crate) fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only || !self.multiline {
             return;
@@ -1505,8 +1574,12 @@ impl TextInputState {
     }
 
     fn offset_one_row(&self, index: usize, delta: i32) -> usize {
+        self.offset_rows(index, self.line_height * delta as f32)
+    }
+
+    fn offset_rows(&self, index: usize, dy: Pixels) -> usize {
         let caret = self.position_for_index(index);
-        let y = caret.y + self.line_height * delta as f32;
+        let y = caret.y + dy;
         if y < px(0.0) {
             return 0;
         }

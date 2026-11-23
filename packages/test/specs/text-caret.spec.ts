@@ -59,6 +59,22 @@ test(
 );
 
 test(
+  "the document start and end keys move and extend the caret in a textarea",
+  async () => {
+    await reset();
+    const [start, end] = MACOS ? ["Cmd+ArrowUp", "Cmd+ArrowDown"] : ["Ctrl+Home", "Ctrl+End"];
+    await read(`(${TA}.value = "ab\\ncd\\nef", ${TA}.selectionStart = ${TA}.selectionEnd = 4, 0)`);
+    await app.locator("#ta").press(end);
+    expect(await until(CARET, `8,8,${FORWARD}`)).toBe(`8,8,${FORWARD}`);
+    await app.locator("#ta").press(start);
+    expect(await until(CARET, `0,0,${FORWARD}`)).toBe(`0,0,${FORWARD}`);
+    await app.locator("#ta").press(`Shift+${end}`);
+    expect(await until(CARET, `0,8,${FORWARD}`)).toBe(`0,8,${FORWARD}`);
+  },
+  T,
+);
+
+test(
   "keydown and beforeinput see the selection the key acts on, input the one after it",
   async () => {
     await reset();

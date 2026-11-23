@@ -41,16 +41,24 @@ actions!(
         DeleteToStart,
         DeleteWordLeft,
         DeleteWordRight,
+        DocEnd,
+        DocStart,
         End,
         Home,
         Left,
+        PageDown,
+        PageUp,
         Paste,
         Redo,
         Right,
         SelectAll,
+        SelectDocEnd,
+        SelectDocStart,
         SelectEnd,
         SelectHome,
         SelectLeft,
+        SelectPageDown,
+        SelectPageUp,
         SelectRight,
         SelectWordLeft,
         SelectWordRight,
@@ -385,6 +393,14 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::down);
     element = on_state_action(element, state, TextInputState::select_up);
     element = on_state_action(element, state, TextInputState::select_down);
+    element = on_state_action(element, state, TextInputState::doc_start);
+    element = on_state_action(element, state, TextInputState::doc_end);
+    element = on_state_action(element, state, TextInputState::select_doc_start);
+    element = on_state_action(element, state, TextInputState::select_doc_end);
+    element = on_state_action(element, state, TextInputState::page_up);
+    element = on_state_action(element, state, TextInputState::page_down);
+    element = on_state_action(element, state, TextInputState::select_page_up);
+    element = on_state_action(element, state, TextInputState::select_page_down);
     element = on_state_action(element, state, TextInputState::newline);
 
     // The wheel listener sits on the wrapper (gpui delivers wheel events to a hitbox).
@@ -546,7 +562,27 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", Down, context),
         KeyBinding::new("shift-up", SelectUp, context),
         KeyBinding::new("shift-down", SelectDown, context),
+        KeyBinding::new("pageup", PageUp, context),
+        KeyBinding::new("pagedown", PageDown, context),
+        KeyBinding::new("shift-pageup", SelectPageUp, context),
+        KeyBinding::new("shift-pagedown", SelectPageDown, context),
     ]);
+
+    if cfg!(target_os = "macos") {
+        bindings.extend([
+            KeyBinding::new("cmd-up", DocStart, context),
+            KeyBinding::new("cmd-down", DocEnd, context),
+            KeyBinding::new("shift-cmd-up", SelectDocStart, context),
+            KeyBinding::new("shift-cmd-down", SelectDocEnd, context),
+        ]);
+    } else {
+        bindings.extend([
+            KeyBinding::new("ctrl-home", DocStart, context),
+            KeyBinding::new("ctrl-end", DocEnd, context),
+            KeyBinding::new("shift-ctrl-home", SelectDocStart, context),
+            KeyBinding::new("shift-ctrl-end", SelectDocEnd, context),
+        ]);
+    }
 
     // Bound in the TEXTAREA context only, so a single-line input leaves Return to the app.
     bindings.extend([

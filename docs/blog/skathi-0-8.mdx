@@ -140,6 +140,7 @@ The same element holds a source file or a diff. See [code and long documents](/e
 - **A gutter.** [`::line-number`](/css/pseudo-line-number/) numbers the lines, [`::gutter`](/css/pseudo-gutter/) styles the column, and the `gutter` text of a line decoration (a diff's `+` and `−`, a breakpoint) is drawn in it, styled by `::gutter(name)`. The gutter does not scroll sideways.
 - **Rounded highlights.** `border-radius` on `::decoration()` and `::mark()` rounds a search hit or an inline code span, and a highlight that wraps is rounded only at its two ends.
 - **Scrolling from script.** `scrollTop`, `scrollLeft`, `scrollHeight` and `scrollWidth` work on the editor as on any scroll container.
+- **Long-distance keys.** Ctrl+Home and Ctrl+End (Cmd+Up and Cmd+Down on macOS) jump to either end of the document, and PageUp and PageDown move a page, keeping the column; with Shift they select. A `<textarea>` has them too.
 
 Several cursors are [in the works](https://github.com/argon-chat/skathi/issues/66).
 

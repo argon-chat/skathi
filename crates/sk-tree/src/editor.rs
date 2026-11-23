@@ -433,6 +433,9 @@ pub(crate) fn build<V: 'static>(
                     });
                 }
                 EditorEvent::SelectionChange => {
+                    // A key that only moves the caret changes nothing in the tree, so the pump
+                    // would not draw the frame that scrolls to it.
+                    repaint(id);
                     crate::render::js_wave_app(window, cx, || {
                         fire_plain(id, "selectionchange");
                         true

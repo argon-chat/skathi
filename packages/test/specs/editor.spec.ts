@@ -404,6 +404,57 @@ describe("<sk-editor> long documents and code", () => {
   );
 
   test(
+    "PageUp and PageDown move a page and scroll with it, keeping the column; the document keys reach either end",
+    async () => {
+      const n = 100_000;
+      await code(
+        Array.from({ length: n }, (_, i) => (i === 4 ? "x" : `${String(i).padStart(6, "0")} abcdefgh`)).join("\n"),
+      );
+      const ed = app.locator("#code");
+      await ed.focus();
+      const sel = "E.code().selections[0]";
+      const pos = (line: number, col: number) => read<number>(`E.code().line(${line}).from + ${col}`);
+      const headAt = async (want: number) => (await until<{ head: number }>(sel, (s) => s.head === want)).head;
+      await app.eval(
+        "(() => { const c = __SK_TEST_EDITOR__.code(); c.dispatch({ selections: [{ anchor: c.line(0).from + 9 }] }) })()",
+      );
+
+      await ed.press("PageDown");
+      expect(await headAt(await pos(3, 9))).toBe(await pos(3, 9));
+      expect(await read<number>("E.code().scrollTop")).toBe(48);
+      await ed.press("ArrowDown");
+      expect(await headAt(await pos(4, 1))).toBe(await pos(4, 1));
+      await ed.press("ArrowDown");
+      expect(await headAt(await pos(5, 9))).toBe(await pos(5, 9));
+      await ed.press("PageDown");
+      expect(await headAt(await pos(8, 9))).toBe(await pos(8, 9));
+      await ed.press("Shift+PageUp");
+      expect(await until<{ anchor: number; head: number }>(sel, (s) => s.head !== s.anchor)).toEqual({
+        anchor: await pos(8, 9),
+        head: await pos(5, 9),
+      });
+
+      const [docStart, docEnd] = MACOS ? ["Cmd+ArrowUp", "Cmd+ArrowDown"] : ["Ctrl+Home", "Ctrl+End"];
+      const length = await read<number>("E.code().length");
+      await ed.press(docEnd);
+      expect(await headAt(length)).toBe(length);
+      const view = await until<{ fromLine: number; toLine: number }>("E.code().viewport", (v) => v.toLine === n);
+      expect(view.toLine).toBe(n);
+      expect(view.toLine - view.fromLine).toBeLessThanOrEqual(8);
+      await ed.press(`Shift+${docStart}`);
+      expect(await until<{ anchor: number; head: number }>(sel, (s) => s.head === 0)).toEqual({
+        anchor: length,
+        head: 0,
+      });
+      expect(await until<number>("E.code().scrollTop", (v) => v === 0)).toBe(0);
+      await ed.press(docEnd);
+      await ed.press(docStart);
+      expect(await until<{ anchor: number; head: number }>(sel, (s) => s.anchor === 0)).toEqual({ anchor: 0, head: 0 });
+    },
+    T,
+  );
+
+  test(
     "tab-size: a tab stops where that many spaces end, in the editor and in text",
     async () => {
       await code("\tx\n    x");

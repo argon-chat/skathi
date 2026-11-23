@@ -372,17 +372,44 @@ impl Geometry {
     }
 
     /// The position one visual row up or down from `pos`, keeping its x; `None` past the edge.
-    pub fn row_step(&self, pos: usize, down: bool) -> Option<usize> {
-        let (at, height, _) = self.caret_at(pos)?;
+    /// The position a row, or `by` further, above or below `pos`, at `x` when given, and the x it
+    /// started from. `None` past either end of the document.
+    pub fn row_step(
+        &self,
+        pos: usize,
+        down: bool,
+        by: Pixels,
+        x: Option<Pixels>,
+    ) -> (Option<usize>, Option<Pixels>) {
+        let Some((at, height, _)) = self.caret_at(pos) else {
+            return (None, x);
+        };
+        let x = x.unwrap_or(at.x);
         let y = if down {
-            at.y + height + px(1.0)
+            at.y + height + px(1.0) + by
         } else {
-            at.y - px(1.0)
+            at.y - px(1.0) - by
         };
         if y < px(0.0) || y >= self.content_height() {
-            return None;
+            return (None, Some(x));
         }
-        Some(self.index_at(point(at.x, y)))
+        (Some(self.index_at(point(x, y))), Some(x))
+    }
+
+    /// How far PageUp and PageDown move: the visible height less one line.
+    pub fn page_height(&self) -> Pixels {
+        let height = self.bounds.map_or(px(0.0), |b| b.size.height);
+        let visible = if self.content_height() > height + px(0.5) {
+            height
+        } else {
+            let (first, last) = self.viewport;
+            if last > first {
+                px(self.index.top(last) - self.index.top(first))
+            } else {
+                height
+            }
+        };
+        (visible - self.line_height).max(self.line_height)
     }
 
     pub fn content_height(&self) -> Pixels {

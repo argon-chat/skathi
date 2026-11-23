@@ -154,12 +154,6 @@ onMounted(() => {
     { line: 16, name: "changed", gutter: "~" },
   ]);
   ed.setLineDecorations("marks", [{ line: 24, name: "stop", gutter: "●" }]);
-  ed.addEventListener("keydown", (e) => {
-    const key = e as KeyboardEvent;
-    if (!key.ctrlKey || (key.key !== "Home" && key.key !== "End")) return;
-    key.preventDefault();
-    ed.dispatch({ selections: [{ anchor: key.key === "Home" ? 0 : ed.length }], scrollIntoView: true });
-  });
   ed.addEventListener("viewportchange", decorate);
   ed.addEventListener("selectionchange", lineDecorations);
   ed.addEventListener("focus", () => {

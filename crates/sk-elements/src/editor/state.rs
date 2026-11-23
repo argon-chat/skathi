@@ -17,8 +17,9 @@ use super::{EditorEvent, EditorHandlers, EditorIntent, EditorShared, LineBreak, 
 use crate::text_input::boundaries;
 use crate::text_input::{
     Backspace, ClearSelection, Copy, Cut, Delete, DeleteToEnd, DeleteToStart, DeleteWordLeft,
-    DeleteWordRight, Down, End, Home, Left, Paste, Redo, Right, SelectAll, SelectDown, SelectEnd,
-    SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+    DeleteWordRight, DocEnd, DocStart, Down, End, Home, Left, PageDown, PageUp, Paste, Redo, Right,
+    SelectAll, SelectDocEnd, SelectDocStart, SelectDown, SelectEnd, SelectHome, SelectLeft,
+    SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
     ShowCharacterPalette, Undo, Up, WordLeft, WordRight,
 };
 use crate::{CompositionPhase, InputType};
@@ -58,6 +59,8 @@ pub struct EditorState {
     is_selecting: bool,
     /// Where a drag started, kept so a drag back over it keeps the start selected.
     drag_anchor: usize,
+    /// The x a run of vertical moves keeps to, for the caret and revision it left.
+    goal_x: Option<(usize, u64, Pixels)>,
     blink_anchor: Instant,
     blink_task: Option<Task<()>>,
     _key_interceptor: Subscription,
@@ -89,6 +92,7 @@ impl EditorState {
             suppress_text_input: false,
             is_selecting: false,
             drag_anchor: 0,
+            goal_x: None,
             blink_anchor: cx.background_executor().now(),
             blink_task: None,
             _key_interceptor: interceptor,
@@ -402,14 +406,108 @@ impl EditorState {
             .unwrap_or(doc_edge)
     }
 
-    fn row_step(&self, down: bool) -> usize {
+    /// Moves or extends the caret a row, or a page with `page`, keeping the column of the first
+    /// move in a run. A page also scrolls by the same distance.
+    fn vertical(
+        &mut self,
+        down: bool,
+        page: bool,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let head = self.selection().head;
-        let len = self.shared.core.borrow().doc().len();
-        self.shared
-            .geometry
-            .borrow()
-            .row_step(head, down)
-            .unwrap_or(if down { len } else { 0 })
+        let (len, revision) = {
+            let core = self.shared.core.borrow();
+            (core.doc().len(), core.revision())
+        };
+        let goal = self
+            .goal_x
+            .filter(|&(h, r, _)| h == head && r == revision)
+            .map(|(.., x)| x);
+        let (pos, x) = {
+            let mut g = self.shared.geometry.borrow_mut();
+            let mut by = px(0.0);
+            if page {
+                let step = g.page_height();
+                by = (step - g.line_height).max(px(0.0));
+                let top = g.scroll_top() + if down { step } else { -step };
+                g.set_scroll(Some(top), None);
+            }
+            g.row_step(head, down, by, goal)
+        };
+        let pos = pos.unwrap_or(if down { len } else { 0 });
+        if extend {
+            self.extend_to(pos, window, cx);
+        } else {
+            self.move_to(pos, window, cx);
+        }
+        self.goal_x = x.map(|x| (pos, revision, x));
+    }
+
+    fn doc_edge(&mut self, end: bool, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let pos = if end {
+            self.shared.core.borrow().doc().len()
+        } else {
+            0
+        };
+        if extend {
+            self.extend_to(pos, window, cx);
+        } else {
+            self.move_to(pos, window, cx);
+        }
+    }
+
+    pub(crate) fn doc_start(&mut self, _: &DocStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.doc_edge(false, false, window, cx);
+    }
+
+    pub(crate) fn doc_end(&mut self, _: &DocEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.doc_edge(true, false, window, cx);
+    }
+
+    pub(crate) fn select_doc_start(
+        &mut self,
+        _: &SelectDocStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.doc_edge(false, true, window, cx);
+    }
+
+    pub(crate) fn select_doc_end(
+        &mut self,
+        _: &SelectDocEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.doc_edge(true, true, window, cx);
+    }
+
+    pub(crate) fn page_up(&mut self, _: &PageUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(false, true, false, window, cx);
+    }
+
+    pub(crate) fn page_down(&mut self, _: &PageDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(true, true, false, window, cx);
+    }
+
+    pub(crate) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vertical(false, true, true, window, cx);
+    }
+
+    pub(crate) fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vertical(true, true, true, window, cx);
     }
 
     pub(crate) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -647,18 +745,15 @@ impl EditorState {
     }
 
     pub(crate) fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
-        let pos = self.row_step(false);
-        self.move_to(pos, window, cx);
+        self.vertical(false, false, false, window, cx);
     }
 
     pub(crate) fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
-        let pos = self.row_step(true);
-        self.move_to(pos, window, cx);
+        self.vertical(true, false, false, window, cx);
     }
 
     pub(crate) fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
-        let pos = self.row_step(false);
-        self.extend_to(pos, window, cx);
+        self.vertical(false, false, true, window, cx);
     }
 
     pub(crate) fn select_down(
@@ -667,8 +762,7 @@ impl EditorState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let pos = self.row_step(true);
-        self.extend_to(pos, window, cx);
+        self.vertical(true, false, true, window, cx);
     }
 
     fn selection_target(core: &Editor) -> (usize, usize) {
