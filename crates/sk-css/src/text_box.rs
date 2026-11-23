@@ -52,7 +52,9 @@ impl TextBoxTrim {
     }
 
     pub fn insets(self, edge: TextBoxEdge, metrics: TextBoxMetrics) -> (f32, f32) {
-        let leading = (metrics.line_height - metrics.ascent - metrics.descent) / 2.0;
+        let total = metrics.line_height - metrics.ascent - metrics.descent;
+        let above = metrics.leading_above.unwrap_or(total / 2.0);
+        let below = total - above;
         let glyph_height = match edge {
             TextBoxEdge::Cap | TextBoxEdge::CapAlphabetic => metrics.cap_height,
             TextBoxEdge::Ex | TextBoxEdge::ExAlphabetic => metrics.x_height,
@@ -64,7 +66,7 @@ impl TextBoxTrim {
             metrics.ascent
         };
         let start = if matches!(self, Self::Start | Self::Both) {
-            (leading + metrics.ascent - glyph_height).max(0.0)
+            (above + metrics.ascent - glyph_height).max(0.0)
         } else {
             0.0
         };
@@ -79,7 +81,7 @@ impl TextBoxTrim {
             } else {
                 0.0
             };
-            (leading + edge).max(0.0)
+            (below + edge).max(0.0)
         } else {
             0.0
         };
@@ -141,6 +143,8 @@ pub struct TextBoxMetrics {
     pub descent: f32,
     pub cap_height: f32,
     pub x_height: f32,
+    /// The part of the leading above the font's box; `None` splits it evenly.
+    pub leading_above: Option<f32>,
 }
 
 fn parse_value<T: Default>(
@@ -284,6 +288,7 @@ mod tests {
             descent: 4.0,
             cap_height: 12.0,
             x_height: 9.0,
+            leading_above: None,
         };
         assert_eq!(
             TextBoxTrim::Both.insets(TextBoxEdge::Auto, metrics()),
@@ -320,6 +325,17 @@ mod tests {
                 }
             ),
             (0.0, 0.0)
+        );
+        // `line-leading: above`: the whole 10 px over the box, none under it.
+        assert_eq!(
+            TextBoxTrim::Both.insets(
+                TextBoxEdge::CapAlphabetic,
+                TextBoxMetrics {
+                    leading_above: Some(10.0),
+                    ..metrics()
+                }
+            ),
+            (14.0, 4.0)
         );
     }
 }

@@ -6326,6 +6326,36 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "line-metrics" =>
+            {
+                match single_ident(&c.value, "line-metrics", diagnostics) {
+                    Some("auto") => r.text.line_metrics = Some(gpui::LineMetrics::Auto),
+                    Some("snapped") => r.text.line_metrics = Some(gpui::LineMetrics::Snapped),
+                    other => unsupported(
+                        diagnostics,
+                        &format!(
+                            "line-metrics: {} — use auto or snapped",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "line-leading" =>
+            {
+                match single_ident(&c.value, "line-leading", diagnostics) {
+                    Some("split") => r.text.line_leading = Some(gpui::LineLeading::Split),
+                    Some("above") => r.text.line_leading = Some(gpui::LineLeading::Above),
+                    other => unsupported(
+                        diagnostics,
+                        &format!(
+                            "line-leading: {} — use split or above",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "-webkit-line-clamp" || name.0.as_ref() == "line-clamp" =>
             {
                 match single_number(&c.value) {
@@ -7680,6 +7710,8 @@ pub(crate) fn inherits(name: &str) -> bool {
                 | "direction"
                 | "letter-spacing"
                 | "line-height"
+                | "line-metrics"
+                | "line-leading"
                 | "white-space"
                 | "white-space-collapse"
                 | "tab-size"
@@ -10461,6 +10493,26 @@ mod prefix_tests {
         );
         assert_eq!(text("will-change: scroll-position"), (None, Some(false), 0));
         assert!(inherits("font-dilation"));
+    }
+
+    #[test]
+    fn line_metrics_and_line_leading_reach_the_text_style_and_inherit() {
+        let text = |css: &str| {
+            let mut d = Vec::new();
+            let s = parse_inline(css, &mut d);
+            (s.text.line_metrics, s.text.line_leading, d.len())
+        };
+        assert_eq!(
+            text("line-metrics: snapped; line-leading: above"),
+            (
+                Some(gpui::LineMetrics::Snapped),
+                Some(gpui::LineLeading::Above),
+                0
+            )
+        );
+        assert_eq!(text("line-metrics: integral"), (None, None, 1));
+        assert_eq!(text("line-leading: center"), (None, None, 1));
+        assert!(inherits("line-metrics") && inherits("line-leading"));
     }
 
     #[test]

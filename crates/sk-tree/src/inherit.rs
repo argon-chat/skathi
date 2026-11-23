@@ -1,5 +1,5 @@
 //! Inherited properties the cascade records only where they are declared, read through the
-//! ancestors: `interpolate-size` and `dynamic-range-limit`.
+//! ancestors: `interpolate-size`, `dynamic-range-limit`, `line-metrics` and `line-leading`.
 
 use crate::tree::{self, Tree};
 
@@ -47,6 +47,32 @@ pub(crate) fn interpolate_keywords(t: &Tree, id: u32, own: Option<bool>) -> bool
             .flatten()
     })
     .unwrap_or(false)
+}
+
+/// `id`'s computed `line-metrics` and `line-leading`.
+pub(crate) fn line_box(t: &Tree, id: u32) -> gpui::LineBoxRules {
+    gpui::LineBoxRules {
+        metrics: nearest_text(t, id, |s| s.line_metrics).unwrap_or_default(),
+        leading: nearest_text(t, id, |s| s.line_leading).unwrap_or_default(),
+    }
+}
+
+fn nearest_text<T>(
+    t: &Tree,
+    id: u32,
+    get: impl Fn(&gpui::TextStyleRefinement) -> Option<T>,
+) -> Option<T> {
+    let mut at = id;
+    while let Some(n) = t.node(at) {
+        if let Some(v) = n.computed.as_ref().and_then(|c| get(&c.base.text)) {
+            return Some(v);
+        }
+        if n.parent == 0 || n.parent == at {
+            return None;
+        }
+        at = n.parent;
+    }
+    None
 }
 
 pub(crate) fn dynamic_range_limit_in(t: &Tree, id: u32) -> sk_css::DynamicRangeLimit {

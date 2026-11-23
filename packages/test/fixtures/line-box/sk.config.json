@@ -1,0 +1,12 @@
+{
+  "name": "line-box",
+
+  "window": {
+    "title": "Skathi — line-metrics and line-leading (fixture)",
+    "width": 480,
+    "height": 560,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "none"
+  }
+}

@@ -1015,7 +1015,54 @@ const typography = section("Typography and text", [
     limitations: [
       "A line whose glyphs fall back to another font does not grow to that font's `normal` height: `normal` is the first font's alone.",
     ],
-    related: ["font"],
+    related: ["font", "line-metrics", "line-leading"],
+  }),
+  prop("line-metrics", OK, "Sets what a font contributes to the height of a line: CSS's metrics or whole pixels.", {
+    skathiOnly: true,
+    values: [
+      v(
+        "auto",
+        OK,
+        "As in CSS: `line-height: normal` is the font's ascent, descent and line gap, each rounded to a pixel, and the baseline is placed from the unrounded ascent and descent.",
+      ),
+      v(
+        "snapped",
+        OK,
+        "The font's box is its ascent and its descent, each rounded to a whole pixel, without the line gap. Where rounding would cut into the descender, the descent is rounded up instead. The baseline is the rounded ascent below the top of the box, so it falls on a whole pixel.",
+      ),
+    ],
+    notes: [
+      "Inherited. Set it on the root to apply it across the app: `html { line-metrics: snapped }`.",
+      "With `snapped`, `line-height: normal` is that box: Segoe UI at 13px is 18px tall with its baseline at 14, and the macOS system font at 13px is 16px with its baseline at 13. A `line-height` you declare keeps its meaning; the leading is then placed around the snapped box as `line-leading` says.",
+      "The metrics are the font's OS/2 typographic ascent and descent when the font sets USE_TYPO_METRICS, and its `hhea` ascent and descent otherwise; the Windows ascent and descent are never used. For most fonts the three agree. Consolas is one where they do not: it is 14px tall at 13px under `snapped`, 15px under `auto`.",
+      "In a line that mixes sizes, each run's box comes from its own font and size, and the line reaches as far above and below the shared baseline as its runs do.",
+      "It applies to the text's layout, painting, selection and caret, `vertical-align`, `text-box-trim`, baseline alignment in flex and grid, `<input>`, `<textarea>` and `<sk-editor>`.",
+      "The rules are the ones AppKit and SwiftUI use to size a label on macOS, and they are the same on every platform. Together with `line-leading: above` they put a label where a native macOS control does; see `line-leading`.",
+    ],
+    limitations: [
+      "The descender is never clipped, for every font and size. AppKit grows the box this way only for its system font up to 21pt, so a 26px system-font label is 31px here and 30 in AppKit, and Inter at 13px is 17px here and 16 in AppKit.",
+    ],
+    aliases: ["integral line height", "whole-pixel line height", "native line metrics", "macOS line height"],
+    related: ["line-leading", "line-height", "text-box-trim"],
+  }),
+  prop("line-leading", OK, "Sets where the difference between the line height and the font's box goes.", {
+    skathiOnly: true,
+    values: [
+      v("split", OK, "As in CSS: half above the font's box and half below it."),
+      v(
+        "above",
+        OK,
+        "All of it above the box, so the baseline sits the font's descent above the bottom of the line. A line height smaller than the box takes the difference from the top.",
+      ),
+    ],
+    notes: [
+      "Inherited. Works with either `line-metrics` value.",
+      "13px text with `line-height: 24px` and a 16px box: `split` puts the baseline at 17, `above` at 21.",
+      "In a line that mixes sizes, each run places its own leading (its line height scaled by its size, as a unitless `line-height` does) and the line takes the most any run reaches above and below the shared baseline.",
+      "macOS puts all the extra leading above the baseline when it scales a line, and controls centre the line box, not the capitals. `html { line-metrics: snapped; line-leading: above }` reproduces where AppKit and SwiftUI put a label: a 13px label is 16px tall with its baseline at 13, and a 24px button that centres it, with `display: flex; align-items: center` or equal padding, puts the baseline at 17.",
+    ],
+    aliases: ["leading distribution", "half-leading", "baseline position"],
+    related: ["line-metrics", "line-height", "vertical-align"],
   }),
   sh("text-box", PART, "Sets the trimmed sides and the font metrics used for trimming.", {
     since: "0.7.0",

@@ -58,6 +58,7 @@ pub(crate) struct ShapeKey {
     runs: Vec<TextRun>,
     wrap_width: Option<Pixels>,
     font_epoch: u64,
+    line_box: gpui::LineBoxRules,
 }
 
 impl TextElement {
@@ -81,6 +82,7 @@ impl TextElement {
         placeholder: Option<SharedString>,
         runs: Vec<TextRun>,
         wrap_width: Option<Pixels>,
+        line_box: gpui::LineBoxRules,
     ) -> ShapeKey {
         ShapeKey {
             revision: state.revision(),
@@ -90,6 +92,7 @@ impl TextElement {
             runs,
             wrap_width,
             font_epoch: self.options.font_epoch,
+            line_box,
         }
     }
 
@@ -135,7 +138,7 @@ impl Element for TextElement {
             let (display, key, cache) = self.state.update(cx, |state, _| {
                 let (display, placeholder) = self.display(state);
                 let runs = runs(display.len(), text_style.color, None, &text_style);
-                let key = self.key(state, placeholder, runs, None);
+                let key = self.key(state, placeholder, runs, None, text_style.line_box());
                 (display, key, state.measure_cache())
             });
             let layout =
@@ -218,7 +221,7 @@ impl Element for TextElement {
                 self.options.text_color
             };
             let runs = runs(display.len(), color, marked_range, &text_style);
-            let key = self.key(state, placeholder, runs, wrap_width);
+            let key = self.key(state, placeholder, runs, wrap_width, text_style.line_box());
             let reuse = state.shaped_key() == Some(&key);
             (display, is_placeholder, key, reuse)
         });
@@ -497,8 +500,10 @@ fn shape(
     window: &mut Window,
 ) -> Vec<LineBox> {
     let text = display.clone();
+    let style = window.text_style();
     let rules = gpui::TextWrap {
-        tab_size: window.text_style().tab_size,
+        tab_size: style.tab_size,
+        line_box: style.line_box(),
         ..gpui::TextWrap::BREAK_WORD
     };
     let Ok(lines) = window

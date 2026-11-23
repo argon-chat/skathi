@@ -248,7 +248,7 @@ pub(crate) fn atom_children(
         .filter_map(|&c| {
             let atom = t.prop(c, "atom")?.trim();
             let align = t.node(c).map_or_else(VerticalAlign::default, |n| {
-                crate::vertical_align::of(n, window)
+                crate::vertical_align::of(t, c, n, window)
             });
             (!atom.is_empty()).then(|| (c, atom.to_owned(), align))
         })

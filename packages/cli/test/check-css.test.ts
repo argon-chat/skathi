@@ -70,6 +70,9 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("font-smoothing", "antialiased")).toBeNull();
     expect(code("-webkit-font-smoothing", "antialiased")).toBe("SK4008");
     expect(code("font-smoothing", "none")).toBe("SK4002");
+    expect(code("line-metrics", "snapped")).toBeNull();
+    expect(code("line-leading", "above")).toBeNull();
+    expect(code("line-leading", "center")).toBe("SK4002");
   });
 
   test("content-sized fields and metric-based block trimming use the native CSS grammar", () => {

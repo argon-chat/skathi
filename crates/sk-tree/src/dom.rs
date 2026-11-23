@@ -236,6 +236,8 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "text-box",
     "text-box-trim",
     "text-box-edge",
+    "line-metrics",
+    "line-leading",
     "font-size",
     "color",
     "text-shadow",
@@ -529,6 +531,16 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
         "text-box" => crate::inherit::layout_value(t, id, true, |x| x.text_box_edge).shorthand(
             crate::inherit::layout_value(t, id, false, |x| x.text_box_trim),
         ),
+        "line-metrics" => match crate::inherit::line_box(t, id).metrics {
+            gpui::LineMetrics::Auto => "auto",
+            gpui::LineMetrics::Snapped => "snapped",
+        }
+        .into(),
+        "line-leading" => match crate::inherit::line_box(t, id).leading {
+            gpui::LineLeading::Split => "split",
+            gpui::LineLeading::Above => "above",
+        }
+        .into(),
         "font-size" => {
             let mut px = None;
             let mut at = id;

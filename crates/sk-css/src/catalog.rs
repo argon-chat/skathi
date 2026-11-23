@@ -340,6 +340,8 @@ pub const CATALOG: &[Entry] = &[
     e("line-break", Unsupported, &[], &["strict"], ""),
     e("line-clamp", Partial, &["2"], &["none"], "`none` cannot undo an earlier clamp"),
     e("line-height", Supported, &["normal", "1.5"], &[], ""),
+    e("line-leading", Supported, &["above", "split"], &[], ""),
+    e("line-metrics", Supported, &["snapped", "auto"], &[], ""),
     e("list-style", Supported, &["none", "disc inside"], &[], ""),
     e("list-style-image", Partial, &["none"], &["url(a.png)"], "Marker images are not drawn"),
     e("list-style-position", Supported, &["inside", "outside"], &[], ""),

@@ -1,7 +1,7 @@
 //! CSS `vertical-align`: where a box sits in a line of text, for an editor's atoms and for the
 //! items of a line laid out as a baseline-aligned flex row.
 
-use gpui::{px, Font, Pixels, VnBaselineShift, Window};
+use gpui::{px, Font, LineBoxRules, LineLeading, Pixels, VnBaselineShift, Window};
 
 /// The computed `vertical-align` of a box.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -31,17 +31,25 @@ pub struct LineText {
     pub descent: Pixels,
     pub x_height: Pixels,
     pub line_height: Pixels,
+    pub leading: LineLeading,
 }
 
 impl LineText {
-    pub fn measure(font: &Font, font_size: Pixels, line_height: Pixels, window: &Window) -> Self {
+    pub fn measure(
+        font: &Font,
+        font_size: Pixels,
+        line_height: Pixels,
+        line_box: LineBoxRules,
+        window: &Window,
+    ) -> Self {
         let text = window.text_system();
         let face = text.resolve_font(font);
         let x_height = text.x_height(face, font_size).abs();
+        let (ascent, descent) = text.line_extent(face, font_size, line_box.metrics);
         Self {
             font_size,
-            ascent: text.ascent(face, font_size).abs(),
-            descent: text.descent(face, font_size).abs(),
+            ascent,
+            descent,
             // CSS takes 0.5em for a font without an x-height.
             x_height: if x_height > px(0.0) {
                 x_height
@@ -49,13 +57,19 @@ impl LineText {
                 font_size / 2.0
             },
             line_height,
+            leading: line_box.leading,
         }
     }
 
-    /// The text's extent above and below the baseline, half-leading included: the line's strut.
+    /// The text's extent above and below the baseline, leading included: the line's strut.
     pub fn strut(&self) -> (Pixels, Pixels) {
-        let half_leading = (self.line_height - self.ascent - self.descent) / 2.0;
-        (self.ascent + half_leading, self.descent + half_leading)
+        match self.leading {
+            LineLeading::Split => {
+                let half_leading = (self.line_height - self.ascent - self.descent) / 2.0;
+                (self.ascent + half_leading, self.descent + half_leading)
+            }
+            LineLeading::Above => (self.line_height - self.descent, self.descent),
+        }
     }
 }
 
@@ -122,6 +136,7 @@ mod tests {
             descent: px(3.0),
             x_height: px(8.0),
             line_height: px(20.0),
+            leading: LineLeading::Split,
         }
     }
 

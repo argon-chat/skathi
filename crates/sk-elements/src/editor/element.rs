@@ -642,7 +642,13 @@ impl PlanCtx<'_> {
                 } else {
                     line_height
                 };
-                let line = LineText::measure(&run.font, run_size, run_line_height, window);
+                let line = LineText::measure(
+                    &run.font,
+                    run_size,
+                    run_line_height,
+                    self.text_style.line_box(),
+                    window,
+                );
                 let (inline_box, place) = atom_box(size, align, &line);
                 if matches!(place, Place::Top | Place::Bottom) {
                     row_atoms.push(RowAtom {
@@ -702,6 +708,7 @@ fn styles_hash(opts: &EditorOptions, text_style: &TextStyle) -> u64 {
     text_style.font_weight.hash(&mut h);
     f32::from(text_style.letter_spacing).to_bits().hash(&mut h);
     f32::from(text_style.word_spacing).to_bits().hash(&mut h);
+    text_style.line_box().hash(&mut h);
     let run = |r: &RunStyle, h: &mut std::collections::hash_map::DefaultHasher| {
         r.font_family.hash(h);
         r.font_weight.hash(h);
@@ -1082,6 +1089,7 @@ impl EditorElement {
             placeholder: layout.placeholder,
             rules: TextWrap {
                 tab_size: text_style.tab_size,
+                line_box: text_style.line_box(),
                 ..TextWrap::BREAK_WORD
             },
             width: opts.wrap.then_some(text_w),

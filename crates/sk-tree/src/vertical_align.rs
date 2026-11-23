@@ -15,7 +15,7 @@ thread_local! {
 }
 
 /// Node `n`'s computed `vertical-align`, a percentage against its own line height when it sets one.
-pub(crate) fn of(n: &Node, window: &Window) -> VerticalAlign {
+pub(crate) fn of(t: &Tree, id: u32, n: &Node, window: &Window) -> VerticalAlign {
     let Some(cs) = n.computed.as_ref() else {
         return VerticalAlign::default();
     };
@@ -39,6 +39,7 @@ pub(crate) fn of(n: &Node, window: &Window) -> VerticalAlign {
                     &cs.computed_font,
                     px(cs.font_size),
                     rem,
+                    crate::inherit::line_box(t, id).metrics,
                 )
             }),
         },
@@ -60,15 +61,19 @@ fn line_height(t: &Tree, id: u32, font: &gpui::Font, font_size: Pixels, window: 
         }
         at = n.parent;
     }
-    window
-        .text_system()
-        .resolve_line_height(declared, font, font_size, window.rem_size())
+    window.text_system().resolve_line_height(
+        declared,
+        font,
+        font_size,
+        window.rem_size(),
+        crate::inherit::line_box(t, id).metrics,
+    )
 }
 
 /// Records where item `id` of a line goes, when its `vertical-align` moves it: the line is its
 /// parent's, so its text is the parent's text.
 pub(crate) fn note_line_item(t: &Tree, id: u32, node: &Node, window: &Window) {
-    let align = of(node, window);
+    let align = of(t, id, node, window);
     if align.is_baseline() {
         PENDING.with(|p| p.borrow_mut().remove(&id));
         return;
@@ -84,6 +89,7 @@ pub(crate) fn note_line_item(t: &Tree, id: u32, node: &Node, window: &Window) {
         &cs.computed_font,
         font_size,
         line_height(t, node.parent, &cs.computed_font, font_size, window),
+        crate::inherit::line_box(t, node.parent),
         window,
     );
     PENDING.with(|p| p.borrow_mut().insert(id, align.alignment(&line)));

@@ -70,16 +70,23 @@ impl Element for Text {
         let line_height = window.pixel_snap(style.line_height.to_pixels(size.into(), rem));
         let text = window.text_system();
         let face = text.resolve_font(&style.font());
-        let (start, end) = self.trim.trim.insets(
-            self.trim.edge,
-            TextBoxMetrics {
-                line_height: f32::from(line_height),
-                ascent: f32::from(text.ascent(face, size)),
-                descent: f32::from(text.descent(face, size)),
-                cap_height: f32::from(text.cap_height(face, size)),
-                x_height: f32::from(text.x_height(face, size)),
-            },
-        );
+        let rules = style.line_box();
+        let mut metrics = TextBoxMetrics {
+            line_height: f32::from(line_height),
+            ascent: f32::from(text.ascent(face, size)),
+            descent: f32::from(text.descent(face, size)),
+            cap_height: f32::from(text.cap_height(face, size)),
+            x_height: f32::from(text.x_height(face, size)),
+            leading_above: None,
+        };
+        if rules != gpui::LineBoxRules::default() {
+            let (ascent, descent) = text.line_extent(face, size, rules.metrics);
+            let baseline = gpui::line_baseline(line_height, ascent, descent, rules.leading);
+            metrics.ascent = f32::from(ascent);
+            metrics.descent = f32::from(descent);
+            metrics.leading_above = Some(f32::from(baseline - ascent));
+        }
+        let (start, end) = self.trim.trim.insets(self.trim.edge, metrics);
         let child = self.child.request_layout(window, cx);
         if start == 0.0 && end == 0.0 {
             return (child, ());
