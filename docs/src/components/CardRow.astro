@@ -1,0 +1,30 @@
+---
+import "../styles/cards.css";
+
+interface Props {
+  /** `grid-template-columns` above 900px wide. */
+  columns?: string;
+  /** `grid-template-columns` from 701 to 900px wide; one column below that. */
+  medium?: string;
+  as?: "div" | "ol" | "ul";
+  class?: string;
+  "aria-label"?: string;
+}
+
+const {
+  columns = "repeat(2, minmax(0, 1fr))",
+  medium = "minmax(0, 1fr)",
+  as: Tag = "div",
+  class: className,
+  ...rest
+} = Astro.props;
+---
+
+<Tag
+  class:list={["card-row", className]}
+  style={`--card-columns: ${columns}; --card-columns-medium: ${medium}`}
+  data-card-row
+  {...rest}
+>
+  <slot />
+</Tag>

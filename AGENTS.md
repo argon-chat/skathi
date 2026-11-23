@@ -67,4 +67,9 @@ exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
   the embedder (`sk_app::embed::HostContext` hooks, sk.config.json `"aliases"`).
 - Error and advisory messages say what is wrong and what to do, without pointing at files a
   user of the SDK does not have.
+- **Docs landing: card rows go through `CardRow` and `CardStack`** (`docs/src/components`), and the
+  columns of a row end flush; balance the content rather than leave a stretched card half empty.
+  Section intros go through `SectionIntro` and use the whole row (two text columns, or text and an
+  aside that end flush; centred only above a symmetric section). `bun run check:layout` in `docs/`
+  checks both in a headless Chromium.
 - Commits: `type(scope): summary` (`fix(css): …`, `feat(window): …`).

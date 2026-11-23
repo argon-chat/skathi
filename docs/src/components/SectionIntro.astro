@@ -1,0 +1,62 @@
+---
+import "../styles/cards.css";
+
+interface Props {
+  /**
+   * `columns`: the heading spans the row, the body flows in two balanced columns.
+   * `aside`: heading and body beside an aside; both start at the top of the intro and end flush.
+   * `center`: a centred intro, for a section that is symmetric below it.
+   */
+  variant: "columns" | "aside" | "center";
+  /** `grid-template-columns` of the text and the aside above 900px. */
+  columns?: string;
+  class?: string;
+}
+
+const { variant, columns = "minmax(0, 1.05fr) minmax(0, 0.95fr)", class: className } = Astro.props;
+const body = Astro.slots.has("default");
+const foot = Astro.slots.has("foot");
+---
+
+<div
+  class:list={["intro", `intro-${variant}`, className]}
+  style={variant === "aside" ? `--intro-columns: ${columns}` : undefined}
+  data-intro={variant}
+>
+  {
+    variant === "aside" ? (
+      <>
+        <div class="intro-main">
+          <slot name="head" />
+          {body && (
+            <div class="intro-body">
+              <slot />
+            </div>
+          )}
+          {foot && (
+            <div class="intro-foot">
+              <slot name="foot" />
+            </div>
+          )}
+        </div>
+        <div class="intro-side">
+          <slot name="aside" />
+        </div>
+      </>
+    ) : (
+      <>
+        <slot name="head" />
+        {body && (
+          <div class="intro-body">
+            <slot />
+          </div>
+        )}
+        {foot && (
+          <div class="intro-foot">
+            <slot name="foot" />
+          </div>
+        )}
+      </>
+    )
+  }
+</div>

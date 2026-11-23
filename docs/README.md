@@ -19,9 +19,12 @@ bun fmt                      # Bun formatter; Prettier for .astro files
 bun run fmt:check
 bun run build                # static site and Pagefind search index in dist/
 bun run test                 # integration checks against the built output
+bun run check:layout         # build, then check the landing's card rows and intros (headless Chromium)
 bun run preview              # inspect the production site and search
 bun run preview:cloudflare   # build and serve through Wrangler
 ```
+
+`check:layout` renders the landing at 1440, 1100 and 390 px in both themes and fails when the columns of a `CardRow` end more than 1px apart or a grid of cards bypasses `CardRow`, and when a section heading sits outside `SectionIntro` or an intro (other than a centred one) leaves the right of the row empty or ends its text and aside apart. It needs a Chromium: `CHROMIUM_PATH`, a Playwright download (`bunx playwright install chromium`), or an installed Chrome or Edge. `bun scripts/check-layout.ts --url http://localhost:4321/` checks a running dev server instead of a build.
 
 Requires Bun >=1.4.4 and a Node version supported by Astro (>=22.23.4; Node 24 recommended). Bun installs, runs scripts, formats supported files, and runs integration tests. Astro's compiler and Vite build the site; `Bun.build` is not a replacement for the Astro/MDX/Vue pipeline. No Vite Plus wrapper is required. `bun --bun run build` is also verified and runs the build using Bun as the JavaScript runtime.
 

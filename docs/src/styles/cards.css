@@ -1,0 +1,115 @@
+@layer reset, theme, layout, content, components, responsive, site, landing, blog, cards;
+
+/* Rows of cards whose columns end on one bottom edge: a single card stretches to the row, and a
+   stack of cards stretches its last card, or the one marked data-grow. */
+/* Below the page's own layers, so a section can still place the row with a margin. */
+@layer components {
+  .card-row {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}
+
+@layer cards {
+  :root {
+    --card-gap: 16px;
+  }
+  .card-row {
+    display: grid;
+    grid-template-columns: var(--card-columns);
+    align-items: stretch;
+    gap: var(--card-gap);
+  }
+  .card-row > *,
+  .card-stack > * {
+    min-width: 0;
+    margin: 0;
+  }
+  .card-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--card-gap);
+  }
+  .card-stack > :last-child,
+  .card-stack > [data-grow] {
+    flex-grow: 1;
+  }
+  .card-stack:has(> [data-grow]) > :last-child:not([data-grow]) {
+    flex-grow: 0;
+  }
+  /* Section intros use the whole row. An aside starts at the top of the intro, and the text and the
+     aside end flush: the aside's data-grow child stretches, or the text's foot drops to the bottom. */
+  .intro {
+    --intro-gap: 48px;
+  }
+  .intro-columns .intro-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 0 var(--intro-gap);
+  }
+  .intro-columns .intro-body > * {
+    margin: 0;
+  }
+  .intro-aside {
+    display: grid;
+    grid-template-columns: var(--intro-columns);
+    align-items: stretch;
+    gap: var(--intro-gap);
+  }
+  .intro-main,
+  .intro-side {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .intro-side > * {
+    margin: 0;
+  }
+  .intro-side > [data-grow] {
+    flex-grow: 1;
+  }
+  .intro-main > .intro-foot {
+    margin-top: auto;
+  }
+  .intro-main > :last-child {
+    margin-bottom: 0;
+  }
+  .intro-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px 24px;
+    padding-top: 20px;
+  }
+  .intro-center {
+    max-width: 760px;
+    margin-inline: auto;
+    text-align: center;
+  }
+  .intro-center .intro-foot {
+    justify-content: center;
+  }
+  @media (max-width: 900px) {
+    .card-row {
+      grid-template-columns: var(--card-columns-medium);
+    }
+    .intro-aside {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 32px;
+    }
+    .intro-columns .intro-body {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+  }
+  @media (max-width: 700px) {
+    .card-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .card-stack > * {
+      flex-grow: 0;
+    }
+  }
+}

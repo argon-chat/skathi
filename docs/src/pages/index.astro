@@ -11,12 +11,18 @@ import drawPoster from "../assets/media/draw-poster.webp";
 import playerPoster from "../assets/media/player-poster.webp";
 import rv32Poster from "../assets/media/rv32-poster.webp";
 import sequencerPoster from "../assets/media/sequencer-poster.webp";
+import editorPoster from "../assets/media/sk-editor-poster.webp";
+import editorCodePoster from "../assets/media/sk-editor-code-poster.webp";
+import layerPoster from "../assets/media/sk-layer-poster.webp";
 import weatherPoster from "../assets/media/weather-poster.webp";
 import slang from "../lib/slang";
+import CardRow from "../components/CardRow.astro";
+import CardStack from "../components/CardStack.astro";
 import Command from "../components/Command.astro";
 import Head from "../components/Head.astro";
 import Icon from "../components/Icon.astro";
 import Parallax from "../components/Parallax.astro";
+import SectionIntro from "../components/SectionIntro.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import SiteNav from "../components/SiteNav.astro";
 import { repository, version } from "../lib/docs";
@@ -76,6 +82,90 @@ const sheenCss = `.card {
 .card:hover {
   --shading: sheen(0.5, #ffd6f0);
 }`;
+
+const editorCss = `.composer::decoration(typo) {
+  text-decoration: underline wavy #ff7a9c;
+}
+.code::gutter {
+  border-right: 1px solid var(--border);
+}
+.code::line-number {
+  color: #6f6a80;
+}
+.code::decoration(match) {
+  background: #f7a8d04d;
+  border-radius: 4px;
+}`;
+
+const editorTimes = [
+  {
+    title: "First frame of a 100,000-line file",
+    max: 2868,
+    rows: [
+      { name: "All lines", value: 2868, label: "2,868 ms", how: "every line laid out" },
+      { name: "On screen", value: 50, label: "50 ms", how: "the lines in view" },
+    ],
+  },
+  {
+    title: "Slowest scroll step",
+    max: 1275,
+    rows: [
+      { name: "All lines", value: 1275, label: "1,275 ms", how: "every line laid out" },
+      { name: "On screen", value: 1.9, label: "1.9 ms", how: "the lines in view" },
+    ],
+  },
+] as const;
+
+const surfaceRust = `use std::time::Duration;
+
+let surface = skathi::surface("player");
+std::thread::spawn(move || loop {
+    std::thread::sleep(Duration::from_millis(16));
+    let info = surface.info();
+    if !info.visible || info.width == 0 {
+        continue; // nothing on screen shows it: render nothing
+    }
+    let (w, h) = (info.width, info.height);
+    let pixels = render_bgra(w, h);
+    surface.present_bgra(&pixels, w, h, (w * 4) as usize).ok();
+});`;
+
+const layerRust = `use skathi::{Layer, LayerHost, LayerPlacement};
+
+struct Player { /* your visual, swap chain, view */ }
+
+impl Layer for Player {
+    fn attach(&mut self, host: &LayerHost) {
+        // Move the layer into this window.
+    }
+
+    fn place(&mut self, placement: Option<LayerPlacement>) {
+        match placement {
+            Some(at) => { /* show at at.bounds, clipped to at.clip */ }
+            None => { /* hide */ }
+        }
+    }
+}
+
+let builder = skathi::Builder::new().setup(|host| {
+    host.layer("player", || Box::new(Player::new()));
+    Ok(())
+});`;
+
+const layerVue = `<template>
+  <div class="stage">
+    <sk-layer name="player" class="video" />
+    <PlayerControls class="controls" />
+  </div>
+</template>
+
+<style scoped>
+.video {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+}
+</style>`;
 
 const notesRust = `#[skathi::data]
 #[derive(Clone)]
@@ -336,9 +426,11 @@ const structuredData = {
 
       <section class="gallery" aria-labelledby="gallery-title" data-fan>
         <div class="gallery-stage">
-          <h2 id="gallery-title" class="gallery-title">
-            Five templates to start from. <span class="candy-text">Every pixel drawn by Skathi.</span>
-          </h2>
+          <SectionIntro variant="center" class="gallery-intro">
+            <h2 slot="head" id="gallery-title" class="gallery-title">
+              Five templates to start from. <span class="candy-text">Every pixel drawn by Skathi.</span>
+            </h2>
+          </SectionIntro>
           <div class="fan">
             <figure class="fan-card" style="--side: -2">
               <div class="window">
@@ -457,16 +549,14 @@ const structuredData = {
       </section>
 
       <section class="code-demo" aria-labelledby="code-title">
-        <div class="code-intro">
-          <h2 id="code-title">Write a component. <span class="candy-text">Get a window.</span></h2>
+        <SectionIntro variant="aside" columns="minmax(0, 1fr) minmax(0, 1fr)">
+          <h2 slot="head" id="code-title">Write a component. <span class="candy-text">Get a window.</span></h2>
           <p>
             It is the Vue you already write: <code>ref</code>, templates, scoped styles, Pinia stores. Skathi takes the
             tree Vue builds and draws it natively, so there is no DOM to ship and no browser to start.
           </p>
           <a class="text-link" href="/concepts/">How the runtime works<Icon name="arrow" size={14} /></a>
-        </div>
-        <div class="code-stage">
-          <div class="code-panel">
+          <div class="code-panel" slot="aside" data-grow>
             <span class="code-file">App.vue</span>
             <Code
               code={component}
@@ -475,7 +565,7 @@ const structuredData = {
               defaultColor={false}
             />
           </div>
-          <div class="mini-window" aria-label="What the component looks like">
+          <div slot="foot" class="mini-window" aria-label="What the component looks like">
             <div class="mini-titlebar">
               <img src={wolf} width="16" height="16" alt="" /><span>my-blazing-fast-app</span><span
                 class="mini-controls"
@@ -487,30 +577,161 @@ const structuredData = {
               <button type="button" data-counter>Clicked 0 times</button>
             </div>
           </div>
-        </div>
+        </SectionIntro>
+      </section>
+
+      <section class="editor" aria-labelledby="editor-title">
+        <SectionIntro variant="columns">
+          <Fragment slot="head">
+            <p class="eyebrow eyebrow-pink"><Icon name="braces" size={15} />Rich text and code</p>
+            <h2 id="editor-title">A chat composer, a source file. <span class="candy-text">One element.</span></h2>
+          </Fragment>
+          <p>
+            <code>&lt;sk-editor&gt;</code> is a native editing element, not <code>contenteditable</code>. It owns the
+            text, the caret, IME input and the undo history, and binds with <code>v-model</code>. A mention or a custom
+            emoji is an atom: a real element of your component, in the line.
+          </p>
+          <p>
+            Marks such as bold and links move with the text. Decorations paint what the value does not hold: syntax
+            colours, search hits, a spelling squiggle.
+            <code>::mark()</code>, <code>::line()</code>, <code>::decoration()</code>, <code>::gutter</code> and
+            <code>::line-number</code> style all of it from CSS.
+          </p>
+          <a slot="foot" class="text-link" href="/elements/sk-editor/"
+            ><span>The <code>&lt;sk-editor&gt;</code> element</span><Icon name="arrow" size={14} /></a
+          >
+        </SectionIntro>
+
+        <CardRow class="editor-row">
+          <figure class="editor-clip">
+            <div class="clip" style="--x: 272; --y: 262; --w: 736; --h: 384">
+              <div class="clip-canvas">
+                <Image
+                  src={editorPoster}
+                  widths={[960, 1280]}
+                  sizes="(max-width: 900px) calc((100vw - 48px) * 1.74), 1100px"
+                  alt=""
+                />
+                <video
+                  muted
+                  loop
+                  playsinline
+                  preload="none"
+                  width="1280"
+                  height="834"
+                  data-demo
+                  aria-label="A chat composer: text is typed, a mention of Mira is inserted as a chip, a misspelled word gets a wavy underline, two words are made bold and pink, and undo steps back to the empty field"
+                >
+                  <source data-src="/media/elements/sk-editor.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                  <source data-src="/media/elements/sk-editor.mp4" type="video/mp4" />
+                </video>
+              </div>
+            </div>
+            <figcaption>
+              A composer: a mention chip that is a real element, a squiggle under a typo, bold and a colour mark, then
+              undo back to empty.
+            </figcaption>
+          </figure>
+          <div class="code-panel">
+            <span class="code-file">src/styles.css</span>
+            <Code
+              code={editorCss}
+              lang="css"
+              themes={{ light: "github-light", dark: "github-dark" }}
+              defaultColor={false}
+            />
+          </div>
+        </CardRow>
+
+        <figure class="editor-clip editor-code-clip">
+          <div class="clip" style="--x: 100; --y: 160; --w: 1080; --h: 588">
+            <div class="clip-canvas">
+              <Image
+                src={editorCodePoster}
+                widths={[640, 960, 1280]}
+                sizes="(max-width: 900px) calc((100vw - 48px) * 1.19), 820px"
+                alt=""
+              />
+              <video
+                muted
+                loop
+                playsinline
+                preload="none"
+                width="1280"
+                height="834"
+                data-demo
+                aria-label="A code editor with line numbers, green and blue diff lines and a breakpoint dot in the gutter; a long line scrolls sideways while the gutter stays, a search highlights every match, the view scrolls fast through thousands of lines and jumps to line 100,000 and back"
+              >
+                <source data-src="/media/elements/sk-editor-code.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                <source data-src="/media/elements/sk-editor-code.mp4" type="video/mp4" />
+              </video>
+            </div>
+          </div>
+          <figcaption>
+            The same element with <code>white-space: pre</code>: a gutter with diff markers, rounded search hits, and a
+            jump to line 100,000.
+          </figcaption>
+        </figure>
+
+        <figure class="editor-numbers">
+          <figcaption>
+            <h3>A long file costs what is on screen</h3>
+            <p>
+              Lines out of view keep an estimated height until they scroll in. On a 6,000-line file the first frame
+              takes 5.9 ms against 213. Debug builds, one machine.
+            </p>
+          </figcaption>
+          {
+            editorTimes.map((group) => (
+              <dl class="call-group">
+                <dt class="call-title">{group.title}</dt>
+                {group.rows.map((row) => (
+                  <dd class="call-row" data-ours={row.name === "On screen" ? "" : undefined}>
+                    <span class="call-name">{row.name}</span>
+                    <span class="call-track" aria-hidden="true">
+                      <span class="call-bar" style={`--share: ${(row.value / group.max) * 100}%`} />
+                    </span>
+                    <span class="call-value">
+                      <strong>{row.label}</strong>
+                      <small>{row.how}</small>
+                    </span>
+                  </dd>
+                ))}
+              </dl>
+            ))
+          }
+        </figure>
       </section>
 
       <section class="shading" aria-labelledby="shading-title">
-        <div class="shading-head">
-          <p class="eyebrow eyebrow-pink"><Icon name="sparkle" size={15} />Shading</p>
-          <h2 id="shading-title">Shaders, <span class="candy-text">straight from CSS.</span></h2>
+        <SectionIntro variant="aside">
+          <Fragment slot="head">
+            <p class="eyebrow eyebrow-pink"><Icon name="sparkle" size={15} />Shading</p>
+            <h2 id="shading-title">Shaders, <span class="candy-text">straight from CSS.</span></h2>
+          </Fragment>
           <p>
             An effect is one Slang file in <code>shaders/</code>. Skathi compiles it for Direct3D, Vulkan and Metal and
             hands it to CSS as a custom property: parameters are arguments, and a transition on
             <code>--shading</code> blends between them, or between two different effects.
           </p>
-        </div>
-        <div class="shading-grid">
-          <div class="shading-code">
-            <div class="code-panel">
-              <span class="code-file">shaders/sheen.slang</span>
-              <Code
-                code={sheenShader}
-                lang={slang}
-                themes={{ light: "github-light", dark: "github-dark" }}
-                defaultColor={false}
-              />
-            </div>
+          <ul slot="aside" class="shading-list" data-grow>
+            <li>On an element, behind it, or over the whole window</li>
+            <li>The pointer, a clock, colours, lengths and textures as parameters</li>
+            <li>Multi-pass and feedback effects</li>
+            <li>An Effects panel in the devtools, with controls for every parameter</li>
+          </ul>
+        </SectionIntro>
+        <CardRow columns="minmax(0, 1.05fr) minmax(0, 0.95fr)">
+          <div class="code-panel">
+            <span class="code-file">shaders/sheen.slang</span>
+            <Code
+              code={sheenShader}
+              lang={slang}
+              themes={{ light: "github-light", dark: "github-dark" }}
+              defaultColor={false}
+            />
+          </div>
+          <CardStack>
             <div class="code-panel">
               <span class="code-file">src/styles.css</span>
               <Code
@@ -520,45 +741,44 @@ const structuredData = {
                 defaultColor={false}
               />
             </div>
-          </div>
-          <div class="shading-gallery">
-            <figure>
-              <Image
-                src={shadingGlass}
-                alt="A liquid glass lens refracting the word refraction and two coloured discs"
-                widths={[480, 968]}
-                sizes="(max-width: 900px) 100vw, 520px"
-                format="webp"
-              />
-              <figcaption><code>lens</code> reads the backdrop: liquid glass that bends what is behind it</figcaption>
-            </figure>
-            <figure>
-              <Image
-                src={shadingNebula}
-                alt="An animated blue and violet nebula with twinkling stars"
-                widths={[480, 968]}
-                sizes="(max-width: 900px) 100vw, 520px"
-                format="webp"
-              />
-              <figcaption><code>nebula</code> is animated: domain-warped noise, redrawn every frame</figcaption>
-            </figure>
-            <ul class="shading-list">
-              <li>On an element, behind it, or over the whole window</li>
-              <li>The pointer, a clock, colours, lengths and textures as parameters</li>
-              <li>Multi-pass and feedback effects</li>
-              <li>An Effects panel in the devtools, with controls for every parameter</li>
-            </ul>
-            <p class="effect-chips" aria-label="Effects in the showcase template">
-              {effects.map((name) => <code>{name}</code>)}
-            </p>
-          </div>
-        </div>
+            <div class="effect-card">
+              <h3>In the showcase template</h3>
+              <p class="effect-chips">
+                {effects.map((name) => <code>{name}</code>)}
+              </p>
+            </div>
+          </CardStack>
+        </CardRow>
+        <CardRow class="shading-gallery">
+          <figure>
+            <Image
+              src={shadingGlass}
+              alt="A liquid glass lens refracting the word refraction and two coloured discs"
+              widths={[480, 968]}
+              sizes="(max-width: 900px) 100vw, 520px"
+              format="webp"
+            />
+            <figcaption><code>lens</code> reads the backdrop: liquid glass that bends what is behind it</figcaption>
+          </figure>
+          <figure>
+            <Image
+              src={shadingNebula}
+              alt="An animated blue and violet nebula with twinkling stars"
+              widths={[480, 968]}
+              sizes="(max-width: 900px) 100vw, 520px"
+              format="webp"
+            />
+            <figcaption><code>nebula</code> is animated: domain-warped noise, redrawn every frame</figcaption>
+          </figure>
+        </CardRow>
       </section>
 
       <section class="aot" aria-labelledby="aot-title">
-        <div class="aot-copy">
-          <p class="eyebrow"><Icon name="cpu" size={15} />Ahead-of-time compilation</p>
-          <h2 id="aot-title">Your TypeScript, <span class="candy-text">compiled to machine code.</span></h2>
+        <SectionIntro variant="aside">
+          <Fragment slot="head">
+            <p class="eyebrow"><Icon name="cpu" size={15} />Ahead-of-time compilation</p>
+            <h2 id="aot-title">Your TypeScript, <span class="candy-text">compiled to machine code.</span></h2>
+          </Fragment>
           <p>
             A release build can skip the JavaScript engine's warm-up. <code>sk publish --aot</code> takes the production bundle
             through Bun's frontend into an intermediate representation, compiles that to native code, and stamps the image
@@ -568,52 +788,54 @@ const structuredData = {
             The compiler does best with typed code. <code>sk check</code> lists what in your code and your dependencies would
             break or slow down under AOT, and how much of it is typed.
           </p>
-          <p class="aot-note">
+          <p slot="foot" class="aot-note">
             Windows x64 for now, and experimental. Without <code>--aot</code>, the same app runs on JavaScriptCore.
           </p>
-        </div>
-        <ol class="pipeline" aria-label="How an AOT build is made">
-          <li>
-            <span class="pipeline-icon"><Icon name="code" size={18} /></span>
-            <span><strong>Components and TypeScript</strong><small>.vue, .svelte, .ts</small></span>
-          </li>
-          <li>
-            <span class="pipeline-icon"><Icon name="package" size={18} /></span>
-            <span><strong>Production bundle</strong><small>tree-shaken, minified</small></span>
-          </li>
-          <li>
-            <span class="pipeline-icon"><Icon name="layers" size={18} /></span>
-            <span><strong>Intermediate representation</strong><small>Bun's AOT frontend</small></span>
-          </li>
-          <li>
-            <span class="pipeline-icon"><Icon name="cpu" size={18} /></span>
-            <span><strong>Machine code</strong><small>a native image inside the app</small></span>
-          </li>
-          <li class="pipeline-command"><code>$ bunx sk publish --aot</code></li>
-        </ol>
+          <ol slot="aside" class="pipeline" aria-label="How an AOT build is made" data-grow>
+            <li>
+              <span class="pipeline-icon"><Icon name="code" size={18} /></span>
+              <span><strong>Components and TypeScript</strong><small>.vue, .svelte, .ts</small></span>
+            </li>
+            <li>
+              <span class="pipeline-icon"><Icon name="package" size={18} /></span>
+              <span><strong>Production bundle</strong><small>tree-shaken, minified</small></span>
+            </li>
+            <li>
+              <span class="pipeline-icon"><Icon name="layers" size={18} /></span>
+              <span><strong>Intermediate representation</strong><small>Bun's AOT frontend</small></span>
+            </li>
+            <li>
+              <span class="pipeline-icon"><Icon name="cpu" size={18} /></span>
+              <span><strong>Machine code</strong><small>a native image inside the app</small></span>
+            </li>
+            <li class="pipeline-command"><code>$ bunx sk publish --aot</code></li>
+          </ol>
+        </SectionIntro>
       </section>
 
       <section class="embed" aria-labelledby="embed-title">
-        <div class="embed-head">
-          <h2 id="embed-title">Embed it in Rust. <span class="candy-text">Call Rust like a module.</span></h2>
+        <SectionIntro variant="columns">
+          <h2 slot="head" id="embed-title">
+            Embed it in Rust. <span class="candy-text">Call Rust like a module.</span>
+          </h2>
           <p>
             The <code>skathi</code> crate runs the whole engine inside your executable, on a thread of its own, and
             <code>main</code> stays yours. Mark an <code>impl</code> block <code>#[skathi::module]</code> and the app imports
-            its methods from <code>native:notes</code>: a <code>pub fn</code> returns its value inside the call, a
-            <code>#[task]</code> runs on a worker and returns a promise, and events reach <code>on</code> from any thread.
+            its methods from <code>native:notes</code>. Values cross straight between Rust and the engine with no JSON
+            in between, and a <code>&amp;[u8]</code> reads the app's bytes where they are.
           </p>
           <p>
-            <code>sk types --exe</code> asks your exe for its modules and writes the app's <code>.d.ts</code>, so a
-            renamed field fails the type check, not a user. Values cross straight between Rust and the engine with no
-            JSON in between, and a <code>&amp;[u8]</code> reads the app's bytes where they are.
+            A <code>pub fn</code> returns its value inside the call, a <code>#[task]</code> runs on a worker and returns a
+            promise, and events reach <code>on</code> from any thread. <code>sk types --exe</code> asks your exe for its modules
+            and writes the app's <code>.d.ts</code>, so a renamed field fails the type check, not a user.
           </p>
-          <p class="embed-links">
+          <Fragment slot="foot">
             <a class="text-link" href="/embedding/overview/">Embedding guide<Icon name="arrow" size={14} /></a>
             <a class="text-link" href="/embedding/native-modules/">Native modules<Icon name="arrow" size={14} /></a>
-          </p>
-        </div>
+          </Fragment>
+        </SectionIntro>
 
-        <div class="embed-code">
+        <CardRow>
           <div class="code-panel embed-rust">
             <span class="code-file">src/main.rs</span>
             <Code
@@ -623,7 +845,7 @@ const structuredData = {
               defaultColor={false}
             />
           </div>
-          <div class="embed-app">
+          <CardStack>
             <div class="code-panel">
               <span class="code-file">app/src/NoteSearch.vue</span>
               <Code
@@ -644,10 +866,10 @@ const structuredData = {
                 defaultColor={false}
               />
             </div>
-          </div>
-        </div>
+          </CardStack>
+        </CardRow>
 
-        <div class="embed-numbers">
+        <CardRow columns="minmax(0, 1.12fr) minmax(0, 0.88fr)" class="embed-numbers">
           <figure class="calls">
             <figcaption>
               <h3>A call into native code, measured</h3>
@@ -715,12 +937,12 @@ const structuredData = {
               The exe of a minimal embedder, Windows x64, size profile. Native modules are new in 0.4.
             </p>
           </figure>
-        </div>
+        </CardRow>
       </section>
 
       <section class="surface" aria-labelledby="surface-title">
-        <div class="surface-head">
-          <h2 id="surface-title">
+        <SectionIntro variant="aside">
+          <h2 slot="head" id="surface-title">
             Your renderer's frames, <span class="candy-text">composited into the UI.</span>
           </h2>
           <p>
@@ -733,49 +955,91 @@ const structuredData = {
             Your program presents frames by name, from the thread that renders. A present stores the frame and returns:
             nothing waits for the UI, and a frame no one can see costs no upload.
           </p>
-          <a class="text-link" href="/embedding/native-frames/">Native frames<Icon name="arrow" size={14} /></a>
-        </div>
+          <a slot="foot" class="text-link" href="/embedding/native-frames/"
+            >Native frames<Icon name="arrow" size={14} /></a
+          >
+          <div slot="aside" class="code-panel" data-grow>
+            <span class="code-file">src/player.rs</span>
+            <Code
+              code={surfaceRust}
+              lang="rust"
+              themes={{ light: "github-light", dark: "github-dark" }}
+              defaultColor={false}
+            />
+          </div>
+        </SectionIntro>
 
-        <div class="surface-stage">
-          <figure class="player">
-            <div class="player-window">
-              <div class="mini-titlebar">
-                <img src={wolf} width="16" height="16" alt="" /><span>player</span><span
-                  class="mini-controls"
-                  aria-hidden="true"><i></i><i></i><i></i></span
-                >
-              </div>
-              <div class="player-body">
-                <div
-                  class="player-frame"
-                  role="img"
-                  aria-label="A frame from a native renderer, with rounded corners, under the app's playback controls"
-                >
-                  <img
-                    class="player-picture"
-                    src="/media/surface-preview.webp"
-                    width="1440"
-                    height="810"
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                  />
-                  <code class="player-tag">&lt;sk-surface name="player"&gt;</code>
-                  <div class="player-controls" aria-hidden="true">
-                    <span class="player-play"><Icon name="play" size={14} /></span>
-                    <span class="player-time">0:42</span>
-                    <span class="player-scrub"><span></span></span>
-                    <span class="player-time">2:18</span>
-                    <Icon name="volume" size={15} />
+        <CardRow columns="minmax(0, 1.3fr) minmax(0, 0.7fr)">
+          <CardStack>
+            <figure class="player">
+              <div class="player-window">
+                <div class="mini-titlebar">
+                  <img src={wolf} width="16" height="16" alt="" /><span>player</span><span
+                    class="mini-controls"
+                    aria-hidden="true"><i></i><i></i><i></i></span
+                  >
+                </div>
+                <div class="player-body">
+                  <div
+                    class="player-frame"
+                    role="img"
+                    aria-label="A frame from a native renderer, with rounded corners, under the app's playback controls"
+                  >
+                    <img
+                      class="player-picture"
+                      src="/media/surface-preview.webp"
+                      width="1440"
+                      height="810"
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <code class="player-tag">&lt;sk-surface name="player"&gt;</code>
+                    <div class="player-controls" aria-hidden="true">
+                      <span class="player-play"><Icon name="play" size={14} /></span>
+                      <span class="player-time">0:42</span>
+                      <span class="player-scrub"><span></span></span>
+                      <span class="player-time">2:18</span>
+                      <Icon name="volume" size={15} />
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <figcaption>
-              The frame comes from your renderer. The controls are Vue elements over it, and the rounded corners are
-              <code>border-radius</code>.
-            </figcaption>
-          </figure>
+              <figcaption>
+                The frame comes from your renderer. The controls are Vue elements over it, and the rounded corners are
+                <code>border-radius</code>.
+              </figcaption>
+            </figure>
+
+            <figure class="timeline" style={`--refreshes: ${refreshes}`}>
+              <figcaption>
+                <h3>Presented, or Dropped and why</h3>
+                <p>
+                  Every frame gets exactly one event, in order: <code>Presented</code> with the refresh it first showed on,
+                  or
+                  <code>Dropped</code> as <code>Superseded</code>, <code>Hidden</code>, <code>DeviceLost</code> or
+                  <code>Closed</code>. A player keeps its clock against the screen, and mpv's display-sync hears each
+                  real flip.
+                </p>
+              </figcaption>
+              <div class="timeline-track" aria-hidden="true">
+                <span class="timeline-ticks"></span>
+                {
+                  frames.map((frame, index) => (
+                    <span class="timeline-frame" style={`--start: ${frame.start}; --span: ${frame.span}`}>
+                      <b>{index + 1}</b>
+                      <small>{frame.span} refreshes</small>
+                    </span>
+                  ))
+                }
+                <span class="timeline-head"></span>
+              </div>
+              <p class="timeline-note">
+                24 fps on a 165 Hz screen, from Skathi's surface example: each frame <code>Presented</code>, held for 7,
+                7, 7, 7, 7, 7, 7 and 6 refreshes.
+              </p>
+            </figure>
+          </CardStack>
 
           <div class="code-panel display-panel">
             <span class="code-file">@surfacedisplaychange</span>
@@ -797,36 +1061,7 @@ const structuredData = {
               <code>content_headroom()</code> is how bright a frame should get.
             </p>
           </div>
-
-          <figure class="timeline" style={`--refreshes: ${refreshes}`}>
-            <figcaption>
-              <h3>Presented, or Dropped and why</h3>
-              <p>
-                Every frame gets exactly one event, in order: <code>Presented</code> with the refresh it first showed on,
-                or
-                <code>Dropped</code> as <code>Superseded</code>, <code>Hidden</code>, <code>DeviceLost</code> or
-                <code>Closed</code>. A player keeps its clock against the screen, and mpv's display-sync hears each real
-                flip.
-              </p>
-            </figcaption>
-            <div class="timeline-track" aria-hidden="true">
-              <span class="timeline-ticks"></span>
-              {
-                frames.map((frame, index) => (
-                  <span class="timeline-frame" style={`--start: ${frame.start}; --span: ${frame.span}`}>
-                    <b>{index + 1}</b>
-                    <small>{frame.span} refreshes</small>
-                  </span>
-                ))
-              }
-              <span class="timeline-head"></span>
-            </div>
-            <p class="timeline-note">
-              24 fps on a 165 Hz screen, from Skathi's surface example: each frame <code>Presented</code>, held for 7,
-              7, 7, 7, 7, 7, 7 and 6 refreshes.
-            </p>
-          </figure>
-        </div>
+        </CardRow>
 
         <div class="surface-facts">
           <div class="surface-sources">
@@ -875,9 +1110,141 @@ const structuredData = {
         </div>
       </section>
 
+      <section class="native-layer" aria-labelledby="layer-title">
+        <SectionIntro variant="columns">
+          <Fragment slot="head">
+            <p class="eyebrow"><Icon name="layers" size={15} />Native layer</p>
+            <h2 id="layer-title">Your own swap chain, <span class="candy-text">under the page.</span></h2>
+          </Fragment>
+          <p>
+            A surface takes your frames into the page. Some programs must present by themselves: a player with its own
+            swap chain and HDR output, a game view, a map. <code>&lt;sk-layer&gt;</code> shows that native layer under the
+            page, where the element is. The element paints nothing: CSS places it, its ancestors clip it,
+            <code>border-radius</code> rounds it, and the page's translucent controls draw over the picture.
+          </p>
+          <p>
+            Your layer hears where to go from the paint that draws its element, so the two move in the same frame. When
+            the window rebuilds what it composes with, or the view moves to another window, Skathi attaches it again.
+          </p>
+          <a slot="foot" class="text-link" href="/embedding/native-layer/"
+            >A native layer under the page<Icon name="arrow" size={14} /></a
+          >
+        </SectionIntro>
+
+        <CardRow columns="minmax(0, 0.9fr) minmax(0, 1.1fr)">
+          <figure class="layer-diagram">
+            <div
+              class="stack"
+              role="img"
+              aria-label="Three planes pulled apart, then pressed into one frame: your native picture at the bottom, the page with a rounded hole where the sk-layer element is, and the page's title and controls on top"
+            >
+              <div class="stack-scene">
+                <div class="stack-plane stack-native" style="--z: 0">
+                  <svg viewBox="0 0 200 120" preserveAspectRatio="none" aria-hidden="true">
+                    <path d="M0 52 C40 30 70 78 110 56 S170 30 200 50"></path>
+                    <path d="M0 66 C40 50 80 92 120 66 S175 44 200 64"></path>
+                    <path d="M0 80 C50 62 90 100 130 78 S180 60 200 76"></path>
+                  </svg>
+                </div>
+                <div class="stack-plane stack-page" style="--z: 1">
+                  <span class="stack-hole"></span>
+                </div>
+                <div class="stack-plane stack-ui" style="--z: 2">
+                  <span class="stack-chip">native layer</span>
+                  <span class="stack-title">Drawn by your renderer</span>
+                  <span class="stack-controls"><i></i><b></b></span>
+                </div>
+              </div>
+            </div>
+            <ol class="stack-legend">
+              <li data-plane="ui">
+                <strong>The page's UI</strong><span>text and controls, drawn over the picture</span>
+              </li>
+              <li data-plane="page">
+                <strong><code>&lt;sk-layer&gt;</code></strong><span>placed, clipped and rounded by CSS</span>
+              </li>
+              <li data-plane="native"><strong>Your layer</strong><span>a swap chain, a game view, a map</span></li>
+            </ol>
+          </figure>
+
+          <figure class="layer-clip">
+            <div class="clip" style="--x: 140; --y: 160; --w: 1000; --h: 610">
+              <div class="clip-canvas">
+                <Image
+                  src={layerPoster}
+                  widths={[640, 960, 1280]}
+                  sizes="(max-width: 900px) calc((100vw - 48px) * 1.28), 740px"
+                  alt=""
+                />
+                <video
+                  muted
+                  loop
+                  playsinline
+                  preload="none"
+                  width="1280"
+                  height="834"
+                  data-demo
+                  aria-label="A moving plasma picture drawn by native code fills a rounded card under the page's chips and title; the card shrinks to a circle and the picture follows its edge, the element is set to display none and the picture disappears, then the wide card comes back"
+                >
+                  <source data-src="/media/elements/sk-layer.webm" type='video/webm; codecs="av01.0.05M.08"' />
+                  <source data-src="/media/elements/sk-layer.mp4" type="video/mp4" />
+                </video>
+              </div>
+            </div>
+            <figcaption>
+              The picture is the embedder's; the chips, the title and the buttons are the page's. The layer follows its
+              element to a circle and hides with <code>display: none</code>.
+            </figcaption>
+          </figure>
+        </CardRow>
+
+        <CardRow columns="minmax(0, 1.1fr) minmax(0, 0.9fr)" class="layer-code">
+          <div class="code-panel">
+            <span class="code-file">src/main.rs</span>
+            <Code
+              code={layerRust}
+              lang="rust"
+              themes={{ light: "github-light", dark: "github-dark" }}
+              defaultColor={false}
+            />
+          </div>
+          <CardStack>
+            <div class="code-panel">
+              <span class="code-file">app/src/Player.vue</span>
+              <Code
+                code={layerVue}
+                lang="vue"
+                themes={{ light: "github-light", dark: "github-dark" }}
+                defaultColor={false}
+              />
+            </div>
+            <dl class="layer-calls">
+              <div>
+                <dt><code>attach</code></dt>
+                <dd>the window the layer goes in: first paint, a new window, a rebuilt compositor</dd>
+              </div>
+              <div>
+                <dt><code>place</code></dt>
+                <dd>
+                  bounds, clip, corner radii, scale and opacity, before the frame is presented; <code>None</code> hides it
+                </dd>
+              </div>
+            </dl>
+          </CardStack>
+        </CardRow>
+      </section>
+
       <section class="features" aria-labelledby="features-title">
-        <h2 id="features-title">Everything a desktop app needs, and nothing a browser brings.</h2>
-        <div class="feature-grid">
+        <SectionIntro variant="aside" columns="minmax(0, 1fr) minmax(0, 1fr)">
+          <h2 slot="head" id="features-title">Everything a desktop app needs, and nothing a browser brings.</h2>
+          <p slot="aside" class="coverage" data-grow>
+            <span>
+              Bringing an app over? The <a href="/css/">CSS coverage</a> and the{" "}
+              <a href="/web-platform/">web platform coverage</a> say what works and what does not.
+            </span>
+          </p>
+        </SectionIntro>
+        <CardRow columns="repeat(3, minmax(0, 1fr))" medium="repeat(2, minmax(0, 1fr))">
           {
             features.map((feature) => (
               <article class="feature" data-tone={feature.tone}>
@@ -889,12 +1256,14 @@ const structuredData = {
               </article>
             ))
           }
-        </div>
+        </CardRow>
       </section>
 
       <section class="steps" aria-labelledby="steps-title">
-        <h2 id="steps-title">Three commands from idea to app.</h2>
-        <ol class="step-list">
+        <SectionIntro variant="center">
+          <h2 slot="head" id="steps-title">Three commands from idea to app.</h2>
+        </SectionIntro>
+        <CardRow as="ol" columns="repeat(3, minmax(0, 1fr))" medium="repeat(2, minmax(0, 1fr))">
           {
             steps.map((step, index) => (
               <li class="step">
@@ -905,17 +1274,14 @@ const structuredData = {
               </li>
             ))
           }
-        </ol>
-        <p class="steps-more">
-          Bringing an existing app over? Check the <a href="/css/">CSS coverage</a> and the <a href="/web-platform/"
-            >web platform coverage</a
-          > first.
-        </p>
+        </CardRow>
       </section>
 
       <section class="cta">
         <img src={wolf} width="96" height="96" alt="" class="cta-wolf" />
-        <h2>Your next desktop app starts here.</h2>
+        <SectionIntro variant="center">
+          <h2 slot="head">Your next desktop app starts here.</h2>
+        </SectionIntro>
         <Command command={command} />
       </section>
     </main>
