@@ -16,18 +16,18 @@ lottie = ["dep:sk-lottie", "dep:sk-sticker"]
 video = ["dep:sk-video", "sk-sticker?/video"]
 
 [dependencies]
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.7.0", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.0", default-features = false }
 keycode = "1.0"
-sk-css = { path = "../sk-css", version = "0.7.0" }
-sk-editor = { path = "../sk-editor", version = "0.7.0" }
-sk-effects = { path = "../sk-effects", version = "0.7.0" }
-sk-elements = { path = "../sk-elements", version = "0.7.0" }
-sk-lottie = { path = "../sk-lottie", version = "0.7.0", optional = true }
-sk-video = { path = "../sk-video", version = "0.7.0", optional = true }
-sk-sticker = { path = "../sk-sticker", version = "0.7.0", default-features = false, optional = true }
-sk-runtime = { path = "../sk-runtime", version = "0.7.0", default-features = false }
-sk-payload = { path = "../sk-payload", version = "0.7.0" }
-sk-resample = { path = "../sk-resample", version = "0.7.0" }
+sk-css = { path = "../sk-css", version = "0.8.0" }
+sk-editor = { path = "../sk-editor", version = "0.8.0" }
+sk-effects = { path = "../sk-effects", version = "0.8.0" }
+sk-elements = { path = "../sk-elements", version = "0.8.0" }
+sk-lottie = { path = "../sk-lottie", version = "0.8.0", optional = true }
+sk-video = { path = "../sk-video", version = "0.8.0", optional = true }
+sk-sticker = { path = "../sk-sticker", version = "0.8.0", default-features = false, optional = true }
+sk-runtime = { path = "../sk-runtime", version = "0.8.0", default-features = false }
+sk-payload = { path = "../sk-payload", version = "0.8.0" }
+sk-resample = { path = "../sk-resample", version = "0.8.0" }
 # Same version and decoders gpui already builds.
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
 # Pinned to the version gpui resolves.
