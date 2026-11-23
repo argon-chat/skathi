@@ -327,6 +327,27 @@ test(
 );
 
 test(
+  "a <canvas> is an instance of HTMLCanvasElement, and nothing else is",
+  async () => {
+    const got = await inPage(`
+    const made = document.createElement('canvas');
+    const mounted = document.body.appendChild(document.createElement('canvas'));
+    const out = [
+      made instanceof HTMLCanvasElement,
+      mounted instanceof HTMLCanvasElement,
+      made instanceof HTMLElement,
+      document.createElement('div') instanceof HTMLCanvasElement,
+      ({}) instanceof HTMLCanvasElement,
+    ];
+    mounted.remove();
+    return out;
+  `);
+    expect(got).toEqual({ ok: [true, true, true, false, false] });
+  },
+  T,
+);
+
+test(
   "the app logged nothing broken",
   async () => {
     await app.expectNoErrors({ ignore: [/missing\.png/] });
