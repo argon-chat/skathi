@@ -340,7 +340,10 @@ patch.apply(text: string, options?: { file?: number; fuzz?: number; reverse?: bo
   text: string
   rejected: number[]
 }
-patch.select(picks: { file: number; hunks?: number[]; lines?: [hunk: number, line: number][] }[]): Patch
+patch.select(
+  picks: { file: number; hunks?: number[]; lines?: [hunk: number, line: number][] }[],
+  options?: { reverse?: boolean },
+): Patch
 patch.reverse(): Patch
 patch.toString(): string
 
@@ -382,12 +385,19 @@ interface PatchFile {
         description:
           "For `select()`: per file, the hunks to take whole and single lines as `[hunk, line]`, indices into `files[file].hunks[hunk].lines`. A file given without either is taken whole.",
       },
+      {
+        name: "options.reverse",
+        type: "boolean",
+        description:
+          "For `select()`: the patch that takes the picked lines back out of the new side, with the lines still picked by their indices in this patch.",
+      },
     ],
     notes: [
       "`parse()` reads git's extended headers: new and deleted files, renames and copies with their similarity, mode changes, the `index` line, quoted paths with unusual characters, `Binary files … differ` and `GIT binary patch`, and `\\ No newline at end of file`. Paths come without git's `a/` and `b/`. `toString()` writes the same form back, so a patch read from git and cut down goes back to git.",
       "`select()` is how a git client stages one hunk or a few lines: an unpicked deleted line stays as context, an unpicked added line is left out, and the line numbers of the hunks after it are counted again. Pass the result's `toString()` to `git apply --cached` on its standard input.",
       "`apply()` applies one file's hunks to a text, in order. A hunk goes where its line numbers say when its lines are there; otherwise it is looked for further away in both directions, so a file that changed above it still takes it. A hunk whose context stops at the start or the end of the file stays there, as in git. A hunk that finds no place is skipped and its index is in `rejected`; the others are still applied.",
-      "`reverse()` swaps the old and new sides: paths, modes, added and deleted, the `index` hashes, and the lines of every hunk.",
+      "`select(picks, { reverse: true })` is how a git client unstages or discards a few lines: the result applies to the new side (the index for `git diff --cached`, the work tree for `git diff`) and leaves every other line as it is there. An unpicked added line stays as context and an unpicked deleted line is left out, as `git checkout -p` does. Pass its `toString()` to `git apply --cached` or `git apply`.",
+      "`reverse()` swaps the old and new sides: paths, modes, added and deleted, the `index` hashes, and the lines of every hunk. Within a run of changes the deleted lines come first, as git writes them, so a line can have another index in the reversed patch than in this one. Pick lines from the patch the user sees and pass `reverse: true` to `select()` rather than picking from `reverse()`.",
       "`files` is made on first read and kept; the patch itself does not change, and `select()` and `reverse()` return new patches.",
       "Only text is applied: a binary file's part is kept in `toString()` but `apply()` refuses it.",
     ],
@@ -412,6 +422,24 @@ const staged = patch.select([{ file: 0, lines: [[0, 4], [0, 5], [0, 6]] }]);
 const git = Process.spawn("git", ["apply", "--cached", "-"]);
 const input = git.stdin!.getWriter();
 await input.write(new TextEncoder().encode(staged.toString()));
+await input.close();
+await git.exited;`,
+      },
+      {
+        title: "Discard two lines from the work tree",
+        lang: "ts",
+        code: `import { Process } from "skathi:process";
+import { Patch } from "skathi:text";
+
+const { stdout } = await Process.exec("git", ["diff", "--", "src/app.ts"]);
+const patch = Patch.parse(stdout);
+
+// The same indices the view showed; the result applies to the work tree.
+const discard = patch.select([{ file: 0, lines: [[0, 4], [0, 5]] }], { reverse: true });
+
+const git = Process.spawn("git", ["apply", "-"]);
+const input = git.stdin!.getWriter();
+await input.write(new TextEncoder().encode(discard.toString()));
 await input.close();
 await git.exited;`,
       },
@@ -447,6 +475,9 @@ const undone = patch.apply(edited, { reverse: true }).text; // draft again`,
       "stage hunk",
       "partial staging",
       "add -p",
+      "unstage lines",
+      "discard lines",
+      "checkout -p",
       "reverse patch",
       "PatchFile",
     ],

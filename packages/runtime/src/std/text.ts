@@ -189,12 +189,18 @@ export interface PatchPick {
   lines?: [number, number][];
 }
 
+export interface PatchSelectOptions {
+  /** The patch that takes the picked lines back out of the new side, as `git apply` takes it. */
+  reverse?: boolean;
+}
+
 /** A unified diff, as git writes and reads it. */
 export interface Patch {
   readonly files: PatchFile[];
   apply(text: string, options?: PatchApplyOptions): PatchResult;
   /** A patch of the picked files, hunks and lines; a file picked without either is taken whole. */
-  select(picks: readonly PatchPick[]): Patch;
+  select(picks: readonly PatchPick[], options?: PatchSelectOptions): Patch;
+  /** Sides swapped; within a run of changes the deleted lines come first, so line indices can move. */
   reverse(): Patch;
   toString(): string;
 }

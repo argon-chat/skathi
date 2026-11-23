@@ -900,7 +900,17 @@ fn reorder(lines: &mut [PatchLine]) {
     }
 }
 
+/// The other way round, a run's deletes first as git writes them.
 pub(super) fn reverse(f: &PatchFile) -> PatchFile {
+    let mut r = flip(f);
+    for h in &mut r.hunks {
+        reorder(&mut h.lines);
+    }
+    r
+}
+
+/// Sides swapped with every line where it was, so forward line indices still address it.
+fn flip(f: &PatchFile) -> PatchFile {
     let mut r = f.clone();
     std::mem::swap(&mut r.old_path, &mut r.new_path);
     std::mem::swap(&mut r.old_mode, &mut r.new_mode);
@@ -927,12 +937,11 @@ pub(super) fn reverse(f: &PatchFile) -> PatchFile {
                 Edit::Equal => Edit::Equal,
             };
         }
-        reorder(&mut h.lines);
     }
     r
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Pick {
     pub(super) whole: bool,
     pub(super) hunks: BTreeSet<usize>,
@@ -977,16 +986,27 @@ fn part(hunk: &PatchHunk, h: usize, picked: &BTreeSet<(usize, usize)>) -> Option
     Some(lines)
 }
 
-/// The files, hunks and lines picked, with the new line numbers counted again.
-pub(super) fn select(files: &[PatchFile], picks: &BTreeMap<usize, Pick>) -> Vec<PatchFile> {
+/// The files, hunks and lines picked, with the new line numbers counted again. With `reverse`, the
+/// patch that takes the picked lines back out of the new side, picked by their forward indices.
+pub(super) fn select(
+    files: &[PatchFile],
+    picks: &BTreeMap<usize, Pick>,
+    reverse: bool,
+) -> Vec<PatchFile> {
     let mut out = Vec::new();
     for (&index, pick) in picks {
-        let file = &files[index];
+        let flipped;
+        let file = if reverse {
+            flipped = flip(&files[index]);
+            &flipped
+        } else {
+            &files[index]
+        };
         let mut f = file.clone();
         f.hunks.clear();
         let mut delta = 0isize;
         for (h, hunk) in file.hunks.iter().enumerate() {
-            let lines = if pick.whole || pick.hunks.contains(&h) {
+            let mut lines = if pick.whole || pick.hunks.contains(&h) {
                 hunk.lines.clone()
             } else {
                 match part(hunk, h, &pick.lines) {
@@ -994,6 +1014,9 @@ pub(super) fn select(files: &[PatchFile], picks: &BTreeMap<usize, Pick>) -> Vec<
                     None => continue,
                 }
             };
+            if reverse {
+                reorder(&mut lines);
+            }
             let old_count = lines.iter().filter(|l| l.edit != Edit::Insert).count();
             let new_count = lines.iter().filter(|l| l.edit != Edit::Delete).count();
             let old_at = if hunk.old_count == 0 {
@@ -1223,7 +1246,67 @@ mod tests {
     }
 
     fn picked(files: &[PatchFile], pick: Pick) -> Vec<PatchFile> {
-        select(files, &BTreeMap::from([(0, pick)]))
+        select(files, &BTreeMap::from([(0, pick)]), false)
+    }
+
+    #[test]
+    fn a_reversed_selection_takes_exactly_the_picked_lines_out_of_the_new_text() {
+        let mut next = rng(0x5eed_f00d);
+        let mut cases: Vec<(String, String)> = [
+            ("a\nb\n", "c\nd\n"),
+            ("a", "a\nb"),
+            ("a\nb", "a"),
+            ("x\n", "y"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        for _ in 0..1500 {
+            cases.push((random_text(&mut next, 20), random_text(&mut next, 20)));
+        }
+        for (a, b) in &cases {
+            let o = Options {
+                context: next(4) as usize,
+                ..Options::default()
+            };
+            let files = vec![from_texts(&u(a), &u(b), &o, None)];
+            let (mut some, mut rest) = (Pick::default(), Pick::default());
+            for (h, hunk) in files[0].hunks.iter().enumerate() {
+                for k in 0..hunk.lines.len() {
+                    if next(2) == 0 {
+                        some.lines.insert((h, k));
+                    } else {
+                        rest.lines.insert((h, k));
+                    }
+                }
+            }
+            let target = picked(&files, rest)
+                .first()
+                .map_or(a.clone(), |p| applied(p, a, 0).0);
+            if let Some(forward) =
+                select(&files, &BTreeMap::from([(0, some.clone())]), false).first()
+            {
+                let staged = applied(forward, a, 0).0;
+                assert_eq!(applied(&reverse(forward), &staged, 0), (a.clone(), vec![]));
+            }
+            let undo = select(&files, &BTreeMap::from([(0, some)]), true);
+            let back = undo.first().map_or(b.clone(), |p| {
+                let (text, rejected) = applied(p, b, 0);
+                assert!(rejected.is_empty(), "{a:?} -> {b:?}: {}", s(&print(&undo)));
+                let reparsed = parse(&print(std::slice::from_ref(p))).unwrap();
+                assert_eq!(applied(&reparsed[0], b, 0).0, text);
+                text
+            });
+            assert_eq!(back, target, "{a:?} -> {b:?}: {}", s(&print(&undo)));
+            if !files[0].hunks.is_empty() {
+                let whole = Pick {
+                    whole: true,
+                    ..Pick::default()
+                };
+                let all = select(&files, &BTreeMap::from([(0, whole)]), true);
+                assert_eq!(all, vec![reverse(&files[0])]);
+            }
+        }
     }
 
     #[test]

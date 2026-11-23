@@ -794,6 +794,7 @@ std_fn!(fn patch_select(g, args) {
         }
         wanted.push((i, file, entry));
     }
+    let reverse = flag(g, args.arg(1).0, "reverse");
     let files = &patch_state(g, args.this().0)?.files;
     for (i, file, entry) in wanted {
         let Some(f) = files.get(file) else {
@@ -810,7 +811,7 @@ std_fn!(fn patch_select(g, args) {
         merged.hunks.extend(entry.hunks);
         merged.lines.extend(entry.lines);
     }
-    let selected = patch::select(files, &picks);
+    let selected = patch::select(files, &picks, reverse);
     Ok(patch_new(g, PatchState { files: selected }))
 });
 
@@ -1468,6 +1469,7 @@ mod tests {
                              parsed.apply('x\\na\\nb\\nc\\n').text,
                              parsed.reverse().apply('a\\nB\\nc\\nd\\n').text,
                              parsed.select([{ file: 0, hunks: [1] }]).toString(),
+                             parsed.select([{ file: 0, lines: [[0, 1]] }], { reverse: true }).apply('a\\nB\\nc\\nd\\n').text,
                              parsed.apply('a\\nq\\nc\\n').rejected,
                              merged,
                              TextDiff.words('one two', 'one three'),
@@ -1475,7 +1477,7 @@ mod tests {
                            ]);
                          })()"
                     ),
-                    r#"["--- a/x\n+++ b/x\n@@ -2 +2 @@\n-b\n+B\n@@ -3,0 +4 @@\n+d\n","modified",true,"x\na\nB\nc\nd\n","a\nb\nc\n","--- a/x\n+++ b/x\n@@ -3,0 +4 @@\n+d\n",[0],{"text":"1\n<<<<<<< O\nours\n=======\ntheirs\n>>>>>>> T\n","conflicts":[{"base":[1,2],"ours":[1,2],"theirs":[1,2],"at":1}]},[{"op":"equal","text":"one "},{"op":"delete","text":"two"},{"op":"insert","text":"three"}],"TypeError"]"#
+                    r#"["--- a/x\n+++ b/x\n@@ -2 +2 @@\n-b\n+B\n@@ -3,0 +4 @@\n+d\n","modified",true,"x\na\nB\nc\nd\n","a\nb\nc\n","--- a/x\n+++ b/x\n@@ -3,0 +4 @@\n+d\n","a\nc\nd\n",[0],{"text":"1\n<<<<<<< O\nours\n=======\ntheirs\n>>>>>>> T\n","conflicts":[{"base":[1,2],"ours":[1,2],"theirs":[1,2],"at":1}]},[{"op":"equal","text":"one "},{"op":"delete","text":"two"},{"op":"insert","text":"three"}],"TypeError"]"#
                 );
             })
         });
