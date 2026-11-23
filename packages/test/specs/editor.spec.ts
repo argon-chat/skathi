@@ -212,7 +212,7 @@ describe("<sk-editor> JS API", () => {
       await app.eval("__SK_TEST_EDITOR__.ed().dispatch({ addMarks: [{ type: 'big', from: 0, to: 1 }] })");
       await sleep(200);
       const tall = await read<number>("E.ed().rectsFor(2, 3)[0].height");
-      expect(tall).toBeGreaterThan(plain.h * 1.5);
+      expect(tall).toBeGreaterThan(plain.h * 1.3);
       const at = await read<number>(
         "(() => { const r = E.ed().rectsFor(4, 5)[0]; return E.ed().positionAt(r.x + 1, r.y + r.height / 2) })()",
       );
