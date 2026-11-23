@@ -36,6 +36,9 @@ bun run shaders:check
 
 End-to-end: `bun test specs` in `packages/test`, after `cargo build -p sk-app`.
 
+`bun run sweep` removes incremental caches and artifacts in `target/` that no recent build has
+used (`--dry-run` to see the size first); cargo never does. Keep logs and scratch files out of `target/`.
+
 A new crate dependency must pass `cargo deny check licenses` (`deny.toml`): no GPL family.
 
 Formatting, from the repo root: `bun fmt` (`bun fmt --check` to verify). Settings are in `bunfig.toml`,

@@ -22,6 +22,7 @@
     "preludes:check": "bun scripts/gen-preludes.ts --check",
     "shaders": "bun scripts/shaders.ts",
     "shaders:check": "bun scripts/shaders.ts --check",
+    "sweep": "bun scripts/sweep-target.ts",
     "docs:dev": "bun run --cwd docs dev",
     "docs:build": "bun run --cwd docs build",
     "docs:check": "bun run --cwd docs check",
