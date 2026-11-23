@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-entry-throws",
+  "version": "0.0.1",
+  "assets": [],
+  "intl": "invariant",
+  "window": {
+    "title": "Skathi — entry throws (fixture)",
+    "width": 320,
+    "height": 200
+  }
+}

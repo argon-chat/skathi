@@ -13,7 +13,7 @@ export { appDataDir, CHECKOUT, REPO, DEFAULT_EXE, EXE_SUFFIX, TARGET, WORK_DIR }
 export { findOrphans, killTree, reapOrphans } from "./reap";
 export { LINUX, MACOS, ON_SCREEN, SCREENSHOTS, WINDOWS } from "./platform";
 export type { Orphan } from "./reap";
-export { featureExe, featureExeDir, fileContains, packagedExe, bareHost } from "./features";
+export { featureExe, featureExeDir, fileContains, packagedExe, bareHost, refuseStaleBareHost } from "./features";
 export type { FeatureExeOptions, PackagedExeOptions } from "./features";
 export { uiaTree, uiaSupported, uiaByName, uiaByType, uiaFormat } from "./uia";
 export {

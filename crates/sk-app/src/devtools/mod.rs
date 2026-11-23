@@ -1083,6 +1083,10 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         "ping" => ok(Json::obj(vec![
             ("pid", Json::n(std::process::id() as f64)),
             ("root", Json::n(f64::from(sk_tree::devtools::root_id()))),
+            (
+                "entryError",
+                crate::crash_window::entry_error().map_or(Json::Null, Json::s),
+            ),
         ])),
         "query" => match arg("selector") {
             None => err("query needs a `selector`"),

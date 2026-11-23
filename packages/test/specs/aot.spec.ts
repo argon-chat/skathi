@@ -9,7 +9,7 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { bareHost, expect, launch, REPO, WORK_DIR, type SkApp } from "../src/index";
+import { bareHost, expect, launch, refuseStaleBareHost, REPO, WORK_DIR, type SkApp } from "../src/index";
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
 import { hostInfo } from "../../cli/cli/host";
 import type { BuildResult } from "../../cli/cli/build-app";
@@ -19,6 +19,7 @@ const BUILD_T = 20 * 60_000;
 
 async function setup(): Promise<{ host: string } | { skip: string }> {
   if (process.platform !== "win32" || process.arch !== "x64") return { skip: "AOT builds are Windows x64 only" };
+  await refuseStaleBareHost("standard");
   const host = await bareHost("standard").catch((e: Error) => e.message);
   if (!host.endsWith(".exe")) return { skip: `no standard host: ${host}` };
   if (!hostInfo(host).aot) return { skip: `${host} was built without the native AOT loader (native-aot)` };

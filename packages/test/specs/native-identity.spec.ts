@@ -25,7 +25,6 @@ describe("native function identity", () => {
         exe: packed.exe,
         packaged: packed.name,
         label: "native-identity",
-        launchTimeout: BUILD_T,
       });
       const probe = (await app.eval("globalThis.__SK_TEST_NATIVE_IDENTITY__")) as {
         checked: number;

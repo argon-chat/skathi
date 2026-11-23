@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { CHECKOUT, DEFAULT_EXE, REPO, TARGET, WORK_DIR, stagedExe } from "./dist";
+import { CHECKOUT, DEFAULT_EXE, REPO, TARGET, WORK_DIR, hostStaleness, requireCurrentHost, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
   /** Cargo features, e.g. */
@@ -60,27 +60,30 @@ function stale(exe: string): boolean {
   return built < newestSource;
 }
 
-/** `cargo`, wherever rustup put it. */
+/** `cargo`, wherever rustup put it: a path, so a timeout kills cargo itself rather than a shell. */
 function cargoCommand(): string {
-  if (spawnSync("cargo", ["--version"], { shell: true, encoding: "utf8" }).status === 0) {
-    return "cargo";
-  }
+  const which = Bun.which("cargo");
+  if (which) return which;
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? homedir(), ".cargo");
   const exe = join(home, "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
   return existsSync(exe) ? exe : "cargo";
 }
 
+/** A cold feature build is minutes; one that runs for this long is waiting on something (another cargo's lock). */
+const CARGO_TIMEOUT_MS = 30 * 60_000;
+
 function run(cmd: string, args: string[], log: (l: string) => void) {
   if (cmd === "cargo") cmd = cargoCommand();
   log(`[sk-test] ${cmd} ${args.join(" ")}`);
-  // `shell: true` because on Windows neither `bun` nor `cargo` is necessarily an `.exe` on PATH
-  // (bun ships a `.cmd` shim), and `spawnSync` applies PATHEXT only through a shell.
-  const quoted = args.map((a) => (/[\s&|<>^]/.test(a) ? `"${a}"` : a));
-  const out = spawnSync(cmd, quoted, { cwd: REPO, encoding: "utf8", shell: true });
+  const out = spawnSync(cmd, args, { cwd: REPO, encoding: "utf8", timeout: CARGO_TIMEOUT_MS });
   if (out.error) {
+    const timedOut = (out.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
     throw new Error(
-      `${cmd} could not be run (${out.error.message}). This spec builds the host under a ` +
-        `non-default feature set; ${cmd} has to be on PATH.`,
+      timedOut
+        ? `${cmd} ${args.join(" ")} did not finish within ${CARGO_TIMEOUT_MS / 60_000} min and was stopped — ` +
+            `is another cargo holding the build directory lock?\n${(out.stderr ?? "").split(/\r?\n/).slice(-10).join("\n")}`
+        : `${cmd} could not be run (${out.error.message}). This spec builds the host under a ` +
+            `non-default feature set; ${cmd} has to be on PATH.`,
     );
   }
   if (out.status !== 0) {
@@ -112,7 +115,7 @@ export function featureExe(options: FeatureExeOptions): Promise<string> {
 async function build(options: FeatureExeOptions, dir: string): Promise<string> {
   const log = options.log ?? (() => {});
   const exe = join(dir, "sk-app.exe");
-  if (!stale(exe)) {
+  if (!stale(exe) && !(await hostStaleness(exe))) {
     log(`[sk-test] reusing ${exe}`);
     return exe;
   }
@@ -152,6 +155,7 @@ export type HostVariant = "standard" | "no-devtools";
  * or the local host cache (`sk workload build` fills it).
  */
 export async function bareHost(variant: HostVariant, log: (l: string) => void = () => {}): Promise<string> {
+  await refuseStaleBareHost(variant);
   const { resolveHost, HostError } = await import("@skathi-native/cli/cli/host");
   try {
     const h = resolveHost({ variant, log });
@@ -161,6 +165,24 @@ export async function bareHost(variant: HostVariant, log: (l: string) => void = 
     if (!(e instanceof HostError) || !CHECKOUT) throw e;
     log(`[sk-test] no prebuilt ${variant} host (${e.message.split("\n")[0]}) — building a debug one`);
     return featureExe({ features: variant === "standard" ? ["prod"] : ["prod", "no-devtools"], log });
+  }
+}
+
+/** Throws when the host `sk build` would pick first (SK_HOST, else the in-repo release exe of `variant`) predates the runtime. */
+export async function refuseStaleBareHost(variant: HostVariant): Promise<void> {
+  const { hostInfo, REPO_RELEASE_EXE } = await import("@skathi-native/cli/cli/host");
+  const named = process.env.SK_HOST;
+  const candidate = named || (REPO_RELEASE_EXE && existsSync(REPO_RELEASE_EXE) ? REPO_RELEASE_EXE : null);
+  if (candidate) {
+    const info = hostInfo(candidate);
+    if (named || (info.mode === "prod" && info.variant === variant)) {
+      await requireCurrentHost(
+        candidate,
+        named
+          ? "rebuild the host SK_HOST names, or unset SK_HOST"
+          : `bun packages/cli/cli/sk.ts workload build ${variant}`,
+      );
+    }
   }
 }
 

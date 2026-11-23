@@ -8,7 +8,6 @@ import { expect, launch, packagedExe, REPO, WINDOWS, WORK_DIR } from "../src/ind
 import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
 
 const T = 30_000;
-const BUILD_T = 20 * 60_000;
 
 const scheme = `sktest-pkg-${process.pid}`;
 const id = "gl.argon.sk-test.launch-packaged";
@@ -60,7 +59,6 @@ const app = await launch({
   packaged: p.name,
   label: "launch-packaged",
   env: { SK_SINGLE_INSTANCE: "1" },
-  launchTimeout: BUILD_T,
 });
 
 afterAll(() => {

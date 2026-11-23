@@ -112,6 +112,8 @@ export const cacheDistFor = (entry: string) => {
   return join(WORK_DIR, "dists", `${appNameOf(entry)}-${key}`);
 };
 
+const BUILD_TIMEOUT_MS = 10 * 60_000;
+
 /** In-process build de-dup: two launches of the same app must not race the builder. */
 const builds = new Map<string, Promise<string>>();
 
@@ -141,10 +143,11 @@ export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<st
     const r = spawnSync("bun", ["--no-install", "build.ts", entry, cache], {
       cwd: CLI_PKG,
       encoding: "utf8",
+      timeout: BUILD_TIMEOUT_MS,
     });
     if (r.status !== 0 || !existsSync(manifest)) {
       throw new Error(
-        `build failed for ${entry}\n` +
+        `build failed for ${entry}${r.error ? ` (${r.error.message})` : ""}\n` +
           `  bun build.ts ${entry} ${cache}  (cwd ${CLI_PKG})\n` +
           `${r.stdout ?? ""}${r.stderr ?? ""}`,
       );
@@ -172,9 +175,27 @@ export function allocateSlot(cacheDist: string, label: string): string {
 
 /** The dev host a launch runs: the checkout's debug build, else the one `sk dev` uses (cached or downloaded). */
 export async function devHostExe(log: BuildLog = () => {}): Promise<string> {
-  if (CHECKOUT) return DEFAULT_EXE;
+  if (CHECKOUT) {
+    if (existsSync(DEFAULT_EXE)) await requireCurrentHost(DEFAULT_EXE, `cargo build -p sk-app --target ${TARGET}`);
+    return DEFAULT_EXE;
+  }
   const { devHost } = await import("@skathi-native/cli/cli/dev");
   return devHost({ log });
+}
+
+const checkedHosts = new Map<string, string | null>();
+
+/** Throws, with `rebuild` as the remedy, when `exe` was built against another runtime protocol than the specs run. */
+export async function requireCurrentHost(exe: string, rebuild: string): Promise<void> {
+  if (!checkedHosts.has(exe)) checkedHosts.set(exe, await hostStaleness(exe));
+  const stale = checkedHosts.get(exe);
+  if (stale) throw new Error(`${stale}. The specs do not run against an out-of-date host:\n  ${rebuild}`);
+}
+
+/** Why `exe` does not match the runtime the specs bundle, or null when it does or cannot tell. */
+export async function hostStaleness(exe: string): Promise<string | null> {
+  const { hostInfo, protocolMismatch } = await import("@skathi-native/cli/cli/host");
+  return protocolMismatch(exe, hostInfo(exe));
 }
 
 /** The executable this run drives, copied aside under its own name. */

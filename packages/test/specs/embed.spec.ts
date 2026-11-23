@@ -84,6 +84,33 @@ test.skipIf(!WINDOWS)(
   1_100_000,
 );
 
+test.skipIf(!WINDOWS)(
+  "an embedded app whose entry throws ends unclean with the error, and the embedder hears it",
+  async () => {
+    // Built by the first test.
+    expect(existsSync(EXE)).toBe(true);
+    run("bun", ["packages/cli/cli/sk.ts", "build", "packages/test/fixtures/entry-throws", "--payload-only"], 120_000);
+    const payload = join(REPO, "packages", "test", "fixtures", "entry-throws", "dist", "debug", ".sk", "app.skpk");
+    // stdin stays open: the example closes the app when it ends.
+    const child = Bun.spawn([EXE, payload], {
+      cwd: REPO,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+      env: { ...process.env, SK_WINDOW_FOCUS: "never" },
+    });
+    const timer = setTimeout(() => child.kill(), 30_000);
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    await child.exited;
+    clearTimeout(timer);
+    expect(child.signalCode, stderr).toBeNull();
+    expect(stdout).toContain("the app closed (NOT clean)");
+    expect(stdout).toContain("entry-throws fixture: startup failed on purpose");
+  },
+  180_000,
+);
+
 test.skipIf(!WINDOWS)("sk types writes the declarations the embedding program gives for its native modules", () => {
   // Built by the test above.
   expect(existsSync(EXE)).toBe(true);

@@ -34,6 +34,7 @@ import {
 } from "./host";
 import { fetchHost, type OnBytes } from "./host-fetch";
 import { currentPlatform, hostsFor, repoHostExe } from "./platform";
+import { protocolMismatch } from "./protocol";
 import { colorEnabled, paint, progressFor } from "./term";
 import { writeNativeTypes } from "./types";
 
@@ -44,11 +45,24 @@ export async function devHost(
   const named = options.exe ?? process.env.SK_DEV_HOST;
   if (named) {
     if (!existsSync(named)) throw new HostError(`no dev workload at ${named}`);
+    let stale: string | null = null;
+    try {
+      stale = protocolMismatch(named, hostInfo(named));
+    } catch {}
+    if (stale) log(`warning: ${stale}; the app will stop at startup if it calls what the host lacks`);
     return named;
   }
   if (REPO_ROOT) {
     const debug = repoHostExe(REPO_ROOT, hostsFor(currentPlatform()), "debug");
-    if (existsSync(debug)) return debug;
+    if (existsSync(debug)) {
+      const stale = protocolMismatch(debug, hostInfo(debug));
+      if (stale) {
+        throw new HostError(
+          `${stale}: \`${["cargo build -p sk-app", ...hostsFor(currentPlatform()).cargoTarget].join(" ")}\``,
+        );
+      }
+      return debug;
+    }
   }
   const cached = cachedHost(CLI_VERSION, DEV_HOST);
   const usable = () => {

@@ -77,6 +77,14 @@ pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     })
 }
 
+/// True while the document has no content: no root yet, or a root with no children and no text.
+pub fn document_is_empty() -> bool {
+    tree::read_tree(|t| {
+        t.node(t.root)
+            .is_none_or(|n| n.children.is_empty() && n.text.is_empty())
+    })
+}
+
 pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }

@@ -75,6 +75,7 @@ import { diagnosticLine } from "./check/finding";
 import { SVELTE_SOURCE, compileSvelte } from "./svelte";
 import { nativeSvelteRenderer, readPermissions } from "./cli/config";
 import { currentPlatform } from "./cli/platform";
+import { runtimeStamp } from "./cli/protocol";
 import { protectHapticPatterns } from "./haptic-patterns";
 
 const C = paint(colorEnabled(process.stdout));
@@ -1339,6 +1340,7 @@ function writeManifest(files: string[]) {
         appRoot: appRootArg ? APP_ROOT : SK_CONFIG_DIR,
         name: readAppName(),
         version: readAppVersion(),
+        runtime: runtimeStamp(),
         ...(readSkConfig()?.memory === "low" && { memory: "low" }),
         ...(devPermissions() && { permissions: devPermissions() }),
         modules: ids,

@@ -273,6 +273,31 @@ fn app_name() -> String {
 
 static ENTRY_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static ENTRY_FAILED: AtomicBool = AtomicBool::new(false);
+static ENTRY_THREW: Mutex<Option<String>> = Mutex::new(None);
+
+/// The app could not start (its entry threw, or its runtime does not fit this host): stderr, the
+/// log ring and devtools `ping`.
+pub(crate) fn entry_threw(error: &str) {
+    let line = format!("[entry] the app could not start: {error}");
+    eprintln!("{line}");
+    sk_tree::log::record("error", line);
+    *ENTRY_THREW.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.to_string());
+}
+
+/// A dev boot or cold restart evaluates the entry again.
+#[cfg(not(feature = "prod"))]
+pub(crate) fn entry_booting() {
+    *ENTRY_THREW.lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+/// Why the app could not start, if it could not.
+#[cfg(sk_devtools)]
+pub(crate) fn entry_error() -> Option<String> {
+    ENTRY_THREW
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
 
 /// The app's entry threw before it put anything in the window: the user is looking at an empty one.
 #[cfg(feature = "prod")]
@@ -281,6 +306,8 @@ pub(crate) fn entry_failed(error: String) {
     ENTRY_FAILED.store(true, Ordering::SeqCst);
 }
 
+/// The app cannot start: the process ends with exit code 1 (an embedder hears an unclean exit), after
+/// the dialog when one is shown, at once when nobody is there to read it.
 pub(crate) fn on_entry_failed(cx: &mut App) {
     if !ENTRY_FAILED.swap(false, Ordering::SeqCst) {
         return;
@@ -298,6 +325,11 @@ pub(crate) fn on_entry_failed(cx: &mut App) {
         "crash",
         format!("[crash] the app's entry threw and mounted nothing: {reason}"),
     );
+    crate::shutdown::failed(format!("the app could not start: {reason}"));
+    if decision == Decision::Log {
+        eprintln!("[crash] the app could not start: closing with exit code 1");
+        cx.defer(|cx| quit(Action::Close, cx));
+    }
     if decision != Decision::Dialog {
         return;
     }

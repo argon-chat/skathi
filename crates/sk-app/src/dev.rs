@@ -66,6 +66,7 @@ struct Manifest {
     app_root: Option<std::path::PathBuf>,
     modules: Vec<String>,
     asset_files: std::collections::HashMap<String, std::path::PathBuf>,
+    runtime_mismatch: Option<String>,
 }
 
 fn read_manifest() -> Option<Manifest> {
@@ -80,6 +81,7 @@ fn read_manifest() -> Option<Manifest> {
         .ok()?;
     let v = json::parse(&text)?;
     Some(Manifest {
+        runtime_mismatch: v.get("runtime").and_then(crate::payload::runtime_mismatch),
         asset_files: match v.get("assetFiles") {
             Some(json::Json::Obj(files)) => files
                 .iter()
@@ -116,19 +118,21 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static str) -> bool {
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[dev] read {}: {e}", path.display());
-            return false;
-        }
-    };
-    if let Err(e) = crate::perf::boot_eval(label, || rt.eval(&src, url)) {
-        eprintln!("[dev] {url}: {}\n{}", e.header, e.stack);
-        return false;
+fn eval_path(
+    rt: &JsRuntime,
+    path: &std::path::Path,
+    url: &str,
+    label: &'static str,
+) -> Result<(), String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    crate::perf::boot_eval(label, || rt.eval(&src, url))
+        .map_err(|e| format!("{url}: {}\n{}", e.header, e.stack))
+}
+
+fn eval_logged(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static str) {
+    if let Err(e) = eval_path(rt, path, url, label) {
+        eprintln!("[dev] {e}");
     }
-    true
 }
 
 /// The base a relative `<img src>` resolves against: the app root the builder recorded, since one
@@ -265,15 +269,21 @@ pub fn boot(rt: &JsRuntime) {
     publish_asset_base(manifest.app_root.clone());
     sk_tree::set_dev_asset_files(manifest.asset_files);
     install_asset_provider(rt);
-    if !eval_path(rt, &dist("vendor.js"), "sk://vendor.js", "vendor.js") {
+    crate::crash_window::entry_booting();
+    if let Some(mismatch) = &manifest.runtime_mismatch {
+        crate::crash_window::entry_threw(mismatch);
+        return;
+    }
+    if let Err(e) = eval_path(rt, &dist("vendor.js"), "sk://vendor.js", "vendor.js") {
+        crate::crash_window::entry_threw(&e);
         return;
     }
     for id in &manifest.modules {
-        eval_path(rt, &module_path(id), &format!("sk://{id}"), "modules");
+        eval_logged(rt, &module_path(id), &format!("sk://{id}"), "modules");
     }
     let js = format!("__SK__.boot({});", json::quote(&manifest.entry));
     if let Err(e) = crate::perf::boot_eval("boot.js (mount)", || rt.eval(&js, "sk://boot.js")) {
-        eprintln!("[dev] boot: {}\n{}", e.header, e.stack);
+        crate::crash_window::entry_threw(&format!("{}\n{}", e.header, e.stack));
     }
     VENDOR_REV.with(|v| v.set(manifest.vendor_rev));
     CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
@@ -388,7 +398,7 @@ pub fn poll_frame(frame_no: u32) {
         for id in &ids {
             // After the first frame, so boot accounting has closed and this
             // label is never charged.
-            eval_path(rt, &module_path(id), &format!("sk://{id}"), "hmr");
+            eval_logged(rt, &module_path(id), &format!("sk://{id}"), "hmr");
         }
         if let Err(e) = rt.eval(&format!("__SK__.hmrApply({text});"), "sk://hmr.js") {
             eprintln!("[dev] hmrApply: {}\n{}", e.header, e.stack);

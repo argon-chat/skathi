@@ -678,9 +678,10 @@ pub(crate) fn boot(rt: &JsRuntime, kind: Kind) -> Result<bool, String> {
             "the {} native entry is awaiting host work; boot is not complete",
             kind.name()
         )),
-        Err(Error::Exception(value)) => Err(ctx
-            .to_rust_string(value)
-            .unwrap_or_else(|_| "native JS exception".into())),
+        Err(Error::Exception(value)) => {
+            let e = rt.describe(value);
+            Err(format!("{}\n{}", e.header, e.stack))
+        }
         Err(error) => Err(error.to_string()),
     }
 }

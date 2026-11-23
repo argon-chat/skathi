@@ -42,6 +42,8 @@ pub struct Meta {
     pub memory: String,
     /// `"permissions"` of sk.config.json, as JSON (`crate::permissions`).
     pub permissions: String,
+    /// Why the app's runtime cannot run on this host ([`runtime_mismatch`]).
+    pub runtime_mismatch: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -414,7 +416,27 @@ fn parse_meta(text: &str) -> Meta {
         intl: s("intl"),
         memory: s("memory"),
         permissions: s("permissions"),
+        runtime_mismatch: v.get("runtime").and_then(runtime_mismatch),
     }
+}
+
+/// Why an app whose bundle records `runtime` (`{ version, protocol }`, packages/cli/cli/protocol.ts)
+/// cannot run on this host; `None` when it can, or when either side does not know its protocol.
+pub(crate) fn runtime_mismatch(runtime: &crate::json::Json) -> Option<String> {
+    let field = |k: &str| runtime.get(k).and_then(crate::json::Json::as_str);
+    let ours = env!("SK_RUNTIME_PROTOCOL");
+    let theirs = field("protocol").filter(|p| !p.is_empty())?;
+    if ours.is_empty() || ours == theirs {
+        return None;
+    }
+    Some(format!(
+        "this host is Skathi {} (runtime protocol {ours}) and the app was built with \
+         @skathi-native/runtime {} (protocol {theirs}): the app would call host functions this host \
+         does not have. Use a host and a runtime from the same Skathi build: rebuild the host, or \
+         build the app again with the sk of the host's version.",
+        env!("SK_PKG_VERSION"),
+        field("version").unwrap_or("?"),
+    ))
 }
 
 /// Tells the user and stops. Before any window exists, so stderr AND a message
@@ -703,6 +725,7 @@ pub fn host_info_json() -> String {
         ),
         ("aot", aot),
         ("skathi", Json::s(env!("SK_PKG_VERSION"))),
+        ("protocol", Json::s(env!("SK_RUNTIME_PROTOCOL"))),
         ("crate", Json::s(env!("CARGO_PKG_VERSION"))),
         ("variant", Json::s(host_variant())),
         ("devtools", Json::Bool(cfg!(sk_devtools))),
@@ -889,6 +912,29 @@ mod tests {
         assert_eq!(m.version, "0.1.0");
         assert_eq!(m.host_variant, "no-devtools");
         assert_eq!(super::parse_meta("not json").name, "");
+    }
+
+    #[test]
+    fn only_a_known_different_runtime_protocol_stops_the_app() {
+        let ours = env!("SK_RUNTIME_PROTOCOL");
+        let other = if ours == "00000000" {
+            "00000001"
+        } else {
+            "00000000"
+        };
+        let with = |runtime: &str| {
+            super::parse_meta(&format!(r#"{{"name":"a"{runtime}}}"#)).runtime_mismatch
+        };
+        assert!(with(&format!(
+            r#","runtime":{{"version":"9.9.9","protocol":"{other}"}}"#
+        ))
+        .is_some());
+        assert!(with(&format!(
+            r#","runtime":{{"version":"9.9.9","protocol":"{ours}"}}"#
+        ))
+        .is_none());
+        assert!(with(r#","runtime":{"version":"9.9.9"}"#).is_none());
+        assert!(with("").is_none());
     }
 
     #[test]

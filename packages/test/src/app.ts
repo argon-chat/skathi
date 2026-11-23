@@ -2,7 +2,7 @@
 // handlers — and all three are idempotent.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Locator, type LocatorOptions } from "./locator";
@@ -38,6 +38,8 @@ export interface LaunchOptions {
   launchTimeout?: number;
   /** Skip the build and use whatever is in the cache dist. */
   noBuild?: boolean;
+  /** Run this prebuilt dev dist instead of building `app`. */
+  dist?: string;
   /** Wait for JS to have mounted a tree before returning. */
   waitForMount?: boolean;
   /** Print build/launch progress to stdout. */
@@ -370,6 +372,25 @@ export class SkApp {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+function hostLogTail(path: string, lines = 25): string {
+  try {
+    const kept: string[] = [];
+    let frames = 0;
+    for (const line of readFileSync(path, "utf8").trimEnd().split(/\r?\n/)) {
+      const frame = /^\S*@\S+:\d+:\d+$/.test(line);
+      frames = frame ? frames + 1 : 0;
+      if (frames === 6) kept.push("(more stack frames)");
+      if (frames < 6) kept.push(line);
+    }
+    return kept
+      .slice(-lines)
+      .map((l) => `  | ${l}`)
+      .join("\n");
+  } catch (e) {
+    return `  (host log unreadable: ${(e as Error).message})`;
+  }
+}
+
 /** `%TEMP%\skathi\apps\<name>\<pid>` — where a packaged app publishes its handshake. */
 export function packagedSlot(name: string, pid: number): string {
   const cleaned = [...name]
@@ -440,8 +461,8 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   // allocated (and its handshake deleted) up front.
   let slotDir = "";
   if (options.packaged === undefined) {
-    const entry = resolveEntry(options.app);
-    const cache = options.noBuild ? cacheDistFor(entry) : await ensureBuild(entry, log);
+    const entry = options.dist ? "" : resolveEntry(options.app);
+    const cache = options.dist ?? (options.noBuild ? cacheDistFor(entry) : await ensureBuild(entry, log));
     if (!existsSync(join(cache, "manifest.json"))) {
       throw new Error(`${cache} has no manifest.json — drop \`noBuild\` or run the builder first`);
     }
@@ -503,7 +524,9 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
       killTree(pid);
       closeSync(logFd);
     } catch {}
-    return new Error(`${label}: ${why}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`);
+    return new Error(
+      `${label}: ${why}\n${hostLogTail(hostLog)}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`,
+    );
   };
 
   // It was deleted from the slot before the spawn (see `allocateSlot`), so its reappearance is a
@@ -553,21 +576,28 @@ export async function launch(options: LaunchOptions): Promise<SkApp> {
   );
   live.add(app);
 
-  if (options.waitForMount !== false) {
-    for (;;) {
-      if (ping?.root) break;
-      if (exited !== null) throw fail(`the host exited with code ${exited} before mounting`);
-      if (Date.now() > deadline) {
-        const tail = await app.tailLogs(20);
-        app.killSync();
-        throw new Error(
-          `${label}: nothing mounted within ${launchTimeout} ms (ping still reports root 0)\n` +
-            `${tail}\n  host log: ${hostLog}`,
-        );
-      }
-      await sleep(50);
-      ping = await app.send("ping").catch(() => null);
+  for (;;) {
+    if (ping?.entryError) {
+      app.killSync();
+      throw new Error(
+        `${label}: the app's entry threw at startup:\n${ping.entryError}\n  exe:      ${exe}\n  host log: ${hostLog}`,
+      );
     }
+    if (ping?.root || options.waitForMount === false) break;
+    if (exited !== null) {
+      app.killSync();
+      throw fail(`the host exited with code ${exited} before mounting`);
+    }
+    if (Date.now() > deadline) {
+      const tail = await app.tailLogs(20);
+      app.killSync();
+      throw new Error(
+        `${label}: nothing mounted within ${launchTimeout} ms (ping still reports root 0)\n` +
+          `${tail}\n  host log: ${hostLog}`,
+      );
+    }
+    await sleep(50);
+    ping = await app.send("ping").catch(() => null);
   }
 
   log(`[sk-test] ${label}: ready (pid ${pid}, root ${ping?.root})`);

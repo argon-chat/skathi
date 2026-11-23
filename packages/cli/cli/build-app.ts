@@ -53,6 +53,7 @@ import {
   type ResolvedHost,
 } from "./host";
 import { resolveOrFetchHost } from "./host-fetch";
+import { runtimeStamp } from "./protocol";
 import { iconImagesFrom } from "./icon";
 import {
   APP_SECTIONS,
@@ -215,6 +216,7 @@ export function appMeta(
     version: config.version,
     skathi: CLI_VERSION,
     host: { version: host?.info.skathi ?? CLI_VERSION, variant },
+    runtime: runtimeStamp(),
     ...(host?.info.features.includes("no-jit") && { publishDevtools: config.publishDevtools }),
     entry,
     assets: assetCount,

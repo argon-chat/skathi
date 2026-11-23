@@ -35,6 +35,7 @@ fn main() {
         link_map(msvc);
     }
     host_identity();
+    runtime_protocol();
     standalone_manifest();
 
     // Cargo features are additive, so the opt-out is the absence of the cfg.
@@ -305,6 +306,65 @@ fn host_identity() {
     let pin = std::env::var("DEP_REDJS_WEBKIT_VERSION").expect("redjs reports its engine pin");
     println!("cargo:rustc-env=SK_PKG_VERSION={version}");
     println!("cargo:rustc-env=SK_JSC_PIN={pin}");
+}
+
+/// `SK_RUNTIME_PROTOCOL`: packages/cli/cli/protocol.ts `protocolOf` over packages/runtime/src, which
+/// the host compares with the app's at startup. Empty (unknown) without the runtime sources.
+fn runtime_protocol() {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let src = manifest.join("../../packages/runtime/src");
+    let id = if src.is_dir() {
+        watch_tree(&src);
+        protocol_of(&src)
+    } else {
+        String::new()
+    };
+    println!("cargo:rustc-env=SK_RUNTIME_PROTOCOL={id}");
+}
+
+fn protocol_of(src: &Path) -> String {
+    fn ident(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    }
+    fn collect(dir: &Path, names: &mut std::collections::BTreeSet<String>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", disp(dir)));
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == "node_modules" || name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, names);
+                continue;
+            }
+            let bytes =
+                std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", disp(&path)));
+            let mut i = 0;
+            while let Some(at) = bytes[i..].windows(5).position(|w| w == b"__sk_") {
+                let start = i + at;
+                let mut end = start + 5;
+                if start == 0 || !ident(bytes[start - 1]) {
+                    while end < bytes.len() && ident(bytes[end]) {
+                        end += 1;
+                    }
+                    names.insert(String::from_utf8_lossy(&bytes[start..end]).into_owned());
+                }
+                i = end;
+            }
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    collect(src, &mut names);
+    let joined = names.into_iter().collect::<Vec<_>>().join("\n");
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in joined.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    format!("{hash:08x}")
 }
 
 fn profile_dir() -> Option<String> {

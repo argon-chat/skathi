@@ -71,12 +71,16 @@ pub fn boot(rt: &JsRuntime) {
         }
     });
 
-    let before = sk_tree::devtools::node_count();
     let failed = |error: String| {
-        if sk_tree::devtools::node_count() == before {
+        crate::crash_window::entry_threw(&error);
+        if sk_tree::devtools::document_is_empty() {
             crate::crash_window::entry_failed(error);
         }
     };
+    if let Some(mismatch) = &meta.runtime_mismatch {
+        failed(mismatch.clone());
+        return;
+    }
     #[cfg(feature = "native-aot")]
     if crate::native_aot::selected(crate::native_aot::Kind::Application) {
         let ran = crate::perf::boot_eval("app native image (+mount)", || {
@@ -84,10 +88,7 @@ pub fn boot(rt: &JsRuntime) {
         });
         match ran {
             Ok(native) => crate::stdlib::set_app_native(native),
-            Err(e) => {
-                eprintln!("[prod] app.prod.js (native image): {e}");
-                failed(e);
-            }
+            Err(e) => failed(format!("app.prod.js (native image): {e}")),
         }
         return;
     }
@@ -100,8 +101,7 @@ pub fn boot(rt: &JsRuntime) {
             return;
         };
         if let Err(e) = crate::bytecode::eval(rt, script) {
-            eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
-            failed(format!("{}\n{}", e.header, e.stack));
+            failed(format!("app.prod.js: {}\n{}", e.header, e.stack));
         }
     }
 }

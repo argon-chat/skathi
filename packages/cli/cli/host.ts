@@ -12,8 +12,8 @@
 // format is sniffed, and what it is comes from a `host.json` beside it or is taken on trust, with a warning.
 //
 // A host and a bundle must come from the same Skathi version (the bundle carries the JS half of
-// the `__sk_*` protocol): the CLI refuses a host whose `--sk-host-info` disagrees
-// (`--allow-workload-mismatch` is for maintainers).
+// the `__sk_*` protocol): the CLI refuses a host whose `--sk-host-info` disagrees on the version or
+// the runtime protocol (protocol.ts; `--allow-workload-mismatch` is for maintainers).
 
 import { spawnSync } from "node:child_process";
 import {
@@ -47,6 +47,9 @@ import { currentPlatform, hostsFor, repoHostExe, type Platform } from "./platfor
 import { TEMPLATE_NAME } from "./image-sections";
 import { MACHO_TEMPLATE_NAME } from "./image-macho";
 import { PAYLOAD_NAME } from "./stamp";
+import { protocolMismatch } from "./protocol";
+
+export { protocolMismatch };
 
 export const PKG_DIR = resolve(import.meta.dir, "..");
 const PKG: { version: string; engines: { bun: string } } = JSON.parse(
@@ -65,6 +68,8 @@ export const REPO_RELEASE_EXE = REPO_ROOT ? repoHostExe(REPO_ROOT, hostsFor(curr
 export interface HostInfo {
   mode: "prod" | "dev";
   skathi: string;
+  /** The runtime protocol it was built against (protocol.ts); absent on older hosts. */
+  protocol?: string;
   crate: string;
   variant: Variant;
   devtools: boolean;
@@ -235,10 +240,15 @@ export function checkHost(exe: string, info: HostInfo, variant: Variant | null, 
 }
 
 function versionMismatch(exe: string, info: HostInfo, allowMismatch: boolean): string | null {
-  return info.skathi !== CLI_VERSION && !allowMismatch
-    ? `${exe} is Skathi ${info.skathi}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
-        `workload protocol, so the two must match (--allow-workload-mismatch overrides, for maintainers)`
-    : null;
+  if (allowMismatch) return null;
+  if (info.skathi !== CLI_VERSION) {
+    return (
+      `${exe} is Skathi ${info.skathi}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
+      `workload protocol, so the two must match (--allow-workload-mismatch overrides, for maintainers)`
+    );
+  }
+  const stale = protocolMismatch(exe, info);
+  return stale && `${stale} (--allow-workload-mismatch overrides, for maintainers)`;
 }
 
 export function resolveEmbedderHost(path: string, allowMismatch = false): ResolvedHost {

@@ -5,7 +5,7 @@
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { featureExe, launch, MACOS, packagedExe, REPO, WORK_DIR, type SkApp } from "../src/index";
+import { featureExe, launch, MACOS, packagedExe, refuseStaleBareHost, REPO, WORK_DIR, type SkApp } from "../src/index";
 
 const BUILD_T = 20 * 60_000;
 
@@ -16,6 +16,7 @@ interface Probe {
 
 /** The workload `sk build` would stamp when it links only the root locale, else one built so. */
 async function rootHost(): Promise<string> {
+  await refuseStaleBareHost("standard");
   const { resolveHost, HostError } = await import("../../cli/cli/host");
   try {
     const host = resolveHost({ variant: "standard" });
@@ -58,7 +59,7 @@ async function run(intl: string | undefined) {
   const label = `intl-${intl ?? "default"}`;
   host ??= await rootHost();
   const packed = await packagedExe({ app: dir, host, label });
-  const app = await launch({ app: label, exe: packed.exe, packaged: packed.name, label, launchTimeout: BUILD_T });
+  const app = await launch({ app: label, exe: packed.exe, packaged: packed.name, label });
   apps.push(app);
   const probe = (await app.eval("globalThis.__SK_TEST_INTL__")) as Probe;
   return { packed, probe };

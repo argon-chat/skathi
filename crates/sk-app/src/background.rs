@@ -206,6 +206,7 @@ fn wave(window: &mut gpui::Window, cx: &mut App) {
         crate::crash_window::on_poisoned(cx);
         return;
     }
+    crate::crash_window::on_entry_failed(cx);
     ACTIVE.with(|a| a.set(true));
     // A visible idle window draws no frames by design; only a hidden page is worth a log line.
     if crate::window::page_hidden() && !REPORTED.with(|r| r.replace(true)) {
