@@ -1,7 +1,7 @@
 // The clips of docs/pages/elements, from apps/elements. Each plan returns the loop window: two
 // moments with the same picture, so the clip loops without a jump. Continuous animations there
 // have periods that divide the window (Lottie 3 s, stickers 2 s, chart and surface 8 s, video 9 s
-// plus the time it was paused).
+// plus the time it was paused, the surface example's plasma layer 4 s).
 import { Driver, until } from "../driver";
 import type { AppPlans } from "../record";
 import { sleep } from "../win32";
@@ -100,6 +100,146 @@ export const plans: AppPlans = {
     },
 
     "sk-surface": { poster: 0.3, host: "surface", plan: still(8000) },
+
+    "sk-editor": {
+      poster: 0.76,
+      async plan(d) {
+        const field = await d.box("[data-demo=editor]");
+        const rest = { x: Math.round(field.x + field.w - 60), y: Math.round(field.y + field.h + 70) };
+        const ed = `document.querySelector("[data-demo=editor]")`;
+        const start = Date.now();
+        await until(start, 500);
+        await d.show(rest);
+        await d.click({ x: Math.round(field.x + field.w * 0.6), y: Math.round(field.y + field.h / 2) });
+        await sleep(150);
+        await d.type("[data-demo=editor]", "Ship the new palette, ", 55);
+        await sleep(200);
+        await d.click(await d.center("[data-demo=mention]"));
+        await sleep(250);
+        await d.type("[data-demo=editor]", "can you check it by Fryday?", 55);
+        await sleep(500);
+        const raw = await d.js(
+          `JSON.stringify((() => { const e = ${ed}; const t = e.slice(0); const f = t.indexOf("new palette"); return e.rectsFor(f, f + 11).map((r) => [r.x, r.y, r.width, r.height]); })())`,
+        );
+        const [[x, y, w, h]] = JSON.parse(String(raw)) as [[number, number, number, number]];
+        await d.move({ x: Math.round(x + 1), y: Math.round(y + h / 2) }, 600);
+        await sleep(100);
+        await d.down();
+        await d.move({ x: Math.round(x + w - 1), y: Math.round(y + h / 2) }, 500);
+        await d.up();
+        await sleep(250);
+        await d.click(await d.center("[data-demo=bold]"));
+        await sleep(200);
+        await d.click(await d.center("[data-demo=accent]"));
+        await sleep(350);
+        await d.move({ x: Math.round(field.x + field.w - 40), y: Math.round(field.y + field.h / 2) }, 500);
+        await d.badge("End");
+        await sleep(260);
+        await d.app.send("key", { key: "End", selector: "[data-demo=editor]" });
+        await sleep(350);
+        await d.badge("");
+        await sleep(1300);
+        await d.badge("Ctrl+Z");
+        await sleep(260);
+        for (let i = 0; i < 20 && String(await d.js(`${ed}.length`)) !== "0"; i++) {
+          await d.app.send("key", { key: "Ctrl+Z", selector: "[data-demo=editor]" });
+          await sleep(170);
+        }
+        await sleep(250);
+        await d.badge("");
+        await sleep(200);
+        await d.click(rest);
+        await sleep(150);
+        await d.hide();
+        const end = Date.now() + 500;
+        await until(end, 300);
+        return { start, end };
+      },
+    },
+
+    "sk-editor-code": {
+      poster: 0.45,
+      settle: 2500,
+      async plan(d) {
+        const code = await d.box("[data-demo=code]");
+        const find = await d.center("[data-demo=find]");
+        const ed = `document.querySelector("[data-demo=code]")`;
+        const rest = { x: Math.round(code.x + code.w - 120), y: Math.round(code.y + code.h - 60) };
+        const start = Date.now();
+        await until(start, 500);
+        await d.show(rest);
+        // The long line: its end runs past the edge.
+        const raw = await d.js(
+          `JSON.stringify((() => { const e = ${ed}; const l = e.line(11); const r = e.rectsFor(l.from + 20, l.from + 21)[0]; return [r.x, r.y, r.height]; })())`,
+        );
+        const [lx, ly, lh] = JSON.parse(String(raw)) as [number, number, number];
+        await d.click({ x: Math.round(lx + 120), y: Math.round(ly + lh / 2) });
+        await sleep(500);
+        await d.badge("Shift+Wheel");
+        for (let i = 0; i < 14; i++) {
+          await d.wheel(0, 60, true);
+          await sleep(40);
+        }
+        await sleep(700);
+        for (let i = 0; i < 14; i++) {
+          await d.wheel(0, -60, true);
+          await sleep(40);
+        }
+        await d.badge("");
+        await sleep(300);
+        await d.click(find);
+        await d.type("[data-demo=find]", "frame", 90);
+        await sleep(700);
+        await d.move({ x: Math.round(code.x + code.w * 0.55), y: Math.round(code.y + code.h * 0.5) }, 600);
+        await d.badge("Wheel");
+        for (let i = 0; i < 45; i++) {
+          await d.wheel(0, 150 + i * 80);
+          await sleep(30);
+        }
+        await d.badge("");
+        await sleep(300);
+        for (const key of ["Ctrl+End", "Ctrl+Home"]) {
+          await d.badge(key);
+          await sleep(260);
+          await d.app.send("key", { key, selector: "[data-demo=code]" });
+          await sleep(1100);
+          await d.badge("");
+          await sleep(300);
+        }
+        await d.click(find);
+        await d.key("Escape", "Esc", 400);
+        await d.click(await d.center("[data-demo=status]", -220));
+        await sleep(150);
+        await d.hide();
+        const end = Date.now() + 500;
+        await until(end, 300);
+        return { start, end };
+      },
+    },
+
+    "sk-layer": {
+      poster: 0.06,
+      host: "surface",
+      async plan(d) {
+        const bar = await d.box(".bar");
+        const rest = { x: Math.round(bar.x + bar.w + 120), y: Math.round(bar.y + bar.h / 2 - 50) };
+        const start = Date.now();
+        await until(start, 900);
+        await d.show(rest);
+        await d.click(await d.center("[data-demo=round]"));
+        await sleep(2000);
+        await d.click(await d.center("[data-demo=hidden]"));
+        await sleep(1900);
+        await d.click(await d.center("[data-demo=wide]"));
+        await sleep(1300);
+        await d.move(rest, 650);
+        await sleep(100);
+        await d.hide();
+        const end = start + 12000;
+        await until(end, 300);
+        return { start, end };
+      },
+    },
 
     iframe: {
       poster: 0.3,

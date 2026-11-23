@@ -6,6 +6,8 @@ section: Embedding
 order: 6.5
 ---
 
+import Demo from "../../src/components/Demo.astro";
+
 [`<sk-surface>`](/embedding/native-frames/) takes frames and draws them as part of the page. A program that must present by itself, such as a player with its own swap chain and HDR output, wants the opposite: its own layer on screen, with the page over it. `<sk-layer>` is the element for that. It paints nothing; your layer is shown under the page where the element is.
 
 ```vue
@@ -15,6 +17,12 @@ order: 6.5
 ```
 
 The page has to be transparent there to let the layer show: a window with [`backdrop: "transparent"`](/embedding/desktop/#a-backdrop-the-page-cannot-change) and no background over the element.
+
+<Demo
+  id="elements/sk-layer"
+  caption="An animated layer the embedder renders itself, under the page's text and controls. It follows its element through a resize to a circle, hides with display: none and comes back."
+  label="A moving plasma picture drawn by native code fills a rounded card under the page's chips and title; the card shrinks to a circle and the picture follows its edge, the element is set to display none and the picture disappears, then the wide card comes back"
+/>
 
 ## The layer
 

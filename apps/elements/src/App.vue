@@ -5,7 +5,10 @@ import CursorLayer from "./CursorLayer.vue";
 import { nav } from "./demo";
 import CanvasPage from "./pages/CanvasPage.vue";
 import FormControlsPage from "./pages/FormControlsPage.vue";
+import EditorCodePage from "./pages/EditorCodePage.vue";
+import EditorPage from "./pages/EditorPage.vue";
 import IframePage from "./pages/IframePage.vue";
+import LayerPage from "./pages/LayerPage.vue";
 import LottiePage from "./pages/LottiePage.vue";
 import StickersPage from "./pages/StickersPage.vue";
 import SurfacePage from "./pages/SurfacePage.vue";
@@ -21,13 +24,18 @@ const pages: Record<string, Component> = {
   iframe: IframePage,
   "text-fields": TextFieldsPage,
   "form-controls": FormControlsPage,
+  "sk-editor": EditorPage,
+  "sk-editor-code": EditorCodePage,
+  "sk-layer": LayerPage,
 };
 const page = computed(() => pages[nav.id]);
 const solid = computed(() => appWindow.effectiveBackdrop === "none");
+// The page tints the window itself, round the hole its layer shows through.
+const clear = computed(() => nav.id === "sk-layer");
 </script>
 
 <template>
-  <div class="app" :class="{ solid }">
+  <div class="app" :class="{ solid, clear }">
     <header class="titlebar">
       <span class="mark">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -74,6 +82,9 @@ const solid = computed(() => appWindow.effectiveBackdrop === "none");
 }
 .app.solid {
   background: var(--bg);
+}
+.app.clear {
+  background: transparent;
 }
 .titlebar {
   position: absolute;

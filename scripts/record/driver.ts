@@ -1,4 +1,4 @@
-// Drives a demo app for a clip: synthetic input through devtools (`mouse`, `type`, `key`) and the
+// Drives a demo app for a clip: synthetic input through devtools (`mouse`, `wheel`, `type`, `key`) and the
 // pointer the app draws itself, so the real mouse and keyboard are never touched.
 //
 // The app provides `globalThis.__demo` (apps/elements/src/demo.ts):
@@ -112,6 +112,10 @@ export class Driver {
     await this.app.send("key", { key });
     await sleep(hold);
     await this.badge("");
+  }
+  /** One wheel step at the pointer, in DOM signs (`dy > 0` scrolls down); `shift` scrolls sideways. */
+  wheel(dx: number, dy: number, shift = false): Promise<unknown> {
+    return this.app.send("wheel", { x: this.pos.x, y: this.pos.y, dx, dy, shift });
   }
   badge(label: string) {
     return this.js(`__demo.cursor.key(${JSON.stringify(label)}); "ok"`);

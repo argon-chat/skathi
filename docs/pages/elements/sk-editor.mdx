@@ -7,7 +7,15 @@ section: Elements
 order: 12
 ---
 
+import Demo from "../../src/components/Demo.astro";
+
 A chat composer with bold and links, mentions shown as chips, custom emoji in the line, a quote block: that is what `<sk-editor>` is for. It is not `contenteditable`. The editor owns the text, the layout, the caret, IME input and the undo history, and your app decides what each piece of formatting means.
+
+<Demo
+  id="elements/sk-editor"
+  caption="A composer: typing, a mention chip, a spelling squiggle, bold and a colour mark, then undo back to empty."
+  label="A chat composer: text is typed, a mention of Mira is inserted as a chip, a misspelled word gets a wavy underline, two words are made bold and pink, and undo steps back to the empty field"
+/>
 
 A document has four layers:
 
@@ -224,6 +232,12 @@ A line decoration paints its line's background, and its `gutter` text is drawn i
 ## Code and long documents
 
 `<sk-editor>` lays out only the lines on screen and a margin around them. The other lines have an estimated height until they come into view, when they are measured; the line at the top of the view stays where it is while estimates above it are corrected. A 100,000-line document scrolls at the cost of the 50 lines it shows. Geometry reads about lines off screen (`rectsFor()`, `caretRect()`, `positionAt()`) lay those lines out first, as a forced reflow does in a browser.
+
+<Demo
+  id="elements/sk-editor-code"
+  caption="A 100,000-line file: line numbers and diff markers in the gutter, a long line scrolled sideways, search hits with rounded corners, a fast scroll and a jump to the last line."
+  label="A code editor with line numbers, green and blue diff lines and a breakpoint dot in the gutter; a long line scrolls sideways while the gutter stays, a search highlights every match, the view scrolls fast through thousands of lines and jumps to line 100,000 and back"
+/>
 
 An editor as tall as its text, inside a scroll container of your own, does the same with the part of it that container shows. Give long wrapped documents an editor with its own height, though: the editor cannot move your container's scroll position when estimated lines above the view turn out taller or shorter, so they can shift the text a little as you scroll up to them. Lines that do not wrap in a monospace font have exact estimates and never shift.
 

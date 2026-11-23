@@ -17,6 +17,7 @@ release:
       command: cargo add skathi@0.8
 ---
 
+import Demo from "../src/components/Demo.astro";
 import Aside from "../src/components/blog/Aside.astro";
 import Feature from "../src/components/blog/Feature.astro";
 import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
@@ -53,6 +54,12 @@ Skathi 0.8 is about text. There is a native rich text element, `<sk-editor>`, fo
 ## A rich text element
 
 [`<sk-editor>`](/elements/sk-editor/) is a native editing element. It owns the text, the layout, the caret, IME input and the undo history; your app decides what each piece of formatting means.
+
+<Demo
+  id="elements/sk-editor"
+  caption="A composer: typing, a mention chip, a spelling squiggle, bold and a colour mark, then undo back to empty."
+  label="A chat composer: text is typed, a mention of Mira is inserted as a chip, a misspelled word gets a wavy underline, two words are made bold and pink, and undo steps back to the empty field"
+/>
 
 A document is one string with three things over it:
 
@@ -106,6 +113,12 @@ function onBeforeInput(e: InputEvent) {
 ### Code and long documents
 
 The same element holds a source file or a diff. See [code and long documents](/elements/sk-editor/#code-and-long-documents).
+
+<Demo
+  id="elements/sk-editor-code"
+  caption="A 100,000-line file: diff markers in the gutter, a long line scrolled sideways, rounded search hits, a fast scroll and a jump to the last line."
+  label="A code editor with line numbers, green and blue diff lines and a breakpoint dot in the gutter; a long line scrolls sideways while the gutter stays, a search highlights every match, the view scrolls fast through thousands of lines and jumps to line 100,000 and back"
+/>
 
 ```css
 .code {
@@ -229,6 +242,12 @@ Smaller additions:
 - `sk build` inlines calls of `skathi:numeric` such as `i32.add(a, b)` where the result is the same either way, and `sk check` reports two different numeric types in one operator (SK7001).
 
 ## For embedders
+
+<Demo
+  id="elements/sk-layer"
+  caption="A layer the embedder renders itself, under the page's text and controls, following its element through a resize and display: none."
+  label="A moving plasma picture drawn by native code fills a rounded card under the page's chips and title; the card shrinks to a circle and the picture follows its edge, the element is set to display none and the picture disappears, then the wide card comes back"
+/>
 
 - **`<sk-layer>`.** A native layer of your own under an element of the page, for a program that must present by itself, such as a video player. See [a native layer under the page](/embedding/native-layer/).
 - **The page's view in a window of yours.** On macOS the page's window state follows its view into a window of yours, while the backdrop stays with Skathi's window and a closing page takes its view back without touching yours ([a window Skathi did not create](/embedding/native-layer/#a-window-skathi-did-not-create)).
