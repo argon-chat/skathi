@@ -17,6 +17,9 @@ const button = (id: string, children: string | Child[]) =>
 const span = (id: string, text: string, style?: Record<string, string>, cls?: string) =>
   h("div", { class: "row" }, [h("span", { id, ...(cls ? { class: cls } : {}), ...(style ? { style } : {}) }, text)]);
 
+const menuRow = (label: string) =>
+  h("button", { style: { display: "flex", width: "100%", padding: "8px 10px", border: "0" } }, label);
+
 createApp({
   setup() {
     return () =>
@@ -61,6 +64,9 @@ createApp({
             h("span", { id: "serif-declared", style: { fontFamily: "serif", lineHeight: "normal" } }, "Frame"),
           ]),
         ]),
+
+        h("div", { id: "rows-ws" }, [" ", menuRow("A"), " ", menuRow("B")]),
+        h("div", { id: "rows-plain" }, [menuRow("A"), menuRow("B")]),
       ]);
   },
 }).mount();

@@ -47,6 +47,14 @@ describe("white space at the edges of a flex item's text", () => {
   );
 });
 
+test(
+  "white space between two block-level flex boxes takes no line",
+  async () => {
+    expect((await rect("rows-ws")).height).toBe((await rect("rows-plain")).height);
+  },
+  T,
+);
+
 describe("line-height: normal", () => {
   test(
     "text with no line-height declared is as tall as text declared normal",

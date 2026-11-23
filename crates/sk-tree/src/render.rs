@@ -3062,7 +3062,7 @@ fn inline_level_element(t: &Tree, kid: &crate::tree::Node) -> bool {
     inline_level
         || !matches!(
             declared,
-            Some(gpui::Display::Block) | Some(gpui::Display::Grid)
+            Some(gpui::Display::Block) | Some(gpui::Display::Grid) | Some(gpui::Display::Flex)
         )
 }
 
@@ -7120,6 +7120,21 @@ mod tests {
             let flex_gap = text(t, " ", flex);
             element(t, span, flex);
             assert!(!generates_a_box(t, flex_gap));
+
+            // An inline-level tag declared `display: flex` is a block-level box.
+            let rows = t.create_element(div);
+            let row_a = element(t, span, rows);
+            let row_gap = text(t, " ", rows);
+            let row_b = element(t, span, rows);
+            for row in [row_a, row_b] {
+                set_style(t, row, &|cs| {
+                    let mut base = gpui::StyleRefinement::default();
+                    base.display = Some(gpui::Display::Flex);
+                    cs.base = std::rc::Rc::new(base);
+                    cs.extras.inline_level = Some(false);
+                });
+            }
+            assert!(!generates_a_box(t, row_gap));
 
             // Preserved white space is content.
             let pre = t.create_element(div);
