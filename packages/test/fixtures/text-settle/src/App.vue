@@ -4,6 +4,7 @@ import { ref } from "vue";
 const tick = ref(0);
 const shown = ref(false);
 const spinning = ref(false);
+const gliding = ref("");
 let ticking = false;
 
 function step() {
@@ -18,6 +19,9 @@ function step() {
   },
   spin(on: boolean) {
     spinning.value = on;
+  },
+  glide(how: string) {
+    gliding.value = how;
   },
   start() {
     ticking = true;
@@ -67,6 +71,18 @@ function step() {
         </div>
       </div>
     </div>
+    <div class="glide">
+      <div v-for="kind in ['layer', 'plain']" :key="kind" :class="['glider', kind, gliding]">
+        <div class="rule" />
+        <div class="hs">H H H H H H H H</div>
+        <div class="rule" />
+      </div>
+      <div class="glider still">
+        <div class="rule" />
+        <div class="hs">H H H H H H H H</div>
+        <div class="rule" />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -90,6 +106,42 @@ function step() {
 .block {
   width: 180px;
   height: 120px;
+}
+.glide {
+  display: flex;
+  gap: 24px;
+  margin: 16px;
+}
+.glider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 180px;
+}
+.layer {
+  will-change: transform;
+}
+.rule {
+  height: 1px;
+  background: #111;
+}
+.hs {
+  font-size: 16px;
+  white-space: pre;
+}
+.moving {
+  animation: slide 2s linear infinite alternate;
+}
+.pinned {
+  transform: translate(3.3px, 1.4px);
+}
+@keyframes slide {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(8.3px, 3.3px);
+  }
 }
 .list {
   height: 150px;

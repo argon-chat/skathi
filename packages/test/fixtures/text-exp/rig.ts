@@ -10,16 +10,16 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { launch, readPng, type Bounds } from "../../src/index";
 
-export const VARIANTS: Record<string, string> = {
-  baseline: "",
-  "no-phases": "no-phases",
-  "contrast-mac": "contrast=mac",
-  "contrast-half": "contrast=half",
-  "no-settle": "no-settle",
-  rigid: "rigid",
+// Each variant: the `SK_TEXT_EXPERIMENT` switches and what the page turns on through CSS.
+export const VARIANTS: Record<string, { env: string; css?: string }> = {
+  baseline: { env: "" },
+  "no-phases": { env: "no-phases" },
+  contrast: { env: "", css: "contrast" },
+  "no-settle": { env: "no-settle" },
+  "will-change": { env: "", css: "layer" },
 };
-const STATIC = ["baseline", "no-phases", "contrast-mac", "contrast-half"];
-const MOTION = ["baseline", "no-settle", "rigid"];
+const STATIC = ["baseline", "no-phases", "contrast"];
+const MOTION = ["baseline", "no-settle", "will-change"];
 const SCALES = (process.env.RIG_SCALES ?? "1,1.25,1.5,2").split(",").map(Number);
 const PAGES = ["light", "dark", "grey", "color", "offsets"];
 const FRAMES = 16;
@@ -41,7 +41,7 @@ async function capture(out: string, only: string[]) {
         scale,
         label: `text-exp-${variant}`,
         env: {
-          SK_TEXT_EXPERIMENT: [VARIANTS[variant], "log"].filter(Boolean).join(","),
+          SK_TEXT_EXPERIMENT: [VARIANTS[variant]!.env, "log"].filter(Boolean).join(","),
           SK_LOG: "gpui=info,gpui_windows=info",
         },
       });
@@ -59,6 +59,8 @@ async function capture(out: string, only: string[]) {
         };
         // Mica, the default backdrop, keeps text grayscale; an opaque window draws ClearType.
         if (CLEARTYPE) await app.eval(`__SK_WINDOW__.appWindow.backdrop = "none"; "ok"`);
+        const css = VARIANTS[variant]!.css;
+        if (css) await app.eval(`__SK_TEXT_EXP__.with(${JSON.stringify(css)}); "ok"`);
         await sleep(600);
         if (STATIC.includes(variant)) {
           for (const page of PAGES) {
@@ -432,7 +434,8 @@ function report(out: string) {
         const b = (kind === "pinned" ? shot(meta, "rest") : frames[0]!).boxes.find(
           (x: { cls: string }) => x.cls === "k-card",
         )!.b;
-        const r = deviceRect({ x: b.x - b.w * 0.1 - 4, y: b.y - 6, w: b.w * 1.2 + 8, h: b.h * 1.2 + 12 }, scale, 0);
+        // The card scales about its left centre (`transform-origin: left center`) and slides right and down.
+        const r = deviceRect({ x: b.x - 4, y: b.y - b.h * 0.1 - 6, w: b.w * 1.2 + 16, h: b.h * 1.2 + 12 }, scale, 0);
         let wobble = 0;
         let resid = 0;
         let relSpread: number[] = [];
@@ -445,8 +448,8 @@ function report(out: string) {
             for (let y = y0; y < y1; y++) if (textBand[y]! > textBand[best]!) best = y;
             return best;
           };
-          const top = peak(0, Math.round((6 + b.h * 0.25) * scale));
-          const bottom = peak(Math.round((6 + b.h * 0.75) * scale), img.h);
+          const top = peak(0, Math.round((6 + b.h * 0.35) * scale));
+          const bottom = peak(Math.round((6 + b.h * 0.85) * scale), img.h);
           const band = new Img(img.w, Math.max(1, bottom - top - 5));
           for (let y = 0; y < band.h; y++)
             for (let x = 0; x < img.w; x++) {
@@ -652,7 +655,7 @@ function post(out: string) {
       0,
     );
     pair("settle", crop(shot(base, "pinned-early").file, r), crop(shot(base, "pinned-late").file, r), 2);
-    const half = metaOf(out, "contrast-half", 1);
+    const half = metaOf(out, "contrast", 1);
     if (half) {
       const dark = shot(base, "dark");
       const rows = (file: string) =>
@@ -664,7 +667,7 @@ function post(out: string) {
           2,
           BG.dark,
         );
-      pair("contrast-half", rows(dark.file), rows(shot(half, "dark").file), 2);
+      pair("contrast", rows(dark.file), rows(shot(half, "dark").file), 2);
     }
   }
   const micaMeta = join(out, "raw-mica", "1", "meta.json");
@@ -681,9 +684,117 @@ function post(out: string) {
   console.log(written.join("\n"));
 }
 
+// ---- full-size shots of the text-post page ----
+
+/** The readback is premultiplied with the Mica backdrop left out; this fill stands in for it. */
+const FILL = [0x20, 0x20, 0x20];
+
+function flatten(file: string, r?: Rect): Img {
+  const png = readPng(file);
+  const area = r ?? { x: 0, y: 0, w: png.width, h: png.height };
+  const img = new Img(area.w, area.h);
+  for (let y = 0; y < area.h; y++)
+    for (let x = 0; x < area.w; x++) {
+      const i = ((area.y + y) * png.width + area.x + x) * 4;
+      const a = png.data[i + 3]! / 255;
+      img.set(
+        x,
+        y,
+        [0, 1, 2].map((c) => Math.min(255, Math.round(png.data[i + c]! + FILL[c]! * (1 - a)))),
+      );
+    }
+  return img;
+}
+
+async function post2(out: string) {
+  const scale = Number(process.env.RIG_POST_SCALE ?? 2);
+  const dir = join(out, "post2", scale === 2 ? "" : `x${scale}`);
+  const raw = join(dir, "raw");
+  mkdirSync(raw, { recursive: true });
+  const app = await launch({
+    app: "packages/test/fixtures/text-post/src/main.ts",
+    window: [1280, 680],
+    scale,
+    label: "text-post",
+  });
+  const shots: Record<string, string> = {};
+  const bounds = async (selector: string) =>
+    (await app.query(selector)).nodes.flatMap((n) => (n.bounds ? [n.bounds] : []));
+  try {
+    const page = (js: string) => app.eval(`__SK_TEXT_POST__.${js}; 'ok'`);
+    const shoot = async (name: string) => {
+      const file = join(raw, `${name}.png`);
+      await app.send("screenshot", { path: file, backend: "render_to_image" });
+      shots[name] = file;
+    };
+    await sleep(1500);
+    await page(`zoom(true)`);
+    await sleep(70);
+    await shoot("zoom-before");
+    await sleep(900);
+    await shoot("zoom-after");
+    await page(`zoom(false)`);
+    await sleep(400);
+    await shoot("smoothing-auto");
+    await page(`with("subpixel")`);
+    await sleep(400);
+    await shoot("smoothing-subpixel");
+    await page(`with("contrast")`);
+    await sleep(400);
+    await shoot("contrast-on");
+    await page(`with("")`);
+    await sleep(400);
+    await shoot("contrast-off");
+    await shoot("line-height-normal");
+    await page(`with("tall")`);
+    await sleep(400);
+    await shoot("line-height-1.618");
+    await page(`with("")`);
+
+    const [card] = await bounds(".media");
+    const [info] = await bounds(".info");
+    const rows = await bounds(".row");
+    const [lead] = await bounds(".lead");
+    const centred = (cx: number, cy: number): Rect => {
+      const w = 1200;
+      const h = 500;
+      return {
+        x: Math.min(1280 * scale - w, Math.max(0, Math.round(cx * scale - w / 2))),
+        y: Math.min(680 * scale - h, Math.max(0, Math.round(cy * scale - h / 2))),
+        w,
+        h,
+      };
+    };
+    const zoomAt = (v: number, c: number) => c + (v - c) * 1.14;
+    const cardCx = card!.x + card!.w / 2;
+    const cardCy = card!.y + card!.h / 2;
+    const zoomCrop = centred(zoomAt(info!.x + info!.w / 2, cardCx), zoomAt(info!.y + info!.h / 2, cardCy));
+    const rowsTop = rows[0]!.y;
+    const rowsBottom = rows[rows.length - 1]!.y + rows[rows.length - 1]!.h;
+    const rowsCrop = centred(rows[0]!.x + rows[0]!.w / 2, (rowsTop + rowsBottom) / 2);
+    const leadCrop = centred(lead!.x + 300, lead!.y + 60);
+    const pairs: [string, string, string, Rect][] = [
+      ["zoom", "zoom-before", "zoom-after", zoomCrop],
+      ["smoothing", "smoothing-auto", "smoothing-subpixel", rowsCrop],
+      ["contrast", "contrast-off", "contrast-on", rowsCrop],
+      ["line-height", "line-height-1.618", "line-height-normal", leadCrop],
+    ];
+    for (const [pair, a, b, r] of pairs) {
+      for (const name of [a, b]) {
+        writeImg(join(dir, `${name}.png`), flatten(shots[name]!));
+        writeImg(join(dir, `${name}-crop.png`), flatten(shots[name]!, r));
+      }
+      console.log(`${pair}: ${a} / ${b}, crop ${JSON.stringify(r)}`);
+    }
+  } finally {
+    await app.close();
+  }
+}
+
 const [cmd, out, ...rest] = process.argv.slice(2);
 if (!out) throw new Error("usage: rig.ts capture|report|mica|post <out> [variant...]");
 if (cmd === "capture") await capture(out, rest);
 else if (cmd === "mica") await mica(out);
 else if (cmd === "post") post(out);
+else if (cmd === "post2") await post2(out);
 else report(out);

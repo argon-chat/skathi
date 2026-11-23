@@ -4,7 +4,7 @@
   "window": {
     "title": "Skathi — text-settle (fixture)",
     "width": 640,
-    "height": 360,
+    "height": 560,
     "titleBarStyle": "hidden",
     "titleBarFallback": false,
     "backdrop": "none"

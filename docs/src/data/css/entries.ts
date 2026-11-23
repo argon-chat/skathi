@@ -1275,9 +1275,33 @@ const typography = section("Typography and text", [
         "ClearType",
         "subpixel antialiasing",
       ],
-      related: ["text-rendering"],
+      related: ["text-rendering", "text-contrast"],
     },
   ),
+  prop("text-contrast", OK, "Sets how much weight glyph edges get for the colour of the text.", {
+    skathiOnly: true,
+    platforms: { windows: OK, macos: NO, linux: PART },
+    values: [
+      v(
+        "auto",
+        OK,
+        "The platform's correction, which leaves light text on a dark ground thinner than dark text on a light one.",
+      ),
+      v("luminance", OK, "More weight the lighter the text, in five steps of its luminance; dark text is unchanged."),
+    ],
+    notes: [
+      "Inherited. Set it on the root to apply it across the app: `html { text-contrast: luminance }`.",
+      "It works with grayscale and ClearType text alike. Light-on-dark text at 14px gains about 6 to 15% ink, depending on the display scale and `font-smoothing`.",
+      "It changes how the rasterized glyph is blended, not the glyph itself, so it costs no glyph cache space.",
+      "It is not an accessibility contrast setting: it does not change colours, and `prefers-contrast` is unrelated.",
+    ],
+    limitations: [
+      "On macOS it changes nothing: CoreGraphics already thickens text by its colour.",
+      "On Linux it is built into the renderer but has not been checked on a Linux display.",
+    ],
+    aliases: ["font dilation", "stem darkening", "light text weight"],
+    related: ["font-smoothing", "text-rendering"],
+  }),
   prop("quotes", NO, "Sets the quotation marks used by `open-quote` and `close-quote`."),
   prop("initial-letter", NO, "Sets the size and sink of drop caps and raised initial letters."),
   prop("ruby-position", NO, "Sets where ruby annotations are placed relative to their base text.", {
@@ -2441,7 +2465,10 @@ const containment = section("Containment and hints", [
     related: ["content-visibility", "container-type"],
   }),
   prop("will-change", OK, "Hints which properties of an element are expected to change.", {
-    notes: ["Treated as a hint."],
+    notes: [
+      "`transform` (or `translate`, `scale`, `rotate`) makes the text of the element and its descendants move as one layer: under a moving translation its glyphs keep their places against each other and against the box, instead of each line snapping to whole pixels. Once the transform has been still for 200 ms the text is drawn sharp at its new place.",
+      "Every other value is a hint and changes nothing.",
+    ],
   }),
   prop("container-type", OK, "Makes an element a query container that `@container` rules can test.", {
     since: "0.4.0",

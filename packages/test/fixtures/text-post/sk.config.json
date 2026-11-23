@@ -1,0 +1,13 @@
+{
+  "$comment": "A settings panel and media cards for the text section of the 0.9 post; text-exp/rig.ts post2 shoots it.",
+
+  "name": "text-post",
+
+  "window": {
+    "title": "Skathi — text-post (fixture)",
+    "width": 1280,
+    "height": 680,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

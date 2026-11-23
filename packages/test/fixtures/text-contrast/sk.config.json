@@ -1,0 +1,12 @@
+{
+  "name": "text-contrast",
+
+  "window": {
+    "title": "Skathi — text-contrast (fixture)",
+    "width": 640,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "none"
+  }
+}

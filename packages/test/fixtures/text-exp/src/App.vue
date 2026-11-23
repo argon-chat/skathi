@@ -22,6 +22,7 @@ const page = ref("light");
 const motion = ref("none");
 const pinned = ref("none");
 const smoothing = ref("");
+const extra = ref("");
 const scheme = computed(() => SCHEMES[page.value] ?? SCHEMES.light!);
 
 (globalThis as { __SK_TEXT_EXP__?: unknown }).__SK_TEXT_EXP__ = {
@@ -34,6 +35,9 @@ const scheme = computed(() => SCHEMES[page.value] ?? SCHEMES.light!);
   pin(transform: string) {
     pinned.value = transform;
   },
+  with(css: string) {
+    extra.value = css;
+  },
   smooth(value: string) {
     smoothing.value = value;
   },
@@ -44,7 +48,10 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
 </script>
 
 <template>
-  <div :class="['root', smoothing && `smooth-${smoothing}`]" :style="{ color: scheme.fg, background: scheme.bg }">
+  <div
+    :class="['root', extra, smoothing && `smooth-${smoothing}`]"
+    :style="{ color: scheme.fg, background: scheme.bg }"
+  >
     <div v-if="page === 'offsets'" class="offsets">
       <div v-for="size in [13, 16]" :key="size" class="col">
         <div
@@ -127,6 +134,12 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
 }
 .line {
   line-height: 22px;
+}
+.contrast {
+  text-contrast: luminance;
+}
+.layer .card {
+  will-change: transform;
 }
 .smooth-subpixel {
   font-smoothing: subpixel-antialiased;

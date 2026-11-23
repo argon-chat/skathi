@@ -33,12 +33,13 @@ export const details: Details = {
   "will-change": {
     examples: [
       {
-        title: "Mark a panel that a drag moves",
+        title: "Slide a toast in without its text stepping",
         lang: "css",
-        code: `.split-pane-handle {
+        code: `.toast {
   will-change: transform;
+  transition: transform 300ms ease-out;
 }`,
-        note: "Keep it for browser builds of the same code; Skathi needs no hint to animate `transform`.",
+        note: "Without the hint each frame places the text on whole pixels, so it moves in 1px steps against the toast's border.",
       },
     ],
     edgeCases: [

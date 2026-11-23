@@ -6311,6 +6311,21 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "text-contrast" =>
+            {
+                match single_ident(&c.value, "text-contrast", diagnostics) {
+                    Some("auto") => r.text.text_contrast = Some(gpui::TextContrast::Auto),
+                    Some("luminance") => r.text.text_contrast = Some(gpui::TextContrast::Luminance),
+                    other => unsupported(
+                        diagnostics,
+                        &format!(
+                            "text-contrast: {} — use auto or luminance",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "-webkit-line-clamp" || name.0.as_ref() == "line-clamp" =>
             {
                 match single_number(&c.value) {
@@ -6449,7 +6464,18 @@ fn apply_property(
                 )
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(name.0.as_ref(), "touch-action" | "will-change") => {}
+                if name.0.as_ref() == "touch-action" => {}
+            // The rest of `will-change` stays a hint; a transform makes the text inside move as
+            // one layer.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "will-change" =>
+            {
+                let value = value_text(p).unwrap_or_default().to_ascii_lowercase();
+                r.text.will_change_transform =
+                    Some(value.split(',').any(|v| {
+                        matches!(v.trim(), "transform" | "translate" | "scale" | "rotate")
+                    }));
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if crate::haptics::property(&name.0) =>
             {
@@ -10415,6 +10441,26 @@ mod prefix_tests {
         ));
         assert!(c.normal.is_some() && c.normal_transitions.is_some());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn text_contrast_and_a_will_change_transform_reach_the_text_style() {
+        let text = |css: &str| {
+            let mut d = Vec::new();
+            let s = parse_inline(css, &mut d);
+            (s.text.text_contrast, s.text.will_change_transform, d.len())
+        };
+        assert_eq!(
+            text("text-contrast: luminance"),
+            (Some(gpui::TextContrast::Luminance), None, 0)
+        );
+        assert_eq!(text("text-contrast: high"), (None, None, 1));
+        assert_eq!(
+            text("will-change: opacity, Transform"),
+            (None, Some(true), 0)
+        );
+        assert_eq!(text("will-change: scroll-position"), (None, Some(false), 0));
+        assert!(inherits("text-contrast"));
     }
 
     #[test]
