@@ -31,6 +31,7 @@ export const TEMPLATES = [
   "chip8",
   "sequencer",
   "rv32",
+  "git",
 ] as const;
 export type Template = (typeof TEMPLATES)[number];
 
@@ -87,6 +88,10 @@ interface TemplateInfo {
   ignore?: string[];
   /** sk.config.json `macos` keys beside `bundleId`: the usage descriptions of the devices the template asks for. */
   macos?: Record<string, string>;
+  /** sk.config.json `permissions`: the programs the template starts. */
+  permissions?: Record<string, unknown>;
+  /** sk.config.json `check`: the advisories the template's permissions mean to raise. */
+  check?: Record<string, unknown>;
   checker: Checker;
 }
 
@@ -172,12 +177,21 @@ const TEMPLATE_INFO: Record<Template, TemplateInfo> = {
     ignore: ["assets/doom1.wad"],
     checker: VUE_TSC,
   },
+  git: {
+    hint: "a git client in Vue: stage hunks and lines, commit, browse history, switch branches",
+    framework: "vue",
+    dependencies: ["vue"],
+    window: { width: 1280, height: 820, minWidth: 900, minHeight: 560, titleBarStyle: "hidden", titleBarHeight: 44 },
+    permissions: { process: [{ name: "git", path: "$PATH/git", args: true }] },
+    check: { allow: { SK6004: ["src/git/run.ts"] } },
+    checker: VUE_TSC,
+  },
 };
 
 export const TEMPLATES_DIR = resolve(import.meta.dir, "..", "templates");
 
 /** Templates kept in the skathi-templates repo rather than in this package. */
-const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8", "sequencer", "rv32"]);
+const GALLERY: ReadonlySet<Template> = new Set(["player", "weather", "draw", "chip8", "sequencer", "rv32", "git"]);
 
 function templateDir(template: Template): string {
   if (!GALLERY.has(template)) return join(TEMPLATES_DIR, template);
@@ -304,6 +318,8 @@ export function create(target: string, options: CreateOptions = {}): string[] {
       window: { title: productName, backdrop: "mica", ...info.window },
       assets: ["assets"],
       ...(info.packs ? { packs: info.packs } : {}),
+      ...(info.permissions ? { permissions: info.permissions } : {}),
+      ...(info.check ? { check: info.check } : {}),
       windows: { exeName, icon: "icon.png" },
       ...(platforms.includes("macos") ? { macos: { bundleId: `com.example.${slug}`, ...info.macos } } : {}),
     }),

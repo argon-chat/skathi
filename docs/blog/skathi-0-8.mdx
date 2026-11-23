@@ -220,6 +220,14 @@ const code = await ffmpeg.exited;
 - **No shell, ever.** Arguments reach the program as an array. Batch files are refused on Windows.
 - **Bounded.** A child gets only its three streams, lives no longer than the app, and at most 32 run at once. [`Process.exec()`](/std/process-exec/) collects the output with a timeout and a size limit.
 
+### A git client to start from
+
+`sk create` has a `git` template: a git client in Vue that stages files, hunks and single lines, commits, and draws every branch on one timeline. It puts this release to work. The `git` it runs goes through [`skathi:process`](/std/process/), each hunk is an [`<sk-editor>`](/elements/sk-editor/) with line numbers and `+`/`−` in its gutter, and staging a line is [`Patch.select()`](/std/patch/) on the diff git printed. It is an early version, with more to come after 0.8.
+
+```sh
+bun create skathi my-app --template git
+```
+
 ## Images and memory
 
 [`skathi:image`](/std/image/) decodes and encodes pictures off the JS thread.

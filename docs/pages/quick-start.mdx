@@ -42,8 +42,9 @@ It asks for the app's name, a template, the platforms to package for, whether pu
 | `chip8`     | Vue             | a CHIP-8 emulator with a debugger beside the screen                     |
 | `sequencer` | Svelte 5        | a drum machine whose dials, keys and meter are drawn by shaders         |
 | `rv32`      | Vue             | a RISC-V emulator with a debugger, running the Doom engine as its guest |
+| `git`       | Vue             | a git client: stage hunks and lines, commit, a timeline of every branch |
 
-`player`, `weather`, `draw`, `chip8`, `sequencer` and `rv32` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
+`player`, `weather`, `draw`, `chip8`, `sequencer`, `rv32` and `git` are downloaded from [skathi-templates](https://github.com/argon-chat/skathi-templates). To skip the questions, pass them as options:
 
 ```bash
 bun create skathi my-app --template minimal --yes
@@ -132,7 +133,7 @@ Skathi renders both frameworks into one element tree with the same renderer, so 
 Some parts are Vue-only:
 
 - `createApp`, `<Teleport>`, `<Transition>`, `useCssModule()`, `useCssVars()` and the rest of the Vue API are exported from `@skathi-native/runtime` in an app that has `vue` installed. Without it, `@skathi-native/runtime` is the DOM layer only.
-- The `showcase`, `weather`, `draw`, `chip8` and `rv32` templates use Vue. The showcase also uses the Vue libraries `vue-router` and `pinia`.
+- The `showcase`, `weather`, `draw`, `chip8`, `rv32` and `git` templates use Vue. The showcase also uses the Vue libraries `vue-router` and `pinia`.
 - Of the [performance advisories](/guides/performance-advisories/), the wasted re-render and long list advisories watch Vue component updates. In a Svelte app only the host-writes advisory is reported, with a total instead of component names.
 
 ## Check compatibility
