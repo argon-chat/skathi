@@ -376,18 +376,28 @@ describe("<sk-editor> long documents and code", () => {
         "(() => { const c = __SK_TEST_EDITOR__.code(); c.dispatch({ selections: [{ anchor: 23 }] }); c.setDecorations('d', [{ from: 0, to: 21, name: 'hit' }]) })()",
       );
       await sleep(200);
-      const [first, second] = await read<Rect[]>("E.code().rectsFor(0, 21)");
+      const first = await read<Rect>("E.code().rectsFor(0, 10)[0]");
+      const second = await read<Rect>("E.code().rectsFor(11, 21)[0]");
       const shot = readPng(await app.screenshot());
       const k = shot.width / 480;
-      const blue = (x: number, y: number) => shot.at(Math.floor(x * k), Math.floor(y * k))[2];
-      const inside = 1 / k;
-      const right = (r: Rect) => r.x + r.width - inside;
-      const bottom = (r: Rect) => r.y + r.height - inside;
-      expect(blue(first!.x + 3, first!.y + 8)).toBeLessThan(60);
-      expect(blue(first!.x, first!.y)).toBeGreaterThan(150);
-      expect(blue(right(second!), bottom(second!))).toBeGreaterThan(150);
-      expect(blue(second!.x, bottom(second!))).toBeLessThan(60);
-      expect(blue(right(first!) - 3, first!.y)).toBeLessThan(60);
+      // The device pixel in each corner that lies wholly inside the rect: yellow for a square
+      // corner, outside the arc of the 8px radius for a rounded one.
+      const corner = (r: Rect, right: boolean, bottom: boolean) =>
+        shot.at(
+          right ? Math.floor((r.x + r.width) * k) - 1 : Math.ceil(r.x * k),
+          bottom ? Math.floor((r.y + r.height) * k) - 1 : Math.ceil(r.y * k),
+        )[2];
+      const round = (r: Rect, right: boolean, bottom: boolean) => expect(corner(r, right, bottom)).toBeGreaterThan(150);
+      const square = (r: Rect, right: boolean, bottom: boolean) => expect(corner(r, right, bottom)).toBeLessThan(60);
+      expect(shot.at(Math.round((first.x + 8) * k), Math.round((first.y + 8) * k))[2]).toBeLessThan(60);
+      round(first, false, false);
+      round(first, false, true);
+      square(first, true, false);
+      square(first, true, true);
+      square(second, false, false);
+      square(second, false, true);
+      round(second, true, false);
+      round(second, true, true);
       await app.eval("__SK_TEST_EDITOR__.code().setDecorations('d', [])");
     },
     T,

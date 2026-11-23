@@ -826,10 +826,15 @@ impl EditorElement {
             x = text_x + widest;
         }
         let natural = x + g.padding.right + g.border_right;
-        let width = g
-            .width
-            .unwrap_or(natural)
-            .max(g.min_width.unwrap_or_default());
+        let scale = window.scale_factor();
+        // Whole device pixels, so the border and the text area's clip do not share one.
+        let width = px((f32::from(
+            g.width
+                .unwrap_or(natural)
+                .max(g.min_width.unwrap_or_default()),
+        ) * scale)
+            .ceil()
+            / scale);
         Some(GutterLayout {
             width,
             numbers,
