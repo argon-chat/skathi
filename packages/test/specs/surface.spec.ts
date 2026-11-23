@@ -1039,26 +1039,34 @@ test(
   "a native layer hears where its sk-layer element is, in the frame that paints it",
   async () => {
     const told: string[] = [];
+    // On Windows the composition device is committed right after the present of the frame that
+    // carried the change, and only then is the layer told `presented`.
     const heard = (line: string) =>
       until(
         async () => (told.push(...((await call("layerLog")) as string[])), told),
-        (all) => all.includes(line),
+        (all) => all.includes(line) && (!WINDOWS || all.indexOf("presented", all.indexOf(line)) > 0),
       );
+    const then = (line: string) => (WINDOWS ? [line, "presented"] : [line]);
     expect(await heard("place:300,140,120,80")).toContain("place:300,140,120,80");
     expect(told[0]).toStartWith("attach:");
     expect(told.filter((line) => line.startsWith("attach:")).length).toBe(1);
+    expect(told.slice(1)).toEqual(then("place:300,140,120,80"));
 
     told.length = 0;
     await app.eval("moveLayer(320); 0");
-    expect(await heard("place:320,140,120,80")).toEqual(["place:320,140,120,80"]);
+    expect(await heard("place:320,140,120,80")).toEqual(then("place:320,140,120,80"));
+
+    told.length = 0;
+    await app.eval("moveLayer(320, 160); 0");
+    expect(await heard("place:320,140,160,80")).toEqual(then("place:320,140,160,80"));
 
     told.length = 0;
     await app.eval("moveLayer(null); 0");
-    expect(await heard("hide")).toEqual(["hide"]);
+    expect(await heard("hide")).toEqual(then("hide"));
 
     told.length = 0;
     await app.eval("moveLayer(300); 0");
-    expect(await heard("place:300,140,120,80")).toEqual(["place:300,140,120,80"]);
+    expect(await heard("place:300,140,120,80")).toEqual(then("place:300,140,120,80"));
   },
   T,
 );

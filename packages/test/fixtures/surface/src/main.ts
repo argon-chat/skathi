@@ -4,10 +4,11 @@ import { appHost } from "skathi:app";
 const events: string[] = [];
 const hiddenShown = ref(false);
 const layerAt = ref<number | null>(300);
+const layerWidth = ref(120);
 Object.assign(globalThis, {
   surfaceEvents: events,
   showHidden: () => (hiddenShown.value = true),
-  moveLayer: (left: number | null) => (layerAt.value = left),
+  moveLayer: (left: number | null, width = 120) => ((layerAt.value = left), (layerWidth.value = width)),
   hostCall: (name: string, ...args: unknown[]) => appHost.call(name, ...args),
 });
 
@@ -58,7 +59,7 @@ createApp({
       h("sk-layer", {
         id: "layer",
         name: "probe",
-        style: at(layerAt.value ?? 0, 140, 120, 80, layerAt.value === null ? "display: none" : ""),
+        style: at(layerAt.value ?? 0, 140, layerWidth.value, 80, layerAt.value === null ? "display: none" : ""),
       }),
       ...["d3d12", "d3d12-shared", "d3d11-fence"].map((name, i) =>
         h("sk-surface", { id: name, name, style: at(20 + i * 120, 260, 100, 80, "object-fit: fill"), ...log(name) }),

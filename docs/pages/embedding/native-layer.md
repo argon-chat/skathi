@@ -44,9 +44,10 @@ let builder = skathi::Builder::new().setup(|host| {
 });
 ```
 
-- **`attach`** is called when the element is painted in a window for the first time, when it moves to another window, and when the window rebuilt what it composes with (a lost device on Windows). A placement always follows it.
-- **`place`** is called from the paint that draws the element, so the layer moves in the frame the page does, and only when the placement changed. `None` means the element was not painted in the last frame: `display: none`, scrolled out, or culled.
-- Both run on Skathi's UI thread inside the page's paint. Return quickly and do not call into Skathi from them.
+- **`attach`** is called when the element is painted in a window for the first time, when it moves to another window, when the window's view is moved into another native window or under another superview (macOS), and when the window rebuilt what it composes with (a lost device on Windows). A placement always follows it.
+- **`place`** is called from the paint that draws the element, before that frame is presented, and only when the placement changed. `None` means the element was not painted in the last frame: `display: none`, scrolled out, or culled.
+- **`presented`** (optional, Windows) is called once Skathi has committed your changes with the frame that carried them; see below.
+- All run on Skathi's UI thread inside the page's paint or present. Return quickly and do not call into Skathi from them.
 
 `LayerPlacement` is in device pixels of the window:
 
@@ -64,13 +65,14 @@ A CSS transform on the element or an ancestor is not applied to the placement.
 
 `LayerHost` says where, per platform:
 
-| Field         | Means                                                                                          |
-| ------------- | ---------------------------------------------------------------------------------------------- |
-| `window`      | the window's Skathi ID                                                                         |
-| `handle`      | the raw window handle: the `HWND`, on macOS the `NSView` the page is drawn in                  |
-| `composition` | Windows: the window's `IDCompositionDevice` and the `IDCompositionVisual` drawn under the page |
+| Field           | Means                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `window`        | the window's Skathi ID                                                                         |
+| `handle`        | the raw window handle: the `HWND`, on macOS the `NSView` the page is drawn in                  |
+| `composition`   | Windows: the window's `IDCompositionDevice` and the `IDCompositionVisual` drawn under the page |
+| `native_window` | macOS: the `NSWindow` the page's view is in now                                                |
 
-**Windows.** Skathi's window owns the DirectComposition target, so a target of your own is refused and a child window lands over the page. Create your visual on `composition.device` (a visual belongs to the device that made it) and add it to `composition.underlay`. Both pointers are borrowed for the call: clone the interfaces to keep them, and drop the old ones on the next `attach`. Call `Commit` on the device after you change the visual.
+**Windows.** Skathi's window owns the DirectComposition target, so a target of your own is refused and a child window lands over the page. Create your visual on `composition.device` (a visual belongs to the device that made it) and add it to `composition.underlay`. Both pointers are borrowed for the call: clone the interfaces to keep them, and drop the old ones on the next `attach`.
 
 ```rust
 fn attach(&mut self, host: &LayerHost) {
@@ -89,7 +91,13 @@ fn attach(&mut self, host: &LayerHost) {
 
 `composition` is `None` when the window does not present through DirectComposition; that is the answer to whether a layer can be shown under this window at all.
 
+**Do not call `Commit` from `attach` or `place`.** The device is shared, and Skathi commits it right after it presents the frame those calls came from, so your visual's changes and the page's frame go out together, and a frame that is dropped (during a live resize) does not leave the layer ahead of the page. A hide is committed at once, since the frame without the element is already on screen. `presented` tells you when that commit was made. A `Commit` of your own still works, but it reaches the compositor before the page's frame does.
+
+What Skathi commits is the visual: its offset, clip and transform. If the layer's content must be redrawn at a new size, as a player's swap chain is after a resize, that picture reaches the screen when your renderer presents it. To keep it in the page's frame, present it before `place` returns, or scale the last picture with the visual's transform until your renderer catches up.
+
 **macOS.** `handle` is `RawWindowHandle::AppKit`, whose `ns_view` is the view the page is drawn in. Add your view to its superview, below it (`addSubview:positioned:relativeTo:` with `NSWindowBelow`), so it stays inside the window's content view and moves with it.
+
+When your program moves that view, or the content view holding it, into a window of its own, the page is redrawn there and `attach` is called again with the same `window` and `handle` and the new `native_window`, then `place`. Read the view's `superview` again then: a view of yours that moved with the content view needs nothing more; one left behind belongs under the view's new superview.
 
 **Linux.** `attach` and `place` are called, but there is no place under the page yet.
 

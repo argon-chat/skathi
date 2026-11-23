@@ -797,7 +797,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let scripted = tree::take_script_dirty();
     img::tick(window, cx);
     iframe::tick(window, cx);
-    layer::tick(windows::key(window));
+    layer::tick(window);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
     let stickers_moved = render::sticker::tick(window, cx);

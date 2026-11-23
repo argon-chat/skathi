@@ -562,9 +562,9 @@ impl Builder {
         self
     }
 
-    /// Dangerous. macOS: the most drawables a window's Metal layer may hold, 2 or 3 (the default).
-    /// 2 saves one window-sized buffer and can cost frame pacing; measure it. Elsewhere it does
-    /// nothing.
+    /// macOS: the `maximumDrawableCount` of every window's Metal layer, 2 or 3 (the default). It
+    /// caps drawables in flight, not the buffers Core Animation keeps resident, so it has not been
+    /// shown to save memory, and 2 can cost frame pacing. Elsewhere it does nothing.
     pub fn metal_drawable_count(mut self, count: u8) -> Self {
         self.drawable_count = Some(count);
         self

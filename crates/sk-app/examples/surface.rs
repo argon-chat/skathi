@@ -15,7 +15,7 @@
 //!   above 1.0. `"cpu-rgba16f"` is the CPU path.
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `layerLog()` answers and clears what the `<sk-layer name="probe">` layer was told:
-//!   `attach:<window>`, `place:x,y,w,h` in CSS px and `hide`.
+//!   `attach:<window>`, `place:x,y,w,h` in CSS px, `hide` and `presented`.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
 //! - `feedbackStart(name, fps, paced, source, ring, width, height, pauseEvery)` and `feedbackStop(name)`: frames at `fps`
 //!   (`0` runs unthrottled, `-1` presents once per measured refresh) with `on_frame` listening.
@@ -73,6 +73,10 @@ impl Layer for ProbeLayer {
             None => "hide".into(),
         };
         LAYER_LOG.lock().unwrap().push(told);
+    }
+
+    fn presented(&mut self) {
+        LAYER_LOG.lock().unwrap().push("presented".into());
     }
 }
 

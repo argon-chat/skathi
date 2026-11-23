@@ -24,6 +24,9 @@ pub struct LayerHost {
     /// Windows: where to add a visual under the page. `None` when the window does not present
     /// through DirectComposition, where nothing can be shown under it.
     pub composition: Option<Composition>,
+    /// macOS: the `NSWindow` the page's view is in now, which is not Skathi's when the embedding
+    /// program moved the view (or its content view) into a window of its own.
+    pub native_window: Option<NonNull<c_void>>,
 }
 
 /// Borrowed for the call that hands them over: `AddRef` (clone a borrowed interface) to keep them.
@@ -38,12 +41,16 @@ pub struct Composition {
 /// A native layer under one `<sk-layer>` element. Its methods run on the UI thread inside the
 /// page's paint: return quickly and do not call back into Skathi. Dropped when the element goes.
 pub trait Layer {
-    /// The element is painted in `host` for the first time, in another window, or after the
-    /// window rebuilt what it composes with: move the layer there. A placement follows.
+    /// The element is painted in `host` for the first time, in another window (or its view moved
+    /// to another native window or superview), or after the window rebuilt what it composes
+    /// with: move the layer there. A placement follows.
     fn attach(&mut self, host: &LayerHost);
     /// Show the layer at `placement`, in device pixels of the window, or hide it (`None`: the
     /// element was not painted in the last frame).
     fn place(&mut self, placement: Option<Placement>);
+    /// Windows: Skathi committed the composition device right after presenting the frame that
+    /// carried the last `attach` or `place`, so those changes are on screen with it.
+    fn presented(&mut self) {}
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,6 +58,8 @@ struct Home {
     window: WinKey,
     handle: Option<RawWindowHandle>,
     composition: Option<Composition>,
+    /// macOS: the page's view's `NSWindow` and superview.
+    container: [usize; 2],
 }
 
 struct Live {
@@ -60,6 +69,8 @@ struct Live {
     /// Keeps `home.composition` alive while the layer may use it.
     _held: Option<Held>,
     placed: Option<Placement>,
+    /// Told something since the last commit of its window's composition device.
+    awaiting: bool,
 }
 
 type Make = Rc<dyn Fn() -> Box<dyn Layer>>;
@@ -69,6 +80,7 @@ thread_local! {
     static LAYERS: RefCell<HashMap<u32, Live>> = RefCell::new(HashMap::new());
     static PAINTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static DREW: RefCell<Vec<WinKey>> = const { RefCell::new(Vec::new()) };
+    static HOOKED: RefCell<HashSet<WinKey>> = RefCell::new(HashSet::new());
 }
 
 /// Has every `<sk-layer name="…">` of that name show a layer made by `make`: one per element.
@@ -110,6 +122,46 @@ fn handle_of(window: &Window) -> Option<RawWindowHandle> {
     Some(HasWindowHandle::window_handle(window).ok()?.as_raw())
 }
 
+/// The embedding program may move the page's view into a window of its own, which Skathi's
+/// window key does not see.
+#[cfg(target_os = "macos")]
+fn container_of(handle: Option<RawWindowHandle>) -> [usize; 2] {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let Some(RawWindowHandle::AppKit(h)) = handle else {
+        return [0; 2];
+    };
+    let view = h.ns_view.as_ptr().cast::<AnyObject>();
+    // SAFETY: the view of a window that is painting, on the main thread.
+    unsafe {
+        let window: *mut AnyObject = msg_send![&*view, window];
+        let superview: *mut AnyObject = msg_send![&*view, superview];
+        [window as usize, superview as usize]
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn container_of(_: Option<RawWindowHandle>) -> [usize; 2] {
+    [0; 2]
+}
+
+fn hook(window: &Window, win: WinKey) {
+    if HOOKED.with(|h| h.borrow_mut().insert(win)) {
+        window.vn_on_composition_commit(Box::new(move || committed(win)));
+    }
+}
+
+fn committed(win: WinKey) {
+    LAYERS.with(|l| {
+        for live in l.borrow_mut().values_mut() {
+            if live.awaiting && live.home.is_some_and(|h| h.window == win) {
+                live.awaiting = false;
+                live.layer.presented();
+            }
+        }
+    });
+}
+
 pub(crate) fn drawing(win: WinKey) {
     if LAYERS.with(|l| l.borrow().is_empty()) {
         return;
@@ -125,21 +177,35 @@ pub(crate) fn drawing(win: WinKey) {
 /// The element is painted in `window` at `placement`: its layer follows at once.
 pub(crate) fn painted(id: u32, name: &str, placement: Placement, window: &mut Window) {
     let (composition, held) = composition(window).unzip();
+    let handle = handle_of(window);
     let home = Home {
         window: crate::windows::key(window),
-        handle: handle_of(window),
+        handle,
         composition,
+        container: container_of(handle),
     };
-    if !settle(id, name, home, held, placement) {
-        crate::render::warn_compat(
+    match settle(id, name, home, held, placement) {
+        None => crate::render::warn_compat(
             &format!("sk-layer:{name}"),
             &format!("<sk-layer name=\"{name}\"> shows nothing: the embedding program registered no layer of that name"),
-        );
+        ),
+        // The page's frame is not presented yet: what the layer changed goes out right after it.
+        Some(true) if home.composition.is_some() => {
+            hook(window, home.window);
+            window.vn_composition_commit(true);
+        }
+        Some(_) => {}
     }
 }
 
-/// Returns whether the element has a layer.
-fn settle(id: u32, name: &str, home: Home, held: Option<Held>, placement: Placement) -> bool {
+/// Returns whether the element has a layer, and if so whether it was told anything.
+fn settle(
+    id: u32,
+    name: &str,
+    home: Home,
+    held: Option<Held>,
+    placement: Placement,
+) -> Option<bool> {
     let make = LAYERS.with(|l| {
         let mut layers = l.borrow_mut();
         if layers.get(&id).is_some_and(|live| live.name != name) {
@@ -157,14 +223,14 @@ fn settle(id: u32, name: &str, home: Home, held: Option<Held>, placement: Placem
             home: None,
             _held: None,
             placed: None,
+            awaiting: false,
         };
         LAYERS.with(|l| l.borrow_mut().insert(id, live));
     }
-    let known = LAYERS.with(|l| {
+    let told = LAYERS.with(|l| {
         let mut layers = l.borrow_mut();
-        let Some(live) = layers.get_mut(&id) else {
-            return false;
-        };
+        let live = layers.get_mut(&id)?;
+        let mut told = false;
         if live.home != Some(home) {
             live._held = held;
             live.home = Some(home);
@@ -173,22 +239,34 @@ fn settle(id: u32, name: &str, home: Home, held: Option<Held>, placement: Placem
                 window: home.window,
                 handle: home.handle,
                 composition: home.composition,
+                native_window: NonNull::new(home.container[0] as *mut c_void),
             });
+            told = true;
         }
         if live.placed != Some(placement) {
             live.placed = Some(placement);
             live.layer.place(Some(placement));
+            told = true;
         }
-        true
+        live.awaiting |= told && home.composition.is_some();
+        Some(told)
     });
-    if known {
+    if told.is_some() {
         PAINTED.with(|p| p.borrow_mut().insert(id));
     }
-    known
+    told
 }
 
-/// Hides each layer of `win` that its last paint did not reach.
-pub(crate) fn tick(win: WinKey) {
+/// Hides each layer of `window` that its last paint did not reach. That frame is on screen
+/// already, so a hide is committed at once.
+pub(crate) fn tick(window: &Window) {
+    if hide_unpainted(crate::windows::key(window)) {
+        window.vn_composition_commit(false);
+    }
+}
+
+/// Returns whether a layer that shows through composition was hidden.
+fn hide_unpainted(win: WinKey) -> bool {
     let drew = DREW.with(|d| {
         let mut d = d.borrow_mut();
         let before = d.len();
@@ -196,22 +274,27 @@ pub(crate) fn tick(win: WinKey) {
         d.len() != before
     });
     if !drew {
-        return;
+        return false;
     }
-    let of = |live: &Live| live.home.map(|h| h.window);
+    let mut composed = false;
     LAYERS.with(|l| {
         PAINTED.with(|p| {
             let mut painted = p.borrow_mut();
             for (id, live) in l.borrow_mut().iter_mut() {
-                if of(live) != Some(win) {
+                let Some(home) = live.home.filter(|h| h.window == win) else {
                     continue;
-                }
+                };
                 if !painted.remove(id) && live.placed.take().is_some() {
                     live.layer.place(None);
+                    if home.composition.is_some() {
+                        live.awaiting = true;
+                        composed = true;
+                    }
                 }
             }
         });
     });
+    composed
 }
 
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
@@ -239,6 +322,7 @@ pub(crate) fn forget_window(win: WinKey) {
             .collect::<Vec<_>>()
     }));
     DREW.with(|d| d.borrow_mut().retain(|w| *w != win));
+    HOOKED.with(|h| h.borrow_mut().remove(&win));
 }
 
 pub fn shutdown() {
@@ -253,7 +337,11 @@ mod tests {
 
     impl Layer for Log {
         fn attach(&mut self, host: &LayerHost) {
-            self.0.borrow_mut().push(format!("attach {}", host.window));
+            let told = match host.native_window {
+                Some(native) => format!("attach {} in {:x}", host.window, native.as_ptr() as usize),
+                None => format!("attach {}", host.window),
+            };
+            self.0.borrow_mut().push(told);
         }
         fn place(&mut self, placement: Option<Placement>) {
             let at = placement.map_or("hide".to_string(), |p| format!("place {}", p.bounds[0]));
@@ -277,42 +365,83 @@ mod tests {
         }
     }
 
-    fn paint(id: u32, window: WinKey, placement: Placement) -> bool {
+    fn paint_in(
+        id: u32,
+        window: WinKey,
+        container: [usize; 2],
+        placement: Placement,
+    ) -> Option<bool> {
         let home = Home {
             window,
             handle: None,
             composition: None,
+            container,
         };
         settle(id, "player", home, None, placement)
+    }
+
+    fn paint(id: u32, window: WinKey, placement: Placement) -> Option<bool> {
+        paint_in(id, window, [0; 2], placement)
+    }
+
+    #[test]
+    fn a_layer_is_attached_again_when_its_view_moves_to_another_native_window_or_superview() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let take = |log: &Rc<RefCell<Vec<String>>>| std::mem::take(&mut *log.borrow_mut());
+        let made = log.clone();
+        register("player", move || Box::new(Log(made.clone())));
+        let (skathi, panel, content) = (0xa0, 0xb0, 0xc0);
+
+        paint_in(3, 1, [skathi, content], at(0.0));
+        assert_eq!(take(&log), ["attach 1 in a0", "place 0"]);
+        assert_eq!(paint_in(3, 1, [skathi, content], at(0.0)), Some(false));
+        assert!(take(&log).is_empty());
+
+        paint_in(3, 1, [panel, content], at(0.0));
+        assert_eq!(
+            take(&log),
+            ["attach 1 in b0", "place 0"],
+            "the embedding program moved the content view into its panel"
+        );
+
+        paint_in(3, 1, [panel, 0xd0], at(0.0));
+        assert_eq!(
+            take(&log),
+            ["attach 1 in b0", "place 0"],
+            "another superview"
+        );
+
+        paint_in(3, 1, [skathi, content], at(4.0));
+        assert_eq!(take(&log), ["attach 1 in a0", "place 4"], "and back");
     }
 
     #[test]
     fn a_layer_is_placed_once_per_change_hidden_when_not_painted_and_dropped_with_its_window() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let take = |log: &Rc<RefCell<Vec<String>>>| std::mem::take(&mut *log.borrow_mut());
-        assert!(!paint(7, 1, at(0.0)), "no layer of that name yet");
+        assert!(paint(7, 1, at(0.0)).is_none(), "no layer of that name yet");
         let made = log.clone();
         register("player", move || Box::new(Log(made.clone())));
         paint(7, 1, at(0.0));
         drawing(1);
         paint(7, 1, at(0.0));
-        tick(1);
+        hide_unpainted(1);
         assert_eq!(take(&log), ["attach 1", "place 0"]);
 
         drawing(1);
         paint(7, 1, at(5.0));
-        tick(1);
+        hide_unpainted(1);
         assert_eq!(take(&log), ["place 5"]);
 
         drawing(1);
-        tick(1);
+        hide_unpainted(1);
         assert_eq!(take(&log), ["hide"], "not painted in a draw of its window");
-        tick(1);
+        hide_unpainted(1);
         assert!(take(&log).is_empty(), "no draw, no news");
 
         drawing(2);
         paint(7, 2, at(5.0));
-        tick(2);
+        hide_unpainted(2);
         assert_eq!(
             take(&log),
             ["attach 2", "place 5"],

@@ -147,17 +147,21 @@ let builder = skathi::Builder::new().backdrop("transparent");
 
 The names are those of [`backdrop`](/window-api/config-window-backdrop/) in sk.config.json; another name makes `spawn()` return `Error::Backdrop`. Pop-out windows keep the backdrop their `<SkWindow>` asks for.
 
-## Fewer drawables on macOS (dangerous)
+## The drawable maximum on macOS
 
-A window's Metal layer may hold three drawables, each the size of the window. A program that shows its picture in a layer of its own, and keeps the page mostly still, can ask for two:
+This sets the `maximumDrawableCount` of every window's Metal layer, 3 by default:
 
 ```rust
 let builder = skathi::Builder::new().metal_drawable_count(2);
 ```
 
-- It saves one window-sized buffer: about 33 MB for a 3840 × 2160 window in 8-bit.
-- It can cost frame pacing. With two drawables a frame that misses its refresh leaves the next one waiting for a buffer, and animations stutter. Measure your own app before you ship it.
-- Core Animation can still hand out more buffers over a window's lifetime than this maximum; see [GPU frames, Windows and macOS](/embedding/native-frames/#gpu-frames-windows-and-macos).
-- 2 and 3 are the only values; another makes `spawn()` return `Error::DrawableCount`. It applies to every window and does nothing on Windows and Linux.
+**It has not been shown to save memory.** The maximum caps how many drawables the layer hands out at once, not how many window-sized buffers Core Animation keeps resident, and every measurement so far found the same number at 2 as at 3:
+
+- An embedder's player window on an M3 Max (screen-sized, 3456 × 1994, 2160p PQ video in an [`<sk-layer>`](/embedding/native-layer/)): the layer read back a maximum of 2, and `footprint -v` still listed five `CAMetalLayer Display Drawable` regions, 133 MiB, as at 3, while playing, paused, and at 1080p. Frame pacing was no worse at 2.
+- A plain window on an Apple Silicon Mac mini (macOS 26.4, 1600 × 1000 at scale 1): three resident drawables drawn with `nextDrawable` and four with `CAMetalDisplayLink`, at 2 and at 3, idle and repainting every frame. After a resize, buffers of the old size stayed resident beside the new ones until the total was back at that number. These ran with the screen locked, where the display link delivered only a few frames a second.
+
+A window that switches between `CAMetalDisplayLink` and `nextDrawable` (a resize, activation, a surface frame after a pause) keeps one buffer more; see [GPU frames, Windows and macOS](/embedding/native-frames/#gpu-frames-windows-and-macos).
+
+The setting is kept as a cap. With two drawables a frame that misses its refresh leaves the next one waiting for a buffer, so measure your own app before you use it. 2 and 3 are the only values; another makes `spawn()` return `Error::DrawableCount`. It applies to every window and does nothing on Windows and Linux.
 
 Next: [Dev loop and devtools](/embedding/dev-loop/).
