@@ -138,11 +138,14 @@ skathi-macros = { path = "../skathi-macros", version = "0.7.0", features = ["typ
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
-# examples/surface.rs renders D3D11 and D3D12 frames for `<sk-surface>`.
+# examples/surface.rs renders D3D11 and D3D12 frames for `<sk-surface>`, and a DirectComposition
+# layer for `<sk-layer>`.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",

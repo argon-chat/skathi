@@ -16,6 +16,8 @@
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `layerLog()` answers and clears what the `<sk-layer name="probe">` layer was told:
 //!   `attach:<window>`, `place:x,y,w,h` in CSS px, `hide` and `presented`.
+//! - `<sk-layer name="plasma">` (Windows) shows a layer that draws: a DirectComposition visual
+//!   with a swap chain of its own, rendered with D3D11 at the display's rate.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
 //! - `feedbackStart(name, fps, paced, source, ring, width, height, pauseEvery)` and `feedbackStop(name)`: frames at `fps`
 //!   (`0` runs unthrottled, `-1` presents once per measured refresh) with `on_frame` listening.
@@ -136,6 +138,8 @@ fn main() {
         .activate(false)
         .setup(|host| {
             host.layer("probe", || Box::new(ProbeLayer));
+            #[cfg(windows)]
+            host.layer("plasma", || Box::new(plasma::Plasma::new()));
             Ok(())
         })
         .function("layerLog", |call| {
@@ -311,6 +315,443 @@ fn main() {
         let exit = ui.wait();
         std::thread::sleep(Duration::from_millis(10));
         std::process::exit(if exit.clean { 0 } else { 1 });
+    }
+}
+
+#[cfg(windows)]
+mod plasma {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use std::time::Instant;
+
+    use sk_app::embed::{Layer, LayerHost, LayerPlacement};
+    use windows::core::{s, Interface, Result, PCSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    use windows::Win32::Graphics::Direct3D::{
+        ID3DBlob, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_DRIVER_TYPE_HARDWARE,
+    };
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11CreateDevice, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
+        ID3D11RenderTargetView, ID3D11Texture2D, ID3D11VertexShader, D3D11_BIND_CONSTANT_BUFFER,
+        D3D11_BUFFER_DESC, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+        D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
+    };
+    use windows::Win32::Graphics::DirectComposition::{
+        IDCompositionDevice, IDCompositionEffectGroup, IDCompositionRectangleClip,
+        IDCompositionScaleTransform, IDCompositionVisual,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    };
+    use windows::Win32::Graphics::Dxgi::{
+        IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, IDXGISwapChain2, DXGI_PRESENT,
+        DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    };
+    use windows::Win32::System::Threading::WaitForSingleObject;
+
+    /// The swap chain keeps this size and the visual scales it to the element, so a move or a
+    /// resize reaches the screen with the page's frame instead of waiting for a redraw.
+    const SIZE: [u32; 2] = [1280, 800];
+    /// Seconds before the picture repeats.
+    const PERIOD: f32 = 4.0;
+
+    const SHADER: &str = r#"
+cbuffer Frame : register(b0) { float phase; float aspect; float2 size; };
+
+float4 vs(uint id : SV_VertexID) : SV_Position {
+    float2 uv = float2((id << 1) & 2, id & 2);
+    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+
+float4 ps(float4 at : SV_Position) : SV_Target {
+    float2 uv = at.xy / size;
+    float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5) * 3.2;
+    float t = phase * 6.2831853;
+    float v = sin(p.x * 1.7 + t) + sin(p.y * 2.3 - t)
+            + sin((p.x + p.y) * 1.3 + 2.0 * t)
+            + sin(length(p + 1.2 * float2(sin(t), cos(t))) * 3.0 - t);
+    float k = saturate(v * 0.125 + 0.5);
+    float3 deep = float3(0.13, 0.08, 0.24), lilac = float3(0.62, 0.45, 0.93);
+    float3 pink = float3(0.96, 0.52, 0.76), blue = float3(0.50, 0.76, 0.98);
+    float3 c = lerp(deep, lilac, smoothstep(0.15, 0.45, k));
+    c = lerp(c, pink, smoothstep(0.45, 0.7, k));
+    c = lerp(c, blue, smoothstep(0.72, 0.95, k));
+    for (int i = 0; i < 5; i++) {
+        float y = 0.22 * sin(p.x * 0.9 + t + i * 1.3) + 0.12 * sin(p.x * 2.1 - 2.0 * t + i);
+        float d = abs(p.y - (i - 2) * 0.32 - y);
+        c += (0.9 - i * 0.12) * smoothstep(0.035, 0.0, d) * float3(1.0, 0.92, 0.98);
+        c += 0.18 * smoothstep(0.25, 0.0, d) * pink;
+    }
+    return float4(c, 1);
+}
+"#;
+
+    #[derive(Default)]
+    struct Shared {
+        stop: AtomicBool,
+        shown: AtomicBool,
+        aspect: AtomicU32,
+    }
+
+    pub struct Plasma {
+        swap_chain: Option<IDXGISwapChain1>,
+        visuals: Option<Visuals>,
+        shared: Arc<Shared>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Plasma {
+        pub fn new() -> Self {
+            let shared = Arc::<Shared>::default();
+            match Renderer::new() {
+                Ok(renderer) => {
+                    let swap_chain = renderer.swap_chain.clone();
+                    let state = shared.clone();
+                    let thread = std::thread::spawn(move || {
+                        if let Err(e) = renderer.run(&state) {
+                            eprintln!("plasma: {e}");
+                        }
+                    });
+                    Self {
+                        swap_chain: Some(swap_chain),
+                        visuals: None,
+                        shared,
+                        thread: Some(thread),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("plasma: no device: {e}");
+                    Self {
+                        swap_chain: None,
+                        visuals: None,
+                        shared,
+                        thread: None,
+                    }
+                }
+            }
+        }
+    }
+
+    impl Layer for Plasma {
+        fn attach(&mut self, host: &LayerHost) {
+            if let Some(old) = self.visuals.take() {
+                old.remove();
+            }
+            let (Some(composition), Some(swap_chain)) = (host.composition, &self.swap_chain) else {
+                return;
+            };
+            // SAFETY: Skathi hands over live interfaces for this call; cloning keeps them.
+            let (device, underlay) = unsafe {
+                (
+                    IDCompositionDevice::from_raw_borrowed(&composition.device.as_ptr())
+                        .unwrap()
+                        .clone(),
+                    IDCompositionVisual::from_raw_borrowed(&composition.underlay.as_ptr())
+                        .unwrap()
+                        .clone(),
+                )
+            };
+            match Visuals::new(device, underlay, swap_chain) {
+                Ok(visuals) => self.visuals = Some(visuals),
+                Err(e) => eprintln!("plasma: {e}"),
+            }
+        }
+
+        fn place(&mut self, placement: Option<LayerPlacement>) {
+            self.shared
+                .shown
+                .store(placement.is_some(), Ordering::Relaxed);
+            if let Some(p) = placement {
+                let aspect = p.bounds[2] / p.bounds[3].max(1.0);
+                self.shared
+                    .aspect
+                    .store(aspect.to_bits(), Ordering::Relaxed);
+            }
+            if let Some(visuals) = self.visuals.as_mut() {
+                if let Err(e) = visuals.place(placement) {
+                    eprintln!("plasma: {e}");
+                }
+            }
+        }
+    }
+
+    impl Drop for Plasma {
+        fn drop(&mut self) {
+            self.shared.stop.store(true, Ordering::Relaxed);
+            if let Some(visuals) = self.visuals.take() {
+                visuals.remove();
+                // Not from `attach` or `place`: nothing of Skathi's commits a layer that is gone.
+                let _ = unsafe { visuals.device.Commit() };
+            }
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// On the window's device: `root` takes the clip of the element's ancestors, `frame` sits at
+    /// the element's box with its rounded corners and opacity, and `content` scales the swap chain
+    /// to that box.
+    struct Visuals {
+        device: IDCompositionDevice,
+        underlay: IDCompositionVisual,
+        root: IDCompositionVisual,
+        clip: IDCompositionRectangleClip,
+        frame: IDCompositionVisual,
+        rounded: IDCompositionRectangleClip,
+        fade: IDCompositionEffectGroup,
+        scale: IDCompositionScaleTransform,
+        added: bool,
+    }
+
+    impl Visuals {
+        fn new(
+            device: IDCompositionDevice,
+            underlay: IDCompositionVisual,
+            swap_chain: &IDXGISwapChain1,
+        ) -> Result<Self> {
+            unsafe {
+                let root = device.CreateVisual()?;
+                let clip = device.CreateRectangleClip()?;
+                root.SetClip(&clip)?;
+                let frame = device.CreateVisual()?;
+                let rounded = device.CreateRectangleClip()?;
+                frame.SetClip(&rounded)?;
+                let fade = device.CreateEffectGroup()?;
+                frame.SetEffect(&fade)?;
+                let content = device.CreateVisual()?;
+                let scale = device.CreateScaleTransform()?;
+                content.SetTransform(&scale)?;
+                content.SetContent(swap_chain)?;
+                frame.AddVisual(&content, true, None::<&IDCompositionVisual>)?;
+                root.AddVisual(&frame, true, None::<&IDCompositionVisual>)?;
+                Ok(Self {
+                    device,
+                    underlay,
+                    root,
+                    clip,
+                    frame,
+                    rounded,
+                    fade,
+                    scale,
+                    added: false,
+                })
+            }
+        }
+
+        fn place(&mut self, placement: Option<LayerPlacement>) -> Result<()> {
+            let Some(p) = placement else {
+                if self.added {
+                    unsafe { self.underlay.RemoveVisual(&self.root)? };
+                    self.added = false;
+                }
+                return Ok(());
+            };
+            let [x, y, w, h] = p.bounds;
+            let [cx, cy, cw, ch] = p.clip;
+            let [tl, tr, br, bl] = p.radii;
+            unsafe {
+                self.clip.SetLeft2(cx)?;
+                self.clip.SetTop2(cy)?;
+                self.clip.SetRight2(cx + cw)?;
+                self.clip.SetBottom2(cy + ch)?;
+                self.frame.SetOffsetX2(x)?;
+                self.frame.SetOffsetY2(y)?;
+                self.rounded.SetLeft2(0.0)?;
+                self.rounded.SetTop2(0.0)?;
+                self.rounded.SetRight2(w)?;
+                self.rounded.SetBottom2(h)?;
+                self.rounded.SetTopLeftRadiusX2(tl)?;
+                self.rounded.SetTopLeftRadiusY2(tl)?;
+                self.rounded.SetTopRightRadiusX2(tr)?;
+                self.rounded.SetTopRightRadiusY2(tr)?;
+                self.rounded.SetBottomRightRadiusX2(br)?;
+                self.rounded.SetBottomRightRadiusY2(br)?;
+                self.rounded.SetBottomLeftRadiusX2(bl)?;
+                self.rounded.SetBottomLeftRadiusY2(bl)?;
+                self.fade.SetOpacity2(p.opacity)?;
+                self.scale.SetScaleX2(w / SIZE[0] as f32)?;
+                self.scale.SetScaleY2(h / SIZE[1] as f32)?;
+                if !self.added {
+                    self.underlay
+                        .AddVisual(&self.root, true, None::<&IDCompositionVisual>)?;
+                    self.added = true;
+                }
+            }
+            Ok(())
+        }
+
+        fn remove(&self) {
+            if self.added {
+                let _ = unsafe { self.underlay.RemoveVisual(&self.root) };
+            }
+        }
+    }
+
+    /// A device of our own and a swap chain for composition, drawn on a thread of ours.
+    struct Renderer {
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        swap_chain: IDXGISwapChain1,
+    }
+
+    impl Renderer {
+        fn new() -> Result<Self> {
+            unsafe {
+                let mut device = None;
+                let mut context = None;
+                D3D11CreateDevice(
+                    None::<&IDXGIAdapter>,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut context),
+                )?;
+                let device: ID3D11Device = device.unwrap();
+                let factory: IDXGIFactory2 =
+                    device.cast::<IDXGIDevice>()?.GetAdapter()?.GetParent()?;
+                let desc = DXGI_SWAP_CHAIN_DESC1 {
+                    Width: SIZE[0],
+                    Height: SIZE[1],
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    BufferCount: 2,
+                    Scaling: DXGI_SCALING_STRETCH,
+                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                    Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
+                    ..Default::default()
+                };
+                let swap_chain = factory.CreateSwapChainForComposition(&device, &desc, None)?;
+                Ok(Self {
+                    device,
+                    context: context.unwrap(),
+                    swap_chain,
+                })
+            }
+        }
+
+        fn run(self, shared: &Shared) -> Result<()> {
+            unsafe {
+                let vs_code = compile(s!("vs"), s!("vs_5_0"))?;
+                let ps_code = compile(s!("ps"), s!("ps_5_0"))?;
+                let mut vs: Option<ID3D11VertexShader> = None;
+                self.device
+                    .CreateVertexShader(bytes(&vs_code), None, Some(&mut vs))?;
+                let mut ps: Option<ID3D11PixelShader> = None;
+                self.device
+                    .CreatePixelShader(bytes(&ps_code), None, Some(&mut ps))?;
+                let mut constants: Option<ID3D11Buffer> = None;
+                let desc = D3D11_BUFFER_DESC {
+                    ByteWidth: 16,
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                    ..Default::default()
+                };
+                self.device
+                    .CreateBuffer(&desc, None, Some(&mut constants))?;
+                let back: ID3D11Texture2D = self.swap_chain.GetBuffer(0)?;
+                let mut view: Option<ID3D11RenderTargetView> = None;
+                self.device
+                    .CreateRenderTargetView(&back, None, Some(&mut view))?;
+
+                let chain: IDXGISwapChain2 = self.swap_chain.cast()?;
+                chain.SetMaximumFrameLatency(1)?;
+                let waitable = Waitable(chain.GetFrameLatencyWaitableObject());
+
+                let ctx = &self.context;
+                ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                ctx.VSSetShader(vs.as_ref(), None);
+                ctx.PSSetShader(ps.as_ref(), None);
+                ctx.PSSetConstantBuffers(0, Some(&[constants.clone()]));
+                ctx.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                    Width: SIZE[0] as f32,
+                    Height: SIZE[1] as f32,
+                    MaxDepth: 1.0,
+                    ..Default::default()
+                }]));
+                let start = Instant::now();
+                while !shared.stop.load(Ordering::Relaxed) {
+                    WaitForSingleObject(waitable.0, 100);
+                    if !shared.shown.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        continue;
+                    }
+                    let aspect = match f32::from_bits(shared.aspect.load(Ordering::Relaxed)) {
+                        a if a > 0.0 => a,
+                        _ => SIZE[0] as f32 / SIZE[1] as f32,
+                    };
+                    let phase = (start.elapsed().as_secs_f32() / PERIOD).fract();
+                    let frame = [phase, aspect, SIZE[0] as f32, SIZE[1] as f32];
+                    ctx.UpdateSubresource(
+                        constants.as_ref().unwrap(),
+                        0,
+                        None,
+                        frame.as_ptr().cast(),
+                        0,
+                        0,
+                    );
+                    // Flip-model presents unbind the target.
+                    ctx.OMSetRenderTargets(Some(&[view.clone()]), None);
+                    ctx.Draw(3, 0);
+                    self.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct Waitable(HANDLE);
+
+    impl Drop for Waitable {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    fn compile(entry: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
+        let mut code = None;
+        let mut errors = None;
+        let compiled = unsafe {
+            D3DCompile(
+                SHADER.as_ptr().cast(),
+                SHADER.len(),
+                s!("plasma.hlsl"),
+                None,
+                None,
+                entry,
+                target,
+                0,
+                0,
+                &mut code,
+                Some(&mut errors),
+            )
+        };
+        if let (Err(e), Some(errors)) = (&compiled, &errors) {
+            eprintln!(
+                "plasma: {}",
+                String::from_utf8_lossy(unsafe { bytes(errors) })
+            );
+            return Err(e.clone());
+        }
+        compiled?;
+        Ok(code.unwrap())
+    }
+
+    unsafe fn bytes(blob: &ID3DBlob) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(blob.GetBufferPointer().cast(), blob.GetBufferSize()) }
     }
 }
 
