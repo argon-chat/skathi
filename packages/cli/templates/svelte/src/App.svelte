@@ -33,6 +33,10 @@
 </main>
 
 <style>
+  :global(html) {
+    line-metrics: snapped;
+    font-dilation: luminance;
+  }
   .page {
     height: 100%;
     display: flex;

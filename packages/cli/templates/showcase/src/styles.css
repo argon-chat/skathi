@@ -1,5 +1,7 @@
 :root {
   color-scheme: dark;
+  line-metrics: snapped;
+  font-dilation: luminance;
   --text: #ececf1;
   --text-muted: #a1a1aa;
   --text-faint: #71717a;
