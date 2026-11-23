@@ -1,0 +1,95 @@
+---
+title: Text rendering
+label: Text rendering
+description: The CSS that makes text in a Skathi app look like text in a native one, with a preset for the root of your app, what each line of it changes on each platform, and when to leave a line out.
+section: Guides
+order: 6.2
+---
+
+Skathi lays text out by CSS's rules by default, so a page ported from the web keeps its line heights. A native app's labels are built a little differently: lines are whole pixels tall, the baseline sits on a pixel, and light text on a dark ground is as heavy as dark text on a light one. Four inherited properties switch those rules on. This guide gives a preset and says what each line of it does.
+
+## The preset
+
+Put this on the root of a new app:
+
+```css
+html {
+  line-metrics: snapped;
+  font-dilation: luminance;
+}
+```
+
+Both properties are Skathi's own; a browser ignores them, so a stylesheet you share with a web build is not affected there.
+
+Two more are worth setting where they fit, not on the root:
+
+```css
+/* A control that should place its label as a macOS control does. */
+.button {
+  line-leading: above;
+}
+
+/* Text on an opaque panel, in a window with a Mica or transparent backdrop. */
+.panel {
+  background: #fff;
+  font-smoothing: subpixel-antialiased;
+}
+```
+
+## `line-metrics: snapped`
+
+Under the default, `auto`, the baseline of a line is placed from the font's unrounded ascent and descent, so it lands at a fraction of a pixel that changes with the font and the size. The renderer then draws the glyphs on the nearest whole pixel, and a label can sit a pixel higher or lower in its box than the same label one size up.
+
+With `snapped` the font's box is its ascent and its descent, each rounded to a whole pixel, and the baseline is the rounded ascent below the top of the box. `line-height: normal` is that box, without the font's line gap. A descender is never cut: where rounding the descent down would clip it, the descent is rounded up.
+
+What changes:
+
+- **Line heights and positions.** At a display scale of 1 or 2 the baseline is on a whole device pixel for every font and size. At 1.25 and 1.5 a whole CSS pixel is not a whole device pixel, so it lands on a quarter or a half.
+- **Not the glyphs.** The same glyphs are drawn, as sharp as before. `snapped` moves lines, it does not change how text is rasterized.
+
+`line-height: normal` at four sizes, `auto` → `snapped`:
+
+| Font          | 12px    | 13px    | 14px    | 16px    |
+| ------------- | ------- | ------- | ------- | ------- |
+| Segoe UI      | 16 → 17 | 17 → 18 | 19 → 19 | 21 → 22 |
+| Arial         | 14 → 14 | 15 → 15 | 16 → 16 | 18 → 18 |
+| Inter         | 15 → 15 | 16 → 17 | 17 → 18 | 20 → 20 |
+| Manrope       | 17 → 17 | 18 → 18 | 19 → 20 | 22 → 22 |
+| Cascadia Code | 14 → 14 | 15 → 16 | 16 → 17 | 19 → 19 |
+| Consolas      | 14 → 13 | 15 → 14 | 17 → 14 | 19 → 17 |
+
+Most fonts move by a pixel at some sizes. Consolas gets shorter, because `snapped` reads the font's own ascender and descender where Windows reports taller ones for it.
+
+**Leave it out** when the app is a port whose layout depends on line heights matching the browser's, or set `line-height` to a length where a height must not move. A declared `line-height` keeps its meaning under `snapped`; only where the baseline sits inside it changes.
+
+## `font-dilation: luminance`
+
+Windows and Linux give light text on a dark ground less weight than dark text on a light one, so a dark theme reads thinner than its light twin. `luminance` gives text more weight the lighter it is, in five steps, as macOS does. Light text at 14px gains 6 to 15% ink; dark text is unchanged. It costs no glyph cache space.
+
+On macOS it changes nothing, because the system already does this.
+
+**Leave it out** when a design was tuned against the thinner light text, for example with a heavier `font-weight` in the dark theme.
+
+## `line-leading: above`
+
+When `line-height` is taller than the font's box, CSS puts half of the difference above the box and half below. `above` puts all of it above, so the text hangs at the bottom of its line: 13px text with `line-height: 24px` has its baseline at 21 instead of 17.
+
+macOS builds a scaled line this way, and with `line-metrics: snapped` a centred label lands where AppKit and SwiftUI put it: a 13px label is 16px tall with its baseline at 13, and a 24px button that centres it puts the baseline at 17.
+
+It is not in the preset because body text with a generous `line-height` looks low in its lines under it. Set it on controls that imitate macOS ones.
+
+## `font-smoothing`
+
+A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque window, so text in a default window is grayscale even with ClearType on in the system. `subpixel-antialiased` draws ClearType anyway. It is right only where the text sits on an opaque background of its own; over a see-through part of the window the glyph edges keep colour fringes.
+
+`antialiased` forces grayscale. On macOS it also turns off the system's thickening of light text, as it does in Safari, so text gets thinner. Tailwind's `antialiased` class sets it: remove the class from the root if a macOS build should look like a native app.
+
+## Text that moves
+
+Text under a moving `translate()` is placed on whole pixels in each frame, so it steps against the edges of its box. Give the moving element `will-change: transform` and its text moves with the box, then is drawn sharp where it stops. Text that was scaled or rotated is redrawn at its final size once the transform has been still for 200 ms; nothing needs to be set for that.
+
+## Reference
+
+- [`line-metrics`](/css/line-metrics/) and [`line-leading`](/css/line-leading/)
+- [`font-dilation`](/css/font-dilation/) and [`font-smoothing`](/css/font-smoothing/)
+- [`line-height`](/css/line-height/) and [`text-box-trim`](/css/text-box-trim/)
