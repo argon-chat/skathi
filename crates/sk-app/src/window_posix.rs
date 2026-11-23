@@ -51,7 +51,6 @@ pub(super) fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) -> Option<O
         Op::ToggleMaximize => window.vn_set_maximized(!window.vn_is_zoomed()),
         Op::Center => center(window),
         Op::AlwaysOnTop(on) => set_always_on_top(window, on),
-        Op::StartDragging => window.start_window_move(),
         Op::Hide => {
             if !window.vn_hide() {
                 window.minimize_window();

@@ -3386,6 +3386,7 @@ paint();`,
     returns: "`undefined`.",
     notes: [
       "It hands the press to the platform's window move, which ends when the user releases the button.",
+      "On Windows the move starts after the handler returns, and the page keeps running while the window moves: timers, `requestAnimationFrame`, animations and `<sk-surface>` content. It needs the left button still held then; after a release it does nothing.",
       "An `app-region: drag` area does the same without code, and also maximizes on double-click.",
       "Like Tauri's `startDragging()`.",
     ],

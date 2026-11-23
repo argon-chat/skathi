@@ -531,8 +531,7 @@ host_fn!(fn sk_window_advise(g, args) {
 
 #[cfg(target_os = "windows")]
 mod win {
-    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     pub fn hwnd() -> Option<HWND> {
@@ -641,20 +640,6 @@ mod win {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             )
         };
-    }
-
-    pub fn start_dragging() {
-        if let Some(h) = hwnd() {
-            unsafe {
-                let _ = ReleaseCapture();
-                let _ = SendMessageW(
-                    h,
-                    WM_NCLBUTTONDOWN,
-                    Some(WPARAM(HTCAPTION as usize)),
-                    Some(LPARAM(0)),
-                );
-            }
-        }
     }
 
     /// Its virtual desktop is not current; treated as minimised ([`super::cloaked`]).
@@ -769,7 +754,6 @@ mod win {
     pub fn set_always_on_top(_on: bool) {}
     pub fn set_always_on_top_for(_raw: isize, _on: bool) {}
     pub fn set_dark_mode_for(_raw: isize, _dark: bool) {}
-    pub fn start_dragging() {}
     pub fn is_cloaked() -> bool {
         false
     }
@@ -2153,7 +2137,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             // The env is re-read next frame; nothing else may be painting.
             window.refresh();
         }
-        Op::StartDragging => win::start_dragging(),
+        Op::StartDragging => window.start_window_move(),
         Op::Hide => {
             if !win::hide() {
                 window.minimize_window();

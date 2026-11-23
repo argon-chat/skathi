@@ -38,3 +38,7 @@ html {
 ### White space at the edges of a flex item
 
 A space at the start or end of a flex or grid item's text is removed, as in the browsers. A label written on its own line after an icon (`<svg/>\n  Open a link\n`) no longer makes the button a space wider. The same holds for the text of a `display: block` or `inline-block` element and of an absolutely positioned one; text inside an inline `<span>` beside other text keeps its spaces.
+
+## Fixes
+
+- Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, `requestAnimationFrame`, animations, video, `<sk-surface>`) instead of freezing until the button is released. The move starts after the `mousedown` handler returns, and only while the left button is still held. ([#110](https://github.com/argon-chat/skathi/issues/110))

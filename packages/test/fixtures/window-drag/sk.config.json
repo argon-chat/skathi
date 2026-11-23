@@ -1,0 +1,12 @@
+{
+  "$comment": "A bar that calls appWindow.startDragging() on mousedown, and timers and frames stamped with Date.now().",
+
+  "name": "sk-test-window-drag",
+
+  "window": {
+    "title": "Skathi — window drag (fixture)",
+    "width": 360,
+    "height": 220,
+    "titleBarStyle": "default"
+  }
+}
