@@ -25,7 +25,7 @@ Skathi 0.8 is about text. There is a native rich text element, `<sk-editor>`, fo
 
 <FeatureGrid label="What is new in 0.8">
   <Feature icon="braces" title="Rich text" href="#a-rich-text-element" tone="pink">
-    `<sk-editor>`: marks, atoms, line blocks and decorations, styled in CSS.
+    `<sk-editor>`: marks, atoms, line blocks and decorations, styled in CSS, and long files with a gutter.
   </Feature>
   <Feature icon="code" title="Diff and patches" href="#a-full-text-diff" tone="blue">
     `TextDiff` with options, a three-way merge, and `Patch`.
@@ -103,7 +103,32 @@ function onBeforeInput(e: InputEvent) {
 - **Geometry.** `rectsFor()`, `caretRect()` and `positionAt()` place a popup at a mention or under the caret.
 - **Clipboard.** Copy and paste keep marks and atoms between editors of Skathi apps; other apps get the plain text.
 
-The element is built for documents of a few thousand characters. Large files, line numbers and several cursors are [in the works](https://github.com/argon-chat/skathi/issues/66).
+### Code and long documents
+
+The same element holds a source file or a diff. See [code and long documents](/elements/sk-editor/#code-and-long-documents).
+
+```css
+.code {
+  white-space: pre;
+  font-family: var(--mono);
+  tab-size: 4;
+}
+.code::line-number {
+  color: var(--faint);
+}
+.code::decoration(match) {
+  background: var(--search-hit);
+  border-radius: 3px;
+}
+```
+
+- **It lays out what is on screen.** Lines out of view keep an estimated height until they scroll in, and the line at the top stays put while estimates above it are corrected. A 100,000-line document took 2.9 s for its first frame and over a second per scroll step; it now takes 64 ms and 2 ms, and a 6,000-line one 6 ms and 2 ms (debug builds). Geometry reads about lines off screen lay those lines out first.
+- **`white-space` decides wrapping.** `pre` and `nowrap` keep each line on one row and scroll sideways; the default is `pre-wrap`, as on a `<textarea>`.
+- **A gutter.** [`::line-number`](/css/pseudo-line-number/) numbers the lines, [`::gutter`](/css/pseudo-gutter/) styles the column, and the `gutter` text of a line decoration (a diff's `+` and `−`, a breakpoint) is drawn in it, styled by `::gutter(name)`. The gutter does not scroll sideways.
+- **Rounded highlights.** `border-radius` on `::decoration()` and `::mark()` rounds a search hit or an inline code span, and a highlight that wraps is rounded only at its two ends.
+- **Scrolling from script.** `scrollTop`, `scrollLeft`, `scrollHeight` and `scrollWidth` work on the editor as on any scroll container.
+
+Several cursors are [in the works](https://github.com/argon-chat/skathi/issues/66).
 
 ## A full text diff
 
@@ -134,7 +159,7 @@ const oneLine = patch.select([{ file: 0, lines: [[0, 4]] }]);
 await gitApplyCached(oneLine.toString());
 ```
 
-`parse`, `from`, `apply` (with `fuzz`, and the hunks it rejected), `reverse`, and `select`, which cuts a patch down to chosen hunks or single lines: what a "stage this line" button needs.
+`parse`, `from`, `apply` (with `fuzz`, and the hunks it rejected), `reverse`, and `select`, which cuts a patch down to chosen hunks or single lines: what a "stage this line" button needs. `select(picks, { reverse: true })` takes the same picks back out of the new side, for "unstage" and "discard".
 
 ## Text fields
 
@@ -152,7 +177,9 @@ A `<textarea>` or a text `<input>` now tells script where its caret is. See [tex
 
 - [`vertical-align`](/css/vertical-align/) takes `baseline`, `sub`, `super`, `text-top`, `text-bottom`, `middle`, `top`, `bottom`, a length and a percentage. It applies to an element in a line of mixed inline content (a `<span>`, an `<img>`, an inline-block, a `<sk-sticker>`) and to an atom of an `<sk-editor>`.
 - `<sub>` and `<sup>` have their usual default style.
+- [`box-shadow`](/css/box-shadow/) animates in transitions, `@keyframes` and `element.animate()`, shadow by shadow, the shorter list padded with transparent shadows. `getComputedStyle()` reports `box-shadow`, and an animating `text-shadow` at its current value.
 - Text aligns by its real first baseline in a row with `align-items: baseline`, so texts of two sizes share a baseline as they do in a browser.
+- [`tab-size`](/css/tab-size/) sets the distance between tab stops, as a number of spaces or a length, in text kept by `white-space: pre`, in a `<textarea>` and in an `<sk-editor>`. A tab used to be as wide as the font made it; it now stops every 8 spaces by default, as in a browser.
 
 ## Programs from JS
 
@@ -204,6 +231,7 @@ Smaller additions:
 ## For embedders
 
 - **`<sk-layer>`.** A native layer of your own under an element of the page, for a program that must present by itself, such as a video player. See [a native layer under the page](/embedding/native-layer/).
+- **The page's view in a window of yours.** On macOS the page's window state follows its view into a window of yours, while the backdrop stays with Skathi's window and a closing page takes its view back without touching yours ([a window Skathi did not create](/embedding/native-layer/#a-window-skathi-did-not-create)).
 - **The window's display.** `on_display_change` reports the display a window is on, its HDR headroom and white levels. See [native frames](/embedding/native-frames/).
 - **`Builder::backdrop`** fixes the main window's backdrop, and `Builder::metal_frame_source` keeps macOS windows on one source of drawables.
 - **`skathi::NativeBuffer`** in a [native module](/embedding/native-modules/): a parameter of that type borrows the page's memory for the call, a `&mut [u8]` writes into it, and a task takes it over until it finishes. `Handle::emit_into()` moves an event's data to the page where `emit_to()` copies it.
@@ -226,12 +254,13 @@ An uncaught error from an app's entry module used to leave a blank window and a 
 - **Surfaces.** A half-float `<sk-surface>` without a frame keeps the window at 8 bits.
 - **`sk check`.** SK4007 is no longer reported for an app that requires a runtime of 0.6 or later.
 - **Vite builds** drop template comments, as `sk build` did.
+- **`TextDecoder`** honours `decode(bytes, { stream: true })` in every encoding, so a character split between chunks no longer turns into U+FFFD, and `TextEncoder` and `TextDecoder` are declared for `vue-tsc` and `sk check`.
 - **Linux.** A font whose tables state no x-height, such as DejaVu Sans, is measured from its glyphs.
 - **Windows.** A copy or paste is retried while another program holds the clipboard.
 
 <Aside kind="warning" title="What 0.8 does not do yet">
 
-- **`<sk-editor>`** is for small documents: no line numbers, no viewport-only layout and one cursor. Its IME and clipboard paths were tested most on Windows.
+- **`<sk-editor>`** has one cursor. Inside a scroll container of your own, long wrapped text can shift a little as estimated lines above the view are measured; an editor with its own height does not. Its IME and clipboard paths were tested most on Windows.
 - **Inline layout.** A line of mixed text and elements is still a wrapping row: text does not flow across element boundaries, and a bare text node cannot be shifted by `vertical-align`. [#94](https://github.com/argon-chat/skathi/issues/94) tracks a real inline layout.
 - **`Patch.apply()`** does not apply binary patches or combined diffs.
 - **`skathi:process`** has no pseudo-terminal.
@@ -244,5 +273,6 @@ Run the commands at the top of this post and `bunx sk check`.
 
 - `TextDiff.lines()` and `TextDiff.unified()` now use the histogram algorithm, and `unified()` writes a count of one as git does (`@@ -10 +10,2 @@`). Pass `algorithm: "myers"` for the old pairing of lines.
 - A row with `align-items: baseline` aligns text by its baseline and not by its bottom edge. A layout that relied on the old result may move by a few pixels.
+- A tab in text kept by `white-space: pre`, in a `<textarea>` or in an `<sk-editor>` now advances to the next stop of 8 spaces. Set `tab-size` for another width.
 - Typing in a text field is one undo step per run, and `maxlength` is now enforced.
 - For embedders: build the host and the payload from the same release. A payload built with `sk` 0.8 names its runtime, and a host from another build refuses it with a message that says so.
