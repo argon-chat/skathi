@@ -55,6 +55,7 @@ export const WEBKIT_APPLIED: readonly string[] = [
   "flex-shrink",
   "flex-wrap",
   "font-feature-settings",
+  "font-smoothing",
   "hyphens",
   "justify-content",
   "line-clamp",

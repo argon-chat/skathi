@@ -53,6 +53,7 @@ pub const WEBKIT_APPLIED: &[&str] = &[
     "flex-shrink",
     "flex-wrap",
     "font-feature-settings",
+    "font-smoothing",
     "hyphens",
     "justify-content",
     "line-clamp",

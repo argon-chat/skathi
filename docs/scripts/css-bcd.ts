@@ -34,7 +34,7 @@ const KEYS: Readonly<Record<string, string | null>> = {
   "easing-functions": "css.types.easing-function",
   "custom-properties": "css.properties.custom-property",
   "dashed-function": "css.types.dashed-function",
-  "webkit-font-smoothing": "css.properties.font-smooth",
+  "font-smoothing": "css.properties.font-smooth",
   "app-region": "css.properties.-webkit-app-region",
   "webkit-mask": null,
   "function-webkit-gradient": null,

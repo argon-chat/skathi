@@ -1251,10 +1251,33 @@ const typography = section("Typography and text", [
       limitations: ["App text uses the platform's text rendering."],
     },
   ),
-  prop("-webkit-font-smoothing", NO, "Sets the antialiasing of text on macOS.", {
-    limitations: ["Text uses the platform's text rendering."],
-    aliases: ["font-smoothing", "-moz-osx-font-smoothing"],
-  }),
+  prop(
+    "font-smoothing",
+    PART,
+    "Sets whether text is antialiased in grayscale or with subpixel (ClearType) rendering.",
+    {
+      notes: [
+        "Inherited. Set the app-wide default on the root element: `html { font-smoothing: antialiased }`.",
+        "`auto` keeps the platform rule. On Windows that is ClearType when the system has it on and the window has an opaque backdrop, and grayscale otherwise; the default Mica backdrop is not opaque, so a default window draws grayscale text.",
+        "`antialiased` always draws grayscale.",
+        "`subpixel-antialiased` draws ClearType on Windows whenever the system has it on, in a Mica or transparent window too. It is right only over opaque content: give the text, or a box behind it, an opaque background. Over a see-through part of the window the glyph edges keep their colour fringes against whatever shows through.",
+        "`-webkit-font-smoothing` is read as `font-smoothing`; `sk check` suggests the unprefixed spelling.",
+        "On Linux the values follow the Windows rules, with subpixel text when the GPU supports dual-source blending.",
+      ],
+      limitations: [
+        "On macOS the property is parsed and changes nothing yet.",
+        "Text in a box drawn through its own layer, such as one with `clip-path`, a colour `filter` or a view transition snapshot, draws grayscale.",
+      ],
+      aliases: [
+        "-webkit-font-smoothing",
+        "-moz-osx-font-smoothing",
+        "font-smooth",
+        "ClearType",
+        "subpixel antialiasing",
+      ],
+      related: ["text-rendering"],
+    },
+  ),
   prop("quotes", NO, "Sets the quotation marks used by `open-quote` and `close-quote`."),
   prop("initial-letter", NO, "Sets the size and sink of drop caps and raised initial letters."),
   prop("ruby-position", NO, "Sets where ruby annotations are placed relative to their base text.", {
@@ -3273,10 +3296,10 @@ const vendorPrefixes = section("Vendor prefixes", [
     "Browser-specific spellings of properties, such as `-webkit-transform`, kept for older engines.",
     {
       notes: [
-        "Skathi reads these `-webkit-` spellings as the unprefixed property, which then has that property's status: `-webkit-align-*`, `-webkit-animation*`, `-webkit-app-region`, `-webkit-appearance`, `-webkit-backdrop-filter`, `-webkit-backface-visibility`, `-webkit-background-clip`, `-webkit-background-origin`, `-webkit-background-size`, `-webkit-border-*-radius`, `-webkit-box-reflect`, `-webkit-box-shadow`, `-webkit-box-sizing`, `-webkit-clip-path`, `-webkit-column*`, `-webkit-filter`, `-webkit-flex*`, `-webkit-font-feature-settings`, `-webkit-hyphens`, `-webkit-justify-content`, `-webkit-line-clamp`, `-webkit-order`, `-webkit-perspective*`, `-webkit-text-fill-color`, `-webkit-text-size-adjust`, `-webkit-text-stroke*`, `-webkit-transform*`, `-webkit-transition*`, `-webkit-user-select`, `-webkit-writing-mode`.",
+        "Skathi reads these `-webkit-` spellings as the unprefixed property, which then has that property's status: `-webkit-align-*`, `-webkit-animation*`, `-webkit-app-region`, `-webkit-appearance`, `-webkit-backdrop-filter`, `-webkit-backface-visibility`, `-webkit-background-clip`, `-webkit-background-origin`, `-webkit-background-size`, `-webkit-border-*-radius`, `-webkit-box-reflect`, `-webkit-box-shadow`, `-webkit-box-sizing`, `-webkit-clip-path`, `-webkit-column*`, `-webkit-filter`, `-webkit-flex*`, `-webkit-font-feature-settings`, `-webkit-font-smoothing`, `-webkit-hyphens`, `-webkit-justify-content`, `-webkit-line-clamp`, `-webkit-order`, `-webkit-perspective*`, `-webkit-text-fill-color`, `-webkit-text-size-adjust`, `-webkit-text-stroke*`, `-webkit-transform*`, `-webkit-transition*`, `-webkit-user-select`, `-webkit-writing-mode`.",
       ],
       limitations: [
-        "Every other vendor-prefixed property (`-moz-`, `-ms-`, `-o-`, and the remaining `-webkit-` ones such as `-webkit-font-smoothing` or `-webkit-tap-highlight-color`) is dropped without an advisory, as Chromium drops what it does not know.",
+        "Every other vendor-prefixed property (`-moz-`, `-ms-`, `-o-`, and the remaining `-webkit-` ones such as `-webkit-touch-callout` or `-webkit-tap-highlight-color`) is dropped without an advisory, as Chromium drops what it does not know.",
         "`-webkit-mask-*` is the exception: it is dropped with an advisory to use the unprefixed `mask-*`.",
         "The legacy flexbox does not lay out: `display: -webkit-box` lays out as `block`, `-webkit-box-orient`, `-webkit-box-align` and `-webkit-box-pack` are accepted and change nothing, and the other `-webkit-box-*` properties are not applied. Use `display: flex`.",
       ],
@@ -3291,13 +3314,7 @@ const vendorPrefixes = section("Vendor prefixes", [
         "-webkit-text-size-adjust",
         "-webkit-tap-highlight-color",
       ],
-      related: [
-        "webkit-mask",
-        "webkit-font-smoothing",
-        "webkit-text-fill-color",
-        "webkit-text-stroke",
-        "webkit-box-reflect",
-      ],
+      related: ["webkit-mask", "font-smoothing", "webkit-text-fill-color", "webkit-text-stroke", "webkit-box-reflect"],
     },
   ),
 ]);

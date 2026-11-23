@@ -39,6 +39,30 @@ html {
 
 A space at the start or end of a flex or grid item's text is removed, as in the browsers. A label written on its own line after an icon (`<svg/>\n  Open a link\n`) no longer makes the button a space wider. The same holds for the text of a `display: block` or `inline-block` element and of an absolutely positioned one; text inside an inline `<span>` beside other text keeps its spaces.
 
+## Text
+
+### Glyph positions by size
+
+On Windows and Linux a glyph is placed in steps that depend on its size: quarters of a pixel below 12px, thirds up to 16px, halves from 17px and whole pixels from 34px (in device pixels), instead of quarters at every size. Small text keeps its spacing, large text stops caching four rasterizations of every glyph, and the glyph atlas holds 7 to 23% fewer tiles depending on the display scale. macOS keeps quarters for now.
+
+### Scaled text settles
+
+Text under a `transform` that scales it used to be drawn from glyphs rasterized at the untransformed size and resampled, so `scale(1.14)` came out soft. Now, once a transform has stopped changing for 200 ms, the text under it is rasterized again at the size it is shown at, and matches text laid out at that size. That holds inside a cached subtree and in a scrolling list too. A transform that keeps changing, such as a running animation, stays resampled rather than rasterizing its glyphs every frame, and nothing keeps running once the text has settled.
+
+### `font-smoothing`
+
+The new inherited `font-smoothing` property picks grayscale or subpixel text: `auto` (the platform's rule, as before), `antialiased` (always grayscale) or `subpixel-antialiased`. The prefixed `-webkit-font-smoothing` is read as the same property, and `sk check` suggests the unprefixed spelling. Set the app's default on the root:
+
+```css
+html {
+  font-smoothing: antialiased;
+}
+```
+
+A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text in a default window is grayscale even when ClearType is on in the system. `subpixel-antialiased` draws ClearType in such a window anyway. It is right only where the text sits on opaque content, such as a panel with a solid background; over a see-through part of the window the colour fringes of the glyph edges stay visible. On macOS the property does nothing yet.
+
 ## Fixes
+
+- A `transform-origin` from a class now applies to a `transform` set in a `style` attribute or by `@keyframes`; before, it was replaced by the default `50% 50%`. A rule that sets only `transform-origin` no longer cancels a `transform` from an earlier rule.
 
 - Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, `requestAnimationFrame`, animations, video, `<sk-surface>`) instead of freezing until the button is released. The move starts after the `mousedown` handler returns, and only while the left button is still held. ([#110](https://github.com/argon-chat/skathi/issues/110))

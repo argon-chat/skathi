@@ -275,6 +275,7 @@ pub const CATALOG: &[Entry] = &[
     e("font-palette", Unsupported, &[], &["--p"], ""),
     e("font-size", Supported, &["12px", "larger"], &[], ""),
     e("font-size-adjust", Unsupported, &[], &["0.5"], ""),
+    e("font-smoothing", Supported, &["antialiased", "subpixel-antialiased", "auto"], &[], ""),
     e("font-stretch", Unsupported, &[], &["condensed"], ""),
     e("font-style", Supported, &["normal", "italic"], &[], ""),
     e("font-synthesis", Unsupported, &[], &["none"], ""),
@@ -537,7 +538,6 @@ pub const CATALOG: &[Entry] = &[
     e("visibility", Supported, &["hidden", "visible"], &[], ""),
     e("-webkit-app-region", Supported, &["drag", "no-drag"], &[], ""),
     e("-webkit-box-reflect", Unsupported, &[], &["below"], ""),
-    e("-webkit-font-smoothing", Dropped, &[], &["antialiased"], ""),
     e("-webkit-line-clamp", Partial, &["2"], &["none"], "`none` cannot undo an earlier clamp"),
     e("-webkit-mask-composite", Supported, &["source-over"], &[], ""),
     e("-webkit-tap-highlight-color", Dropped, &[], &["transparent"], ""),
@@ -733,7 +733,11 @@ mod tests {
             let guard = &src[at..];
             let guard = &guard[..guard.find("=>").unwrap_or(0)];
             for literal in guard.split('"').skip(1).step_by(2) {
-                if entry(literal).is_none() {
+                let base = literal
+                    .strip_prefix("-webkit-")
+                    .filter(|b| webkit_applied(b))
+                    .unwrap_or(literal);
+                if entry(literal).is_none() && entry(base).is_none() {
                     missing.push(literal.to_string());
                 }
             }

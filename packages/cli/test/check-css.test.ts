@@ -67,6 +67,9 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("float", "inherit")).toBeNull();
     expect(code("-webkit-text-size-adjust", "100%")).toBeNull();
     expect(code("-moz-appearance", "none")).toBeNull();
+    expect(code("font-smoothing", "antialiased")).toBeNull();
+    expect(code("-webkit-font-smoothing", "antialiased")).toBe("SK4008");
+    expect(code("font-smoothing", "none")).toBe("SK4002");
   });
 
   test("content-sized fields and metric-based block trimming use the native CSS grammar", () => {
@@ -150,7 +153,7 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     ]);
   }, 60_000);
 
-  test("all ten reported patterns point to their source declaration or selector", () => {
+  test("all eleven reported patterns point to their source declaration or selector", () => {
     expect(css(report(), "src/compat.css")).toEqual([
       "1:1:SK4004",
       "7:3:SK4007",
@@ -162,6 +165,7 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
       "26:3:SK4006",
       "29:3:SK4006",
       "32:3:SK4007",
+      "35:3:SK4008",
     ]);
   });
 
@@ -256,13 +260,13 @@ describe("CSS warnings in sk build and sk dev", () => {
 
     appendFileSync(join(app, "src/fine.css"), ".added {\n  float: right;\n}\n");
     await until("rev 2");
-    await until("src/fine.css:69:3 SK4001");
+    await until("src/fine.css:70:3 SK4001");
     appendFileSync(join(app, "src/fine.css"), ".again {\n  color: red;\n}\n");
     await until("rev 3");
     appendFileSync(join(app, "src/main.css"), ".more {\n  color: blue;\n}\n");
     await until("rev 4");
     await Bun.sleep(200);
-    expect(count("src/fine.css:69:3 SK4001")).toBe(1);
+    expect(count("src/fine.css:70:3 SK4001")).toBe(1);
     expect(count("src/main.css:3:3 SK4001")).toBe(1);
   }, 90_000);
 });

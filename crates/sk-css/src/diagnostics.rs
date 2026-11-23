@@ -354,6 +354,15 @@ fn declaration(
     {
         return;
     }
+    if name == "-webkit-font-smoothing" {
+        emit(
+            out,
+            at,
+            "SK4008",
+            "`-webkit-font-smoothing` is the prefixed spelling of `font-smoothing`",
+            format!("Write `font-smoothing: {value}`."),
+        );
+    }
     let base = name
         .strip_prefix("-webkit-")
         .filter(|base| catalog::webkit_applied(base))

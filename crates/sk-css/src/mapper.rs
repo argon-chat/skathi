@@ -5101,8 +5101,10 @@ fn apply_property(
             });
             match (x, y) {
                 (Some(x), Some(y)) => {
-                    let spec = r.vn_transform.get_or_insert(TransformSpec::IDENTITY);
-                    spec.origin = (x, y);
+                    r.vn_transform_origin = Some((x, y));
+                    if let Some(spec) = r.vn_transform.as_mut() {
+                        spec.origin = (x, y);
+                    }
                 }
                 _ => unsupported(
                     diagnostics,
@@ -6289,6 +6291,26 @@ fn apply_property(
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(name.0.as_ref(), "font-smoothing" | "-webkit-font-smoothing") =>
+            {
+                match single_ident(&c.value, "font-smoothing", diagnostics) {
+                    Some("auto") => r.text.font_smoothing = Some(gpui::FontSmoothing::Auto),
+                    Some("antialiased") => {
+                        r.text.font_smoothing = Some(gpui::FontSmoothing::Antialiased)
+                    }
+                    Some("subpixel-antialiased") => {
+                        r.text.font_smoothing = Some(gpui::FontSmoothing::SubpixelAntialiased)
+                    }
+                    other => unsupported(
+                        diagnostics,
+                        &format!(
+                            "font-smoothing: {} — use auto, antialiased or subpixel-antialiased",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "-webkit-line-clamp" || name.0.as_ref() == "line-clamp" =>
             {
                 match single_number(&c.value) {
@@ -7306,8 +7328,8 @@ fn apply_transform(
     let basis = offset.map(|row| row.map(|value| value as f32));
     let (x, y) = (slot(basis[0], 0), slot(basis[1], 1));
     let origin = r
-        .vn_transform
-        .map(|t| t.origin)
+        .vn_transform_origin
+        .or(r.vn_transform.map(|t| t.origin))
         .unwrap_or(TransformSpec::CENTRE_ORIGIN);
     let mut spec = TransformSpec {
         translate: (
@@ -9643,8 +9665,7 @@ mod tests {
             transform("transform: scale(2)").0.unwrap().origin,
             TransformSpec::CENTRE_ORIGIN
         );
-        let alone = transform("transform-origin: left top").0.expect("declared");
-        assert!(alone.is_identity(), "an origin alone transforms nothing");
+        assert_eq!(transform("transform-origin: left top").0, None);
     }
 
     #[test]
@@ -10354,7 +10375,6 @@ mod prefix_tests {
     fn a_prefixed_declaration_the_engine_does_not_apply_is_dropped_without_a_word() {
         for body in [
             "-moz-osx-font-smoothing: grayscale",
-            "-webkit-font-smoothing: antialiased",
             "-webkit-touch-callout: none",
             "-webkit-tap-highlight-color: transparent",
             "-webkit-overflow-scrolling: touch",
@@ -10395,6 +10415,29 @@ mod prefix_tests {
         ));
         assert!(c.normal.is_some() && c.normal_transitions.is_some());
         assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
+    }
+
+    #[test]
+    fn font_smoothing_takes_either_spelling_and_inherits() {
+        let smoothing = |css: &str| {
+            let mut d = Vec::new();
+            let s = parse_inline(css, &mut d);
+            (s.text.font_smoothing, d.len())
+        };
+        assert_eq!(
+            smoothing("font-smoothing: antialiased"),
+            (Some(gpui::FontSmoothing::Antialiased), 0)
+        );
+        assert_eq!(
+            smoothing("-webkit-font-smoothing: subpixel-antialiased"),
+            (Some(gpui::FontSmoothing::SubpixelAntialiased), 0)
+        );
+        assert_eq!(
+            smoothing("font-smoothing: antialiased; -webkit-font-smoothing: auto"),
+            (Some(gpui::FontSmoothing::Auto), 0)
+        );
+        assert_eq!(smoothing("font-smoothing: none"), (None, 1));
+        assert!(inherits("font-smoothing") && inherits("-webkit-font-smoothing"));
     }
 
     #[test]

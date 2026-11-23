@@ -13,6 +13,7 @@ const SCHEMES: Record<string, { fg: string; bg: string }> = {
   dark: { fg: "#f0f0f0", bg: "#1c1c1c" },
   grey: { fg: "#808080", bg: "#ffffff" },
   color: { fg: "#1a5fd6", bg: "#ffffff" },
+  mica: { fg: "#f0f0f0", bg: "transparent" },
 };
 const PARAGRAPH =
   "Static text keeps its pixels while another subtree changes. Few phases, a whole-pixel baseline and the right weight decide how it reads.";
@@ -20,6 +21,7 @@ const PARAGRAPH =
 const page = ref("light");
 const motion = ref("none");
 const pinned = ref("none");
+const smoothing = ref("");
 const scheme = computed(() => SCHEMES[page.value] ?? SCHEMES.light!);
 
 (globalThis as { __SK_TEXT_EXP__?: unknown }).__SK_TEXT_EXP__ = {
@@ -32,6 +34,9 @@ const scheme = computed(() => SCHEMES[page.value] ?? SCHEMES.light!);
   pin(transform: string) {
     pinned.value = transform;
   },
+  smooth(value: string) {
+    smoothing.value = value;
+  },
 };
 
 const offsets = Array.from({ length: 10 }, (_, k) => k);
@@ -39,7 +44,7 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
 </script>
 
 <template>
-  <div class="root" :style="{ color: scheme.fg, background: scheme.bg }">
+  <div :class="['root', smoothing && `smooth-${smoothing}`]" :style="{ color: scheme.fg, background: scheme.bg }">
     <div v-if="page === 'offsets'" class="offsets">
       <div v-for="size in [13, 16]" :key="size" class="col">
         <div
@@ -57,6 +62,20 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
         <div class="rule" />
         <div class="hs">H H H H H H H H H H</div>
         <div class="rule" />
+      </div>
+    </div>
+    <div v-else-if="page === 'mica'" class="mica">
+      <div v-for="where in ['clear', 'card']" :key="where" :class="['plane', where]">
+        <div v-for="tone in ['light', 'dark']" :key="tone" :class="['tone', tone]">
+          <div
+            v-for="size in [12, 14, 16]"
+            :key="size"
+            :class="['line', 'w', `k-mica-${where}-${tone}-${size}`]"
+            :style="{ fontSize: `${size}px` }"
+          >
+            Hamburgefonstiv minimum
+          </div>
+        </div>
       </div>
     </div>
     <div v-else class="matrix">
@@ -108,6 +127,38 @@ const pinnedStyle = computed(() => (pinned.value === "none" ? {} : { transform: 
 }
 .line {
   line-height: 22px;
+}
+.smooth-subpixel {
+  font-smoothing: subpixel-antialiased;
+}
+.smooth-gray {
+  font-smoothing: antialiased;
+}
+.mica {
+  display: flex;
+  gap: 24px;
+  font-family: "Segoe UI", sans-serif;
+}
+.plane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 300px;
+}
+.tone {
+  padding: 8px 12px;
+}
+.tone.light {
+  color: #f0f0f0;
+}
+.tone.dark {
+  color: #111111;
+}
+.card .tone.light {
+  background: #1c1c1c;
+}
+.card .tone.dark {
+  background: #ffffff;
 }
 .motion {
   display: flex;

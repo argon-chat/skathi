@@ -591,7 +591,7 @@ export const bcd: Readonly<Record<string, BcdInfo>> = {
     key: "css.properties.text-rendering",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/text-rendering",
   },
-  "webkit-font-smoothing": {
+  "font-smoothing": {
     key: "css.properties.font-smooth",
     mdn: "https://developer.mozilla.org/docs/Web/CSS/Reference/Properties/font-smooth",
   },

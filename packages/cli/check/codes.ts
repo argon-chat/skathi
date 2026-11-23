@@ -274,6 +274,15 @@ const CODES: CodeInfo[] = [
     fix: 'Distribute a 0.6 or later host. An app whose package.json asks for "@skathi-native/runtime" 0.6 or later, such as "^0.7.0", is not warned.',
   },
   {
+    code: "SK4008",
+    severity: "warning",
+    title: "prefixed font-smoothing",
+    explanation:
+      "Skathi reads `-webkit-font-smoothing` as `font-smoothing`, the property it documents. Browsers know only the prefixed spelling and apply it only on macOS.",
+    example: "html { -webkit-font-smoothing: antialiased; }",
+    fix: "Write `font-smoothing` with the same value. Keep the prefixed line beside it only if the same stylesheet also targets browsers.",
+  },
+  {
     code: "SK5001",
     severity: "error",
     title: "Vue Vapor mode",

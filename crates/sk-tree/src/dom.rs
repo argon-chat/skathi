@@ -419,13 +419,11 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 gpui::TransformLength::Pixels(px) => px,
                 gpui::TransformLength::Fraction(f) => f * size,
             };
-            let (ox, oy) = cs.base.vn_transform.map_or(
-                (
-                    gpui::TransformLength::Fraction(0.5),
-                    gpui::TransformLength::Fraction(0.5),
-                ),
-                |t| t.origin,
-            );
+            let (ox, oy) = cs
+                .base
+                .vn_transform_origin
+                .or(cs.base.vn_transform.map(|t| t.origin))
+                .unwrap_or(gpui::TransformSpec::CENTRE_ORIGIN);
             format!("{}px {}px", at(ox, w), at(oy, h))
         }
         "zoom" => "1".into(),

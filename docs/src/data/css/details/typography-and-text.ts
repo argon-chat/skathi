@@ -1011,9 +1011,29 @@ const expanded = ref(false);
       '`CSS.supports("text-rendering", "optimizeLegibility")` returns `false` for app stylesheets. The SVG renderer reads text rendering hints set on its text elements.',
     ],
   },
-  "webkit-font-smoothing": {
+  "font-smoothing": {
+    examples: [
+      {
+        title: "Grayscale text across the app",
+        lang: "css",
+        code: `html {
+  font-smoothing: antialiased;
+}`,
+        note: "The property inherits, so the root sets the default and any subtree can override it.",
+      },
+      {
+        title: "ClearType on an opaque panel in a Mica window",
+        lang: "css",
+        code: `.editor {
+  background: #1e1e1e;
+  font-smoothing: subpixel-antialiased;
+}`,
+        note: "The panel's opaque background is what makes subpixel text right here.",
+      },
+    ],
     edgeCases: [
-      "`-webkit-font-smoothing` and `-moz-osx-font-smoothing` are dropped without an advisory, as Chromium drops them; `CSS.supports()` returns `false` for both.",
+      "`font-smoothing: none` and other values log an advisory and are not applied.",
+      "`-moz-osx-font-smoothing` is dropped without an advisory; `CSS.supports()` returns `false` for it.",
     ],
   },
   quotes: {

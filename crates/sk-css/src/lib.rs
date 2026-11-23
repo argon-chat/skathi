@@ -8080,6 +8080,56 @@ mod tests {
     }
 
     #[test]
+    fn a_class_transform_origin_holds_under_an_inline_or_animated_transform() {
+        let corner = (
+            gpui::TransformLength::Fraction(0.0),
+            gpui::TransformLength::Fraction(0.0),
+        );
+        let origin = |layers: &[&StyleRefinement]| {
+            let mut style = gpui::Style::default();
+            for layer in layers {
+                style.refine(layer);
+            }
+            style.transform_origin()
+        };
+
+        let engine = Engine::compile(".box { transform-origin: left top }");
+        let inline = parse_inline_style("transform: scale(2)", &mut Vec::new());
+        let states = engine.compute_node(
+            box_node(),
+            Some(&inline),
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut Vec::new(),
+        );
+        assert!(states.base.vn_transform.is_some());
+        assert_eq!(origin(&[&states.base]), corner);
+
+        let engine = Engine::compile(
+            "@keyframes grow { from { transform: scale(1) } to { transform: scale(2) } } \
+             .box { transform-origin: left top; animation: grow 1s linear }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| {
+            engine.keyframes_for(name, &cs.vars, &Env::default(), &mut Vec::new())
+        });
+        let overlay = a
+            .overlay(1, &cs.base, now + Duration::from_millis(500))
+            .expect("animating");
+        assert!(overlay.vn_transform.is_some());
+        assert_eq!(origin(&[&cs.base, &overlay]), corner);
+
+        let engine =
+            Engine::compile(".box { transform: rotate(10deg) } .box { transform-origin: right }");
+        let cs = engine.compute(box_node(), None, &Env::default());
+        assert!(cs.base.vn_transform.is_some_and(|t| t.rotate != 0.0));
+        assert_eq!(origin(&[&cs.base]).0, gpui::TransformLength::Fraction(1.0));
+    }
+
+    #[test]
     fn two_elements_resolve_the_same_keyframes_differently() {
         let engine = Engine::compile(
             "@keyframes enter { from { opacity: var(--tw-enter-opacity, 1) } } \

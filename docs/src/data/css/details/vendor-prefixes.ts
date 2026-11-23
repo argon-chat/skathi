@@ -33,9 +33,9 @@ export const details: Details = {
         title: "Feature-test a prefixed property",
         lang: "ts",
         code: `const blurs = CSS.supports("-webkit-backdrop-filter", "blur(8px)");
-const smooths = CSS.supports("-webkit-font-smoothing", "antialiased");
+const callout = CSS.supports("-webkit-touch-callout", "none");
 
-console.log(blurs, smooths);`,
+console.log(blurs, callout);`,
         note: "Prints `true false`: a spelling Skathi reads answers as its property does, and a dropped one answers `false`.",
       },
     ],

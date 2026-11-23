@@ -31,3 +31,6 @@
 .rel {
   position: relative;
 }
+.smooth {
+  -webkit-font-smoothing: antialiased;
+}

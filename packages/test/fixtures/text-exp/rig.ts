@@ -3,6 +3,8 @@
 //
 //   bun fixtures/text-exp/rig.ts capture <out> [variant...]    (from packages/test)
 //   bun fixtures/text-exp/rig.ts report <out>
+//   bun fixtures/text-exp/rig.ts mica <out>      font-smoothing in a Mica window, alpha included
+//   bun fixtures/text-exp/rig.ts post <out>      before/after pairs from a capture and a mica run
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -10,18 +12,14 @@ import { launch, readPng, type Bounds } from "../../src/index";
 
 export const VARIANTS: Record<string, string> = {
   baseline: "",
-  phases: "phases",
-  floor: "floor",
-  "phases+floor": "phases,floor",
-  "contrast-flat": "contrast=flat",
+  "no-phases": "no-phases",
   "contrast-mac": "contrast=mac",
   "contrast-half": "contrast=half",
+  "no-settle": "no-settle",
   rigid: "rigid",
-  rerast: "rerast",
-  settle: "settle",
 };
-const STATIC = ["baseline", "phases", "floor", "phases+floor", "contrast-flat", "contrast-mac", "contrast-half"];
-const MOTION = ["baseline", "rigid", "rerast", "settle"];
+const STATIC = ["baseline", "no-phases", "contrast-mac", "contrast-half"];
+const MOTION = ["baseline", "no-settle", "rigid"];
 const SCALES = (process.env.RIG_SCALES ?? "1,1.25,1.5,2").split(",").map(Number);
 const PAGES = ["light", "dark", "grey", "color", "offsets"];
 const FRAMES = 16;
@@ -522,7 +520,170 @@ function report(out: string) {
   console.log(lines.join("\n"));
 }
 
+// ---- font-smoothing over Mica ----
+
+const MICA_RUNS = [
+  { name: "mica-auto", smooth: "", backdrop: "" },
+  { name: "mica-subpixel", smooth: "subpixel", backdrop: "" },
+  { name: "opaque-auto", smooth: "", backdrop: "none" },
+];
+
+async function mica(out: string) {
+  const lines: string[] = ["# font-smoothing over Mica (premultiplied readback)"];
+  for (const scale of SCALES) {
+    const dir = join(out, "raw-mica", String(scale));
+    mkdirSync(dir, { recursive: true });
+    const app = await launch({
+      app: "packages/test/fixtures/text-exp/src/main.ts",
+      window: [900, 640],
+      scale,
+      label: "text-exp-mica",
+    });
+    const meta: Record<string, Shot> = {};
+    try {
+      await app.eval(`__SK_TEXT_EXP__.show("mica"); 'ok'`);
+      for (const run of MICA_RUNS) {
+        if (run.backdrop) await app.eval(`__SK_WINDOW__.appWindow.backdrop = ${JSON.stringify(run.backdrop)}; "ok"`);
+        await app.eval(`__SK_TEXT_EXP__.smooth(${JSON.stringify(run.smooth)}); 'ok'`);
+        await sleep(600);
+        const file = join(dir, `${run.name}.png`);
+        await app.send("screenshot", { path: file, backend: "render_to_image" });
+        const boxes = (await app.query(".w")).nodes.flatMap((n) =>
+          n.bounds ? [{ cls: (n.classes ?? []).find((c) => c.startsWith("k-")) ?? "", b: n.bounds }] : [],
+        );
+        meta[run.name] = { file, boxes };
+      }
+    } finally {
+      await app.close();
+    }
+    writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 1));
+    lines.push(`\n## scale ${scale}`, "run\tline\ttransparent px\tbad premultiplied px\tmax excess\tfringe\tink");
+    for (const run of MICA_RUNS) {
+      const s = meta[run.name]!;
+      const png = readPng(s.file);
+      for (const { cls, b } of s.boxes) {
+        const r = deviceRect(b, scale);
+        let clear = 0;
+        let bad = 0;
+        let excess = 0;
+        let fringe = 0;
+        let inkSum = 0;
+        for (let y = r.y; y < r.y + r.h; y++)
+          for (let x = r.x; x < r.x + r.w; x++) {
+            const i = (y * png.width + x) * 4;
+            const [cr, cg, cb, a] = [png.data[i]!, png.data[i + 1]!, png.data[i + 2]!, png.data[i + 3]!];
+            if (a < 255) clear++;
+            const over = Math.max(cr, cg, cb) - a;
+            if (over > 1) bad++;
+            excess = Math.max(excess, over);
+            fringe += Math.abs(cr - cb);
+            inkSum += a < 255 ? a : 0;
+          }
+        lines.push(
+          `${run.name}\t${cls.replace("k-mica-", "")}\t${clear}\t${bad}\t${excess}\t${(fringe / (r.w * r.h)).toFixed(2)}\t${(inkSum / (r.w * r.h)).toFixed(2)}`,
+        );
+      }
+    }
+    // The transparent plane composited over a mid grey, as a backdrop would show it.
+    const rows: Img[][] = MICA_RUNS.map((run) => {
+      const s = meta[run.name]!;
+      const png = readPng(s.file);
+      const keys = s.boxes.filter((x) => x.cls.includes("-clear-") || x.cls.includes("-card-"));
+      const x0 = Math.min(...keys.map((k) => k.b.x)) - 12;
+      const y0 = Math.min(...keys.map((k) => k.b.y)) - 8;
+      const x1 = Math.max(...keys.map((k) => k.b.x + k.b.w)) + 12;
+      const y1 = Math.max(...keys.map((k) => k.b.y + k.b.h)) + 8;
+      const r = deviceRect({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, scale, 0);
+      const img = new Img(r.w, r.h);
+      for (let y = 0; y < r.h; y++)
+        for (let x = 0; x < r.w; x++) {
+          const i = ((r.y + y) * png.width + r.x + x) * 4;
+          const a = png.data[i + 3]! / 255;
+          img.set(
+            x,
+            y,
+            [0, 1, 2].map((c) => Math.min(255, Math.round(png.data[i + c]! + 120 * (1 - a)))),
+          );
+        }
+      return [img];
+    });
+    writeImg(join(out, `mica@${scale}.png`), sheet(rows));
+  }
+  writeFileSync(join(out, "report-mica.txt"), lines.join("\n"));
+  console.log(lines.join("\n"));
+}
+
+// ---- pairs for the post ----
+
+function union(
+  boxes: { cls: string; b: Bounds }[],
+  match: (cls: string) => boolean,
+  padX: number,
+  padY = padX,
+): Bounds {
+  const keys = boxes.filter((x) => match(x.cls));
+  const x0 = Math.min(...keys.map((k) => k.b.x)) - padX;
+  const y0 = Math.min(...keys.map((k) => k.b.y)) - padY;
+  const x1 = Math.max(...keys.map((k) => k.b.x + k.b.w)) + padX;
+  const y1 = Math.max(...keys.map((k) => k.b.y + k.b.h)) + padY;
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function post(out: string) {
+  const dir = join(out, "post");
+  mkdirSync(dir, { recursive: true });
+  const written: string[] = [];
+  const pair = (name: string, before: Img, after: Img, z: number) => {
+    for (const [tag, img] of [
+      ["before", before],
+      ["after", after],
+    ] as const) {
+      const file = join(dir, `${name}-${tag}.png`);
+      writeImg(file, zoom(img, z));
+      written.push(`${file} (${img.w * z}x${img.h * z})`);
+    }
+  };
+  const base = metaOf(out, "baseline", 1);
+  if (base) {
+    const card = shot(base, "rest").boxes.find((x) => x.cls === "k-card")!.b;
+    const r = deviceRect(
+      { x: card.x - 6, y: card.y - card.h * 0.07 - 6, w: card.w * 0.6, h: card.h * 1.14 + 12 },
+      1,
+      0,
+    );
+    pair("settle", crop(shot(base, "pinned-early").file, r), crop(shot(base, "pinned-late").file, r), 2);
+    const half = metaOf(out, "contrast-half", 1);
+    if (half) {
+      const dark = shot(base, "dark");
+      const rows = (file: string) =>
+        sheet(
+          [12, 13, 14].map((size) => {
+            const words = (cls: string) => new RegExp(`^k-seg-400-${size}-[01]$`).test(cls);
+            return [crop(file, deviceRect(union(dark.boxes, words, 2, 0), 1, 0))];
+          }),
+          2,
+          BG.dark,
+        );
+      pair("contrast-half", rows(dark.file), rows(shot(half, "dark").file), 2);
+    }
+  }
+  const micaMeta = join(out, "raw-mica", "1", "meta.json");
+  if (existsSync(micaMeta)) {
+    const m = JSON.parse(readFileSync(micaMeta, "utf8")) as Record<string, Shot>;
+    const auto = m["mica-auto"]!;
+    const r = deviceRect(
+      union(auto.boxes, (cls) => cls.startsWith("k-mica-card-light-"), 6),
+      1,
+      0,
+    );
+    pair("mica-subpixel", crop(auto.file, r), crop(m["mica-subpixel"]!.file, r), 2);
+  }
+  console.log(written.join("\n"));
+}
+
 const [cmd, out, ...rest] = process.argv.slice(2);
-if (!out) throw new Error("usage: rig.ts capture|report <out> [variant...]");
+if (!out) throw new Error("usage: rig.ts capture|report|mica|post <out> [variant...]");
 if (cmd === "capture") await capture(out, rest);
+else if (cmd === "mica") await mica(out);
+else if (cmd === "post") post(out);
 else report(out);

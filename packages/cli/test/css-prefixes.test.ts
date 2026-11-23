@@ -30,7 +30,6 @@ describe("css-prefixes.ts", () => {
       "-ms-overflow-style",
       "-o-transition",
       "-webkit-touch-callout",
-      "-webkit-font-smoothing",
       "-WEBKIT-TAP-HIGHLIGHT-COLOR",
     ]) {
       expect(isDroppedPrefix(p)).toBe(true);
@@ -44,6 +43,7 @@ describe("css-prefixes.ts", () => {
       "-webkit-mask-image",
       "-webkit-backdrop-filter",
       "-webkit-user-select",
+      "-webkit-font-smoothing",
       "transform",
       "--webkit-like",
     ]) {
@@ -61,17 +61,12 @@ describe("css-prefixes.ts", () => {
       "@-webkit-keyframes spin { to { -webkit-transform: rotate(1turn); -moz-transform: rotate(1turn) } }",
     ].join("\n");
     const out = pruneVendorPrefixes(css);
-    for (const gone of [
-      "-moz-tab-size",
-      "-webkit-font-smoothing",
-      "-moz-osx-font-smoothing",
-      "-webkit-touch-callout",
-      "-moz-transform",
-    ]) {
+    for (const gone of ["-moz-tab-size", "-moz-osx-font-smoothing", "-webkit-touch-callout", "-moz-transform"]) {
       expect(out).not.toContain(gone);
     }
     for (const kept of [
       "-webkit-text-size-adjust: 100%",
+      "-webkit-font-smoothing: antialiased",
       "tab-size: 4",
       "display: -webkit-box",
       "-webkit-line-clamp: 2",
