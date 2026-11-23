@@ -37,11 +37,17 @@ impl LineText {
     pub fn measure(font: &Font, font_size: Pixels, line_height: Pixels, window: &Window) -> Self {
         let text = window.text_system();
         let face = text.resolve_font(font);
+        let x_height = text.x_height(face, font_size).abs();
         Self {
             font_size,
             ascent: text.ascent(face, font_size).abs(),
             descent: text.descent(face, font_size).abs(),
-            x_height: text.x_height(face, font_size).abs(),
+            // CSS takes 0.5em for a font without an x-height.
+            x_height: if x_height > px(0.0) {
+                x_height
+            } else {
+                font_size / 2.0
+            },
             line_height,
         }
     }
