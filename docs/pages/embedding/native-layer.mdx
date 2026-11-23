@@ -16,7 +16,7 @@ import Demo from "../../src/components/Demo.astro";
 </template>
 ```
 
-The page has to be transparent there to let the layer show. Nothing the page paints may cover the element: no background on it or on any of its ancestors. And the window's backdrop must be one that is not opaque, any [`backdrop`](/window-api/config-window-backdrop/) but `"none"`: `"transparent"`, or a material such as `"acrylic"` or `"mica"` where the platform has it. A window with `"none"` is drawn opaque and hides the layer. To keep the page from changing the backdrop, fix it with [`Builder::backdrop`](/embedding/desktop/#a-backdrop-the-page-cannot-change).
+[The element's own page](/elements/sk-layer/) covers the app author's side. The page has to be transparent there to let the layer show. Nothing the page paints may cover the element: no background on it or on any of its ancestors. And the window's backdrop must be one that is not opaque, any [`backdrop`](/window-api/config-window-backdrop/) but `"none"`: `"transparent"`, or a material such as `"acrylic"` or `"mica"` where the platform has it. A window with `"none"` is drawn opaque and hides the layer. To keep the page from changing the backdrop, fix it with [`Builder::backdrop`](/embedding/desktop/#a-backdrop-the-page-cannot-change).
 
 <Demo
   id="elements/sk-layer"

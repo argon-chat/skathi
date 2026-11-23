@@ -1,0 +1,159 @@
+---
+title: "<sk-layer>"
+label: "<sk-layer>"
+metaTitle: "<sk-layer>: a native layer under the page"
+description: The element that marks where the embedding program shows a native layer of its own under the page, such as a video player's swap chain or a Metal layer. Its attribute, what the page must leave transparent, and the CSS that reaches the layer.
+section: Elements
+order: 2.5
+---
+
+import Demo from "../../src/components/Demo.astro";
+
+Some native pictures cannot be handed over as frames: a video player that presents through its own swap chain to get HDR output and the system's frame pacing, a map or a game engine that owns its layer. `<sk-layer>` gives such a layer a place in your page. The element paints nothing. The program that embeds Skathi shows its layer under the page where the element is, and Skathi tells it where that is from the same frame that paints the element, so the layer moves, resizes and hides together with the page around it.
+
+<Demo
+  id="elements/sk-layer"
+  caption="An animated layer the embedder renders itself, under the page's text and controls. It follows its element through a resize to a circle, hides with display: none and comes back."
+  label="A moving plasma picture drawn by native code fills a rounded card under the page's chips and title; the card shrinks to a circle and the picture follows its edge, the element is set to display none and the picture disappears, then the wide card comes back"
+/>
+
+This page is the element, the part an app author writes. [Native layer](/embedding/native-layer/) is the embedder's side: the Rust `Layer` trait, the placement it receives and where the layer goes on each platform.
+
+## `<sk-layer>` or `<sk-surface>`
+
+|                     | [`<sk-surface>`](/elements/sk-surface/)            | `<sk-layer>`                                           |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| Who draws it        | Skathi, from frames the producer presents          | the embedder's own layer, presented by the embedder    |
+| Where it is         | in the page, between the elements around it        | under the whole page                                   |
+| `transform`         | applies                                            | does not reach the layer                               |
+| Covered by the page | by whatever is painted after it                    | by anything opaque: the page must be transparent there |
+| Use it for          | a viewport, a preview, several views of one stream | a player or renderer that must present by itself       |
+
+Reach for `<sk-surface>` first. `<sk-layer>` is for a program that already owns a presenting layer and cannot give frames away.
+
+## A player with your own controls
+
+The element is a hole the layer shows through, and the controls are ordinary elements over it.
+
+```vue title="Player.vue" framework="vue"
+<template>
+  <div class="player">
+    <sk-layer name="player" class="video" />
+    <div class="controls">
+      <button @click="toggle()">Play</button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { toggle } from "native:player";
+</script>
+
+<style scoped>
+.player {
+  position: relative;
+}
+.video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+}
+.controls {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 8px 12px;
+}
+</style>
+```
+
+```svelte title="Player.svelte" framework="svelte"
+<script lang="ts">
+  import { toggle } from "native:player";
+</script>
+
+<div class="player">
+  <sk-layer name="player" class="video"></sk-layer>
+  <div class="controls">
+    <button onclick={() => toggle()}>Play</button>
+  </div>
+</div>
+
+<style>
+  .player {
+    position: relative;
+  }
+  .video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+  }
+  .controls {
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 8px 12px;
+  }
+</style>
+```
+
+- The embedder registers the layer `"player"` and gives the app `toggle` in a [native module](/embedding/native-modules/).
+- Clicks on the element go to the element and your listeners, never to the layer.
+- Vue compiles every `sk-*` tag as a custom element, so there is nothing to register. In Svelte, `@skathi-native/runtime/svelte` types the element's `name`.
+
+## What the page must leave transparent
+
+The layer is under the page, so it shows only where the page paints nothing:
+
+- **No background on the element or on any of its ancestors**, up to and including `html` and `body`. Put the app's background on the parts around the element instead.
+- **A window backdrop that is not opaque.** Any [`backdrop`](/window-api/config-window-backdrop/) but `"none"` works: `"transparent"`, or a material such as `"acrylic"` or `"mica"`. A window with `"none"` is drawn opaque and hides the layer.
+- **Whatever is painted over the element covers the layer**, which is how controls, subtitles and menus go over a video.
+
+## Things to watch for
+
+- **Round the element itself.** An ancestor with `border-radius` and `overflow: hidden` clips the page's content, but the layer gets only the rectangle the ancestors leave. Give `<sk-layer>` the same `border-radius` as the ancestor.
+- **Transforms do not reach the layer.** A CSS `transform` on the element or an ancestor is not applied to it. Move and size the element with layout.
+- **One layer per element.** Two elements with the same `name` get a layer each, unlike `<sk-surface>`, where they share the frames.
+- **Children are not drawn.** Put overlays next to the element, positioned over it.
+- **No `name` property.** From plain JavaScript use `setAttribute("name", …)`. Vue's `:name` and Svelte's `name={…}` set the attribute.
+- **On Linux there is no place under the page yet**: the element lays out, and nothing shows in it.
+
+## Attributes
+
+| Attribute         | What it does                                                 |
+| ----------------- | ------------------------------------------------------------ |
+| `name`            | The layer to show, trimmed, as the embedder registered it.   |
+| `width`, `height` | Size hints in CSS pixels, unitless, as on `<img>`. CSS wins. |
+
+The element has no events of its own. Its size is the layout's: read it with `getBoundingClientRect()` or a `ResizeObserver`. The embedder is told the same box in device pixels without the app passing anything.
+
+## Size and CSS
+
+Size the element as you would a `<div>`: it has no intrinsic size. What reaches the layer:
+
+- the element's box and the part of it inside its ancestors' clips, so scrolling and `overflow` work;
+- its own [`border-radius`](/css/border-radius/);
+- its own [`opacity`](/css/opacity/);
+- whether it is painted at all: under `display: none` or scrolled out of view the layer is hidden, and it comes back with the element.
+
+A layout change and the layer's move are shown in the same frame, so the layer does not lag behind the page during a resize or an animation of `width` and `height`.
+
+## Input and focus
+
+The element is an ordinary hit target. Clicks, pointer events and the wheel go to the element and to your listeners, as on a `<div>`; nothing is forwarded to the layer. `pointer-events: none` lets them through to what is under it in the page. With a `tabindex` it takes focus.
+
+## Platforms
+
+| Platform | The layer                                                                  |
+| -------- | -------------------------------------------------------------------------- |
+| Windows  | a DirectComposition visual under the page, committed with the page's frame |
+| macOS    | a view or layer of the embedder under the page's view                      |
+| Linux    | not shown yet                                                              |
+
+## Compared with the browser
+
+There is no browser element like it. The nearest thing is a transparent page over a native window, which an app has to keep in step with the page by hand; here the page says where the layer is, frame by frame.
+
+## See also
+
+- [Native layer](/embedding/native-layer/): the `Layer` trait and the platforms' details.
+- [`<sk-surface>`](/elements/sk-surface/): frames drawn as part of the page.
+- [Native modules](/embedding/native-modules/): giving the app functions to call the embedder, such as play and seek.
