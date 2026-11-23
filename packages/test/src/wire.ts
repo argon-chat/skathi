@@ -4,6 +4,7 @@
 import { connect, type Socket } from "node:net";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 export type Handshake = { port: number; pid: number; token: string };
 
@@ -40,6 +41,8 @@ export class Wire {
   #connecting: Promise<Socket> | null = null;
   #waiters: Waiter[] = [];
   #buffer = "";
+  // A reply's UTF-8 is split wherever TCP splits it.
+  #decoder = new StringDecoder("utf8");
   #closed = false;
 
   constructor(
@@ -75,7 +78,7 @@ export class Wire {
   }
 
   #onData(chunk: Buffer) {
-    this.#buffer += chunk.toString("utf8");
+    this.#buffer += this.#decoder.write(chunk);
     for (;;) {
       const nl = this.#buffer.indexOf("\n");
       if (nl < 0) break;
@@ -93,6 +96,7 @@ export class Wire {
     const socket = this.#socket;
     this.#socket = null;
     this.#buffer = "";
+    this.#decoder = new StringDecoder("utf8");
     socket?.removeAllListeners();
     socket?.destroy();
     const waiters = this.#waiters;
@@ -145,6 +149,7 @@ export function pingOnce(port: number, token: string, timeoutMs: number): Promis
   return new Promise((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port });
     let buffer = "";
+    const decoder = new StringDecoder("utf8");
     const done = (fn: () => void) => {
       clearTimeout(timer);
       socket.removeAllListeners();
@@ -154,7 +159,7 @@ export function pingOnce(port: number, token: string, timeoutMs: number): Promis
     const timer = setTimeout(() => done(() => reject(new Error("ping timed out"))), timeoutMs);
     socket.on("connect", () => socket.write(JSON.stringify({ token, cmd: "ping" }) + "\n"));
     socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       const nl = buffer.indexOf("\n");
       if (nl < 0) return;
       done(() => {

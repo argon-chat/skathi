@@ -15,6 +15,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { connect } from "node:net";
 import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 import { appSlot } from "./apps";
@@ -50,6 +51,7 @@ function send(port: number, payload: string): Promise<string> {
   return new Promise((resolveReply, reject) => {
     const socket = connect({ host: "127.0.0.1", port });
     let buffer = "";
+    const decoder = new StringDecoder("utf8");
     const timer = setTimeout(() => {
       socket.destroy();
       reject(new Error(`no reply within ${TIMEOUT_MS}ms — the host's frame pump may be wedged`));
@@ -61,7 +63,7 @@ function send(port: number, payload: string): Promise<string> {
     };
     socket.on("connect", () => socket.write(payload + "\n"));
     socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
+      buffer += decoder.write(chunk);
       const nl = buffer.indexOf("\n");
       if (nl >= 0) finish(() => resolveReply(buffer.slice(0, nl)));
     });
