@@ -375,7 +375,7 @@ float4 ps(float4 at : SV_Position) : SV_Target {
             + sin((p.x + p.y) * 1.3 + 2.0 * t)
             + sin(length(p + 1.2 * float2(sin(t), cos(t))) * 3.0 - t);
     float k = saturate(v * 0.125 + 0.5);
-    float3 deep = float3(0.13, 0.08, 0.24), lilac = float3(0.62, 0.45, 0.93);
+    float3 deep = float3(0.36, 0.24, 0.62), lilac = float3(0.62, 0.45, 0.93);
     float3 pink = float3(0.96, 0.52, 0.76), blue = float3(0.50, 0.76, 0.98);
     float3 c = lerp(deep, lilac, smoothstep(0.15, 0.45, k));
     c = lerp(c, pink, smoothstep(0.45, 0.7, k));

@@ -29,7 +29,6 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
     </div>
     <div class="stage">
       <div ref="hole" class="hole" :class="mode">
-        <div class="tint" />
         <div class="clip">
           <sk-layer v-show="mode !== 'hidden'" name="plasma" class="layer" />
           <div v-show="mode !== 'hidden'" class="over">
@@ -92,23 +91,15 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
   width: 470px;
   height: 470px;
 }
-/* The window's tint, drawn round the box so the layer under it shows untinted. */
-.tint {
-  position: absolute;
-  inset: -2400px;
-  border: 2400px solid var(--tint);
-  border-radius: 2434px;
-  transition: border-radius 700ms var(--ease);
-}
-.round .tint {
-  border-radius: 2635px;
-}
 .clip {
   position: absolute;
   inset: 0;
   border-radius: 34px;
   overflow: hidden;
-  box-shadow: 0 24px 60px #0008;
+  /* The window's tint, drawn round the box so the layer under it shows untinted. */
+  box-shadow:
+    0 0 0 2400px var(--tint),
+    0 24px 60px #0008;
   transition: border-radius 700ms var(--ease);
 }
 .round .clip {
@@ -134,7 +125,6 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
   top: 22px;
   display: flex;
   justify-content: space-between;
-  transition: opacity 300ms ease;
 }
 .center {
   position: absolute;
@@ -143,7 +133,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 300ms ease;
+  transition: opacity 120ms ease;
 }
 .bottom {
   position: absolute;
@@ -152,14 +142,20 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: opacity 300ms ease;
+}
+/* Text leaves before the box changes size and comes back after it. */
+.top,
+.bottom {
+  transition: opacity 200ms ease 550ms;
 }
 .round .top,
 .round .bottom {
   opacity: 0;
+  transition: opacity 120ms ease;
 }
 .round .center {
   opacity: 1;
+  transition: opacity 200ms ease 550ms;
 }
 .bottom b {
   font-family: var(--font-display);

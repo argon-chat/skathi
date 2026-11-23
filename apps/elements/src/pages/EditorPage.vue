@@ -380,7 +380,8 @@ onMounted(() => {
   color: var(--blue);
   font-size: 14px;
   font-weight: 600;
-  vertical-align: middle;
+  /* Its name on the line's baseline: `middle` centres the taller chip, which drops the name. */
+  vertical-align: -4px;
 }
 .dot {
   width: 16px;
