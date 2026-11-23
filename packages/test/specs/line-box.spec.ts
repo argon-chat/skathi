@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
-import { type Bounds, launch, type Png, readPng, type SkApp } from "../src/index";
+import { type Bounds, launch, type Png, readPng, SCREENSHOTS, type SkApp } from "../src/index";
 
 // `line-metrics: snapped` and `line-leading: above` against Manrope's own metrics, read from the
 // fixture's font file.
@@ -125,7 +125,7 @@ describe("line-metrics and line-leading", () => {
     expect(await app.eval(`getComputedStyle(document.getElementById("b-above")).lineLeading`)).toBe("above");
   });
 
-  test("the baseline sits at half the leading below the box, or under all of it", async () => {
+  test.skipIf(!SCREENSHOTS)("the baseline sits at half the leading below the box, or under all of it", async () => {
     const png = await shot();
     const [a, d] = snapped(20);
     const split = baseline(png, await box("b-split"));
@@ -138,7 +138,7 @@ describe("line-metrics and line-leading", () => {
     expect(Math.abs(autoAbove - want.autoAbove)).toBeLessThanOrEqual(0.5);
   });
 
-  test("text-box-trim to the text edges leaves the font's ascent and descent", async () => {
+  test.skipIf(!SCREENSHOTS)("text-box-trim to the text edges leaves the font's ascent and descent", async () => {
     const png = await shot();
     const trim = await box("trim");
     console.log("trim", trim.h, baseline(png, trim), MANROPE.ascent * 20, MANROPE.descent * 20);
@@ -146,57 +146,66 @@ describe("line-metrics and line-leading", () => {
     expect(Math.abs(baseline(png, trim) - MANROPE.ascent * 20)).toBeLessThanOrEqual(1);
   });
 
-  test("runs of two sizes share a baseline; the line takes the most each reaches above and below it", async () => {
-    const png = await shot();
-    const [a13, d13] = snapped(13);
-    const [a26, d26] = snapped(26);
-    const mixed = await box("mixed");
-    const above = Math.max(26 - d13, 52 - d26);
-    const below = Math.max(d13, d26);
-    console.log("mixed", mixed.h, baseline(png, mixed), { above, below, a13, a26 });
-    expect(mixed.h).toBe(above + below);
-    expect(baseline(png, mixed)).toBe(above);
-  });
-
-  test("baseline-aligned flex items of two sizes line up on the snapped, above baseline", async () => {
-    const png = await shot();
-    const [, d13] = snapped(13);
-    const [, d26] = snapped(26);
-    const small = await box("r13");
-    const large = await box("r26");
-    const inkSmall = small.y + baseline(png, small);
-    const inkLarge = large.y + baseline(png, large);
-    console.log("row", { small, large, inkSmall, inkLarge });
-    expect(small.y - large.y).toBe(52 - d26 - (26 - d13));
-    expect(inkSmall).toBe(inkLarge);
-    expect(inkLarge - large.y).toBe(52 - d26);
-  });
-
-  test("a field's caret and selection cover its line box; its text sits on the line's baseline", async () => {
-    const [, d] = snapped(20);
-    const field = await box("field");
-    await app.locator("#field").focus();
-    await app.eval(`(document.getElementById("field").setSelectionRange(2, 2), 0)`);
-    let caret: { y: number; h: number } | null = null;
-    let text = NaN;
-    for (let i = 0; i < 20 && !caret; i++) {
-      await sleep(60);
+  test.skipIf(!SCREENSHOTS)(
+    "runs of two sizes share a baseline; the line takes the most each reaches above and below it",
+    async () => {
       const png = await shot();
-      // The first "H"'s stem is the text; the caret is a dark column far taller than a capital.
-      text = baseline(png, field, field.x, field.x + 8);
-      for (let x = Math.floor(field.x); x < field.x + field.w && !caret; x++) {
-        const column = { x, y: field.y, w: 1, h: field.h };
-        if (png.count(column, (luma) => luma < 128) > 30) caret = png.bounds(column, (luma) => luma < 128);
+      const [a13, d13] = snapped(13);
+      const [a26, d26] = snapped(26);
+      const mixed = await box("mixed");
+      const above = Math.max(26 - d13, 52 - d26);
+      const below = Math.max(d13, d26);
+      console.log("mixed", mixed.h, baseline(png, mixed), { above, below, a13, a26 });
+      expect(mixed.h).toBe(above + below);
+      expect(baseline(png, mixed)).toBe(above);
+    },
+  );
+
+  test.skipIf(!SCREENSHOTS)(
+    "baseline-aligned flex items of two sizes line up on the snapped, above baseline",
+    async () => {
+      const png = await shot();
+      const [, d13] = snapped(13);
+      const [, d26] = snapped(26);
+      const small = await box("r13");
+      const large = await box("r26");
+      const inkSmall = small.y + baseline(png, small);
+      const inkLarge = large.y + baseline(png, large);
+      console.log("row", { small, large, inkSmall, inkLarge });
+      expect(small.y - large.y).toBe(52 - d26 - (26 - d13));
+      expect(inkSmall).toBe(inkLarge);
+      expect(inkLarge - large.y).toBe(52 - d26);
+    },
+  );
+
+  test.skipIf(!SCREENSHOTS)(
+    "a field's caret and selection cover its line box; its text sits on the line's baseline",
+    async () => {
+      const [, d] = snapped(20);
+      const field = await box("field");
+      await app.locator("#field").focus();
+      await app.eval(`(document.getElementById("field").setSelectionRange(2, 2), 0)`);
+      let caret: { y: number; h: number } | null = null;
+      let text = NaN;
+      for (let i = 0; i < 20 && !caret; i++) {
+        await sleep(60);
+        const png = await shot();
+        // The first "H"'s stem is the text; the caret is a dark column far taller than a capital.
+        text = baseline(png, field, field.x, field.x + 8);
+        for (let x = Math.floor(field.x); x < field.x + field.w && !caret; x++) {
+          const column = { x, y: field.y, w: 1, h: field.h };
+          if (png.count(column, (luma) => luma < 128) > 30) caret = png.bounds(column, (luma) => luma < 128);
+        }
       }
-    }
-    await app.eval(`(document.getElementById("field").select(), 0)`);
-    await sleep(200);
-    const selection = (await shot()).bounds(field, (_, [r, g, b]) => g > 200 && r < 80 && b < 80);
-    console.log("field", { field, caret, text, selection });
-    expect(text).toBe(40 - d);
-    expect(caret && caret.y - field.y).toBe(0);
-    expect(caret?.h).toBe(40);
-    expect(selection && selection.y - field.y).toBe(0);
-    expect(selection?.h).toBe(40);
-  });
+      await app.eval(`(document.getElementById("field").select(), 0)`);
+      await sleep(200);
+      const selection = (await shot()).bounds(field, (_, [r, g, b]) => g > 200 && r < 80 && b < 80);
+      console.log("field", { field, caret, text, selection });
+      expect(text).toBe(40 - d);
+      expect(caret && caret.y - field.y).toBe(0);
+      expect(caret?.h).toBe(40);
+      expect(selection && selection.y - field.y).toBe(0);
+      expect(selection?.h).toBe(40);
+    },
+  );
 });
