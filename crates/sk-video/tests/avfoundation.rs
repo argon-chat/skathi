@@ -291,15 +291,18 @@ mod mac {
         let end = d.take_events();
         assert!(position(&end, MediaEvent::Pause) < position(&end, MediaEvent::Ended));
         assert!(d.state.ended() && d.state.paused());
+        println!(
+            "end events: {:?}, at t={} of {}",
+            end.iter().map(|e| e.name()).collect::<Vec<_>>(),
+            d.state.current_time(),
+            d.state.duration()
+        );
         assert!(
             (d.state.current_time() - 12.0).abs() < 0.1,
             "t={}",
             d.state.current_time()
         );
-        println!(
-            "end events: {:?}",
-            end.iter().map(|e| e.name()).collect::<Vec<_>>()
-        );
+        assert!(d.state.current_time() <= d.state.duration());
 
         // play() after the end restarts from the beginning.
         d.state.play();

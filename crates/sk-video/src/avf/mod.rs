@@ -692,11 +692,20 @@ impl VideoBackend for AvPlayerBackend {
         if self.item.is_none() {
             return 0.0;
         }
+        let duration = self.duration();
+        if self.ended && duration.is_finite() {
+            return duration;
+        }
+        // With no action at the item's end the player's clock runs on past it until `poll` sees
+        // the end notification and pauses.
         let t = unsafe { self.player.currentTime().seconds() };
-        if t.is_finite() {
-            t.max(0.0)
+        if !t.is_finite() {
+            return 0.0;
+        }
+        if duration.is_finite() {
+            t.clamp(0.0, duration)
         } else {
-            0.0
+            t.max(0.0)
         }
     }
 
