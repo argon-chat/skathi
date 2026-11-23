@@ -1310,9 +1310,9 @@ const typography = section("Typography and text", [
         "`subpixel-antialiased` draws ClearType on Windows whenever the system has it on, in a Mica or transparent window too. It is right only over opaque content: give the text, or a box behind it, an opaque background. Over a see-through part of the window the glyph edges keep their colour fringes against whatever shows through.",
         "`-webkit-font-smoothing` is read as `font-smoothing`; `sk check` suggests the unprefixed spelling.",
         "On Linux the values follow the Windows rules, with subpixel text when the GPU supports dual-source blending.",
+        "On macOS text is always grayscale, as in native apps. `auto` and `subpixel-antialiased` draw it the way AppKit does: CoreGraphics thickens each glyph by an amount its colour selects, light text the most. `antialiased` turns that thickening off, as `-webkit-font-smoothing: antialiased` does in Safari, so text is thinner, light text on a dark ground most of all. With font smoothing turned off in System Settings no text is thickened.",
       ],
       limitations: [
-        "On macOS the property is parsed and changes nothing yet.",
         "Text in a box drawn through its own layer, such as one with `clip-path`, a colour `filter` or a view transition snapshot, draws grayscale.",
       ],
       aliases: [
@@ -1343,7 +1343,7 @@ const typography = section("Typography and text", [
       "It is not an accessibility contrast setting: it does not change colours, and `prefers-contrast` is unrelated.",
     ],
     limitations: [
-      "On macOS it changes nothing: CoreGraphics already thickens text by its colour.",
+      "On macOS it changes nothing: CoreGraphics already thickens each glyph by its colour, in the same five steps of luminance, and the result is blended as is.",
       "On Linux it is built into the renderer but has not been checked on a Linux display.",
     ],
     aliases: ["font dilation", "stem darkening", "light text weight"],

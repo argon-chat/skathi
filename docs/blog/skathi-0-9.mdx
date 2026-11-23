@@ -43,7 +43,7 @@ A space at the start or end of a flex or grid item's text is removed, as in the 
 
 ### Glyph positions by size
 
-On Windows and Linux a glyph is placed in steps that depend on its size: quarters of a pixel below 12px, thirds up to 16px, halves from 17px and whole pixels from 34px (in device pixels), instead of quarters at every size. Small text keeps its spacing, large text stops caching four rasterizations of every glyph, and the glyph atlas holds 7 to 23% fewer tiles depending on the display scale. macOS keeps quarters for now.
+On Windows and Linux a glyph is placed in steps that depend on its size: quarters of a pixel below 12px, thirds up to 16px, halves from 17px and whole pixels from 34px (in device pixels), instead of quarters at every size. Small text keeps its spacing, large text stops caching four rasterizations of every glyph, and the glyph atlas holds 7 to 23% fewer tiles depending on the display scale. macOS follows its own version of the table, below.
 
 ### Scaled text settles
 
@@ -59,15 +59,34 @@ html {
 }
 ```
 
-A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text in a default window is grayscale even when ClearType is on in the system. `subpixel-antialiased` draws ClearType in such a window anyway. It is right only where the text sits on opaque content, such as a panel with a solid background; over a see-through part of the window the colour fringes of the glyph edges stay visible. On macOS the property does nothing yet.
+A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text in a default window is grayscale even when ClearType is on in the system. `subpixel-antialiased` draws ClearType in such a window anyway. It is right only where the text sits on opaque content, such as a panel with a solid background; over a see-through part of the window the colour fringes of the glyph edges stay visible. On macOS text is always grayscale, and `antialiased` turns off the thickening described below.
 
 ### `font-dilation`
 
 Windows gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. `font-dilation: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
 
+### Text on macOS as native apps draw it
+
+Text on macOS was darkened twice: CoreGraphics thickens each glyph by an amount its colour selects, and Skathi's Metal renderer then applied the gamma and contrast correction that DirectWrite text gets on Windows. Coverage is now blended as it is, the way macOS composites a label, and the thickening is chosen from the colour's linear luminance, as CoreGraphics chooses it, so light grey, green and red text get the weight they get in a native app (red used to get black's). Glyphs are placed in the steps macOS uses for their size (thirds of a pixel at 13px on a 1x display, halves at 13px on a Retina display, whole pixels from 17px on Retina) and rounded down as macOS rounds them, and small text keeps the system's vertical hinting. `font-weight: 500` on the system font selects its Medium design, which it drew as Regular before, and large text no longer loses a column of pixels at a glyph's edge. Against CoreText drawing the same line in the same colour, every pixel of the composited text now matches, at 13 and 24px, on 1x and Retina displays, for black, white, greys and saturated colours. Monochrome SVG icons are blended the same way.
+
+`font-smoothing: antialiased` now does on macOS what it does in Safari: it turns the thickening off, so text is thinner, light text on a dark ground most of all. Tailwind's `antialiased` class sets it, so an app that uses that class draws thinner text on macOS than before, as the same page does in Safari.
+
 ### `will-change: transform` moves text as a layer
 
 Text under a moving `translate()` is placed on whole pixels in every frame, so it steps by a pixel against the borders and lines of its box. Inside an element with `will-change: transform` the text now moves with the box instead, and once the box has been still for 200 ms it is drawn sharp where it stopped.
+
+### `line-metrics` and `line-leading`
+
+Two new inherited Skathi properties build a line the way macOS builds a label's. `line-metrics: snapped` rounds the font's ascent and descent to whole pixels, leaves out the line gap and rounds the descent up where rounding would cut into a descender, so the baseline falls on a whole pixel and `line-height: normal` is that box. `line-leading: above` puts all the leading above the font's box instead of half above and half below. Together they reproduce where AppKit and SwiftUI put a label: 13px text is 16px tall with its baseline at 13, and a 24px button that centres it puts the baseline at 17.
+
+```css
+html {
+  line-metrics: snapped;
+  line-leading: above;
+}
+```
+
+The rules are the same on every platform, and the defaults, `auto` and `split`, are CSS's. They apply to layout, painting, selection and the caret, `vertical-align`, `text-box-trim`, baseline alignment, text fields and `<sk-editor>`; in a line that mixes sizes, each run's box comes from its own font, and the line reaches as far above and below the baseline as its runs do.
 
 ## Fixes
 
