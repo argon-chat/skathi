@@ -488,6 +488,8 @@ host_fn!(fn sk_fullscreen_element(_g, args) {
 });
 
 pub fn install(rt: &JsRuntime) {
+    #[cfg(all(feature = "video", feature = "webgpu"))]
+    sk_runtime::redjs_webgpu::video::set_element_source(rt.raw(), video::webgpu_frame);
     #[cfg(all(feature = "video", feature = "audio"))]
     sk_runtime::redjs::webapi::audio::set_media_element_host(rt.raw(), video::graph_audio::connect);
     let fns: &[(&str, u32, *const c_void)] = &[

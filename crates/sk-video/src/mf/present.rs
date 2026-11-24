@@ -70,6 +70,16 @@ impl Presenter {
         self.gpu
     }
 
+    #[cfg(feature = "webgpu")]
+    pub fn snapshot(
+        &self,
+        engine: &IMFMediaEngine,
+        size: (u32, u32),
+        timestamp: i64,
+    ) -> Option<redjs_webgpu::video::Frame> {
+        super::webgpu::capture(&self.device, engine, size, timestamp).ok()
+    }
+
     /// Called when `Window::upload_image_from_gpu` returned `false`: falls back to readback permanently.
     pub fn demote_to_readback(&mut self) {
         if !self.gpu {

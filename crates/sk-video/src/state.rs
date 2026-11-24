@@ -358,6 +358,22 @@ impl VideoState {
         self.cached.as_ref().map(|c| c.image.clone())
     }
 
+    #[cfg(feature = "webgpu")]
+    pub fn webgpu_frame(
+        &mut self,
+    ) -> Result<redjs_webgpu::video::Frame, redjs_webgpu::video::SourceError> {
+        use redjs_webgpu::video::SourceError;
+        // HTTP media is loaded by the system player, which supplies no CORS response metadata.
+        if matches!(self.source(), Some(MediaSource::Uri(uri)) if !uri.starts_with(crate::stream::PREFIX))
+        {
+            return Err(SourceError::Origin);
+        }
+        if self.ready_state() < ReadyState::HaveCurrentData {
+            return Err(SourceError::NoFrame);
+        }
+        self.backend.webgpu_frame().ok_or(SourceError::NoFrame)
+    }
+
     pub fn frame_info(&self) -> Option<((u32, u32), f64)> {
         self.cached.as_ref().map(|c| (c.size, c.pts))
     }

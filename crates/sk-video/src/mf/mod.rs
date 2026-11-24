@@ -15,6 +15,8 @@ mod codecs;
 mod notify;
 mod present;
 mod source;
+#[cfg(feature = "webgpu")]
+mod webgpu;
 
 use std::ffi::c_void;
 use std::path::Path;
@@ -301,9 +303,11 @@ pub struct MediaEngineBackend {
     _notify: IMFMediaEngineNotify,
     queue: Arc<Mutex<Vec<u32>>>,
     presenter: present::Presenter,
-    /// The last PTS `OnVideoStreamTick` reported: unchanged means "no new frame" (`windows-rs`
-    /// collapses `S_FALSE` into `Ok(())`).
+    /// Timestamp last sent to the atlas, in 100 ns units.
     last_pts: i64,
+    current_pts: Option<i64>,
+    #[cfg(feature = "webgpu")]
+    webgpu_snapshot: Option<redjs_webgpu::video::Frame>,
     shared_device: bool,
     /// The bytes of a `data:` source handed to the engine in memory and not yet proved to work:
     /// `SetSourceFromByteStream` reports its verdict asynchronously, so [`Self::retry_bytes_from_file`]
@@ -406,6 +410,9 @@ impl MediaEngineBackend {
             queue,
             presenter: present::Presenter::new(device),
             last_pts: i64::MIN,
+            current_pts: None,
+            #[cfg(feature = "webgpu")]
+            webgpu_snapshot: None,
             shared_device,
             bytes_retry: None,
             wants_playing: false,
@@ -475,7 +482,7 @@ impl MediaEngineBackend {
             return false;
         };
         trace(format_args!("  retrying from {}", path.display()));
-        self.last_pts = i64::MIN;
+        self.reset_picture();
         self.presenter.reset();
         if self.set_source_url(&file_url(&path)).is_err() {
             return false;
@@ -644,6 +651,30 @@ impl Drop for MediaEngineBackend {
     }
 }
 
+impl MediaEngineBackend {
+    fn reset_picture(&mut self) {
+        self.last_pts = i64::MIN;
+        self.current_pts = None;
+        #[cfg(feature = "webgpu")]
+        {
+            self.webgpu_snapshot = None;
+        }
+    }
+
+    fn picture_time(&mut self) -> Option<i64> {
+        let mut pts = 0;
+        // The generated wrapper maps S_FALSE to Ok(0). Only S_OK identifies an actual
+        // decoded picture, including the first legitimate presentation timestamp of zero.
+        let status =
+            unsafe { (self.engine.vtable().OnVideoStreamTick)(self.engine.as_raw(), &mut pts) };
+        if status == windows::Win32::Foundation::S_OK {
+            self.current_pts = Some(pts);
+        }
+        status.ok().ok()?;
+        self.current_pts
+    }
+}
+
 impl VideoBackend for MediaEngineBackend {
     fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
         let failed = |e| {
@@ -668,7 +699,7 @@ impl VideoBackend for MediaEngineBackend {
     }
 
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
-        self.last_pts = i64::MIN;
+        self.reset_picture();
         self.presenter.reset();
         if !matches!(source, MediaSource::StaticBytes { .. }) {
             self.source_control.clear();
@@ -750,7 +781,9 @@ impl VideoBackend for MediaEngineBackend {
     }
 
     fn seek(&mut self, seconds: f64) {
-        let _ = unsafe { self.engine.SetCurrentTime(seconds) };
+        if unsafe { self.engine.SetCurrentTime(seconds) }.is_ok() {
+            self.reset_picture();
+        }
     }
 
     fn set_volume(&mut self, volume: f64) {
@@ -832,6 +865,20 @@ impl VideoBackend for MediaEngineBackend {
         codecs::can_play_type(mime_type)
     }
 
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        let size = self.native_size()?;
+        let timestamp = self.picture_time()? / 10;
+        if let Some(frame) = &self.webgpu_snapshot {
+            if (frame.width, frame.height, frame.timestamp) == (size.0, size.1, timestamp) {
+                return Some(frame.clone());
+            }
+        }
+        let frame = self.presenter.snapshot(&self.engine, size, timestamp)?;
+        self.webgpu_snapshot = Some(frame.clone());
+        Some(frame)
+    }
+
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
         let native = self.native_size()?;
         let size = crate::fit_within(native, request.max_size);
@@ -839,10 +886,7 @@ impl VideoBackend for MediaEngineBackend {
             return None;
         }
 
-        // `OnVideoStreamTick` signals S_OK vs S_FALSE but `windows-rs` maps both to `Ok`, leaving the
-        // PTS zeroed on S_FALSE, so an unchanged PTS means nothing new. Two cases transfer regardless:
-        // the very first frame (PTS 0 is also what S_FALSE leaves) and a resize (the new texture is empty).
-        let pts = unsafe { self.engine.OnVideoStreamTick() }.ok()?;
+        let pts = self.picture_time()?;
         let forced = self.last_pts == i64::MIN || self.presenter.size() != size;
         if !forced && pts == self.last_pts {
             return None;
@@ -907,7 +951,7 @@ impl VideoBackend for MediaEngineBackend {
     fn suspend(&mut self) {
         self.pause();
         self.presenter.reset();
-        self.last_pts = i64::MIN;
+        self.reset_picture();
         // Not `SetSource("")`: rebuilding the pipeline in `resume` grows the process ~5 MiB per
         // park/unpark cycle. A bounded resident cost beats an unbounded one, so the decoder stays.
     }

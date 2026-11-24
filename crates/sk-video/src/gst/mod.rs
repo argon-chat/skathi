@@ -1336,6 +1336,11 @@ impl VideoBackend for GstBackend {
         codecs::can_play_type(self.api, mime_type)
     }
 
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        self.frames.snapshot(self.api)
+    }
+
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
         if self.error.is_some() || self.has_video == Some(false) {
             return None;
@@ -1346,11 +1351,17 @@ impl VideoBackend for GstBackend {
         if target.0 == 0 || target.1 == 0 {
             return None;
         }
-        if target != self.caps_size && !capsfilter.is_null() {
-            self.caps_size = target;
+        // WebGPU reads the media pixels independently of the element's CSS box.
+        let decode = if cfg!(feature = "webgpu") {
+            native
+        } else {
+            target
+        };
+        if decode != self.caps_size && !capsfilter.is_null() {
+            self.caps_size = decode;
             let caps = ffi::c(&format!(
                 "{BASE_CAPS},width={},height={}",
-                target.0, target.1
+                decode.0, decode.1
             ));
             // SAFETY: the capsfilter takes its own reference to the caps.
             unsafe {

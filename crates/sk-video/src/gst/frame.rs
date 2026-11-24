@@ -127,6 +127,18 @@ impl Frames {
         self.held.as_ref().map(|h| h.size)
     }
 
+    #[cfg(feature = "webgpu")]
+    pub fn snapshot(&self, api: &Api) -> Option<redjs_webgpu::video::Frame> {
+        let held = self.held.as_ref()?;
+        redjs_webgpu::video::Frame::packed(
+            held.size.0,
+            held.size.1,
+            (held.pts * 1e6) as i64,
+            bgra(api, &held.sample, held.size, held.size)?,
+            true,
+        )
+    }
+
     /// The newest sample the sink delivered, at `target` (already fitted to the request).
     pub fn present(&mut self, api: &Api, target: (u32, u32)) -> Option<VideoFrame> {
         if target.0 == 0 || target.1 == 0 {

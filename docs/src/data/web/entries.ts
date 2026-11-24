@@ -911,8 +911,9 @@ const graphics = section("Graphics and media", [
   }),
   api("webgpu", "WebGPU", PART, "Renders and computes on the GPU.", {
     notes: [
-      "Typed by the official `@webgpu/types`, which `@skathi-native/runtime` depends on: an app needs no install or `tsconfig.json` change. What they declare that Skathi lacks is under Limitations.",
-      "Backed by wgpu 30: DirectX 12 on Windows, Metal on macOS, Vulkan on Linux.",
+      "The runtime includes the official `@webgpu/types` declarations. Read `adapter.features` to discover this GPU's capabilities and pass the features your shader needs in `requiredFeatures`.",
+      "Windows (DirectX 12), macOS (Metal) and Linux (Vulkan) can report `depth-clip-control`, `depth32float-stencil8`, `texture-compression-bc`, `texture-compression-bc-sliced-3d`, `timestamp-query`, `indirect-first-instance`, `shader-f16`, `rg11b10ufloat-renderable`, `bgra8unorm-storage`, `float32-filterable`, `float32-blendable`, `dual-source-blending`, `primitive-index` and `subgroups`. Availability depends on the GPU and driver.",
+      "Metal and Vulkan can additionally report `texture-compression-etc2`, `texture-compression-astc`, `texture-compression-astc-sliced-3d` and `clip-distances`. Either sliced-3D feature also enables its base compression feature.",
     ],
     values: [
       {
@@ -932,6 +933,26 @@ const graphics = section("Graphics and media", [
         status: OK,
         since: "0.5.0",
         note: "An optional feature: request it in `requiredFeatures`. Timestamps are in nanoseconds.",
+      },
+      {
+        value: "adapter.features / device.features",
+        status: OK,
+        note: "Every device has `core-features-and-limits`. The device additionally exposes the requested optional features and their dependencies. An unsupported requirement rejects the device request.",
+      },
+      {
+        value: "importExternalTexture()",
+        status: PART,
+        note: "DirectX 12 and Metal bind an HTML video element or VideoFrame to a WGSL `texture_external`. A video element import lasts through the current task. A VideoFrame import stays valid until the frame closes.",
+      },
+      {
+        value: "copyExternalImageToTexture()",
+        status: OK,
+        note: "Video elements and VideoFrames support source rectangles, flipY and destination mip and layer selection. Windows uses a GPU copy between compatible decoder and device, macOS wraps IOSurface-backed decoder buffers, and Linux uploads GStreamer's BGRA frames.",
+      },
+      {
+        value: "VideoFrame",
+        status: PART,
+        note: "Capture a video element or an image, or construct a frame from packed RGBA, RGBX, BGRA or BGRX bytes. A frame retains its picture across playback and seeks. Times are in microseconds. Clones close independently.",
       },
       {
         value: "drawIndirect()",
@@ -973,7 +994,7 @@ const graphics = section("Graphics and media", [
         value: "device.adapterInfo",
         status: OK,
         since: "0.5.0",
-        note: "`subgroupMinSize` and `subgroupMaxSize` are 4 and 128, the specification's values while `subgroups` is not a feature.",
+        note: "With `subgroups` enabled, the device reports the adapter's subgroup size range. The default range is 4 to 128.",
       },
       {
         value: "navigator.gpu.wgslLanguageFeatures",
@@ -1000,8 +1021,8 @@ const graphics = section("Graphics and media", [
       },
     ],
     limitations: [
-      "No `importExternalTexture`, and `copyExternalImageToTexture` does not take a `<video>` or a `VideoFrame`.",
-      "`adapter.features` lists only `core-features-and-limits` and `timestamp-query`. Optional features such as `shader-f16`, `subgroups` and the compressed texture formats are not offered.",
+      "On Vulkan, use `copyExternalImageToTexture` with a regular sampled texture. The Vulkan backend in wgpu 30 rejects external texture imports with `NotSupportedError`.",
+      "Video imports and external copies support sRGB. The system player supplies no CORS metadata for remote HTTP media, so reading those video frames raises `SecurityError`. Local assets, data URLs and local media streams can supply frames.",
     ],
     related: ["offscreen-canvas", "webgl", "webgl-2"],
     aliases: [
@@ -1179,8 +1200,12 @@ const graphics = section("Graphics and media", [
   iface("MediaRecorder", NO, "Records a media stream to a file.", {
     related: ["media-stream"],
   }),
-  api("webcodecs", "WebCodecs", NO, "Encodes and decodes audio and video frames.", {
-    aliases: ["VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder"],
+  api("webcodecs", "WebCodecs", PART, "Represents media frames and provides codec interfaces.", {
+    aliases: ["VideoFrame", "VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder"],
+    notes: [
+      "`VideoFrame` captures a video element, image source or packed RGBA/BGRA buffer for WebGPU. It exposes dimensions, a timestamp, duration, `clone()` and `close()`.",
+    ],
+    related: ["webgpu", "video"],
   }),
   api("webrtc", "WebRTC", NO, "Real-time peer-to-peer audio, video and data connections.", {
     aliases: ["RTCPeerConnection", "RTCDataChannel"],

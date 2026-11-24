@@ -13,6 +13,8 @@
 mod audio;
 mod frame;
 mod loader;
+#[cfg(feature = "webgpu")]
+mod webgpu;
 
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -873,6 +875,11 @@ impl VideoBackend for AvPlayerBackend {
             (true, true) => CanPlay::Probably,
             (true, false) => CanPlay::Maybe,
         }
+    }
+
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        self.frames.snapshot()
     }
 
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {

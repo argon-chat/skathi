@@ -25,6 +25,8 @@ use objc2_core_video::{
 };
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 
+#[cfg(feature = "webgpu")]
+use super::webgpu;
 use crate::backend::{FrameRequest, VideoFrame};
 
 extern "C" {
@@ -69,6 +71,24 @@ impl Frames {
         self.last.is_some()
     }
 
+    #[cfg(feature = "webgpu")]
+    pub fn snapshot(&self) -> Option<redjs_webgpu::video::Frame> {
+        use redjs_webgpu::video::Frame;
+        let (buffer, pts) = self.last.as_ref()?;
+        let size = size_of(buffer);
+        let timestamp = (pts * 1e6) as i64;
+        if objc2_core_video::CVPixelBufferGetIOSurface(Some(buffer)).is_some() {
+            Some(Frame::native(
+                size.0,
+                size.1,
+                timestamp,
+                Arc::new(webgpu::Image(buffer.clone())),
+            ))
+        } else {
+            Frame::packed(size.0, size.1, timestamp, bgra(buffer, size, size)?, true)
+        }
+    }
+
     pub fn last_size(&self) -> Option<(u32, u32)> {
         self.last.as_ref().map(|(buffer, _)| size_of(buffer))
     }
@@ -83,17 +103,26 @@ impl Frames {
         let key = |k: &'static CFString| -> &'static NSString {
             unsafe { &*(k as *const CFString).cast() }
         };
+        #[cfg(feature = "webgpu")]
+        let surface_properties = Retained::into_super(Retained::into_super(NSDictionary::<
+            NSString,
+            AnyObject,
+        >::new()));
         let attributes = unsafe {
             NSDictionary::<NSString, AnyObject>::from_retained_objects(
                 &[
                     key(kCVPixelBufferPixelFormatTypeKey),
                     key(kCVPixelBufferWidthKey),
                     key(kCVPixelBufferHeightKey),
+                    #[cfg(feature = "webgpu")]
+                    key(objc2_core_video::kCVPixelBufferIOSurfacePropertiesKey),
                 ],
                 &[
                     number(kCVPixelFormatType_32BGRA),
                     number(size.0),
                     number(size.1),
+                    #[cfg(feature = "webgpu")]
+                    surface_properties,
                 ],
             )
         };
@@ -127,8 +156,13 @@ impl Frames {
         if target.0 == 0 || target.1 == 0 {
             return out;
         }
-        if self.output_size != target {
-            self.attach(item, target);
+        let decode = if cfg!(feature = "webgpu") {
+            native
+        } else {
+            target
+        };
+        if self.output_size != decode {
+            self.attach(item, decode);
             out.output_replaced = true;
         }
         let Some(output) = &self.output else {
@@ -172,7 +206,7 @@ impl Frames {
     }
 }
 
-fn size_of(buffer: &CVPixelBuffer) -> (u32, u32) {
+pub(super) fn size_of(buffer: &CVPixelBuffer) -> (u32, u32) {
     (
         CVPixelBufferGetWidth(buffer) as u32,
         CVPixelBufferGetHeight(buffer) as u32,
@@ -186,7 +220,7 @@ fn seconds(time: CMTime) -> Option<f64> {
 }
 
 /// Packed BGRA at `size`, downscaled on the CPU when the buffer is larger.
-fn bgra(buffer: &CVPixelBuffer, have: (u32, u32), size: (u32, u32)) -> Option<Vec<u8>> {
+pub(super) fn bgra(buffer: &CVPixelBuffer, have: (u32, u32), size: (u32, u32)) -> Option<Vec<u8>> {
     if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA {
         return None;
     }

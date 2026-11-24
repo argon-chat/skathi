@@ -214,6 +214,24 @@ impl VideoBackend for StreamBackend {
     fn can_play_type(&self, _: &str) -> CanPlay {
         CanPlay::No
     }
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        let frame = self
+            .slot
+            .latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .frame
+            .clone()?;
+        redjs_webgpu::video::Frame::packed(
+            frame.size.0,
+            frame.size.1,
+            (frame.pts * 1e6) as i64,
+            frame.bytes.clone(),
+            true,
+        )
+    }
+
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
         if !self.loaded || (self.paused && self.generation != 0) {
             return None;

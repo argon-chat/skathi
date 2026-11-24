@@ -10,6 +10,8 @@ include = ["src/**/*", "build.rs"]
 
 [features]
 default = []
+webgpu = ["dep:redjs-webgpu", "windows/Win32_Graphics_Direct3D11on12", "windows/Win32_Graphics_Direct3D12",
+    "windows/Win32_Security", "dep:objc2-metal", "objc2-core-video/CVPixelBufferIOSurface", "objc2-core-video/objc2-io-surface"]
 # Opt-in software AV1 decoder (dav1d) for machines without `Microsoft.AV1VideoExtension`. Not
 # vendored yet: enabling it only gives a clearer advisory.
 av1-software = []
@@ -27,6 +29,7 @@ name = "audio_route"
 harness = false
 
 [dependencies]
+redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.7.0", optional = true }
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
@@ -58,6 +61,9 @@ windows-core = "0.62"
 libloading = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2-metal = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std", "objc2-io-surface", "MTLAllocation", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes",
+] }
 block2 = "0.6.2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
 objc2 = "0.6.4"

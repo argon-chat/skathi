@@ -9,7 +9,7 @@ homepage.workspace = true
 
 [features]
 default = ["webgpu", "lottie", "video"]
-webgpu = ["sk-runtime/webgpu"]
+webgpu = ["sk-runtime/webgpu", "sk-video?/webgpu"]
 audio = ["sk-runtime/audio"]
 # `<lottie>` and `<sk-sticker>` (ThorVG). Off, both lay out as empty boxes and warn once.
 lottie = ["dep:sk-lottie", "dep:sk-sticker"]
