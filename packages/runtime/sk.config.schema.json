@@ -548,7 +548,7 @@
                   "default": "10.0.26100.0"
                 },
                 "capabilities": {
-                  "description": "What the package declares beside runFullTrust; a device the app uses (microphone, webcam, location) must be listed for Windows to grant it.",
+                  "description": "What the package declares beside runFullTrust; list a device the app uses (microphone, webcam, location) so Windows shows the app's own switch for it in the privacy settings from installation rather than after its first use.",
                   "type": "array",
                   "items": {
                     "enum": [

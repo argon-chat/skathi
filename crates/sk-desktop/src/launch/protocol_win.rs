@@ -17,7 +17,6 @@ use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
 };
-use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
     RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE,
@@ -313,13 +312,6 @@ pub fn unregister_all(hive: &Hive, id: &str) -> Vec<String> {
     }
     drop(classes);
     ours.into_iter().filter(|s| delete(hive, s)).collect()
-}
-
-/// Under MSIX package identity HKCU\Classes writes are virtualised and register nothing.
-pub fn has_package_identity() -> bool {
-    let mut len = 0u32;
-    let r = unsafe { GetCurrentPackageFullName(&mut len, std::ptr::null_mut()) };
-    r == 122
 }
 
 #[cfg(test)]

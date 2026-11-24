@@ -10,6 +10,7 @@ use sk_runtime::JsRuntime;
 pub mod consent;
 pub mod decisions;
 mod js;
+pub mod package;
 pub mod stub;
 
 pub use js::request as request_promise;
@@ -156,10 +157,24 @@ fn mac_privacy_hint(app: &str, page: &str, anchor: &str) -> String {
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn windows_hint(page: &str, device: &str, uri: &str) -> String {
-    format!(
-        "Turn on \"{page} access\" and \"Let desktop apps access your {device}\" in \
-         Settings › Privacy & security › {page} (ms-settings:{uri})."
-    )
+    let app = package::has_identity().then(consent::app_name);
+    windows_hint_for(page, device, uri, app.as_deref())
+}
+
+/// `packaged_app`: the app's name when it runs with package identity, where Windows lists it by
+/// name instead of under the desktop-app toggle.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_hint_for(page: &str, device: &str, uri: &str, packaged_app: Option<&str>) -> String {
+    match packaged_app {
+        None => format!(
+            "Turn on \"{page} access\" and \"Let desktop apps access your {device}\" in \
+             Settings › Privacy & security › {page} (ms-settings:{uri})."
+        ),
+        Some(app) => format!(
+            "Turn on \"{page} access\", \"Let apps access your {device}\" and {app} in \
+             Settings › Privacy & security › {page} (ms-settings:{uri})."
+        ),
+    }
 }
 
 pub fn display_capture_refusal() -> (&'static str, String) {

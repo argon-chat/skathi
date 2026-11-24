@@ -1,12 +1,14 @@
-//! The Windows backend. Skathi is an unpackaged win32 process (no MSIX identity).
+//! The Windows backend, for an unpackaged win32 process or a full-trust MSIX one.
 //!
 //! State comes from the registry consent store, not WinRT: `AppCapability::CheckAccess()` reports
 //! `Allowed` for unpackaged callers even with the microphone toggle off. Both
-//! `HKCU\...\CapabilityAccessManager\ConsentStore\<cap>\Value` (master toggle) and `...\NonPackaged\Value`
-//! (desktop apps) must say Allow.
+//! `HKCU\...\CapabilityAccessManager\ConsentStore\<cap>\Value` (master toggle) and the app's own
+//! toggle must say Allow. Unpackaged, that is `...\NonPackaged\Value` (all desktop apps); with
+//! package identity, `...\<package family name>\Value`, and `NonPackaged` does not apply.
 //!
-//! There is no `prompt` state: Windows never asks an unpackaged process. `request()` opens the
-//! `ms-settings:` page and settles with whatever the user did.
+//! There is no `prompt` state: a packaged app's key may say `Prompt`, which Windows resolves at the
+//! first capture, so it reads like an absent key. `request()` opens the `ms-settings:` page and
+//! settles with whatever the user did.
 //!
 //! One watcher thread waits (`RegNotifyChangeKeyValue`, thread-agnostic) on every consent key, armed
 //! with `REG_NOTIFY_CHANGE_LAST_SET` and no subtree: the per-exe telemetry keys are written whenever
@@ -61,6 +63,11 @@ fn consent_key(cap: Capability) -> Option<&'static str> {
         Capability::Geolocation => Some("location"),
         Capability::Notifications | Capability::ClipboardRead | Capability::ClipboardWrite => None,
     }
+}
+
+/// The consent-store key of this app's own toggle for the capability `key`.
+fn app_consent_path(key: &str, family: Option<&str>) -> String {
+    format!(r"{CONSENT}\{key}\{}", family.unwrap_or("NonPackaged"))
 }
 
 fn policy_value(cap: Capability) -> Option<&'static str> {
@@ -184,9 +191,9 @@ pub fn read_state(cap: Capability) -> PermissionState {
                 return PermissionState::Unsupported;
             };
             let master = consent_value(&format!(r"{CONSENT}\{key}"));
-            let desktop = consent_value(&format!(r"{CONSENT}\{key}\NonPackaged"));
+            let app = consent_value(&app_consent_path(key, crate::package::family_name()));
             // Both gates, and absent means "nothing denies it".
-            if master == Some(false) || desktop == Some(false) {
+            if master == Some(false) || app == Some(false) {
                 PermissionState::Denied
             } else {
                 PermissionState::Granted
@@ -220,8 +227,13 @@ pub fn set_aumid(id: &str) {
     let _ = AUMID.set(Some(id.to_string()));
 }
 
+/// A packaged process's toasts are keyed by the AUMID Windows assigned it.
 fn aumid() -> Option<String> {
-    AUMID.get().cloned().flatten()
+    AUMID
+        .get()
+        .cloned()
+        .flatten()
+        .or_else(|| crate::package::app_user_model_id().map(str::to_owned))
 }
 
 #[derive(Clone, Copy)]
@@ -372,7 +384,7 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
             out.push((HKEY_CURRENT_USER, format!(r"{CONSENT}\{key}"), vec![cap]));
             out.push((
                 HKEY_CURRENT_USER,
-                format!(r"{CONSENT}\{key}\NonPackaged"),
+                app_consent_path(key, crate::package::family_name()),
                 vec![cap],
             ));
         }
@@ -609,6 +621,27 @@ mod tests {
     }
 
     #[test]
+    fn a_packaged_app_reads_its_family_key_and_an_unpackaged_one_the_desktop_key() {
+        assert_eq!(
+            app_consent_path("microphone", None),
+            format!(r"{CONSENT}\microphone\NonPackaged")
+        );
+        assert_eq!(
+            app_consent_path("webcam", Some("Example.Notes_8wekyb3d8bbwe")),
+            format!(r"{CONSENT}\webcam\Example.Notes_8wekyb3d8bbwe")
+        );
+    }
+
+    #[test]
+    fn a_packaged_key_that_says_prompt_does_not_deny() {
+        let base = ScratchKey::new("prompt");
+        base.set("pkg", "Prompt");
+        base.set("denied", "Deny");
+        assert_eq!(consent_value(&format!(r"{}\pkg", base.0)), None);
+        assert_eq!(consent_value(&format!(r"{}\denied", base.0)), Some(false));
+    }
+
+    #[test]
     fn reading_the_real_consent_store_never_says_prompt_and_never_panics() {
         for cap in Capability::ALL.iter().copied() {
             let st = read_state(cap);
@@ -633,8 +666,7 @@ mod tests {
         let keys = watched_keys();
         for cap in Capability::ALL.iter().copied() {
             let Some(k) = consent_key(cap) else { continue };
-            for suffix in ["", r"\NonPackaged"] {
-                let want = format!(r"{CONSENT}\{k}{suffix}");
+            for want in [format!(r"{CONSENT}\{k}"), app_consent_path(k, None)] {
                 assert!(
                     keys.iter()
                         .any(|(r, p, c)| *r == HKEY_CURRENT_USER && *p == want && c.contains(&cap)),

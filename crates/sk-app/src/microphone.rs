@@ -44,7 +44,13 @@ pub fn install() {
 }
 
 fn system_denied_hint() -> Option<&'static str> {
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") && sk_permissions::package::has_identity() {
+        Some(
+            "On Windows: Settings > Privacy & security > Microphone (ms-settings:privacy-microphone); \
+             \"Microphone access\", \"Let apps access your microphone\" and this app's own switch in that \
+             list must be on. appPermissions.request(\"microphone\") opens that page.",
+        )
+    } else if cfg!(target_os = "windows") {
         Some(
             "On Windows: Settings > Privacy & security > Microphone (ms-settings:privacy-microphone); both \
              \"Microphone access\" and \"Let desktop apps access your microphone\" must be on. \

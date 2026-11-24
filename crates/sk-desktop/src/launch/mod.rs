@@ -579,7 +579,7 @@ pub fn register_declared() {
     }
     #[cfg(target_os = "windows")]
     {
-        if protocol_win::has_package_identity() {
+        if sk_permissions::package::has_identity() {
             crate::advise_later(
                 "this app runs with MSIX package identity: per-user protocol registration is virtualised there and \
                  would register nothing — declare the protocols in AppxManifest (uap:Protocol) instead; skipped",
@@ -616,7 +616,7 @@ pub fn js_register(raw: &str) -> Result<(), crate::Fail> {
     };
     #[cfg(target_os = "windows")]
     {
-        if protocol_win::has_package_identity() {
+        if sk_permissions::package::has_identity() {
             return fail("this app runs with MSIX package identity; declare the protocol in AppxManifest (uap:Protocol)".into());
         }
         if b.dev_slot.is_some() {
