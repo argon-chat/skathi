@@ -85,6 +85,26 @@
       ]
     },
     {
+      "name": "font-smoothing",
+      "description": "Skathi: grayscale or subpixel glyph coverage. Inherited.",
+      "syntax": "auto | antialiased | subpixel-antialiased"
+    },
+    {
+      "name": "font-dilation",
+      "description": "Skathi: how much weight glyph edges get for the colour of the text. Inherited.",
+      "syntax": "auto | luminance"
+    },
+    {
+      "name": "line-metrics",
+      "description": "Skathi: what a font contributes to the height of a line, CSS's metrics or whole pixels. Inherited.",
+      "syntax": "auto | snapped"
+    },
+    {
+      "name": "line-leading",
+      "description": "Skathi: where the difference between the line height and the font's box goes. Inherited.",
+      "syntax": "split | above"
+    },
+    {
       "name": "--shading",
       "description": "Skathi: a GPU shader effect on this element only (not inherited, unlike other custom properties). One effect function, or `none`. Out-of-range arguments are clamped. An app's own effects, its shaders/*.slang, are named the same way.",
       "syntax": "none | frost( <number> , <length>? , <color>? ) | noise( <number> , <length>? , <number>? ) | glow( <color>? , <length> , <number> )",
