@@ -15,6 +15,7 @@
 //   "publishSingleFile": true    sk publish writes one exe: the native images, the ICU data and the packs go inside it
 //   "intl": "invariant"          ship no ICU locale data beside the app (default "full": icu.skpk)
 //   "memory": "low"              the engine's allocator keeps no memory in reserve (default "default")
+//   "textRendering": "optimized" the platform's text rasterizer (default "skathi-mode" on Windows and Linux)
 //   "permissions": { "ffi": [{ "name": "sqlite3", "path": "$APP/lib/sqlite3" }] }
 //                                the libraries skathi:ffi may load; none without it
 //   "permissions": { "process": [{ "name": "git", "path": "$PATH/git", "args": ["status"] }] }
@@ -124,6 +125,8 @@ export interface AppConfig {
   intl: IntlMode;
   /** `low`: the engine's allocator commits pages as they fill and returns freed memory at once. */
   memory: MemoryMode;
+  /** Which rasterizer draws text; `undefined`: the platform's default. */
+  textRendering: TextRenderingMode | undefined;
   /** What the app may reach outside the web platform; `undefined` when sk.config.json asks for nothing. */
   permissions: Permissions | undefined;
   windows: WindowsConfig;
@@ -147,6 +150,8 @@ export type IntlMode = "full" | "invariant";
 export const INTL_MODES: readonly IntlMode[] = ["full", "invariant"];
 export type MemoryMode = "default" | "low";
 export const MEMORY_MODES: readonly MemoryMode[] = ["default", "low"];
+export type TextRenderingMode = "skathi-mode" | "optimized";
+export const TEXT_RENDERING_MODES: readonly TextRenderingMode[] = ["skathi-mode", "optimized"];
 
 const PACK_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 /** Pack file names the build writes itself. */
@@ -206,6 +211,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "svelte",
   "intl",
   "memory",
+  "textRendering",
   "permissions",
   "httpCache",
   "colorPicker",
@@ -802,6 +808,12 @@ export function loadAppConfig(
     );
   }
   const memory: MemoryMode = raw.memory === "low" ? "low" : "default";
+  if (raw.textRendering !== undefined && !TEXT_RENDERING_MODES.includes(raw.textRendering as TextRenderingMode)) {
+    throw new ConfigError(
+      'sk.config.json "textRendering" must be "skathi-mode" (grayscale, as macOS draws text) or "optimized" (the platform\'s rasterizer)',
+    );
+  }
+  const textRendering = raw.textRendering as TextRenderingMode | undefined;
   const permissions = readPermissions(raw.permissions, options.platform ?? currentPlatform());
 
   const windows: WindowsConfig = {};
@@ -889,6 +901,7 @@ export function loadAppConfig(
     publishSingleFile: raw.publishSingleFile === true,
     intl,
     memory,
+    textRendering,
     permissions,
     aot: raw.aot === true,
     windows,

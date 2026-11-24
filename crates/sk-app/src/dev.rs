@@ -200,6 +200,16 @@ pub fn memory() -> Option<String> {
     Some(json::parse(&text)?.get("memory")?.as_str()?.to_string())
 }
 
+pub fn text_rendering() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    Some(
+        json::parse(&text)?
+            .get("textRendering")?
+            .as_str()?
+            .to_string(),
+    )
+}
+
 pub fn app_version() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let version = json::parse(&text)?.get("version")?.as_str()?.to_string();

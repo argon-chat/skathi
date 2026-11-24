@@ -208,6 +208,12 @@ pub fn memory() -> Option<String> {
     payload::get().map(|l| l.meta.memory.clone())
 }
 
+pub fn text_rendering() -> Option<String> {
+    payload::get()
+        .map(|l| l.meta.text_rendering.clone())
+        .filter(|mode| !mode.is_empty())
+}
+
 pub fn app_version() -> Option<String> {
     payload::get()
         .map(|l| l.meta.version.clone())

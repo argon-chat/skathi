@@ -1342,6 +1342,9 @@ function writeManifest(files: string[]) {
         version: readAppVersion(),
         runtime: runtimeStamp(),
         ...(readSkConfig()?.memory === "low" && { memory: "low" }),
+        ...(typeof readSkConfig()?.textRendering === "string" && {
+          textRendering: readSkConfig()?.textRendering,
+        }),
         ...(devPermissions() && { permissions: devPermissions() }),
         modules: ids,
         assetFiles: Object.fromEntries(

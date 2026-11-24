@@ -1,5 +1,6 @@
 {
   "name": "font-dilation",
+  "textRendering": "optimized",
 
   "window": {
     "title": "Skathi — font-dilation (fixture)",

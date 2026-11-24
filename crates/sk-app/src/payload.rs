@@ -40,6 +40,8 @@ pub struct Meta {
     pub intl: String,
     /// `"low"`: the app asked for the smaller footprint (`crate::memory`).
     pub memory: String,
+    /// `"skathi-mode"` or `"optimized"` (`crate::text_rendering`); empty is the platform's default.
+    pub text_rendering: String,
     /// `"permissions"` of sk.config.json, as JSON (`crate::permissions`).
     pub permissions: String,
     /// Why the app's runtime cannot run on this host ([`runtime_mismatch`]).
@@ -415,6 +417,7 @@ fn parse_meta(text: &str) -> Meta {
             .collect(),
         intl: s("intl"),
         memory: s("memory"),
+        text_rendering: s("textRendering"),
         permissions: s("permissions"),
         runtime_mismatch: v.get("runtime").and_then(runtime_mismatch),
     }

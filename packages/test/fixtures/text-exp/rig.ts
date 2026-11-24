@@ -10,15 +10,17 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { launch, readPng, type Bounds } from "../../src/index";
 
-// Each variant: the `SK_TEXT_EXPERIMENT` switches and what the page turns on through CSS.
-export const VARIANTS: Record<string, { env: string; css?: string }> = {
+// Each variant: the `SK_TEXT_EXPERIMENT` switches, what the page turns on through CSS, and the
+// text rendering mode (`optimized` unless given).
+export const VARIANTS: Record<string, { env: string; css?: string; rendering?: string }> = {
   baseline: { env: "" },
   "no-phases": { env: "no-phases" },
   contrast: { env: "", css: "contrast" },
   "no-settle": { env: "no-settle" },
   "will-change": { env: "", css: "layer" },
+  "skathi-mode": { env: "", rendering: "skathi-mode" },
 };
-const STATIC = ["baseline", "no-phases", "contrast"];
+const STATIC = ["baseline", "no-phases", "contrast", "skathi-mode"];
 const MOTION = ["baseline", "no-settle", "will-change"];
 const SCALES = (process.env.RIG_SCALES ?? "1,1.25,1.5,2").split(",").map(Number);
 const PAGES = ["light", "dark", "grey", "color", "offsets"];
@@ -42,6 +44,7 @@ async function capture(out: string, only: string[]) {
         label: `text-exp-${variant}`,
         env: {
           SK_TEXT_EXPERIMENT: [VARIANTS[variant]!.env, "log"].filter(Boolean).join(","),
+          SK_TEXT_RENDERING: VARIANTS[variant]!.rendering ?? "optimized",
           SK_LOG: "gpui=info,gpui_windows=info",
         },
       });
@@ -791,10 +794,33 @@ async function post2(out: string) {
   }
 }
 
+// ---- whole windows side by side: one variant against another, 1:1 ----
+
+function sideBySide(out: string, left: string, right: string, dest: string) {
+  const dir = join(out, dest);
+  mkdirSync(dir, { recursive: true });
+  const index: string[] = [`${left} (left) | ${right} (right), whole window at 1:1 device pixels`];
+  for (const scale of SCALES) {
+    const a = metaOf(out, left, scale);
+    const b = metaOf(out, right, scale);
+    if (!a || !b) continue;
+    for (const page of ["light", "dark", "grey", "color"]) {
+      const la = flatten(shot(a, page).file);
+      const lb = flatten(shot(b, page).file);
+      const name = `${page}@${scale}.png`;
+      writeImg(join(dir, name), sheet([[la, lb]], 8, 128));
+      index.push(`${name}\t${page} page at ${scale * 100} %`);
+    }
+  }
+  writeFileSync(join(dir, "index.txt"), index.join("\n") + "\n");
+  console.log(index.join("\n"));
+}
+
 const [cmd, out, ...rest] = process.argv.slice(2);
-if (!out) throw new Error("usage: rig.ts capture|report|mica|post <out> [variant...]");
+if (!out) throw new Error("usage: rig.ts capture|report|mica|post|sides <out> [variant...]");
 if (cmd === "capture") await capture(out, rest);
 else if (cmd === "mica") await mica(out);
+else if (cmd === "sides") sideBySide(out, rest[0] ?? "baseline", rest[1] ?? "skathi-mode", rest[2] ?? "sides");
 else if (cmd === "post") post(out);
 else if (cmd === "post2") await post2(out);
 else report(out);

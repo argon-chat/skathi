@@ -100,6 +100,7 @@ mod slot;
 #[cfg(feature = "spatial-audio")]
 mod spatial_audio;
 mod stdlib;
+mod text_rendering;
 mod transparency;
 pub mod tray;
 mod window;
@@ -1098,6 +1099,7 @@ fn run_app() {
     #[cfg(all(feature = "webgpu", target_os = "windows"))]
     shared_gpu::install().expect("installing shared graphics device provider");
     perf::boot();
+    text_rendering::apply();
     #[cfg(sk_devtools)]
     if heapcount::on() {
         sk_tree::perf::set_live_bytes_probe(|| heapcount::snapshot().map(|s| s.0));
@@ -1439,6 +1441,10 @@ fn run_app() {
         sk_tree::set_sync_layout(sync_layout);
         let text_system = cx.text_system().clone();
         sk_css::set_font_source(move || text_system.all_font_names());
+        let aspect_system = cx.text_system().clone();
+        sk_css::set_font_aspect_source(move |font, aspect| {
+            aspect_system.font_aspect(aspect_system.resolve_font(font), aspect)
+        });
         let metric_system = cx.text_system().clone();
         let metric_text = RefCell::new((0usize, gpui::WindowTextSystem::new(metric_system.clone())));
         sk_css::set_font_metric_source(move |font, size| {

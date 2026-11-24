@@ -223,6 +223,7 @@ export function appMeta(
     launch: config.launch,
     intl: config.intl,
     ...(config.memory === "low" && { memory: config.memory }),
+    ...(config.textRendering && { textRendering: config.textRendering }),
     ...(config.permissions && { permissions: JSON.stringify(config.permissions) }),
     ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });

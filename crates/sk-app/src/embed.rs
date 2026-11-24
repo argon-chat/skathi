@@ -121,6 +121,7 @@ struct Config {
     ffi_address: bool,
     process: Vec<crate::permissions::ProcessEntry>,
     backdrop: Option<String>,
+    text_rendering: Option<TextRendering>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -155,6 +156,14 @@ pub(crate) fn visible() -> bool {
 /// The main window's backdrop when the embedder fixed it with [`Builder::backdrop`].
 pub(crate) fn pinned_backdrop() -> Option<&'static str> {
     CONFIG.get()?.backdrop.as_deref()
+}
+
+/// The text rendering mode when the embedder fixed it with [`Builder::text_rendering`].
+pub(crate) fn pinned_text_rendering() -> Option<gpui::TextRendering> {
+    Some(match CONFIG.get()?.text_rendering? {
+        TextRendering::SkathiMode => gpui::TextRendering::SkathiMode,
+        TextRendering::Optimized => gpui::TextRendering::Optimized,
+    })
 }
 
 /// Seals a dormant profile's localStorage with the OS provider, no plaintext fallback.
@@ -372,6 +381,17 @@ pub struct Builder {
     backdrop: Option<String>,
     display_change: Option<DisplayChange>,
     metal_frame_source: MetalFrameSource,
+    text_rendering: Option<TextRendering>,
+}
+
+/// Which rasterizer draws text ([`Builder::text_rendering`]), as `"textRendering"` in sk.config.json.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextRendering {
+    /// `"skathi-mode"`: grayscale glyphs drawn from unhinted outlines, emboldened for light text,
+    /// as macOS draws them. The default on Windows and Linux; the same as `Optimized` on macOS.
+    SkathiMode,
+    /// `"optimized"`: the platform's rasterizer (DirectWrite with ClearType, CoreText, swash).
+    Optimized,
 }
 
 /// macOS: where a window's frames get their Metal drawables ([`Builder::metal_frame_source`]).
@@ -420,6 +440,7 @@ impl Builder {
             backdrop: None,
             display_change: None,
             metal_frame_source: MetalFrameSource::Auto,
+            text_rendering: None,
         }
     }
 
@@ -566,6 +587,13 @@ impl Builder {
     /// applied. For an embedder that composes its own content under the window.
     pub fn backdrop(mut self, name: impl Into<String>) -> Self {
         self.backdrop = Some(name.into());
+        self
+    }
+
+    /// Fixes the text rendering mode over the payload's `"textRendering"`; `SK_TEXT_RENDERING`
+    /// still decides over it.
+    pub fn text_rendering(mut self, mode: TextRendering) -> Self {
+        self.text_rendering = Some(mode);
         self
     }
 
@@ -807,6 +835,7 @@ impl Builder {
             process: self.process,
             app_menu: self.app_menu,
             backdrop: self.backdrop,
+            text_rendering: self.text_rendering,
         };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);

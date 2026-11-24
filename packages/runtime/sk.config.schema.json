@@ -164,6 +164,10 @@
       "enum": ["default", "low"],
       "default": "default"
     },
+    "textRendering": {
+      "description": "Which rasterizer draws text. \"skathi-mode\": glyphs from the font's unhinted outlines, grayscale, emboldened a little for light text on dark, as macOS draws them; font-smoothing: antialiased turns the emboldening off and subpixel-antialiased is ignored. \"optimized\": the platform's own rasterizer (DirectWrite with ClearType on Windows, CoreText on macOS, swash on Linux), where font-smoothing and font-dilation apply. The default is skathi-mode on Windows and Linux and optimized on macOS, where skathi-mode draws the same. The SK_TEXT_RENDERING environment variable, set to skathi-mode or optimized, decides over this.",
+      "enum": ["skathi-mode", "optimized"]
+    },
     "permissions": {
       "description": "What the app's code may reach outside the web platform. Nothing is allowed without it. An embedded app has what its embedder allows instead.",
       "type": "object",

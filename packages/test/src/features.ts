@@ -7,12 +7,18 @@ import { CHECKOUT, DEFAULT_EXE, REPO, TARGET, WORK_DIR, hostStaleness, requireCu
 export interface FeatureExeOptions {
   /** Cargo features, e.g. */
   features: string[];
+  /** Without sk-app's default features: on Windows, the Direct3D 11 renderer instead of Direct3D 12. */
+  noDefaultFeatures?: boolean;
   log?: (line: string) => void;
 }
 
 /** Where a feature build is kept between runs. */
-export const featureExeDir = (features: string[]) =>
-  join(WORK_DIR, "exes", features.length ? [...features].sort().join("+") : "dev");
+export const featureExeDir = (features: string[], noDefaultFeatures = false) =>
+  join(
+    WORK_DIR,
+    "exes",
+    [noDefaultFeatures ? "no-default" : "", ...[...features].sort()].filter(Boolean).join("+") || "dev",
+  );
 
 /** The sources whose mtime decides whether a staged exe is still the truth. */
 const SOURCE_ROOTS = [join(REPO, "crates"), join(REPO, "apps", "devtools"), join(REPO, "packages", "runtime", "src")];
@@ -103,7 +109,7 @@ export function featureExe(options: FeatureExeOptions): Promise<string> {
       ),
     );
   }
-  const dir = featureExeDir(options.features);
+  const dir = featureExeDir(options.features, options.noDefaultFeatures);
   const key = dir;
   const existing = inFlight.get(key);
   if (existing) return existing;
@@ -132,6 +138,7 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
   // No JS step: a `prod` build carries no app any more (it is stamped in afterwards —
   // `packagedExe`), so the host is the same whatever runs on it.
   const args = ["build", "-p", "sk-app", "--target", TARGET];
+  if (options.noDefaultFeatures) args.push("--no-default-features");
   if (options.features.length) args.push("--features", options.features.join(","));
   run("cargo", args, log);
 
@@ -144,7 +151,8 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
 
   // Put the tree back: the next `cargo build` in somebody's editor must not find a prod host where
   // the dev host belongs.
-  if (options.features.length) run("cargo", ["build", "-p", "sk-app", "--target", TARGET], log);
+  if (options.features.length || options.noDefaultFeatures)
+    run("cargo", ["build", "-p", "sk-app", "--target", TARGET], log);
   return exe;
 }
 

@@ -1,0 +1,12 @@
+{
+  "name": "text-rendering",
+
+  "window": {
+    "title": "Skathi — text-rendering (fixture)",
+    "width": 640,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "none"
+  }
+}
