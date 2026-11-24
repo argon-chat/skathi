@@ -240,6 +240,11 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "line-leading",
     "font-size",
     "font-size-adjust",
+    "font-weight",
+    "font-style",
+    "font-stretch",
+    "font-width",
+    "font-variation-settings",
     "color",
     "text-shadow",
     "box-shadow",
@@ -574,6 +579,19 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 FontAspect::CapHeight => format!("cap-height {value}"),
                 FontAspect::ChWidth => format!("ch-width {value}"),
                 FontAspect::IcWidth => format!("ic-width {value}"),
+            }
+        }
+        "font-weight"
+        | "font-style"
+        | "font-stretch"
+        | "font-width"
+        | "font-variation-settings" => {
+            let font = computed_font(t, id).unwrap_or_default();
+            match name {
+                "font-weight" => font.weight.0.to_string(),
+                "font-style" => sk_css::font_style_css(font.style, font.oblique_angle),
+                "font-variation-settings" => sk_css::font_variations_css(&font.variations),
+                _ => sk_css::font_width_css(font.width),
             }
         }
         "font-size" => {

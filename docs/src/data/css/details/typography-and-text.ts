@@ -151,13 +151,12 @@ const compact = ref(false);
   },
   "font-stretch": {
     edgeCases: [
-      'App stylesheets drop `font-stretch: condensed`, and `CSS.supports("font-stretch", "condensed")` returns `false`. On SVG text, set the stretch directly on the element or in a stylesheet inside the SVG.',
+      "A face declared `font-stretch: 75% 100%` in `@font-face` draws `font-stretch: expanded` at 100%.",
+      "A family with no face near the width asked for and no `wdth` axis draws at the width it has; nothing is synthesized.",
     ],
   },
   "font-width": {
-    edgeCases: [
-      '`font-width: condensed` logs an advisory and is not applied; `CSS.supports("font-width", "condensed")` returns `false`.',
-    ],
+    edgeCases: ["`font-width` and `font-stretch` set the same value; `getComputedStyle` reports both as a percentage."],
   },
   "font-variant": {
     examples: [
@@ -272,7 +271,20 @@ const compact = ref(false);
     ],
   },
   "font-variation-settings": {
-    edgeCases: ["Any value other than `normal` logs an advisory and is not applied."],
+    examples: [
+      {
+        title: "Narrow a variable font and raise its grade",
+        lang: "css",
+        code: `.label {
+  font-family: "Roboto Flex", sans-serif;
+  font-variation-settings: "wdth" 75, "GRAD" 50;
+}`,
+      },
+    ],
+    edgeCases: [
+      "A tag that is not four characters long, or a value that is not a number, drops the declaration with an advisory.",
+      "A setting for `wght` wins over `font-weight`, so `font-weight: bold` on a child does not make it bold while the setting is inherited.",
+    ],
   },
   "font-optical-sizing": {
     examples: [

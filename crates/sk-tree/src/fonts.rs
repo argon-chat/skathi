@@ -24,6 +24,7 @@ pub(crate) struct Descriptors {
     pub stretch: String,
     pub unicode_range: Vec<(u32, u32)>,
     pub display: String,
+    pub variations: gpui::FontVariations,
 }
 
 impl Default for Descriptors {
@@ -35,6 +36,7 @@ impl Default for Descriptors {
             stretch: "normal".into(),
             unicode_range: Vec::new(),
             display: "auto".into(),
+            variations: gpui::FontVariations::default(),
         }
     }
 }
@@ -138,19 +140,22 @@ struct Face {
     registered_as: Option<String>,
 }
 
-/// The family a face is registered under: its own, so the text system draws exactly this file.
-fn face_family(family: &str, id: u32) -> String {
-    format!("{family} (sk face {id})")
+/// The family a face is registered under: its own, so the text system draws exactly this file. It
+/// holds none of the page's words: DirectWrite takes words such as `Narrow` or `Light` out of a
+/// variable font's family name as its width or weight.
+fn face_family(id: u32) -> String {
+    format!("sk face {id}")
 }
 
 fn is_face_family(name: &str) -> bool {
-    name.ends_with(')') && name.contains(" (sk face ")
+    name.strip_prefix("sk face ")
+        .is_some_and(|id| id.parse::<u32>().is_ok())
 }
 
 /// The bytes face `id` is handed to the text system as, and the family it is registered under when
 /// that is its own.
 fn registration(bytes: Vec<u8>, desc: &Descriptors, id: u32) -> (Vec<u8>, Option<String>) {
-    let own = face_family(&desc.family, id);
+    let own = face_family(id);
     match rename_family(&bytes, &own, &own) {
         Some(renamed) => (renamed, Some(own)),
         None => (bytes, None),
@@ -474,14 +479,40 @@ fn best_matching(descs: &[&Descriptors], weight: f32, italic: bool) -> Vec<usize
     styled.into_iter().filter(|&i| rank(i) == best).collect()
 }
 
-/// The weight a face draws a run of `asked` at: clamped to its `font-weight` descriptor. A face
-/// that declares none (the initial `normal`) is left to the font's own `wght` range.
-fn drawn_weight(descriptor: &str, asked: gpui::FontWeight) -> Option<gpui::FontWeight> {
-    if descriptor.trim().eq_ignore_ascii_case("normal") {
-        return None;
-    }
-    let (lo, hi) = weight_range(descriptor);
-    Some(gpui::FontWeight(asked.0.clamp(lo, hi)))
+/// [`best_matching`] among the faces nearest `width` by CSS Fonts 4: a face whose `font-stretch`
+/// range holds it, else narrower ones first at or below 100%, wider ones first above it.
+fn best_matching_width(
+    descs: &[&Descriptors],
+    width: f32,
+    weight: f32,
+    italic: bool,
+) -> Vec<usize> {
+    let rank = |i: usize| {
+        let (lo, hi) = stretch_range(&descs[i].stretch);
+        let hundredths = |d: f32| (d * 100.0) as u32;
+        if lo <= width && width <= hi {
+            (0u8, 0u32)
+        } else if width <= 100.0 {
+            if hi < width {
+                (1, hundredths(width - hi))
+            } else {
+                (2, hundredths(lo - width))
+            }
+        } else if lo > width {
+            (1, hundredths(lo - width))
+        } else {
+            (2, hundredths(width - hi))
+        }
+    };
+    let Some(best) = (0..descs.len()).map(rank).min() else {
+        return Vec::new();
+    };
+    let nearest: Vec<usize> = (0..descs.len()).filter(|&i| rank(i) == best).collect();
+    let subset: Vec<&Descriptors> = nearest.iter().map(|&i| descs[i]).collect();
+    best_matching(&subset, weight, italic)
+        .into_iter()
+        .map(|j| nearest[j])
+        .collect()
 }
 
 fn weight_range(w: &str) -> (f32, f32) {
@@ -1145,21 +1176,17 @@ fn compositions() -> Vec<Composition> {
                 .collect();
             out.push(Composition {
                 family: family.clone(),
-                composer: Arc::new(move |weight, style| compose(&faces, weight, style)),
+                composer: Arc::new(move |font: &gpui::Font| compose(&faces, font)),
             });
         }
         out
     })
 }
 
-fn compose(
-    faces: &[(Descriptors, Option<String>)],
-    weight: gpui::FontWeight,
-    style: gpui::FontStyle,
-) -> Vec<gpui::ComposedFace> {
+fn compose(faces: &[(Descriptors, Option<String>)], font: &gpui::Font) -> Vec<gpui::ComposedFace> {
     let descs: Vec<&Descriptors> = faces.iter().map(|x| &x.0).collect();
-    let italic = !matches!(style, gpui::FontStyle::Normal);
-    best_matching(&descs, weight.0, italic)
+    let italic = !matches!(font.style, gpui::FontStyle::Normal);
+    best_matching_width(&descs, font.width.0, font.weight.0, italic)
         .into_iter()
         .rev()
         .filter_map(|i| {
@@ -1167,10 +1194,50 @@ fn compose(
             Some(gpui::ComposedFace {
                 family: family.clone()?.into(),
                 ranges: desc.unicode_range.clone().into(),
-                weight: drawn_weight(&desc.weight, weight),
+                descriptors: face_descriptors(desc),
             })
         })
         .collect()
+}
+
+/// The ranges a face declares, which clamp what it is drawn at. A descriptor at its initial value
+/// (`normal`) declares none: the font's own axes bound it.
+fn face_descriptors(desc: &Descriptors) -> gpui::FaceDescriptors {
+    let declared = |v: &str| !v.trim().eq_ignore_ascii_case("normal");
+    gpui::FaceDescriptors {
+        weight: declared(&desc.weight).then(|| {
+            let (lo, hi) = weight_range(&desc.weight);
+            (gpui::FontWeight(lo), gpui::FontWeight(hi))
+        }),
+        width: declared(&desc.stretch).then(|| {
+            let (lo, hi) = stretch_range(&desc.stretch);
+            (gpui::FontWidth(lo), gpui::FontWidth(hi))
+        }),
+        oblique: oblique_range(&desc.style)
+            .map(|(lo, hi)| (gpui::ObliqueAngle(lo), gpui::ObliqueAngle(hi))),
+        variations: desc.variations.clone(),
+    }
+}
+
+/// `font-stretch` as a percentage range; a value that does not parse is `normal`.
+fn stretch_range(s: &str) -> (f32, f32) {
+    let mut parts = s.split_whitespace().filter_map(sk_css::font_width_percent);
+    let lo = parts.next().unwrap_or(100.0);
+    let hi = parts.next().unwrap_or(lo);
+    (lo.min(hi), lo.max(hi))
+}
+
+/// The angles of an `oblique` style descriptor in degrees; `oblique` alone is 14deg.
+fn oblique_range(style: &str) -> Option<(f32, f32)> {
+    let style = style.trim().to_ascii_lowercase();
+    let rest = style.strip_prefix("oblique")?;
+    let mut angles = rest.split_whitespace().filter_map(|a| {
+        let a = a.strip_suffix("deg")?;
+        a.parse::<f32>().ok()
+    });
+    let lo = angles.next().unwrap_or(14.0);
+    let hi = angles.next().unwrap_or(lo);
+    Some((lo.min(hi), lo.max(hi)))
 }
 
 fn deliver_events(window: &mut gpui::Window, cx: &mut App) {
@@ -1377,14 +1444,15 @@ pub(crate) fn own_family(sfnt: &[u8]) -> Option<String> {
     None
 }
 
-/// The font with its family names (1, 4, 16, 21) replaced by `family` and its PostScript name (6)
-/// made from `postscript`; `None` for a collection or a font without a readable `name` table.
+/// The font with its family names (1, 4, 16, 21) replaced by `family` and its PostScript name (6),
+/// and a variable font's prefix for its instances' (25), made from `postscript`; `None` for a collection or a font without a readable `name` table.
 pub(crate) fn rename_family(sfnt: &[u8], family: &str, postscript: &str) -> Option<Vec<u8>> {
     let dir = tables(sfnt)?;
     let mut records: Vec<NameRecord> = name_records(sfnt)?
         .into_iter()
-        .filter(|r| !matches!(r.3, 1 | 4 | 6 | 16 | 21))
+        .filter(|r| !matches!(r.3, 1 | 4 | 6 | 16 | 21 | 25))
         .collect();
+    let variable = dir.iter().any(|(tag, _, _)| tag == b"fvar");
     let enc = |s: &str| {
         s.encode_utf16()
             .flat_map(|u| u.to_be_bytes())
@@ -1397,10 +1465,13 @@ pub(crate) fn rename_family(sfnt: &[u8], family: &str, postscript: &str) -> Opti
     for (id, text) in [
         (1, family.to_string()),
         (4, family.to_string()),
-        (6, ps),
+        (6, ps.clone()),
         (16, family.to_string()),
     ] {
         records.push((3, 1, 0x409, id, enc(&text)));
+    }
+    if variable {
+        records.push((3, 1, 0x409, 25, enc(&ps)));
     }
     records.sort_by_key(|r| (r.0, r.1, r.2, r.3));
     let mut table = Vec::new();
@@ -1564,7 +1635,14 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
                 desc.style = match s {
                     FontStyle::Normal => "normal".into(),
                     FontStyle::Italic => "italic".into(),
-                    FontStyle::Oblique(_) => "oblique".into(),
+                    FontStyle::Oblique(range) => {
+                        let (a, b) = (range.0.to_degrees(), range.1.to_degrees());
+                        if a == b {
+                            format!("oblique {a}deg")
+                        } else {
+                            format!("oblique {a}deg {b}deg")
+                        }
+                    }
                 }
             }
             FontFaceProperty::FontWeight(w) => {
@@ -1599,6 +1677,17 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
                 desc.display = v;
             }
         }
+    }
+    // Nor is `font-variation-settings`; its tags keep their case.
+    const VARIATIONS: &str = "font-variation-settings";
+    let variations = lower.find(VARIATIONS).and_then(|at| {
+        let v = block[at + VARIATIONS.len()..]
+            .trim_start()
+            .strip_prefix(':')?;
+        sk_css::font_variations(v.split([';', '}']).next().unwrap_or(""))
+    });
+    if let Some(variations) = variations {
+        desc.variations = variations;
     }
     Some((desc, sources))
 }
@@ -1923,7 +2012,7 @@ mod tests {
                 if matches!(&x.sources[0], Src::Url { url, .. } if urls.contains(&url.as_str())) {
                     x.status = Status::Loaded;
                     x.registered = true;
-                    x.registered_as = Some(face_family(&x.desc.family, x.id));
+                    x.registered_as = Some(face_family(x.id));
                 }
             }
         });
@@ -1935,24 +2024,28 @@ mod tests {
         } else {
             gpui::FontStyle::Normal
         };
-        (c.composer)(gpui::FontWeight(weight), style)
-            .into_iter()
-            .map(|face| {
-                FONTS.with(|f| {
-                    let f = f.borrow();
-                    let x = f
-                        .faces
-                        .iter()
-                        .find(|x| x.registered_as.as_deref() == Some(face.family.as_ref()))
-                        .unwrap();
-                    match &x.sources[0] {
-                        Src::Url { url, .. } => url.clone(),
-                        Src::Local(l) => l.clone(),
-                        Src::Bytes(_) => "<bytes>".into(),
-                    }
-                })
+        (c.composer)(&gpui::Font {
+            weight: gpui::FontWeight(weight),
+            style,
+            ..Default::default()
+        })
+        .into_iter()
+        .map(|face| {
+            FONTS.with(|f| {
+                let f = f.borrow();
+                let x = f
+                    .faces
+                    .iter()
+                    .find(|x| x.registered_as.as_deref() == Some(face.family.as_ref()))
+                    .unwrap();
+                match &x.sources[0] {
+                    Src::Url { url, .. } => url.clone(),
+                    Src::Local(l) => l.clone(),
+                    Src::Bytes(_) => "<bytes>".into(),
+                }
             })
-            .collect()
+        })
+        .collect()
     }
 
     #[test]
@@ -1975,18 +2068,25 @@ mod tests {
             composed_urls(&c[0], 700.0, false),
             vec!["latin.woff2", "cyr.woff2"]
         );
-        let faces = (c[0].composer)(gpui::FontWeight(400.0), gpui::FontStyle::Normal);
+        let faces = (c[0].composer)(&gpui::Font::default());
         assert_eq!(&*faces[0].ranges, &[(0, 0xFF), (0x2000, 0x206F)]);
         assert!(faces[1].covers('Ж') && !faces[1].covers('a'));
         for (asked, drawn) in [(600.0, 600.0), (900.0, 800.0), (100.0, 200.0)] {
-            let faces = (c[0].composer)(gpui::FontWeight(asked), gpui::FontStyle::Normal);
+            let font = gpui::Font {
+                weight: gpui::FontWeight(asked),
+                ..Default::default()
+            };
+            let faces = (c[0].composer)(&font);
             assert_eq!(faces.len(), 2);
             for face in faces {
-                assert_eq!(face.weight, Some(gpui::FontWeight(drawn)), "{asked}");
+                assert_eq!(
+                    face.member(&font).weight,
+                    gpui::FontWeight(drawn),
+                    "{asked}"
+                );
             }
         }
         assert!(is_face_family(&faces[0].family) && !is_face_family("Manrope Variable"));
-        assert_eq!(face_family("Inter", 7), "Inter (sk face 7)");
     }
 
     #[test]
@@ -2013,6 +2113,70 @@ mod tests {
             x.registered = true;
         });
         assert!(compositions().iter().all(|c| c.family != "Unused"));
+    }
+
+    #[test]
+    fn a_composed_family_matches_width_first_and_clamps_to_each_face() {
+        note_sheet(
+            r#"
+@font-face { font-family: W; src: url(n.ttf); font-weight: 400; }
+@font-face { font-family: W; src: url(bold.ttf); font-weight: 700; }
+@font-face { font-family: W; src: url(c.ttf); font-weight: 400; font-stretch: 62.5% 87.5%; }
+@font-face { font-family: W; src: url(x.ttf); font-stretch: expanded;
+  font-style: oblique 0deg 10deg; font-variation-settings: "GRAD" 50, 'wdth' 120; }
+"#,
+        );
+        register(&["n.ttf", "bold.ttf", "c.ttf", "x.ttf"]);
+        let c = compositions();
+        let w = c.iter().find(|c| c.family == "W").unwrap();
+        let urls = |width: f32, weight: f32| {
+            let font = gpui::Font {
+                width: gpui::FontWidth(width),
+                weight: gpui::FontWeight(weight),
+                ..Default::default()
+            };
+            let faces = (w.composer)(&font);
+            let face = faces.first().unwrap();
+            let url = FONTS.with(|f| {
+                let f = f.borrow();
+                let x = f
+                    .faces
+                    .iter()
+                    .find(|x| x.registered_as.as_deref() == Some(face.family.as_ref()))
+                    .unwrap();
+                match &x.sources[0] {
+                    Src::Url { url, .. } => url.clone(),
+                    _ => unreachable!(),
+                }
+            });
+            (url, face.member(&font))
+        };
+        assert_eq!(urls(100.0, 700.0).0, "bold.ttf");
+        let (url, member) = urls(50.0, 700.0);
+        assert_eq!(url, "c.ttf", "a narrower width beats the weight");
+        assert_eq!(member.width, gpui::FontWidth(62.5));
+        assert_eq!(
+            urls(95.0, 400.0).0,
+            "c.ttf",
+            "narrower first at or below 100%"
+        );
+        assert_eq!(urls(105.0, 400.0).0, "x.ttf", "wider first above 100%");
+
+        let (_, member) = urls(130.0, 400.0);
+        assert_eq!(member.width, gpui::FontWidth(125.0));
+        let oblique = gpui::Font {
+            style: gpui::FontStyle::Oblique,
+            oblique_angle: gpui::ObliqueAngle(20.0),
+            variations: sk_css::font_variations("\"wdth\" 110").unwrap(),
+            width: gpui::FontWidth(150.0),
+            ..Default::default()
+        };
+        let member = (w.composer)(&oblique)[0].member(&oblique);
+        assert_eq!(member.oblique_angle, gpui::ObliqueAngle(10.0));
+        assert_eq!(
+            sk_css::font_variations_css(&member.variations),
+            "\"GRAD\" 50, \"wdth\" 110"
+        );
     }
 
     #[test]
@@ -2312,7 +2476,7 @@ mod tests {
                     .cloned()
                     .collect();
                 let composer: gpui::FamilyComposer =
-                    Arc::new(move |weight, style| compose(&faces, weight, style));
+                    Arc::new(move |font: &gpui::Font| compose(&faces, font));
                 (gpui::SharedString::from(family), composer)
             })
             .collect();
@@ -2380,7 +2544,7 @@ mod tests {
         }
         text.add_fonts(files).unwrap();
         let composer: gpui::FamilyComposer =
-            Arc::new(move |weight, style| compose(&registered, weight, style));
+            Arc::new(move |font: &gpui::Font| compose(&registered, font));
         text.set_composed_families(vec![("SK Variable".into(), composer)]);
 
         let width = |sample: &str, weight: f32| {

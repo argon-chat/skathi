@@ -944,19 +944,24 @@ const typography = section("Typography and text", [
     related: ["font", "font-variation-settings"],
   }),
   prop("font-style", OK, "Selects a normal, italic or oblique face of the font.", {
-    limitations: ["The angle of `oblique <angle>` is ignored."],
-    related: ["font"],
+    notes: [
+      "On a variable font, `italic` sets the `ital` axis to 1, or the `slnt` axis to -14deg when the font has no `ital` axis, and `oblique <angle>` sets `slnt` to minus the angle; both stay within the axis and the face's `@font-face` `font-style` range.",
+      "A face with neither axis and no italic face of its own is drawn upright on macOS and Linux; on Windows, DirectWrite slants it.",
+    ],
+    related: ["font", "font-variation-settings"],
   }),
   sh("font", PART, "Sets the font's style, weight, size, line height and family in one declaration.", {
     notes: ["A stylesheet inside an SVG can set `font` on SVG text."],
     workaround: "In app stylesheets, set the font longhands.",
     related: ["font-family", "font-size", "font-weight", "font-style", "line-height"],
   }),
-  prop("font-stretch", PART, "Selects a condensed or expanded face of the font.", {
-    notes: ["On SVG text, `font-stretch: condensed` selects a condensed face when the family has one.", SVG_STYLE_ONLY],
-    related: ["font-width"],
+  prop("font-stretch", OK, "Selects a condensed or expanded face of the font.", {
+    notes: [
+      "Keywords and percentages. A variable font draws at that `wdth`, within the axis and the face's `@font-face` `font-stretch` range; among static faces the nearest width is picked before style and weight.",
+    ],
+    related: ["font-width", "font-variation-settings"],
   }),
-  prop("font-width", NO, "Selects a condensed or expanded face of the font; the newer name of `font-stretch`.", {
+  prop("font-width", OK, "Selects a condensed or expanded face of the font; the newer name of `font-stretch`.", {
     related: ["font-stretch"],
   }),
   sh(
@@ -986,12 +991,18 @@ const typography = section("Typography and text", [
   }),
   prop(
     "font-variation-settings",
-    PART,
-    "Accepts `normal`. Set the weight and style of a variable font with their longhands.",
+    OK,
+    "Sets the axes of a variable font by tag, such as `wdth`, `GRAD` or one of the font's own.",
     {
-      values: [v("normal", OK, "Uses the font's usual axis selection."), v("axis tag and value pairs", NO)],
+      values: [
+        v("normal", OK, "Uses the axes `font-weight`, `font-stretch` and `font-style` set."),
+        v("axis tag and value pairs", OK),
+      ],
       notes: [
-        "`font-weight` sets the `wght` axis, within the face's `font-weight` range, and `opsz` follows the font size. `font-style` picks an italic or oblique face but sets no `ital` or `slnt` axis.",
+        "A setting overrides what `font-weight`, `font-stretch` and `font-style` set on the same axis, and a value outside the axis is clamped to it. An axis the font does not have is ignored.",
+        "The `@font-face` `font-variation-settings` descriptor applies too; the property overrides it axis by axis.",
+        "On macOS the axes are set on `@font-face` fonts; an installed variable font keeps the instance Core Text picks for its weight and style.",
+        "`font-weight`, `font-stretch` and `font-variation-settings` are not animated: they snap to the end value.",
       ],
       related: ["font-weight", "font-style", "font-optical-sizing"],
     },

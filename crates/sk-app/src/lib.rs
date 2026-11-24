@@ -783,9 +783,7 @@ fn window_controls_overlay(window: &Window) -> Option<gpui::Deferred> {
             "Segoe MDL2 Assets".to_string(),
             "Segoe UI Symbol".to_string(),
         ])),
-        features: Default::default(),
-        weight: Default::default(),
-        style: Default::default(),
+        ..Default::default()
     };
     let symbol = overlay
         .symbol_color

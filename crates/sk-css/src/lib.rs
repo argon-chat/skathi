@@ -22,6 +22,7 @@ mod dynamic_range;
 mod element;
 #[cfg(test)]
 mod em_tests;
+mod font_axes;
 mod functions;
 pub mod haptics;
 mod has;
@@ -60,6 +61,9 @@ pub use animator::{
 pub use corner_shape::to_css as corner_shape_css;
 pub use dynamic_range::{DynamicRangeLimit, CONSTRAINED_HEADROOM};
 pub use element::{Interaction, MatchDom};
+pub use font_axes::{
+    font_style_css, font_variations, font_variations_css, font_width_css, font_width_percent,
+};
 #[doc(hidden)]
 pub use keyframes::AnimationDeclarations;
 pub use keyframes::{
@@ -643,6 +647,14 @@ fn refine_font(parent: &gpui::Font, refinement: &gpui::TextStyleRefinement) -> g
             .or_else(|| parent.fallbacks.clone()),
         weight: refinement.font_weight.unwrap_or(parent.weight),
         style: refinement.font_style.unwrap_or(parent.style),
+        width: refinement.font_width.unwrap_or(parent.width),
+        oblique_angle: refinement
+            .font_oblique_angle
+            .unwrap_or(parent.oblique_angle),
+        variations: refinement
+            .font_variations
+            .clone()
+            .unwrap_or_else(|| parent.variations.clone()),
     }
 }
 

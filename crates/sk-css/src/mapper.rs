@@ -6071,14 +6071,30 @@ fn apply_property(
         }
         FontStyle(v) => {
             use lightningcss::properties::font::FontStyle as FS;
-            r.text.font_style = Some(match v {
-                FS::Normal => gpui::FontStyle::Normal,
-                FS::Italic => gpui::FontStyle::Italic,
-                FS::Oblique(_) => {
-                    unsupported(diagnostics, "font-style: oblique <angle> (angle ignored)");
-                    gpui::FontStyle::Oblique
+            let (style, angle) = match v {
+                FS::Normal => (gpui::FontStyle::Normal, gpui::ObliqueAngle::DEFAULT),
+                FS::Italic => (gpui::FontStyle::Italic, gpui::ObliqueAngle::DEFAULT),
+                FS::Oblique(angle) => (
+                    gpui::FontStyle::Oblique,
+                    gpui::ObliqueAngle(angle.to_degrees().clamp(-90.0, 90.0)),
+                ),
+            };
+            r.text.font_style = Some(style);
+            r.text.font_oblique_angle = Some(angle);
+        }
+        FontStretch(v) => {
+            use lightningcss::properties::font::FontStretch as FS;
+            let percent = match v {
+                FS::Percentage(p) => Some(p.0 * 100.0),
+                FS::Keyword(k) => {
+                    lightningcss::traits::ToCss::to_css_string(k, PrinterOptions::default())
+                        .ok()
+                        .and_then(|k| crate::font_width_percent(&k))
                 }
-            });
+            };
+            if let Some(percent) = percent {
+                r.text.font_width = Some(gpui::FontWidth(percent.max(0.0)));
+            }
         }
         TextAlign(v) => {
             use gpui::TextAlign as G;
@@ -6529,15 +6545,33 @@ fn apply_property(
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "font-variation-settings" =>
             {
-                if single_ident_is(&c.value, "normal") || is_css_wide_keyword(&c.value) {
+                if is_css_wide_keyword(&c.value) {
                     return;
                 }
-                warn_once(
-                    diagnostics,
-                    "`font-variation-settings` is not applied (v1) — an arbitrary axis \
-                     (`wdth`, `slnt`, a custom one) cannot be instantiated. `font-weight` sets \
-                     the `wght` axis and `opsz` is driven from the font size",
-                )
+                match value_text(p).and_then(|v| crate::font_variations(&v)) {
+                    Some(variations) => r.text.font_variations = Some(variations),
+                    None => warn_once(
+                        diagnostics,
+                        "a `font-variation-settings` value was not understood — it takes \
+                         `normal` or a list of a four-character quoted axis tag and a number, \
+                         such as `\"wdth\" 75, \"GRAD\" 50`",
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "font-width" =>
+            {
+                if is_css_wide_keyword(&c.value) {
+                    return;
+                }
+                match value_text(p).and_then(|v| crate::font_width_percent(&v)) {
+                    Some(percent) => r.text.font_width = Some(gpui::FontWidth(percent)),
+                    None => warn_once(
+                        diagnostics,
+                        "a `font-width` value was not understood — it takes a keyword such as \
+                         `condensed` or a percentage",
+                    ),
+                }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "touch-action" => {}
@@ -10049,6 +10083,31 @@ mod tests {
         assert_eq!(
             clean("margin: 1px; margin-inline-end: 9px").margin.right,
             Some(px(9.0).into())
+        );
+    }
+
+    #[test]
+    fn font_axes_reach_the_text_style() {
+        let r = clean(
+            "font-stretch: condensed; font-style: oblique 20deg; \
+             font-variation-settings: \"GRAD\" 50, \"wght\" 300",
+        );
+        assert_eq!(r.text.font_width, Some(gpui::FontWidth(75.0)));
+        assert_eq!(r.text.font_style, Some(gpui::FontStyle::Oblique));
+        assert_eq!(r.text.font_oblique_angle, Some(gpui::ObliqueAngle(20.0)));
+        assert_eq!(
+            r.text.font_variations,
+            Some(gpui::FontVariations::new([
+                (gpui::axis_tag(b"wght"), 300.0),
+                (gpui::axis_tag(b"GRAD"), 50.0),
+            ]))
+        );
+        let r = clean("font-width: 87.5%; font-style: italic");
+        assert_eq!(r.text.font_width, Some(gpui::FontWidth(87.5)));
+        assert_eq!(r.text.font_oblique_angle, Some(gpui::ObliqueAngle::DEFAULT));
+        assert_eq!(
+            clean("font-stretch: 130%").text.font_width,
+            Some(gpui::FontWidth(130.0))
         );
     }
 

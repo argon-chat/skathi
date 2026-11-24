@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-font-axes",
+
+  "window": {
+    "title": "Skathi — font axes (fixture)",
+    "width": 360,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

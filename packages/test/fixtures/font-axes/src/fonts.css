@@ -1,0 +1,75 @@
+/* Fixture for specs/font-axes.spec.ts: a variable font with wght, wdth, slnt and GRAD axes, set through font-stretch, font-style and font-variation-settings. */
+
+@font-face {
+  font-family: "Flex";
+  font-weight: 100 1000;
+  font-stretch: 25% 151%;
+  font-style: oblique 0deg 10deg;
+  src: url("./fonts/roboto-flex-axes.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Flex Narrow";
+  font-stretch: 75% 100%;
+  font-variation-settings: "GRAD" 100;
+  src: url("./fonts/roboto-flex-axes.woff2") format("woff2-variations");
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px;
+  background: white;
+  color: black;
+}
+
+.probe {
+  font-family: "Flex";
+  font-size: 28px;
+  line-height: 36px;
+  white-space: nowrap;
+}
+
+.condensed {
+  font-stretch: condensed;
+}
+
+.expanded {
+  font-stretch: 125%;
+}
+
+.width {
+  font-width: 75%;
+}
+
+.settings {
+  font-variation-settings: "wdth" 75;
+}
+
+.override {
+  font-weight: 700;
+  font-variation-settings: "wght" 400;
+}
+
+.oblique {
+  font-style: oblique 8deg;
+}
+
+.italic {
+  font-style: italic;
+}
+
+.grad {
+  font-variation-settings: "GRAD" 150;
+}
+
+.narrow {
+  font-family: "Flex Narrow";
+  font-stretch: 125%;
+}
+
+.narrow-ref {
+  font-variation-settings: "GRAD" 100;
+}
