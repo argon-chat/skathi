@@ -49,7 +49,7 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: Rust
-        run: rustup toolchain install 1.97.1 --profile minimal
+        run: rustup toolchain install 1.100.0 --profile minimal
       - run: bun scripts/publish-crates.ts --tag "$TAG" --check
 
   sk-aot:

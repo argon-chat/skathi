@@ -86,7 +86,7 @@ jobs:
           arch: x64
       - name: Rust
         if: env.SELECTED == 'true'
-        run: rustup toolchain install 1.97.1 --profile minimal --target ${{ matrix.target }}
+        run: rustup toolchain install 1.100.0 --profile minimal --target ${{ matrix.target }}
 
       # Outside the repository, so cargo does not load the workspace (and its other submodules);
       # .cargo/config.toml does not apply there, hence RUSTFLAGS and MACOSX_DEPLOYMENT_TARGET.

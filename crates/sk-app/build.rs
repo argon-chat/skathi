@@ -369,7 +369,11 @@ fn protocol_of(src: &Path) -> String {
 
 fn profile_dir() -> Option<String> {
     let out = PathBuf::from(std::env::var("OUT_DIR").ok()?);
-    let profile = out.ancestors().nth(3)?.file_name()?;
+    let profile = out
+        .ancestors()
+        .find(|dir| dir.ends_with("build"))?
+        .parent()?
+        .file_name()?;
     Some(profile.to_string_lossy().into_owned())
 }
 

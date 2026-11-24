@@ -9,7 +9,7 @@
 // build still needs.
 
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 import { ROOT } from "./package-crates";
 
@@ -34,14 +34,6 @@ const dirs = (path: string) =>
     .filter((e) => e.isDirectory())
     .map((e) => join(path, e.name));
 
-function size(path: string): number {
-  let total = 0;
-  for (const e of readdirSync(path, { withFileTypes: true, recursive: true })) {
-    if (e.isFile()) total += statSync(join(e.parentPath, e.name)).size;
-  }
-  return total;
-}
-
 /** The last time a build wrote into `dir`: cargo replaces a session directory on every compile. */
 function touched(dir: string): number {
   let latest = statSync(dir).mtimeMs;
@@ -57,20 +49,33 @@ function drop(path: string, bytes: number) {
   if (!values["dry-run"]) rmSync(path, { recursive: true, force: true });
 }
 
-/** `<target>/<profile>` and `<target>/<triple>/<profile>`: the directories that hold `deps`. */
+/** Cargo puts host and cross-target profiles one or two levels below the cache root. */
 function profiles(): string[] {
+  const isProfile = (p: string) => existsSync(join(p, "deps")) || existsSync(join(p, ".cargo-build-lock"));
   const out: string[] = [];
   for (const a of dirs(target)) {
-    if (existsSync(join(a, "deps"))) out.push(a);
-    else for (const b of dirs(a)) if (existsSync(join(b, "deps"))) out.push(b);
+    if (isProfile(a)) out.push(a);
+    else for (const b of dirs(a)) if (isProfile(b)) out.push(b);
   }
   return out;
+}
+
+function sweepUnit(unit: string, maxAge: number) {
+  if (now - touched(unit) <= maxAge) return;
+  let bytes = 0;
+  for (const entry of readdirSync(unit, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile() && !entry.isDirectory()) continue;
+    const stat = statSync(join(entry.parentPath, entry.name));
+    if (now - stat.mtimeMs <= maxAge) return;
+    if (entry.isFile()) bytes += stat.size;
+  }
+  drop(unit, bytes);
 }
 
 for (const profile of profiles()) {
   const incremental = join(profile, "incremental");
   if (existsSync(incremental)) {
-    for (const dir of dirs(incremental)) if (now - touched(dir) > cacheAge) drop(dir, size(dir));
+    for (const dir of dirs(incremental)) sweepUnit(dir, cacheAge);
   }
   for (const name of ["deps", "examples"]) {
     const dir = join(profile, name);
@@ -82,10 +87,20 @@ for (const profile of profiles()) {
       if (now - stat.mtimeMs > artifactAge) drop(path, stat.size);
     }
   }
-  for (const name of [".fingerprint", "build"]) {
-    const dir = join(profile, name);
-    if (!existsSync(dir)) continue;
-    for (const unit of dirs(dir)) if (now - touched(unit) > artifactAge) drop(unit, size(unit));
+  const fingerprints = join(profile, ".fingerprint");
+  if (existsSync(fingerprints)) {
+    for (const unit of dirs(fingerprints)) sweepUnit(unit, artifactAge);
+  }
+  const build = join(profile, "build");
+  if (!existsSync(build)) continue;
+  for (const pkg of dirs(build)) {
+    // Cargo 1.100 groups units by package. A sibling with another hash can still be in use.
+    const units = dirs(pkg).filter((path) => /^[0-9a-f]{16}$/.test(basename(path)));
+    if (units.length) {
+      for (const unit of units) sweepUnit(unit, artifactAge);
+    } else if (/-[0-9a-f]{16}$/.test(basename(pkg))) {
+      sweepUnit(pkg, artifactAge);
+    }
   }
 }
 

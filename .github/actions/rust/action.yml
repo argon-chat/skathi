@@ -17,4 +17,4 @@ runs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.cargo/bin:$PATH"
         fi
-        rustup toolchain install 1.97.1 --profile minimal --target ${{ inputs.targets }}
+        rustup toolchain install 1.100.0 --profile minimal --target ${{ inputs.targets }}
