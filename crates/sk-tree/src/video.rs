@@ -22,6 +22,31 @@ use crate::EventPayload;
 #[cfg(feature = "audio")]
 pub(crate) mod graph_audio;
 
+#[cfg(feature = "webgpu")]
+pub(crate) unsafe fn webgpu_frame(
+    g: *mut std::ffi::c_void,
+    object: u64,
+) -> Option<
+    Result<sk_runtime::redjs_webgpu::video::Frame, sk_runtime::redjs_webgpu::video::SourceError>,
+> {
+    let id = crate::native_dom::node_id(g, object)?;
+    if crate::native_dom::node_by_id(g, id) != object
+        || !tree::read_tree(|t| t.node(id).is_some_and(|n| t.name(n.tag) == "video"))
+    {
+        return None;
+    }
+    Some(VIDEO_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let entry = states.get_mut(&id).filter(|entry| {
+            tree::read_tree(|t| t.prop(id, "src").unwrap_or("").trim() == entry.src)
+        });
+        entry
+            .and_then(|entry| entry.state.as_mut())
+            .ok_or(sk_runtime::redjs_webgpu::video::SourceError::NoFrame)?
+            .webgpu_frame()
+    }))
+}
+
 struct Entry {
     src: String,
     /// `None` when no backend could be built or the `src` could not be resolved.

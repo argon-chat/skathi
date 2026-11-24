@@ -257,6 +257,12 @@ impl Drop for HeldGpuFrame {
 /// * [`drain_events`](VideoBackend::drain_events) never re-enters: platform callbacks are queued, not
 ///   dispatched, since a JS handler can mutate the tree.
 pub trait VideoBackend {
+    /// The presentable picture at media resolution, independent of the atlas and its paint size.
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        None
+    }
+
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError>;
 
     /// Route decoded audio to the graph. Video-only streams have no audio to route.

@@ -248,6 +248,36 @@ ctx.lineTo(tip.x, tip.y);`,
   webgpu: {
     examples: [
       {
+        title: "Request hardware features used by a shader",
+        lang: "ts",
+        code: `const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error("No WebGPU adapter");
+const useF16 = adapter.features.has("shader-f16");
+const device = await adapter.requestDevice({ requiredFeatures: useF16 ? ["shader-f16"] : [] });
+const code = useF16
+  ? "enable f16; @compute @workgroup_size(1) fn main() { let x = 1h; }"
+  : "@compute @workgroup_size(1) fn main() { let x = 1f; }";
+const module = device.createShaderModule({ code });`,
+      },
+      {
+        title: "Copy a video frame into a sampled texture",
+        lang: "ts",
+        code: `const video = document.querySelector("video")!;
+await video.play();
+function copyFrame() {
+  if (video.readyState < 2) { requestAnimationFrame(copyFrame); return; }
+  const frame = new VideoFrame(video);
+  const size = [frame.displayWidth, frame.displayHeight] as const;
+  const texture = device.createTexture({ size, format: "rgba8unorm",
+    usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+  device.queue.copyExternalImageToTexture({ source: frame }, { texture }, size);
+  frame.close();
+  // Bind texture.createView() as a texture_2d<f32> in the next pass.
+}
+requestAnimationFrame(copyFrame);`,
+        note: "On DirectX 12 or Metal, bind `device.importExternalTexture({ source: video })` directly to a layout entry with `externalTexture: {}`. Submit the draw in the same task. In WGSL, declare `var picture: texture_external` and sample it with `textureSampleBaseClampToEdge(picture, sampler, uv)`.",
+      },
+      {
         title: "Render a shader into a canvas every frame",
         lang: "ts",
         code: `const adapter = await navigator.gpu.requestAdapter();

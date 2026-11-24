@@ -1,13 +1,10 @@
 // The web surface a Skathi app sees, under the web's names, on top of src/engine.d.ts. NOTHING IS
 // DECLARED THAT THE HOST DOES NOT PROVIDE: lib.dom stays out because it declares far more.
-// WebGPU is the exception: @webgpu/types declares a few calls the host lacks (the web-platform
-// reference's WebGPU limitations), and VideoFrame below exists only so those types resolve.
+// WebGPU uses the official interfaces from @webgpu/types. The reference lists backend capabilities.
 
 /// <reference types="@webgpu/types" />
 
 export {};
-
-declare const noVideoFrame: unique symbol;
 
 // The window: the prelude installs these on `globalThis` before the app bundle evaluates.
 
@@ -1164,10 +1161,34 @@ declare global {
   }
   var OffscreenCanvas: { new (width: number, height: number): OffscreenCanvas; prototype: OffscreenCanvas };
 
-  /** Not provided: WebCodecs is not in Skathi. Declared so the WebGPU types resolve; no value has this type. */
+  /** An immutable video snapshot suitable for WebGPU. Times are in microseconds. */
   interface VideoFrame {
-    readonly [noVideoFrame]: never;
+    readonly codedWidth: number;
+    readonly codedHeight: number;
+    readonly displayWidth: number;
+    readonly displayHeight: number;
+    readonly timestamp: number;
+    readonly duration: number | null;
+    readonly format: "RGBA" | "RGBX" | "BGRA" | "BGRX" | null;
+    clone(): VideoFrame;
+    close(): void;
   }
+  var VideoFrame: {
+    new (source: HTMLVideoElement | VideoFrame, init?: { timestamp?: number; duration?: number }): VideoFrame;
+    new (source: CanvasImageSource | ImageData, init: { timestamp: number; duration?: number }): VideoFrame;
+    new (
+      data: BufferSource,
+      init: {
+        format: "RGBA" | "RGBX" | "BGRA" | "BGRX";
+        codedWidth: number;
+        codedHeight: number;
+        timestamp: number;
+        duration?: number;
+        layout?: readonly { offset: number; stride: number }[];
+      },
+    ): VideoFrame;
+    prototype: VideoFrame;
+  };
 
   interface WindowProxy {
     readonly document: unknown;

@@ -12,6 +12,89 @@ afterAll(async () => {
 
 const T = 60_000;
 
+test(
+  "a decoded video and its retained VideoFrame copy the same media pixels",
+  async () => {
+    const clip = await Bun.file(new URL("../fixtures/paint-only/src/clip-tiny.mp4", import.meta.url)).arrayBuffer();
+    const src = "data:video/mp4;base64," + Buffer.from(clip).toString("base64");
+    const result = await inPage(`
+    const d = await (await navigator.gpu.requestAdapter()).requestDevice();
+    const video = document.createElement('video');
+    video.muted = true;
+    video.style.width = '80px'; video.style.height = '45px';
+    document.body.appendChild(video);
+    try {
+      video.src = ${JSON.stringify(src)};
+      await video.play();
+      let frame;
+      for (let i=0;i<160 && !frame;i++) {
+        try { frame = new VideoFrame(video); }
+        catch(e) { if (e.name !== 'InvalidStateError') throw e; await new Promise(r=>setTimeout(r,50)); }
+      }
+      if (!frame) throw Error('decoder supplied no frame, readyState='+video.readyState);
+      video.pause();
+      const snap = frame.clone(); frame.close();
+      const size = [snap.codedWidth,snap.codedHeight];
+      const tex = d.createTexture({format:'rgba8unorm',size:[3,1],
+        usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.COPY_SRC|GPUTextureUsage.RENDER_ATTACHMENT});
+      d.pushErrorScope('validation');
+      d.queue.copyExternalImageToTexture({source:video,origin:[2,2]},{texture:tex},[1,1]);
+      let draw;
+      try {
+        const picture = d.importExternalTexture({source:video});
+        const shader = d.createShaderModule({code:
+          '@group(0) @binding(0) var picture:texture_external;' +
+          '@vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4f {' +
+          'let xy=array(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));return vec4f(xy[i],0,1);}' +
+          '@fragment fn fs()->@location(0) vec4f {return textureLoad(picture,vec2u(2,2));}'});
+        const pipeline=d.createRenderPipeline({layout:'auto',vertex:{module:shader,entryPoint:'vs'},
+          fragment:{module:shader,entryPoint:'fs',targets:[{format:'rgba8unorm'}]}});
+        const group=d.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:picture}]});
+        draw=()=>{
+          const enc=d.createCommandEncoder(), pass=enc.beginRenderPass({colorAttachments:[
+            {view:tex.createView(),loadOp:'load',storeOp:'store'}]});
+          pass.setPipeline(pipeline); pass.setBindGroup(0,group); pass.setScissorRect(2,0,1,1);
+          pass.draw(3); pass.end(); d.queue.submit([enc.finish()]);
+        };
+        draw();
+      } catch(e) { if(e.name!=='NotSupportedError') throw e; }
+      video.src = '';
+      try { new VideoFrame(video); throw Error('reused a frame from the previous source'); }
+      catch(e) { if(e.name!=='InvalidStateError') throw e; }
+      video.remove();
+      d.queue.copyExternalImageToTexture({source:snap,origin:[2,2]},{texture:tex,origin:[1,0]},[1,1]);
+      let imported = false;
+      try { imported = d.importExternalTexture({source:snap}) instanceof GPUExternalTexture; }
+      catch(e) { if(e.name !== 'NotSupportedError') throw e; }
+      const out=d.createBuffer({size:256,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+      const cmd=d.createCommandEncoder();
+      cmd.copyTextureToBuffer({texture:tex},{buffer:out,bytesPerRow:256},[3,1]); d.queue.submit([cmd.finish()]);
+      const error = await d.popErrorScope(); if(error) throw Error(error.message);
+      await out.mapAsync(GPUMapMode.READ);
+      const bytes = new Uint8Array(out.getMappedRange()).slice(0,12); out.unmap(); snap.close();
+      if(draw) {
+        await new Promise(r=>setTimeout(r,0));
+        d.pushErrorScope('validation'); draw();
+        if(!(await d.popErrorScope() instanceof GPUValidationError)) throw Error('element import did not expire');
+      }
+      return {size, imported, elementImported:!!draw,
+        matching:bytes.slice(0,4).every((v,i)=>Math.abs(v-bytes[4+i])<=3 && (!draw || Math.abs(v-bytes[8+i])<=3)),
+        decoded:bytes[0]>60 && bytes[0]<150 && bytes[3]===255 ? true : Array.from(bytes)};
+    } finally { video.pause(); video.remove(); d.destroy(); }
+  `);
+    expect(result).toEqual({
+      ok: {
+        size: [160, 90],
+        imported: process.platform !== "linux",
+        elementImported: process.platform !== "linux",
+        matching: true,
+        decoded: true,
+      },
+    });
+  },
+  T,
+);
+
 async function inPage(body: string): Promise<unknown> {
   await app.eval(
     `globalThis.__gpu = undefined; (async () => { ${body} })().then(` +

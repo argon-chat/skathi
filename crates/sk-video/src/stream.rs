@@ -113,6 +113,8 @@ pub fn backend(url: &str) -> Result<Box<dyn VideoBackend>, MediaError> {
         metadata: false,
         ended_event: false,
         generation: 0,
+        #[cfg(feature = "webgpu")]
+        displayed: None,
         size: (0, 0),
         time: 0.0,
         events: Vec::new(),
@@ -126,6 +128,8 @@ struct StreamBackend {
     metadata: bool,
     ended_event: bool,
     generation: u64,
+    #[cfg(feature = "webgpu")]
+    displayed: Option<Arc<Pixels>>,
     size: (u32, u32),
     time: f64,
     events: Vec<MediaEvent>,
@@ -214,6 +218,18 @@ impl VideoBackend for StreamBackend {
     fn can_play_type(&self, _: &str) -> CanPlay {
         CanPlay::No
     }
+    #[cfg(feature = "webgpu")]
+    fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        let frame = self.displayed.as_ref()?;
+        redjs_webgpu::video::Frame::packed(
+            frame.size.0,
+            frame.size.1,
+            (frame.pts * 1e6) as i64,
+            frame.bytes.clone(),
+            redjs_webgpu::video::PixelFormat::Bgra,
+        )
+    }
+
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
         if !self.loaded || (self.paused && self.generation != 0) {
             return None;
@@ -243,6 +259,10 @@ impl VideoBackend for StreamBackend {
             )
         };
         self.generation = frame.generation;
+        #[cfg(feature = "webgpu")]
+        {
+            self.displayed = Some(frame.clone());
+        }
         self.size = size;
         self.time = frame.pts;
         Some(VideoFrame {
@@ -304,10 +324,14 @@ mod tests {
         slot.publish(4, 2, vec![0; 1]);
         assert!(a.present(&request).is_none());
         a.pause();
-        slot.publish(4, 2, vec![0; 32]);
+        slot.publish(6, 2, vec![0; 48]);
         assert!(a.present(&request).is_none());
+        #[cfg(feature = "webgpu")]
+        assert_eq!(a.webgpu_frame().unwrap().width, 4);
         a.play();
         assert!(a.present(&request).is_some());
+        #[cfg(feature = "webgpu")]
+        assert_eq!(a.webgpu_frame().unwrap().width, 6);
         unregister(&url);
         assert!(a.ended());
         assert!(backend(&url).is_err());

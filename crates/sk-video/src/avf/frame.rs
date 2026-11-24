@@ -25,6 +25,8 @@ use objc2_core_video::{
 };
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 
+#[cfg(feature = "webgpu")]
+use super::webgpu;
 use crate::backend::{FrameRequest, VideoFrame};
 
 extern "C" {
@@ -35,6 +37,10 @@ extern "C" {
 pub(super) struct Frames {
     output: Option<Retained<AVPlayerItemVideoOutput>>,
     output_size: (u32, u32),
+    #[cfg(feature = "webgpu")]
+    media_output: Option<((u32, u32), Retained<AVPlayerItemVideoOutput>)>,
+    #[cfg(feature = "webgpu")]
+    media_frame: Option<(Retained<CVPixelBuffer>, f64)>,
     /// Kept so a resize, or a paused element's single seek frame, can be produced again.
     last: Option<(Retained<CVPixelBuffer>, f64)>,
     /// The frame box the last presented image was made for.
@@ -50,6 +56,13 @@ pub(super) struct Presented {
 
 impl Frames {
     pub fn detach(&mut self, item: Option<&AVPlayerItem>) {
+        #[cfg(feature = "webgpu")]
+        {
+            if let (Some(item), Some((_, output))) = (item, self.media_output.take()) {
+                unsafe { item.removeOutput(&output) };
+            }
+            self.media_frame = None;
+        }
         if let (Some(item), Some(output)) = (item, self.output.take()) {
             unsafe { item.removeOutput(&output) };
         }
@@ -61,6 +74,10 @@ impl Frames {
 
     /// Forgets the frame but keeps the output.
     pub fn forget(&mut self) {
+        #[cfg(feature = "webgpu")]
+        {
+            self.media_frame = None;
+        }
         self.last = None;
         self.presented_for = (0, 0);
     }
@@ -69,11 +86,43 @@ impl Frames {
         self.last.is_some()
     }
 
+    #[cfg(feature = "webgpu")]
+    pub fn snapshot(&mut self) -> Option<redjs_webgpu::video::Frame> {
+        use redjs_webgpu::video::{Frame, PixelFormat};
+        let (buffer, pts) = if let Some((_, output)) = &self.media_output {
+            if let Some(frame) = acquire(output) {
+                self.media_frame = Some(frame);
+            }
+            self.media_frame.as_ref()?
+        } else {
+            self.last.as_ref()?
+        };
+        let size = size_of(buffer);
+        let timestamp = (pts * 1e6) as i64;
+        if objc2_core_video::CVPixelBufferGetIOSurface(Some(buffer)).is_some() {
+            Some(Frame::native(
+                size.0,
+                size.1,
+                timestamp,
+                PixelFormat::Bgra,
+                Arc::new(webgpu::Image(buffer.clone())),
+            ))
+        } else {
+            Frame::packed(
+                size.0,
+                size.1,
+                timestamp,
+                bgra(buffer, size, size)?,
+                PixelFormat::Bgra,
+            )
+        }
+    }
+
     pub fn last_size(&self) -> Option<(u32, u32)> {
         self.last.as_ref().map(|(buffer, _)| size_of(buffer))
     }
 
-    fn attach(&mut self, item: &AVPlayerItem, size: (u32, u32)) {
+    fn attach(item: &AVPlayerItem, size: (u32, u32)) -> Retained<AVPlayerItemVideoOutput> {
         let number = |n: u32| -> Retained<AnyObject> {
             Retained::into_super(Retained::into_super(Retained::into_super(
                 NSNumber::new_u32(n),
@@ -83,17 +132,26 @@ impl Frames {
         let key = |k: &'static CFString| -> &'static NSString {
             unsafe { &*(k as *const CFString).cast() }
         };
+        #[cfg(feature = "webgpu")]
+        let surface_properties = Retained::into_super(Retained::into_super(NSDictionary::<
+            NSString,
+            AnyObject,
+        >::new()));
         let attributes = unsafe {
             NSDictionary::<NSString, AnyObject>::from_retained_objects(
                 &[
                     key(kCVPixelBufferPixelFormatTypeKey),
                     key(kCVPixelBufferWidthKey),
                     key(kCVPixelBufferHeightKey),
+                    #[cfg(feature = "webgpu")]
+                    key(objc2_core_video::kCVPixelBufferIOSurfacePropertiesKey),
                 ],
                 &[
                     number(kCVPixelFormatType_32BGRA),
                     number(size.0),
                     number(size.1),
+                    #[cfg(feature = "webgpu")]
+                    surface_properties,
                 ],
             )
         };
@@ -105,11 +163,8 @@ impl Frames {
         };
         unsafe {
             item.addOutput(&output);
-            if let Some(old) = self.output.replace(output) {
-                item.removeOutput(&old);
-            }
         }
-        self.output_size = size;
+        output
     }
 
     /// The frame due now on the player's clock (so the picture follows the audio), at `request`'s size.
@@ -127,27 +182,35 @@ impl Frames {
         if target.0 == 0 || target.1 == 0 {
             return out;
         }
+        // AVFoundation tracks acquisition separately for each output. The display output
+        // stays GPU-scaled to the paint box, while a WebGPU reader pulls full-size buffers.
+        #[cfg(feature = "webgpu")]
+        if (target != native || self.media_output.is_some())
+            && self
+                .media_output
+                .as_ref()
+                .is_none_or(|(size, _)| *size != native)
+        {
+            let output = Self::attach(item, native);
+            if let Some((_, old)) = self.media_output.replace((native, output)) {
+                unsafe { item.removeOutput(&old) };
+            }
+            self.media_frame = None;
+        }
         if self.output_size != target {
-            self.attach(item, target);
+            let output = Self::attach(item, target);
+            if let Some(old) = self.output.replace(output) {
+                unsafe { item.removeOutput(&old) };
+            }
+            self.output_size = target;
             out.output_replaced = true;
         }
         let Some(output) = &self.output else {
             return out;
         };
-        // SAFETY: plain queries on a live output; the out-pointer is a local.
-        let fresh = unsafe {
-            let now = output.itemTimeForMachAbsoluteTime(mach_absolute_time() as i64);
-            let mut shown = kCMTimeInvalid;
-            output.hasNewPixelBufferForItemTime(now)
-                && output
-                    .copyPixelBufferForItemTime_itemTimeForDisplay(now, &mut shown)
-                    .map(|buffer| {
-                        let pts = seconds(shown).or_else(|| seconds(now)).unwrap_or(0.0);
-                        self.last = Some((buffer, pts));
-                    })
-                    .is_some()
-        };
-        if !fresh && self.presented_for == target {
+        if let Some(frame) = acquire(output) {
+            self.last = Some(frame);
+        } else if self.presented_for == target {
             return out;
         }
         let Some((buffer, pts)) = &self.last else {
@@ -172,7 +235,22 @@ impl Frames {
     }
 }
 
-fn size_of(buffer: &CVPixelBuffer) -> (u32, u32) {
+fn acquire(output: &AVPlayerItemVideoOutput) -> Option<(Retained<CVPixelBuffer>, f64)> {
+    unsafe {
+        let now = output.itemTimeForMachAbsoluteTime(mach_absolute_time() as i64);
+        let mut shown = kCMTimeInvalid;
+        if !output.hasNewPixelBufferForItemTime(now) {
+            return None;
+        }
+        let buffer = output.copyPixelBufferForItemTime_itemTimeForDisplay(now, &mut shown)?;
+        Some((
+            buffer,
+            seconds(shown).or_else(|| seconds(now)).unwrap_or(0.0),
+        ))
+    }
+}
+
+pub(super) fn size_of(buffer: &CVPixelBuffer) -> (u32, u32) {
     (
         CVPixelBufferGetWidth(buffer) as u32,
         CVPixelBufferGetHeight(buffer) as u32,
@@ -186,7 +264,7 @@ fn seconds(time: CMTime) -> Option<f64> {
 }
 
 /// Packed BGRA at `size`, downscaled on the CPU when the buffer is larger.
-fn bgra(buffer: &CVPixelBuffer, have: (u32, u32), size: (u32, u32)) -> Option<Vec<u8>> {
+pub(super) fn bgra(buffer: &CVPixelBuffer, have: (u32, u32), size: (u32, u32)) -> Option<Vec<u8>> {
     if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA {
         return None;
     }
