@@ -5352,7 +5352,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "sk-app"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5412,7 +5412,7 @@ dependencies = [
 
 [[package]]
 name = "sk-audio"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "redjs",
  "windows 0.62.2",
@@ -5421,7 +5421,7 @@ dependencies = [
 
 [[package]]
 name = "sk-clipboard"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "image",
  "sk-runtime",
@@ -5431,7 +5431,7 @@ dependencies = [
 
 [[package]]
 name = "sk-css"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "cssparser",
  "lightningcss",
@@ -5444,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "sk-desktop"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "ashpd",
  "async-io",
@@ -5472,11 +5472,11 @@ dependencies = [
 
 [[package]]
 name = "sk-editor"
-version = "0.8.0"
+version = "0.8.5"
 
 [[package]]
 name = "sk-effects"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -5485,7 +5485,7 @@ dependencies = [
 
 [[package]]
 name = "sk-elements"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "sk-editor",
  "skathi-gpui",
@@ -5493,7 +5493,7 @@ dependencies = [
 
 [[package]]
 name = "sk-ffi"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -5501,14 +5501,14 @@ dependencies = [
 
 [[package]]
 name = "sk-hotkeys"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "sk-locale"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "serde_json",
  "sk-runtime",
@@ -5516,7 +5516,7 @@ dependencies = [
 
 [[package]]
 name = "sk-lottie"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "flate2",
  "image",
@@ -5529,11 +5529,11 @@ dependencies = [
 
 [[package]]
 name = "sk-payload"
-version = "0.8.0"
+version = "0.8.5"
 
 [[package]]
 name = "sk-permissions"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -5547,14 +5547,14 @@ dependencies = [
 
 [[package]]
 name = "sk-resample"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "sk-runtime"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "redjs",
  "redjs-webgpu",
@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "sk-sticker"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "lz4_flex",
  "sk-lottie",
@@ -5574,7 +5574,7 @@ dependencies = [
 
 [[package]]
 name = "sk-storage"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "core-foundation",
  "futures-lite",
@@ -5589,7 +5589,7 @@ dependencies = [
 
 [[package]]
 name = "sk-thorvg-sys"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "cc",
  "flate2",
@@ -5598,7 +5598,7 @@ dependencies = [
 
 [[package]]
 name = "sk-tree"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "block2 0.6.2",
  "futures",
@@ -5636,7 +5636,7 @@ dependencies = [
 
 [[package]]
 name = "sk-video"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -5656,14 +5656,14 @@ dependencies = [
 
 [[package]]
 name = "sk-vpx-sys"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "sk-webview"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.4",
@@ -5681,11 +5681,11 @@ dependencies = [
 
 [[package]]
 name = "sk-yuv"
-version = "0.8.0"
+version = "0.8.5"
 
 [[package]]
 name = "skathi"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "serde_json",
  "sk-app",
@@ -5695,7 +5695,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -5756,7 +5756,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-apple"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-task",
@@ -5794,7 +5794,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-collections"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.3",
@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-derive-refineable"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5812,7 +5812,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-http-client"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -5828,7 +5828,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-ios"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -5848,7 +5848,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-linux"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -5891,7 +5891,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-macos"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5930,7 +5930,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-macros"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5940,7 +5940,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-platform"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5954,14 +5954,14 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-refineable"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "skathi-gpui-derive-refineable",
 ]
 
 [[package]]
 name = "skathi-gpui-scheduler"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "async-task",
  "backtrace",
@@ -5975,7 +5975,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-shared-string"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "serde",
  "smol_str 0.3.6",
@@ -5983,7 +5983,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-sum-tree"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "heapless",
  "skathi-gpui-ztracing",
@@ -5992,7 +5992,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-util"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "log",
@@ -6001,7 +6001,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-web"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6028,7 +6028,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-wgpu"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-windows"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -6084,7 +6084,7 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-ztracing"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "skathi-gpui-ztracing-macro",
  "tracing",
@@ -6092,11 +6092,11 @@ dependencies = [
 
 [[package]]
 name = "skathi-gpui-ztracing-macro"
-version = "0.8.0"
+version = "0.8.5"
 
 [[package]]
 name = "skathi-macros"
-version = "0.8.0"
+version = "0.8.5"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -8,5 +8,5 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.0", default-features = false }
-sk-editor = { path = "../sk-editor", version = "0.8.0" }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
+sk-editor = { path = "../sk-editor", version = "0.8.5" }

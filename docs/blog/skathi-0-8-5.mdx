@@ -1,10 +1,10 @@
 ---
 title: Skathi 0.8.5
 metaTitle: "Skathi 0.8.5"
-description: Text that matches the browsers' line boxes.
-date: 2026-11-23
-draft: true
-tags: [release, text, css]
+description: Text drawn the same on every platform, line boxes that match the browsers, and sk package for MSIX, DMG and AppImage.
+date: 2026-11-24
+draft: false
+tags: [release, text, css, packaging]
 release:
   version: "0.8.5"
   platforms: Windows, macOS and Linux
@@ -52,6 +52,8 @@ The new `"textRendering"` setting in sk.config.json picks the rasterizer, and it
 `SK_TEXT_RENDERING=optimized` in the environment does the same without a rebuild.
 
 ## Text
+
+The new [text rendering guide](/guides/text-rendering/) puts the pieces below together and gives a preset for the root of an app; the apps `sk create` makes start with it.
 
 ### Skathi mode (experimental)
 
@@ -138,5 +140,8 @@ For Linux it writes an AppImage, on any system, Windows and macOS included: `sk 
 
 - `text-box-trim` trimmed the font's descent too much from the top of a line, and with a `text` or `cap` bottom edge from the bottom too, so a trimmed box was shorter than its glyphs. It now leaves exactly the edges `text-box-edge` names.
 - A `transform-origin` from a class now applies to a `transform` set in a `style` attribute or by `@keyframes`; before, it was replaced by the default `50% 50%`. A rule that sets only `transform-origin` no longer cancels a `transform` from an earlier rule.
-
+- White space between block-level flex boxes no longer takes a line of its own. ([#101](https://github.com/argon-chat/skathi/issues/101))
+- macOS and Linux: an `@font-face` family whose declared name differs from the name inside the font file is now used; before, its text fell back to another font.
+- Linux: text that no installed font covers, such as Chinese on a system without CJK fonts, no longer holds up a frame for seconds while every installed face is tried.
+- Devtools: a reply with non-ASCII text that arrives split across two chunks is decoded whole.
 - Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, `requestAnimationFrame`, animations, video, `<sk-surface>`) instead of freezing until the button is released. The move starts after the `mousedown` handler returns, and only while the left button is still held. ([#110](https://github.com/argon-chat/skathi/issues/110))

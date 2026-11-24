@@ -6,7 +6,7 @@
     "url": "git+https://github.com/argon-chat/skathi.git",
     "directory": "packages/test"
   },
-  "version": "0.8.0",
+  "version": "0.8.5",
   "type": "module",
   "description": "Playwright-shaped end-to-end testing for Skathi apps, as a library for `bun test`.",
   "main": "src/index.ts",

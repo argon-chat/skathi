@@ -36,5 +36,5 @@ net-h2 = ["redjs/net-h2"]
 # `svg-images` and `canvas` are always on.
 redjs = { path = "../../vendor/redjs/redjs", version = "0.7.0", default-features = false, features = ["svg-images", "canvas"] }
 redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.7.0", optional = true }
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.0", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
 serde_json = "1"

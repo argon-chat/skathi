@@ -46,7 +46,7 @@
     },
     "packages/cli": {
       "name": "@skathi-native/cli",
-      "version": "0.8.0",
+      "version": "0.8.5",
       "bin": {
         "sk": "./cli/sk.ts",
       },
@@ -76,7 +76,7 @@
     },
     "packages/create-skathi": {
       "name": "create-skathi",
-      "version": "0.8.0",
+      "version": "0.8.5",
       "bin": {
         "create-skathi": "./create-skathi.ts",
       },
@@ -86,7 +86,7 @@
     },
     "packages/runtime": {
       "name": "@skathi-native/runtime",
-      "version": "0.8.0",
+      "version": "0.8.5",
       "dependencies": {
         "@webgpu/types": "0.1.74",
       },
@@ -107,7 +107,7 @@
     },
     "packages/test": {
       "name": "@skathi-native/test",
-      "version": "0.8.0",
+      "version": "0.8.5",
       "dependencies": {
         "@skathi-native/cli": "workspace:*",
       },
