@@ -25,7 +25,10 @@ export const MAIN_CATEGORIES: ReadonlySet<string> = new Set([
 
 export const mimeTypeOf = (a: FileAssociation): string => a.mimeType ?? `application/x-${a.extensions[0]}`;
 
-/** The `Exec` arguments. A link launch goes through the host's protocol marker so the URL cannot carry host flags. */
+/**
+ * The `Exec` arguments. A link-only entry passes the link after the host's protocol marker; with file types too,
+ * `%U` passes links and files alike and the host takes an argument whose scheme the app declares for the link.
+ */
 export function execArgs(files: boolean, urls: boolean): string {
   if (files && urls) return " %U";
   if (urls) return " --sk-protocol-launch -- %u";

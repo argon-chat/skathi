@@ -5,6 +5,7 @@
   "id": "gl.argon.sk-test.launch",
   "singleInstance": true,
   "raiseOnSecondInstance": true,
+  "protocols": ["sktest-launch"],
 
   "window": {
     "title": "Skathi — launch (fixture)",

@@ -152,16 +152,6 @@ function validate(ctx: PackageCheckContext): Problem[] {
       message: `"${at}.runtime": ${o.runtime} does not exist; point it at an AppImage type-2 runtime file, or leave it out to download the pinned one`,
     });
   }
-  if (ctx.config.fileAssociations.length && ctx.config.protocols.length) {
-    problems.push({
-      code: "SK8002",
-      severity: "warning",
-      key: "package.protocols",
-      message:
-        "an AppImage has one desktop entry for files and links: a link to the app's schemes arrives as a plain argument " +
-        "(launch.argv, not launch.url) because the app also opens files",
-    });
-  }
   return problems;
 }
 

@@ -42,6 +42,22 @@ pub fn validate_scheme(raw: &str) -> Result<String, String> {
     Ok(s)
 }
 
+/// A link handed over as a plain argument, as a Linux desktop entry's `%U` passes it: the first argument whose
+/// scheme is one of `declared`. A reserved scheme never counts, nor a one-letter one (a Windows drive).
+pub fn declared_url(args: &[String], declared: &[String]) -> Option<String> {
+    args.iter()
+        .find(|a| {
+            crate::shell::scheme_of(a).is_some_and(|s| {
+                s.len() > 1
+                    && validate_scheme(&s).is_ok()
+                    && declared
+                        .iter()
+                        .any(|d| validate_scheme(d).is_ok_and(|d| d == s))
+            })
+        })
+        .cloned()
+}
+
 /// The `shell\open\command` a registration writes. The shell substitutes `%1` verbatim, so the URL is
 /// recovered from the raw command line after the marker's `--` rather than re-split.
 pub fn command_line(exe: &str, dev_slot: Option<&str>) -> String {
@@ -106,6 +122,34 @@ mod tests {
             assert_eq!(a.host.sk_dist.as_deref(), slot);
             assert!(!a.host.devtools, "a flag inside the URL is data");
         }
+    }
+
+    #[test]
+    fn a_plain_argument_is_a_link_only_when_its_scheme_is_declared() {
+        let declared = vec!["notes".to_string(), "http".to_string(), "c".to_string()];
+        let url = |args: &[&str]| {
+            declared_url(
+                &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                &declared,
+            )
+        };
+        assert_eq!(
+            url(&["Notes://open?id=1"]).as_deref(),
+            Some("Notes://open?id=1")
+        );
+        assert_eq!(
+            url(&["/home/me/a.note", "notes:x", "notes:y"]).as_deref(),
+            Some("notes:x")
+        );
+        assert_eq!(url(&["other://x"]), None, "not declared");
+        assert_eq!(url(&["https://example.com"]), None);
+        assert_eq!(
+            url(&["http://example.com"]),
+            None,
+            "reserved, declared or not"
+        );
+        assert_eq!(url(&[r"C:\docs\a.note"]), None, "a drive letter");
+        assert_eq!(url(&["./notes:x", "--notes:x"]), None);
     }
 
     #[test]

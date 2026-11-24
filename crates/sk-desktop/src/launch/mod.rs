@@ -325,7 +325,19 @@ fn raise_refusal(
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
-pub(crate) fn deliver(msg: Forward) {
+/// The link this launch carries: the one after `--sk-protocol-launch`, else a plain argument with a declared scheme.
+fn launch_url(args: &Args, protocols: &[String]) -> Option<String> {
+    if args.protocol_launch {
+        return args.url.clone();
+    }
+    protocol::declared_url(&args.app_args, protocols)
+}
+
+pub(crate) fn deliver(mut msg: Forward) {
+    if msg.url.is_none() {
+        let declared = config().map(|c| c.protocols.as_slice()).unwrap_or_default();
+        msg.url = protocol::declared_url(&msg.args, declared);
+    }
     let paths = existing_paths(&msg.args, Path::new(&msg.cwd));
     let refusal = raise_refusal(
         config().is_none_or(|c| c.raise),
@@ -460,7 +472,7 @@ pub fn start_with_activation(
     let info = LaunchInfo {
         argv: args.argv.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
-        url: args.url.clone(),
+        url: launch_url(args, &config.protocols),
         paths: existing_paths(&args.app_args, &cwd),
     };
     if args.host.unregister_protocols {
@@ -748,6 +760,23 @@ mod tests {
         }
         let huge = vec![b' '; MAX_MESSAGE + 1];
         assert!(Forward::decode(&huge).is_err());
+    }
+
+    #[test]
+    fn a_declared_link_is_a_protocol_launch_with_or_without_the_flag() {
+        let declared = vec!["notes".to_string()];
+        let url = |argv: &[&str]| {
+            let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            launch_url(&crate::args::parse(&argv, None), &declared)
+        };
+        assert_eq!(url(&["Notes", "notes://a"]).as_deref(), Some("notes://a"));
+        assert_eq!(url(&["Notes", "/home/me/a.note"]), None);
+        assert_eq!(url(&["Notes", "--", "other://a"]), None);
+        assert_eq!(
+            url(&["Notes", "--sk-protocol-launch", "--", "other://a"]).as_deref(),
+            Some("other://a"),
+            "the flag also carries a scheme registered at run time"
+        );
     }
 
     #[test]

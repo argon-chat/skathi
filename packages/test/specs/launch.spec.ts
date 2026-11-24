@@ -135,6 +135,24 @@ describe("a second launch", () => {
   );
 
   test(
+    "a plain argument with a declared scheme is the link, as a Linux desktop entry's %U passes it",
+    async () => {
+      const url = "sktest-launch://open?id=7";
+      const { got, event: ev } = await forward([url], scratch);
+      bunExpect(ev.source).toBe("open-url");
+      bunExpect(ev.url).toBe(url);
+      bunExpect(ev.argv.slice(1)).toEqual([url]);
+      bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
+
+      const { event: other } = await forward(["--", "sktest-undeclared://x"], scratch);
+      bunExpect(other.source).toBe("second-instance");
+      bunExpect(other.url).toBe(null);
+      bunExpect(other.argv.slice(1)).toEqual(["--", "sktest-undeclared://x"]);
+    },
+    T,
+  );
+
+  test(
     "a `--devtools` AFTER an app argument is data, and the launch is still forwarded",
     async () => {
       const { event } = await forward(["report.txt", "--devtools"], scratch);

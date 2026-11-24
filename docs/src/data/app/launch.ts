@@ -89,6 +89,7 @@ export const profile = (at >= 0 && appLaunch.argv[at + 1]) || "default";`,
     syntax: "readonly appLaunch.url: string | null",
     notes: [
       'Set when Windows started the app for a scheme registered with `registerProtocol()` or the `"protocols"` key. The URL is taken whole from the command line, so quotes and spaces in it arrive unchanged.',
+      'A command-line argument whose scheme is in `"protocols"` is the link too, on every platform: a Linux desktop entry for an app that also opens files passes links that way. Its text stays in `argv` as well; an argument with any other scheme is only in `argv`.',
       'With `singleInstance`, a link opened while the app runs arrives as a `launch` event with `source: "open-url"` and `url` instead.',
       UNTRUSTED,
     ],
