@@ -161,7 +161,12 @@ host_fn!(fn sk_create_element(g, args) {
             unsafe { sk_runtime::host::warn_compat(g, "absent:iframe", &msg) };
         }
     }
-    ret_id(tree::with_tree(|t| t.create_element(tag)))
+    ret_id(tree::with_tree(|t| {
+        let id = t.create_element(tag);
+        #[cfg(feature = "video")]
+        if t.name(tag) == "audio" { video::track_audio(id) }
+        id
+    }))
 });
 
 host_fn!(fn sk_create_text(_g, _args) {
@@ -483,6 +488,8 @@ host_fn!(fn sk_fullscreen_element(_g, args) {
 });
 
 pub fn install(rt: &JsRuntime) {
+    #[cfg(all(feature = "video", feature = "audio"))]
+    sk_runtime::redjs::webapi::audio::set_media_element_host(rt.raw(), video::graph_audio::connect);
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__sk_intern", 1, sk_intern as *const _),
         ("__sk_create_element", 1, sk_create_element as *const _),
@@ -692,6 +699,8 @@ pub fn flush_changes_kind() -> Flush {
         TREE_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tree::restyle_all();
         render::gc_node_state();
+        #[cfg(feature = "video")]
+        video::sync_audio_elements();
         containers::gc(&|id| tree::read_tree(|t| t.node(id).is_some()));
         render::canvas::gc(|id| tree::read_tree(|t| t.node(id).is_some()));
         tree::animator_gc();

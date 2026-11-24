@@ -5639,6 +5639,7 @@ name = "sk-video"
 version = "0.8.5"
 dependencies = [
  "block2 0.6.2",
+ "cc",
  "dispatch2",
  "image",
  "libloading",

@@ -926,6 +926,14 @@ declare const sampleRate: number;
 declare const currentFrame: number;
 declare const currentTime: number;
 
+interface MediaElementAudioSourceNode extends AudioNode {
+  readonly mediaElement: HTMLMediaElement;
+}
+declare var MediaElementAudioSourceNode: {
+  new (context: AudioContext, options: { mediaElement: HTMLMediaElement }): MediaElementAudioSourceNode;
+  prototype: MediaElementAudioSourceNode;
+};
+
 interface AudioContext {
   readonly state: "suspended" | "running" | "closed";
   readonly sampleRate: number;
@@ -942,6 +950,7 @@ interface AudioContext {
   createStereoPanner(): StereoPannerNode;
   createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
   createBufferSource(): AudioBufferSourceNode;
+  createMediaElementSource(mediaElement: HTMLMediaElement): MediaElementAudioSourceNode;
   createChannelSplitter(numberOfOutputs?: number): ChannelSplitterNode;
   createChannelMerger(numberOfInputs?: number): ChannelMergerNode;
   createDelay(maxDelayTime?: number): DelayNode;

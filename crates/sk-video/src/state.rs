@@ -56,6 +56,7 @@ impl Default for Pushed {
 }
 
 pub struct VideoState {
+    audio_output: Option<Arc<dyn crate::AudioOutput>>,
     backend: Box<dyn VideoBackend>,
     pushed: Pushed,
     source: Option<MediaSource>,
@@ -77,6 +78,7 @@ impl VideoState {
     pub fn new(backend: Box<dyn VideoBackend>) -> Self {
         Self {
             backend,
+            audio_output: None,
             pushed: Pushed::default(),
             source: None,
             load_error: None,
@@ -98,6 +100,7 @@ impl VideoState {
             return self.load_error.clone().map_or(Ok(()), Err);
         }
         self.source = Some(source.clone());
+        self.flush_audio();
         self.load_error = None;
         self.metadata = false;
         self.last_reported_time = f64::NAN;
@@ -115,6 +118,18 @@ impl VideoState {
         self.source.as_ref()
     }
 
+    pub fn route_audio(&mut self, output: Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
+        self.backend.route_audio(&output)?;
+        self.audio_output = Some(output);
+        Ok(())
+    }
+
+    fn flush_audio(&self) {
+        if let Some(out) = &self.audio_output {
+            out.flush()
+        }
+    }
+
     /// `play()` / `pause()` as the state the element wants, edge-triggered against what was last
     /// pushed so `:autoplay="isPlaying"` is a transport control rather than a per-frame restart.
     pub fn set_playing(&mut self, playing: bool) {
@@ -127,6 +142,7 @@ impl VideoState {
             self.backend.play();
         } else {
             self.backend.pause();
+            self.flush_audio();
         }
     }
 
@@ -149,6 +165,7 @@ impl VideoState {
             return;
         }
         self.backend.seek(seconds);
+        self.flush_audio();
     }
 
     pub fn set_volume(&mut self, volume: f64) {
@@ -194,6 +211,7 @@ impl VideoState {
         }
         self.suspended = true;
         self.backend.suspend();
+        self.flush_audio();
     }
 
     /// Puts back what [`Self::suspend`] released; position and source survive, so this is not a reload.
@@ -277,7 +295,9 @@ impl VideoState {
         !self.backend.paused()
             || self.backend.seeking()
             || self.backend.network_state() == NetworkState::Loading
-            || (self.backend.ready_state() >= ReadyState::HaveMetadata && self.cached.is_none())
+            || (self.backend.ready_state() >= ReadyState::HaveMetadata
+                && self.cached.is_none()
+                && self.native_size().is_some())
     }
 
     /// One frame's work: pull a frame at `request`'s size, collect the platform's events, add the

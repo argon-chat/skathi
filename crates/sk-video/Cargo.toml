@@ -6,7 +6,7 @@ edition = "2021"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-include = ["src/**/*"]
+include = ["src/**/*", "build.rs"]
 
 [features]
 default = []
@@ -22,11 +22,18 @@ harness = false
 name = "gstreamer"
 harness = false
 
+[[test]]
+name = "audio_route"
+harness = false
+
 [dependencies]
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
 sk-resample = { path = "../sk-resample", version = "0.8.5" }
+
+[build-dependencies]
+cc = "1"
 
 [target.'cfg(windows)'.dependencies]
 # 0.62, not gpui_windows' 0.61: the D3D11 device crosses the boundary as a raw COM pointer, so the

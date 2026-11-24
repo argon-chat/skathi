@@ -9,6 +9,7 @@
 //! browser fires them. The streaming threads touch nothing but the appsink's sample slot and the
 //! appsrc's read offset.
 
+mod audio;
 mod codecs;
 mod ffi;
 mod frame;
@@ -82,6 +83,7 @@ impl Missing {
 }
 
 struct Pipeline {
+    audio_filter: bool,
     playbin: Ptr,
     bus: Ptr,
     video_bin: Ptr,
@@ -92,6 +94,7 @@ struct Pipeline {
 }
 
 pub struct GstBackend {
+    capture: Arc<audio::Capture>,
     api: &'static Api,
     pipeline: Option<Pipeline>,
     frames: frame::Frames,
@@ -177,6 +180,7 @@ impl GstBackend {
         }
         Ok(Self {
             api,
+            capture: Arc::default(),
             pipeline: None,
             frames: frame::Frames::new(),
             events: Vec::new(),
@@ -337,6 +341,7 @@ impl GstBackend {
             return Err(setup(format!("no {factory} element")));
         }
         let mut p = Pipeline {
+            audio_filter: false,
             playbin: unsafe { (core.gst_object_ref_sink)(playbin) },
             bus: std::ptr::null_mut(),
             video_bin: std::ptr::null_mut(),
@@ -381,6 +386,21 @@ impl GstBackend {
         }
         api.set_ptr(p.playbin, "video-sink", bin);
 
+        p.audio_filter = audio::install(api, p.playbin, &self.capture);
+        if !p.audio_filter && self.capture.routed() {
+            unsafe {
+                for object in [p.video_pad, p.capsfilter, p.video_bin, p.playbin]
+                    .into_iter()
+                    .filter(|p| !p.is_null())
+                {
+                    (core.gst_object_unref)(object);
+                }
+            }
+            return Err(setup(
+                "the Web Audio filter needs tee, queue, audioconvert and appsink".into(),
+            ));
+        }
+
         let audio = match std::env::var("SK_VIDEO_GST_AUDIO_SINK") {
             Ok(description) if !description.trim().is_empty() => api.parse_bin(&description).ok(),
             _ => {
@@ -405,8 +425,9 @@ impl GstBackend {
             (api.get_u32(p.playbin, "flags") & !ffi::PLAY_FLAG_TEXT) | ffi::PLAY_FLAG_NATIVE_VIDEO;
         api.set_i32(p.playbin, "flags", flags as c_int);
         api.set_str(p.playbin, "uri", uri);
-        api.set_f64(p.playbin, "volume", self.volume);
-        api.set_bool(p.playbin, "mute", self.muted);
+        let routed = self.capture.routed();
+        api.set_f64(p.playbin, "volume", if routed { 1.0 } else { self.volume });
+        api.set_bool(p.playbin, "mute", routed || self.muted);
         if let Some(feed) = &feed {
             source::connect(api, p.playbin, feed);
         }
@@ -1062,6 +1083,22 @@ impl Drop for GstBackend {
 }
 
 impl VideoBackend for GstBackend {
+    fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
+        if let Some(p) = &self.pipeline {
+            if !p.audio_filter {
+                return Err(MediaError::new(
+                    MediaErrorCode::Decode,
+                    "GStreamer could not install the Web Audio filter",
+                ));
+            }
+            self.api.set_bool(p.playbin, "mute", true);
+            self.api.set_f64(p.playbin, "volume", 1.0);
+        }
+        self.capture.gain(self.volume, self.muted);
+        self.capture.attach(output);
+        Ok(())
+    }
+
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         let had_source = self.loaded;
         self.unload();
@@ -1115,8 +1152,9 @@ impl VideoBackend for GstBackend {
 
     fn set_volume(&mut self, volume: f64) {
         self.volume = volume;
+        self.capture.gain(volume, self.muted);
         let playbin = self.playbin();
-        if !playbin.is_null() {
+        if !playbin.is_null() && !self.capture.routed() {
             self.api.set_f64(playbin, "volume", volume);
         }
         self.events.push(MediaEvent::VolumeChange);
@@ -1124,8 +1162,9 @@ impl VideoBackend for GstBackend {
 
     fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
+        self.capture.gain(self.volume, muted);
         let playbin = self.playbin();
-        if !playbin.is_null() {
+        if !playbin.is_null() && !self.capture.routed() {
             self.api.set_bool(playbin, "mute", muted);
         }
         self.events.push(MediaEvent::VolumeChange);
@@ -1184,7 +1223,8 @@ impl VideoBackend for GstBackend {
 
     fn audible(&self) -> bool {
         let playbin = self.playbin();
-        self.has_audio == Some(true)
+        !self.capture.routed()
+            && self.has_audio == Some(true)
             && !self.paused
             && !self.ended
             && !playbin.is_null()
