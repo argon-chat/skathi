@@ -275,7 +275,7 @@ pub const CATALOG: &[Entry] = &[
     e("font-optical-sizing", Partial, &["auto"], &["none"], "Always `auto`"),
     e("font-palette", Unsupported, &[], &["--p"], ""),
     e("font-size", Supported, &["12px", "larger"], &[], ""),
-    e("font-size-adjust", Unsupported, &[], &["0.5"], ""),
+    e("font-size-adjust", Partial, &["0.5", "from-font", "cap-height 0.7", "none"], &["ic-height 1"], "`ic-height` is refused; text fields and `<sk-editor>` draw without it"),
     e("font-smoothing", Supported, &["antialiased", "subpixel-antialiased", "auto"], &[], ""),
     e("font-stretch", Unsupported, &[], &["condensed"], ""),
     e("font-style", Supported, &["normal", "italic"], &[], ""),

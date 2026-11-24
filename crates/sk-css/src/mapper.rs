@@ -1897,7 +1897,6 @@ fn first_available_family(families: &[CssFontFamily]) -> Option<String> {
 
 thread_local! {
     static COMPOSED_FONTS: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static UNREACHED_FONTS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 pub fn set_composed_font_families(families: impl IntoIterator<Item = (String, bool)>) {
@@ -1908,16 +1907,9 @@ pub fn set_composed_font_families(families: impl IntoIterator<Item = (String, bo
     COMPOSED_FONTS.with(|c| *c.borrow_mut() = list);
 }
 
-pub fn take_unreached_fonts() -> Vec<(String, String)> {
-    UNREACHED_FONTS.with(|m| std::mem::take(&mut *m.borrow_mut()))
-}
-
 fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::FontFallbacks)> {
     use lightningcss::traits::ToCss;
     let composed = COMPOSED_FONTS.with(|c| c.borrow().clone());
-    if composed.is_empty() {
-        return None;
-    }
     let mut stack: Vec<(String, Option<bool>)> = Vec::new();
     for f in families {
         let (name, generic) = match f {
@@ -1943,20 +1935,7 @@ fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::Font
             stack.push((name, latin));
         }
     }
-    let (first, latin) = stack.first()?.clone();
-    if latin.is_none() {
-        // An installed family draws the text; a composed one after it is reached only by the
-        // characters it lacks, and DirectWrite's own fallback takes those.
-        for (name, _) in stack.iter().skip(1).filter(|s| s.1.is_some()) {
-            UNREACHED_FONTS.with(|u| {
-                let mut u = u.borrow_mut();
-                if !u.iter().any(|(n, _)| n == name) {
-                    u.push((name.clone(), first.clone()));
-                }
-            });
-        }
-        return Some((first, gpui::FontFallbacks::default()));
-    }
+    let first = stack.first()?.0.clone();
     let rest = stack.into_iter().skip(1).map(|s| s.0).collect();
     Some((first, gpui::FontFallbacks::from_fonts(rest)))
 }
@@ -2104,6 +2083,21 @@ pub fn set_font_metric_source(
 ) {
     FONT_METRIC_SOURCE.with(|slot| *slot.borrow_mut() = Some(Box::new(source)));
     FONT_METRIC_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
+}
+
+thread_local! {
+    static FONT_ASPECT_SOURCE: std::cell::RefCell<Option<Box<dyn Fn(&gpui::Font, gpui::FontAspect) -> f32>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Installs the host's `font-size-adjust` aspect values: a font's metric per em.
+pub fn set_font_aspect_source(source: impl Fn(&gpui::Font, gpui::FontAspect) -> f32 + 'static) {
+    FONT_ASPECT_SOURCE.with(|slot| *slot.borrow_mut() = Some(Box::new(source)));
+}
+
+/// `font`'s aspect value for `font-size-adjust: from-font`; `None` before the host installs a
+/// source.
+pub fn font_aspect(font: &gpui::Font, aspect: gpui::FontAspect) -> Option<f32> {
+    FONT_ASPECT_SOURCE.with(|slot| slot.borrow().as_ref().map(|source| source(font, aspect)))
 }
 
 pub(crate) fn font_metric_generation() -> u32 {
@@ -3981,6 +3975,52 @@ fn single_ident<'a>(
         return None;
     }
     first
+}
+
+/// CSS `font-size-adjust`: `none`, or an optional metric and `from-font` or a number. The error
+/// names what is not supported.
+fn font_size_adjust(
+    value: &lightningcss::properties::custom::TokenList<'_>,
+) -> Result<gpui::FontSizeAdjust, String> {
+    use gpui::{FontAspect, FontSizeAdjust};
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut aspect = None;
+    let mut ratio = None;
+    let mut from_font = false;
+    for token in value.0.iter() {
+        match token {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::Ident(ident)) => match ident.to_ascii_lowercase().as_str() {
+                "none" if value.0.len() == 1 => return Ok(FontSizeAdjust::None),
+                "from-font" if !from_font && ratio.is_none() => from_font = true,
+                metric if aspect.is_none() && !from_font && ratio.is_none() => {
+                    aspect = Some(match metric {
+                        "ex-height" => FontAspect::ExHeight,
+                        "cap-height" => FontAspect::CapHeight,
+                        "ch-width" => FontAspect::ChWidth,
+                        "ic-width" => FontAspect::IcWidth,
+                        "ic-height" => {
+                            return Err("ic-height — use ic-width, the same for most fonts".into());
+                        }
+                        other => return Err(format!("{other} — not a font metric")),
+                    });
+                }
+                other => return Err(format!("{other} out of place")),
+            },
+            TokenOrValue::Token(Token::Number { value, .. })
+                if *value >= 0. && ratio.is_none() && !from_font =>
+            {
+                ratio = Some(*value);
+            }
+            _ => return Err("a value that is not a metric, from-font or a number".into()),
+        }
+    }
+    let aspect = aspect.unwrap_or_default();
+    match (ratio, from_font) {
+        (Some(ratio), false) => Ok(FontSizeAdjust::Ratio(aspect, ratio)),
+        (None, true) => Ok(FontSizeAdjust::FromFont(aspect)),
+        _ => Err("a metric without from-font or a number".into()),
+    }
 }
 
 fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui::VnClipPath> {
@@ -6338,6 +6378,14 @@ fn apply_property(
                             other.unwrap_or("<not a keyword>")
                         ),
                     ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "font-size-adjust" =>
+            {
+                match font_size_adjust(&c.value) {
+                    Ok(adjust) => r.text.font_size_adjust = Some(adjust),
+                    Err(what) => unsupported(diagnostics, &format!("font-size-adjust: {what}")),
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
@@ -9105,11 +9153,11 @@ mod tests {
                 t.font_fallbacks.map(|f| f.fallback_list().join("|")),
             )
         };
+        let some = |f: &str, rest: &str| (Some(f.to_string()), Some(rest.to_string()));
         set_font_source(|| vec!["Arial".into(), "Mix".into(), "Segoe UI".into()]);
-        assert_eq!(font("font-family: Mix, Arial"), (Some("Mix".into()), None));
+        assert_eq!(font("font-family: Mix, Arial"), some("Mix", "Arial"));
 
         set_composed_font_families([("Mix".to_string(), true), ("SK PUA".to_string(), false)]);
-        let some = |f: &str, rest: &str| (Some(f.to_string()), Some(rest.to_string()));
         assert_eq!(
             font("font-family: Mix, \"Segoe UI\", sans-serif"),
             some("Mix", "Segoe UI|Arial")
@@ -9122,22 +9170,13 @@ mod tests {
             font("font-family: Nowhere, \"SK PUA\", Mix"),
             some("SK PUA", "Mix")
         );
-        assert!(take_unreached_fonts().is_empty());
+        // An installed family first hands on the rest of the list too.
         assert_eq!(
             font("font-family: Arial, Mix, \"SK PUA\""),
-            some("Arial", "")
-        );
-        assert_eq!(
-            take_unreached_fonts(),
-            vec![
-                ("Mix".to_string(), "Arial".to_string()),
-                ("SK PUA".to_string(), "Arial".to_string())
-            ]
+            some("Arial", "Mix|SK PUA")
         );
         assert_eq!(font("font-family: Arial"), some("Arial", ""));
-        assert!(take_unreached_fonts().is_empty());
         set_composed_font_families([]);
-        assert_eq!(font("font-family: Mix"), (Some("Mix".into()), None));
     }
 
     #[test]
@@ -10513,6 +10552,42 @@ mod prefix_tests {
         assert_eq!(text("line-metrics: integral"), (None, None, 1));
         assert_eq!(text("line-leading: center"), (None, None, 1));
         assert!(inherits("line-metrics") && inherits("line-leading"));
+    }
+
+    #[test]
+    fn font_size_adjust_takes_a_metric_and_from_font_or_a_number() {
+        use gpui::{FontAspect as A, FontSizeAdjust as F};
+        let adjust = |css: &str| {
+            let mut d = Vec::new();
+            let s = parse_inline(css, &mut d);
+            (s.text.font_size_adjust, d.len())
+        };
+        assert_eq!(adjust("font-size-adjust: none"), (Some(F::None), 0));
+        assert_eq!(
+            adjust("font-size-adjust: 0.5"),
+            (Some(F::Ratio(A::ExHeight, 0.5)), 0)
+        );
+        assert_eq!(
+            adjust("font-size-adjust: from-font"),
+            (Some(F::FromFont(A::ExHeight)), 0)
+        );
+        assert_eq!(
+            adjust("font-size-adjust: cap-height 0.7"),
+            (Some(F::Ratio(A::CapHeight, 0.7)), 0)
+        );
+        assert_eq!(
+            adjust("font-size-adjust: ic-width from-font"),
+            (Some(F::FromFont(A::IcWidth)), 0)
+        );
+        for wrong in [
+            "font-size-adjust: cap-height",
+            "font-size-adjust: 0.5 from-font",
+            "font-size-adjust: -1",
+            "font-size-adjust: x-height 0.5",
+            "font-size-adjust: ic-height 1",
+        ] {
+            assert_eq!(adjust(wrong), (None, 1), "{wrong}");
+        }
     }
 
     #[test]

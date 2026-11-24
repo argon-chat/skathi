@@ -73,6 +73,9 @@ describe("CSS the engine does not apply (SK4xxx)", () => {
     expect(code("line-metrics", "snapped")).toBeNull();
     expect(code("line-leading", "above")).toBeNull();
     expect(code("line-leading", "center")).toBe("SK4002");
+    expect(code("font-size-adjust", "from-font")).toBeNull();
+    expect(code("font-size-adjust", "cap-height 0.7")).toBeNull();
+    expect(code("font-size-adjust", "ic-height 1")).toBe("SK4002");
   });
 
   test("content-sized fields and metric-based block trimming use the native CSS grammar", () => {

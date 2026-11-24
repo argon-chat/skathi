@@ -138,10 +138,6 @@ struct Face {
     registered_as: Option<String>,
 }
 
-/// Whether the platform text system draws a family composed of faces registered under families of
-/// their own (`set_composed_families`).
-const COMPOSES_FAMILIES: bool = cfg!(target_os = "windows");
-
 /// The family a face is registered under: its own, so the text system draws exactly this file.
 fn face_family(family: &str, id: u32) -> String {
     format!("{family} (sk face {id})")
@@ -155,23 +151,10 @@ fn is_face_family(name: &str) -> bool {
 /// that is its own.
 fn registration(bytes: Vec<u8>, desc: &Descriptors, id: u32) -> (Vec<u8>, Option<String>) {
     let own = face_family(&desc.family, id);
-    if COMPOSES_FAMILIES {
-        return match rename_family(&bytes, &own, &own) {
-            Some(renamed) => (renamed, Some(own)),
-            None => (bytes, None),
-        };
+    match rename_family(&bytes, &own, &own) {
+        Some(renamed) => (renamed, Some(own)),
+        None => (bytes, None),
     }
-    // Core Text and fontdb find a face by the family in its name table, never by the one the
-    // page declared. Nothing composes `unicode-range` subsets here, and cosmic-text shapes with
-    // any face of a family at the asked weight, so only a face that draws Latin text takes it.
-    // The PostScript name stays unique per face, as both key faces by it.
-    let family = if desc.covers_latin() {
-        &desc.family
-    } else {
-        &own
-    };
-    let renamed = rename_family(&bytes, family, &own);
-    (renamed.unwrap_or(bytes), None)
 }
 
 type Done = (u32, Result<Vec<u8>, String>);
@@ -879,7 +862,6 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
     for (family, used) in due_misses(Instant::now()) {
         crate::render::warn_missing_font(&family, used.as_deref());
     }
-    advise_unreached();
     let laid_out = crate::render::layout_count() > 0 && !crate::layout_owed();
     note_quiet(started || due, laid_out);
     deliver_events(window, cx);
@@ -1178,20 +1160,6 @@ fn compose(
             })
         })
         .collect()
-}
-
-/// `font-family` lists where a web family follows an installed one (sk-css's stack), advised once per family.
-fn advise_unreached() {
-    for (family, used) in sk_css::take_unreached_fonts() {
-        crate::render::warn_compat(
-            &format!("font:unreached:{family}"),
-            &format!(
-                "font-family: `{family}` comes after `{used}`, an installed font, which draws the text; \
-                 the characters `{used}` has no glyph for are drawn by the system's fallback font, not by \
-                 `{family}`"
-            ),
-        );
-    }
 }
 
 fn deliver_events(window: &mut gpui::Window, cx: &mut App) {
@@ -2274,7 +2242,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
     #[test]
-    fn a_web_face_is_drawn_under_the_family_it_was_declared_as() {
+    fn a_web_family_is_drawn_with_its_faces() {
         #[cfg(target_os = "macos")]
         let platform: Arc<dyn gpui::PlatformTextSystem> =
             Arc::new(gpui_apple::AppleTextSystem::new());
@@ -2309,15 +2277,29 @@ mod tests {
             (pixel.clone(), face("SK Pixel", Vec::new())),
             (pixel, face("SK Late", Vec::new())),
         ];
-        let faces = faces
+        let mut registered: Vec<(Descriptors, Option<String>)> = Vec::new();
+        let mut files = Vec::new();
+        for ((bytes, desc), id) in faces.into_iter().zip(1..) {
+            let (bytes, registered_as) = registration(bytes, &desc, id);
+            files.push(Cow::Owned(bytes));
+            registered.push((desc, registered_as));
+        }
+        text.add_fonts(files).unwrap();
+        let families = ["SK Pixel", "SK Late"]
             .into_iter()
-            .zip(1..)
-            .map(|((bytes, desc), id)| Cow::Owned(registration(bytes, &desc, id).0))
+            .map(|family| {
+                let faces: Vec<_> = registered
+                    .iter()
+                    .filter(|(desc, _)| desc.family == family)
+                    .cloned()
+                    .collect();
+                let composer: gpui::FamilyComposer =
+                    Arc::new(move |weight, style| compose(&faces, weight, style));
+                (gpui::SharedString::from(family), composer)
+            })
             .collect();
-        text.add_fonts(faces).unwrap();
+        text.set_composed_families(families);
 
-        let names = text.all_font_names();
-        assert!(names.iter().any(|n| n == "SK Pixel"), "{names:?}");
         for family in ["SK Pixel", "SK Late"] {
             let font = gpui::font(family);
             let id = text.resolve_font(&font);

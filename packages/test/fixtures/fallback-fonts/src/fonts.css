@@ -1,0 +1,13 @@
+/* Fixture for specs/fallback-fonts.spec.ts: Manrope has no Private Use Area glyphs, Alcarin Tengwar has them, a smaller box and a smaller x-height. */
+
+@font-face {
+  font-family: "Manrope";
+  font-weight: 200 800;
+  src: url("../../font-subsets/src/fonts/manrope-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Tengwar";
+  font-weight: 400 700;
+  src: url("../../font-subsets/src/fonts/AlcarinTengwarVF.woff2") format("woff2-variations");
+}

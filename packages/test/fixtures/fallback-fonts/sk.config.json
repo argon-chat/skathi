@@ -1,0 +1,12 @@
+{
+  "name": "fallback-fonts",
+
+  "window": {
+    "title": "Skathi — fallback fonts (fixture)",
+    "width": 480,
+    "height": 560,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "none"
+  }
+}

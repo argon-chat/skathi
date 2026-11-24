@@ -1,5 +1,6 @@
 //! Inherited properties the cascade records only where they are declared, read through the
-//! ancestors: `interpolate-size`, `dynamic-range-limit`, `line-metrics` and `line-leading`.
+//! ancestors: `interpolate-size`, `dynamic-range-limit`, `line-metrics`, `line-leading` and
+//! `font-size-adjust`.
 
 use crate::tree::{self, Tree};
 
@@ -54,7 +55,13 @@ pub(crate) fn line_box(t: &Tree, id: u32) -> gpui::LineBoxRules {
     gpui::LineBoxRules {
         metrics: nearest_text(t, id, |s| s.line_metrics).unwrap_or_default(),
         leading: nearest_text(t, id, |s| s.line_leading).unwrap_or_default(),
+        normal: None,
     }
+}
+
+/// `id`'s computed `font-size-adjust`.
+pub(crate) fn font_size_adjust(t: &Tree, id: u32) -> gpui::FontSizeAdjust {
+    nearest_text(t, id, |s| s.font_size_adjust).unwrap_or_default()
 }
 
 fn nearest_text<T>(

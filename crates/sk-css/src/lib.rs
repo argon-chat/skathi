@@ -80,9 +80,9 @@ pub fn image_rendering(vars: &Vars) -> &'static str {
     }
 }
 pub use mapper::{
-    accepts_declaration, parse_inline, parse_inline_full, parse_inline_style,
-    parse_inline_with_transitions, rem_basis, set_font_metric_source, set_font_source,
-    set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses,
+    accepts_declaration, font_aspect, parse_inline, parse_inline_full, parse_inline_style,
+    parse_inline_with_transitions, rem_basis, set_font_aspect_source, set_font_metric_source,
+    set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses,
     uses_viewport_units, viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl,
     CurrentColorTargets, Decls, Extras, FontRelativeMetrics, InlineMotion, InlinePriority,
     InlineStyle, ListMarker, MaskClips, MaskCompositing, MaskImages, MaskPatch, MaskStack,
@@ -92,7 +92,7 @@ pub use mapper::{
 };
 pub use mapper::{
     box_shadow_css, parse_color, parse_color_in, rotate_css, set_composed_font_families,
-    take_unreached_fonts, text_shadow_css, transform_css, translate_css,
+    text_shadow_css, transform_css, translate_css,
 };
 pub use mapper::{svg_length_text, svg_user_length};
 pub use media::{

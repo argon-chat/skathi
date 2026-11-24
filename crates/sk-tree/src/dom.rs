@@ -239,6 +239,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "line-metrics",
     "line-leading",
     "font-size",
+    "font-size-adjust",
     "color",
     "text-shadow",
     "box-shadow",
@@ -293,6 +294,21 @@ pub fn computed_style(id: u32) -> Option<String> {
         out.push('\n');
     }
     Some(out)
+}
+
+/// The font of `id`'s text: its own computed font, else its nearest styled ancestor's.
+fn computed_font(t: &Tree, id: u32) -> Option<gpui::Font> {
+    let mut at = id;
+    while let Some(n) = t.node(at) {
+        if let Some(c) = n.computed.as_ref() {
+            return Some(c.computed_font.clone());
+        }
+        if n.parent == 0 || n.parent == at {
+            return None;
+        }
+        at = n.parent;
+    }
+    None
 }
 
 fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
@@ -541,6 +557,25 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
             gpui::LineLeading::Above => "above",
         }
         .into(),
+        "font-size-adjust" => {
+            use gpui::{FontAspect, FontSizeAdjust};
+            let number = |value: f32| ((value * 10000.).round() / 10000.).to_string();
+            let (aspect, value) = match crate::inherit::font_size_adjust(t, id) {
+                FontSizeAdjust::None => return Some("none".into()),
+                FontSizeAdjust::FromFont(aspect) => {
+                    let font = computed_font(t, id);
+                    let value = font.and_then(|font| sk_css::font_aspect(&font, aspect));
+                    (aspect, value.map_or_else(|| "from-font".into(), number))
+                }
+                FontSizeAdjust::Ratio(aspect, ratio) => (aspect, number(ratio)),
+            };
+            match aspect {
+                FontAspect::ExHeight => value,
+                FontAspect::CapHeight => format!("cap-height {value}"),
+                FontAspect::ChWidth => format!("ch-width {value}"),
+                FontAspect::IcWidth => format!("ic-width {value}"),
+            }
+        }
         "font-size" => {
             let mut px = None;
             let mut at = id;
