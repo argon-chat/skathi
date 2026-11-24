@@ -253,9 +253,14 @@ function platformLine(entry: RefEntry): string {
   return platforms
     .map((p) => {
       const since = entry.platformSince ? sinceOn(entry, p.id) : undefined;
-      return `${p.label}: ${statuses[entry.platforms[p.id]].label.toLowerCase()}${since ? ` since ${since}` : ""}`;
+      return `${p.label}: ${statuses[entry.platforms[p.id]].label.toLowerCase()}${releaseQualifier(since)}`;
     })
     .join(", ");
+}
+
+export function releaseQualifier(since?: Release): string {
+  if (since === "Unreleased") return " in development builds";
+  return since ? ` since ${since}` : "";
 }
 
 export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): string {
@@ -267,7 +272,7 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
     `Source: ${new URL(entryUrl(ref, entry.slug), site).href}`,
     "",
     `- Kind: ${kindLabel(entry.kind)} (${entry.category})`,
-    `- Status in Skathi: ${statuses[entry.status].label}${entry.since ? ` since ${entry.since}` : ""}`,
+    `- Status in Skathi: ${statuses[entry.status].label}${releaseQualifier(entry.since)}`,
     `- Platforms: ${platformLine(entry)}`,
   ];
   const fresh = freshNote(entry);
