@@ -97,7 +97,7 @@ function objectOf(node: Schema): Schema | undefined {
 
 function typeOf(node: Schema): string {
   const n = deref(node);
-  if (n.oneOf) return n.oneOf.map(typeOf).join(" | ");
+  if (n.oneOf && !n.type) return n.oneOf.map(typeOf).join(" | ");
   if ("const" in n) return JSON.stringify(n.const);
   if (n.enum) return n.enum.map((v) => JSON.stringify(v)).join(" | ");
   if (n.type === "array") {
@@ -150,12 +150,14 @@ function enumOf(node: Schema): readonly unknown[] | undefined {
 function validate(value: unknown, node: Schema, where: string): string[] {
   const n = deref(node);
   if (n.oneOf) {
-    return n.oneOf.some((b) => validate(value, b, where).length === 0)
-      ? []
-      : [`${where}: ${JSON.stringify(value)} is none of ${typeOf(n)}`];
+    if (!n.oneOf.some((b) => validate(value, b, where).length === 0))
+      return [`${where}: ${JSON.stringify(value)} is none of ${typeOf(n)}`];
+    if (!n.type) return [];
   }
   const errors: string[] = [];
   const fail = (why: string) => errors.push(`${where}: ${why}`);
+  if (!n.type && n.required && value && typeof value === "object" && !Array.isArray(value))
+    for (const key of n.required) if (!(key in value)) fail(`needs ${key}`);
   if ("const" in n && value !== n.const) fail(`must be ${JSON.stringify(n.const)}`);
   if (n.enum && !n.enum.includes(value)) fail(`${JSON.stringify(value)} is not one of ${typeOf(n)}`);
   if (n.not && validate(value, n.not, where).length === 0) fail(`${JSON.stringify(value)} is not allowed`);
