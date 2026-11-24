@@ -5541,6 +5541,7 @@ dependencies = [
  "serde_json",
  "sk-locale",
  "sk-runtime",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 

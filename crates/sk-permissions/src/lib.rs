@@ -100,10 +100,11 @@ pub fn describe_json() -> String {
         ));
     }
     let file = b.decisions_file().map(|p| p.display().to_string());
+    let or_null = |v: Option<String>| v.map_or_else(|| "null".into(), |v| json_string(&v));
     s.push_str(&format!(
-        "],\"file\":{}}}",
-        file.map(|f| json_string(&f))
-            .unwrap_or_else(|| "null".into())
+        "],\"file\":{},\"package\":{}}}",
+        or_null(file),
+        or_null(package::family_name().map(str::to_owned))
     ));
     s
 }

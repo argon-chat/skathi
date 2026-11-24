@@ -1,26 +1,31 @@
 //! The Windows backend, for an unpackaged win32 process or a full-trust MSIX one.
 //!
-//! State comes from the registry consent store, not WinRT: `AppCapability::CheckAccess()` reports
-//! `Allowed` for unpackaged callers even with the microphone toggle off. Both
-//! `HKCU\...\CapabilityAccessManager\ConsentStore\<cap>\Value` (master toggle) and the app's own
-//! toggle must say Allow. Unpackaged, that is `...\NonPackaged\Value` (all desktop apps); with
-//! package identity, `...\<package family name>\Value`, and `NonPackaged` does not apply.
+//! State comes from the registry consent store, which is what the Settings switches write:
+//! `AppCapability::CheckAccess()` reports `Allowed` for unpackaged callers even with the microphone
+//! toggle off. `HKCU\...\CapabilityAccessManager\ConsentStore\<cap>\Value` is the master toggle;
+//! the app's own is `...\NonPackaged\Value` (all desktop apps) or, with package identity,
+//! `...\<package family name>\Value` ([`consent_state`]).
 //!
-//! There is no `prompt` state: a packaged app's key may say `Prompt`, which Windows resolves at the
-//! first capture, so it reads like an absent key. `request()` opens the `ms-settings:` page and
-//! settles with whatever the user did.
+//! Unpackaged there is no `prompt`: Windows never asks a desktop app. `request()` opens the
+//! `ms-settings:` page and settles with whatever the user did. A packaged app's key says `Prompt`
+//! (written at install for a declared capability, at first use otherwise) until the user answers
+//! Windows' own question, which `request()` raises through `AppCapability::RequestAccessAsync`.
 //!
 //! One watcher thread waits (`RegNotifyChangeKeyValue`, thread-agnostic) on every consent key, armed
 //! with `REG_NOTIFY_CHANGE_LAST_SET` and no subtree: the per-exe telemetry keys are written whenever
 //! any app touches a microphone. Lazily written keys are watched via their nearest existing ancestor.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use sk_runtime::redjs::webapi::permissions::{
     Capability, PermissionHost, PermissionState, RequestOutcome,
+};
+use windows::core::HSTRING;
+use windows::Security::Authorization::AppCapabilityAccess::{
+    AppCapability, AppCapabilityAccessStatus,
 };
 
 use std::ptr::{null, null_mut};
@@ -154,12 +159,34 @@ fn read_dword(root: HKEY, path: &str, name: &str) -> Option<u32> {
     Some(out)
 }
 
-/// One consent-store `Value` as a tri-state. `None` (absent) is not a denial: keys are created lazily.
-fn consent_value(path: &str) -> Option<bool> {
-    match read_sz(HKEY_CURRENT_USER, path, "Value")?.as_str() {
-        "Allow" => Some(true),
-        "Deny" => Some(false),
-        _ => None,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Consent {
+    Allow,
+    Deny,
+    Prompt,
+    /// No key or no `Value`: keys are created lazily.
+    Unset,
+}
+
+fn consent_value(path: &str) -> Consent {
+    match read_sz(HKEY_CURRENT_USER, path, "Value").as_deref() {
+        Some("Allow") => Consent::Allow,
+        Some("Deny") => Consent::Deny,
+        Some("Prompt") => Consent::Prompt,
+        _ => Consent::Unset,
+    }
+}
+
+/// `master` is the capability's own switch, `app` this app's. An unpackaged app is never asked, so
+/// only a Deny refuses it. A packaged app is granted only by its own Allow: Windows asks it on
+/// first use both while its key says `Prompt` and before the key exists (an undeclared capability).
+fn consent_state(master: Consent, app: Consent, packaged: bool) -> PermissionState {
+    if master == Consent::Deny || app == Consent::Deny {
+        PermissionState::Denied
+    } else if !packaged || app == Consent::Allow {
+        PermissionState::Granted
+    } else {
+        PermissionState::Prompt
     }
 }
 
@@ -190,14 +217,12 @@ pub fn read_state(cap: Capability) -> PermissionState {
             let Some(key) = consent_key(cap) else {
                 return PermissionState::Unsupported;
             };
-            let master = consent_value(&format!(r"{CONSENT}\{key}"));
-            let app = consent_value(&app_consent_path(key, crate::package::family_name()));
-            // Both gates, and absent means "nothing denies it".
-            if master == Some(false) || app == Some(false) {
-                PermissionState::Denied
-            } else {
-                PermissionState::Granted
-            }
+            let family = crate::package::family_name();
+            consent_state(
+                consent_value(&format!(r"{CONSENT}\{key}")),
+                consent_value(&app_consent_path(key, family)),
+                family.is_some(),
+            )
         }
     }
 }
@@ -236,11 +261,22 @@ fn aumid() -> Option<String> {
         .or_else(|| crate::package::app_user_model_id().map(str::to_owned))
 }
 
-#[derive(Clone, Copy)]
+const UNANSWERED: i32 = -1;
+const NO_ANSWER: i32 = -2;
+
+/// What a request waits on: the user in Settings, or the answer to Windows' own question.
+#[derive(Clone)]
+enum Wait {
+    Settings,
+    Question(Arc<AtomicI32>),
+}
+
+#[derive(Clone)]
 struct PendingRequest {
     cap: Capability,
     was: PermissionState,
     started: Instant,
+    wait: Wait,
 }
 
 fn join_or_open(
@@ -248,26 +284,72 @@ fn join_or_open(
     token: u32,
     cap: Capability,
     now: PermissionState,
-    open: impl FnOnce() -> bool,
+    open: impl FnOnce() -> Option<Wait>,
 ) -> bool {
     let joined = pending
         .lock()
         .unwrap()
         .iter()
         .find(|(_, p)| p.cap == cap)
-        .map(|(_, p)| *p);
+        .map(|(_, p)| p.clone());
     let request = match joined {
         Some(p) => p,
         // Not under the lock: ShellExecute is slow.
-        None if open() => PendingRequest {
-            cap,
-            was: now,
-            started: Instant::now(),
+        None => match open() {
+            Some(wait) => PendingRequest {
+                cap,
+                was: now,
+                started: Instant::now(),
+                wait,
+            },
+            None => return false,
         },
-        None => return false,
     };
     pending.lock().unwrap().push((token, request));
     true
+}
+
+/// What a request settles with once Windows answered its question. An undeclared capability is
+/// not Windows' to answer here; it asks when the device opens, so the capture goes ahead.
+fn answered_state(answer: AppCapabilityAccessStatus, now: PermissionState) -> PermissionState {
+    match answer {
+        AppCapabilityAccessStatus::Allowed => PermissionState::Granted,
+        AppCapabilityAccessStatus::DeniedByUser | AppCapabilityAccessStatus::DeniedBySystem => {
+            PermissionState::Denied
+        }
+        AppCapabilityAccessStatus::NotDeclaredByApp if now == PermissionState::Prompt => {
+            PermissionState::Granted
+        }
+        _ => now,
+    }
+}
+
+/// `RequestAccessAsync` must be called on the UI thread, which is the VM's; any other caller gets
+/// `None` and the Settings page.
+fn ask_windows(cap: Capability) -> Option<Wait> {
+    let key = consent_key(cap)?;
+    if !on_ui_thread() {
+        return None;
+    }
+    let capability = AppCapability::Create(&HSTRING::from(key)).ok()?;
+    let op = capability.RequestAccessAsync().ok()?;
+    let answer = Arc::new(AtomicI32::new(UNANSWERED));
+    let to = Arc::clone(&answer);
+    op.when(move |result| {
+        let _alive = &capability;
+        to.store(result.map_or(NO_ANSWER, |s| s.0), Ordering::SeqCst);
+        sk_runtime::frames::wake();
+    })
+    .ok()?;
+    Some(Wait::Question(answer))
+}
+
+fn on_ui_thread() -> bool {
+    use windows_sys::Win32::System::Com::{CoGetApartmentType, APTTYPE_MAINSTA, APTTYPE_STA};
+    let (mut kind, mut qualifier) = (0, 0);
+    // SAFETY: two out-pointers to locals.
+    let ok = unsafe { CoGetApartmentType(&mut kind, &mut qualifier) } == 0;
+    ok && (kind == APTTYPE_STA || kind == APTTYPE_MAINSTA)
 }
 
 #[derive(Default)]
@@ -302,6 +384,11 @@ impl PermissionHost for WindowsHost {
         "Windows"
     }
 
+    /// Packaged, Windows asks for the gated capabilities itself; the app's own prompt stays out.
+    fn has_native_prompt(&self, cap: Capability) -> bool {
+        crate::package::has_identity() && consent_key(cap).is_some()
+    }
+
     fn status(&self, cap: Capability) -> PermissionState {
         read_state(cap)
     }
@@ -312,15 +399,22 @@ impl PermissionHost for WindowsHost {
         if now == PermissionState::Granted || now == PermissionState::Unsupported {
             return RequestOutcome::Settled(now);
         }
-        let Some(uri) = settings_uri(cap) else {
+        let uri = settings_uri(cap);
+        let ask = now == PermissionState::Prompt;
+        if !ask && uri.is_none() {
             return RequestOutcome::Settled(now);
-        };
+        }
         let token = self
             .next_token
             .fetch_add(1, Ordering::SeqCst)
             .wrapping_add(1)
             .max(1);
-        if !join_or_open(&self.pending, token, cap, now, || open_uri(uri)) {
+        let open = || {
+            ask.then(|| ask_windows(cap))
+                .flatten()
+                .or_else(|| uri.filter(|u| open_uri(u)).map(|_| Wait::Settings))
+        };
+        if !join_or_open(&self.pending, token, cap, now, open) {
             return RequestOutcome::Settled(now);
         }
         self.ensure_watcher();
@@ -340,19 +434,43 @@ impl PermissionHost for WindowsHost {
         let mut out = Vec::new();
         pending.retain(|(token, p)| {
             let now = read_state(p.cap);
-            if now != p.was {
-                out.push((*token, now));
-                return false;
+            let settled = match &p.wait {
+                Wait::Settings => (now != p.was).then_some(now),
+                Wait::Question(answer) => match answer.load(Ordering::SeqCst) {
+                    UNANSWERED => None,
+                    NO_ANSWER => Some(now),
+                    status => {
+                        let status = AppCapabilityAccessStatus(status);
+                        if status == AppCapabilityAccessStatus::NotDeclaredByApp {
+                            undeclared(p.cap);
+                        }
+                        Some(answered_state(status, now))
+                    }
+                },
+            };
+            // Settle with the truth, not a hanging `await`, if nobody answered.
+            match settled.or_else(|| (p.started.elapsed() >= REQUEST_TIMEOUT).then_some(now)) {
+                Some(state) => {
+                    out.push((*token, state));
+                    false
+                }
+                None => true,
             }
-            if p.started.elapsed() >= REQUEST_TIMEOUT {
-                // Settle with the truth, not a hanging `await`, if Settings closed untouched.
-                out.push((*token, now));
-                return false;
-            }
-            true
         });
         out
     }
+}
+
+fn undeclared(cap: Capability) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let Some(key) = consent_key(cap) else { return };
+    ONCE.call_once(|| {
+        eprintln!(
+            "[permissions] the package does not declare \"{key}\": Windows asks only when the device \
+             opens. Add \"{key}\" to sk.config.json \"package.windows.msix.capabilities\" so the app \
+             can ask first and has its switch in Settings from installation."
+        )
+    });
 }
 
 /// `ShellExecuteW`; success is the legacy `> 32` HINSTANCE convention.
@@ -633,32 +751,81 @@ mod tests {
     }
 
     #[test]
-    fn a_packaged_key_that_says_prompt_does_not_deny() {
-        let base = ScratchKey::new("prompt");
-        base.set("pkg", "Prompt");
-        base.set("denied", "Deny");
-        assert_eq!(consent_value(&format!(r"{}\pkg", base.0)), None);
-        assert_eq!(consent_value(&format!(r"{}\denied", base.0)), Some(false));
+    fn every_consent_value_windows_writes_is_told_apart() {
+        let base = ScratchKey::new("values");
+        base.set("allow", "Allow");
+        base.set("deny", "Deny");
+        base.set("prompt", "Prompt");
+        let at = |sub: &str| consent_value(&format!(r"{}\{sub}", base.0));
+        assert_eq!(at("allow"), Consent::Allow);
+        assert_eq!(at("deny"), Consent::Deny);
+        assert_eq!(at("prompt"), Consent::Prompt);
+        assert_eq!(at("missing"), Consent::Unset);
     }
 
     #[test]
-    fn reading_the_real_consent_store_never_says_prompt_and_never_panics() {
-        for cap in Capability::ALL.iter().copied() {
-            let st = read_state(cap);
-            assert_ne!(
-                st,
-                PermissionState::Prompt,
-                "{cap:?}: Windows has no prompt state for an unpackaged app"
-            );
+    fn an_unpackaged_app_is_refused_only_by_a_deny() {
+        use Consent::*;
+        for app in [Allow, Prompt, Unset] {
+            for master in [Allow, Prompt, Unset] {
+                assert_eq!(
+                    consent_state(master, app, false),
+                    PermissionState::Granted,
+                    "{master:?}/{app:?}"
+                );
+            }
+            assert_eq!(consent_state(Deny, app, false), PermissionState::Denied);
         }
+        assert_eq!(consent_state(Allow, Deny, false), PermissionState::Denied);
     }
 
     #[test]
-    fn a_missing_key_reads_as_granted_rather_than_denied() {
+    fn a_packaged_app_is_granted_only_by_its_own_allow() {
+        use Consent::{Allow, Deny, Unset};
+        use PermissionState::{Denied, Granted};
+        assert_eq!(consent_state(Allow, Allow, true), Granted);
+        assert_eq!(consent_state(Unset, Allow, true), Granted);
         assert_eq!(
-            consent_value(&format!(r"{CONSENT}\skProbeNoSuchCapability")),
-            None
+            consent_state(Allow, Consent::Prompt, true),
+            PermissionState::Prompt,
+            "a declared capability before Windows has asked"
         );
+        assert_eq!(
+            consent_state(Allow, Unset, true),
+            PermissionState::Prompt,
+            "an undeclared one: Windows asks on first use"
+        );
+        assert_eq!(consent_state(Allow, Deny, true), Denied);
+        assert_eq!(
+            consent_state(Deny, Allow, true),
+            Denied,
+            "the master switch"
+        );
+        assert_eq!(consent_state(Deny, Consent::Prompt, true), Denied);
+    }
+
+    #[test]
+    fn windows_answer_settles_the_request() {
+        use AppCapabilityAccessStatus as S;
+        use PermissionState::*;
+        assert_eq!(answered_state(S::Allowed, Prompt), Granted);
+        assert_eq!(answered_state(S::DeniedByUser, Prompt), Denied);
+        assert_eq!(answered_state(S::DeniedBySystem, Prompt), Denied);
+        assert_eq!(
+            answered_state(S::NotDeclaredByApp, Prompt),
+            Granted,
+            "the capture goes ahead and Windows asks then"
+        );
+        assert_eq!(answered_state(S::NotDeclaredByApp, Denied), Denied);
+        assert_eq!(answered_state(S::UserPromptRequired, Prompt), Prompt);
+    }
+
+    #[test]
+    fn this_unpackaged_test_process_never_reads_prompt() {
+        assert!(!crate::package::has_identity());
+        for cap in Capability::ALL.iter().copied() {
+            assert_ne!(read_state(cap), PermissionState::Prompt, "{cap:?}");
+        }
     }
 
     #[test]
@@ -771,7 +938,7 @@ mod tests {
         );
         assert_eq!(
             consent_value(&lazy),
-            Some(true),
+            Consent::Allow,
             "the value the watcher woke for"
         );
     }
@@ -782,7 +949,7 @@ mod tests {
         let opened = std::cell::Cell::new(0);
         let open = || {
             opened.set(opened.get() + 1);
-            true
+            Some(Wait::Settings)
         };
         let cap = Capability::Camera;
         assert!(join_or_open(
@@ -820,7 +987,7 @@ mod tests {
             4,
             cap,
             PermissionState::Denied,
-            || false
+            || None
         ));
         assert!(
             failed.lock().unwrap().is_empty(),
