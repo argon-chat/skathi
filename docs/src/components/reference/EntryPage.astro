@@ -19,6 +19,7 @@ import {
   newLabel,
   plain,
   platforms,
+  releaseQualifier,
   sinceOn,
   skathiOnlyNote,
   statuses,
@@ -64,7 +65,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
 
 <DocsLayout
   title={plain(entry.name)}
-  description={`${entry.summary} ${status.label} in Skathi${entry.since ? ` since ${entry.since}` : ""}.`}
+  description={`${entry.summary} ${status.label} in Skathi${releaseQualifier(entry.since)}.`}
   headings={headings}
   sub={{
     parent: reference.id,
@@ -101,7 +102,9 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
               <StatusMark status={value} size={16} />
               {statuses[value].label}
             </dd>
-            {since && <dd class:list={["spec-os-since", { "is-new": isNew(since) }]}>since {since}</dd>}
+            {since && (
+              <dd class:list={["spec-os-since", { "is-new": isNew(since) }]}>{releaseQualifier(since).trim()}</dd>
+            )}
           </div>
         );
       })
