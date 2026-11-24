@@ -42,8 +42,8 @@ homepage = "https://skathi.land"
 # identity fix (smol-rs/async-task#108) is merged upstream but not yet released.
 [patch.crates-io]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
-# gpui pins skathi-taffy =0.15.0, the argon-chat/taffy fork in vendor/taffy (branch `vue-native`:
-# upstream v0.15.0 plus patches, each marked "vue-native patch" in the source).
+# gpui pins skathi-taffy =0.16.0, the argon-chat/taffy fork in vendor/taffy (branch `vue-native`:
+# upstream v0.16.0 plus patches).
 skathi-taffy = { path = "vendor/taffy" }
 
 [profile.release]
