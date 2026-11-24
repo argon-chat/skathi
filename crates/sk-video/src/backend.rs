@@ -259,6 +259,11 @@ impl Drop for HeldGpuFrame {
 pub trait VideoBackend {
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError>;
 
+    /// Route decoded audio to the graph. Video-only streams have no audio to route.
+    fn route_audio(&mut self, _output: &Arc<dyn AudioOutput>) -> Result<(), MediaError> {
+        Ok(())
+    }
+
     fn play(&mut self);
     fn pause(&mut self);
     fn seek(&mut self, seconds: f64);
@@ -305,4 +310,11 @@ pub trait VideoBackend {
     /// backend producing [`GpuFrame`]s should stop and fill `VideoFrame::image` with real bytes.
     /// One-way: the causes are properties of the machine. The default ignores it.
     fn gpu_upload_failed(&mut self) {}
+}
+
+/// The audio graph input belonging to one media element.
+pub trait AudioOutput: Send + Sync {
+    fn sample_rate(&self) -> u32;
+    fn push(&self, interleaved: &[f32], channels: usize, rate: u32, gain: f32);
+    fn flush(&self);
 }

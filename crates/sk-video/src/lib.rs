@@ -36,8 +36,8 @@ pub mod avf;
 pub mod gst;
 
 pub use backend::{
-    CanPlay, FrameRequest, GpuFrame, HeldGpuFrame, MediaError, MediaErrorCode, MediaEvent,
-    MediaSource, NetworkState, ReadyState, VideoBackend, VideoFrame,
+    AudioOutput, CanPlay, FrameRequest, GpuFrame, HeldGpuFrame, MediaError, MediaErrorCode,
+    MediaEvent, MediaSource, NetworkState, ReadyState, VideoBackend, VideoFrame,
 };
 pub use element::{video, VideoFit, VideoOptions};
 pub use state::{Advance, VideoState};

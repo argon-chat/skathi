@@ -54,7 +54,7 @@ devtools = []
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
 default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview", "ffi", "process"]
-audio = ["sk-runtime/audio", "sk-permissions/audio"]
+audio = ["sk-runtime/audio", "sk-permissions/audio", "sk-tree/audio"]
 # `panningModel: "spatial"` and `AudioContext.spatialAudio`: Windows spatial audio objects.
 spatial-audio = ["audio", "dep:sk-audio"]
 

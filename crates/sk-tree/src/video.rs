@@ -5,8 +5,8 @@
 //! - `autoplay` is edge-triggered off the prop, as on `<lottie>`.
 //! - `currentTime` is written through a write counter, not the value: `el.currentTime = 0` on a video
 //!   already at 0 must re-seek, and a prop channel that dedupes on the string cannot see it.
-//! - A detached `<video>` is paused and suspended (unlike `<lottie>`): a stream costs tens of MiB, and
-//!   a browser pauses on removal too. A hidden or off-screen one keeps playing.
+//! - Removing a playing element pauses and suspends it. An audio source can also be played explicitly
+//!   while detached.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,6 +18,9 @@ use sk_video::{FrameRequest, MediaError, MediaEvent, MediaSource, VideoOptions, 
 
 use crate::tree::{self, Tree};
 use crate::EventPayload;
+
+#[cfg(feature = "audio")]
+pub(crate) mod graph_audio;
 
 struct Entry {
     src: String,
@@ -37,9 +40,53 @@ struct Entry {
 }
 
 thread_local! {
+    /// Audio elements and routed video elements. The flag records an explicit play() while detached.
+    static AUDIO_ELEMENTS: RefCell<HashMap<u32, bool>> = RefCell::default();
     static VIDEO_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
     /// Script-set state by node, apart from [`VIDEO_STATES`] because it outlives the decoder ([`Api`]).
     static API: RefCell<HashMap<u32, Api>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn track_audio(id: u32) {
+    AUDIO_ELEMENTS.with(|ids| {
+        ids.borrow_mut().entry(id).or_default();
+    });
+}
+
+fn sync_audio_element(t: &Tree, id: u32) {
+    let scale = VIDEO_STATES.with(|m| m.borrow().get(&id).map_or(1.0, |e| e.scale));
+    sync(t, id, crate::windows::window_of_node_in(t, id), scale);
+}
+
+fn sync_audio_playback(id: u32, playing: bool) {
+    tree::read_tree(|t| {
+        let tracked = AUDIO_ELEMENTS.with(|ids| {
+            let mut ids = ids.borrow_mut();
+            let Some(play_detached) = ids.get_mut(&id) else {
+                return false;
+            };
+            *play_detached = playing && !t.connected(id);
+            true
+        });
+        if playing && tracked {
+            sync_audio_element(t, id);
+        }
+    });
+}
+
+pub(crate) fn sync_audio_elements() {
+    AUDIO_ELEMENTS.with(|ids| {
+        tree::read_tree(|t| {
+            for (&id, play_detached) in ids.borrow_mut().iter_mut() {
+                if t.connected(id) {
+                    *play_detached = false;
+                } else if !*play_detached {
+                    continue;
+                }
+                sync_audio_element(t, id);
+            }
+        })
+    });
 }
 
 #[derive(Default, Clone, Copy)]
@@ -190,7 +237,7 @@ pub(crate) fn sync(
     scale: f32,
 ) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
-    let src = t.prop(id, "src").unwrap_or("").trim().to_string();
+    let src = t.prop(id, "src").unwrap_or("").trim();
     let autoplay = bool_attr(t.prop(id, "autoplay"));
 
     VIDEO_STATES.with(|m| {
@@ -210,8 +257,12 @@ pub(crate) fn sync(
             map.insert(
                 id,
                 Entry {
-                    src: src.clone(),
-                    state: load(&src),
+                    src: src.to_owned(),
+                    state: load(src).and_then(|state| {
+                        #[cfg(feature = "audio")]
+                        let state = graph_audio::restore(id, src, state)?;
+                        Some(state)
+                    }),
                     autoplay,
                     props: Props::default(),
                     seek_write: None,
@@ -391,6 +442,9 @@ pub(crate) fn note_frame_box(id: u32, options: &VideoOptions) {
 }
 
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
+    AUDIO_ELEMENTS.with(|ids| ids.borrow_mut().retain(|&id, _| live(id)));
+    #[cfg(feature = "audio")]
+    graph_audio::gc(&live);
     API.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     VIDEO_STATES.with(|m| {
         m.borrow_mut().retain(|&id, entry| {
@@ -462,7 +516,8 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 continue;
             };
             // Detached (unmounted, or parked in a never-inserted `<KeepAlive>` container): stop decoding.
-            if !attached {
+            if !attached && !AUDIO_ELEMENTS.with(|m| m.borrow().get(&id).copied().unwrap_or(false))
+            {
                 if state.wants_playing() && !state.suspended() {
                     state.pause();
                     let removed = [MediaEvent::TimeUpdate, MediaEvent::Pause];
@@ -486,9 +541,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             } else {
                 entry.frame_box
             };
-            if max_size == (0, 0) {
-                continue;
-            }
             let advance = state.advance(now, &FrameRequest { max_size });
             let show = advance.new_frame && on_screen(id, entry.window);
             match state.take_gpu_upload() {
@@ -779,7 +831,15 @@ pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
 }
 
 pub(crate) fn media_call(id: u32, verb: u32, arg: f64) -> bool {
-    let live = with_state(id, |_| ()).is_some();
+    if matches!(verb, 0 | 1) {
+        sync_audio_playback(id, verb == 0);
+    }
+    let live = VIDEO_STATES.with(|m| {
+        m.borrow().get(&id).is_some_and(|entry| {
+            entry.state.is_some()
+                && tree::read_tree(|t| t.prop(id, "src").unwrap_or("").trim() == entry.src)
+        })
+    });
     // The element's own state whether or not a decoder exists yet (`Api`).
     note_api(id, verb, arg, live);
     if !live {

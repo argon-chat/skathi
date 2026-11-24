@@ -27,6 +27,49 @@ async function inPage(body: string): Promise<unknown> {
 }
 
 test(
+  "an element feeds its Web Audio analyser across source changes",
+  async () => {
+    const wav = Bun.file(new URL("../../../apps/hello/assets/chirp-mono-22k.wav", import.meta.url));
+    const src = "data:audio/wav;base64," + Buffer.from(await wav.arrayBuffer()).toString("base64");
+    for (const tag of ["audio", "video"]) {
+      const got = await inPage(`
+      const ctx = new AudioContext(), el = document.createElement(${JSON.stringify(tag)});
+      if (el.tagName.toLowerCase() === "video") document.getElementById("root").appendChild(el);
+      try {
+        const node = ${tag === "audio" ? "ctx.createMediaElementSource(el)" : "new MediaElementAudioSourceNode(ctx, {mediaElement: el})"};
+        if (!(node instanceof MediaElementAudioSourceNode) || node.mediaElement !== el || node.numberOfInputs !== 0) return "source";
+        try { ctx.createMediaElementSource(el); return "duplicate" } catch (e) { if (e.name !== "InvalidStateError") throw e }
+        try { ctx.createMediaElementSource({__skId: el.__skId}); return "forged" } catch (e) { if (!(e instanceof TypeError)) throw e }
+        const gain = ctx.createGain(), analyser = ctx.createAnalyser(), data = new Float32Array(analyser.fftSize);
+        node.connect(gain).connect(analyser);
+        el.loop = true;
+        for (const mime of ["audio/wav", "audio/x-wav"]) {
+          el.setAttribute("src", ${JSON.stringify(src)}.replace("audio/wav", mime));
+          await el.play();
+          const until = Date.now() + 3000;
+          while (Date.now() < until) {
+            analyser.getFloatTimeDomainData(data);
+            if (data.some(s => Math.abs(s) > 0.01)) break;
+            await new Promise(r => setTimeout(r, 20));
+          }
+          if (ctx.currentTime === 0) return "no output device";
+          if (!data.some(s => Math.abs(s) > 0.01)) return { silent: mime, media: __sk_media_state(el.__skId), clock: ctx.currentTime, events: __sk_media_events(el.__skId) };
+          el.pause();
+          await new Promise(r => setTimeout(r, 250));
+          analyser.getFloatTimeDomainData(data);
+          if (data.some(s => Math.abs(s) > 0.01)) return "audio after pause";
+        }
+        return "heard both sources";
+      } finally { el.pause(); el.remove(); await ctx.close(); }
+    `);
+      if ((got as { ok?: string }).ok === "no output device") continue;
+      expect(got).toEqual({ ok: "heard both sources" });
+    }
+  },
+  T,
+);
+
+test(
   "the classes are there, tagged as a browser tags them",
   async () => {
     const got = await inPage(

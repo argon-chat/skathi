@@ -31,10 +31,10 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEngine,
-    IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, MFCreateAttributes,
-    MFCreateDXGIDeviceManager, MFCreateMFByteStreamOnStream, MFStartup, MFSTARTUP_FULL,
-    MF_BYTESTREAM_CONTENT_TYPE, MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_DXGI_MANAGER,
-    MF_MEDIA_ENGINE_EXTENSION, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
+    IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineWebSupport,
+    MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMFByteStreamOnStream, MFStartup,
+    MFSTARTUP_FULL, MF_BYTESTREAM_CONTENT_TYPE, MF_MEDIA_ENGINE_CALLBACK,
+    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EXTENSION, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_VERSION,
 };
 use windows::Win32::System::Com::{
@@ -235,8 +235,69 @@ fn ensure_platform() -> Result<(), MediaError> {
     }
 }
 
+struct WebAudio {
+    web: IMFMediaEngineWebSupport,
+    provider: windows::Win32::Media::MediaFoundation::IAudioSourceProvider,
+    output: std::sync::Weak<dyn crate::AudioOutput>,
+    rate: u32,
+    channels: u32,
+    last: std::time::Instant,
+    remainder: f64,
+    samples: Vec<f32>,
+}
+
+impl WebAudio {
+    // The provider has no COM proxy. Pull on the media engine's apartment.
+    fn pump(&mut self, playing: bool) {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        let Some(output) = self.output.upgrade().filter(|_| playing) else {
+            self.remainder = 0.0;
+            return;
+        };
+        let due = elapsed.min(0.2) * f64::from(self.rate) + self.remainder;
+        self.remainder = due.fract();
+        let mut remaining = due as usize;
+        while remaining > 0 {
+            let frames = remaining.min(512);
+            let mut channels = self.channels;
+            self.samples.resize(frames * channels as usize, 0.0);
+            let mut result = unsafe {
+                self.provider.ProvideInput(
+                    frames as u32,
+                    &mut channels,
+                    Some(self.samples.as_mut_ptr()),
+                )
+            };
+            // A layout change returns the required width, even when the supplied buffer was wider.
+            if result.is_err() && channels != self.channels && (1..=32).contains(&channels) {
+                self.channels = channels;
+                self.samples.resize(frames * channels as usize, 0.0);
+                result = unsafe {
+                    self.provider.ProvideInput(
+                        frames as u32,
+                        &mut channels,
+                        Some(self.samples.as_mut_ptr()),
+                    )
+                };
+            }
+            if result.is_ok() && channels > 0 && channels <= self.channels {
+                output.push(
+                    &self.samples[..frames * channels as usize],
+                    channels as usize,
+                    self.rate,
+                    1.0,
+                );
+            }
+            remaining -= frames;
+        }
+    }
+}
+
 pub struct MediaEngineBackend {
     engine: IMFMediaEngine,
+    web_audio: Option<WebAudio>,
     _notify: IMFMediaEngineNotify,
     queue: Arc<Mutex<Vec<u32>>>,
     presenter: present::Presenter,
@@ -339,6 +400,7 @@ impl MediaEngineBackend {
         })?;
 
         Ok(Self {
+            web_audio: None,
             engine,
             _notify: notify,
             queue,
@@ -573,6 +635,9 @@ impl MediaEngineBackend {
 /// heap and 2-3 threads per unmounted `<video>`.
 impl Drop for MediaEngineBackend {
     fn drop(&mut self) {
+        if let Some(web) = self.web_audio.take() {
+            let _ = unsafe { web.web.DisconnectWebAudio() };
+        }
         if let Err(e) = unsafe { self.engine.Shutdown() } {
             trace(format_args!("Shutdown failed: {e}"));
         }
@@ -580,6 +645,28 @@ impl Drop for MediaEngineBackend {
 }
 
 impl VideoBackend for MediaEngineBackend {
+    fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
+        let failed = |e| {
+            MediaError::new(
+                MediaErrorCode::Decode,
+                format!("Media Foundation could not route audio to Web Audio: {e}"),
+            )
+        };
+        let web: IMFMediaEngineWebSupport = self.engine.cast().map_err(failed)?;
+        let provider = unsafe { web.ConnectWebAudio(output.sample_rate()) }.map_err(failed)?;
+        self.web_audio = Some(WebAudio {
+            web,
+            provider,
+            output: Arc::downgrade(output),
+            rate: output.sample_rate(),
+            channels: 1,
+            last: std::time::Instant::now(),
+            remainder: 0.0,
+            samples: Vec::new(),
+        });
+        Ok(())
+    }
+
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         self.last_pts = i64::MIN;
         self.presenter.reset();
@@ -704,7 +791,8 @@ impl VideoBackend for MediaEngineBackend {
 
     fn audible(&self) -> bool {
         unsafe {
-            self.engine.HasAudio().as_bool()
+            self.web_audio.is_none()
+                && self.engine.HasAudio().as_bool()
                 && !self.engine.IsPaused().as_bool()
                 && !self.engine.IsEnded().as_bool()
                 && !self.engine.GetMuted().as_bool()
@@ -789,6 +877,10 @@ impl VideoBackend for MediaEngineBackend {
     }
 
     fn drain_events(&mut self, sink: &mut dyn FnMut(MediaEvent)) {
+        let playing = !self.paused() && !self.ended();
+        if let Some(audio) = &mut self.web_audio {
+            audio.pump(playing)
+        }
         let raw = {
             let Ok(mut queue) = self.queue.lock() else {
                 return;

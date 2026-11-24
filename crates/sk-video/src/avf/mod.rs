@@ -10,6 +10,7 @@
 //! events. The callbacks that arrive elsewhere (end of item, a failure while playing, seek
 //! completion) touch nothing but [`Shared`].
 
+mod audio;
 mod frame;
 mod loader;
 
@@ -94,6 +95,8 @@ impl Failure {
 }
 
 pub struct AvPlayerBackend {
+    capture: Option<Arc<audio::Capture>>,
+    tap_installed: bool,
     mtm: MainThreadMarker,
     player: Retained<AVPlayer>,
     item: Option<Retained<AVPlayerItem>>,
@@ -143,6 +146,8 @@ impl AvPlayerBackend {
         // The end is handled in `poll` (pause or loop), not by AVPlayer's own end action.
         unsafe { player.setActionAtItemEnd(AVPlayerActionAtItemEnd::None) };
         Ok(Self {
+            capture: None,
+            tap_installed: false,
             mtm,
             player,
             item: None,
@@ -174,6 +179,7 @@ impl AvPlayerBackend {
     }
 
     fn unload(&mut self) {
+        self.tap_installed = false;
         let center = NSNotificationCenter::defaultCenter();
         for observer in self.observers.drain(..) {
             unsafe { center.removeObserver(observer.as_ref()) };
@@ -351,6 +357,21 @@ impl AvPlayerBackend {
         self.has_video = Some(video);
     }
 
+    fn apply_audio_level(&self) {
+        let (volume, muted) = if let Some(capture) = &self.capture {
+            capture.gain(self.volume, self.muted);
+            // The tap applies the element gain and clears the player's buffers. Keep the
+            // renderer running once the tap is in place so it continues to supply PCM.
+            (1.0, !self.tap_installed)
+        } else {
+            (self.volume as f32, self.muted)
+        };
+        unsafe {
+            self.player.setVolume(volume);
+            self.player.setMuted(muted);
+        }
+    }
+
     fn compute_ready_state(&self) -> ReadyState {
         if self.error.is_some() || !self.item_ready() {
             return ReadyState::HaveNothing;
@@ -420,6 +441,18 @@ impl AvPlayerBackend {
             .append(&mut self.shared.events.lock().unwrap_or_else(|e| e.into_inner()));
 
         self.track_kinds();
+        if let Some(capture) = &self.capture {
+            if !self.tap_installed && self.has_audio == Some(true) {
+                self.tap_installed = capture.install(&item);
+                if !self.tap_installed {
+                    self.error = Some(MediaError::new(MediaErrorCode::Decode, "AVFoundation could not attach an audio processing tap to the playing track"));
+                    self.events.push(MediaEvent::Error);
+                    unsafe { self.player.pause() };
+                    return;
+                }
+                self.apply_audio_level();
+            }
+        }
         let ready = self.compute_ready_state();
         while self.reported_ready < ready {
             let next = ReadyState::from_u8(self.reported_ready as u8 + 1);
@@ -596,6 +629,27 @@ impl Drop for AvPlayerBackend {
 }
 
 impl VideoBackend for AvPlayerBackend {
+    fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
+        let capture = audio::Capture::new(output);
+        capture.gain(self.volume, self.muted);
+        if let Some(item) = self
+            .item
+            .as_deref()
+            .filter(|_| self.has_audio == Some(true))
+        {
+            if !capture.install(item) {
+                return Err(MediaError::new(
+                    MediaErrorCode::Decode,
+                    "AVFoundation could not attach an audio processing tap to the playing track",
+                ));
+            }
+            self.tap_installed = true;
+        }
+        self.capture = Some(capture);
+        self.apply_audio_level();
+        Ok(())
+    }
+
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         let had_source = self.loaded;
         self.unload();
@@ -607,13 +661,12 @@ impl VideoBackend for AvPlayerBackend {
         let asset = self.asset_for(source)?;
         trace(format_args!("load {} (AVPlayer)", self.src));
         let item = unsafe { AVPlayerItem::playerItemWithAsset(&asset, self.mtm) };
+        self.apply_audio_level();
         unsafe {
             // AVFoundation's stall prediction does not work for data served by a resource loader.
             self.player
                 .setAutomaticallyWaitsToMinimizeStalling(self.served.is_none());
             self.player.replaceCurrentItemWithPlayerItem(Some(&item));
-            self.player.setVolume(self.volume as f32);
-            self.player.setMuted(self.muted);
         }
         self.observe(&item);
         self.item = Some(item);
@@ -663,13 +716,13 @@ impl VideoBackend for AvPlayerBackend {
 
     fn set_volume(&mut self, volume: f64) {
         self.volume = volume;
-        unsafe { self.player.setVolume(volume as f32) };
+        self.apply_audio_level();
         self.events.push(MediaEvent::VolumeChange);
     }
 
     fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
-        unsafe { self.player.setMuted(muted) };
+        self.apply_audio_level();
         self.events.push(MediaEvent::VolumeChange);
     }
 
@@ -738,7 +791,8 @@ impl VideoBackend for AvPlayerBackend {
     }
 
     fn audible(&self) -> bool {
-        self.has_audio == Some(true)
+        self.capture.is_none()
+            && self.has_audio == Some(true)
             && !self.paused
             && !self.ended
             && !self.muted
