@@ -198,6 +198,7 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     platforms:
       'macOS: `"skathi-mode"` draws the same as `"optimized"`, with CoreText. Linux: `"optimized"` is swash\'s own rasterizer.',
     notes: [
+      '`"skathi-mode"` is experimental: its output may change between releases. `"optimized"` is the stable mode.',
       "`SK_TEXT_RENDERING=optimized` (or `skathi-mode`) in the environment wins over the config and over `sk_app::embed::Builder::text_rendering`.",
       "[Text rendering](/guides/text-rendering/#two-rendering-modes) compares the two modes.",
     ],

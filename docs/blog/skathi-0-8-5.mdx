@@ -1,20 +1,20 @@
 ---
-title: Skathi 0.9
-metaTitle: "Skathi 0.9"
+title: Skathi 0.8.5
+metaTitle: "Skathi 0.8.5"
 description: Text that matches the browsers' line boxes.
 date: 2026-11-23
 draft: true
 tags: [release, text, css]
 release:
-  version: "0.9.0"
+  version: "0.8.5"
   platforms: Windows, macOS and Linux
   install:
     - label: New app
       command: bun create skathi my-app
     - label: Existing app
-      command: bun add @skathi-native/runtime@^0.9.0 && bun add -d @skathi-native/cli@^0.9.0
+      command: bun add @skathi-native/runtime@^0.8.5 && bun add -d @skathi-native/cli@^0.8.5
     - label: Rust program
-      command: cargo add skathi@0.9
+      command: cargo add skathi@0.8.5
 ---
 
 ## Upgrading
@@ -41,7 +41,7 @@ A space at the start or end of a flex or grid item's text is removed, as in the 
 
 ### Text on Windows and Linux is drawn as on a Mac
 
-The new `"textRendering"` setting in sk.config.json picks the rasterizer, and its default on Windows and Linux is `"skathi-mode"`, below. Text there is grayscale and a little heavier than before, light text on a dark ground most of all. To keep DirectWrite with ClearType, as 0.8 drew it:
+The new `"textRendering"` setting in sk.config.json picks the rasterizer, and its default on Windows and Linux is `"skathi-mode"`, below, which is experimental. Text there is grayscale and a little heavier than before, light text on a dark ground most of all. To keep DirectWrite with ClearType, as 0.8 drew it:
 
 ```json
 {
@@ -53,9 +53,9 @@ The new `"textRendering"` setting in sk.config.json picks the rasterizer, and it
 
 ## Text
 
-### Skathi mode
+### Skathi mode (experimental)
 
-Skathi now has its own glyph rasterizer, and on Windows and Linux it draws every glyph the way macOS does. It reads the font's outlines without hinting, thickens them by an amount the text colour's luminance selects (sideways by the amount, upwards by twice it, the baseline kept, in five steps as CoreGraphics takes them), puts the x-height and cap height of small text on whole pixels as macOS's vertical hinting does, and blends the coverage linearly, with no gamma or contrast correction. It is `"skathi-mode"`, the default on Windows and Linux; `"optimized"` keeps the platform's rasterizer (DirectWrite with ClearType, swash), and on macOS both draw with CoreText. The [text rendering guide](/guides/text-rendering/#two-rendering-modes) says when to pick which.
+Skathi now has its own glyph rasterizer, and on Windows and Linux it draws every glyph the way macOS does. It reads the font's outlines without hinting, thickens them by an amount the text colour's luminance selects (sideways by the amount, upwards by twice it, the baseline kept, in five steps as CoreGraphics takes them), puts the x-height and cap height of small text on whole pixels as macOS's vertical hinting does, and blends the coverage linearly, with no gamma or contrast correction. It is `"skathi-mode"`, the default on Windows and Linux; `"optimized"` keeps the platform's rasterizer (DirectWrite with ClearType, swash), and on macOS both draw with CoreText. The [text rendering guide](/guides/text-rendering/#two-rendering-modes) says when to pick which. The mode is experimental in this release: it is the default so that it is tried on real apps and displays, its output may still change, and `"optimized"` is the stable choice.
 
 Measured on Windows against CoreText rendering the same text (Manrope 400 and 600; 11, 13, 16 and 24px; 1x and 2x; black, white, grey and coloured text; 48 cases), glyph masks differ by 0.25 to 1.1 levels in 255 on average per case; DirectWrite's differ by 33 to 36. Ink stays within 0.1% of CoreText's. Against 0.8 on Windows, light text on a dark ground has 10 to 22% more ink. On Linux the same rasterizer reads the outlines through swash and produces the same masks, byte for byte, as on Windows.
 

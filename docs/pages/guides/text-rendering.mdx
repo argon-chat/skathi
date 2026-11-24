@@ -15,6 +15,8 @@ Which rasterizer draws the glyphs is a setting for the whole app, `"textRenderin
 - **`"skathi-mode"`**, the default on Windows and Linux, draws text as a Mac does: from the font's outlines without hinting, grayscale, and a little heavier the lighter the text is. The same app looks the same on every OS, at every size and display scale. Measured against macOS's own rendering of the same text, glyph pixels differ by about one level in 255 on average, where DirectWrite's differ by 33.
 - **`"optimized"`** is the platform's own rasterizer: DirectWrite with ClearType and the font's hinting on Windows, swash on Linux, CoreText on macOS. On macOS it is the default, and `"skathi-mode"` there draws the same.
 
+**Skathi mode is experimental.** It is the default so that it is seen on real apps and displays, and its output may still change between releases: glyph weights, the hinting of small text, and how it behaves with variable fonts. `"optimized"` is the stable mode; set it if an app must look exactly the same after an update.
+
 Choose `"optimized"` when the app should look like the other apps on its desktop rather than like a Mac app: Segoe UI at 100 % scale with ClearType has sharper stems on Windows, at the cost of the shapes and weights it has on a Mac. `SK_TEXT_RENDERING=optimized` in the environment tries it without a rebuild.
 
 In `"skathi-mode"` text is always grayscale, so `font-smoothing: subpixel-antialiased` does nothing, and `font-dilation` changes nothing either, because the weight of light text is already part of the mode. `font-smoothing: antialiased` turns that extra weight off, as it does on a Mac.
