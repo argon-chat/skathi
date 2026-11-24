@@ -6534,11 +6534,9 @@ fn apply_property(
                 }
                 warn_once(
                     diagnostics,
-                    "`font-variation-settings` is not applied (v1) — a face is selected through \
-                     the weight/width/slope model, not by axis value, so an arbitrary axis \
-                     (`wdth`, `slnt`, a custom one) cannot be instantiated. `font-weight` and \
-                     `font-style` do reach the axis the WWS model covers, and `opsz` is driven \
-                     from the font size",
+                    "`font-variation-settings` is not applied (v1) — an arbitrary axis \
+                     (`wdth`, `slnt`, a custom one) cannot be instantiated. `font-weight` sets \
+                     the `wght` axis and `opsz` is driven from the font size",
                 )
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)

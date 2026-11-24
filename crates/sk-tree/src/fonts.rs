@@ -474,6 +474,16 @@ fn best_matching(descs: &[&Descriptors], weight: f32, italic: bool) -> Vec<usize
     styled.into_iter().filter(|&i| rank(i) == best).collect()
 }
 
+/// The weight a face draws a run of `asked` at: clamped to its `font-weight` descriptor. A face
+/// that declares none (the initial `normal`) is left to the font's own `wght` range.
+fn drawn_weight(descriptor: &str, asked: gpui::FontWeight) -> Option<gpui::FontWeight> {
+    if descriptor.trim().eq_ignore_ascii_case("normal") {
+        return None;
+    }
+    let (lo, hi) = weight_range(descriptor);
+    Some(gpui::FontWeight(asked.0.clamp(lo, hi)))
+}
+
 fn weight_range(w: &str) -> (f32, f32) {
     let one = |t: &str| match t.to_ascii_lowercase().as_str() {
         "normal" => Some(400.0),
@@ -1157,6 +1167,7 @@ fn compose(
             Some(gpui::ComposedFace {
                 family: family.clone()?.into(),
                 ranges: desc.unicode_range.clone().into(),
+                weight: drawn_weight(&desc.weight, weight),
             })
         })
         .collect()
@@ -1967,6 +1978,13 @@ mod tests {
         let faces = (c[0].composer)(gpui::FontWeight(400.0), gpui::FontStyle::Normal);
         assert_eq!(&*faces[0].ranges, &[(0, 0xFF), (0x2000, 0x206F)]);
         assert!(faces[1].covers('Ж') && !faces[1].covers('a'));
+        for (asked, drawn) in [(600.0, 600.0), (900.0, 800.0), (100.0, 200.0)] {
+            let faces = (c[0].composer)(gpui::FontWeight(asked), gpui::FontStyle::Normal);
+            assert_eq!(faces.len(), 2);
+            for face in faces {
+                assert_eq!(face.weight, Some(gpui::FontWeight(drawn)), "{asked}");
+            }
+        }
         assert!(is_face_family(&faces[0].family) && !is_face_family("Manrope Variable"));
         assert_eq!(face_family("Inter", 7), "Inter (sk face 7)");
     }
@@ -2312,6 +2330,82 @@ mod tests {
             };
             let line = platform.layout_line("Frame", size, &[run]);
             assert_eq!(line.width, size * 5.0, "{family}");
+        }
+    }
+
+    /// The reporter's case: one variable file per `unicode-range` subset, `font-weight: 300 700`.
+    /// Each weight draws its own instance, and one past the range draws the range's end.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn a_variable_web_family_is_drawn_at_each_weight() {
+        #[cfg(target_os = "macos")]
+        let platform: Arc<dyn gpui::PlatformTextSystem> =
+            Arc::new(gpui_apple::AppleTextSystem::new());
+        #[cfg(not(target_os = "macos"))]
+        let platform: Arc<dyn gpui::PlatformTextSystem> =
+            Arc::new(gpui_wgpu::CosmicTextSystem::new("IBM Plex Sans"));
+        let text = gpui::TextSystem::new(platform.clone());
+        let fixture = |path: &str| {
+            sfnt(
+                std::fs::read(format!(
+                    "{}/../../packages/test/fixtures/font-subsets/src/fonts/{path}",
+                    env!("CARGO_MANIFEST_DIR")
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let face = |unicode_range: Vec<(u32, u32)>| Descriptors {
+            family: "SK Variable".into(),
+            weight: "300 700".into(),
+            unicode_range,
+            ..Descriptors::default()
+        };
+        let faces = [
+            (
+                fixture("manrope-cyrillic-wght-normal.woff2"),
+                face(vec![(0x400, 0x45F)]),
+            ),
+            (
+                fixture("manrope-latin-wght-normal.woff2"),
+                face(vec![(0, 0xFF)]),
+            ),
+        ];
+        let mut registered = Vec::new();
+        let mut files = Vec::new();
+        for ((bytes, desc), id) in faces.into_iter().zip(1..) {
+            let (bytes, registered_as) = registration(bytes, &desc, id);
+            files.push(Cow::Owned(bytes));
+            registered.push((desc, registered_as));
+        }
+        text.add_fonts(files).unwrap();
+        let composer: gpui::FamilyComposer =
+            Arc::new(move |weight, style| compose(&registered, weight, style));
+        text.set_composed_families(vec![("SK Variable".into(), composer)]);
+
+        let width = |sample: &str, weight: f32| {
+            let font = gpui::Font {
+                weight: gpui::FontWeight(weight),
+                ..gpui::font("SK Variable")
+            };
+            let run = gpui::FontRun {
+                len: sample.len(),
+                font_id: text.resolve_font(&font),
+                tracking: gpui::px(0.0),
+                word_spacing: gpui::px(0.0),
+            };
+            platform.layout_line(sample, gpui::px(20.0), &[run]).width
+        };
+        for sample in ["Hamburgefonstiv", "Съешь же ещё"] {
+            let widths: Vec<_> = [300.0, 400.0, 500.0, 600.0, 700.0]
+                .map(|weight| width(sample, weight))
+                .into();
+            assert!(
+                widths.windows(2).all(|w| w[1] > w[0]),
+                "{sample}: {widths:?}"
+            );
+            assert_eq!(width(sample, 900.0), widths[4], "{sample}");
+            assert_eq!(width(sample, 100.0), widths[0], "{sample}");
         }
     }
 }

@@ -285,7 +285,7 @@ pub const CATALOG: &[Entry] = &[
     e("font-variant-east-asian", Unsupported, &[], &["ruby"], ""),
     e("font-variant-ligatures", Supported, &["none", "normal"], &[], ""),
     e("font-variant-numeric", Supported, &["tabular-nums", "normal"], &[], ""),
-    e("font-variation-settings", Partial, &["normal"], &["\"wght\" 400"], "`font-weight` and `font-style` reach the matching axes"),
+    e("font-variation-settings", Partial, &["normal"], &["\"wght\" 400"], "`font-weight` reaches the `wght` axis"),
     e("font-weight", Supported, &["bold", "450"], &[], ""),
     e("font-width", Unsupported, &[], &["condensed"], ""),
     e("forced-color-adjust", Unsupported, &[], &["none"], ""),

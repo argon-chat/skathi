@@ -990,7 +990,9 @@ const typography = section("Typography and text", [
     "Accepts `normal`. Set the weight and style of a variable font with their longhands.",
     {
       values: [v("normal", OK, "Uses the font's usual axis selection."), v("axis tag and value pairs", NO)],
-      notes: ["`font-weight` and `font-style` reach the matching axes, and `opsz` follows the font size."],
+      notes: [
+        "`font-weight` sets the `wght` axis, within the face's `font-weight` range, and `opsz` follows the font size. `font-style` picks an italic or oblique face but sets no `ital` or `slnt` axis.",
+      ],
       related: ["font-weight", "font-style", "font-optical-sizing"],
     },
   ),
