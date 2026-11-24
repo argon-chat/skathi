@@ -17,31 +17,60 @@ release:
       command: cargo add skathi@0.8.5
 ---
 
-## Upgrading
+import Compare from "../src/components/Compare.astro";
+import Aside from "../src/components/blog/Aside.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+import modeOptimized from "../src/assets/blog-0-8-5/mode-optimized.png";
+import modeSkathi from "../src/assets/blog-0-8-5/mode-skathi.png";
+import lineHeightOld from "../src/assets/blog-0-8-5/line-height-0-8.png";
+import lineHeightNormal from "../src/assets/blog-0-8-5/line-height-normal.png";
+import scaleResampled from "../src/assets/blog-0-8-5/scale-resampled.png";
+import scaleSettled from "../src/assets/blog-0-8-5/scale-settled.png";
 
-### Text with no `line-height` is `normal`
+0.8 was about what you can do with text. 0.8.5 is about how it looks. The same app used to read differently on each system: thin on Windows, too dark on a Mac, and a little taller than the same markup in a browser everywhere. This release takes those apart one by one. Skathi gets a glyph rasterizer of its own, so Windows and Linux draw text the way macOS does; macOS text now matches a native label pixel for pixel; lines are as tall as browsers make them; and text keeps its shape while it moves.
 
-A document's text now starts at CSS's initial `line-height: normal`. Before, text whose line height no rule declared got 1.618 of its font size, so every line was about 0.4 em taller than in a browser. Interfaces that never declare `line-height` (most of those written for the web) now come out at the browsers' heights: buttons, menu rows and labels lose the extra room.
+It is also the first release that ends in something to install: `sk package` writes an MSIX, a DMG and an AppImage from one section of sk.config.json.
 
-To keep the old look, declare it once:
+<FeatureGrid label="What is new in 0.8.5">
+  <Feature icon="sparkle" title="Skathi mode" href="#skathi-mode" tone="pink">
+    Skathi's own rasterizer: one look on Windows, macOS and Linux. Experimental.
+  </Feature>
+  <Feature icon="monitor" title="macOS, like native" href="#macos-text-as-native-apps-draw-it" tone="blue">
+    Every pixel of a line matches CoreText drawing it.
+  </Feature>
+  <Feature icon="layers" title="Line boxes" href="#lines-as-tall-as-in-a-browser" tone="lilac">
+    `line-height: normal` from the font, and AppKit's label box when you want it.
+  </Feature>
+  <Feature icon="play" title="Text in motion" href="#text-in-motion" tone="yellow">
+    No shimmer under `translate()`, sharp again after `scale()`.
+  </Feature>
+  <Feature icon="shapes" title="Fallback fonts" href="#fonts-and-fallback" tone="pink">
+    `font-family` lists as browsers read them, and `font-size-adjust`.
+  </Feature>
+  <Feature icon="package" title="sk package" href="#packaging" tone="blue">
+    MSIX, DMG and AppImage, without the platform SDKs.
+  </Feature>
+</FeatureGrid>
 
-```css
-html {
-  line-height: 1.618;
-}
-```
+## Skathi mode
 
-### `normal` follows the font
+Skathi now has its own glyph rasterizer, and on Windows and Linux it is the default. It draws every glyph the way macOS does: outlines without hinting, a little extra weight that depends on how light the text is, the x-height of small text on whole pixels, and plain linear blending. The result is grayscale and a little heavier than DirectWrite's, light text on a dark ground most of all, which is where Windows text looks thinnest.
 
-`line-height: normal` is no longer a fixed 1.2 of the font size. It comes from the first available font of the element's `font-family`: its ascent, descent and line gap, rounded as Chromium rounds them, so Segoe UI at 16px is 21px tall and Arial 18px, as in Chromium. It inherits as the keyword, and each element resolves it for its own font and size. A line whose glyphs come from another font, such as Chinese text in a Latin font, grows where that font's box is taller, below.
+<Compare
+  before={modeOptimized}
+  after={modeSkathi}
+  alt="The same page of light text on a dark ground, drawn by DirectWrite and by Skathi mode"
+  beforeLabel="optimized"
+  afterLabel="skathi-mode"
+  caption="Windows at 100 %: Segoe UI on the left of each page, Manrope on the right. Move the pointer over the picture to see the pixels."
+  loupe={4}
+  detail={{ x: 456, y: 306, width: 260, height: 50 }}
+/>
 
-### White space at the edges of a flex item
+How close is it to a Mac? Against CoreText drawing the same text (Manrope 400 and 600, 11 to 24px, 1x and 2x, black, white, grey and coloured, 48 cases), glyph masks differ by 0.25 to 1.1 levels in 255 on average. DirectWrite's differ by 33 to 36. On Linux the rasterizer produces the same masks as on Windows, byte for byte.
 
-A space at the start or end of a flex or grid item's text is removed, as in the browsers. A label written on its own line after an icon (`<svg/>\n  Open a link\n`) no longer makes the button a space wider. The same holds for the text of a `display: block` or `inline-block` element and of an absolutely positioned one; text inside an inline `<span>` beside other text keeps its spaces.
-
-### Text on Windows and Linux is drawn as on a Mac
-
-The new `"textRendering"` setting in sk.config.json picks the rasterizer, and its default on Windows and Linux is `"skathi-mode"`, below, which is experimental. Text there is grayscale and a little heavier than before, light text on a dark ground most of all. To keep DirectWrite with ClearType, as 0.8 drew it:
+The setting is `"textRendering"` in sk.config.json. `"skathi-mode"` is the default on Windows and Linux; `"optimized"` keeps the platform's rasterizer, DirectWrite with ClearType as 0.8 drew it; on macOS both draw with CoreText.
 
 ```json
 {
@@ -49,61 +78,48 @@ The new `"textRendering"` setting in sk.config.json picks the rasterizer, and it
 }
 ```
 
-`SK_TEXT_RENDERING=optimized` in the environment does the same without a rebuild.
+`SK_TEXT_RENDERING=optimized` in the environment switches it without a rebuild, and `Builder::text_rendering` does it for embedders. The [text rendering guide](/guides/text-rendering/#two-rendering-modes) says when to pick which.
 
-## Text
+<Aside kind="warning" title="Experimental">
 
-The new [text rendering guide](/guides/text-rendering/) puts the pieces below together and gives a preset for the root of an app; the apps `sk create` makes start with it.
+Skathi mode is the default so that it gets tried on real apps and real displays. Its output may still change between releases, and `"optimized"` is the stable choice. In this mode `font-smoothing: subpixel-antialiased` and `font-dilation` do nothing, text in many colours takes more room in the glyph atlas, and a glyph takes 2 to 5 µs to rasterize the first time it is drawn, up to 4.6 times as long as before. Emoji are drawn as before.
 
-### Skathi mode (experimental)
+</Aside>
 
-Skathi now has its own glyph rasterizer, and on Windows and Linux it draws every glyph the way macOS does. It reads the font's outlines without hinting, thickens them by an amount the text colour's luminance selects (sideways by the amount, upwards by twice it, the baseline kept, in five steps as CoreGraphics takes them), puts the x-height and cap height of small text on whole pixels as macOS's vertical hinting does, and blends the coverage linearly, with no gamma or contrast correction. It is `"skathi-mode"`, the default on Windows and Linux; `"optimized"` keeps the platform's rasterizer (DirectWrite with ClearType, swash), and on macOS both draw with CoreText. The [text rendering guide](/guides/text-rendering/#two-rendering-modes) says when to pick which. The mode is experimental in this release: it is the default so that it is tried on real apps and displays, its output may still change, and `"optimized"` is the stable choice.
+### `font-smoothing` and `font-dilation`
 
-Measured on Windows against CoreText rendering the same text (Manrope 400 and 600; 11, 13, 16 and 24px; 1x and 2x; black, white, grey and coloured text; 48 cases), glyph masks differ by 0.25 to 1.1 levels in 255 on average per case; DirectWrite's differ by 33 to 36. Ink stays within 0.1% of CoreText's. Against 0.8 on Windows, light text on a dark ground has 10 to 22% more ink. On Linux the same rasterizer reads the outlines through swash and produces the same masks, byte for byte, as on Windows.
+For `"optimized"` mode there are two new inherited properties. `font-smoothing` picks grayscale or subpixel text: `auto`, `antialiased` or `subpixel-antialiased`. `-webkit-font-smoothing` is read as the same property, and `sk check` suggests the unprefixed spelling. A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text of a default window is grayscale; `subpixel-antialiased` asks for ClearType anyway, and is right only where the text sits on an opaque panel.
 
-In this mode `font-smoothing: subpixel-antialiased` is ignored, `font-dilation` changes nothing, and `font-smoothing: antialiased` turns the thickening off, as in Safari. Emoji are drawn as before. Each colour step needs its own glyph in the atlas, so text in several colours takes more atlas tiles than in `"optimized"` mode, and a glyph takes up to 4.6 times as long to rasterize the first time it is drawn (2 to 5 µs).
+`font-dilation: luminance` gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink and dark text is unchanged, so a dark theme stops reading thinner than its light twin.
 
 ### Glyph positions by size
 
-On Windows and Linux a glyph is placed in steps that depend on its size: quarters of a pixel below 12px, thirds up to 16px, halves from 17px and whole pixels from 34px (in device pixels), instead of quarters at every size. Small text keeps its spacing, large text stops caching four rasterizations of every glyph, and the glyph atlas holds 7 to 23% fewer tiles depending on the display scale. macOS follows its own version of the table, below.
+On Windows and Linux a glyph is placed in steps that depend on its size: quarters of a pixel below 12px, thirds up to 16px, halves from 17px and whole pixels from 34px, where it was quarters at every size. Small text keeps its spacing, and the glyph atlas holds 7 to 23% fewer tiles.
 
-### Scaled text settles
+## macOS text as native apps draw it
 
-Text under a `transform` that scales it used to be drawn from glyphs rasterized at the untransformed size and resampled, so `scale(1.14)` came out soft. Now, once a transform has stopped changing for 200 ms, the text under it is rasterized again at the size it is shown at, and matches text laid out at that size. That holds inside a cached subtree and in a scrolling list too. A transform that keeps changing, such as a running animation, stays resampled rather than rasterizing its glyphs every frame, and nothing keeps running once the text has settled.
+Text on macOS was darkened twice. CoreGraphics thickens each glyph by an amount its colour selects, and Skathi's Metal renderer then applied the gamma and contrast correction that DirectWrite text needs on Windows. Coverage is now blended as it is, the way macOS composites a label.
 
-### `font-smoothing`
+The rest follows the system too. The thickening is chosen from the colour's linear luminance, so light grey, green and red text get the weight they get in a native app (red used to get black's). Glyphs sit in the steps macOS uses for their size. `font-weight: 500` on the system font selects its Medium design, which was drawn as Regular before. Against CoreText drawing the same line in the same colour, every pixel now matches: at 13 and 24px, on 1x and Retina displays, for black, white, greys and saturated colours.
 
-The new inherited `font-smoothing` property picks grayscale or subpixel text: `auto` (the platform's rule, as before), `antialiased` (always grayscale) or `subpixel-antialiased`. The prefixed `-webkit-font-smoothing` is read as the same property, and `sk check` suggests the unprefixed spelling. Set the app's default on the root:
+One thing to know: `font-smoothing: antialiased` now does on macOS what it does in Safari and turns the thickening off. Tailwind's `antialiased` class sets it, so an app that uses that class draws thinner text on macOS than before, as the same page does in Safari.
 
-```css
-html {
-  font-smoothing: antialiased;
-}
-```
+## Lines as tall as in a browser
 
-A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque one, so under `auto` the text in a default window is grayscale even when ClearType is on in the system. `subpixel-antialiased` draws ClearType in such a window anyway. It is right only where the text sits on opaque content, such as a panel with a solid background; over a see-through part of the window the colour fringes of the glyph edges stay visible. On macOS text is always grayscale, and `antialiased` turns off the thickening described below.
+Text whose line height no rule declared used to get 1.618 of its font size, about 0.4 em more than a browser gives it. It is now CSS's `normal`, taken from the font's own ascent, descent and line gap and rounded as Chromium rounds them: Segoe UI at 16px is 21px tall and Arial 18px. An interface that never declares `line-height`, as most written for the web don't, comes out at the heights it has in a browser.
 
-### `font-dilation`
+<Compare
+  before={lineHeightOld}
+  after={lineHeightNormal}
+  alt="A preferences window with the line height of 0.8 and with line-height: normal"
+  beforeLabel="0.8"
+  afterLabel="0.8.5"
+  caption="The same markup with no line-height declared. Menu rows, labels and buttons lose the extra room."
+/>
 
-DirectWrite gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. In `"optimized"` mode `font-dilation: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
+### The box of a native label
 
-### Text on macOS as native apps draw it
-
-Text on macOS was darkened twice: CoreGraphics thickens each glyph by an amount its colour selects, and Skathi's Metal renderer then applied the gamma and contrast correction that DirectWrite text gets on Windows. Coverage is now blended as it is, the way macOS composites a label, and the thickening is chosen from the colour's linear luminance, as CoreGraphics chooses it, so light grey, green and red text get the weight they get in a native app (red used to get black's). Glyphs are placed in the steps macOS uses for their size (thirds of a pixel at 13px on a 1x display, halves at 13px on a Retina display, whole pixels from 17px on Retina) and rounded down as macOS rounds them, and small text keeps the system's vertical hinting. `font-weight: 500` on the system font selects its Medium design, which it drew as Regular before, and large text no longer loses a column of pixels at a glyph's edge. Against CoreText drawing the same line in the same colour, every pixel of the composited text now matches, at 13 and 24px, on 1x and Retina displays, for black, white, greys and saturated colours. Monochrome SVG icons are blended the same way.
-
-`font-smoothing: antialiased` now does on macOS what it does in Safari: it turns the thickening off, so text is thinner, light text on a dark ground most of all. Tailwind's `antialiased` class sets it, so an app that uses that class draws thinner text on macOS than before, as the same page does in Safari.
-
-### `will-change: transform` moves text as a layer
-
-Text under a moving `translate()` is placed on whole pixels in every frame, so it steps by a pixel against the borders and lines of its box. Inside an element with `will-change: transform` the text now moves with the box instead, and once the box has been still for 200 ms it is drawn sharp where it stopped.
-
-### Text keeps its shape while it moves
-
-Under a moving `translate()` each glyph used to be placed on its own, so the gaps between letters changed by up to half a pixel from frame to frame and words seemed to shimmer. The translation is now rounded once for the whole text, and letters and lines keep their distances while it moves. Text that is scaled, rotated or moved as a layer is resampled with its edges intact: a glyph's outermost pixels fade out past its box as they should, instead of being cut off where its box ends, which made letters wobble against each other by up to 0.9 px under a running `scale()`. It now stays under 0.2 px. A plain rectangle, a background or a rule with no border or rounded corner, now has antialiased edges under a fractional translation, a scale or a rotation, where it used to step by whole pixels, so inside a `will-change: transform` box the text and the box's lines move together. ([#108](https://github.com/argon-chat/skathi/issues/108))
-
-### `line-metrics` and `line-leading`
-
-Two new inherited Skathi properties build a line the way macOS builds a label's. `line-metrics: snapped` rounds the font's ascent and descent to whole pixels, leaves out the line gap and rounds the descent up where rounding would cut into a descender, so the baseline falls on a whole pixel and `line-height: normal` is that box. `line-leading: above` puts all the leading above the font's box instead of half above and half below. Together they reproduce where AppKit and SwiftUI put a label: 13px text is 16px tall with its baseline at 13, and a 24px button that centres it puts the baseline at 17.
+Two new inherited properties build a line the way AppKit and SwiftUI build a label's. `line-metrics: snapped` rounds the font's ascent and descent to whole pixels and leaves out the line gap, so the baseline falls on a whole pixel. `line-leading: above` puts all the leading above the font's box instead of half above and half below. Together, 13px text is 16px tall with its baseline at 13, and a 24px button that centres it puts the baseline at 17: where macOS puts it.
 
 ```css
 html {
@@ -112,36 +128,85 @@ html {
 }
 ```
 
-The rules are the same on every platform, and the defaults, `auto` and `split`, are CSS's. They apply to layout, painting, selection and the caret, `vertical-align`, `text-box-trim`, baseline alignment, text fields and `<sk-editor>`; in a line that mixes sizes, each run's box comes from its own font, and the line reaches as far above and below the baseline as its runs do.
+The new [text rendering guide](/guides/text-rendering/) puts these together into a preset for the root of an app, and the apps `sk create` makes start with it.
 
-### Fallback fonts grow the line
+## Text in motion
 
-Under `line-height: normal` a line with glyphs from a font other than the first one, a later family of `font-family` or the system's fallback, is as tall as that font's box needs: its rounded ascent and descent with half its line gap above and half below, on the shared baseline, as Chromium builds it. Manrope at 16px is 22px tall; with a Private Use Area glyph from Alcarin Tengwar, whose line gap reaches further below, the line is 23px, as in Chromium. Under `line-metrics: snapped` the other font's snapped box counts. A line without such glyphs keeps the first font's height, and a declared `line-height` never grows. ([#106](https://github.com/argon-chat/skathi/issues/106))
+Three things used to give moving text away.
 
-### `font-size-adjust`
+Under a moving `translate()` each glyph was placed on its own, so the gaps between letters changed by up to half a pixel from frame to frame and words seemed to shimmer. The translation is now rounded once for the whole text, and letters and lines keep their distances.
 
-`font-size-adjust` draws the fonts of a text at the size that matches their x-height: `from-font` sizes every fallback font to the first font's, and a number sizes the first font too, so that its x-height is that fraction of the font size. `cap-height`, `ch-width` and `ic-width` match by another metric. The computed `font-size` and `em` stay as declared. ([#106](https://github.com/argon-chat/skathi/issues/106))
+Under a `scale()` text was drawn from glyphs rasterized at the original size and stretched, so `scale(1.14)` came out soft and stayed soft. Once a transform has been still for 200 ms, the text under it is now rasterized again at the size it is shown at. A transform that keeps changing stays resampled, and nothing keeps running once the text has settled.
 
-### `font-family` lists
+<Compare
+  before={scaleResampled}
+  after={scaleSettled}
+  alt="A card under transform: scale(1.14), resampled and after it settles"
+  beforeLabel="while it scales"
+  afterLabel="200 ms later"
+  caption="A card at scale(1.14) on a 100 % display."
+  loupe={4}
+/>
 
-Each character is now drawn with the first family of the `font-family` list that has a glyph for it, as in browsers, on Windows, macOS and Linux alike. An `@font-face` family after an installed one is reached, a face is used only for the characters its `unicode-range` covers, and one whose range covers a character it has no glyph for passes it to the next family instead of to the system's fallback. On macOS and Linux only the first family was used before, and `unicode-range` subsets of one family were not told apart. A character no font has is the first family's missing glyph on every platform; macOS drew Core Text's LastResort symbol for it. The [text rendering guide](/guides/text-rendering/#characters-the-font-lacks) has the order. ([#106](https://github.com/argon-chat/skathi/issues/106))
+And text stepped by whole pixels against the borders of a box that glided. Inside an element with `will-change: transform` the text now moves with the box as one layer, and plain rectangles, backgrounds and rules are antialiased off the pixel grid, so the box and its text travel together. Letters under a running `scale()` wobbled against each other by up to 0.9 px; they now stay under 0.2. ([#108](https://github.com/argon-chat/skathi/issues/108))
+
+## Fonts and fallback
+
+Each character is now drawn with the first family of the `font-family` list that has a glyph for it, on every platform. On macOS and Linux only the first family was used before. An `@font-face` family after an installed one is reached, a face is used only for the characters its `unicode-range` covers, and a character no font has is the first family's missing glyph everywhere. The [guide](/guides/text-rendering/#characters-the-font-lacks) has the order.
+
+A line with glyphs from another font, such as Chinese text in a Latin font, grows where that font's box is taller, as in Chromium: Manrope at 16px is 22px tall, and 23px with a glyph from a font whose line gap reaches further down. A declared `line-height` never grows.
+
+`font-size-adjust` evens out the sizes: `from-font` draws every fallback font at the size that matches the first font's x-height, and a number sizes the first font too. `cap-height`, `ch-width` and `ic-width` match by another metric. ([#106](https://github.com/argon-chat/skathi/issues/106))
 
 ## Packaging
 
-`sk package` turns a release build into what people install. It runs `sk publish`, then writes the formats the new `"package"` section of sk.config.json lists for the system it runs on into `dist/package`: who publishes the app, its reverse-DNS id, the icon every format scales its images from, the file types it opens and the URL schemes it handles. Most of it defaults from the keys the app already has. `--from <dir>` packages a folder built another way, such as the output of a Rust program that embeds Skathi, and `sk check` reports a mistake in the section as SK8001 or SK8002 before anything is built. The [packaging guide](/guides/packaging/) walks through it.
+`sk package` turns a release build into what people install. It runs `sk publish`, then writes the formats the new `"package"` section lists for the system it runs on into `dist/package`.
 
-On Windows it writes an MSIX, without the Windows SDK: the program and its files, a manifest that declares the app as a full-trust desktop app with its file types and URL schemes, tile and taskbar images from the icon at every scale and target size with their unplated variants, the `resources.pri` index Windows chooses among them with (the same bytes `makepri` writes), and the block map Windows verifies the package against. Inside a package, `appPermissions` and `navigator.permissions` read the app's own switch in Windows' privacy settings, where a packaged app is listed by name, instead of the switch for all desktop apps: `prompt` until the user answers Windows' own question, which `appPermissions.request()` and `getUserMedia()` show in place of the app's dialog. With `"appInstaller"` it also writes an `.appinstaller` file, through which installed copies update from a URL. The package's publisher must be the signing certificate's subject, character for character, and `sk package` prints the one it wrote; signing is still a `signtool` step of your own.
+```json
+{
+  "id": "com.example.notes",
+  "protocols": ["notes"],
+  "package": {
+    "publisher": "Example Ltd",
+    "icon": "icon.png",
+    "fileAssociations": [{ "extensions": ["note"], "name": "Notes document" }]
+  }
+}
+```
 
-On macOS it writes a disk image: the signed app, a link to Applications, and the Finder window they open in, with its size, icon positions and background from `"dmg"` in the config. The layout is written as Finder's own `.DS_Store` rather than by scripting Finder, so it builds headless on a CI runner. With `"notarize"`, the app and then the image go to Apple's notary service and get their tickets stapled; the credentials are a keychain profile or an App Store Connect API key read from environment variables, and a key written into sk.config.json is refused. Extra entitlements for the signed app go in the new `macos.entitlements`.
+Most of the section defaults from keys the app already has. `--from <dir>` packages a folder built another way, such as a Rust program that embeds Skathi, and `sk check` reports a mistake in the section before anything is built. The [packaging guide](/guides/packaging/) walks through it.
 
-For Linux it writes an AppImage, on any system, Windows and macOS included: `sk package` builds the squashfs itself and puts the pinned AppImage type-2 runtime in front of it, so neither `mksquashfs` nor `appimagetool` is needed. The image holds the program and its files, a desktop entry with the app's categories, file types and URL schemes (a link reaches `appLaunch.url` also in an app that opens files, where the entry passes it as a plain argument), the icon at the hicolor sizes and AppStream metainfo. `"updateInformation"` is embedded for AppImageUpdate, with a `.zsync` beside the image when `zsyncmake` is installed, and `"signKey"` embeds a GnuPG signature as appimagetool does. Skathi's Linux hosts are built on Ubuntu 22.04, so an image needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36, RHEL 10 or later), and `sk package` prints the floor of the host it packages.
+- **Windows: MSIX**, written without the Windows SDK: the manifest with the app's file types and URL schemes, tile and taskbar images at every scale with the `resources.pri` Windows picks among them with, the block map, and an `.appinstaller` feed for updates. `sk package` prints the publisher the signing certificate must carry; signing is still a `signtool` step of your own.
+- **macOS: DMG** with the signed app, a link to Applications and a Finder window laid out from the config. The layout is written as Finder's own `.DS_Store`, so it builds headless on a CI runner. With `"notarize"` the app and the image go to Apple's notary service and get their tickets stapled.
+- **Linux: AppImage**, written on any system, Windows and macOS included. `sk package` builds the squashfs itself, so neither `mksquashfs` nor `appimagetool` is needed. It holds a desktop entry, icons and AppStream metainfo, and can embed update information and a GnuPG signature. It needs glibc 2.35 or newer.
 
-## Fixes
+An installed app behaves like one. Inside an MSIX, `appPermissions` and `navigator.permissions` read the app's own switch in Windows' privacy settings, where a packaged app is listed by name, and a request shows Windows' own question in place of the app's dialog. A launch with a URL of a scheme the app declares arrives as `appLaunch.url` on every platform.
 
-- `text-box-trim` trimmed the font's descent too much from the top of a line, and with a `text` or `cap` bottom edge from the bottom too, so a trimmed box was shorter than its glyphs. It now leaves exactly the edges `text-box-edge` names.
-- A `transform-origin` from a class now applies to a `transform` set in a `style` attribute or by `@keyframes`; before, it was replaced by the default `50% 50%`. A rule that sets only `transform-origin` no longer cancels a `transform` from an earlier rule.
+## Fixes worth knowing
+
+- `text-box-trim` trimmed the font's descent too much, so a trimmed box was shorter than its glyphs. It now leaves exactly the edges `text-box-edge` names.
+- A `transform-origin` from a class now applies to a `transform` set in a `style` attribute or by `@keyframes`; before, it was replaced by `50% 50%`.
 - White space between block-level flex boxes no longer takes a line of its own. ([#101](https://github.com/argon-chat/skathi/issues/101))
-- macOS and Linux: an `@font-face` family whose declared name differs from the name inside the font file is now used; before, its text fell back to another font.
-- Linux: text that no installed font covers, such as Chinese on a system without CJK fonts, no longer holds up a frame for seconds while every installed face is tried.
+- Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, animations, video) instead of freezing until the button is released. ([#110](https://github.com/argon-chat/skathi/issues/110))
+- macOS and Linux: an `@font-face` family whose declared name differs from the name inside the font file is now used.
+- Linux: text that no installed font covers, such as Chinese on a system without CJK fonts, no longer holds up a frame for seconds.
 - Devtools: a reply with non-ASCII text that arrives split across two chunks is decoded whole.
-- Windows: while a window is moved with `appWindow.startDragging()`, the page keeps running (timers, `requestAnimationFrame`, animations, video, `<sk-surface>`) instead of freezing until the button is released. The move starts after the `mousedown` handler returns, and only while the left button is still held. ([#110](https://github.com/argon-chat/skathi/issues/110))
+
+<Aside kind="warning" title="What 0.8.5 does not do yet">
+
+- **Skathi mode** has not been looked at on a Linux display or with variable fonts, and simulated bold and oblique faces take their outlines from DirectWrite.
+- **Packaging.** DMG notarization and the look of the Finder window are untested on a real release, the arm64 AppImage has not been run, and `sk package` does not sign an MSIX itself. [#111](https://github.com/argon-chat/skathi/issues/111) tracks signing through Azure.
+- **Fallback fonts** do not grow the line in `<input>`, `<textarea>` and `<sk-editor>`.
+
+</Aside>
+
+## Upgrading
+
+Run the commands at the top of this post and `bunx sk check`.
+
+- Text with no declared `line-height` is `normal` and no longer 1.618 of the font size. To keep the old look, declare it once: `html { line-height: 1.618 }`.
+- `line-height: normal` follows the font and is no longer a fixed 1.2. It inherits as the keyword, and each element resolves it for its own font and size.
+- Text on Windows and Linux is grayscale and a little heavier. `"textRendering": "optimized"` keeps DirectWrite with ClearType.
+- A space at the start or end of a flex or grid item's text is removed, as in browsers: a label written on its own line after an icon no longer makes the button a space wider. Text inside an inline `<span>` beside other text keeps its spaces.
+- On macOS, `font-smoothing: antialiased` (Tailwind's `antialiased`) makes text thinner, as in Safari.
+- For embedders: build the host and the payload from the same release.
