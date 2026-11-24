@@ -8,6 +8,17 @@ order: 6.2
 
 Skathi lays text out by CSS's rules by default, so a page ported from the web keeps its line heights. A native app's labels are built a little differently: lines are whole pixels tall, the baseline sits on a pixel, and light text on a dark ground is as heavy as dark text on a light one. Four inherited properties switch those rules on. This guide gives a preset and says what each line of it does.
 
+## Two rendering modes
+
+Which rasterizer draws the glyphs is a setting for the whole app, `"textRendering"` in [sk.config.json](/sk-config/#textRendering):
+
+- **`"skathi-mode"`**, the default on Windows and Linux, draws text as a Mac does: from the font's outlines without hinting, grayscale, and a little heavier the lighter the text is. The same app looks the same on every OS, at every size and display scale. Measured against macOS's own rendering of the same text, glyph pixels differ by about one level in 255 on average, where DirectWrite's differ by 33.
+- **`"optimized"`** is the platform's own rasterizer: DirectWrite with ClearType and the font's hinting on Windows, swash on Linux, CoreText on macOS. On macOS it is the default, and `"skathi-mode"` there draws the same.
+
+Choose `"optimized"` when the app should look like the other apps on its desktop rather than like a Mac app: Segoe UI at 100 % scale with ClearType has sharper stems on Windows, at the cost of the shapes and weights it has on a Mac. `SK_TEXT_RENDERING=optimized` in the environment tries it without a rebuild.
+
+In `"skathi-mode"` text is always grayscale, so `font-smoothing: subpixel-antialiased` does nothing, and `font-dilation` changes nothing either, because the weight of light text is already part of the mode. `font-smoothing: antialiased` turns that extra weight off, as it does on a Mac.
+
 ## The preset
 
 Put this on the root of a new app:
@@ -29,7 +40,7 @@ Two more are worth setting where they fit, not on the root:
   line-leading: above;
 }
 
-/* Text on an opaque panel, in a window with a Mica or transparent backdrop. */
+/* "optimized" mode: ClearType on an opaque panel, in a window with a Mica or transparent backdrop. */
 .panel {
   background: #fff;
   font-smoothing: subpixel-antialiased;
@@ -66,7 +77,7 @@ Most fonts move by a pixel at some sizes. Consolas gets shorter, because `snappe
 
 Windows and Linux give light text on a dark ground less weight than dark text on a light one, so a dark theme reads thinner than its light twin. `luminance` gives text more weight the lighter it is, in five steps, as macOS does. Light text at 14px gains 6 to 15% ink; dark text is unchanged. It costs no glyph cache space.
 
-On macOS it changes nothing, because the system already does this.
+It only matters in `"optimized"` mode on Windows and Linux. On macOS, and in `"skathi-mode"`, it changes nothing, because text there already gets this weight.
 
 **Leave it out** when a design was tuned against the thinner light text, for example with a heavier `font-weight` in the dark theme.
 
@@ -80,16 +91,38 @@ It is not in the preset because body text with a generous `line-height` looks lo
 
 ## `font-smoothing`
 
+In `"skathi-mode"` text is always grayscale and `subpixel-antialiased` is ignored; the rest of this section is about `"optimized"` mode, except the last paragraph.
+
 A Skathi window has a Mica backdrop by default, and Windows draws ClearType only over an opaque window, so text in a default window is grayscale even with ClearType on in the system. `subpixel-antialiased` draws ClearType anyway. It is right only where the text sits on an opaque background of its own; over a see-through part of the window the glyph edges keep colour fringes.
 
-`antialiased` forces grayscale. On macOS it also turns off the system's thickening of light text, as it does in Safari, so text gets thinner. Tailwind's `antialiased` class sets it: remove the class from the root if a macOS build should look like a native app.
+`antialiased` forces grayscale. On macOS and in `"skathi-mode"` it also turns off the thickening of light text, as it does in Safari, so text gets thinner. Tailwind's `antialiased` class sets it: remove the class from the root if a macOS build should look like a native app.
+
+## Characters the font lacks
+
+Each character is drawn with the first family of `font-family` that has a glyph for it, as in browsers, on Windows, macOS and Linux alike:
+
+1. The families of the list in order, installed or `@font-face`. An `@font-face` face counts for a character only when its `unicode-range` covers it and its file has a glyph for it; otherwise the character goes on to the family's next face, then to the next family.
+2. A character no family of the list has goes to the platform's fallback from the first available family. Only this step differs by platform: DirectWrite picks by script and the system's locale (on an English Windows 11, Han characters next to Segoe UI come from Microsoft JhengHei UI, and from Yu Gothic UI where JhengHei has no glyph), Core Text takes the cascade list of the first family, and cosmic-text its list of families for the character's script, then every installed face in turn. Name a family in the list to choose one yourself.
+3. A character no font has at all is the first available family's missing glyph (glyph 0, usually an empty box).
+
+Layout and painting use the same face: the glyphs are drawn with the font they were shaped with.
+
+A line with glyphs from another font grows where that font's box is taller, under `line-height: normal`, and [`font-size-adjust`](/css/font-size-adjust/) draws the other fonts at the size that matches the first font's x-height.
 
 ## Text that moves
 
-Text under a moving `translate()` is placed on whole pixels in each frame, so it steps against the edges of its box. Give the moving element `will-change: transform` and its text moves with the box, then is drawn sharp where it stops. Text that was scaled or rotated is redrawn at its final size once the transform has been still for 200 ms; nothing needs to be set for that.
+Text moves as one piece: its letters and lines never shift against each other while it moves.
+
+- Under a `translate()` the translation is rounded once for the whole text, to whole device pixels down and to the glyphs' subpixel steps across, so the text stays sharp and steps by up to half a pixel against the edges of its box. Give the moving element `will-change: transform` and its text moves with the box instead, resampled between pixels, then is drawn sharp where it stops.
+- Text under a `scale()` or `rotate()` keeps the glyphs it had and is resampled while the transform changes; once the transform has been still for 200 ms it is drawn again at the size it is shown at. Nothing needs to be set for that.
+- A scrolled list moves by whole device pixels, every line by the same amount, so its text stays as sharp as it is at rest.
+- A view transition moves pictures of the old and new state, so text inside a group moves with it as one piece.
+
+At rest, at every display scale, each line's baseline is on a whole device pixel and glyphs are placed in subpixel steps measured in device pixels.
 
 ## Reference
 
 - [`line-metrics`](/css/line-metrics/) and [`line-leading`](/css/line-leading/)
 - [`font-dilation`](/css/font-dilation/) and [`font-smoothing`](/css/font-smoothing/)
 - [`line-height`](/css/line-height/) and [`text-box-trim`](/css/text-box-trim/)
+- [`font-family`](/css/font-family/) and [`font-size-adjust`](/css/font-size-adjust/)

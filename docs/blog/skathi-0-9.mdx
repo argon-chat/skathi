@@ -33,13 +33,33 @@ html {
 
 ### `normal` follows the font
 
-`line-height: normal` is no longer a fixed 1.2 of the font size. It comes from the first available font of the element's `font-family`: its ascent, descent and line gap, rounded as Chromium rounds them, so Segoe UI at 16px is 21px tall and Arial 18px, as in Chromium. It inherits as the keyword, and each element resolves it for its own font and size. A line whose glyphs fall back to another font, such as Chinese text in a Latin font, does not yet grow to that font's height.
+`line-height: normal` is no longer a fixed 1.2 of the font size. It comes from the first available font of the element's `font-family`: its ascent, descent and line gap, rounded as Chromium rounds them, so Segoe UI at 16px is 21px tall and Arial 18px, as in Chromium. It inherits as the keyword, and each element resolves it for its own font and size. A line whose glyphs come from another font, such as Chinese text in a Latin font, grows where that font's box is taller, below.
 
 ### White space at the edges of a flex item
 
 A space at the start or end of a flex or grid item's text is removed, as in the browsers. A label written on its own line after an icon (`<svg/>\n  Open a link\n`) no longer makes the button a space wider. The same holds for the text of a `display: block` or `inline-block` element and of an absolutely positioned one; text inside an inline `<span>` beside other text keeps its spaces.
 
+### Text on Windows and Linux is drawn as on a Mac
+
+The new `"textRendering"` setting in sk.config.json picks the rasterizer, and its default on Windows and Linux is `"skathi-mode"`, below. Text there is grayscale and a little heavier than before, light text on a dark ground most of all. To keep DirectWrite with ClearType, as 0.8 drew it:
+
+```json
+{
+  "textRendering": "optimized"
+}
+```
+
+`SK_TEXT_RENDERING=optimized` in the environment does the same without a rebuild.
+
 ## Text
+
+### Skathi mode
+
+Skathi now has its own glyph rasterizer, and on Windows and Linux it draws every glyph the way macOS does. It reads the font's outlines without hinting, thickens them by an amount the text colour's luminance selects (sideways by the amount, upwards by twice it, the baseline kept, in five steps as CoreGraphics takes them), puts the x-height and cap height of small text on whole pixels as macOS's vertical hinting does, and blends the coverage linearly, with no gamma or contrast correction. It is `"skathi-mode"`, the default on Windows and Linux; `"optimized"` keeps the platform's rasterizer (DirectWrite with ClearType, swash), and on macOS both draw with CoreText. The [text rendering guide](/guides/text-rendering/#two-rendering-modes) says when to pick which.
+
+Measured on Windows against CoreText rendering the same text (Manrope 400 and 600; 11, 13, 16 and 24px; 1x and 2x; black, white, grey and coloured text; 48 cases), glyph masks differ by 0.25 to 1.1 levels in 255 on average per case; DirectWrite's differ by 33 to 36. Ink stays within 0.1% of CoreText's. Against 0.8 on Windows, light text on a dark ground has 10 to 22% more ink. On Linux the same rasterizer reads the outlines through swash and produces the same masks, byte for byte, as on Windows.
+
+In this mode `font-smoothing: subpixel-antialiased` is ignored, `font-dilation` changes nothing, and `font-smoothing: antialiased` turns the thickening off, as in Safari. Emoji are drawn as before. Each colour step needs its own glyph in the atlas, so text in several colours takes more atlas tiles than in `"optimized"` mode, and a glyph takes up to 4.6 times as long to rasterize the first time it is drawn (2 to 5 µs).
 
 ### Glyph positions by size
 
@@ -63,7 +83,7 @@ A Skathi window has a Mica backdrop by default, and Windows draws ClearType only
 
 ### `font-dilation`
 
-Windows gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. `font-dilation: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
+DirectWrite gives light text on a dark ground less weight than dark text on a light one, so a dark interface reads thinner than its light twin. In `"optimized"` mode `font-dilation: luminance`, a Skathi property that inherits, gives text more weight the lighter it is, as macOS does: light text at 14px gains 6 to 15% ink, dark text is unchanged. It works with grayscale and ClearType text and costs no glyph cache space. On macOS, where CoreGraphics already does this, it changes nothing.
 
 ### Text on macOS as native apps draw it
 
@@ -74,6 +94,10 @@ Text on macOS was darkened twice: CoreGraphics thickens each glyph by an amount 
 ### `will-change: transform` moves text as a layer
 
 Text under a moving `translate()` is placed on whole pixels in every frame, so it steps by a pixel against the borders and lines of its box. Inside an element with `will-change: transform` the text now moves with the box instead, and once the box has been still for 200 ms it is drawn sharp where it stopped.
+
+### Text keeps its shape while it moves
+
+Under a moving `translate()` each glyph used to be placed on its own, so the gaps between letters changed by up to half a pixel from frame to frame and words seemed to shimmer. The translation is now rounded once for the whole text, and letters and lines keep their distances while it moves. Text that is scaled, rotated or moved as a layer is resampled with its edges intact: a glyph's outermost pixels fade out past its box as they should, instead of being cut off where its box ends, which made letters wobble against each other by up to 0.9 px under a running `scale()`. It now stays under 0.2 px. A plain rectangle, a background or a rule with no border or rounded corner, now has antialiased edges under a fractional translation, a scale or a rotation, where it used to step by whole pixels, so inside a `will-change: transform` box the text and the box's lines move together. ([#108](https://github.com/argon-chat/skathi/issues/108))
 
 ### `line-metrics` and `line-leading`
 
@@ -87,6 +111,18 @@ html {
 ```
 
 The rules are the same on every platform, and the defaults, `auto` and `split`, are CSS's. They apply to layout, painting, selection and the caret, `vertical-align`, `text-box-trim`, baseline alignment, text fields and `<sk-editor>`; in a line that mixes sizes, each run's box comes from its own font, and the line reaches as far above and below the baseline as its runs do.
+
+### Fallback fonts grow the line
+
+Under `line-height: normal` a line with glyphs from a font other than the first one, a later family of `font-family` or the system's fallback, is as tall as that font's box needs: its rounded ascent and descent with half its line gap above and half below, on the shared baseline, as Chromium builds it. Manrope at 16px is 22px tall; with a Private Use Area glyph from Alcarin Tengwar, whose line gap reaches further below, the line is 23px, as in Chromium. Under `line-metrics: snapped` the other font's snapped box counts. A line without such glyphs keeps the first font's height, and a declared `line-height` never grows. ([#106](https://github.com/argon-chat/skathi/issues/106))
+
+### `font-size-adjust`
+
+`font-size-adjust` draws the fonts of a text at the size that matches their x-height: `from-font` sizes every fallback font to the first font's, and a number sizes the first font too, so that its x-height is that fraction of the font size. `cap-height`, `ch-width` and `ic-width` match by another metric. The computed `font-size` and `em` stay as declared. ([#106](https://github.com/argon-chat/skathi/issues/106))
+
+### `font-family` lists
+
+Each character is now drawn with the first family of the `font-family` list that has a glyph for it, as in browsers, on Windows, macOS and Linux alike. An `@font-face` family after an installed one is reached, a face is used only for the characters its `unicode-range` covers, and one whose range covers a character it has no glyph for passes it to the next family instead of to the system's fallback. On macOS and Linux only the first family was used before, and `unicode-range` subsets of one family were not told apart. A character no font has is the first family's missing glyph on every platform; macOS drew Core Text's LastResort symbol for it. The [text rendering guide](/guides/text-rendering/#characters-the-font-lacks) has the order. ([#106](https://github.com/argon-chat/skathi/issues/106))
 
 ## Fixes
 

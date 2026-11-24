@@ -302,8 +302,19 @@ const compact = ref(false);
     ],
   },
   "font-size-adjust": {
+    examples: [
+      {
+        title: "Keep CJK fallback glyphs in proportion to the Latin font",
+        lang: "css",
+        code: `.message {
+  font-family: Inter, sans-serif;
+  font-size-adjust: from-font;
+}`,
+      },
+    ],
     edgeCases: [
-      '`font-size-adjust: 0.5` logs an advisory and is not applied; `CSS.supports("font-size-adjust", "0.5")` returns `false`.',
+      "`font-size-adjust: 0.5` with no metric matches the x-height.",
+      '`font-size-adjust: ic-height 1` logs an advisory and is not applied; `CSS.supports("font-size-adjust", "ic-height 1")` returns `false`.',
     ],
   },
   "font-variant-east-asian": {
@@ -337,7 +348,7 @@ const compact = ref(false);
       },
     ],
     edgeCases: [
-      "`normal` is `1.2` times the font size, not the font's own line gap.",
+      "`normal` is the first available font's ascent, descent and line gap, each rounded to a pixel; a line with glyphs from a taller fallback font grows to fit that font's box.",
       "A number inherits as the number, so each child multiplies its own font size. An `em` or `%` value is resolved to px on the element that declares it, and children inherit that px.",
     ],
   },

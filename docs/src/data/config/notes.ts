@@ -46,6 +46,11 @@ export const groups: readonly ConfigGroup[] = [
     keys: ["devtools", "httpCache", "colorPicker"],
   },
   {
+    title: "Text",
+    intro: "How the host draws text, for the whole app. Read once at start; a change needs a restart.",
+    keys: ["textRendering"],
+  },
+  {
     title: "Launch",
     intro: "How a second launch and a link to the app's URL scheme reach the running app.",
     keys: ["singleInstance", "raiseOnSecondInstance", "protocols"],
@@ -181,6 +186,22 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     ],
     example: "system",
     since: "0.5.0",
+  },
+  textRendering: {
+    default: '`"skathi-mode"` on Windows and Linux, `"optimized"` on macOS',
+    values: {
+      "skathi-mode":
+        "Text looks as it does on a Mac at every size and scale. `font-smoothing: antialiased` turns the emboldening off; `subpixel-antialiased` and `font-dilation` change nothing.",
+      optimized:
+        "ClearType and the font's hinting on Windows: sharper stems at 100 % scale, the look of other Windows apps.",
+    },
+    platforms:
+      'macOS: `"skathi-mode"` draws the same as `"optimized"`, with CoreText. Linux: `"optimized"` is swash\'s own rasterizer.',
+    notes: [
+      "`SK_TEXT_RENDERING=optimized` (or `skathi-mode`) in the environment wins over the config and over `sk_app::embed::Builder::text_rendering`.",
+      "[Text rendering](/guides/text-rendering/#two-rendering-modes) compares the two modes.",
+    ],
+    example: "optimized",
   },
   singleInstance: { example: true },
   raiseOnSecondInstance: { example: false },

@@ -924,6 +924,7 @@ const typography = section("Typography and text", [
   prop("font-family", OK, "Sets a prioritized list of font families for an element's text.", {
     notes: [
       "Installed families, `@font-face` families, `serif`, `sans-serif`, `monospace` and `system-ui` are supported.",
+      "Each character is drawn with the first family of the list that has a glyph for it, as in browsers, on every platform; an `@font-face` face only for the characters its `unicode-range` covers. One no family has goes to the platform's fallback, which differs by platform; one no font has is the first family's missing glyph. See [text rendering](/guides/text-rendering/#characters-the-font-lacks).",
     ],
     values: [
       v("ui-monospace", PART, "Not resolved on its own; list a fallback after it."),
@@ -1002,7 +1003,35 @@ const typography = section("Typography and text", [
     NO,
     "Sets whether the browser may synthesize bold, italic or small-capital faces the font lacks.",
   ),
-  prop("font-size-adjust", NO, "Scales fallback fonts so their x-height matches the first choice."),
+  prop("font-size-adjust", PART, "Scales fallback fonts so their x-height matches the first choice.", {
+    values: [
+      v("none", OK),
+      v(
+        "<number>",
+        OK,
+        "Every font of the text, the first included, is drawn at the size that makes its x-height that fraction of the font size.",
+      ),
+      v(
+        "from-font",
+        OK,
+        "The number is the first available font's own, so the first font keeps its size and each fallback font is drawn at the size that matches it.",
+      ),
+      v("ex-height", OK, "The metric matched, and the default. A font without an x-height counts as 0.5."),
+      v("cap-height", OK, "A font without a cap height counts its ascent."),
+      v("ch-width", OK, 'The advance of "0"; 0.5 where the font has none.'),
+      v("ic-width", OK, 'The advance of "水"; 1 where the font has none.'),
+      v("ic-height", NO, "Use `ic-width`, which is the same for most CJK fonts."),
+    ],
+    notes: [
+      "Inherited. The computed `font-size` and `em` stay as declared; `line-height: normal` is that of the font at its adjusted size, and a fallback font's taller box grows the line from there.",
+      "The size is applied per run: a stretch of text the first font has no glyphs for is shaped again at its font's adjusted size.",
+    ],
+    limitations: [
+      "`from-font` takes the first font of each element, so an element that inherits it with another `font-family` matches its own first font, not the number of the element that declared it. `getComputedStyle` returns that number for the element's own font.",
+      "Text fields and `<sk-editor>` draw without it.",
+    ],
+    related: ["font-size", "font-family", "line-height"],
+  }),
   prop(
     "font-variant-east-asian",
     NO,
@@ -1011,11 +1040,13 @@ const typography = section("Typography and text", [
   prop("line-height", OK, "Sets the height of a line of text.", {
     notes: [
       "`normal`, the initial value, comes from the first available font of the element's `font-family`: its ascent, descent and line gap, each rounded to a pixel as Chromium does. It inherits as the keyword, so each element resolves it for its own font and size.",
+      "A line with glyphs from another font (a later family of the list, or the system's fallback) grows where that font's box reaches further: its rounded ascent and descent with half its rounded line gap on each side, set on the shared baseline, as Chromium unites them. Under `line-metrics: snapped` that font's snapped box. A line without such glyphs keeps the first font's height, and a declared `line-height` never grows.",
     ],
     limitations: [
-      "A line whose glyphs fall back to another font does not grow to that font's `normal` height: `normal` is the first font's alone.",
+      "Text fields and `<sk-editor>` keep the first font's `normal` height.",
+      "Baseline alignment takes the first baseline of the text laid out on one line, so a first line that wraps before the fallback glyphs is aligned as if it held them.",
     ],
-    related: ["font", "line-metrics", "line-leading"],
+    related: ["font", "line-metrics", "line-leading", "font-size-adjust"],
   }),
   prop("line-metrics", OK, "Sets what a font contributes to the height of a line: CSS's metrics or whole pixels.", {
     skathiOnly: true,
@@ -1305,6 +1336,7 @@ const typography = section("Typography and text", [
     {
       notes: [
         "Inherited. Set the app-wide default on the root element: `html { font-smoothing: antialiased }`.",
+        'Under `"textRendering": "skathi-mode"` in sk.config.json, the default on Windows and Linux, text is always grayscale and drawn as on macOS: `auto` and `subpixel-antialiased` thicken light text by its colour, and `antialiased` turns that off. The Windows and Linux rules below are those of `"optimized"`.',
         "`auto` keeps the platform rule. On Windows that is ClearType when the system has it on and the window has an opaque backdrop, and grayscale otherwise; the default Mica backdrop is not opaque, so a default window draws grayscale text.",
         "`antialiased` always draws grayscale.",
         "`subpixel-antialiased` draws ClearType on Windows whenever the system has it on, in a Mica or transparent window too. It is right only over opaque content: give the text, or a box behind it, an opaque background. Over a see-through part of the window the glyph edges keep their colour fringes against whatever shows through.",
@@ -1338,13 +1370,14 @@ const typography = section("Typography and text", [
     ],
     notes: [
       "Inherited. Set it on the root to apply it across the app: `html { font-dilation: luminance }`.",
+      'It applies under `"textRendering": "optimized"` in sk.config.json. Under `"skathi-mode"`, the default on Windows and Linux, it changes nothing: glyphs there are already thickened by their colour, as on macOS.',
       "It works with grayscale and ClearType text alike. Light-on-dark text at 14px gains about 6 to 15% ink, depending on the display scale and `font-smoothing`.",
       "It changes how the rasterized glyph is blended, not the glyph itself, so it costs no glyph cache space.",
       "It is not an accessibility contrast setting: it does not change colours, and `prefers-contrast` is unrelated.",
     ],
     limitations: [
       "On macOS it changes nothing: CoreGraphics already thickens each glyph by its colour, in the same five steps of luminance, and the result is blended as is.",
-      "On Linux it is built into the renderer but has not been checked on a Linux display.",
+      'On Linux, under `"optimized"`, it is built into the renderer but has not been checked on a Linux display.',
     ],
     aliases: ["font dilation", "stem darkening", "light text weight"],
     related: ["font-smoothing", "text-rendering"],
@@ -2513,7 +2546,7 @@ const containment = section("Containment and hints", [
   }),
   prop("will-change", OK, "Hints which properties of an element are expected to change.", {
     notes: [
-      "`transform` (or `translate`, `scale`, `rotate`) makes the text of the element and its descendants move as one layer: under a moving translation its glyphs keep their places against each other and against the box, instead of each line snapping to whole pixels. Once the transform has been still for 200 ms the text is drawn sharp at its new place.",
+      "`transform` (or `translate`, `scale`, `rotate`) makes the text of the element and its descendants move as one layer: under a moving translation it is resampled between pixels and keeps its place against the box, instead of stepping by whole device pixels down and by subpixel steps across. Once the transform has been still for 200 ms the text is drawn sharp at its new place.",
       "Every other value is a hint and changes nothing.",
     ],
   }),
