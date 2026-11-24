@@ -9,23 +9,43 @@ import { blogHome } from "../lib/blog";
 interface Props {
   /** The blog page this is: the index is the current page, a post is inside the blog. */
   blog?: "index" | "post";
+  /** The repository's star count, shown beside the GitHub mark when known. */
+  stars?: number | undefined;
 }
 
-const { blog } = Astro.props;
+const { blog, stars } = Astro.props;
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 ---
 
-<header class="site-nav">
-  <a class="site-mark" href="/" aria-label="Skathi home">
-    <img src={wolf} width="34" height="34" alt="" /><span>Skathi</span>
-  </a>
-  <nav class="site-links" aria-label="Site">
-    <a href={docsHome}>Docs</a>
-    <a href={blogHome} aria-current={blog === "index" ? "page" : blog === "post" ? "true" : undefined}>Blog</a>
-    <a href="/quick-start/" class="wide-only">Quick start</a>
-    <a href="/css/" class="wide-only">CSS</a>
-    <a href={repository} target="_blank" rel="noreferrer" aria-label="Skathi on GitHub"
-      ><Icon name="github" size={19} /></a
-    >
-    <ThemeSwitch />
-  </nav>
+<header class="site-nav" data-site-nav>
+  <div class="site-nav-inner">
+    <a class="site-mark" href="/" aria-label="Skathi home">
+      <img src={wolf} width="34" height="34" alt="" /><span>Skathi</span>
+    </a>
+    <nav class="site-links" aria-label="Site">
+      <a href={docsHome}>Docs</a>
+      <a href={blogHome} aria-current={blog === "index" ? "page" : blog === "post" ? "true" : undefined}>Blog</a>
+      <a href="/comparison/" class="wide-only">Compare</a>
+      <a href="/css/" class="wide-only">CSS</a>
+    </nav>
+    <div class="site-tools">
+      <a class="site-github" href={repository} target="_blank" rel="noreferrer" aria-label="Skathi on GitHub">
+        <Icon name="github" size={18} />
+        <span class="site-github-stars" data-stat-text="stars" hidden={stars === undefined}
+          >{stars !== undefined && compact.format(stars)}</span
+        >
+      </a>
+      <ThemeSwitch />
+      <a class="button button-primary site-cta wide-only" href="/quick-start/">Get started</a>
+    </div>
+  </div>
 </header>
+
+<script>
+  function update(): void {
+    document.querySelector("[data-site-nav]")?.toggleAttribute("data-stuck", window.scrollY > 8);
+  }
+  window.addEventListener("scroll", update, { passive: true });
+  document.addEventListener("astro:page-load", update);
+  update();
+</script>

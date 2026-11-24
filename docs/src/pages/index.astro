@@ -25,7 +25,9 @@ import Parallax from "../components/Parallax.astro";
 import SectionIntro from "../components/SectionIntro.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import SiteNav from "../components/SiteNav.astro";
+import { getPosts, postUrl } from "../lib/blog";
 import { repository, version } from "../lib/docs";
+import { currentMinor } from "../lib/release";
 import { organizationId } from "../lib/schema";
 import { fetchStats } from "../lib/stats";
 
@@ -34,11 +36,53 @@ const posterSizes = "(max-width: 900px) calc(100vw - 48px), 277px";
 const title = "Skathi · Vue and Svelte desktop apps without Electron";
 const metaDescription =
   "Native desktop apps from Vue 3 or Svelte 5 and TypeScript, with no Electron and no webview: a GPU renderer and JavaScriptCore, for Windows, macOS and Linux.";
-const description =
-  "Write Vue 3 or Svelte 5 components in TypeScript. Skathi renders them on the GPU, runs the script in JavaScriptCore or compiles it ahead of time to machine code, and ships one app for Windows, macOS and Linux.";
 const canonical = new URL("/", Astro.site);
 const stats = await fetchStats();
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const release = (await getPosts()).find((post) => post.data.release);
+const releaseHeadline = release?.data.description.split(/[,.]/)[0];
+
+const bench = [
+  {
+    id: "call",
+    gain: "up to 18,000× faster",
+    tab: "Native call",
+    title: "Calling Rust from the app",
+    unit: "microseconds per add(a, b) · lower is better",
+    max: 995.9,
+    rows: [
+      { name: "Skathi", value: 0.054, label: "0.054 µs", how: "in the same process" },
+      { name: "Electron", value: 117.8, label: "117.8 µs", how: "IPC to the main process" },
+      { name: "Tauri 2", value: 995.9, label: "995.9 µs", how: "IPC to the app process" },
+    ],
+  },
+  {
+    id: "bytes",
+    gain: "no copy",
+    tab: "1 MiB buffer",
+    title: "Passing 1 MiB to native code",
+    unit: "milliseconds · lower is better",
+    max: 9.46,
+    rows: [
+      { name: "Skathi", value: 0.001, label: "<0.001 ms", how: "a &[u8], read in place" },
+      { name: "Electron", value: 1.18, label: "1.18 ms", how: "a structured clone" },
+      { name: "Tauri 2", value: 9.46, label: "9.46 ms", how: "an ArrayBuffer as a raw body" },
+    ],
+  },
+  {
+    id: "memory",
+    gain: "up to 3× less",
+    tab: "Memory",
+    title: "Working set of the running app",
+    unit: "MiB, all processes · lower is better",
+    max: 363.8,
+    rows: [
+      { name: "Skathi", value: 116.4, label: "116.4 MiB", how: "1 process" },
+      { name: "Electron", value: 311.6, label: "311.6 MiB", how: "4 processes" },
+      { name: "Tauri 2", value: 363.8, label: "363.8 MiB", how: "7 processes" },
+    ],
+  },
+] as const;
 
 const component = `<script setup lang="ts">
 import { ref } from "vue";
@@ -54,6 +98,22 @@ const count = ref(0);
     </button>
   </main>
 </template>`;
+
+const componentSvelte = `<script lang="ts">
+  let count = $state(0);
+</script>
+
+<main class="window">
+  <h1>Hello from a native window</h1>
+  <button onclick={() => count++}>
+    Clicked {count} times
+  </button>
+</main>`;
+
+const demoFiles = [
+  { name: "App.vue", lang: "vue", code: component, state: 4, hit: [10, 11] },
+  { name: "App.svelte", lang: "svelte", code: componentSvelte, state: 2, hit: [7, 8] },
+] as const;
 
 const sheenShader = `[SkEffect("sheen")]
 struct Sheen : IEffect
@@ -230,25 +290,9 @@ const notesTypes = `declare module "native:notes" {
 }`;
 
 const calls = [
-  {
-    title: "add(a, b), one call",
-    max: 932,
-    rows: [
-      { name: "Skathi", value: 0.06, label: "0.06 µs", how: "in the same process" },
-      { name: "Electron", value: 109, label: "109 µs", how: "IPC to the main process" },
-      { name: "Tauri 2", value: 932, label: "932 µs", how: "IPC to the app process" },
-    ],
-  },
-  {
-    title: "1 MiB of bytes into native code",
-    max: 8.9,
-    rows: [
-      { name: "Skathi", value: 0.001, label: "<0.001 ms", how: "a &[u8], read in place" },
-      { name: "Electron", value: 1.14, label: "1.14 ms", how: "a structured clone" },
-      { name: "Tauri 2", value: 8.9, label: "8.9 ms", how: "an ArrayBuffer as a raw body" },
-    ],
-  },
-] as const;
+  { ...bench[0], title: "add(a, b), one call" },
+  { ...bench[1], title: "1 MiB of bytes into native code" },
+];
 
 const builds = [
   { label: "Every default feature", size: 101.4, detail: "459 crates" },
@@ -346,9 +390,24 @@ const features = [
 ] as const;
 
 const steps = [
-  { label: "Create", command, text: "Pick a template: the showcase, a minimal app, or Svelte." },
-  { label: "Develop", command: "bun run dev", text: "A native window opens and follows your edits." },
-  { label: "Ship", command: "bun run publish", text: "A release build for this OS, ready to hand out." },
+  {
+    label: "Create",
+    command: "bun create skathi my-app",
+    text: "Pick a template: the showcase, a minimal app, or Svelte.",
+    tags: ["Vue 3", "Svelte 5", "TypeScript"],
+  },
+  {
+    label: "Develop",
+    command: "bun run dev",
+    text: "A native window opens and follows your edits.",
+    tags: ["Hot reload", "F12 devtools", "Effects panel"],
+  },
+  {
+    label: "Ship",
+    command: "bun run publish",
+    text: "A release build for this OS, ready to hand out.",
+    tags: [".exe", ".app", "AppImage"],
+  },
 ] as const;
 
 const site = Astro.site ?? canonical;
@@ -391,7 +450,7 @@ const structuredData = {
   <body class="landing" transition:animate="none">
     <a href="#main-content" class="skip-link">Skip to content</a>
     <Parallax />
-    <SiteNav />
+    <SiteNav stars={stats.stars} />
 
     <main id="main-content" tabindex="-1">
       <section class="hero">
@@ -399,29 +458,105 @@ const structuredData = {
           <span class="glow glow-pink"></span>
           <span class="glow glow-blue"></span>
         </div>
-        <img class="hero-logo" src={wordmark} width="1902" height="827" alt="Skathi" fetchpriority="high" />
-        <p class="hero-meta">
-          <span class="status-dot"></span>v{version}<span aria-hidden="true">·</span>Windows, macOS and Linux
-        </p>
-        <h1>Desktop apps from Vue, <span class="candy-text">without a browser.</span></h1>
-        <p class="hero-lead">{description}</p>
-        <Command command={command} />
-        <div class="hero-actions">
-          <a class="button button-primary" href="/quick-start/">Get started<Icon name="arrow" size={15} /></a>
-          <a class="button" href={repository} target="_blank" rel="noreferrer"
-            ><Icon name="github" size={16} />Star on GitHub</a
-          >
+        <div class="hero-copy">
+          {
+            release ? (
+              <a class="hero-meta" href={postUrl(release.id)}>
+                <span class="status-dot" />
+                <strong>Skathi v{version}</strong>
+                <span class="hero-meta-text">{releaseHeadline}</span>
+                <Icon name="arrow" size={13} />
+              </a>
+            ) : (
+              <p class="hero-meta">
+                <span class="status-dot" />
+                <strong>Skathi v{version}</strong>
+              </p>
+            )
+          }
+          <h1>Desktop apps from Vue, <span class="candy-text">without a browser.</span></h1>
+          <p class="hero-lead">
+            Write Vue 3 or Svelte 5 components in TypeScript. Skathi{" "}
+            <a href="/architecture/">renders them on the GPU</a>, runs the script in JavaScriptCore or{" "}
+            <a href="/guides/aot/">compiles it ahead of time</a> to machine code, and ships one app for Windows, macOS and
+            Linux.
+          </p>
+          <Command command={command} />
+          <div class="hero-actions">
+            <a class="button button-primary" href="/quick-start/">Get started<Icon name="arrow" size={15} /></a>
+            <a class="button" href={repository} target="_blank" rel="noreferrer"
+              ><Icon name="github" size={16} />Star on GitHub<span
+                class="button-count"
+                data-stat-text="stars"
+                hidden={stats.stars === undefined}>{stats.stars !== undefined && compact.format(stats.stars)}</span
+              ></a
+            >
+          </div>
         </div>
-        <dl class="stats">
-          <div data-stat-cell="npm" hidden={stats.npm === undefined}>
-            <dt>installs from npm</dt>
-            <dd data-stat="npm">{stats.npm !== undefined && compact.format(stats.npm)}</dd>
-          </div>
-          <div data-stat-cell="stars" hidden={stats.stars === undefined}>
-            <dt>stars on GitHub</dt>
-            <dd data-stat="stars">{stats.stars !== undefined && compact.format(stats.stars)}</dd>
-          </div>
-        </dl>
+
+        <div class="hero-side">
+          <img class="hero-logo" src={wordmark} width="1902" height="827" alt="Skathi" fetchpriority="high" />
+          <figure class="bench" data-tabs>
+            <div class="bench-tabs" role="tablist" aria-label="Skathi, Electron and Tauri, measured">
+              {
+                bench.map((group, index) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`bench-tab-${group.id}`}
+                    aria-controls={`bench-${group.id}`}
+                    aria-selected={index === 0 ? "true" : "false"}
+                    tabindex={index === 0 ? 0 : -1}
+                  >
+                    {group.tab}
+                  </button>
+                ))
+              }
+            </div>
+            <div class="bench-panels">
+              {
+                bench.map((group, index) => (
+                  <div
+                    class="bench-panel"
+                    role="tabpanel"
+                    id={`bench-${group.id}`}
+                    aria-labelledby={`bench-tab-${group.id}`}
+                    hidden={index !== 0}
+                  >
+                    <p class="bench-head">
+                      <span class="bench-title">{group.title}</span>
+                      <span class="bench-gain">{group.gain}</span>
+                    </p>
+                    <p class="bench-unit">{group.unit}</p>
+                    <dl class="call-group">
+                      {group.rows.map((row) => (
+                        <div class="call-row" data-ours={row.name === "Skathi" ? "" : undefined}>
+                          <dt class="call-name">{row.name}</dt>
+                          <dd class="call-track" aria-hidden="true">
+                            <span class="call-bar" style={`--share: ${(row.value / group.max) * 100}%`} />
+                          </dd>
+                          <dd class="call-value">
+                            <strong class:list={{ "candy-text": row.name === "Skathi" }}>{row.label}</strong>
+                            <small>{row.how}</small>
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ))
+              }
+            </div>
+            <figcaption class="bench-foot">
+              <span>
+                The same Vue app in each framework · Windows 11 x64, Ryzen 9 9950X · medians of 5 · 22 November 2026
+              </span>
+              <span class="bench-links">
+                <a href="/comparison/#how-it-was-measured">How it was measured</a>
+                <a href={`${repository}/tree/master/benches/comparison`} target="_blank" rel="noreferrer">reproduce</a>
+              </span>
+            </figcaption>
+          </figure>
+        </div>
       </section>
 
       <section class="gallery" aria-labelledby="gallery-title" data-fan>
@@ -431,8 +566,17 @@ const structuredData = {
               Five templates to start from. <span class="candy-text">Every pixel drawn by Skathi.</span>
             </h2>
           </SectionIntro>
+          <div class="fan-tabs" role="group" aria-label="Templates">
+            {
+              ["Music player", "Drawing", "Weather", "Drum machine", "RISC-V workbench"].map((name, index) => (
+                <button type="button" data-fan-tab aria-pressed={index === 2 ? "true" : "false"}>
+                  {name}
+                </button>
+              ))
+            }
+          </div>
           <div class="fan">
-            <figure class="fan-card" style="--side: -2">
+            <figure class="fan-card" style="--i: 0" data-fan-card>
               <div class="window">
                 <Image class="window-poster" src={playerPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -450,10 +594,12 @@ const structuredData = {
               </div>
               <figcaption>
                 <strong>Music player</strong><span>Svelte 5 · spectrum, aurora and glass in shaders</span>
-                <code>bun create skathi my-app --template player</code>
+                <button type="button" class="fan-command" data-copy="bun create skathi my-app --template player"
+                  ><code>bun create skathi my-app --template player</code><span data-copy-label>Copy</span></button
+                >
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: -1">
+            <figure class="fan-card" style="--i: 1" data-fan-card>
               <div class="window">
                 <Image class="window-poster" src={drawPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -471,10 +617,12 @@ const structuredData = {
               </div>
               <figcaption>
                 <strong>Drawing</strong><span>Vue · pens, paint and layers, every stroke replayable</span>
-                <code>bun create skathi my-app --template draw</code>
+                <button type="button" class="fan-command" data-copy="bun create skathi my-app --template draw"
+                  ><code>bun create skathi my-app --template draw</code><span data-copy-label>Copy</span></button
+                >
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: 0">
+            <figure class="fan-card is-active" style="--i: 2" data-fan-card>
               <div class="window">
                 <Image class="window-poster" src={weatherPoster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -492,10 +640,12 @@ const structuredData = {
               </div>
               <figcaption>
                 <strong>Weather</strong><span>Vue 3 · sky, rain, lightning and frost in shaders</span>
-                <code>bun create skathi my-app --template weather</code>
+                <button type="button" class="fan-command" data-copy="bun create skathi my-app --template weather"
+                  ><code>bun create skathi my-app --template weather</code><span data-copy-label>Copy</span></button
+                >
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: 1">
+            <figure class="fan-card" style="--i: 3" data-fan-card>
               <div class="window">
                 <Image
                   class="window-poster"
@@ -519,10 +669,12 @@ const structuredData = {
               </div>
               <figcaption>
                 <strong>Drum machine</strong><span>Svelte 5 · dials, keys and a meter in shaders</span>
-                <code>bun create skathi my-app --template sequencer</code>
+                <button type="button" class="fan-command" data-copy="bun create skathi my-app --template sequencer"
+                  ><code>bun create skathi my-app --template sequencer</code><span data-copy-label>Copy</span></button
+                >
               </figcaption>
             </figure>
-            <figure class="fan-card" style="--side: 2">
+            <figure class="fan-card" style="--i: 4" data-fan-card>
               <div class="window">
                 <Image class="window-poster" src={rv32Poster} widths={[640, 960, 1280]} sizes={posterSizes} alt="" />
                 <video
@@ -541,7 +693,9 @@ const structuredData = {
               <figcaption>
                 <strong>RISC-V workbench</strong><span>Vue · an emulator and its debugger, running the Doom engine</span
                 >
-                <code>bun create skathi my-app --template rv32</code>
+                <button type="button" class="fan-command" data-copy="bun create skathi my-app --template rv32"
+                  ><code>bun create skathi my-app --template rv32</code><span data-copy-label>Copy</span></button
+                >
               </figcaption>
             </figure>
           </div>
@@ -549,35 +703,77 @@ const structuredData = {
       </section>
 
       <section class="code-demo" aria-labelledby="code-title">
-        <SectionIntro variant="aside" columns="minmax(0, 1fr) minmax(0, 1fr)">
+        <SectionIntro variant="columns">
           <h2 slot="head" id="code-title">Write a component. <span class="candy-text">Get a window.</span></h2>
           <p>
-            It is the Vue you already write: <code>ref</code>, templates, scoped styles, Pinia stores. Skathi takes the
-            tree Vue builds and draws it natively, so there is no DOM to ship and no browser to start.
+            It is the Vue you already write: <code>ref</code>, templates, scoped styles, Pinia stores. Or Svelte 5 and
+            its runes, from a template of its own.
           </p>
-          <a class="text-link" href="/concepts/">How the runtime works<Icon name="arrow" size={14} /></a>
-          <div class="code-panel" slot="aside" data-grow>
-            <span class="code-file">App.vue</span>
-            <Code
-              code={component}
-              lang="vue"
-              themes={{ light: "github-light", dark: "github-dark" }}
-              defaultColor={false}
-            />
-          </div>
-          <div slot="foot" class="mini-window" aria-label="What the component looks like">
-            <div class="mini-titlebar">
-              <img src={wolf} width="16" height="16" alt="" /><span>my-blazing-fast-app</span><span
-                class="mini-controls"
-                aria-hidden="true"><i></i><i></i><i></i></span
-              >
-            </div>
-            <div class="mini-body">
-              <strong>Hello from a native window</strong>
-              <button type="button" data-counter>Clicked 0 times</button>
-            </div>
-          </div>
+          <p>
+            Skathi takes the tree the framework builds and draws it natively, so there is no DOM to ship and no browser
+            to start. Save the file and the open window updates in place.
+          </p>
+          <a slot="foot" class="text-link" href="/concepts/">How the runtime works<Icon name="arrow" size={14} /></a>
         </SectionIntro>
+        <CardRow columns="minmax(0, 1.08fr) minmax(0, 0.92fr)" class="demo-row">
+          <div class="code-panel demo-code" data-tabs data-demo-code>
+            <div class="code-tabs" role="tablist" aria-label="The component, in Vue or Svelte">
+              {
+                demoFiles.map((file, index) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`demo-tab-${file.lang}`}
+                    aria-controls={`demo-${file.lang}`}
+                    aria-selected={index === 0 ? "true" : "false"}
+                    tabindex={index === 0 ? 0 : -1}
+                  >
+                    {file.name}
+                  </button>
+                ))
+              }
+            </div>
+            <div class="demo-files">
+              {
+                demoFiles.map((file, index) => (
+                  <div
+                    role="tabpanel"
+                    id={`demo-${file.lang}`}
+                    aria-labelledby={`demo-tab-${file.lang}`}
+                    data-state-line={file.state}
+                    data-hit-lines={file.hit.join(" ")}
+                    hidden={index !== 0}
+                  >
+                    <Code
+                      code={file.code}
+                      lang={file.lang}
+                      themes={{ light: "github-light", dark: "github-dark" }}
+                      defaultColor={false}
+                    />
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+          <div class="code-panel demo-stage">
+            <span class="code-file"><span class="demo-prompt" aria-hidden="true">$</span> bun run dev</span>
+            <div class="demo-desk">
+              <div class="mini-window" aria-label="The window the component opens">
+                <div class="mini-titlebar">
+                  <img src={wolf} width="16" height="16" alt="" /><span>my-blazing-fast-app</span><span
+                    class="mini-controls"
+                    aria-hidden="true"><i></i><i></i><i></i></span
+                  >
+                </div>
+                <div class="mini-body">
+                  <strong>Hello from a native window</strong>
+                  <button type="button" data-counter>Clicked 0 times</button>
+                </div>
+              </div>
+              <p class="demo-hint">Click the button: the lines it runs light up.</p>
+            </div>
+          </div>
+        </CardRow>
       </section>
 
       <section class="editor" aria-labelledby="editor-title">
@@ -914,8 +1110,8 @@ const structuredData = {
               </p>
             </figcaption>
             <code class="builds-toml"
-              >skathi = &#123; version = "0.4", default-features = false, features = ["prod", "types", "storages",
-              "clipboard"] &#125;</code
+              >skathi = &#123; version = "{currentMinor}", default-features = false, features = ["prod", "types",
+              "storages", "clipboard"] &#125;</code
             >
             <ul class="build-list">
               {
@@ -933,9 +1129,7 @@ const structuredData = {
                 ))
               }
             </ul>
-            <p class="section-note">
-              The exe of a minimal embedder, Windows x64, size profile. Native modules are new in 0.4.
-            </p>
+            <p class="section-note">The exe of a minimal embedder, Windows x64, size profile.</p>
           </figure>
         </CardRow>
       </section>
@@ -1103,8 +1297,8 @@ const structuredData = {
               both.
             </p>
             <p class="section-note">
-              New in 0.4. GPU frames on Windows and macOS, CPU frames on Linux. HDR output on Windows and macOS; Linux
-              windows stay SDR.
+              GPU frames on Windows and macOS, CPU frames on Linux. HDR output on Windows and macOS; Linux windows stay
+              SDR.
             </p>
           </div>
         </div>
@@ -1263,14 +1457,31 @@ const structuredData = {
         <SectionIntro variant="center">
           <h2 slot="head" id="steps-title">Three commands from idea to app.</h2>
         </SectionIntro>
-        <CardRow as="ol" columns="repeat(3, minmax(0, 1fr))" medium="repeat(2, minmax(0, 1fr))">
+        <CardRow as="ol" columns="repeat(3, minmax(0, 1fr))" medium="minmax(0, 1fr)" class="steps-row">
           {
             steps.map((step, index) => (
               <li class="step">
-                <span class="step-number">{index + 1}</span>
-                <h3>{step.label}</h3>
-                <code class="step-command">{step.command}</code>
+                <div class="step-head">
+                  <span class="step-number" aria-hidden="true">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <h3>{step.label}</h3>
+                </div>
+                <button type="button" class="step-command" data-copy={step.command} aria-label="Copy the command">
+                  <span class="step-prompt" aria-hidden="true">
+                    $
+                  </span>
+                  <code>{step.command}</code>
+                  <span class="step-copy" data-copy-label>
+                    Copy
+                  </span>
+                </button>
                 <p>{step.text}</p>
+                <ul class="step-tags">
+                  {step.tags.map((tag) => (
+                    <li>{tag}</li>
+                  ))}
+                </ul>
               </li>
             ))
           }
@@ -1278,11 +1489,24 @@ const structuredData = {
       </section>
 
       <section class="cta">
-        <img src={wolf} width="96" height="96" alt="" class="cta-wolf" />
+        <img src={wolf} width="128" height="128" alt="" class="cta-wolf" />
         <SectionIntro variant="center">
-          <h2 slot="head">Your next desktop app starts here.</h2>
+          <h2 slot="head">Your next desktop app <span class="candy-text">starts here.</span></h2>
         </SectionIntro>
         <Command command={command} />
+        <div class="cta-actions">
+          <a class="button button-primary" href="/quick-start/">Get started<Icon name="arrow" size={15} /></a>
+          <a class="button" href={repository} target="_blank" rel="noreferrer"
+            ><Icon name="github" size={16} />Star on GitHub</a
+          >
+        </div>
+        <p class="cta-facts">
+          <span>v{version}</span><span>MIT or Apache-2.0</span><span>Windows, macOS and Linux</span><span
+            data-stat-cell
+            hidden={stats.npm === undefined}
+            ><b data-stat-text="npm">{stats.npm !== undefined && compact.format(stats.npm)}</b> installs from npm</span
+          >
+        </p>
       </section>
     </main>
 
