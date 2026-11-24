@@ -55,26 +55,23 @@ pub(crate) unsafe fn connect(
         Ok(())
     })?;
     track_audio(id);
-    if api_of(id, false).playing == Some(true) {
-        sync_audio_playback(id, true);
+    let synced = if api_of(id, false).playing == Some(true) {
+        sync_audio_playback(id, true)
     } else {
-        tree::read_tree(|t| {
-            if t.connected(id) {
-                sync_audio_element(t, id);
-            }
-        });
+        tree::read_tree(|t| sync_audio_element(t, id))
+    };
+    if let Err(error) = synced {
+        INPUTS.with(|inputs| inputs.borrow_mut().remove(&id));
+        return Err(ElementError::Unavailable(error.message));
     }
     Ok(())
 }
 
-pub(super) fn restore(id: u32, src: &str, mut state: VideoState) -> Option<VideoState> {
+pub(super) fn restore(id: u32, state: &mut VideoState) -> Result<(), MediaError> {
     if let Some(input) = INPUTS.with(|m| m.borrow().get(&id).cloned()) {
-        if let Err(error) = state.route_audio(Arc::new(Output(input))) {
-            report(src, &error);
-            return None;
-        }
+        state.route_audio(Arc::new(Output(input)))?;
     }
-    Some(state)
+    Ok(())
 }
 
 pub(super) fn gc(live: &impl Fn(u32) -> bool) {

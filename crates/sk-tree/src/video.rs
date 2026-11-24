@@ -53,12 +53,12 @@ pub(crate) fn track_audio(id: u32) {
     });
 }
 
-fn sync_audio_element(t: &Tree, id: u32) {
+fn sync_audio_element(t: &Tree, id: u32) -> Result<(), MediaError> {
     let scale = VIDEO_STATES.with(|m| m.borrow().get(&id).map_or(1.0, |e| e.scale));
-    sync(t, id, crate::windows::window_of_node_in(t, id), scale);
+    sync(t, id, crate::windows::window_of_node_in(t, id), scale).map(|_| ())
 }
 
-fn sync_audio_playback(id: u32, playing: bool) {
+fn sync_audio_playback(id: u32, playing: bool) -> Result<(), MediaError> {
     tree::read_tree(|t| {
         let tracked = AUDIO_ELEMENTS.with(|ids| {
             let mut ids = ids.borrow_mut();
@@ -69,9 +69,10 @@ fn sync_audio_playback(id: u32, playing: bool) {
             true
         });
         if playing && tracked {
-            sync_audio_element(t, id);
+            sync_audio_element(t, id)?;
         }
-    });
+        Ok(())
+    })
 }
 
 pub(crate) fn sync_audio_elements() {
@@ -83,7 +84,7 @@ pub(crate) fn sync_audio_elements() {
                 } else if !*play_detached {
                     continue;
                 }
-                sync_audio_element(t, id);
+                let _ = sync_audio_element(t, id);
             }
         })
     });
@@ -235,7 +236,7 @@ pub(crate) fn sync(
     id: u32,
     win: crate::windows::WinKey,
     scale: f32,
-) -> Option<(u32, u32)> {
+) -> Result<Option<(u32, u32)>, MediaError> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").trim();
     let autoplay = bool_attr(t.prop(id, "autoplay"));
@@ -258,11 +259,7 @@ pub(crate) fn sync(
                 id,
                 Entry {
                     src: src.to_owned(),
-                    state: load(src).and_then(|state| {
-                        #[cfg(feature = "audio")]
-                        let state = graph_audio::restore(id, src, state)?;
-                        Some(state)
-                    }),
+                    state: load(id, src)?,
                     autoplay,
                     props: Props::default(),
                     seek_write: None,
@@ -276,11 +273,13 @@ pub(crate) fn sync(
             );
         }
 
-        let entry = map.get_mut(&id)?;
+        let entry = map.get_mut(&id).expect("entry just synchronized");
         // `scale` goes too: `frame_box` is in physical pixels and the windows can differ in DPI.
         entry.window = win;
         entry.scale = scale;
-        let state = entry.state.as_mut()?;
+        let Some(state) = entry.state.as_mut() else {
+            return Ok(None);
+        };
         state.resume();
 
         let props = Props {
@@ -357,28 +356,41 @@ pub(crate) fn sync(
             state.set_playing(playing);
         }
 
-        state.native_size()
+        Ok(state.native_size())
     })
 }
 
-fn load(src: &str) -> Option<VideoState> {
+fn load(_id: u32, src: &str) -> Result<Option<VideoState>, MediaError> {
     if src.is_empty() {
         // An absent `src` is not worth an error (a `v-if`'d binding hits it on its first frame).
-        return None;
+        return Ok(None);
     }
-    if src.starts_with(sk_video::stream::PREFIX) {
-        return match sk_video::stream::backend(src) {
-            Ok(backend) => {
-                let mut state = VideoState::new(backend);
-                state.set_source(MediaSource::Uri(src.to_string())).ok()?;
-                Some(state)
-            }
-            Err(error) => {
-                report(src, &error);
-                None
-            }
+    let (backend, source) = if src.starts_with(sk_video::stream::PREFIX) {
+        (
+            sk_video::stream::backend(src),
+            MediaSource::Uri(src.to_owned()),
+        )
+    } else {
+        let Some(source) = resolve_source(src) else {
+            return Ok(None);
         };
-    }
+        (sk_video::backend_for_this_platform(), source)
+    };
+    let Ok(backend) = backend.inspect_err(|error| report(src, error)) else {
+        return Ok(None);
+    };
+    let mut state = VideoState::new(backend);
+    // Loading may open the system audio device. Restore the graph before the decoder opens.
+    #[cfg(feature = "audio")]
+    graph_audio::restore(_id, &mut state).inspect_err(|error| report(src, error))?;
+    Ok(state
+        .set_source(source)
+        .inspect_err(|error| report(src, error))
+        .ok()
+        .map(|_| state))
+}
+
+fn resolve_source(src: &str) -> Option<MediaSource> {
     let source = match crate::img::resolve_media("video", src) {
         Ok(source) => source,
         Err(msg) => {
@@ -403,21 +415,7 @@ fn load(src: &str) -> Option<VideoState> {
         return None;
     }
 
-    let backend = match sk_video::backend_for_this_platform() {
-        Ok(backend) => backend,
-        Err(error) => {
-            report(src, &error);
-            return None;
-        }
-    };
-    let mut state = VideoState::new(backend);
-    match state.set_source(source) {
-        Ok(()) => Some(state),
-        Err(error) => {
-            report(src, &error);
-            None
-        }
-    }
+    Some(source)
 }
 
 fn report(src: &str, error: &MediaError) {
@@ -831,8 +829,8 @@ pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
 }
 
 pub(crate) fn media_call(id: u32, verb: u32, arg: f64) -> bool {
-    if matches!(verb, 0 | 1) {
-        sync_audio_playback(id, verb == 0);
+    if matches!(verb, 0 | 1) && sync_audio_playback(id, verb == 0).is_err() {
+        return false;
     }
     let live = VIDEO_STATES.with(|m| {
         m.borrow().get(&id).is_some_and(|entry| {
@@ -938,7 +936,7 @@ mod tests {
         });
         let here = |k, scale| {
             tree::read_tree(|t| {
-                sync(t, id, k, scale);
+                sync(t, id, k, scale).unwrap();
             })
         };
         let recorded = || {

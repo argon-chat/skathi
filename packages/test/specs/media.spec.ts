@@ -52,7 +52,7 @@ test(
             if (data.some(s => Math.abs(s) > 0.01)) break;
             await new Promise(r => setTimeout(r, 20));
           }
-          if (ctx.currentTime === 0) return "no output device";
+          if (ctx.currentTime === 0) return "audio context clock did not start";
           if (!data.some(s => Math.abs(s) > 0.01)) return { silent: mime, media: __sk_media_state(el.__skId), clock: ctx.currentTime, events: __sk_media_events(el.__skId) };
           el.pause();
           await new Promise(r => setTimeout(r, 250));
@@ -62,7 +62,6 @@ test(
         return "heard both sources";
       } finally { el.pause(); el.remove(); await ctx.close(); }
     `);
-      if ((got as { ok?: string }).ok === "no output device") continue;
       expect(got).toEqual({ ok: "heard both sources" });
     }
   },
@@ -167,8 +166,7 @@ test(
   `);
     console.log(`[media] sprite ${JSON.stringify(got)}`);
     const r = (got as { ok: { moved: boolean; why: string } }).ok;
-    // With no output device the clock does not run and nothing ends; the slice itself is pinned by
-    // redjs's offline-graph tests.
+    // Measure the slice against render time once the host clock has advanced.
     if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
   },
   T,
@@ -274,8 +272,7 @@ test(
       got as { ok: { moved: boolean; presses: number; peak: number; loud: number; checked: number; silent: number } }
     ).ok;
     expect(r.presses).toBe(60);
-    // With no output device the clock does not run and nothing plays; the envelope and the node
-    // lifetimes are then pinned by redjs's own tests.
+    // Only measure the sustained envelopes if the host rendered the observation window.
     if (r.moved) {
       expect(r.peak).toBeGreaterThan(0.05);
       expect(r.peak).toBeLessThan(0.6);

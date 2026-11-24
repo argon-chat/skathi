@@ -25,27 +25,13 @@ impl Capture {
     }
 }
 
-unsafe extern "C" fn handoff(identity: Ptr, buffer: *mut ffi::Buffer, user: Ptr) {
-    let capture = unsafe { &*user.cast::<Capture>() };
-    let Some(output) = capture
-        .output
-        .try_lock()
-        .ok()
-        .and_then(|s| s.as_ref()?.upgrade())
-    else {
-        return;
-    };
-    let Ok(api) = ffi::api() else { return };
+unsafe fn forward(api: &Api, sample: Ptr, output: &dyn AudioOutput, gain: f32) {
     let core = &api.core;
-    // SAFETY: identity passes a borrowed buffer with the format negotiated on its sink pad.
+    // SAFETY: the sample owns its caps and buffer for the duration of this call.
     unsafe {
-        let pad = (core.gst_element_get_static_pad)(identity, c"sink".as_ptr());
-        if pad.is_null() {
-            return;
-        }
-        let caps = (core.gst_pad_get_current_caps)(pad);
-        (core.gst_object_unref)(pad);
-        if caps.is_null() {
+        let caps = (core.gst_sample_get_caps)(sample);
+        let buffer = (core.gst_sample_get_buffer)(sample);
+        if caps.is_null() || buffer.is_null() {
             return;
         }
         let s = (core.gst_caps_get_structure)(caps, 0);
@@ -54,7 +40,6 @@ unsafe extern "C" fn handoff(identity: Ptr, buffer: *mut ffi::Buffer, user: Ptr)
             (core.gst_structure_get_int)(s, c"channels".as_ptr(), &mut channels);
             (core.gst_structure_get_int)(s, c"rate".as_ptr(), &mut rate);
         }
-        (core.gst_mini_object_unref)(caps);
         if channels <= 0 || rate <= 0 {
             return;
         }
@@ -67,75 +52,83 @@ unsafe extern "C" fn handoff(identity: Ptr, buffer: *mut ffi::Buffer, user: Ptr)
                 std::slice::from_raw_parts(map.data.cast::<f32>(), map.size / 4),
                 channels as usize,
                 rate as u32,
-                f32::from_bits(capture.gain.load(Ordering::Relaxed)),
+                gain,
             );
         }
         (core.gst_buffer_unmap)(buffer, &mut map);
     }
 }
 
-unsafe extern "C" fn release(data: Ptr, _: Ptr) {
+unsafe extern "C" fn on_sample(sink: Ptr, data: Ptr) -> i32 {
+    let Ok(api) = ffi::api() else {
+        return ffi::FLOW_OK;
+    };
+    // SAFETY: appsink owns the callback's Capture and hands us one sample reference.
+    unsafe {
+        let capture = &*data.cast::<Capture>();
+        let sample = (api.app.gst_app_sink_pull_sample)(sink);
+        if !sample.is_null() {
+            if let Some(output) = capture
+                .output
+                .try_lock()
+                .ok()
+                .and_then(|s| s.as_ref()?.upgrade())
+            {
+                forward(
+                    api,
+                    sample,
+                    output.as_ref(),
+                    f32::from_bits(capture.gain.load(Ordering::Relaxed)),
+                );
+            }
+            (api.core.gst_mini_object_unref)(sample);
+        }
+    }
+    ffi::FLOW_OK
+}
+
+unsafe extern "C" fn release(data: Ptr) {
     drop(unsafe { Arc::from_raw(data.cast::<Capture>()) });
 }
 
-pub(super) struct Filter {
-    api: &'static Api,
-    identity: Ptr,
-    direct: Ptr,
-}
-
-impl Filter {
-    pub fn install(api: &'static Api, playbin: Ptr, capture: &Arc<Capture>) -> Option<Self> {
-        let format = if cfg!(target_endian = "little") {
-            "F32LE"
-        } else {
-            "F32BE"
-        };
-        let bin = api.parse_bin(&format!("audioconvert ! audio/x-raw,format={format},layout=interleaved ! identity name=tap signal-handoffs=false ! volume name=direct")).ok()?;
-        // SAFETY: the named elements belong to this bin. Each lookup takes a reference.
-        unsafe {
-            let identity = (api.core.gst_bin_get_by_name)(bin, c"tap".as_ptr());
-            let direct = (api.core.gst_bin_get_by_name)(bin, c"direct".as_ptr());
-            if identity.is_null() || direct.is_null() {
-                for object in [identity, direct, bin].into_iter().filter(|p| !p.is_null()) {
-                    (api.core.gst_object_unref)(object);
-                }
-                return None;
-            }
-            (api.gobject.g_signal_connect_data)(
-                identity,
-                c"handoff".as_ptr(),
-                handoff as Ptr,
-                Arc::into_raw(capture.clone()) as Ptr,
-                Some(release),
-                0,
-            );
-            api.set_ptr(playbin, "audio-filter", bin);
+pub(super) fn install(api: &Api, playbin: Ptr, capture: &Arc<Capture>) -> bool {
+    let format = if cfg!(target_endian = "little") {
+        "F32LE"
+    } else {
+        "F32BE"
+    };
+    // Only new_sample delivers PCM, after clock sync. The main output controls paused preroll.
+    let desc = format!(
+        "tee name=split ! queue split. ! queue ! audioconvert ! \
+        audio/x-raw,format={format},layout=interleaved ! appsink name=tap sync=true \
+        async=false max-buffers=1 drop=true enable-last-sample=false"
+    );
+    let Ok(bin) = api.parse_bin(&desc) else {
+        return false;
+    };
+    unsafe {
+        let tap = (api.core.gst_bin_get_by_name)(bin, c"tap".as_ptr());
+        if tap.is_null() {
             (api.core.gst_object_unref)(bin);
-            let filter = Self {
-                api,
-                identity,
-                direct,
-            };
-            if capture.routed() {
-                filter.route()
-            }
-            Some(filter)
+            return false;
         }
+        let callbacks = ffi::AppSinkCallbacks {
+            eos: None,
+            new_preroll: None,
+            new_sample: Some(on_sample),
+            new_event: std::ptr::null_mut(),
+            propose_allocation: std::ptr::null_mut(),
+            reserved: [std::ptr::null_mut(); 2],
+        };
+        (api.app.gst_app_sink_set_callbacks)(
+            tap,
+            &callbacks,
+            Arc::into_raw(capture.clone()) as Ptr,
+            Some(release),
+        );
+        api.set_ptr(playbin, "audio-filter", bin);
+        (api.core.gst_object_unref)(tap);
+        (api.core.gst_object_unref)(bin);
     }
-
-    pub fn route(&self) {
-        self.api.set_bool(self.direct, "mute", true);
-        self.api.set_bool(self.identity, "sync", true);
-        self.api.set_bool(self.identity, "signal-handoffs", true);
-    }
-}
-
-impl Drop for Filter {
-    fn drop(&mut self) {
-        unsafe {
-            (self.api.core.gst_object_unref)(self.identity);
-            (self.api.core.gst_object_unref)(self.direct);
-        }
-    }
+    true
 }

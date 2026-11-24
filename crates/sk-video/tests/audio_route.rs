@@ -78,19 +78,57 @@ fn main() {
             return;
         }
     };
-    let mut state = VideoState::new(backend);
-    state.set_source(tone()).unwrap();
-    state.play();
-    let start = Instant::now();
-    while state.current_time() < 0.05 || !state.current_time().is_finite() {
-        assert!(
-            start.elapsed() < Duration::from_secs(8),
-            "media clock did not start"
-        );
-        tick(&mut state);
+    check_route(VideoState::new(backend), false);
+    #[cfg(windows)]
+    {
+        use windows::Win32::Media::MediaFoundation::MFCreateAudioRenderer;
+        // Media Foundation cannot start direct playback on machines without a render endpoint.
+        match unsafe { MFCreateAudioRenderer(None) } {
+            Ok(sink) => unsafe { sink.Shutdown() }.unwrap(),
+            Err(error) => {
+                eprintln!("direct playback unavailable ({error}), graph playback passed");
+                return;
+            }
+        }
     }
+    let backend = sk_video::backend_for_this_platform().unwrap();
+    check_route(VideoState::new(backend), true);
+}
+
+fn check_route(mut state: VideoState, start_direct: bool) {
     let output = Arc::new(Probe::default());
-    state.route_audio(output.clone()).unwrap();
+    if !start_direct {
+        state.route_audio(output.clone()).unwrap();
+    }
+    state.set_source(tone()).unwrap();
+    if !start_direct {
+        let start = Instant::now();
+        while !state.duration().is_finite() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "no duration while paused"
+            );
+            tick(&mut state);
+        }
+        assert!((state.duration() - 3.0).abs() < 0.1);
+        assert_eq!(
+            *output.energy.lock().unwrap(),
+            0.0,
+            "paused preroll reached the graph"
+        );
+    }
+    state.play();
+    if start_direct {
+        let start = Instant::now();
+        while state.current_time() < 0.05 || !state.current_time().is_finite() {
+            assert!(
+                start.elapsed() < Duration::from_secs(8),
+                "direct media clock did not start"
+            );
+            tick(&mut state);
+        }
+        state.route_audio(output.clone()).unwrap();
+    }
     let start = Instant::now();
     while *output.energy.lock().unwrap() < 10.0 {
         assert!(

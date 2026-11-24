@@ -86,6 +86,12 @@ bool sk_install_audio_tap(AVPlayerItem *item, void *context, Push push, Release 
     owner->context = context;
     owner->push = push;
     owner->releaseContext = releaseContext;
+    // AVPlayerItem audio mixes apply only to file-based media, including progressive HTTP.
+    if ([item.asset isKindOfClass:AVURLAsset.class]) {
+        AVURLAsset *asset = (AVURLAsset *)item.asset;
+        if ([asset.URL.pathExtension.lowercaseString isEqualToString:@"m3u8"] || asset.variants.count > 0)
+            return false;
+    }
     NSMutableArray *params = [NSMutableArray array];
     for (AVPlayerItemTrack *itemTrack in item.tracks) {
         AVAssetTrack *track = itemTrack.assetTrack;

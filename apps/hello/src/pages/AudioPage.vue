@@ -7,7 +7,6 @@ const state = reactive({
   ctxState: "—",
   sampleRate: 0,
   currentTime: 0,
-  running: false,
 });
 
 // Nodes, kept out of `reactive()` on purpose: they are host objects with live getters, not data,
@@ -345,7 +344,6 @@ function frame() {
     meters.post = Math.round(rms(postTime!) * 1000) / 1000;
 
     const now = Math.round(a.currentTime * 100) / 100;
-    state.running = now > 0;
     state.currentTime = now;
     state.ctxState = a.state;
   }
@@ -506,7 +504,7 @@ const surface = computed<[string, string, string][]>(() => {
       </div>
 
       <div class="card">
-        <div class="title">AudioContext — state, clock, device</div>
+        <div class="title">AudioContext — state and clock</div>
         <div class="kv">
           <div>
             <span class="k">state</span><span class="v">{{ state.ctxState }}</span>
@@ -517,30 +515,16 @@ const surface = computed<[string, string, string][]>(() => {
           <div>
             <span class="k">currentTime</span><span class="v">{{ state.currentTime.toFixed(2) }} s</span>
           </div>
-          <div>
-            <span class="k">output stream</span>
-            <span class="v">{{ state.running ? "running (clock advancing)" : "none (clock frozen)" }}</span>
-          </div>
         </div>
         <div class="row">
           <div class="btn" @click="toggleSuspend">
             {{ state.ctxState === "suspended" ? "resume()" : "suspend()" }}
           </div>
         </div>
-        <div v-if="!state.running" class="advisory">
-          <div class="ahead">No output device.</div>
-          <div>
-            The graph API still works — nodes connect, params take, decodeAudioData decodes — but currentTime never
-            advances, so anything scheduled at an absolute future time never fires. This is the headless case, and it
-            degrades rather than crashing.
-          </div>
-        </div>
         <div class="advisory soft">
-          <div class="ahead">Deviation: suspend() mutes, it does not pause.</div>
           <div>
-            The master bus goes to zero but the stream keeps running, so currentTime keeps advancing while suspended.
-            The pre-gain analyser above keeps seeing the oscillator for the same reason — it sits upstream of the
-            master.
+            The clock and analysers keep running when the device has no audio output. Suspend the context to pause
+            rendering and freeze currentTime. Resume continues from the same time.
           </div>
         </div>
       </div>

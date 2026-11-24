@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
-use crate::AudioOutput;
+use crate::{AudioOutput, MediaError, MediaErrorCode};
 use objc2_av_foundation::AVPlayerItem;
 
 pub(super) struct Capture {
@@ -23,7 +23,7 @@ impl Capture {
             Ordering::Relaxed,
         );
     }
-    pub fn install(self: &Arc<Self>, item: &AVPlayerItem) -> bool {
+    pub fn install(self: &Arc<Self>, item: &AVPlayerItem) -> Result<(), MediaError> {
         extern "C" {
             fn sk_install_audio_tap(
                 item: *const AVPlayerItem,
@@ -53,6 +53,11 @@ impl Capture {
             drop(unsafe { Arc::from_raw(data.cast::<Capture>()) });
         }
         // SAFETY: the tap takes ownership of this reference on every return path.
-        unsafe { sk_install_audio_tap(item, Arc::into_raw(self.clone()).cast(), push, release) }
+        if unsafe { sk_install_audio_tap(item, Arc::into_raw(self.clone()).cast(), push, release) }
+        {
+            Ok(())
+        } else {
+            Err(MediaError::new(MediaErrorCode::Decode, "AVFoundation could not attach an audio tap. Use a file-based audio or video source for Web Audio on macOS."))
+        }
     }
 }

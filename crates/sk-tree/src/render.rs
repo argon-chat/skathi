@@ -5831,7 +5831,9 @@ fn build_video<V: 'static>(
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let win = windows::key(window);
-    let intrinsic = crate::video::sync(t, id, win, window.scale_factor());
+    let intrinsic = crate::video::sync(t, id, win, window.scale_factor())
+        .ok()
+        .flatten();
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
     d = crate::aria::apply(d, t, id, node);

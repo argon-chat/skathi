@@ -1047,6 +1047,7 @@ const graphics = section("Graphics and media", [
       "`statechange` fires after the promise of `suspend()`, `resume()` or `close()` has resolved, and once after a context is made, which starts running.",
       "`fftSize` above 4096 throws a `TypeError`.",
       "`PannerNode` and `StereoPannerNode` accept up to two input channels. A larger `channelCount` throws `NotSupportedError`.",
+      "On macOS, routing a media element through Web Audio requires file-based media, including files served over HTTP. AVFoundation audio mixes do not support HTTP Live Streaming (HLS) playlists.",
     ],
     related: ["get-user-media", "spatial-audio", "audio-worklet"],
     aliases: ["AudioContext", "AudioNode", "channelCount", "maxChannelCount", "5.1", "7.1", "surround"],

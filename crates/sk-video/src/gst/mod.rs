@@ -83,7 +83,7 @@ impl Missing {
 }
 
 struct Pipeline {
-    audio_filter: Option<audio::Filter>,
+    audio_filter: bool,
     playbin: Ptr,
     bus: Ptr,
     video_bin: Ptr,
@@ -341,7 +341,7 @@ impl GstBackend {
             return Err(setup(format!("no {factory} element")));
         }
         let mut p = Pipeline {
-            audio_filter: None,
+            audio_filter: false,
             playbin: unsafe { (core.gst_object_ref_sink)(playbin) },
             bus: std::ptr::null_mut(),
             video_bin: std::ptr::null_mut(),
@@ -386,8 +386,8 @@ impl GstBackend {
         }
         api.set_ptr(p.playbin, "video-sink", bin);
 
-        p.audio_filter = audio::Filter::install(api, p.playbin, &self.capture);
-        if p.audio_filter.is_none() && self.capture.routed() {
+        p.audio_filter = audio::install(api, p.playbin, &self.capture);
+        if !p.audio_filter && self.capture.routed() {
             unsafe {
                 for object in [p.video_pad, p.capsfilter, p.video_bin, p.playbin]
                     .into_iter()
@@ -397,7 +397,7 @@ impl GstBackend {
                 }
             }
             return Err(setup(
-                "the Web Audio filter needs audioconvert, identity and volume".into(),
+                "the Web Audio filter needs tee, queue, audioconvert and appsink".into(),
             ));
         }
 
@@ -427,7 +427,7 @@ impl GstBackend {
         api.set_str(p.playbin, "uri", uri);
         let routed = self.capture.routed();
         api.set_f64(p.playbin, "volume", if routed { 1.0 } else { self.volume });
-        api.set_bool(p.playbin, "mute", !routed && self.muted);
+        api.set_bool(p.playbin, "mute", routed || self.muted);
         if let Some(feed) = &feed {
             source::connect(api, p.playbin, feed);
         }
@@ -1085,15 +1085,14 @@ impl Drop for GstBackend {
 impl VideoBackend for GstBackend {
     fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
         if let Some(p) = &self.pipeline {
-            let filter = p.audio_filter.as_ref().ok_or_else(|| {
-                MediaError::new(
+            if !p.audio_filter {
+                return Err(MediaError::new(
                     MediaErrorCode::Decode,
                     "GStreamer could not install the Web Audio filter",
-                )
-            })?;
-            filter.route();
+                ));
+            }
+            self.api.set_bool(p.playbin, "mute", true);
             self.api.set_f64(p.playbin, "volume", 1.0);
-            self.api.set_bool(p.playbin, "mute", false);
         }
         self.capture.gain(self.volume, self.muted);
         self.capture.attach(output);

@@ -359,10 +359,10 @@ impl AvPlayerBackend {
 
     fn apply_audio_level(&self) {
         let (volume, muted) = if let Some(capture) = &self.capture {
-            capture.gain(self.volume, self.muted);
-            // The tap applies the element gain and clears the player's buffers. Keep the
-            // renderer running once the tap is in place so it continues to supply PCM.
-            (1.0, !self.tap_installed)
+            capture.gain(self.volume, self.muted || self.paused || self.ended);
+            // Player volume is downstream of the tap. An item that ignores its mix must
+            // also stay silent at the device.
+            (0.0, false)
         } else {
             (self.volume as f32, self.muted)
         };
@@ -443,13 +443,13 @@ impl AvPlayerBackend {
         self.track_kinds();
         if let Some(capture) = &self.capture {
             if !self.tap_installed && self.has_audio == Some(true) {
-                self.tap_installed = capture.install(&item);
-                if !self.tap_installed {
-                    self.error = Some(MediaError::new(MediaErrorCode::Decode, "AVFoundation could not attach an audio processing tap to the playing track"));
+                if let Err(error) = capture.install(&item) {
+                    self.error = Some(error);
                     self.events.push(MediaEvent::Error);
                     unsafe { self.player.pause() };
                     return;
                 }
+                self.tap_installed = true;
                 self.apply_audio_level();
             }
         }
@@ -495,6 +495,7 @@ impl AvPlayerBackend {
                 self.start_seek(0.0);
             } else {
                 self.ended = true;
+                self.apply_audio_level();
                 unsafe { self.player.pause() };
                 if !self.paused {
                     self.paused = true;
@@ -631,18 +632,13 @@ impl Drop for AvPlayerBackend {
 impl VideoBackend for AvPlayerBackend {
     fn route_audio(&mut self, output: &Arc<dyn crate::AudioOutput>) -> Result<(), MediaError> {
         let capture = audio::Capture::new(output);
-        capture.gain(self.volume, self.muted);
+        capture.gain(self.volume, self.muted || self.paused || self.ended);
         if let Some(item) = self
             .item
             .as_deref()
             .filter(|_| self.has_audio == Some(true))
         {
-            if !capture.install(item) {
-                return Err(MediaError::new(
-                    MediaErrorCode::Decode,
-                    "AVFoundation could not attach an audio processing tap to the playing track",
-                ));
-            }
+            capture.install(item)?;
             self.tap_installed = true;
         }
         self.capture = Some(capture);
@@ -682,6 +678,7 @@ impl VideoBackend for AvPlayerBackend {
         }
         if self.paused {
             self.paused = false;
+            self.apply_audio_level();
             self.events.push(MediaEvent::Play);
         }
         if self.item.is_some() && self.error.is_none() {
@@ -692,6 +689,7 @@ impl VideoBackend for AvPlayerBackend {
     fn pause(&mut self) {
         if !self.paused {
             self.paused = true;
+            self.apply_audio_level();
             self.events.push(MediaEvent::Pause);
         }
         unsafe { self.player.pause() };
