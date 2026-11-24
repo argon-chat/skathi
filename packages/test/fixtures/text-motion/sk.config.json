@@ -1,0 +1,12 @@
+{
+  "name": "text-motion",
+
+  "window": {
+    "title": "Skathi — text-motion (fixture)",
+    "width": 720,
+    "height": 560,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "none"
+  }
+}
