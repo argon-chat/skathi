@@ -63,9 +63,13 @@ The [config reference](/sk-config/#installable-packages) lists every key with it
 
 ## Windows: MSIX
 
-An MSIX is the package Windows installs from a double click, from `Add-AppxPackage` or from the Microsoft Store, and removes cleanly. `sk package` writes it without the Windows SDK: the program and everything beside it, `AppxManifest.xml`, tile images made from the icon, and the block map that Windows checks every 64 KiB of the package against.
+An MSIX is the package Windows installs from a double click, from `Add-AppxPackage` or from the Microsoft Store, and removes cleanly. `sk package` writes it without the Windows SDK: the program and everything beside it, `AppxManifest.xml`, tile and taskbar images made from the icon with the `resources.pri` index Windows picks them from, and the block map that Windows checks every 64 KiB of the package against.
 
 The app is declared a full-trust desktop app (`runFullTrust`), so it runs as it does without the package: same window, same file access, no app container.
+
+### Tile and taskbar images
+
+From the package icon, `sk package` writes `Square44x44Logo` (the taskbar, the Start menu's app list, Explorer) at target sizes of 16, 24, 32, 48 and 256 px, each also as `altform-unplated` and `altform-lightunplated`, and `Square44x44Logo`, `Square150x150Logo`, `Wide310x150Logo` and `StoreLogo` at scales of 100, 125, 150, 200 and 400%. `resources.pri` indexes them, so Windows takes the size that fits the screen and the unplated variant, which it draws as it is rather than on a coloured plate. The index is the one `makepri` writes for the same files, byte for byte. Give the icon a transparent background; `background` in `msix` is the colour of the tiles behind it (`transparent` by default).
 
 ### The publisher is the certificate's subject
 
@@ -116,7 +120,7 @@ With `appInstaller`, `sk package` also writes `<identityName>.appinstaller`. Upl
 - **Data.** The app keeps its data in `%LOCALAPPDATA%\<name>`, as without the package. Inside a package, Windows redirects files the app creates under `AppData` to a private folder of the package and shows them at the usual path, and deletes them when the package is removed. Files that were already there, from a copy of the app installed without the package, are read and changed in place, so the packaged app starts with that copy's data.
 - **One instance.** `singleInstance` works as it does without the package: a second launch, a link or a file opened from Explorer goes to the running app. A copy installed from the package and one installed without it share the instance (same `id` and `name`, same user) but are different program files, so while one runs, starting the other ends without a window. Install one or the other.
 - **Links and file types.** The package declares the URL schemes and file types; the app does not register them itself at start, as it does without a package.
-- **Devices.** A packaged app gets the microphone, the camera or the location only when the package declares it: list `"microphone"`, `"webcam"` or `"location"` in `capabilities`. `sk check` warns when `macos.microphoneUsageDescription` or `macos.cameraUsageDescription` is set and the capability is missing.
+- **Privacy settings.** Windows keeps a switch for each packaged app: in Settings › Privacy & security › Microphone (and Camera, Location, Screen capture) the app is listed by name under "Let apps access your microphone", and "Let desktop apps access your microphone" no longer applies to it. `appPermissions`, `navigator.permissions` and the capture refusal messages read that switch, and `appPermissions.request()` opens the same page. Notifications follow the app's own switch in Settings › System › Notifications. List `"microphone"`, `"webcam"` or `"location"` in `capabilities` so the app is in those lists from installation; without it, Windows adds it at its first use. `sk check` warns when `macos.microphoneUsageDescription` or `macos.cameraUsageDescription` is set and the capability is missing.
 - **Same build, both ways.** The program in the package is the one `sk publish` writes, so one build can ship as an MSIX and as a plain folder or classic installer.
 
 The program and its files are read-only once installed; write to `%LOCALAPPDATA%`, never beside the program.
@@ -229,7 +233,7 @@ The runtime is the small static program at the front of the file that mounts the
 
 ### Desktop integration
 
-An AppImage is not installed, so the system knows nothing of its desktop entry until a tool such as AppImageLauncher or Gear Lever integrates it; from then on the app is in the menu, opens its file types and handles its links. A link-only app is started as `Notes --sk-protocol-launch -- %u`, so the link arrives in `appLaunch.url`. The desktop entry has a single command line, so an app that also opens files is started as `Notes %U` and a link arrives as a plain argument in `appLaunch.argv`; `sk check` warns about it.
+An AppImage is not installed, so the system knows nothing of its desktop entry until a tool such as AppImageLauncher or Gear Lever integrates it; from then on the app is in the menu, opens its file types and handles its links. A link-only app is started as `Notes --sk-protocol-launch -- %u`; an app that also opens files is started as `Notes %U`, since the entry has a single command line, and the app takes an argument whose scheme is in the top-level `"protocols"` for the link. Either way the link arrives in `appLaunch.url`, also when it is handed to an instance that is already running.
 
 ### Updates and signatures
 

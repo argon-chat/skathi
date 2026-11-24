@@ -1,10 +1,13 @@
-// Windows MSIX: AppxManifest.xml from the package config, visual assets from the icon, the build folder as the
-// payload, and an optional .appinstaller feed. The package is written unsigned (appx.ts); `ctx.sign` signs it.
+// Windows MSIX: AppxManifest.xml from the package config, visual assets and their resources.pri from the icon,
+// the build folder as the payload, and an optional .appinstaller feed. The package is written unsigned
+// (appx.ts); `ctx.sign` signs it.
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import type { Rgba } from "../icon";
 import { iconAt, iconOnCanvas, iconSources } from "./icons";
 import { reservedPath, writeAppx } from "./appx";
+import { resourcesPri } from "./pri";
 import type {
   AppInstallerOptions,
   Artifact,
@@ -294,7 +297,7 @@ function validate(ctx: PackageCheckContext): Problem[] {
     if (reason && !o.capabilities.includes(cap)) {
       warn(
         "capabilities",
-        `the app asks for the ${cap === "webcam" ? "camera" : cap} on macOS, but "${at}.capabilities" lacks "${cap}": Windows does not list the packaged app under that privacy setting and denies it`,
+        `the app asks for the ${cap === "webcam" ? "camera" : cap} on macOS, but "${at}.capabilities" lacks "${cap}": Windows lists the packaged app under that privacy setting only after its first use; add "${cap}" so its switch is there from installation`,
       );
     }
   }
@@ -445,11 +448,38 @@ export function payloadFiles(dir: string): string[] {
   return out.sort();
 }
 
-const ASSETS = {
-  storeLogo: ["PackageAssets/StoreLogo.png", 100],
-  square150: ["PackageAssets/Square150x150Logo.png", 300],
-  square44: ["PackageAssets/Square44x44Logo.png", 88],
-} as const;
+const SCALES = [100, 125, 150, 200, 400];
+const TARGET_SIZES = [16, 24, 32, 48, 256];
+
+/**
+ * The tile and taskbar images under `PackageAssets/`, every scale and target size Windows picks from through
+ * resources.pri, unplated ones included so the taskbar draws the icon without a coloured plate.
+ */
+export function msixAssets(sources: readonly Rgba[], wide: boolean): Map<string, Uint8Array> {
+  const out = new Map<string, Uint8Array>();
+  const sized = new Map<number, Uint8Array>();
+  const icon = (size: number) => {
+    let png = sized.get(size);
+    if (!png) {
+      png = iconAt(sources, size) ?? blankPng(size);
+      sized.set(size, png);
+    }
+    return png;
+  };
+  const at = (s: number, px: number) => Math.round((px * s) / 100);
+  for (const s of SCALES) {
+    out.set(`PackageAssets/Square44x44Logo.scale-${s}.png`, icon(at(s, 44)));
+    out.set(`PackageAssets/Square150x150Logo.scale-${s}.png`, icon(at(s, 150)));
+    out.set(`PackageAssets/StoreLogo.scale-${s}.png`, icon(at(s, 50)));
+    const canvas = wide && iconOnCanvas(sources, at(s, 120), at(s, 310), at(s, 150));
+    if (canvas) out.set(`PackageAssets/Wide310x150Logo.scale-${s}.png`, canvas);
+  }
+  for (const t of TARGET_SIZES) {
+    for (const form of ["", "_altform-unplated", "_altform-lightunplated"])
+      out.set(`PackageAssets/Square44x44Logo.targetsize-${t}${form}.png`, icon(t));
+  }
+  return out;
+}
 
 async function write(ctx: PackageContext): Promise<Artifact[]> {
   const { config } = ctx;
@@ -467,31 +497,31 @@ async function write(ctx: PackageContext): Promise<Artifact[]> {
       `${join(ctx.buildDir, "PackageAssets")}: the name is reserved for the package's tile images; rename the folder`,
     );
   }
+  if (payload.some((p) => p.toLowerCase() === "resources.pri")) {
+    throw new Error(
+      `${join(ctx.buildDir, "resources.pri")}: the name is reserved for the package's resource index; rename or remove it`,
+    );
+  }
 
-  const generated = new Map<string, Uint8Array>();
   const sources = iconSources(config.icons);
-  const asset = (path: string, png: Uint8Array | null) => {
-    if (png) generated.set(path, png);
-  };
-  for (const [path, size] of Object.values(ASSETS)) asset(path, iconAt(sources, size) ?? blankPng(size));
-  const wide = sources.length ? "PackageAssets/Wide310x150Logo.png" : null;
-  if (wide) asset(wide, iconOnCanvas(sources, 240, 620, 300));
+  const generated = msixAssets(sources, sources.length > 0);
   const fileTypeLogos = config.fileAssociations.map((f, i) => {
-    if (!f.icon) return null;
+    const png = f.icon && iconAt(iconSources([f.icon]), 96);
+    if (!png) return null;
     const path = `PackageAssets/FileType${i}.png`;
-    asset(path, iconAt(iconSources([f.icon]), 96));
+    generated.set(path, png);
     return path.replace(/\//g, "\\");
   });
+  generated.set("resources.pri", resourcesPri(o.identityName, [...generated.keys()]));
 
-  const win = (p: string) => p.replace(/\//g, "\\");
   const manifest = appxManifest({
     config,
-    executable: win(exeRel),
+    executable: exeRel.replace(/\//g, "\\"),
     assets: {
-      storeLogo: win(ASSETS.storeLogo[0]),
-      square150: win(ASSETS.square150[0]),
-      square44: win(ASSETS.square44[0]),
-      wide310: wide && win(wide),
+      storeLogo: "PackageAssets\\StoreLogo.png",
+      square150: "PackageAssets\\Square150x150Logo.png",
+      square44: "PackageAssets\\Square44x44Logo.png",
+      wide310: sources.length ? "PackageAssets\\Wide310x150Logo.png" : null,
     },
     fileTypeLogos,
   });

@@ -10,7 +10,8 @@ import { encodePng } from "../cli/icon";
 import { BLOCK, contentTypesXml, encodeFile, writeAppx, zipName } from "../cli/package/appx";
 import { packageApp } from "../cli/package/command";
 import { packageProblems, parsePackageConfig } from "../cli/package/config";
-import { appInstallerXml, appxManifest, parsePublisher, payloadFiles } from "../cli/package/msix";
+import { appInstallerXml, appxManifest, msixAssets, parsePublisher, payloadFiles } from "../cli/package/msix";
+import { resourcesPri } from "../cli/package/pri";
 
 // Made up, in the shape Windows prints a real code-signing subject: E= first, quoted values with commas.
 const SUBJECT = 'E=support@example.com, CN="Example Widgets, LLC", O="Example Widgets, LLC", L=Springfield, C=US';
@@ -255,6 +256,45 @@ describe("the package file", () => {
   });
 });
 
+describe("the MSIX tile images and resources.pri", () => {
+  const icon = [{ width: 8, height: 8, data: new Uint8Array(8 * 8 * 4).fill(255) }];
+  const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+  const size = (png: Uint8Array) => {
+    const v = new DataView(png.buffer, png.byteOffset);
+    return [v.getUint32(16), v.getUint32(20)];
+  };
+
+  // The references are `makepri new` (SDK 10.0.26100) over a folder of these names, with the config of
+  // `makepri createconfig /dq en-US /pv 10.0.0` minus its <packaging> section, for a package named com.example.notes.
+  test("the index is makepri's byte for byte, with the wide tile and file type logos", () => {
+    const files = [...msixAssets(icon, true).keys(), "PackageAssets/FileType1.png", "PackageAssets/FileType0.png"];
+    expect(sha(resourcesPri("com.example.notes", files))).toBe(
+      "e2966fe36f5e4274cd4a3d5e9dce112210c77911c7f73f85ef67fb3dbae833b3",
+    );
+  });
+
+  test("and without the wide tile", () => {
+    expect(sha(resourcesPri("com.example.notes", [...msixAssets([], false).keys()]))).toBe(
+      "f51571cbf23b22cf85d055907bbbd3ca0f200e03de41ed5b1ed45b1c70620caa",
+    );
+  });
+
+  test("a variant the index has no ranking for is refused rather than indexed wrong", () => {
+    expect(() => resourcesPri("com.example.notes", ["PackageAssets/Logo.scale-300.png"])).toThrow(/scale-300/);
+  });
+
+  test("each variant has the pixel size Windows asks for", () => {
+    const assets = msixAssets(icon, true);
+    const px = (name: string) => size(assets.get(`PackageAssets/${name}.png`)!);
+    expect(px("Square44x44Logo.scale-125")).toEqual([55, 55]);
+    expect(px("Square150x150Logo.scale-125")).toEqual([188, 188]);
+    expect(px("Wide310x150Logo.scale-125")).toEqual([388, 188]);
+    expect(px("StoreLogo.scale-400")).toEqual([200, 200]);
+    expect(px("Square44x44Logo.targetsize-24_altform-lightunplated")).toEqual([24, 24]);
+    expect(assets.size).toBe(35);
+  });
+});
+
 describe('sk.config.json "package"', () => {
   test("defaults come from the rest of the config", () => {
     const { config, problems } = parsePackageConfig(
@@ -328,7 +368,12 @@ describe("sk package --from", () => {
       ["installer", "com.example.notes_1.4.2.0_x64.msix", false],
     ]);
     const zip = readZip(readFileSync(result.artifacts[0]!.path));
-    expect(zip.entries.map((e) => e.name)).toContain("PackageAssets/Square44x44Logo.png");
+    const names = zip.entries.map((e) => e.name);
+    expect(names).toContain("resources.pri");
+    expect(names).toContain("PackageAssets/Square44x44Logo.targetsize-24_altform-unplated.png");
+    const pri = zip.data(zip.entries.find((e) => e.name === "resources.pri")!);
+    const assets = names.filter((n) => n.startsWith("PackageAssets/"));
+    expect(Buffer.from(pri).equals(Buffer.from(resourcesPri("com.example.notes", assets)))).toBe(true);
 
     const bad = app({ package: { windows: { msix: {} } } });
     await expect(
