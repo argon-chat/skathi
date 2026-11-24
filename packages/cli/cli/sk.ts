@@ -326,6 +326,47 @@ export function cli(run: Run): Command {
     });
   }
 
+  program
+    .command("package")
+    .summary("Release build, then the installable packages")
+    .description(
+      'sk publish, then the packages sk.config.json "package" lists for the OS (Windows: msix; macOS: dmg; Linux: appimage), in <app>/dist/package.',
+    )
+    .argument("[app]")
+    .option("--format <list>", "Only these formats, comma-separated (default: package.<os>.formats)")
+    .option("--out <dir>", "Output directory (default: package.out, else <app>/dist/package)")
+    .option("--no-build", "Package what the last sk publish wrote to <app>/dist/release")
+    .option("--from <dir>", "Package this folder instead of building, such as an embedding program's output")
+    .option("--exe <file>", "With --from: the program inside the folder")
+    .option("--config <path>", "An sk.config.json outside the app")
+    .option("--platform <os>", "windows, macos or linux (default: this OS)")
+    .option("--aot", "Compile the app to a native image on Windows x64 or macOS arm64")
+    .option("--json", "Print the written files as JSON")
+    .action(async (app, o) => {
+      if (o.exe !== undefined && o.from === undefined)
+        throw new ConfigError("--exe names the program inside --from <dir>");
+      const { packageApp, packageSummary } = await import("./package/command");
+      const progress = progressFor(process.stderr, errColor);
+      const result = await packageApp({
+        target: app ?? ".",
+        configPath: o.config,
+        platform: o.platform === undefined ? undefined : parsePlatform(o.platform),
+        formats: o.format?.split(",").filter((f) => f.trim()),
+        out: o.out,
+        build: o.build,
+        from: o.from,
+        exe: o.exe,
+        ...(o.aot === true && { aot: true }),
+        progress,
+        color: errColor,
+      }).finally(() => progress.end());
+      console.log(
+        o.json
+          ? JSON.stringify({ platform: result.platform, artifacts: result.artifacts }, null, 2)
+          : packageSummary(result, outColor),
+      );
+    });
+
   const colorFlags = { color: run.color === true, "no-color": run.color === false };
   program
     .command("check")

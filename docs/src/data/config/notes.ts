@@ -84,6 +84,12 @@ export const groups: readonly ConfigGroup[] = [
     intro: "Written into the `.app` bundle's `Info.plist`. Read on every OS, so a typo fails the build everywhere.",
     keys: ["macos"],
   },
+  {
+    title: "Installable packages",
+    intro:
+      "Read by `sk package`, which writes the installers, and by `sk check`, which reports a mistake in them as SK8001 or SK8002. The [packaging guide](/guides/packaging/) walks through each format.",
+    keys: ["package"],
+  },
 ];
 
 const BUILD_TIME = "Stamped at build time; it cannot change while the app runs.";
@@ -334,5 +340,115 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     ],
     example: "Notes scans documents with the camera.",
   },
-  "macos.sign": { default: "ad hoc where `codesign` exists", example: "Developer ID Application: Example Ltd" },
+  "macos.sign": {
+    default: "ad hoc where `codesign` exists",
+    notes: [
+      "An identity signs with the hardened runtime and a secure timestamp, as notarisation requires; ad hoc signs without either.",
+    ],
+    example: "Developer ID Application: Example Ltd",
+  },
+  "macos.entitlements": {
+    default: "the JIT, plus the microphone and camera when their usage descriptions are set",
+    notes: ["Ad hoc signing carries no entitlements, so these apply only with an identity in `macos.sign`."],
+    example: { "com.apple.security.network.client": true },
+  },
+  package: {
+    example: {
+      publisher: "Example Ltd",
+      id: "com.example.notes",
+      icon: "icon.png",
+      fileAssociations: [{ extensions: ["note"], name: "Notes document" }],
+      windows: { msix: { publisher: 'CN="Example, Ltd.", O="Example, Ltd.", C=US' } },
+    },
+  },
+  "package.publisher": { example: "Example Ltd" },
+  "package.icon": {
+    notes: ["512px or more looks sharp everywhere: Windows tiles go up to 300px and macOS icons to 1024px."],
+    example: "icon.png",
+  },
+  "package.protocols": { example: [{ scheme: "notes", name: "Notes link" }] },
+  "package.fileAssociations[].extensions": { example: ["note", "notes"] },
+  "package.fileAssociations[].name": { example: "Notes document" },
+  "package.windows.msix.appInstaller.url": { example: "https://downloads.example.com/notes" },
+  "package.windows.msix.publisher": {
+    notes: [
+      "Windows installs the package only when this equals the subject of the certificate it is signed with, character for character. `(Get-AuthenticodeSignature <signed file>).SignerCertificate.Subject` prints it.",
+    ],
+    example: 'E=support@example.com, CN="Example, Ltd.", O="Example, Ltd.", L=Springfield, C=US',
+  },
+  "package.windows.msix.capabilities": { example: ["microphone", "webcam"] },
+  "package.windows.msix.appInstaller": { example: { url: "https://downloads.example.com/notes" } },
+  "package.macos.dmg": {
+    platforms: "macOS: hdiutil, codesign and notarytool run on a Mac only.",
+    example: {
+      window: { width: 660, height: 400 },
+      background: "packaging/dmg-background.png",
+      notarize: { keychainProfile: "notes-notary" },
+    },
+  },
+  "package.macos.dmg.fileName": { example: "Notes-{arch}" },
+  "package.macos.dmg.format": {
+    values: {
+      ULFO: "LZFSE: quick to open, macOS 10.11 and later.",
+      ULMO: "LZMA: the smallest file, macOS 10.15 and later.",
+      UDZO: "zlib at its highest level: opens on any macOS.",
+      UDBZ: "bzip2.",
+    },
+  },
+  "package.macos.dmg.window": { example: { x: 200, y: 120, width: 660, height: 400 } },
+  "package.macos.dmg.appPosition": { example: { x: 180, y: 170 } },
+  "package.macos.dmg.applicationsPosition": { example: { x: 480, y: 170 } },
+  "package.macos.dmg.background": {
+    notes: [
+      "Make it the window's size; `background@2x.png` beside `background.png`, twice the size, is joined into one TIFF for Retina screens.",
+    ],
+    example: "packaging/dmg-background.png",
+  },
+  "package.macos.dmg.backgroundColor": { example: "#f4f1ea" },
+  "package.macos.dmg.sign": {
+    notes: [
+      "A signed image is what notarisation and Gatekeeper expect; the app inside is signed by `sk build` either way.",
+    ],
+    example: "Developer ID Application: Example Ltd (TEAM123456)",
+  },
+  "package.macos.dmg.notarize": {
+    notes: [
+      "Needs the app signed with a Developer ID Application identity in `macos.sign`. The app is notarised first and its ticket stapled, then the image is notarised and stapled.",
+      'A literal key, or a path to one, in `apiKey` is an error: name a variable as `"env:NAME"` that holds the `.p8` file\'s path or its contents.',
+    ],
+    example: { apiKey: "env:ASC_API_KEY", apiKeyId: "env:ASC_API_KEY_ID", apiIssuer: "env:ASC_API_ISSUER" },
+  },
+  "package.linux.appimage": {
+    notes: [
+      "Written on any OS: `sk package` builds the squashfs itself and needs neither `mksquashfs` nor `appimagetool`.",
+      "The image runs where the host's glibc does; `sk package` prints the version and the distributions that have it.",
+    ],
+    example: {
+      categories: ["Office"],
+      updateInformation: "gh-releases-zsync|example|notes|latest|Notes-*-x86_64.AppImage.zsync",
+    },
+  },
+  "package.linux.appimage.categories": { example: ["Office", "TextEditor"] },
+  "package.linux.appimage.compression": {
+    values: {
+      zstd: "Smaller, what appimagetool writes.",
+      gzip: "About a tenth larger, quicker to write.",
+    },
+  },
+  "package.linux.appimage.runtime": {
+    notes: [
+      "The pinned runtime is `runtime-x86_64` or `runtime-aarch64` of the AppImage/type2-runtime release 20251108, checked by SHA-256 and cached beside the hosts.",
+    ],
+    example: "packaging/runtime-x86_64",
+  },
+  "package.linux.appimage.updateInformation": {
+    example: "gh-releases-zsync|example|notes|latest|Notes-*-x86_64.AppImage.zsync",
+  },
+  "package.linux.appimage.signKey": {
+    notes: ["Signed as appimagetool signs: a detached signature of the image's SHA-256, checked by AppImageUpdate."],
+    example: "release@example.com",
+  },
+  "package.linux.appimage.license": { example: "MIT" },
+  "package.linux.appimage.homepage": { example: "https://example.com/notes" },
+  "package.linux.appimage.fileName": { example: "Notes-x86_64.AppImage" },
 };

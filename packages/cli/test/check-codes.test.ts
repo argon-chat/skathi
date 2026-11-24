@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { effectFindings, runCheck } from "../check";
 import { ALL_CODES, REGISTRY, RETIRED } from "../check/codes";
 import { parseCheckConfig } from "../check/config";
+import { packageFindings } from "../check/package";
+import { loadAppConfig } from "../cli/config";
+import { parsePackageConfig } from "../cli/package/config";
+import { validateDmg } from "../cli/package/dmg";
 import { explain } from "../check/report";
 import { analyzeCss, analyzeFrameworks, analyzeRules, analyzeUnit, FIXTURES } from "./check-fixtures";
 
@@ -79,6 +83,37 @@ describe("the code registry", () => {
     } finally {
       if (saved === undefined) delete process.env.SK_REDSLANGC;
       else process.env.SK_REDSLANGC = saved;
+    }
+    const packaged = mkdtempSync(join(FIXTURES, "check-package-"));
+    try {
+      writeFileSync(join(packaged, "main.ts"), "");
+      writeFileSync(join(packaged, "sk.config.json"), '{"name":"p","version":"1.0.0-beta.1","package":{"colour":1}}');
+      add(packageFindings(loadAppConfig(packaged), join(packaged, "sk.config.json"), ""));
+      writeFileSync(
+        join(packaged, "sk.config.json"),
+        JSON.stringify({
+          name: "p",
+          version: "1.0.0",
+          id: "com.example.p",
+          platforms: ["macos"],
+          package: {
+            macos: {
+              dmg: {
+                iconSize: "big",
+                background: "missing.png",
+                backgroundColor: "#ffffff",
+                notarize: { apiKey: "-----BEGIN PRIVATE KEY-----", apiKeyId: "ABC", apiIssuer: "x" },
+              },
+            },
+          },
+        }),
+      );
+      const dmgApp = loadAppConfig(packaged);
+      add(packageFindings(dmgApp, join(packaged, "sk.config.json"), ""));
+      const { config: dmgConfig } = parsePackageConfig(dmgApp);
+      add(validateDmg({ appRoot: packaged, app: dmgApp, config: dmgConfig, platform: "macos" }, "linux"));
+    } finally {
+      rmSync(packaged, { recursive: true, force: true });
     }
     expect([...REGISTRY.keys()].filter((code) => !seen.has(code))).toEqual([]);
   }, 60_000);

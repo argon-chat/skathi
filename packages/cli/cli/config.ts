@@ -96,6 +96,8 @@ export interface MacConfig {
   cameraUsageDescription: string | null;
   /** A codesign identity; `"-"` signs ad hoc; `false` leaves the bundle unsigned. `undefined`: ad hoc wherever `codesign` exists. */
   sign: string | false | undefined;
+  /** Merged over the derived entitlements when signing with an identity. */
+  entitlements: Record<string, boolean | string | string[]>;
 }
 
 export const MACOS_MINIMUM = "13.0";
@@ -227,11 +229,12 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "singleInstance",
   "raiseOnSecondInstance",
   "protocols",
+  "package",
 ]);
 
-const SCHEME = /^[a-z][a-z0-9+.-]{0,62}$/;
+export const SCHEME = /^[a-z][a-z0-9+.-]{0,62}$/;
 /** Schemes an app may never claim; the host refuses them too, this makes it a build error. */
-const RESERVED_SCHEMES = new Set([
+export const RESERVED_SCHEMES: ReadonlySet<string> = new Set([
   "http",
   "https",
   "file",
@@ -309,8 +312,9 @@ export const MACOS_KEYS: ReadonlySet<string> = new Set([
   "microphoneUsageDescription",
   "cameraUsageDescription",
   "sign",
+  "entitlements",
 ]);
-const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+export const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const CATEGORY = /^public\.app-category\.[a-z]+(-[a-z]+)*$/;
 
 function readMacos(
@@ -381,6 +385,26 @@ function readMacos(
     }
   }
 
+  const entitlements: MacConfig["entitlements"] = {};
+  if (m.entitlements !== undefined) {
+    const shape =
+      'sk.config.json "macos.entitlements" must map entitlement keys to true/false, a string or a list of strings, ' +
+      'e.g. { "com.apple.security.network.client": true }';
+    if (!m.entitlements || typeof m.entitlements !== "object" || Array.isArray(m.entitlements)) {
+      throw new ConfigError(shape);
+    }
+    for (const [key, value] of Object.entries(m.entitlements)) {
+      const list = Array.isArray(value) && value.every((v) => typeof v === "string");
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(key) ||
+        !(typeof value === "boolean" || typeof value === "string" || list)
+      ) {
+        throw new ConfigError(`${shape} — ${JSON.stringify(key)} is not one`);
+      }
+      entitlements[key] = value as boolean | string | string[];
+    }
+  }
+
   let iconPath = fallback.icon;
   const icon = str(m.icon, where("icon"));
   if (icon) {
@@ -403,6 +427,7 @@ function readMacos(
     microphoneUsageDescription: str(m.microphoneUsageDescription, where("microphoneUsageDescription")) ?? null,
     cameraUsageDescription: str(m.cameraUsageDescription, where("cameraUsageDescription")) ?? null,
     sign,
+    entitlements,
   };
 }
 const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts", "main.js"];

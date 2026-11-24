@@ -22,6 +22,7 @@ export const RANGES = [
   { from: 5000, to: 5999, what: "Vue and Svelte features that do not work, or work differently, in Skathi" },
   { from: 6000, to: 6999, what: "permissions and modules that reach outside the app" },
   { from: 7000, to: 7999, what: "the number types of skathi:numeric" },
+  { from: 8000, to: 8999, what: 'installable packages: sk.config.json "package"' },
 ] as const;
 
 const CODES: CodeInfo[] = [
@@ -450,6 +451,86 @@ const CODES: CodeInfo[] = [
     example:
       'import { i32, u8 } from "skathi:numeric";\n\nconst level = u8(200);\nconst offset = i32(-5);\nconst sum = level + offset;',
     fix: "Convert one side with the other type's function: `i32(level) + offset`, or `i32.add(i32(level), offset)` for a sum that wraps as an `i32`.",
+  },
+  {
+    code: "SK8001",
+    severity: "error",
+    title: 'sk.config.json "package" cannot be packaged as written',
+    explanation:
+      'A key of "package" has a value of the wrong type or shape, something a listed format needs is missing (an MSIX publisher, a reverse-DNS id), or a value would be refused by the system installing the package. `sk package` refuses to run until it is fixed; `check.allow` cannot hide it.',
+    example:
+      '"package": { "windows": { "formats": ["msix"], "msix": { "publisher": "CN=Example Ltd,O=Example Ltd" } } }',
+    fix: "Change the key the message names as it says; the packaging guide shows a complete section.",
+    firm: true,
+  },
+  {
+    code: "SK8002",
+    severity: "warning",
+    title: 'sk.config.json "package" builds, but the package will lack something',
+    explanation:
+      "The packages can be written, but they will miss something users notice: no icon, a prerelease version that installers cannot tell from its release, a URL scheme only the installed package handles, or a device the app uses that the package does not declare.",
+    example:
+      '"package": { "windows": { "formats": ["msix"], "msix": { "publisher": "CN=Example Ltd" } } } with no icon anywhere',
+    fix: "Add what the message names, or allow SK8002 for sk.config.json once the package is what you mean.",
+  },
+  {
+    code: "SK8201",
+    severity: "warning",
+    title: "a DMG is made on macOS only",
+    explanation:
+      "A disk image is written, signed and notarised with macOS's own tools (hdiutil, codesign, notarytool), so `sk package` writes one only on a Mac. `sk check` reports it as a warning on other systems so an app that also ships for macOS still passes there; `sk package` for macOS refuses to run elsewhere.",
+    example: '"platforms": ["windows", "macos"], checked on Windows',
+    fix: "Run sk package for macOS on a Mac (a macOS CI runner works); allow SK8201 for sk.config.json to silence it elsewhere.",
+  },
+  {
+    code: "SK8202",
+    severity: "error",
+    title: '"package.macos.dmg" has a value of the wrong type or range',
+    explanation:
+      "An option of the disk image is not what it takes: a size outside its range, a position that is not { x, y }, an unknown image format or notarisation settings of the wrong shape. `sk package` refuses to run until it is fixed.",
+    example: '"dmg": { "iconSize": "big" }',
+    fix: "Give the key the type and range the message names; the packaging guide shows a complete DMG section.",
+    firm: true,
+  },
+  {
+    code: "SK8203",
+    severity: "error",
+    title: "the DMG background image is missing or not a PNG or TIFF",
+    explanation:
+      'The image "package.macos.dmg.background" names is drawn behind the icons of the mounted disk image. It must exist, relative to the app root, and be a PNG or a TIFF.',
+    example: '"dmg": { "background": "assets/dmg-background.jpg" }',
+    fix: "Point it at a PNG or TIFF in the app (a <name>@2x.png beside a PNG is used on Retina displays), or remove the key.",
+    firm: true,
+  },
+  {
+    code: "SK8204",
+    severity: "error",
+    title: "a notarisation credential is written into sk.config.json",
+    explanation:
+      'An App Store Connect API key in sk.config.json ends up in the repository and in every copy of it. The key, its id and issuer are read from environment variables named as "env:NAME", or notarisation uses a keychain profile.',
+    example: '"notarize": { "apiKey": "-----BEGIN PRIVATE KEY-----…", "apiKeyId": "ABC123", "apiIssuer": "…" }',
+    fix: 'Write "apiKey": "env:NOTARY_KEY" (and the same for apiKeyId and apiIssuer) and set those variables where sk package runs, or use { "keychainProfile": "<profile>" }.',
+    firm: true,
+  },
+  {
+    code: "SK8205",
+    severity: "error",
+    title: "notarisation is asked for an app that is not signed with an identity",
+    explanation:
+      "Apple's notary service rejects an app signed ad hoc or not signed at all. Notarising the disk image needs the app signed with a Developer ID Application identity under the hardened runtime.",
+    example:
+      '"macos": { "sign": "-" }, "package": { "macos": { "dmg": { "notarize": { "keychainProfile": "notary" } } } }',
+    fix: 'Set "macos.sign" to the Developer ID Application identity, or remove "notarize".',
+    firm: true,
+  },
+  {
+    code: "SK8208",
+    severity: "warning",
+    title: "a DMG layout setting has no effect",
+    explanation:
+      "The disk image is written, but part of its window layout is not what the config says: a background colour that the background image covers, or an icon placed outside the window, where nobody sees it.",
+    example: '"dmg": { "background": "bg.png", "backgroundColor": "#ffffff" }',
+    fix: "Remove the setting that has no effect, or move the icon inside the window's size.",
   },
 ];
 

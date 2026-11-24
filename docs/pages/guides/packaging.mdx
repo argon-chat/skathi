@@ -1,0 +1,244 @@
+---
+title: Packaging an app for installation
+label: Packaging
+description: Turn a release build into an installer for each system with sk package, configured from sk.config.json.
+section: Guides
+order: 8
+---
+
+`sk build` and `sk publish` end at a folder with the program in it, or at a `.app` bundle on macOS. People install apps from a package: an MSIX on Windows, a disk image on macOS, an AppImage on Linux. `sk package` writes them from the `"package"` section of sk.config.json.
+
+## The command
+
+```sh
+sk package
+```
+
+It runs `sk publish`, then writes every format listed for the system it runs on into `<app>/dist/package`, and prints each file with its kind: `installer` for what people install, `update` for what an updater reads.
+
+| Option                            | What it does                                                                                                                                                            |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--format <list>`                 | Only these formats, comma-separated, instead of `package.<os>.formats`.                                                                                                 |
+| `--out <dir>`                     | Write here instead of `package.out` or `dist/package`.                                                                                                                  |
+| `--no-build`                      | Package what the last `sk publish` wrote to `<app>/dist/release`.                                                                                                       |
+| `--from <dir>` and `--exe <file>` | Package a folder you built another way, such as the output of a Rust program that embeds Skathi. Everything in the folder goes in, except dot-folders and `.pdb` files. |
+| `--config <path>`                 | An sk.config.json outside the app.                                                                                                                                      |
+| `--json`                          | Print the written files as JSON.                                                                                                                                        |
+
+Before it builds anything, `sk package` reads the whole `"package"` section and stops with every mistake it finds, each with the key it is about. `sk check` reports the same mistakes as SK8001 (errors) and SK8002 (warnings), and each format's own codes, for the systems in `"platforms"`. A format that can be written only on its own system, such as a DMG, is refused on another one before anything is built, with `--platform` naming where to run it; an MSIX can be written on any system.
+
+## The package section
+
+```json
+{
+  "name": "notes",
+  "productName": "Notes",
+  "version": "1.4.0",
+  "id": "com.example.notes",
+  "singleInstance": true,
+  "protocols": ["notes"],
+  "package": {
+    "publisher": "Example Ltd",
+    "icon": "icon.png",
+    "fileAssociations": [{ "extensions": ["note"], "name": "Notes document", "mimeType": "application/x-notes" }],
+    "windows": {
+      "formats": ["msix"],
+      "msix": { "publisher": "CN=\"Example, Ltd.\", O=\"Example, Ltd.\", C=US" }
+    },
+    "macos": { "formats": ["dmg"] },
+    "linux": { "formats": ["appimage"] }
+  }
+}
+```
+
+Most keys have defaults from the rest of the config, so a short section is enough:
+
+- **Identity.** `displayName` defaults to `productName`, `version` to the app's version, `description` to `windows.description`, and `publisher` to `windows.company`. `id` is the reverse-DNS name the systems know the package by; it defaults to `macos.bundleId`, else to the top-level `"id"`. Installers compare versions as numbers only, so a prerelease such as `1.4.0-beta.1` is packaged as `1.4.0`, with a warning.
+- **Icon.** A square PNG of 512px or more, or an `.ico` with PNG images. Each format scales it to the sizes it needs. It defaults to `macos.icon` or `windows.icon`.
+- **File types.** Each entry of `fileAssociations` names the extensions (without the dot), what users see as the type's name, and optionally its MIME type, its own icon and a `role` (`"editor"`, `"viewer"` or `"none"`, which macOS shows in Open With). When the installed app is opened with a file, the file's path arrives in `appLaunch.argv`.
+- **URL schemes.** `protocols` defaults to the top-level `"protocols"`. Keep a scheme in both: the top-level list is what a build run without installing registers at start, and the package's list is what the installed package declares.
+- **Formats.** `formats` under `windows`, `macos` and `linux` lists what `sk package` writes on that system. Left out, it is every format the system has.
+
+The [config reference](/sk-config/#installable-packages) lists every key with its type and default.
+
+## Windows: MSIX
+
+An MSIX is the package Windows installs from a double click, from `Add-AppxPackage` or from the Microsoft Store, and removes cleanly. `sk package` writes it without the Windows SDK: the program and everything beside it, `AppxManifest.xml`, tile images made from the icon, and the block map that Windows checks every 64 KiB of the package against.
+
+The app is declared a full-trust desktop app (`runFullTrust`), so it runs as it does without the package: same window, same file access, no app container.
+
+### The publisher is the certificate's subject
+
+Windows installs only signed packages, and only when `package.windows.msix.publisher` equals the subject of the signing certificate, character for character: the same attributes in the same order, `E=` included, quoted values with their commas. Copy it from the certificate, or from a file signed with it:
+
+```powershell
+(Get-AuthenticodeSignature .\SomeSignedApp.exe).SignerCertificate.Subject
+(Get-PfxCertificate .\certificate.pfx).Subject
+```
+
+The value is written as Windows prints it: attributes joined by a comma and one space, a value that contains a comma in double quotes.
+
+```json
+"msix": { "publisher": "E=support@example.com, CN=\"Example, Ltd.\", O=\"Example, Ltd.\", L=Springfield, C=US" }
+```
+
+`sk package` prints the publisher it wrote, so a mismatch is easy to spot. When they differ, `signtool` fails with error 0x8007000B ("the app manifest publisher name must match the subject name of the signing certificate"); fix the config, run `sk package` again, and sign the new file. `package.publisher` is only the name users see; it defaults to the subject's `O`.
+
+### Signing
+
+The package is written unsigned. Sign it with `signtool` from the Windows SDK and the certificate whose subject is the publisher, with a timestamp so the signature outlives the certificate:
+
+```powershell
+signtool sign /fd SHA256 /a /f .\certificate.pfx /p $password /tr http://timestamp.digicert.com /td SHA256 .\dist\package\com.example.notes_1.4.0.0_x64.msix
+```
+
+A certificate in the user's store is picked with `/n "<subject CN>"` or `/sha1 <thumbprint>` instead of `/f`. To try a package on your own machine without a trusted certificate, sign it with a self-signed certificate whose subject is the publisher and add that certificate to Trusted People first.
+
+Then install it:
+
+```powershell
+Add-AppxPackage .\dist\package\com.example.notes_1.4.0.0_x64.msix
+```
+
+### Updates from a URL
+
+With `appInstaller`, `sk package` also writes `<identityName>.appinstaller`. Upload it and the `.msix` to the folder `url` names, and install from the `.appinstaller`: Windows then looks for a newer version there on launch and every `hoursBetweenUpdateChecks` hours. Each release needs a higher version.
+
+```json
+"msix": {
+  "publisher": "CN=\"Example, Ltd.\", O=\"Example, Ltd.\", C=US",
+  "appInstaller": { "url": "https://downloads.example.com/notes", "hoursBetweenUpdateChecks": 12 }
+}
+```
+
+### How the installed app behaves
+
+- **Data.** The app keeps its data in `%LOCALAPPDATA%\<name>`, as without the package. Inside a package, Windows redirects files the app creates under `AppData` to a private folder of the package and shows them at the usual path, and deletes them when the package is removed. Files that were already there, from a copy of the app installed without the package, are read and changed in place, so the packaged app starts with that copy's data.
+- **One instance.** `singleInstance` works as it does without the package: a second launch, a link or a file opened from Explorer goes to the running app. A copy installed from the package and one installed without it share the instance (same `id` and `name`, same user) but are different program files, so while one runs, starting the other ends without a window. Install one or the other.
+- **Links and file types.** The package declares the URL schemes and file types; the app does not register them itself at start, as it does without a package.
+- **Devices.** A packaged app gets the microphone, the camera or the location only when the package declares it: list `"microphone"`, `"webcam"` or `"location"` in `capabilities`. `sk check` warns when `macos.microphoneUsageDescription` or `macos.cameraUsageDescription` is set and the capability is missing.
+- **Same build, both ways.** The program in the package is the one `sk publish` writes, so one build can ship as an MSIX and as a plain folder or classic installer.
+
+The program and its files are read-only once installed; write to `%LOCALAPPDATA%`, never beside the program.
+
+## macOS: DMG
+
+A disk image is what people download on macOS: they open it, and a Finder window shows the app beside a link to Applications to drag it onto. `sk package` makes it with the system's own tools (`hdiutil`, `codesign`, `xcrun notarytool`), so it runs on a Mac only; on another system `sk check` warns about it and `sk package` refuses. Nothing has to be installed beyond the Xcode command line tools that `sk build` already needs.
+
+The window's layout is written into the image as Finder's `.DS_Store` file, without scripting Finder, so it works over ssh and on CI runners without a screen:
+
+```json
+"macos": {
+  "formats": ["dmg"],
+  "dmg": {
+    "window": { "width": 660, "height": 400 },
+    "iconSize": 128,
+    "appPosition": { "x": 180, "y": 170 },
+    "applicationsPosition": { "x": 480, "y": 170 },
+    "background": "packaging/dmg-background.png"
+  }
+}
+```
+
+Every key is optional; the values above are the defaults, except that without `background` the window is plain (or `backgroundColor`). Positions are icon centres in points from the window's top-left corner. Make the background the window's size, and put a `dmg-background@2x.png` of twice that size beside it for Retina screens: the two become one TIFF. The image is named `<displayName>-<version>-<arch>.dmg` unless `fileName` says otherwise, and it gets the app's icon as its volume icon.
+
+### Signing and notarisation
+
+The app inside is the one `sk build` signed. With a Developer ID Application identity in `macos.sign`, that signature already has what notarisation needs: the hardened runtime, a secure timestamp and the entitlements, which are the JIT, the microphone and the camera when their usage descriptions are set, plus anything in `macos.entitlements`. The image is signed with the same identity (`dmg.sign` picks another, `false` none); an ad hoc app gives an unsigned image.
+
+Notarisation sends the app, then the image, to Apple's notary service and staples each ticket, so Gatekeeper accepts the app even offline, whether it is run from the image or after it is copied out:
+
+```json
+"dmg": { "notarize": { "keychainProfile": "notes-notary" } }
+```
+
+The profile is one saved once on the Mac with `xcrun notarytool store-credentials notes-notary`. On a CI runner, use an App Store Connect API key from the environment instead:
+
+```json
+"dmg": {
+  "notarize": { "apiKey": "env:ASC_API_KEY", "apiKeyId": "env:ASC_API_KEY_ID", "apiIssuer": "env:ASC_API_ISSUER" }
+}
+```
+
+`ASC_API_KEY` holds the `.p8` file's path or its contents; contents are written to a private file for `notarytool` and removed afterwards. The key itself, or a path to it, in sk.config.json is an error, since the file ends up in the repository. A rejected submission stops `sk package` with notarytool's log of what Apple refused.
+
+Hosts are published for Apple silicon only, so the image holds an arm64 app; there is no universal (arm64 and x86_64) build yet.
+
+## Linux: AppImage
+
+An AppImage is one executable file that carries the whole app: people download it, mark it executable and run it, with nothing installed and nothing left behind. `sk package` writes it on any system, Windows and macOS included: it builds the image's file system itself, so neither `mksquashfs` nor `appimagetool` is needed.
+
+The file is the AppImage runtime followed by a squashfs of the app folder:
+
+```
+AppRun -> usr/lib/Notes/Notes           the program sk publish wrote
+com.example.notes.desktop               the desktop entry
+com.example.notes.png, .DirIcon         the icon, 256px
+usr/lib/Notes/                          the program, its packs, icu.skpk and the app's own libraries
+usr/bin/Notes -> ../lib/Notes/Notes
+usr/share/applications/                 the desktop entry again, for tools that install it
+usr/share/icons/hicolor/<size>/apps/    the icon at 16 to 512px
+usr/share/metainfo/                     AppStream metainfo, for software centres
+usr/share/mime/packages/                the app's own file types, when it has some
+```
+
+The desktop entry takes its name, description and icon from the package identity, the MIME types from `fileAssociations` and an `x-scheme-handler/<scheme>` for each URL scheme. Every option is optional:
+
+```json
+"linux": {
+  "formats": ["appimage"],
+  "appimage": {
+    "categories": ["Office"],
+    "license": "MIT",
+    "homepage": "https://example.com/notes",
+    "updateInformation": "gh-releases-zsync|example|notes|latest|Notes-*-x86_64.AppImage.zsync",
+    "signKey": "release@example.com"
+  }
+}
+```
+
+The image is named `<displayName>-<version>-x86_64.AppImage` unless `fileName` says otherwise; `compression` picks `"zstd"` (the default, as appimagetool) or `"gzip"`.
+
+### Which distributions it runs on
+
+The program inside is the host `sk publish` stamped, linked against the C library of the machine it was built on, and it runs only where that glibc version or a newer one is installed. Skathi's published Linux hosts are built on Ubuntu 22.04 and need **glibc 2.35 or newer**:
+
+| Runs on                                   | Does not run on                   |
+| ----------------------------------------- | --------------------------------- |
+| Ubuntu 22.04 and later, Linux Mint 21     | Ubuntu 20.04 and Linux Mint 20    |
+| Debian 12 and later                       | Debian 11                         |
+| Fedora 36 and later                       | RHEL, AlmaLinux and Rocky Linux 9 |
+| RHEL, AlmaLinux and Rocky Linux 10        |                                   |
+| Arch Linux, openSUSE Tumbleweed (rolling) |                                   |
+
+A host you build yourself needs the glibc of the machine you build it on. `sk package` reads the newest glibc version the program asks for and prints it with the first release of each distribution that has it:
+
+```
+the host needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36, RHEL 10 or later
+```
+
+The image does not carry the system libraries the host links: OpenSSL 3 (`libssl.so.3`), ALSA (`libasound.so.2`), `libxcb`, `libxkbcommon` and `libxkbcommon-x11`, and `libstdc++`. A desktop installation has them; a minimal container or WSL image may not. The runtime mounts the image with FUSE (`fusermount3` or `fusermount`); where FUSE is missing, `./Notes-1.4.0-x86_64.AppImage --appimage-extract-and-run` unpacks it to a temporary folder and runs it from there.
+
+### The runtime
+
+The runtime is the small static program at the front of the file that mounts the rest. `sk package` downloads `runtime-x86_64` (or `runtime-aarch64`) of the [AppImage/type2-runtime](https://github.com/AppImage/type2-runtime) release 20251108, checks it against the SHA-256 it pins, and caches it beside the hosts. For a build without network access, download that file once and point `runtime` at it:
+
+```json
+"appimage": { "runtime": "packaging/runtime-x86_64" }
+```
+
+### Desktop integration
+
+An AppImage is not installed, so the system knows nothing of its desktop entry until a tool such as AppImageLauncher or Gear Lever integrates it; from then on the app is in the menu, opens its file types and handles its links. A link-only app is started as `Notes --sk-protocol-launch -- %u`, so the link arrives in `appLaunch.url`. The desktop entry has a single command line, so an app that also opens files is started as `Notes %U` and a link arrives as a plain argument in `appLaunch.argv`; `sk check` warns about it.
+
+### Updates and signatures
+
+`updateInformation` is written into the runtime's `.upd_info` section, where AppImageUpdate and the integration tools look for it. `gh-releases-zsync` points at a file pattern of a GitHub release; `zsync|<url>` at a fixed URL. When `zsyncmake` (from the `zsync` package) is on `PATH`, `sk package` also writes `<image>.zsync` beside the image, the file an updater downloads first to fetch only the blocks that changed. Upload both with each release.
+
+`signKey` signs the image as appimagetool does: GnuPG signs the image's SHA-256, and the signature and the public key go into the runtime's `.sha256_sig` and `.sig_key` sections, where AppImageUpdate checks them. It needs `gpg` on `PATH` and the key in its keyring; a passphrase comes from `gpg-agent`.
+
+### How the image behaves
+
+- **Data.** The app keeps its data in `~/.local/share/<name>`, as without the image; the image itself is read-only.
+- **Programs the app starts.** Inside an image the runtime sets `APPIMAGE`, `APPDIR`, `ARGV0` and `OWD` and adds the mount to search paths. `skathi:process` leaves those four variables out of a child's environment and drops the mount's entries from `PATH`-like variables, so a program the app starts runs as it would outside the image.
+- **Restarting.** `app.restart()` starts the `.AppImage` file again, not the program inside the mount, which goes away with the running app.

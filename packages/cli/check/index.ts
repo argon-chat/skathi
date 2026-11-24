@@ -14,6 +14,7 @@ import { diagnosticsOf, PLATFORM, posix, rangeOf, ZERO_RANGE, type Finding } fro
 import { frameworkFindings, readFrameworkSources } from "./frameworks";
 import { BundleLiveness } from "./bundle";
 import { buildGraph, GraphFailure, type ModuleGraph } from "./graph";
+import { packageFindings } from "./package";
 import { Packages } from "./packages";
 import { allowedOf, PermissionRules, type Allowed } from "./permissions";
 import { buildProgram, readUnits, type TypeScript } from "./program";
@@ -79,7 +80,10 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   requireAppDependencies(config.appRoot, dirname(config.entry));
   const configFile = config.configPath ?? join(config.appRoot, "sk.config.json");
   const checkConfig = parseCheckConfig(config.raw.check);
-  const configText = checkConfig.problems.length ? readFileSync(configFile, "utf8").replace(/^﻿/, "") : "";
+  const configText =
+    checkConfig.problems.length || config.raw.package !== undefined
+      ? readFileSync(configFile, "utf8").replace(/^﻿/, "")
+      : "";
   const findings: Finding[] = checkConfig.problems.map(({ message, key }) => {
     const at = configText.indexOf(JSON.stringify(key));
     const before = configText.slice(0, Math.max(0, at)).split("\n");
@@ -99,6 +103,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const typescript = loadTypeScript(config.appRoot);
   const base = { typescript, root: config.appRoot, entry: config.entry, toolVersion: options.toolVersion, progress };
   if (findings.length) return analyze({ ...base, modules: [], findings });
+  findings.push(...packageFindings(config, configFile, configText));
   findings.push(...(await effectFindings(config.appRoot, progress)));
 
   progress.step("module graph");

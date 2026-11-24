@@ -385,6 +385,438 @@
         "sign": {
           "description": "A codesign identity, \"-\" to sign ad hoc, or false to leave the bundle unsigned. Default: ad hoc where codesign exists.",
           "oneOf": [{ "type": "string", "minLength": 1, "pattern": "\\S" }, { "const": false }]
+        },
+        "entitlements": {
+          "description": "Entitlements added to the ones sk build derives (the JIT, and the microphone and camera when their usage descriptions are set), applied when the app is signed with an identity under the hardened runtime. A key given here wins over a derived one.",
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*$" },
+          "additionalProperties": {
+            "oneOf": [{ "type": "boolean" }, { "type": "string" }, { "type": "array", "items": { "type": "string" } }]
+          }
+        }
+      },
+      "patternProperties": { "^\\$": {} },
+      "additionalProperties": false
+    },
+    "package": {
+      "description": "Installable packages written by sk package: who ships the app, its icon, file types and URL schemes, and the formats per OS. Unknown keys are errors.",
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "description": "The name users see in the Start menu, Finder and the desktop entry. Default: productName.",
+          "type": "string",
+          "minLength": 1
+        },
+        "publisher": {
+          "description": "The person or company shipping the app, as users see it. Default: windows.company.",
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "description": "Reverse-DNS identity of the package (\"com.example.notes\"). Default: macos.bundleId when set, else id with \"_\" as \"-\".",
+          "type": "string",
+          "pattern": "^\\s*[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+\\s*$"
+        },
+        "version": {
+          "description": "The packages' version: up to four numbers. Default: version without a prerelease part.",
+          "type": "string",
+          "pattern": "^\\s*v?\\d+(\\.\\d+){0,3}([-+].*)?\\s*$"
+        },
+        "description": {
+          "description": "One line about the app. Default: windows.description, else displayName.",
+          "type": "string",
+          "minLength": 1
+        },
+        "copyright": {
+          "description": "Default: windows.copyright, else macos.copyright, else \"© <publisher>\".",
+          "type": "string",
+          "minLength": 1
+        },
+        "icon": {
+          "description": "A square .png (512px or more) or an .ico, or a list of square .png files of different sizes, relative to the app root. Default: macos.icon or windows.icon.",
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          ]
+        },
+        "fileAssociations": {
+          "description": "File types the installed app opens. The path of the opened file arrives in appLaunch.argv.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "extensions": {
+                "description": "Extensions without the dot (\"note\"). Each may appear in one association only.",
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^\\s*\\.?[A-Za-z0-9][A-Za-z0-9_+-]{0,63}\\s*$" }
+              },
+              "name": {
+                "description": "The file type's name as users see it (\"Notes document\").",
+                "type": "string",
+                "minLength": 1
+              },
+              "mimeType": {
+                "description": "The MIME type of these files (\"application/x-notes\").",
+                "type": "string",
+                "pattern": "^\\s*[A-Za-z0-9][\\w.+-]*/[A-Za-z0-9][\\w.+-]*\\s*$"
+              },
+              "role": {
+                "description": "What the app does with these files; macOS shows it in Open With. Default: \"editor\".",
+                "enum": ["editor", "viewer", "none"]
+              },
+              "icon": {
+                "description": "A square .png for files of this type, relative to the app root. Default: the app's icon.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["extensions", "name"],
+            "patternProperties": { "^\\$": {} },
+            "additionalProperties": false
+          }
+        },
+        "protocols": {
+          "description": "URL schemes the installed package registers. Default: the top-level protocols, named after displayName.",
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "pattern": "^\\s*[A-Za-z][A-Za-z0-9+.-]{0,62}(:/*)?\\s*$" },
+              {
+                "type": "object",
+                "properties": {
+                  "scheme": {
+                    "description": "The scheme (\"notes\" for notes://...).",
+                    "type": "string",
+                    "pattern": "^\\s*[A-Za-z][A-Za-z0-9+.-]{0,62}(:/*)?\\s*$"
+                  },
+                  "name": {
+                    "description": "The name shown where the system names the link's handler. Default: displayName.",
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["scheme"],
+                "patternProperties": { "^\\$": {} },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "out": {
+          "description": "Where sk package writes, relative to the app root. Default: dist/package.",
+          "type": "string",
+          "minLength": 1
+        },
+        "windows": {
+          "description": "Packages for Windows. Unknown keys are errors.",
+          "type": "object",
+          "properties": {
+            "formats": {
+              "description": "What sk package writes on Windows. Default: [\"msix\"].",
+              "type": "array",
+              "items": { "enum": ["msix"] }
+            },
+            "msix": {
+              "description": "The MSIX package. Unknown keys are errors.",
+              "type": "object",
+              "properties": {
+                "publisher": {
+                  "description": "The subject of the certificate the package is signed with, exactly as Windows prints it: E=..., CN=\"Example, Ltd.\", O=..., C=US. Required for MSIX.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "identityName": {
+                  "description": "The package name Windows identifies the app by: 3 to 50 letters, digits, \".\" and \"-\". Default: package.id.",
+                  "type": "string",
+                  "pattern": "^\\s*[A-Za-z0-9.-]{3,50}\\s*$"
+                },
+                "architecture": {
+                  "description": "The processor the package is for. Default: the architecture sk runs on.",
+                  "enum": ["x64", "arm64", "x86", "neutral"]
+                },
+                "minVersion": {
+                  "description": "The oldest Windows that installs the package.",
+                  "type": "string",
+                  "pattern": "^\\s*\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}\\s*$",
+                  "default": "10.0.17763.0"
+                },
+                "maxVersionTested": {
+                  "description": "The newest Windows the app was tested on.",
+                  "type": "string",
+                  "pattern": "^\\s*\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}\\.\\d{1,5}\\s*$",
+                  "default": "10.0.26100.0"
+                },
+                "capabilities": {
+                  "description": "What the package declares beside runFullTrust; a device the app uses (microphone, webcam, location) must be listed for Windows to grant it.",
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "internetClient",
+                      "internetClientServer",
+                      "privateNetworkClientServer",
+                      "documentsLibrary",
+                      "picturesLibrary",
+                      "videosLibrary",
+                      "musicLibrary",
+                      "removableStorage",
+                      "enterpriseAuthentication",
+                      "sharedUserCertificates",
+                      "userAccountInformation",
+                      "contacts",
+                      "appointments",
+                      "broadFileSystemAccess",
+                      "unvirtualizedResources",
+                      "allowElevation",
+                      "microphone",
+                      "webcam",
+                      "location",
+                      "bluetooth",
+                      "proximity",
+                      "radios",
+                      "serialcommunication",
+                      "usb",
+                      "humaninterfacedevice",
+                      "gazeInput"
+                    ]
+                  }
+                },
+                "background": {
+                  "description": "The tile background: \"transparent\" or #rrggbb.",
+                  "type": "string",
+                  "pattern": "^\\s*(transparent|#[0-9a-fA-F]{6})\\s*$",
+                  "default": "transparent"
+                },
+                "appInstaller": {
+                  "description": "Also write <identityName>.appinstaller, through which installed copies update from url. Unknown keys are errors.",
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "description": "The https folder the .msix and the .appinstaller are uploaded to.",
+                      "type": "string",
+                      "pattern": "^\\s*https://\\S+$"
+                    },
+                    "hoursBetweenUpdateChecks": {
+                      "description": "Hours between checks for an update, 0 to 255.",
+                      "type": "integer",
+                      "minimum": 0,
+                      "default": 24
+                    },
+                    "showPrompt": {
+                      "description": "Ask the user before updating on launch.",
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "updateBlocksActivation": {
+                      "description": "Wait for a found update to install before the app starts.",
+                      "type": "boolean",
+                      "default": false
+                    }
+                  },
+                  "required": ["url"],
+                  "patternProperties": { "^\\$": {} },
+                  "additionalProperties": false
+                }
+              },
+              "patternProperties": { "^\\$": {} },
+              "additionalProperties": false
+            }
+          },
+          "patternProperties": { "^\\$": {} },
+          "additionalProperties": false
+        },
+        "macos": {
+          "description": "Packages for macOS. Unknown keys are errors.",
+          "type": "object",
+          "properties": {
+            "formats": {
+              "description": "What sk package writes on macOS. Default: [\"dmg\"].",
+              "type": "array",
+              "items": { "enum": ["dmg"] }
+            },
+            "dmg": {
+              "description": "The disk image: the app, a link to Applications and the Finder window they open in. Unknown keys are errors.",
+              "type": "object",
+              "properties": {
+                "volumeName": {
+                  "description": "The name of the mounted volume, shown in Finder's sidebar and window title. Default: package.displayName.",
+                  "type": "string",
+                  "pattern": "^[^:/]+$"
+                },
+                "fileName": {
+                  "description": "The image's file name without .dmg; {arch} is replaced by arm64 or x64. Default: \"<displayName>-<version>-{arch}\".",
+                  "type": "string",
+                  "pattern": "^[^:/\\\\]+$"
+                },
+                "format": {
+                  "description": "The compression: ULFO (LZFSE), ULMO (LZMA, smaller, slower to build), UDZO (zlib) or UDBZ (bzip2). Default: ULFO.",
+                  "enum": ["ULFO", "ULMO", "UDZO", "UDBZ"]
+                },
+                "window": {
+                  "description": "The Finder window, in points: its top-left corner on screen and its size. Default: { \"x\": 200, \"y\": 120, \"width\": 660, \"height\": 400 }.",
+                  "type": "object",
+                  "properties": {
+                    "x": { "description": "The window's left edge on screen.", "type": "integer", "minimum": 0 },
+                    "y": { "description": "The window's top edge on screen.", "type": "integer", "minimum": 0 },
+                    "width": {
+                      "description": "The window's width.",
+                      "type": "integer",
+                      "minimum": 200,
+                      "maximum": 4000
+                    },
+                    "height": {
+                      "description": "The window's height.",
+                      "type": "integer",
+                      "minimum": 150,
+                      "maximum": 4000
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "iconSize": {
+                  "description": "The icons' size in points. Default: 128.",
+                  "type": "integer",
+                  "minimum": 16,
+                  "maximum": 512
+                },
+                "textSize": {
+                  "description": "The labels' size in points. Default: 13.",
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 16
+                },
+                "appPosition": {
+                  "description": "The centre of the app's icon, in points from the window's top-left corner. Default: { \"x\": 180, \"y\": 170 }.",
+                  "$ref": "#/definitions/dmgPoint"
+                },
+                "applicationsPosition": {
+                  "description": "The centre of the Applications link's icon. Default: { \"x\": 480, \"y\": 170 }.",
+                  "$ref": "#/definitions/dmgPoint"
+                },
+                "background": {
+                  "description": "A PNG or TIFF drawn behind the icons, relative to the app root, the size of the window. A <name>@2x.png beside a PNG is used on Retina screens.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "backgroundColor": {
+                  "description": "The window's colour as #rrggbb when there is no background image.",
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                },
+                "volumeIcon": {
+                  "description": "Give the mounted volume the app's icon. Default: true.",
+                  "type": "boolean"
+                },
+                "sign": {
+                  "description": "A codesign identity for the image, or false to leave it unsigned. Default: macos.sign when it is an identity; an ad hoc app gives an unsigned image.",
+                  "oneOf": [{ "type": "string", "minLength": 1, "pattern": "^(?!-$)\\S" }, { "const": false }]
+                },
+                "notarize": {
+                  "description": "Notarise the app and the image with notarytool and staple the tickets to both. Credentials are a keychain profile or an App Store Connect API key named by environment variables, never the key itself. Default: off.",
+                  "oneOf": [
+                    { "const": false },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "keychainProfile": {
+                          "description": "A profile saved with xcrun notarytool store-credentials.",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "keychain": {
+                          "description": "The keychain holding the profile. Default: the login keychain.",
+                          "type": "string"
+                        },
+                        "apiKey": {
+                          "description": "\"env:NAME\": the variable holding the .p8 file's path or its contents.",
+                          "type": "string",
+                          "pattern": "^env:[A-Za-z_][A-Za-z0-9_]*$"
+                        },
+                        "apiKeyId": {
+                          "description": "The key's id, or \"env:NAME\".",
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "apiIssuer": {
+                          "description": "The issuer id, or \"env:NAME\".",
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "oneOf": [
+                        { "required": ["keychainProfile"], "not": { "required": ["apiKey"] } },
+                        { "required": ["apiKey", "apiKeyId", "apiIssuer"], "not": { "required": ["keychainProfile"] } }
+                      ],
+                      "patternProperties": { "^\\$": {} },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "patternProperties": { "^\\$": {} },
+              "additionalProperties": false
+            }
+          },
+          "patternProperties": { "^\\$": {} },
+          "additionalProperties": false
+        },
+        "linux": {
+          "description": "Packages for Linux. Unknown keys are errors.",
+          "type": "object",
+          "properties": {
+            "formats": {
+              "description": "What sk package writes on Linux. Default: [\"appimage\"].",
+              "type": "array",
+              "items": { "enum": ["appimage"] }
+            },
+            "appimage": {
+              "description": "The AppImage: the AppImage runtime followed by a squashfs of the app, its desktop entry and icons. Unknown keys are errors.",
+              "type": "object",
+              "properties": {
+                "categories": {
+                  "description": "Desktop Menu categories for the desktop entry; include a main one such as Office or Development. Default: [\"Utility\"].",
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" }
+                },
+                "compression": {
+                  "description": "How the squashfs is compressed: zstd (as appimagetool) or gzip (larger, quicker to write). Default: \"zstd\".",
+                  "enum": ["zstd", "gzip"]
+                },
+                "runtime": {
+                  "description": "A local AppImage type-2 runtime file, for builds without network access. Default: the pinned runtime, downloaded once and cached.",
+                  "type": "string"
+                },
+                "updateInformation": {
+                  "description": "Update information embedded in the image, read by AppImageUpdate and other updaters: zsync|<url>, gh-releases-zsync|<owner>|<repo>|<tag>|<file pattern> or pling-v1-zsync|<id>|<file pattern>. With zsyncmake on PATH, sk package also writes <image>.zsync.",
+                  "type": "string",
+                  "pattern": "^(zsync|gh-releases-zsync|pling-v1-zsync)\\|"
+                },
+                "signKey": {
+                  "description": "A GnuPG key (id, fingerprint or e-mail) that signs the image; the signature and the public key are embedded in it. Needs gpg on PATH. Default: unsigned.",
+                  "type": "string"
+                },
+                "license": {
+                  "description": "The app's license as an SPDX expression, for the AppStream metainfo.",
+                  "type": "string"
+                },
+                "homepage": {
+                  "description": "The app's web page, for the AppStream metainfo.",
+                  "type": "string",
+                  "pattern": "^https?://"
+                },
+                "fileName": {
+                  "description": "The image's file name. Default: \"<displayName>-<version>-<x86_64|aarch64>.AppImage\", spaces in the name replaced by _.",
+                  "type": "string",
+                  "pattern": "^[^/\\\\]+\\.AppImage$"
+                }
+              },
+              "patternProperties": { "^\\$": {} },
+              "additionalProperties": false
+            }
+          },
+          "patternProperties": { "^\\$": {} },
+          "additionalProperties": false
         }
       },
       "patternProperties": { "^\\$": {} },
@@ -392,6 +824,15 @@
     }
   },
   "definitions": {
+    "dmgPoint": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "y": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      },
+      "required": ["x", "y"],
+      "additionalProperties": false
+    },
     "colorPicker": {
       "description": "What <input type=\"color\"> opens. \"builtin\": Skathi's picker, drawn in the window under the input. \"system\": the OS color dialog (ChooseColor on Windows, NSColorPanel on macOS, zenity or kdialog on Linux).",
       "enum": ["builtin", "system"]

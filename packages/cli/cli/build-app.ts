@@ -414,7 +414,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
   const info = macInfoFor(config, !!icon);
   const noJit = host.info.features.includes("no-jit");
   const entitlementsPath = join(work, "entitlements.plist");
-  writeFileSync(entitlementsPath, plistXml(entitlements(info, !noJit)));
+  writeFileSync(entitlementsPath, plistXml({ ...entitlements(info, !noJit), ...m.entitlements }));
 
   const out = join(outDir, `${m.exeName}.app`);
   const onMac = process.platform === "darwin";

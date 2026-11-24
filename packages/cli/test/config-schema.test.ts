@@ -15,6 +15,9 @@ import {
   WINDOWS_KEYS,
 } from "../cli/config";
 import { CONFIG_SCHEMA, create } from "../cli/create";
+import { FILE_ASSOCIATION_KEYS, PACKAGE_KEYS, platformKeys, PROTOCOL_KEYS } from "../cli/package/config";
+import { APP_INSTALLER_KEYS, MSIX_KEYS } from "../cli/package/msix";
+import { PLATFORMS } from "../cli/platform";
 
 interface Schema {
   type?: string;
@@ -60,6 +63,21 @@ describe("the schema and the loader know the same keys", () => {
       expect(s?.additionalProperties).toBe(false);
       expect(Object.keys(s?.patternProperties ?? {})).toEqual(["^\\$"]);
     }
+  });
+
+  test("package and its MSIX options", () => {
+    const pkg = schema.properties?.package;
+    expect(props(pkg)).toEqual(sorted(PACKAGE_KEYS));
+    expect(props(pkg?.properties?.fileAssociations?.items)).toEqual(sorted(FILE_ASSOCIATION_KEYS));
+    const protocol = (pkg?.properties?.protocols?.items as { oneOf?: Schema[] } | undefined)?.oneOf?.find(
+      (b) => b.properties,
+    );
+    expect(props(protocol)).toEqual(sorted(PROTOCOL_KEYS));
+    for (const platform of PLATFORMS)
+      expect(props(pkg?.properties?.[platform])).toEqual(sorted(platformKeys(platform)));
+    const msix = pkg?.properties?.windows?.properties?.msix;
+    expect(props(msix)).toEqual(sorted(MSIX_KEYS));
+    expect(props(msix?.properties?.appInstaller)).toEqual(sorted(APP_INSTALLER_KEYS));
   });
 
   test("every key has a description", () => {

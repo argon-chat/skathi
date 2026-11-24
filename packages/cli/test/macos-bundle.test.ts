@@ -496,6 +496,8 @@ describe('sk.config.json "macos"', () => {
     bad({ sign: true });
     bad({ microphoneUsageDescription: 3 });
     bad({ icon: "missing.png" });
+    bad({ entitlements: { "com.apple.security.cs.allow-jit": 1 } });
+    bad({ entitlements: ["com.apple.security.cs.allow-jit"] });
     expect(() => loadAppConfig(app({ macos: {} }))).not.toThrow(ConfigError);
   });
 });
@@ -596,7 +598,14 @@ describe("hosts per platform", () => {
           singleInstance: true,
           protocols: ["e2e"],
           windows: { icon: "icon.png" },
-          macos: { bundleId: "com.example.e2e", microphoneUsageDescription: "mic" },
+          macos: {
+            bundleId: "com.example.e2e",
+            microphoneUsageDescription: "mic",
+            entitlements: {
+              "com.apple.security.cs.allow-jit": false,
+              "com.apple.security.application-groups": ["TEAM.group"],
+            },
+          },
         }),
       );
       const host = fakeMachO(join(fresh("e2e-host"), "sk-app"));
@@ -633,7 +642,11 @@ describe("hosts per platform", () => {
         4,
       );
       const ent = readPlist(readFileSync(r.bundle!.entitlements, "utf8"));
-      expect(ent).toEqual({ "com.apple.security.cs.allow-jit": true, "com.apple.security.device.audio-input": true });
+      expect(ent).toEqual({
+        "com.apple.security.cs.allow-jit": false,
+        "com.apple.security.device.audio-input": true,
+        "com.apple.security.application-groups": ["TEAM.group"],
+      });
     }, 120_000);
   });
 });
