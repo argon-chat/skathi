@@ -887,7 +887,10 @@ impl VideoBackend for MediaEngineBackend {
         }
 
         let pts = self.picture_time()?;
-        let forced = self.last_pts == i64::MIN || self.presenter.size() != size;
+        let pipeline = !self.paused();
+        let forced = self.last_pts == i64::MIN
+            || self.presenter.size() != size
+            || (!pipeline && self.presenter.has_pending_readback());
         if !forced && pts == self.last_pts {
             return None;
         }
@@ -904,7 +907,6 @@ impl VideoBackend for MediaEngineBackend {
         }
 
         // Pipeline only while PLAYING: a paused element's seek frame must be the right picture.
-        let pipeline = !self.paused();
         let (image, frame_pts) = self.presenter.transfer(&self.engine, size, pts, pipeline)?;
         Some(VideoFrame {
             image,
@@ -951,7 +953,12 @@ impl VideoBackend for MediaEngineBackend {
     fn suspend(&mut self) {
         self.pause();
         self.presenter.reset();
-        self.reset_picture();
+        // The engine and its paused current picture survive suspension. Refill the new atlas target.
+        self.last_pts = i64::MIN;
+        #[cfg(feature = "webgpu")]
+        {
+            self.webgpu_snapshot = None;
+        }
         // Not `SetSource("")`: rebuilding the pipeline in `resume` grows the process ~5 MiB per
         // park/unpark cycle. A bounded resident cost beats an unbounded one, so the decoder stays.
     }

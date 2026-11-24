@@ -1,9 +1,9 @@
 //! Take a private media-resolution snapshot. The atlas target is mutable and can be paint-sized.
 use redjs_webgpu::{
     backend::Context,
-    video::{wgpu, Frame, NativeFrame},
+    video::{wgpu, Frame, NativeFrame, PixelFormat},
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use windows::{
     core::{IUnknown, Interface, Owned},
     Win32::{
@@ -26,6 +26,7 @@ struct Image {
     device: ID3D11Device,
     frame: ID3D11Texture2D,
     desc: D3D11_TEXTURE2D_DESC,
+    checked_out: Mutex<bool>,
 }
 
 unsafe fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D> {
@@ -66,7 +67,9 @@ pub(super) fn capture(
         width,
         height,
         timestamp,
+        PixelFormat::Bgra,
         Arc::new(Image {
+            checked_out: Mutex::new(false),
             device: device.clone(),
             frame,
             desc,
@@ -114,7 +117,7 @@ impl Image {
         )
     }
 
-    unsafe fn native(&self, context: &Context) -> Result<wgpu::Texture> {
+    unsafe fn native(&self, context: &Context, checked_out: &mut bool) -> Result<wgpu::Texture> {
         let (device, queue) = {
             let dx = context
                 .device
@@ -135,6 +138,7 @@ impl Image {
                 ));
             let mut encoder = context.device.create_command_encoder(&Default::default());
             let raw: ID3D12Resource = on12.UnwrapUnderlyingResource(&self.frame, &queue)?;
+            *checked_out = true;
             immediate.Flush();
             let source = self.wrap(&context.device, raw, wgpu::TextureUsages::COPY_SRC);
             encoder.copy_texture_to_texture(
@@ -154,6 +158,8 @@ impl Image {
             // Return ownership with a GPU fence before the decoder or another logical device can use it.
             queue.Signal(&done, 1)?;
             on12.ReturnUnderlyingResource(&self.frame, 1, &1, [Some(done)].as_ptr())?;
+            *checked_out = false;
+            crate::trace(format_args!("WebGPU video copied on the D3D12 queue"));
             return Ok(result);
         }
 
@@ -186,6 +192,7 @@ impl Image {
         immediate.cast::<ID3D11DeviceContext4>()?.Signal(&done, 1)?;
         immediate.Flush();
         queue.Wait(&ready.ok_or(E_FAIL)?, 1)?;
+        crate::trace(format_args!("WebGPU video imported through DXGI"));
         Ok(self.wrap(
             &context.device,
             dst.ok_or(E_FAIL)?,
@@ -220,13 +227,30 @@ impl Image {
 }
 impl NativeFrame for Image {
     fn texture(&self, context: &Context) -> std::result::Result<wgpu::Texture, String> {
-        if let Ok(texture) = unsafe { self.native(context) } {
-            return Ok(texture);
+        // Clones may use different queues. Serialize handoff of this one immutable source.
+        let mut checked_out = self
+            .checked_out
+            .lock()
+            .map_err(|_| "D3D11 video handoff failed")?;
+        if *checked_out {
+            return Err("D3D11 video ownership was lost".into());
+        }
+        match unsafe { self.native(context, &mut checked_out) } {
+            Ok(texture) => return Ok(texture),
+            // The translation layer cannot access a resource still checked out to D3D12.
+            Err(error) if *checked_out => return Err(error.to_string()),
+            Err(error) => crate::trace(format_args!("WebGPU video readback fallback: {error}")),
         }
         // A fallback adapter can be on a different physical GPU.
         let bytes = unsafe { self.readback() }.map_err(|e| e.to_string())?;
-        Frame::packed(self.desc.Width, self.desc.Height, 0, bytes, true)
-            .ok_or("Invalid Media Foundation frame")?
-            .texture(context)
+        Frame::packed(
+            self.desc.Width,
+            self.desc.Height,
+            0,
+            bytes,
+            PixelFormat::Bgra,
+        )
+        .ok_or("Invalid Media Foundation frame")?
+        .texture(context)
     }
 }

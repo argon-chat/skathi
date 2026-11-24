@@ -58,6 +58,9 @@ test(
         };
         draw();
       } catch(e) { if(e.name!=='NotSupportedError') throw e; }
+      video.src = '';
+      try { new VideoFrame(video); throw Error('reused a frame from the previous source'); }
+      catch(e) { if(e.name!=='InvalidStateError') throw e; }
       video.remove();
       d.queue.copyExternalImageToTexture({source:snap,origin:[2,2]},{texture:tex,origin:[1,0]},[1,1]);
       let imported = false;
@@ -74,13 +77,19 @@ test(
         d.pushErrorScope('validation'); draw();
         if(!(await d.popErrorScope() instanceof GPUValidationError)) throw Error('element import did not expire');
       }
-      return {size, imported,
+      return {size, imported, elementImported:!!draw,
         matching:bytes.slice(0,4).every((v,i)=>Math.abs(v-bytes[4+i])<=3 && (!draw || Math.abs(v-bytes[8+i])<=3)),
         decoded:bytes[0]>60 && bytes[0]<150 && bytes[3]===255 ? true : Array.from(bytes)};
     } finally { video.pause(); video.remove(); d.destroy(); }
   `);
     expect(result).toEqual({
-      ok: { size: [160, 90], imported: process.platform !== "linux", matching: true, decoded: true },
+      ok: {
+        size: [160, 90],
+        imported: process.platform !== "linux",
+        elementImported: process.platform !== "linux",
+        matching: true,
+        decoded: true,
+      },
     });
   },
   T,

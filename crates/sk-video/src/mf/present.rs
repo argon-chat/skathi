@@ -70,6 +70,10 @@ impl Presenter {
         self.gpu
     }
 
+    pub fn has_pending_readback(&self) -> bool {
+        self.slots.iter().any(|slot| slot.filled)
+    }
+
     #[cfg(feature = "webgpu")]
     pub fn snapshot(
         &self,

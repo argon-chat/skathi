@@ -153,9 +153,9 @@ pub type DestroyNotify = unsafe extern "C" fn(data: Ptr);
 pub type ClosureNotify = unsafe extern "C" fn(data: Ptr, closure: Ptr);
 
 macro_rules! table {
-    ($name:ident { $($field:ident : $ty:ty,)* }) => {
+    ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty,)* }) => {
         pub struct $name {
-            $(pub $field: $ty,)*
+            $($(#[$meta])* pub $field: $ty,)*
         }
 
         impl $name {
@@ -163,7 +163,7 @@ macro_rules! table {
             /// Each symbol must have the C signature its field declares.
             unsafe fn load(lib: &Library) -> Result<Self, String> {
                 Ok(Self {
-                    $($field: unsafe { sym(lib, stringify!($field))? },)*
+                    $($(#[$meta])* $field: unsafe { sym(lib, stringify!($field))? },)*
                 })
             }
         }
@@ -264,6 +264,8 @@ table!(App {
 
 table!(Video {
     gst_buffer_get_video_meta: unsafe extern "C" fn(*mut Buffer) -> *const VideoMeta,
+    #[cfg(feature = "webgpu")]
+    gst_video_convert_sample: unsafe extern "C" fn(Ptr, Ptr, u64, *mut *mut GError) -> Ptr,
 });
 
 table!(PbUtils {

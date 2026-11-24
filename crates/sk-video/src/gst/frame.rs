@@ -91,6 +91,8 @@ pub(super) struct Frames {
     pub latest: Arc<Latest>,
     seen: u64,
     held: Option<Held>,
+    #[cfg(feature = "webgpu")]
+    media: Option<(Sample, redjs_webgpu::video::Frame)>,
     presented_for: (u32, u32),
     /// A frame has been decoded since the load; survives [`Frames::forget`].
     decoded: bool,
@@ -108,6 +110,8 @@ impl Frames {
             latest: Arc::default(),
             seen: 0,
             held: None,
+            #[cfg(feature = "webgpu")]
+            media: None,
             presented_for: (0, 0),
             decoded: false,
         }
@@ -115,6 +119,10 @@ impl Frames {
 
     /// Forgets the frame shown, keeping the sink.
     pub fn forget(&mut self) {
+        #[cfg(feature = "webgpu")]
+        {
+            self.media = None;
+        }
         self.held = None;
         self.presented_for = (0, 0);
     }
@@ -128,15 +136,68 @@ impl Frames {
     }
 
     #[cfg(feature = "webgpu")]
-    pub fn snapshot(&self, api: &Api) -> Option<redjs_webgpu::video::Frame> {
-        let held = self.held.as_ref()?;
-        redjs_webgpu::video::Frame::packed(
-            held.size.0,
-            held.size.1,
-            (held.pts * 1e6) as i64,
-            bgra(api, &held.sample, held.size, held.size)?,
-            true,
-        )
+    pub fn snapshot(&mut self, api: &Api, video_bin: Ptr) -> Option<redjs_webgpu::video::Frame> {
+        use redjs_webgpu::video::{Frame, PixelFormat};
+        let video = api.video.as_ref()?;
+        // SAFETY: the bin owns the sink; the boxed last-sample property returns an owned
+        // reference, including when the sink is paused on its preroll frame.
+        let sample = unsafe {
+            let sink = (api.core.gst_bin_get_by_name)(video_bin, c"media".as_ptr());
+            if sink.is_null() {
+                return None;
+            }
+            let mut raw: Ptr = std::ptr::null_mut();
+            (api.gobject.g_object_get)(
+                sink,
+                c"last-sample".as_ptr(),
+                &mut raw as *mut Ptr,
+                std::ptr::null::<std::ffi::c_char>(),
+            );
+            (api.core.gst_object_unref)(sink);
+            if raw.is_null() {
+                return None;
+            }
+            Sample(raw)
+        };
+        // SAFETY: both buffer pointers are borrowed from live sample references.
+        if let Some((previous, frame)) = &self.media {
+            if unsafe {
+                (api.core.gst_sample_get_buffer)(previous.0)
+                    == (api.core.gst_sample_get_buffer)(sample.0)
+            } {
+                return Some(frame.clone());
+            }
+        }
+        let source = describe(api, sample)?;
+        // SAFETY: convert_sample borrows the sample and caps, returning a new sample reference.
+        let converted = unsafe {
+            let caps = (api.core.gst_caps_from_string)(
+                c"video/x-raw,format=BGRA,pixel-aspect-ratio=1/1".as_ptr(),
+            );
+            if caps.is_null() {
+                return None;
+            }
+            let raw = (video.gst_video_convert_sample)(
+                source.sample.0,
+                caps,
+                1_000_000_000,
+                std::ptr::null_mut(),
+            );
+            (api.core.gst_mini_object_unref)(caps);
+            if raw.is_null() {
+                return None;
+            }
+            describe(api, Sample(raw))?
+        };
+        let frame = Frame::packed(
+            converted.size.0,
+            converted.size.1,
+            (source.pts * 1e6) as i64,
+            bgra(api, &converted.sample, converted.size, converted.size)?,
+            PixelFormat::Bgra,
+        )?;
+        self.media = Some((source.sample, frame.clone()));
+        Some(frame)
     }
 
     /// The newest sample the sink delivered, at `target` (already fitted to the request).

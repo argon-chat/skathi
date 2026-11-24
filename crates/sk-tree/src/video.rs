@@ -35,10 +35,16 @@ pub(crate) unsafe fn webgpu_frame(
     {
         return None;
     }
-    Some(
-        with_state(id, VideoState::webgpu_frame)
-            .unwrap_or(Err(sk_runtime::redjs_webgpu::video::SourceError::NoFrame)),
-    )
+    Some(VIDEO_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let entry = states.get_mut(&id).filter(|entry| {
+            tree::read_tree(|t| t.prop(id, "src").unwrap_or("").trim() == entry.src)
+        });
+        entry
+            .and_then(|entry| entry.state.as_mut())
+            .ok_or(sk_runtime::redjs_webgpu::video::SourceError::NoFrame)?
+            .webgpu_frame()
+    }))
 }
 
 struct Entry {

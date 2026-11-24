@@ -364,6 +364,13 @@ impl GstBackend {
             "{convert} ! capsfilter name=size caps=\"{BASE_CAPS}\" ! appsink name=sink sync=true \
              max-buffers=1 drop=true enable-last-sample=false qos=true"
         );
+        // Retain a clocked decoder sample before paint-size conversion. The second sink
+        // holds one reference; full-resolution color conversion happens only on capture.
+        #[cfg(feature = "webgpu")]
+        let description = {
+            let queue = "queue max-size-buffers=2 max-size-time=0 max-size-bytes=0";
+            format!("tee name=views ! {queue} ! {description} views. ! {queue} ! fakesink name=media sync=true async=false enable-last-sample=true")
+        };
         let bin = match api.parse_bin(&description) {
             Ok(bin) => bin,
             Err(e) => {
@@ -1338,7 +1345,8 @@ impl VideoBackend for GstBackend {
 
     #[cfg(feature = "webgpu")]
     fn webgpu_frame(&mut self) -> Option<redjs_webgpu::video::Frame> {
-        self.frames.snapshot(self.api)
+        self.frames
+            .snapshot(self.api, self.pipeline.as_ref()?.video_bin)
     }
 
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
@@ -1351,17 +1359,11 @@ impl VideoBackend for GstBackend {
         if target.0 == 0 || target.1 == 0 {
             return None;
         }
-        // WebGPU reads the media pixels independently of the element's CSS box.
-        let decode = if cfg!(feature = "webgpu") {
-            native
-        } else {
-            target
-        };
-        if decode != self.caps_size && !capsfilter.is_null() {
-            self.caps_size = decode;
+        if target != self.caps_size && !capsfilter.is_null() {
+            self.caps_size = target;
             let caps = ffi::c(&format!(
                 "{BASE_CAPS},width={},height={}",
-                decode.0, decode.1
+                target.0, target.1
             ));
             // SAFETY: the capsfilter takes its own reference to the caps.
             unsafe {

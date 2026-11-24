@@ -6,7 +6,7 @@ use objc2_metal::{
 };
 use redjs_webgpu::{
     backend::Context,
-    video::{wgpu, Frame, NativeFrame},
+    video::{wgpu, Frame, NativeFrame, PixelFormat},
 };
 
 #[derive(Clone)]
@@ -74,7 +74,7 @@ impl NativeFrame for Image {
         }
         let bytes = bgra(&self.0, (width, height), (width, height))
             .ok_or("AVFoundation frame is unreadable")?;
-        Frame::packed(width, height, 0, bytes, true)
+        Frame::packed(width, height, 0, bytes, PixelFormat::Bgra)
             .ok_or("Invalid AVFoundation frame")?
             .texture(context)
     }
