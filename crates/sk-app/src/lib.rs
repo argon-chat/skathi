@@ -52,6 +52,7 @@ mod content_dialog;
 pub mod crash_window;
 mod dialogs;
 mod effect_quality;
+mod effects_prewarm;
 pub mod embed;
 mod fault;
 /// Audio processors written in Rust: DSP that runs in the audio callback, behind a node the
@@ -1209,6 +1210,7 @@ fn run_app() {
         let http_cache_mb = http_client::cache_mb(window_json.as_deref());
         sk_tree::color_picker::use_system_dialog(system_color_picker(window_json.as_deref()));
         wheel_scroll::apply(window_json.as_deref());
+        effects_prewarm::apply(window_json.as_deref());
         let cfg = window::load_config(window_json);
 
         // Before `JsRuntime::init` so the bundle's first line sees the settled state.

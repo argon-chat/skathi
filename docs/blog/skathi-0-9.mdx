@@ -74,6 +74,16 @@ struct Glass : IEffect
 
 The renderer then copies and blurs only the element's box grown by that length, on Metal, DirectX 12 and wgpu alike, and a read beyond it is clamped to that edge. The marker implies `[SkBackdrop]`. An effect without it works as before. ([#130](https://github.com/argon-chat/skathi/issues/130))
 
+### Effects built before they are drawn
+
+An app's effect is compiled, and its pipelines built, in the first frame that draws it. Where that frame is one the user watches, a control bar appearing over a video, it can show as a hitch. A new key has the renderer build them on a background thread when the window opens:
+
+```json
+{ "effects": { "prewarm": true } }
+```
+
+`true` builds every effect of the app; a list of names, such as `["glass"]`, builds only those and is the better choice for an app with many effects that are seldom on screen. It is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133))
+
 ## Windows
 
 **`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. A new `"window": { "theme" }` key in sk.config.json sets the starting theme on every platform, before the window is first shown, so a dark app does not flash light. ([#117](https://github.com/argon-chat/skathi/issues/117))

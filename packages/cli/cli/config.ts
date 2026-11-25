@@ -5,6 +5,8 @@
 //   "httpCache": { "maxMB": 256 }  disk HTTP cache cap; 0 or false = none
 //   "colorPicker": "system"      <input type=color> opens the OS dialog instead of the in-window picker
 //   "input": { "wheelScrollScale": 2 }  a wheel notch scrolls the app twice as far (WheelEvent unchanged)
+//   "effects": { "prewarm": true }  the app's --shading effects are built before the frame that first draws them
+//                                (a list of names builds only those; default false: built in that frame)
 //   "id", "singleInstance", "raiseOnSecondInstance", "protocols"  launch identity and URL schemes
 //   "assets", "publicDir"        what is packaged (relative to the app root); Vite's public/, keyed relative to it
 //   "packs": [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }]
@@ -219,6 +221,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "httpCache",
   "colorPicker",
   "input",
+  "effects",
   "assets",
   "publicDir",
   "packs",
@@ -893,6 +896,26 @@ export function loadAppConfig(
     if (scale !== undefined && (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0)) {
       throw new ConfigError(
         'sk.config.json "input.wheelScrollScale" must be a number above 0 (1 scrolls as a browser does)',
+      );
+    }
+  }
+
+  if (raw.effects !== undefined) {
+    const effects = raw.effects as Record<string, unknown> | null;
+    if (!effects || typeof effects !== "object" || Array.isArray(effects)) {
+      throw new ConfigError('sk.config.json "effects" must be an object: { "prewarm": true | false | ["name", …] }');
+    }
+    const extra = Object.keys(effects).filter((k) => k !== "prewarm");
+    if (extra.length) {
+      throw new ConfigError(
+        `sk.config.json "effects" has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")}; the known key is prewarm`,
+      );
+    }
+    const prewarm = effects.prewarm;
+    const names = Array.isArray(prewarm) && prewarm.every((n) => typeof n === "string" && n !== "");
+    if (prewarm !== undefined && typeof prewarm !== "boolean" && !names) {
+      throw new ConfigError(
+        'sk.config.json "effects.prewarm" must be true, false or a list of effect names (as `--shading` names them)',
       );
     }
   }

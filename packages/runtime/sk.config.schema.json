@@ -133,7 +133,8 @@
         },
         "httpCache": { "$ref": "#/definitions/httpCache" },
         "colorPicker": { "$ref": "#/definitions/colorPicker" },
-        "input": { "$ref": "#/definitions/input" }
+        "input": { "$ref": "#/definitions/input" },
+        "effects": { "$ref": "#/definitions/effects" }
       }
     },
     "devtools": {
@@ -246,6 +247,7 @@
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "colorPicker": { "$ref": "#/definitions/colorPicker" },
     "input": { "$ref": "#/definitions/input" },
+    "effects": { "$ref": "#/definitions/effects" },
     "assets": {
       "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",
       "type": "array",
@@ -852,6 +854,17 @@
           "description": "How far a mouse-wheel notch scrolls scroll containers, text areas and the editor, as a multiple of a browser's distance; kept between 0.1 and 10. WheelEvent deltas and touchpad scrolling are not scaled. Default 1.",
           "type": "number",
           "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "effects": {
+      "description": "The app's own --shading effects.",
+      "type": "object",
+      "properties": {
+        "prewarm": {
+          "description": "Which of the app's effects are built on a background thread before the frame that first draws them: true for all, a list of names (as --shading names them) for those only. Default false: an effect is compiled in the first frame that draws it, which can drop that frame.",
+          "oneOf": [{ "type": "boolean" }, { "type": "array", "items": { "type": "string", "minLength": 1 } }]
         }
       },
       "additionalProperties": false

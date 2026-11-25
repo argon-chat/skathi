@@ -40,7 +40,7 @@ import {
   type PackConfig,
   type Variant,
 } from "./config";
-import { buildAppEffects, type BuiltEffects } from "./effects";
+import { buildAppEffects, unknownPrewarmNames, type BuiltEffects } from "./effects";
 import { stampElf, type ElfStampResult } from "./elf";
 import {
   CLI_VERSION,
@@ -591,6 +591,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     progress,
   });
   if (!effects) rmSync(join(work, "effects"), { recursive: true, force: true });
+  warnings.push(...unknownPrewarmNames(config.raw.effects, effects));
 
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");

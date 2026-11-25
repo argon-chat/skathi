@@ -65,6 +65,22 @@ export async function buildAppEffects(options: {
   return { effects, compiler, inputs: effectInputs(effects) };
 }
 
+const BUILTIN_EFFECTS = ["frost", "noise", "glow"];
+
+/// sk.config.json "effects.prewarm" names that are not effects this app has; the host ignores them.
+export function unknownPrewarmNames(effects: unknown, built: BuiltEffects | null): string[] {
+  const prewarm = effects && typeof effects === "object" ? (effects as Record<string, unknown>).prewarm : undefined;
+  if (!Array.isArray(prewarm)) return [];
+  const known = new Set([...BUILTIN_EFFECTS, ...(built?.effects.compiled.map((c) => c.effect.name) ?? [])]);
+  return prewarm
+    .filter((name): name is string => typeof name === "string" && !known.has(name))
+    .map(
+      (name) =>
+        `sk.config.json "effects.prewarm" names ${JSON.stringify(name)}, which is not one of the app's \`--shading\` ` +
+        'effects — it is ignored; use the name its [SkEffect("…")] declares',
+    );
+}
+
 export interface EffectsWatch {
   close(): void;
 }

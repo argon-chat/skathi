@@ -172,10 +172,19 @@ function foldInput(
   return { ...(win ?? {}), input: cfg.input };
 }
 
+function foldEffects(
+  cfg: Record<string, unknown> | undefined,
+  win: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!cfg || cfg.effects === undefined) return win;
+  if (win && win.effects !== undefined) return win;
+  return { ...(win ?? {}), effects: cfg.effects };
+}
+
 function readWindowConfig(): Record<string, unknown> | undefined {
   const cfg = readSkConfig();
   const win = cfg && typeof cfg.window === "object" && cfg.window ? (cfg.window as Record<string, unknown>) : undefined;
-  return foldInput(cfg, foldColorPicker(cfg, foldHttpCache(cfg, foldDevtoolsFlag(cfg, win))));
+  return foldEffects(cfg, foldInput(cfg, foldColorPicker(cfg, foldHttpCache(cfg, foldDevtoolsFlag(cfg, win)))));
 }
 
 function readAppName(): string | undefined {

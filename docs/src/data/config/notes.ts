@@ -43,7 +43,7 @@ export const groups: readonly ConfigGroup[] = [
   {
     title: "Runtime",
     intro: "Settings the host reads at start. Each also works inside `window`, where it wins over the top-level key.",
-    keys: ["devtools", "httpCache", "colorPicker", "input"],
+    keys: ["devtools", "httpCache", "colorPicker", "input", "effects"],
   },
   {
     title: "Text",
@@ -171,6 +171,8 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   "window.colorPicker": { default: "the top-level `colorPicker`", example: "system", since: "0.5.0" },
   "window.input": { default: "the top-level `input`", example: { wheelScrollScale: 1.5 } },
   "window.input.wheelScrollScale": { example: 1.5 },
+  "window.effects": { default: "the top-level `effects`", example: { prewarm: true } },
+  "window.effects.prewarm": { example: true },
   devtools: {
     default: "`true`",
     notes: [
@@ -207,6 +209,19 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
       "[`app.wheelScrollScale`](/std/app-wheel-scroll-scale/) reads and changes it at run time.",
     ],
     example: 1.5,
+  },
+  effects: {
+    default: '`{ "prewarm": false }`',
+    example: { prewarm: ["glass"] },
+  },
+  "effects.prewarm": {
+    default: "`false`",
+    notes: [
+      "With `false` an app effect is compiled, and its pipelines created, in the first frame that draws it. That frame can take tens of milliseconds longer, a visible stutter when the effect first appears over moving content.",
+      "`true` builds every app effect on a background thread when the window opens and again after `sk dev` reloads the effects, so the first frame that draws one finds it ready. On macOS and Linux it also builds the backdrop pipelines and the built-in effects (`frost`, `glow`, `noise`) ahead; on Windows those are always built ahead. A frame that needs an effect still being built waits for that one.",
+      "A list builds only the effects it names, as `--shading` names them: the right choice for an app with many effects of which few are on screen early, or with a start-up CPU or memory budget. An empty list is `false`. A name that is not one of the app's effects is reported by `sk build` and ignored.",
+    ],
+    example: ["glass", "ripples"],
   },
   textRendering: {
     default: '`"skathi-mode"` on Windows and Linux, `"optimized"` on macOS',
