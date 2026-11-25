@@ -71,7 +71,9 @@ describe("matchMedia", () => {
       );
       expect(fired.sort()).toEqual(["legacy:true", "listener:true", "once:true", "onchange:true"]);
 
-      await collected("__mq.once");
+      // On the Linux runner the fired query is sometimes still referenced from the stack after ten
+      // seconds of collections, and sometimes gone at once.
+      if (!LINUX) await collected("__mq.once");
       await setTheme("light");
       const back = await until(
         () => js<string[]>(`__mq.seen`),
