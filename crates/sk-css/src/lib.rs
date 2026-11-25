@@ -633,7 +633,6 @@ impl ComputedStates {
     pub fn needs_focus_handle(&self) -> bool {
         self.focus.is_some()
             || self.focus_visible.is_some()
-            || self.focus_within.is_some()
             || (2..STATE_RUNGS).any(|rung| self.control_state(rung))
     }
 
@@ -7864,10 +7863,6 @@ mod tests {
         assert_eq!(
             states.focus_within.as_ref().and_then(|f| f.opacity),
             Some(0.5)
-        );
-        assert!(
-            states.needs_focus_handle(),
-            "gpui needs a handle to key it on"
         );
     }
 

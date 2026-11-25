@@ -540,7 +540,8 @@ impl Tree {
     }
 
     /// Focus moved from `old` to `new`: re-render the elements whose ancestor-focus rules watch
-    /// either one or, for `:focus-within`, an element above either.
+    /// either one or, for `:focus-within`, an element above either, and the elements above either
+    /// with a `:focus-within` rule of their own.
     pub(crate) fn touch_focus_watchers(&mut self, old: u32, new: u32) {
         for anchor in [old, new] {
             self.mark_custom_watchers(anchor, sk_css::Interaction::Focus);
@@ -552,9 +553,6 @@ impl Tree {
                 }
             }
         }
-        if self.group_focus_deps.is_empty() {
-            return;
-        }
         let mut deps = Vec::new();
         for start in [old, new] {
             let mut at = start;
@@ -562,6 +560,12 @@ impl Tree {
                 let Some(n) = self.node(at) else { break };
                 if let Some(watchers) = self.group_focus_deps.get(&at) {
                     deps.extend_from_slice(watchers);
+                }
+                if n.computed
+                    .as_ref()
+                    .is_some_and(|cs| cs.focus_within.is_some())
+                {
+                    deps.push(at);
                 }
                 if n.parent == 0 || n.parent == at {
                     break;

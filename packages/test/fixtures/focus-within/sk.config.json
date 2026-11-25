@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-focus-within",
+
+  "window": {
+    "title": "Skathi — focus-within (fixture)",
+    "width": 360,
+    "height": 240,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

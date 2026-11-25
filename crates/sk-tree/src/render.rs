@@ -2492,9 +2492,6 @@ fn build_node<V: 'static>(
                         if let Some(f) = cs.focus_visible.clone() {
                             d = d.focus_visible(move |_| (*f).clone());
                         }
-                        if let Some(f) = cs.focus_within.clone() {
-                            d = d.in_focus(move |_| (*f).clone());
-                        }
                     }
                 }
                 let click_focus = handle.clone().filter(|_| focusable);
@@ -3878,6 +3875,14 @@ where
     if let Some(overlay) = tree::animation_overlay(id, &cs.base, now) {
         e.style().refine(&overlay);
     }
+    // Not gpui's `in_focus`: that holds when the element is INSIDE the focused one.
+    if let Some(f) = &cs.focus_within {
+        if tree::read_tree(|t| {
+            crate::live_state::drawn_focus_holds(t, id, sk_css::Interaction::FocusWithin)
+        }) {
+            e.style().refine(f);
+        }
+    }
     // Properties named in `transition` come out of the hover rungs: a rung has no clock and would
     // refine them whole the instant of hover, leaving the animator nothing to interpolate.
     let split = |rung: &std::rc::Rc<gpui::StyleRefinement>| {
@@ -3994,8 +3999,8 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
             }
         }
     } else if let Some(now) = focused_node(window, cx) {
-        // gpui's own focus-on-press may have moved focus to an inner box tracked only for
-        // `:focus-within`, which HTML never focuses: put it back.
+        // gpui's own focus-on-press may have moved focus to an inner box tracked only for a `:focus`
+        // rule, which HTML never focuses: put it back.
         if now != root && !windows::of(k, |w| w.focus_subs.contains_key(&now)) {
             let slot = windows::focused_node(k);
             let back = if slot != 0 {
