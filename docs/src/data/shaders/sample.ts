@@ -491,7 +491,10 @@ float2 kaleidoscope(float2 p, float2 center, int segments, float rotation = 0.0)
       },
     ],
     returns: "The folded point: read the source there.",
-    notes: ["No reads of their own: pass the result to `src.at` or a kernel."],
+    notes: [
+      "No reads of their own: pass the result to `src.at` or a kernel.",
+      "`kaleidoscope` returns the centre itself for the centre, on every backend.",
+    ],
     examples: [
       {
         title: "A six-fold kaleidoscope of the content",

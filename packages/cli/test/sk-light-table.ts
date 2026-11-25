@@ -324,6 +324,19 @@ export function cases(): Case[] {
       t4(0),
     );
   }
+  const up = v([0, 0, 1]);
+  add(
+    "highlights where the base of the power is 0",
+    `float4(rim(${up}, ${live("3.0")}), lobe(${up}, ${v([1, 0, 0])}, ${live("8.0")}), lobe(${up}, ${v([0, 0, -1])}, ${live("0.0")}), anisotropic(${up}, ${up}, ${up}, ${live("40.0")}))`,
+    [0, 0, 1, 0],
+    t4(0),
+  );
+  add(
+    "squircle bevel normal on the edge",
+    `float4(bevelNormal(${live("0.0")}, ${v([1, 0])}, ${live("10.0")}, BevelProfile.Squircle), 0.0)`,
+    [1, 0, 0, 0],
+    t4(1e-6),
+  );
   return withRunTime(out);
 }
 

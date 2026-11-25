@@ -28,7 +28,6 @@ export async function shaderTable({ label, imports, declarations = "", cases }: 
   const compiler = (await resolveCompiler().catch(() => null))?.path ?? null;
   const scratch = mkdtempSync(join(tmpdir(), `sk-${label}-`));
   const effectsDir = join(scratch, "effects");
-  let app: SkApp | null = null;
   if (compiler && SCREENSHOTS) {
     mkdirSync(join(scratch, "shaders"));
     chunks.forEach((chunk, i) =>
@@ -38,50 +37,62 @@ export async function shaderTable({ label, imports, declarations = "", cases }: 
       ),
     );
     writeEffectFiles(effectsDir, (await compileAppEffects(scratch, compiler)).files);
-    app = await launch({
-      app: "packages/test/fixtures/shader-table/src/main.ts",
-      window: [W, TILES * TILE_HEIGHT],
-      label,
-      env: { SK_EFFECTS_DIR: effectsDir, SK_WINDOW_FOCUS: "never" },
-    });
   }
-  afterAll(() => {
-    app?.close();
-    rmSync(scratch, { recursive: true, force: true });
-  });
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-  async function results(): Promise<number[][][]> {
-    const shot = readPng(await app!.screenshot(undefined, "render_to_image"));
+  async function results(app: SkApp): Promise<number[][][]> {
+    const shot = readPng(await app.screenshot(undefined, "render_to_image"));
     const k = shot.width / W;
     return chunks.map((chunk, i) => {
       const top = Math.round(i * TILE_HEIGHT * k);
       if (effectHeight(chunk.length) > TILE_HEIGHT * k) throw new Error(`tile ${i} is too short for its cases`);
-      return decode(chunk.length, (x, y) => shot.at(x, top + y));
+      try {
+        return decode(chunk.length, (x, y) => shot.at(x, top + y));
+      } catch (e) {
+        throw new Error(`tile ${i}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     });
   }
 
+  // Each attempt (bun test --retry) launches its own host, so a retry never inherits a broken one, and
+  // decodes only a frame that two screenshots in a row agree on.
   test.skipIf(!compiler || !SCREENSHOTS)(
     `${imports[imports.length - 1]} matches the float64 reference on the GPU, case by case`,
     async () => {
-      let tiles: number[][][] | null = null;
-      let last: unknown = null;
-      const deadline = Date.now() + 30_000;
-      while (!tiles && Date.now() < deadline) {
-        try {
-          tiles = await results();
-        } catch (e) {
-          last = e;
-          await new Promise((r) => setTimeout(r, 200));
+      const app = await launch({
+        app: "packages/test/fixtures/shader-table/src/main.ts",
+        window: [W, TILES * TILE_HEIGHT],
+        label,
+        env: { SK_EFFECTS_DIR: effectsDir, SK_WINDOW_FOCUS: "never" },
+      });
+      try {
+        let tiles: number[][][] | null = null;
+        let last: unknown = null;
+        const deadline = Date.now() + 30_000;
+        while (!tiles && Date.now() < deadline) {
+          try {
+            const first = await results(app);
+            const second = await results(app);
+            const unstable = first.flatMap((t, i) => (Bun.deepEquals(t, second[i]) ? [] : [i]));
+            if (unstable.length)
+              throw new Error(`tiles ${unstable.join(", ")} differ between two screenshots in a row`);
+            tiles = first;
+          } catch (e) {
+            last = e;
+            await new Promise((r) => setTimeout(r, 200));
+          }
         }
+        if (!tiles) throw last;
+        const failures = chunks.flatMap((chunk, i) =>
+          chunk.flatMap((c, j) => {
+            const bad = misses(c, tiles![i]![j]!);
+            return bad.length ? [`${c.name}: ${bad.join(", ")}`] : [];
+          }),
+        );
+        expect(failures).toEqual([]);
+      } finally {
+        await app.close();
       }
-      if (!tiles) throw last;
-      const failures = chunks.flatMap((chunk, i) =>
-        chunk.flatMap((c, j) => {
-          const bad = misses(c, tiles![i]![j]!);
-          return bad.length ? [`${c.name}: ${bad.join(", ")}`] : [];
-        }),
-      );
-      expect(failures).toEqual([]);
     },
     T,
   );

@@ -96,6 +96,7 @@ float3 hash3(float p); float3 hash3(float2 p); float3 hash3(float3 p);`,
     notes: [
       "Cost: `hash` of a float2 is 2 `pcg`, of a float3 3; `hash2` and `hash3` are one `pcg3d` whatever the dimension.",
       "Bit-exact across DirectX 12, Metal and wgpu, so a scatter of sparkles or a dissolve sits on the same pixels on every machine.",
+      "Cells beyond ±2³¹ clamp to the last one, where a plain float-to-int conversion would be undefined.",
     ],
     examples: [
       {

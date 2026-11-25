@@ -693,6 +693,16 @@ export function cases(): Case[] {
       [5e-3, 0, 0, 0],
     );
   });
+  const greys: [V3, V3] = [
+    [50, 0, 0],
+    [30, 0, 0],
+  ];
+  add(
+    "deltaE2000 between two greys, where chroma and hue are 0",
+    `float4(Color.from<Lab>(${vec(greys[0])} * one, 1.0).deltaE2000(Color.from<Lab>(${vec(greys[1])} * one, 1.0)), Color.from<Lab>(${vec(greys[0])}, 1.0).deltaE2000(Color.from<Lab>(${vec(greys[1])}, 1.0)), 0.0, 0.0)`,
+    [deltaE2000Lab(...greys), deltaE2000Lab(...greys), 0, 0],
+    [5e-3, 5e-3, 0, 0],
+  );
 
   for (const [harmony, shifts] of Object.entries(HARMONIES)) {
     shifts.forEach((shift, i) => {

@@ -38,6 +38,18 @@ public vector<float, N> safeDiv<let N : int>(vector<float, N> a, vector<float, N
     return select(b != 0.0, a / select(b != 0.0, b, one), vector<float, N>(fallback));
 }
 
+/// `atan2(y, x)` in [-π, π] that is 0 at (0, 0) and ignores the sign of a zero, where the
+/// built-in is undefined or differs between GPUs.
+public float safeAtan2(float y, float x)
+{
+    float ax = abs(x);
+    float ay = abs(y);
+    float a = atan(min(ax, ay) / max(max(ax, ay), 1e-30));
+    a = ay > ax ? 1.57079632679490 - a : a;
+    a = x < 0.0 ? 3.14159265358979 - a : a;
+    return y < 0.0 ? -a : a;
+}
+
 /// `x` mapped linearly from [from0, from1] to [to0, to1], unclamped. An empty source range
 /// (from0 == from1) maps everything to `to0`.
 public float remap(float x, float from0, float from1, float to0, float to1)

@@ -15,6 +15,8 @@
 
 module "sk.color";
 
+import sk.math;
+
 // ===========================================================================
 //  Colour spaces
 // ===========================================================================
@@ -66,6 +68,13 @@ float3 sk_rows(float3 r0, float3 r1, float3 r2, float3 v)
     return float3(dot(r0, v), dot(r1, v), dot(r2, v));
 }
 
+/// x^7 by multiplication: `pow` goes through log2, which fast maths leaves undefined at 0.
+float sk_pow7(float x)
+{
+    float x2 = x * x;
+    return x2 * x2 * x2 * x;
+}
+
 /// Hue in degrees wrapped into [0, 360); a hue just below 0 can round to 360.
 float sk_wrap_hue(float h)
 {
@@ -86,7 +95,7 @@ float3 sk_to_polar(float3 lab, float grey)
 {
     float c = length(lab.yz);
     bool hued = c > grey;
-    float h = hued ? sk_wrap_hue(degrees(atan2(lab.z, hued ? lab.y : 1.0))) : 0.0;
+    float h = hued ? sk_wrap_hue(degrees(safeAtan2(lab.z, lab.y))) : 0.0;
     return float3(lab.x, c, h);
 }
 
@@ -596,14 +605,14 @@ public struct Color
         float3 l2 = other.to<Lab>();
         static const float pow25_7 = 6103515625.0;
         float cBar = (length(l1.yz) + length(l2.yz)) * 0.5;
-        float c7 = pow(max(cBar, 0.0), 7.0);
+        float c7 = sk_pow7(max(cBar, 0.0));
         float g = 0.5 * (1.0 - sqrt(c7 / (c7 + pow25_7)));
         float a1 = l1.y * (1.0 + g);
         float a2 = l2.y * (1.0 + g);
         float c1 = length(float2(a1, l1.z));
         float c2 = length(float2(a2, l2.z));
-        float h1 = c1 > 0.0 ? degrees(atan2(l1.z, c1 > 0.0 ? a1 : 1.0)) : 0.0;
-        float h2 = c2 > 0.0 ? degrees(atan2(l2.z, c2 > 0.0 ? a2 : 1.0)) : 0.0;
+        float h1 = degrees(safeAtan2(l1.z, a1));
+        float h2 = degrees(safeAtan2(l2.z, a2));
         float dl = l2.x - l1.x;
         float dc = c2 - c1;
         float cc = c1 * c2;
@@ -611,7 +620,7 @@ public struct Color
         // from it: the published case split on wrapped hues, without its seam at 0/360, where a
         // GPU may round one hue to ~0 for a comparison and ~360 for the arithmetic after it.
         float dh = cc == 0.0 ? 0.0
-            : degrees(atan2(a1 * l2.z - l1.z * a2, cc == 0.0 ? 1.0 : a1 * a2 + l1.z * l2.z));
+            : degrees(safeAtan2(a1 * l2.z - l1.z * a2, a1 * a2 + l1.z * l2.z));
         float dH = 2.0 * sqrt(cc) * sin(radians(dh) * 0.5);
         float lBar = (l1.x + l2.x) * 0.5;
         float cpBar = (c1 + c2) * 0.5;
@@ -622,7 +631,7 @@ public struct Color
         float sl = 1.0 + 0.015 * l50 / sqrt(20.0 + l50);
         float sc = 1.0 + 0.045 * cpBar;
         float sh = 1.0 + 0.015 * cpBar * t;
-        float cp7 = pow(max(cpBar, 0.0), 7.0);
+        float cp7 = sk_pow7(max(cpBar, 0.0));
         float rc = 2.0 * sqrt(cp7 / (cp7 + pow25_7));
         float dTheta = 30.0 * exp(-((hBar - 275.0) / 25.0) * ((hBar - 275.0) / 25.0));
         float rt = -sin(radians(2.0 * dTheta)) * rc;

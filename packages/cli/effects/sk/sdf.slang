@@ -42,7 +42,7 @@ float sk_sdf_cross2(float2 a, float2 b)
 /// The point folded into one sector of an n-fold symmetric shape: a sector edge straight up (−y).
 float2 sk_sdf_sector(float2 p, float wedge)
 {
-    float a = floorMod(atan2(p.x, -p.y), 2.0 * wedge) - wedge;
+    float a = floorMod(safeAtan2(p.x, -p.y), 2.0 * wedge) - wedge;
     return length(p) * float2(cos(a), abs(sin(a)));
 }
 
@@ -299,10 +299,7 @@ public namespace Sdf
     public float2 polarRepeat(float2 p, int count)
     {
         float sector = SK_TAU / float(max(count, 1));
-        // acos, not atan2: Metal's fast atan2 turns +90° into −90° when -p.y is −0.
-        float l = length(p);
-        float a = acos(clamp(-p.y / (l > 0.0 ? l : 1.0), -1.0, 1.0)) * (p.x < 0.0 ? -1.0 : 1.0);
-        return rotate(p, sector * round(a / sector));
+        return rotate(p, sector * round(safeAtan2(p.x, -p.y) / sector));
     }
 
     /// `shape` scaled by `factor` (> 0) about the origin, the distance scaled with it so it

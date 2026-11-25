@@ -33,7 +33,7 @@ export function pcg3d(a: number, b: number, c: number): [number, number, number]
 }
 
 export const unit = (h: number) => (h >>> 8) / 16777216;
-const cell = (p: number) => u32(Math.floor(p) | 0);
+const cell = (p: number) => u32(Math.min(Math.max(Math.floor(p), -2147483648), 2147483520) | 0);
 
 type V2 = [number, number];
 type V3 = [number, number, number];
@@ -405,6 +405,18 @@ export function cases(): Case[] {
       `hash3 at ${p}`,
       `float4(hash3(${at2(p)}), hash2(${live(num(p[0]))}).y)`,
       [unit(h3[0]), unit(h3[1]), unit(h3[2]), unit(h1[1])],
+      [0, 0, 0, 0],
+    );
+  }
+  for (const p of [
+    [3e9, -5e9],
+    [-2147483904, 2147483904],
+  ] as V2[]) {
+    const [cx, cy] = [cell(p[0]), cell(p[1])];
+    add(
+      `hash outside the int range at ${p}`,
+      `float4(hash(${at2(p)}), hash(${live(num(p[0]))}), hash2(${at2(p)}))`,
+      [unit(pcg2(cx, cy)), unit(pcg(cx)), ...pcg3d(cx, cy, 0).slice(0, 2).map(unit)],
       [0, 0, 0, 0],
     );
   }

@@ -18,6 +18,7 @@
 module "sk.sample";
 
 import sk;
+import sk.math;
 
 // ===========================================================================
 //  Sources
@@ -512,7 +513,7 @@ public float2 kaleidoscope(float2 p, float2 center, int segments, float rotation
 {
     float2 d = p - center;
     float wedge = 6.28318530717958648 / float(max(segments, 1));
-    float a = atan2(d.y, d.x) - rotation;
+    float a = safeAtan2(d.y, d.x) - rotation;
     a = a - wedge * floor(a / wedge);
     a = abs(a - 0.5 * wedge);
     float r = length(d);

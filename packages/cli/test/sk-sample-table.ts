@@ -270,6 +270,7 @@ export function cases(): Case[] {
     [70, 15],
     [12, 80],
     [41, 49],
+    [40, 40],
   ] as V2[]) {
     add(
       `kaleidoscope of ${p}`,

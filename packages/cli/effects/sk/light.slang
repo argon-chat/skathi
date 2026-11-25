@@ -32,6 +32,12 @@ float2 sk_normalize_or(float2 v, float2 fallback)
     return len2 > 1e-20 ? v * rsqrt(len2 > 1e-20 ? len2 : 1.0) : fallback;
 }
 
+/// `x^e` for x >= 0 without the built-in's log2(0): 0 at x = 0 for e > 0, 1 for e <= 0.
+float sk_pow(float x, float e)
+{
+    return x > 0.0 ? pow(x > 0.0 ? x : 1.0, e) : (e > 0.0 ? 0.0 : 1.0);
+}
+
 // ===========================================================================
 //  Normals
 // ===========================================================================
@@ -123,7 +129,7 @@ public float3 bevelNormal(float sd, float2 gradient, float width, BevelProfile p
     // vertical edge of a circle (b = 0) needs no division.
     float a = profile == BevelProfile.Circle ? u : (profile == BevelProfile.Squircle ? u3 : (s < 1.0 ? 1.0 : 0.0));
     float b = profile == BevelProfile.Circle ? sqrt(saturate(1.0 - u * u))
-        : (profile == BevelProfile.Squircle ? pow(saturate(1.0 - u3 * u), 0.75) : 1.0);
+        : (profile == BevelProfile.Squircle ? sk_pow(saturate(1.0 - u3 * u), 0.75) : 1.0);
     return sk_normalize_or(float3(outward * a * height, b), SK_VIEW);
 }
 
@@ -264,7 +270,7 @@ public float wrapLambert(float3 normal, float3 toLight, float wrap)
 /// A glint where the normal faces the light: max(n . l, 0)^exponent. Range [0, 1].
 public float lobe(float3 normal, float3 toLight, float exponent)
 {
-    return pow(saturate(dot(normal, toLight)), exponent);
+    return sk_pow(saturate(dot(normal, toLight)), exponent);
 }
 
 /// Blinn-Phong specular: max(n . h, 0)^shininess, h halfway between light and viewer. Range [0, 1];
@@ -272,7 +278,7 @@ public float lobe(float3 normal, float3 toLight, float exponent)
 public float blinnPhong(float3 normal, float3 toLight, float shininess, float3 toViewer = SK_VIEW)
 {
     float3 h = sk_normalize_or(toLight + toViewer, normal);
-    return pow(saturate(dot(normal, h)), shininess);
+    return sk_pow(saturate(dot(normal, h)), shininess);
 }
 
 /// Cook-Torrance specular with the GGX distribution, Smith height-correlated visibility and
@@ -299,7 +305,7 @@ public float ggx(float3 normal, float3 toLight, float roughness, float f0, float
 /// Rim light: (1 - n . v)^power, bright where the surface turns away from the viewer. Range [0, 1].
 public float rim(float3 normal, float power, float3 toViewer = SK_VIEW)
 {
-    return pow(1.0 - saturate(dot(normal, toViewer)), power);
+    return sk_pow(1.0 - saturate(dot(normal, toViewer)), power);
 }
 
 /// Kajiya-Kay anisotropic highlight: a streak across `tangent` (unit, along the grooves of brushed
@@ -308,7 +314,7 @@ public float anisotropic(float3 normal, float3 toLight, float3 tangent, float ex
 {
     float3 h = sk_normalize_or(toLight + toViewer, normal);
     float th = dot(tangent, h);
-    return pow(sqrt(saturate(1.0 - th * th)), exponent) * saturate(dot(normal, toLight));
+    return sk_pow(sqrt(saturate(1.0 - th * th)), exponent) * saturate(dot(normal, toLight));
 }
 
 // ===========================================================================

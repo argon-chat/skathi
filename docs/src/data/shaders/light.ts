@@ -446,6 +446,9 @@ return float4(lit, lit, lit, 1.0) * input.coverage;`,
       toViewer,
     ],
     returns: "[0, 1]. Not energy-normalised: raise the intensity with the shininess yourself.",
+    notes: [
+      "Where the base is 0, as for a light behind the surface, the result is 0 for a positive exponent and 1 for an exponent of 0 on every backend; the same holds for `lobe`, `rim` and `anisotropic`. The built-in `pow` goes through `log2(0)` there, which fast maths leaves undefined.",
+    ],
     examples: [
       {
         title: "A highlight on a glass rim",

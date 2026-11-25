@@ -4,7 +4,7 @@
 
 import { type Case, live, num, vec, withRunTime } from "./shader-table";
 
-export const IMPORTS = ["sk.sdf"];
+export const IMPORTS = ["sk.math", "sk.sdf"];
 
 /** Structs the cases use as `ISdf` fields. */
 export const DECLARATIONS = `
@@ -276,7 +276,7 @@ export function cases(): Case[] {
       `polygon(${sides})`,
       (p) => `Sdf.polygon(${p}, ${f(30)}, ${sides})`,
       (p) => polygon(p, vs),
-      [...PROBES, vs[0]!, [0, -30], [0, 31]],
+      [...PROBES, vs[0]!, [0, -30], [0, 31], [-12, 0]],
     );
   }
   for (const inner of [12, 24]) {
@@ -285,7 +285,7 @@ export function cases(): Case[] {
       `star(5, ${inner})`,
       (p) => `Sdf.star(${p}, ${f(30)}, 5, ${f(inner)})`,
       (p) => polygon(p, vs),
-      [...PROBES, vs[0]!, vs[1]!, [0, -30]],
+      [...PROBES, vs[0]!, vs[1]!, [0, -30], [-12, 0]],
     );
   }
   for (const half of [0.6, 2.2]) {
@@ -395,6 +395,17 @@ export function cases(): Case[] {
       (p) => Math.min(...Array.from({ length: 6 }, (_, i) => circle(p, at(20, Math.PI + (i * Math.PI) / 3), 4))),
       [...PROBES, [0, 20], at(20, Math.PI / 3)],
     ],
+    [
+      "polarRepeat 5",
+      (p) => `Sdf.circle(Sdf.polarRepeat(${p}, 5) - float2(0.0, -20.0), 4.0)`,
+      (p) => Math.min(...Array.from({ length: 5 }, (_, i) => circle(p, at(20, Math.PI + (i * 2 * Math.PI) / 5), 4))),
+      [
+        [0, 0],
+        [15, 0],
+        [-15, 0],
+        [0, 20],
+      ],
+    ],
     ["scaled", (p) => `Sdf.scaled(SkCaseCircle(float2(5.0, 0.0), 4.0), ${p}, ${f(2.5)})`, disc([12.5, 0], 10), PROBES],
   ];
   for (const [name, call, ref, probes] of moved) distance(name, call, ref, probes);
@@ -456,5 +467,18 @@ export function cases(): Case[] {
       5e-3,
     );
   }
+  const angles: Array<[string, string, number]> = [
+    ["0.0", "0.0", 0],
+    ["0.0", "-0.0", 0],
+    ["-0.0", "-1.0", Math.PI],
+    ["0.0", "-1.0", Math.PI],
+    ["1.0", "-0.0", Math.PI / 2],
+    ["-1.0", "-0.0", -Math.PI / 2],
+    ["3.0", "4.0", Math.atan2(3, 4)],
+    ["-3.0", "-4.0", Math.atan2(-3, -4)],
+    ["4.0", "-3.0", Math.atan2(4, -3)],
+  ];
+  for (const [y, x, want] of angles)
+    add(`safeAtan2(${y}, ${x})`, `float4(safeAtan2(${live(y)}, ${live(x)}), 0.0, 0.0, 0.0)`, [want, 0, 0, 0], 2e-6);
   return withRunTime(out);
 }

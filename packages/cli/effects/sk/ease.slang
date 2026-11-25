@@ -245,7 +245,8 @@ public float easeOutQuad(float t) { t = saturate(t); return 1.0 - (1.0 - t) * (1
 public float easeInOutQuad(float t)
 {
     t = saturate(t);
-    return t < 0.5 ? 2.0 * t * t : 1.0 - pow(-2.0 * t + 2.0, 2.0) * 0.5;
+    float u = 2.0 - 2.0 * t;
+    return t < 0.5 ? 2.0 * t * t : 1.0 - u * u * 0.5;
 }
 
 /// t³.

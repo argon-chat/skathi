@@ -71,20 +71,21 @@ float3 sk_unit(uint3 h)
     return float3(h >> 8u) * (1.0 / 16777216.0);
 }
 
-/// The integer cell holding p, as hash input (two's complement words; |p| < 2^31).
+/// The integer cell holding p as a two's complement word. Clamped into int range first: a float
+/// out of it converts to an undefined int on Metal and WGSL.
 uint sk_cell(float p)
 {
-    return uint(int(floor(p)));
+    return uint(int(clamp(floor(p), -2147483648.0, 2147483520.0)));
 }
 
 uint2 sk_cell(float2 p)
 {
-    return uint2(int2(floor(p)));
+    return uint2(int2(clamp(floor(p), -2147483648.0, 2147483520.0)));
 }
 
 uint3 sk_cell(float3 p)
 {
-    return uint3(int3(floor(p)));
+    return uint3(int3(clamp(floor(p), -2147483648.0, 2147483520.0)));
 }
 
 /// A float in [0, 1) for the cell `floor(p)`: the same bits on every backend.
@@ -211,7 +212,7 @@ float3 sk_value2(uint2 c00, uint2 c11, float2 f)
 uint2 sk_wrap(float2 cell, float2 period)
 {
     float2 p = max(round(period), float2(1.0, 1.0));
-    return uint2(int2(cell - p * floor(cell / p)));
+    return sk_cell(cell - p * floor(cell / p));
 }
 
 /// Trilinear blend with fade weights of eight corner values (v0: x00, x10, x01, x11 at z0;
@@ -280,7 +281,7 @@ public struct Perlin : INoise, INoise3
     public static float3 derivatives(float2 p)
     {
         float2 i = floor(p);
-        uint2 c = uint2(int2(i));
+        uint2 c = sk_cell(i);
         return sk_perlin2(c, c + 1u, p - i);
     }
 
@@ -308,7 +309,7 @@ public struct Perlin : INoise, INoise3
     {
         float3 i = floor(p);
         float3 f = p - i;
-        uint3 c = uint3(int3(i));
+        uint3 c = sk_cell(i);
         float3 g[8];
         float v[8];
         [ForceUnroll]
@@ -336,7 +337,7 @@ public struct ValueNoise : INoise, INoise3
     public static float3 derivatives(float2 p)
     {
         float2 i = floor(p);
-        uint2 c = uint2(int2(i));
+        uint2 c = sk_cell(i);
         return sk_value2(c, c + 1u, p - i);
     }
 
@@ -363,7 +364,7 @@ public struct ValueNoise : INoise, INoise3
     public static float4 derivatives(float3 p)
     {
         float3 i = floor(p);
-        uint3 c = uint3(int3(i));
+        uint3 c = sk_cell(i);
         float3 g[8];
         float v[8];
         [ForceUnroll]
@@ -396,7 +397,7 @@ float3 sk_simplex2(float2 p, float2 cs)
     float2 i1 = x0.x > x0.y ? float2(1.0, 0.0) : float2(0.0, 1.0);
     float2 x1 = x0 - i1 + SK_G2;
     float2 x2 = x0 - 1.0 + 2.0 * SK_G2;
-    uint2 c = uint2(int2(i));
+    uint2 c = sk_cell(i);
     uint h0 = pcg(c);
     uint h1 = pcg(c + uint2(i1));
     uint h2 = pcg(c + 1u);
@@ -457,7 +458,7 @@ public struct Simplex : INoise, INoise3
         float3 l = 1.0 - g;
         float3 i1 = min(g, l.zxy);
         float3 i2 = max(g, l.zxy);
-        uint3 c = uint3(int3(i));
+        uint3 c = sk_cell(i);
         float4 n = sk_simplex_corner3(sk_grad3(pcg(c)), x0)
             + sk_simplex_corner3(sk_grad3(pcg(c + uint3(i1))), x0 - i1 + (1.0 / 6.0))
             + sk_simplex_corner3(sk_grad3(pcg(c + uint3(i2))), x0 - i2 + (2.0 / 6.0))
@@ -514,7 +515,7 @@ Cell sk_worley(float2 p, float jitter, float2 period, bool tiled)
         for (int x = -1; x <= 1; x++)
         {
             float2 o = float2(float(x), float(y));
-            uint2 key = tiled ? sk_wrap(i + o, period) : uint2(int2(i + o));
+            uint2 key = tiled ? sk_wrap(i + o, period) : sk_cell(i + o);
             float2 r = o + sk_feature(key, jitter) - f;
             float d = dot(r, r);
             bool nearer = d < d1;
@@ -528,7 +529,7 @@ Cell sk_worley(float2 p, float jitter, float2 period, bool tiled)
     c.f1 = sqrt(d1);
     c.f2 = sqrt(d2);
     c.cell = best;
-    c.id = pcg(tiled ? sk_wrap(best, period) : uint2(int2(best)));
+    c.id = pcg(tiled ? sk_wrap(best, period) : sk_cell(best));
     c.toNearest = to;
     return c;
 }
@@ -562,7 +563,7 @@ public float worleyEdge(float2 p, float jitter = 1.0)
         for (int x = -1; x <= 1; x++)
         {
             float2 o = home + float2(float(x), float(y));
-            float2 r = o + sk_feature(uint2(int2(i + o)), jitter) - f;
+            float2 r = o + sk_feature(sk_cell(i + o), jitter) - f;
             float2 d = r - near.toNearest;
             float len2 = dot(d, d);
             float bisector = dot(0.5 * (near.toNearest + r), d * rsqrt(max(len2, 1e-12)));
@@ -603,7 +604,7 @@ public Cell3 worley(float3 p, float jitter = 1.0)
             for (int x = -1; x <= 1; x++)
             {
                 float3 o = float3(float(x), float(y), float(z));
-                float3 r = o + 0.5 + (sk_unit(pcg3d(uint3(int3(i + o)))) - 0.5) * jitter - f;
+                float3 r = o + 0.5 + (sk_unit(pcg3d(sk_cell(i + o))) - 0.5) * jitter - f;
                 float d = dot(r, r);
                 bool nearer = d < d1;
                 d2 = nearer ? d1 : min(d2, d);
@@ -616,7 +617,7 @@ public Cell3 worley(float3 p, float jitter = 1.0)
     c.f1 = sqrt(d1);
     c.f2 = sqrt(d2);
     c.cell = best;
-    c.id = pcg(uint3(int3(best)));
+    c.id = pcg(sk_cell(best));
     return c;
 }
 
@@ -792,13 +793,13 @@ public float r2(float2 px)
 public float bayer(float2 px, int size = 8)
 {
     uint levels = size >= 8 ? 3u : (size >= 4 ? 2u : 1u);
-    uint2 c = uint2(int2(floor(px))) & 7u;
+    uint2 c = sk_cell(px) & 7u;
     uint xy = c.x ^ c.y;
     uint index = 0u;
     [ForceUnroll]
     for (uint k = 0u; k < 3u; k++)
     {
-        uint shift = 2u * (levels - 1u - k);
+        uint shift = 2u * (levels - 1u - min(k, levels - 1u));
         uint bits = (((xy >> k) & 1u) << 1u) | ((c.y >> k) & 1u);
         index = k < levels ? index | (bits << shift) : index;
     }
@@ -824,6 +825,6 @@ public float3 dither(float3 rgb, float2 px, float levels = 255.0)
 /// `dither` with a different pattern every frame (`frame` a whole frame count).
 public float3 dither(float3 rgb, float2 px, float frame, float levels)
 {
-    float3 u = sk_unit(pcg3d(uint3(sk_cell(px), uint(int(frame)))));
+    float3 u = sk_unit(pcg3d(uint3(sk_cell(px), sk_cell(frame))));
     return rgb + float3(triangular(u.x), triangular(u.y), triangular(u.z)) / levels;
 }
