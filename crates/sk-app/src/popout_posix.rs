@@ -1,5 +1,5 @@
 //! `<SkWindow>` on macOS and Linux: what Windows does through the HWND, through gpui's platform
-//! window. Monitor indices, mapping between windows and the cover window's warm size stay Windows-only.
+//! window. Monitor indices and the cover window's warm size stay Windows-only.
 
 use gpui::{point, px, size, AnyWindowHandle, App, Window, WindowHandle, WindowId};
 
@@ -49,13 +49,15 @@ fn set_client_bounds(window: &mut Window, [x, y, w, h]: [Option<f32>; 4]) {
     }
 }
 
-/// A hidden or hidden-first pop-out's show; `cover` fills the display it is on.
+/// A hidden or hidden-first pop-out's show; `cover` fills the display it is on. `after` runs once
+/// the window is on screen.
 pub(super) fn show(
     id: WindowId,
     handle: WindowHandle<PopoutShell>,
     cover: bool,
     activate: bool,
     on_top: bool,
+    after: impl FnOnce() + 'static,
     cx: &mut App,
 ) {
     let _ = AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
@@ -71,7 +73,12 @@ pub(super) fn show(
     cx.spawn(async move |cx| {
         cx.update(|cx| {
             let _ = AnyWindowHandle::from(handle).update(cx, |_, window, _| {
-                if !window.show_window(activate, || true, |_| {}) && activate {
+                let after = move |shown: bool| {
+                    if shown {
+                        after();
+                    }
+                };
+                if !window.show_window(activate, || true, after) && activate {
                     window.activate_window();
                 }
                 if on_top {

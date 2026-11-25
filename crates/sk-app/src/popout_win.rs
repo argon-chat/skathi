@@ -372,6 +372,7 @@ mod imp {
     pub fn monitor_at(_x: i32, _y: i32) -> Option<(u64, Rect)> {
         None
     }
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn is_foreground(_raw: isize) -> bool {
         false
     }
@@ -399,6 +400,7 @@ pub use imp::*;
 
 /// Maps a rect between two windows' client spaces (CSS px) through the screen; the origins are
 /// the client areas' screen origins, physical px.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn map_rect(
     rect: (f32, f32, f32, f32),
     from_origin: (i32, i32),

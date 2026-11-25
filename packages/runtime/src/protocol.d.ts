@@ -335,6 +335,9 @@ declare function __sk_window_popouts(): SkJson;
 /** TEST SURFACE. Dispatches a real platform click at the window's own client coordinates; `true` if it landed. */
 declare function __sk_window_click(nodeId: SkNodeId, x: number, y: number): boolean;
 
+/** TEST SURFACE, macOS only. Queues an AppKit mouse move (`"move"`), or a move and a left click (`"click"`), at the window's client coordinates, so it goes through `NSApplication` as real input does; node 0 is the main window. `false` when there is no such window. */
+declare function __sk_window_post_mouse(nodeId: SkNodeId, x: number, y: number, kind: "move" | "click"): boolean;
+
 /** A line into the host log. Always registered by the app host (callers do not probe); a bare embedder must provide it. */
 declare function __sk_log(message: string): void;
 /** `console.warn`s `[skathi compat] message` the first time `key` is advised in this process; false after. */

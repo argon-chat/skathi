@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-popout-menu",
+
+  "window": {
+    "title": "Skathi — pop-out menu (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "default",
+    "backdrop": "none"
+  }
+}

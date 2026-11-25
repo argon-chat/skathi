@@ -83,6 +83,7 @@ mod perf;
 mod permissions;
 mod placement;
 mod popout;
+mod popout_mac;
 mod popout_win;
 mod power;
 mod pressure_observer;
@@ -697,6 +698,8 @@ impl Render for Shell {
         perf::render_begin();
         let el = self.render_body(window, cx);
         window.defer(cx, |window, _| power::note_primary(window));
+        #[cfg(target_os = "macos")]
+        popout::attach_pending(cx);
         perf::render_done();
         // An input dispatch flushes its own changes and draws, and a paced pump may not follow it.
         #[cfg(sk_devtools)]

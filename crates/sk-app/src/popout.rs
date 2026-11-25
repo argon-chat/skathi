@@ -43,6 +43,8 @@ impl Render for PopoutShell {
             crate::power::note_popout(window);
         });
         frame_drawn(id, window, cx);
+        #[cfg(target_os = "macos")]
+        attach_pending(cx);
         let backdrop = POPOUTS
             .with(|p| {
                 p.borrow()
@@ -125,6 +127,9 @@ struct Popout {
     fullscreen: bool,
     /// 0 = none.
     hwnd: isize,
+    /// gpui's `NSView` on macOS; 0 elsewhere.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    view: usize,
     /// A hidden pop-out still paints its subtree and is shown again rather than reopened.
     visible: bool,
     cover: bool,
@@ -156,6 +161,73 @@ thread_local! {
     static POPOUTS: RefCell<Vec<Popout>> = const { RefCell::new(Vec::new()) };
     static CLOSED_SUB: RefCell<Option<Subscription>> = const { RefCell::new(None) };
     static PAINT_ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `taskbar={false}` pop-outs that could not be made child windows yet.
+    #[cfg(target_os = "macos")]
+    static PENDING_CHILDREN: RefCell<Vec<WindowId>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(target_os = "macos")]
+fn main_view() -> usize {
+    crate::popout_mac::view_of(crate::window::native_window(None))
+}
+
+/// `taskbar={false}` on macOS: a child window of the main window while both are shown. When
+/// that cannot be done now, it is tried again from a later frame of either window.
+#[cfg(target_os = "macos")]
+fn want_child(id: WindowId) {
+    let Some(view) = POPOUTS.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|w| w.id == id && !w.taskbar && w.visible)
+            .map(|w| w.view)
+    }) else {
+        return;
+    };
+    if !crate::popout_mac::attach(view, main_view()) {
+        pend_child(id);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pend_child(id: WindowId) {
+    PENDING_CHILDREN.with(|p| {
+        let mut p = p.borrow_mut();
+        if !p.contains(&id) {
+            p.push(id);
+        }
+    });
+}
+
+/// The relation is kept only while both windows are shown.
+#[cfg(target_os = "macos")]
+fn drop_child(id: WindowId, view: usize) {
+    PENDING_CHILDREN.with(|p| p.borrow_mut().retain(|&w| w != id));
+    crate::popout_mac::detach(view);
+}
+
+/// From a task: `addChildWindow:` can call back into gpui.
+#[cfg(target_os = "macos")]
+pub(crate) fn attach_pending(cx: &mut App) {
+    if PENDING_CHILDREN.with(|p| p.borrow().is_empty()) {
+        return;
+    }
+    cx.spawn(async move |_| {
+        for id in PENDING_CHILDREN.with(|p| std::mem::take(&mut *p.borrow_mut())) {
+            want_child(id);
+        }
+    })
+    .detach();
+}
+
+/// A child window entering fullscreen of its own leaves its parent first and comes back after.
+#[cfg(target_os = "macos")]
+fn child_fullscreen(id: WindowId, view: usize, event: gpui::WindowFullscreenTransition) {
+    use gpui::WindowFullscreenTransition::*;
+    match event {
+        Will(true) => drop_child(id, view),
+        Did(false) | Cancelled(true) => pend_child(id),
+        _ => {}
+    }
 }
 
 /// Marks every pop-out dirty after a JS wave and paints the visible ones from a task.
@@ -758,16 +830,33 @@ host_fn!(fn sk_window_click(_g, args) {
     Value::boolean(done.unwrap_or(false)).0
 });
 
+// macOS: the AppKit counterpart of `sk_window_click`, for specs about activation and key state.
+// Node 0 is the main window. `kind` is "move" or "click".
+#[cfg(target_os = "macos")]
+host_fn!(fn sk_window_post_mouse(g, args) {
+    let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
+    let x = args.arg(1).as_number().unwrap_or(0.0);
+    let y = args.arg(2).as_number().unwrap_or(0.0);
+    let click = unsafe { read_string(g, args.arg(3).0) }.as_deref() == Some("click");
+    let view = if node == 0 {
+        main_view()
+    } else {
+        match popout_of_node(node) {
+            Some(i) => POPOUTS.with(|p| p.borrow()[i].view),
+            None => return Value::boolean(false).0,
+        }
+    };
+    Value::boolean(crate::popout_mac::post_mouse(view, x, y, click)).0
+});
+
 host_fn!(fn sk_window_popouts(_g, _args) {
     let json = POPOUTS.with(|p| {
         Json::arr(
             p.borrow()
                 .iter()
                 .map(|w| {
-                    let rect = popout_win::window_rect(w.hwnd).map_or(Json::Null, |r| {
-                        Json::arr(r.iter().map(|v| Json::n(*v as f64)).collect())
-                    });
-                    let (owner, appwindow, toolwindow, popup, thickframe, non_rude) =
+                    let (rect, main_rect, shown, foreground, owned_by_main) = native_facts(w);
+                    let (_, appwindow, toolwindow, popup, thickframe, non_rude) =
                         popout_win::describe(w.hwnd);
                     let (layered, transparent, no_activate) = popout_win::describe_input(w.hwnd);
                     Json::obj(vec![
@@ -779,12 +868,13 @@ host_fn!(fn sk_window_popouts(_g, _args) {
                         ("height", Json::n(w.last_metrics.1)),
                         ("focused", Json::Bool(w.last_focused)),
                         ("visible", Json::Bool(w.visible)),
-                        ("shown", Json::Bool(popout_win::is_visible(w.hwnd))),
-                        ("foreground", Json::Bool(popout_win::is_foreground(w.hwnd))),
+                        ("shown", Json::Bool(shown)),
+                        ("foreground", Json::Bool(foreground)),
                         ("cover", Json::Bool(w.cover)),
                         ("rect", rect),
+                        ("mainRect", main_rect),
                         ("hwnd", Json::n(w.hwnd as f64)),
-                        ("ownedByMain", Json::Bool(owner != 0 && Some(owner) == crate::window::primary_hwnd())),
+                        ("ownedByMain", Json::Bool(owned_by_main)),
                         ("appWindow", Json::Bool(appwindow)),
                         ("toolWindow", Json::Bool(toolwindow)),
                         ("popup", Json::Bool(popup)),
@@ -814,6 +904,37 @@ host_fn!(fn sk_window_popouts(_g, _args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
+/// `(rect, main window's rect, shown, key/foreground, owned by or child of the main window)`.
+/// Rects are `[left, top, right, bottom]`: physical px on Windows, points from the top of the
+/// primary screen on macOS.
+fn native_facts(w: &Popout) -> (Json, Json, bool, bool, bool) {
+    let rect = |r: Option<[f64; 4]>| r.map_or(Json::Null, |r| Json::arr(r.map(Json::n).into()));
+    #[cfg(target_os = "macos")]
+    {
+        let main = main_view();
+        (
+            rect(crate::popout_mac::frame_top_left(w.view)),
+            rect(crate::popout_mac::frame_top_left(main)),
+            crate::popout_mac::is_visible(w.view),
+            crate::popout_mac::is_key(w.view),
+            crate::popout_mac::is_child_of(w.view, main),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let physical = |r: Option<popout_win::Rect>| rect(r.map(|r| r.map(f64::from)));
+        let main = crate::window::primary_hwnd();
+        let (owner, ..) = popout_win::describe(w.hwnd);
+        (
+            physical(popout_win::window_rect(w.hwnd)),
+            physical(main.and_then(popout_win::window_rect)),
+            popout_win::is_visible(w.hwnd),
+            popout_win::is_foreground(w.hwnd),
+            owner != 0 && Some(owner) == main,
+        )
+    }
+}
+
 // Maps a node as the primary window painted it into the pop-out's CSS px, relative to its painted
 // root, via screen coordinates (holds across monitors and DPIs). A cover window is measured where
 // its next show puts it, so the answer is right while hidden.
@@ -821,29 +942,56 @@ host_fn!(fn sk_window_map_rect(_g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let src = args.arg(1).as_number().unwrap_or(0.0) as u32;
     let Some(i) = popout_of_node(node) else { return UNDEF };
+    let Some(rect) = sk_tree::bounds_in(0, src) else { return UNDEF };
+    let Some((x, y, w, h)) = map_to_popout(i, rect) else { return UNDEF };
+    let root = sk_tree::bounds_in(node, node).map_or((0.0, 0.0), |r| (r.0, r.1));
+    let json = Json::arr(vec![Json::n(x - root.0), Json::n(y - root.1), Json::n(w), Json::n(h)]).to_json();
+    JsRuntime::with(|rt| rt.ctx().string(&json)).0
+});
+
+/// Points throughout: AppKit's screen space is global and in points on every display.
+#[cfg(target_os = "macos")]
+fn map_to_popout(i: usize, rect: (f32, f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
+    let (view, cover) = POPOUTS.with(|p| {
+        let p = p.borrow();
+        (p[i].view, p[i].cover)
+    });
+    let main = main_view();
+    let from = crate::popout_mac::view_on_screen(main)?;
+    let to = if cover {
+        crate::popout_mac::view_on_filled_screen(view, main)?
+    } else {
+        crate::popout_mac::view_on_screen(view)?
+    };
+    Some(crate::popout_mac::map_rect(rect, from, to))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn map_to_popout(i: usize, rect: (f32, f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
     let (hwnd, cover, scale, monitor) = POPOUTS.with(|p| {
         let p = p.borrow();
         (p[i].hwnd, p[i].cover, p[i].scale, p[i].monitor)
     });
-    let Some(rect) = sk_tree::bounds_in(0, src) else { return UNDEF };
-    let Some(main) = crate::window::primary_hwnd() else { return UNDEF };
-    let Some(from) = popout_win::client_rect_on_screen(main) else { return UNDEF };
+    let main = crate::window::primary_hwnd()?;
+    let from = popout_win::client_rect_on_screen(main)?;
     let main_scale = crate::window::primary_scale();
-    let to = if cover {
+    let (to, to_scale) = if cover {
         // Another monitor uses the scale of its own latest frame.
         let at = monitor.and_then(popout_win::monitor_rect_at);
         let s = if at.is_some() { scale } else { main_scale };
-        at.or_else(|| popout_win::monitor_rect(main)).map(|r| (r, s))
+        at.or_else(|| popout_win::monitor_rect(main))
+            .map(|r| (r, s))?
     } else {
-        popout_win::client_rect_on_screen(hwnd).map(|r| (r, scale))
+        popout_win::client_rect_on_screen(hwnd).map(|r| (r, scale))?
     };
-    let Some((to, to_scale)) = to else { return UNDEF };
-    let root = sk_tree::bounds_in(node, node).map_or((0.0, 0.0), |r| (r.0, r.1));
-    let (x, y, w, h) =
-        popout_win::map_rect(rect, (from[0], from[1]), main_scale, (to[0], to[1]), to_scale);
-    let json = Json::arr(vec![Json::n(x - root.0), Json::n(y - root.1), Json::n(w), Json::n(h)]).to_json();
-    JsRuntime::with(|rt| rt.ctx().string(&json)).0
-});
+    Some(popout_win::map_rect(
+        rect,
+        (from[0], from[1]),
+        main_scale,
+        (to[0], to[1]),
+        to_scale,
+    ))
+}
 
 /// `0` addresses the primary window; any other id must be an existing SkWindow root (a missing
 /// owner never falls back to the primary).
@@ -867,6 +1015,17 @@ fn fullscreen_window(owner: u32, on: Option<bool>) -> bool {
         return false;
     };
     if let Some(on) = on {
+        #[cfg(target_os = "macos")]
+        if on {
+            if let Some((id, view)) = POPOUTS.with(|p| {
+                p.borrow()
+                    .iter()
+                    .find(|w| w.id == handle.window_id() && !w.taskbar)
+                    .map(|w| (w.id, w.view))
+            }) {
+                drop_child(id, view);
+            }
+        }
         with_app(|cx| {
             cx.defer(move |cx| {
                 let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
@@ -1076,6 +1235,7 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
             is_minimizable: !opts.cover,
             display_id,
             app_owns_titlebar_drag: !opts.os_chrome,
+            nonactivating_panel: !opts.focusable,
             ..Default::default()
         },
         |window, cx| {
@@ -1097,6 +1257,8 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
     sk_tree::set_os_chrome_in(key, opts.os_chrome);
     sk_tree::windows::set_full_res_images(key, opts.full_resolution);
     let mut hwnd = 0;
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut view = 0;
     let mut first_frame = (1.0, (0.0, 0.0));
     let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
         opts.controls.apply(
@@ -1108,6 +1270,18 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
         );
         crate::window::remember_native_window(window);
         hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
+        #[cfg(target_os = "macos")]
+        {
+            view = crate::popout_mac::view_of(crate::window::native_window(Some(key)));
+            // A window that is never activated draws only what the app paints, as on Windows.
+            if !opts.focusable && !opts.os_chrome {
+                window.vn_set_window_buttons(false, 1.0);
+            }
+            if !opts.taskbar {
+                let id = handle.window_id();
+                window.vn_on_fullscreen_transition(move |event| child_fullscreen(id, view, event));
+            }
+        }
         let client = window.viewport_size();
         first_frame = (
             window.scale_factor(),
@@ -1175,6 +1349,7 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
             last_focused: false,
             fullscreen: false,
             hwnd,
+            view,
             visible: opts.visible,
             cover: opts.cover,
             taskbar: opts.taskbar,
@@ -1230,6 +1405,10 @@ fn open_now(node: u32, mut opts: Options, on_close: u64, on_event: u64, cx: &mut
         let still_shown = POPOUTS.with(|p| p.borrow().iter().any(|w| w.id == id && w.visible));
         if still_shown {
             report_show(cx, id, on_event, opened_at.elapsed());
+            #[cfg(target_os = "macos")]
+            if !opts.taskbar {
+                cx.spawn(async move |_| want_child(id)).detach();
+            }
         }
     }
 }
@@ -1314,6 +1493,10 @@ fn show_now(id: WindowId, cx: &mut App) {
             cover,
             activate && !crate::quiet::never_focus(),
             on_top,
+            move || {
+                #[cfg(target_os = "macos")]
+                want_child(id);
+            },
             cx,
         );
         return;
@@ -1438,6 +1621,11 @@ fn hide_now(id: WindowId, cx: &mut App) {
         return;
     };
     if hwnd == 0 {
+        #[cfg(target_os = "macos")]
+        if let Some(view) = POPOUTS.with(|p| p.borrow().iter().find(|w| w.id == id).map(|w| w.view))
+        {
+            drop_child(id, view);
+        }
         #[cfg(not(target_os = "windows"))]
         if posix::hide(id, cx) {
             emit_in(cx, on_event, "hide", Json::obj(vec![]));
@@ -1566,6 +1754,8 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
         return;
     };
     let popout = POPOUTS.with(|p| p.borrow_mut().remove(i));
+    #[cfg(target_os = "macos")]
+    drop_child(id, popout.view);
     crate::power::forget_popout(id.as_u64());
     sk_tree::set_popped_out(popout.node, false);
     // Its atlas is destroyed, so owed tiles must not reach another window's `drop_image`, which could remove keys a live window re-inserted.
@@ -1626,6 +1816,12 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__sk_window_close", 1, sk_window_close_popout as *const _);
     rt.register("__sk_window_popouts", 0, sk_window_popouts as *const _);
     rt.register("__sk_window_click", 3, sk_window_click as *const _);
+    #[cfg(target_os = "macos")]
+    rt.register(
+        "__sk_window_post_mouse",
+        4,
+        sk_window_post_mouse as *const _,
+    );
     rt.register(
         "__sk_window_set_options",
         2,

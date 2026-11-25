@@ -9,7 +9,7 @@ order: 3
 import Demo from "../../src/components/Demo.astro";
 import Sample from "../../src/components/Sample.astro";
 
-`<SkWindow>` opens a second OS window that paints part of your component tree. There is no second app, no message passing and no serialization: the pop-out runs the same components on the same reactive state, so a click in it updates the main window in the same frame. This guide covers the model first, then opening and closing, which props apply live, and the common scenarios: palettes, tooltips that follow the main window, click-through overlays, owned windows, focus, screen-capture protection and multiple monitors. A few props work on Windows only, and Wayland on Linux limits a few more; each section says so. The [platform table](#platform-support) collects them.
+`<SkWindow>` opens a second OS window that paints part of your component tree. There is no second app, no message passing and no serialization: the pop-out runs the same components on the same reactive state, so a click in it updates the main window in the same frame. This guide covers the model first, then opening and closing, which props apply live, and the common scenarios: palettes, tooltips that follow the main window, menus past the window's edge, click-through overlays, owned windows, focus, screen-capture protection and multiple monitors. A few props work on Windows only, and Wayland on Linux limits a few more; each section says so. The [platform table](#platform-support) collects them.
 
 ## One app, many windows
 
@@ -86,8 +86,8 @@ Some props are read once, when the window is created. Others are applied to the 
 | [`monitor`](/window-api/sk-window-monitor/)                                                      | Main's monitor    | Live, with `cover`   | Windows                                        |
 | [`chrome`](/window-api/sk-window-chrome/)                                                        | `"default"`       | Creation; advises    | All                                            |
 | [`cover`](/window-api/sk-window-cover/)                                                          | none              | Creation; advises    | Windows; display-sized elsewhere               |
-| [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises    | Windows                                        |
-| [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises    | Windows                                        |
+| [`taskbar`](/window-api/sk-window-taskbar/)                                                      | `true`            | Creation; advises    | Windows, macOS                                 |
+| [`focusable`](/window-api/sk-window-focusable/)                                                  | `true`            | Creation; advises    | Windows, macOS                                 |
 | [`resizable`](/window-api/sk-window-resizable/)                                                  | `true`            | Creation; advises    | All                                            |
 | [`minWidth`](/window-api/sk-window-min-width/), [`minHeight`](/window-api/sk-window-min-height/) | none              | Live                 | All                                            |
 | [`maxWidth`](/window-api/sk-window-max-width/), [`maxHeight`](/window-api/sk-window-max-height/) | none              | Live                 | All                                            |
@@ -112,7 +112,7 @@ A palette is a small window that edits the document in the main window. It shoul
 <Sample src="pop-out-windows/Palette" />
 
 - `activate` is left at `false`, so the palette appears without taking focus, and the caret stays where it was in the main window.
-- `:taskbar="false"` makes the palette an owned window on Windows: no taskbar button, no Alt+Tab entry, always above the main window, and minimized with it. See [Owned windows](#owned-windows).
+- `:taskbar="false"` makes the palette an owned window on Windows (no taskbar button, no Alt+Tab entry, always above the main window, and minimized with it) and a child window of the main window on macOS. See [Owned windows](#owned-windows).
 - On Windows the palette opens to the right of the main window. `appWindow.getBounds()` gives the main window's outer rect in CSS px of screen space, the same space as `bounds` when all monitors share one scale. On macOS `getBounds()` is relative to the current screen, so the sample passes only a size outside Windows.
 - Use [`alwaysOnTop`](/window-api/sk-window-always-on-top/) instead when the palette must stay above other apps' windows too. It does nothing under Wayland.
 
@@ -136,7 +136,18 @@ The usual host for such content is a transparent, click-through window that cove
 - The tip hides when the selected row scrolls out of the list, by comparing the row with the list's own mapped rect.
 - `mapFromMain()` returns `null` before `@open`, after the window closes, and when either element is not painted.
 
-> **Note:** `mapFromMain()` works on Windows only. On macOS and Linux it always returns `null`, and a `cover` window is not made borderless. That is why the sample mounts the overlay only on Windows. On other platforms, show the tooltip inside the main window.
+> **Note:** `mapFromMain()` works on Windows and macOS; on Linux it always returns `null`. The sample still mounts the overlay only on Windows, because on macOS and Linux a `cover` window is not made borderless. On macOS, place a small pop-out at the element instead, as the menu below does. On Linux, show the tooltip inside the main window.
+
+## Menus past the window's edge
+
+A context menu or a dropdown can extend past the main window's edges, as native menus do, when it is a pop-out. It must not take the focus from the main window, it belongs to it, and it opens at the element or the point that was clicked.
+
+<Sample src="pop-out-windows/ContextMenu" />
+
+- `:focusable="false"`: a click in the menu reaches it, while the main window stays the active one and gets no `blur`. Keys keep going to the main window, so handle arrows, Enter and Escape there and route them to the menu.
+- `:taskbar="false"`: the menu belongs to the main window. See [Owned windows](#owned-windows) for how that differs between Windows and macOS.
+- The menu is created once, hidden, and kept warm. `mapFromMain(page)` tells where the page is in the menu's own coordinates, so adding it, and the click's offset in the page, to the menu's current `bounds` position puts the menu's corner at the click. It works while the menu is hidden.
+- On macOS, a `:focusable="false"` pop-out with `chrome="hidden"` has no traffic lights.
 
 ## Click-through overlays
 
@@ -158,17 +169,19 @@ An overlay draws over the desktop, on top of other apps, without getting in the 
 - [`@show`](/window-api/sk-window-event-show/) fires on each of those shows, with `firstFrameMs`, the time from the show request to the first frame. [`@hide`](/window-api/sk-window-event-hide/) fires when `visible` goes back to `false`. A pop-out that opens visible gets one `@show` too, timed from the open.
 - `alwaysOnTop` keeps the ring above other apps' windows when they are activated.
 
-> **Note:** The sample mounts the overlay on Windows only. On macOS and Linux a `cover` window fills the display but is not made borderless, and `:focusable="false"` does not keep a click from activating it. `ignoreMouseEvents` does nothing under X11, and under Wayland `alwaysOnTop` does nothing and `visible` minimizes instead of hiding.
+> **Note:** The sample mounts the overlay on Windows only. On macOS and Linux a `cover` window fills the display but is not made borderless. On Linux, `:focusable="false"` does not keep a click from activating the window. `ignoreMouseEvents` does nothing under X11, and under Wayland `alwaysOnTop` does nothing and `visible` minimizes instead of hiding.
 
 ## Owned windows
 
-[`:taskbar="false"`](/window-api/sk-window-taskbar/) makes the pop-out owned by the main window on Windows. An owned window:
+[`:taskbar="false"`](/window-api/sk-window-taskbar/) makes the pop-out belong to the main window. On Windows it is an owned window, which:
 
 - has no taskbar button and no Alt+Tab entry;
 - always stays above the main window, without being topmost over other apps;
 - minimizes and restores with the main window.
 
-That suits palettes, inspectors and find bars. It is the only owner relationship Skathi has. Pop-outs are otherwise siblings: a `<SkWindow>` nested inside another is flattened to a sibling window, with an advisory. `taskbar` is creation-time, and on macOS and Linux it does nothing.
+On macOS it is a child window of the main window while it is shown. It stays above the main window, hides and minimizes with it, and one shown while the main window is in fullscreen appears in that fullscreen space. Unlike an owned window on Windows, it also moves when the main window is dragged, keeping its place relative to it. A hidden pop-out is not attached, so the main window coming back does not show it.
+
+That suits palettes, inspectors, find bars and menus. It is the only owner relationship Skathi has. Pop-outs are otherwise siblings: a `<SkWindow>` nested inside another is flattened to a sibling window, with an advisory. `taskbar` is creation-time, and on Linux it does nothing.
 
 ## Focus
 
@@ -176,7 +189,7 @@ Focus is per window. An `<input>` in a pop-out holds the focus in that window wh
 
 - [`activate`](/window-api/sk-window-activate/) (default `false`) decides whether the window takes the keyboard when it is shown. Leave it off for palettes and turn it on for windows the user types into first.
 - [`@focus`](/window-api/sk-window-event-focus/) and [`@blur`](/window-api/sk-window-event-blur/) report the pop-out's own activation. They arrive with the pop-out's next frame.
-- When a pop-out takes focus, the main window loses it: `window` receives [`blur`](/window-api/event-blur/), and [`appWindow.isFocused()`](/window-api/is-focused/) turns `false`.
+- When a pop-out takes focus, the main window loses it: `window` receives [`blur`](/window-api/event-blur/), and [`appWindow.isFocused()`](/window-api/is-focused/) turns `false`. A [`:focusable="false"`](/window-api/sk-window-focusable/) pop-out never takes it, on Windows and macOS, even when it is clicked.
 - On Windows, hiding a pop-out with `visible` hands activation back to the main window.
 
 <Sample src="pop-out-windows/FindWindow" />
@@ -217,9 +230,10 @@ There is no list of displays: `window.getScreenDetails` is not defined. [`screen
 | `ignoreMouseEvents`                                   | Supported | Supported                          | Wayland only                                   |
 | `contentProtection`                                   | Supported | Supported                          | No-op                                          |
 | `cover`                                               | Supported | Fills the display, not borderless  | Fills the display, except under Wayland        |
-| `:focusable="false"`                                  | Supported | Not activated on show only         | Not activated on show only                     |
-| `monitor`, `taskbar`                                  | Supported | No-op                              | No-op                                          |
-| `mapFromMain()`                                       | Supported | Returns `null`                     | Returns `null`                                 |
+| `:focusable="false"`                                  | Supported | Supported; a nonactivating panel   | Not activated on show only                     |
+| `taskbar`                                             | Supported | Supported; a child window          | No-op                                          |
+| `monitor`                                             | Supported | No-op                              | No-op                                          |
+| `mapFromMain()`                                       | Supported | Supported                          | Returns `null`                                 |
 
 For code that must run everywhere, open and close with `v-if` or `{#if}` and keep the Windows-only props behind a platform check, as the samples above do with `navigator.platform`.
 

@@ -24,7 +24,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Title bar and chrome":
     'With the default `titleBarStyle: "hidden"`, the app draws its own title bar under the Window Controls Overlay model: `app-region` marks where the window drags, `--window-control` turns elements into caption buttons, and `env(titlebar-area-*)` and `navigator.windowControlsOverlay` describe the strip. On macOS, the traffic lights stay at the left of the strip, and the title bar area starts past them. See [Custom title bar](/guides/custom-title-bar/).',
   "Pop-out windows":
-    "`<SkWindow>` paints part of the same component tree in a second OS window: one JS realm, one Vue or Svelte app, the same reactive state. Mounting the component opens the window and unmounting it closes it. CSS inside it is evaluated against the pop-out's own viewport, while `window.*` and `appWindow` still mean the main window. `taskbar`, `focusable`, `monitor` and `mapFromMain()` work only on Windows. A Svelte app imports it from `@skathi-native/runtime/svelte`, where the events are callback props such as `onclose` and the exposed values are `bind:` props. See [Pop-out windows](/guides/pop-out-windows/).",
+    "`<SkWindow>` paints part of the same component tree in a second OS window: one JS realm, one Vue or Svelte app, the same reactive state. Mounting the component opens the window and unmounting it closes it. CSS inside it is evaluated against the pop-out's own viewport, while `window.*` and `appWindow` still mean the main window. `taskbar`, `focusable` and `mapFromMain()` work on Windows and macOS, and `monitor` only on Windows. A Svelte app imports it from `@skathi-native/runtime/svelte`, where the events are callback props such as `onclose` and the exposed values are `bind:` props. See [Pop-out windows](/guides/pop-out-windows/).",
   "Taskbar and dock":
     "The badge on the app icon is `navigator.setAppBadge()`. `appWindow` has no taskbar progress, overlay icon or skip-taskbar call; on Windows, `appWindow.hide()` removes the taskbar button with the window. The window and taskbar icon comes from `sk.config.json` at build time and cannot change at run time.",
 };
@@ -3837,7 +3837,7 @@ const colors = ["charcoal", "rust", "moss", "slate"];
       "A `<Teleport :to>` into its `el` works, which moves existing content into the pop-out. Svelte has no `<Teleport>`: put the content in the children, or mount a component into `el` with Svelte's `mount(Comp, { target: el })`.",
     ],
     limitations: [
-      "On macOS and Linux, `taskbar`, `focusable` and `monitor` do nothing, and `mapFromMain()` returns `null`. Each prop lists its other gaps, mostly under Wayland.",
+      "On macOS, `monitor` does nothing. On Linux, `taskbar` and `monitor` do nothing, `focusable` only keeps the window from being activated when it is shown, and `mapFromMain()` returns `null`. Each prop lists its other gaps, mostly under Wayland.",
     ],
     related: ["sk-window-event-close", "sk-window-bounds", "sk-window-el", "window-open"],
     aliases: ["SkWindow", "second window", "multi-window", "BrowserWindow"],
@@ -4313,21 +4313,22 @@ defineProps<{ countdown: number }>();
     slug: "sk-window-taskbar",
     name: "<SkWindow taskbar>",
     kind: "prop",
-    summary: "Sets whether the pop-out has its own taskbar button.",
-    platforms: os(OK, NO, NO),
+    summary: "Sets whether the pop-out has its own taskbar button or belongs to the main window.",
+    platforms: os(OK, OK, NO),
     syntax: '<SkWindow :taskbar="false" />',
     params: [
       {
         name: "taskbar",
         type: "boolean",
-        description: "`false` removes the taskbar button.",
+        description: "`false` ties the pop-out to the main window.",
         default: "`true`",
         optional: true,
       },
     ],
     notes: [
       CREATION,
-      "With `false`, the main window owns the pop-out: it has no taskbar button and no Alt+Tab entry, stays above the main window and minimizes with it.",
+      "On Windows, with `false`, the main window owns the pop-out: it has no taskbar button and no Alt+Tab entry, stays above the main window and minimizes with it.",
+      "On macOS, with `false`, the pop-out is a child window of the main window while it is shown: it stays above the main window, moves when the main window is dragged, and hides and minimizes with it. Unlike an owned window on Windows, it also moves with the main window. While the pop-out is hidden it is not attached, so showing the main window again does not show it.",
       "A change prints an advisory.",
     ],
     examples: [
@@ -4345,7 +4346,7 @@ ${SK_IMPORT}
 </template>`,
       },
     ],
-    limitations: [POPOUT_HWND_ONLY],
+    limitations: ["On Linux, it does nothing."],
     related: ["sk-window-focusable", "hide"],
     aliases: ["skipTaskbar", "owned window", "tool window"],
   },
@@ -4451,7 +4452,7 @@ const locked = ref(true);
     name: "<SkWindow focusable>",
     kind: "prop",
     summary: "Sets whether the pop-out can ever become the active window.",
-    platforms: os(OK, PART, PART),
+    platforms: os(OK, OK, PART),
     syntax: '<SkWindow :focusable="false" />',
     params: [
       {
@@ -4464,7 +4465,9 @@ const locked = ref(true);
     ],
     notes: [
       CREATION,
-      "With `false`, a click does not activate the window, it receives no keyboard input, and it has no taskbar or Alt+Tab entry.",
+      "With `false`, a click reaches the window without activating it: the main window stays active and gets no `blur`, and keys keep going to the main window. Route arrows and Enter to the pop-out's content yourself, as a menu does.",
+      "On Windows, the window also has no taskbar or Alt+Tab entry.",
+      "On macOS, the window is a nonactivating panel at the normal window level; use `alwaysOnTop` to keep it above other apps' windows. Hover and the cursor work in it while it is not the key window, and it stays visible when the app is not active.",
       "A change prints an advisory.",
       "Like Electron's `focusable: false`.",
     ],
@@ -4486,7 +4489,7 @@ defineProps<{ fps: number }>();
       },
     ],
     limitations: [
-      "On macOS and Linux, it only keeps the pop-out from being activated when it is shown; a click still activates it.",
+      "On Linux, it only keeps the pop-out from being activated when it is shown; a click still activates it.",
     ],
     related: ["sk-window-activate", "sk-window-taskbar", "sk-window-ignore-mouse-events"],
   },
@@ -4970,7 +4973,7 @@ watchEffect(() => {
     name: "<SkWindow> mapFromMain()",
     kind: "exposed",
     summary: "Returns where an element of the main window is, in the pop-out's own coordinates.",
-    platforms: os(OK, NO, NO),
+    platforms: os(OK, OK, NO),
     syntax: "mapFromMain(target: SkWindowTarget | null | undefined): SkWindowRect | null",
     params: [
       { name: "target", type: "SkWindowTarget", description: "An element of the main window, such as a template ref." },
@@ -4978,8 +4981,9 @@ watchEffect(() => {
     returns:
       "`{ x, y, width, height }` in the pop-out's CSS px, relative to its root, or `null` before `@open`, after close, or when either element is not painted.",
     notes: [
-      "It maps through screen coordinates, so it works across monitors with different scales.",
-      "For a `cover` window, it measures where the next show will place the window.",
+      "It maps through screen coordinates, so it works across monitors with different scales. On macOS that is AppKit's screen space, in points on every display.",
+      "It answers while the pop-out is hidden. For a `cover` window, it measures where the next show will place the window.",
+      "To place a small pop-out at an element, add the result to the `bounds` position the pop-out has now.",
       "In Svelte, `bind:this` on `<SkWindow>` gives an object with this method.",
     ],
     examples: [
@@ -5004,7 +5008,7 @@ const spot = computed(() => overlay.value?.mapFromMain(props.target) ?? null);
 </template>`,
       },
     ],
-    limitations: ["On macOS and Linux, it always returns `null`."],
+    limitations: ["On Linux, it always returns `null`."],
     related: ["sk-window-cover", "sk-window-el"],
   },
   {
