@@ -37,7 +37,7 @@ test("closing a pop-out while the main window moves drops no move or resize", as
     await until("the palette to close", async () => (await popouts()).length === 0);
     await until("the main window to take its new width", async () => {
       const b = JSON.parse(
-        await app.eval(`JSON.stringify(__SK_WINDOW__.refresh() && __SK_WINDOW__.appWindow.getContentBounds())`),
+        await app.eval(`JSON.stringify((__SK_WINDOW__.refresh(), __SK_WINDOW__.appWindow.getContentBounds()))`),
       );
       return Math.round(b.width) === width;
     });

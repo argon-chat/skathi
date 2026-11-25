@@ -26,7 +26,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "Pop-out windows":
     "`<SkWindow>` paints part of the same component tree in a second OS window: one JS realm, one Vue or Svelte app, the same reactive state. Mounting the component opens the window and unmounting it closes it. CSS inside it is evaluated against the pop-out's own viewport, while `window.*` and `appWindow` still mean the main window. `taskbar`, `focusable`, `monitor` and `mapFromMain()` work only on Windows. A Svelte app imports it from `@skathi-native/runtime/svelte`, where the events are callback props such as `onclose` and the exposed values are `bind:` props. See [Pop-out windows](/guides/pop-out-windows/).",
   "Taskbar and dock":
-    "The badge on the app icon is `navigator.setAppBadge()`. The `appWindow` taskbar verbs from Electron are accepted and do nothing yet. The window and taskbar icon comes from `sk.config.json` at build time and cannot change at run time.",
+    "The badge on the app icon is `navigator.setAppBadge()`. `appWindow` has no taskbar progress, overlay icon or skip-taskbar call; on Windows, `appWindow.hide()` removes the taskbar button with the window. The window and taskbar icon comes from `sk.config.json` at build time and cannot change at run time.",
 };
 
 export interface WindowEntry extends Detail {
@@ -1455,7 +1455,6 @@ const quit = () => window.close();
     mdn: `${MDN}API/Window/blur`,
     syntax: "window.blur(): void",
     returns: "`undefined`.",
-    notes: ["It prints an advisory once."],
     workaround: "Minimize the window with `appWindow.minimize()`, or hide it with `appWindow.hide()`.",
     related: ["window-focus", "minimize"],
   },
@@ -1548,7 +1547,7 @@ appWindow.setContentBounds({ width, height });`,
     edgeCases: ["`screen` never fires `change`."],
     workaround:
       'There is no list of displays. For a window on another monitor, use `<SkWindow cover="monitor" :monitor>` on Windows.',
-    related: ["get-screen-details", "screen-orientation", "set-bounds"],
+    related: ["screen-orientation", "set-bounds", "sk-window-monitor"],
   },
   {
     slug: "screen-orientation",
@@ -1561,7 +1560,7 @@ appWindow.setContentBounds({ width, height });`,
       'readonly screen.orientation: { type: "landscape-primary" | "portrait-primary"; angle: 0; lock(): Promise<never>; unlock(): void }',
     notes: [
       "`type` is `landscape-primary` when the display is at least as wide as it is tall. `angle` is always `0`.",
-      "`lock()` rejects with `NotSupportedError` and prints an advisory, as in desktop browsers.",
+      "`lock()` rejects with `NotSupportedError`, as in desktop browsers.",
     ],
     examples: [
       {
@@ -1578,21 +1577,6 @@ const portrait = screen.orientation.type.startsWith("portrait");
     ],
     edgeCases: ["It never fires `change`; read it again on `resize`."],
     related: ["screen"],
-  },
-  {
-    slug: "get-screen-details",
-    name: "window.getScreenDetails()",
-    kind: "function",
-    summary: "Would list every connected display; it rejects for now.",
-    platforms: all(PLAN),
-    mdn: `${MDN}API/Window/getScreenDetails`,
-    syntax: "window.getScreenDetails(): Promise<never>",
-    returns: "A promise that rejects with `NotSupportedError`.",
-    notes: ["It prints an advisory once."],
-    workaround:
-      'Read `screen.isExtended` to know whether more than one display exists. On Windows, `<SkWindow cover="monitor" :monitor="index">` covers a given monitor.',
-    related: ["screen", "sk-window-monitor"],
-    aliases: ["Window Management API", "multi-monitor"],
   },
   {
     slug: "match-media",
@@ -1910,7 +1894,7 @@ export const discardAndClose = () => appWindow.close();`,
     platforms: all(NO),
     mdn: `${MDN}API/Window/unload_event`,
     syntax: 'addEventListener("unload", (event: Event) => void)',
-    notes: ["Adding a listener prints an advisory. Browsers are removing the event as well."],
+    notes: ["Browsers are removing the event as well."],
     workaround: "Listen to `pagehide`, or to `visibilitychange` for a window that goes to the background.",
     related: ["event-pagehide", "event-visibilitychange"],
   },
@@ -3408,20 +3392,7 @@ function grab(e: MouseEvent) {
       },
     ],
     edgeCases: ["Whether the matching `mouseup` reaches the app is not verified."],
-    related: ["app-region", "start-resize-dragging"],
-  },
-  {
-    slug: "start-resize-dragging",
-    name: "appWindow.startResizeDragging()",
-    kind: "method",
-    summary: "The Tauri call that starts a resize from an edge; it does nothing.",
-    platforms: all(NO),
-    syntax: "appWindow.startResizeDragging(): void",
-    returns: "`undefined`.",
-    notes: ["It prints an advisory once. It takes no edge argument."],
-    workaround:
-      "The window already resizes from all four edges and corners, also when the app draws its own title bar.",
-    related: ["start-dragging"],
+    related: ["app-region"],
   },
   {
     slug: "window-controls-overlay",
@@ -4375,7 +4346,7 @@ ${SK_IMPORT}
       },
     ],
     limitations: [POPOUT_HWND_ONLY],
-    related: ["sk-window-focusable", "set-skip-taskbar"],
+    related: ["sk-window-focusable", "hide"],
     aliases: ["skipTaskbar", "owned window", "tool window"],
   },
   {
@@ -4604,7 +4575,7 @@ const extended = screen.isExtended;
     ],
     edgeCases: ["The index is not related to `screen` or to any web API."],
     limitations: [POPOUT_HWND_ONLY],
-    related: ["sk-window-cover", "get-screen-details", "screen"],
+    related: ["sk-window-cover", "screen"],
   },
   {
     slug: "sk-window-event-open",
@@ -5080,7 +5051,7 @@ const key = computed(() => props.chrome + "|" + props.resizable);
     returns: "`null` in every case.",
     notes: [
       "An external URL goes to the system browser or mail client, as with `noopener`.",
-      "Any other call (no URL, a relative URL, `about:blank`) prints an advisory once that points at `<SkWindow>`. There is one document; a pop-out shares it.",
+      "Any other call (no URL, a relative URL, `about:blank`) does nothing. There is one document; a pop-out shares it.",
       "See [window.open](/web-platform/window-open/) in the web platform reference.",
     ],
     workaround: "Mount a `<SkWindow>` to show part of the app in a second window.",
@@ -5089,73 +5060,7 @@ const key = computed(() => props.chrome + "|" + props.resizable);
   },
 ]);
 
-const NOT_YET = "It does nothing and prints an advisory once.";
-
 const taskbar = section("Taskbar and dock", [
-  {
-    slug: "set-progress-bar",
-    name: "appWindow.setProgressBar()",
-    kind: "method",
-    summary: "The Electron call that shows progress on the taskbar button; it does nothing yet.",
-    platforms: all(PLAN),
-    syntax: "appWindow.setProgressBar(...args: unknown[]): void",
-    returns: "`undefined`.",
-    notes: [NOT_YET],
-    workaround: "Show progress inside the app, or in the title with `appWindow.title`.",
-    related: ["set-badge-count", "set-app-badge"],
-    aliases: ["taskbar progress"],
-  },
-  {
-    slug: "set-overlay-icon",
-    name: "appWindow.setOverlayIcon()",
-    kind: "method",
-    summary: "The Electron call that draws a small icon over the taskbar button; it does nothing yet.",
-    platforms: all(PLAN),
-    syntax: "appWindow.setOverlayIcon(...args: unknown[]): void",
-    returns: "`undefined`.",
-    notes: [NOT_YET],
-    workaround: "On Windows, `navigator.setAppBadge()` draws a badge as the taskbar overlay icon.",
-    related: ["set-app-badge"],
-  },
-  {
-    slug: "set-badge-count",
-    name: "appWindow.setBadgeCount()",
-    kind: "method",
-    summary: "The Electron call that shows a count on the app icon; it does nothing.",
-    platforms: all(PLAN),
-    syntax: "appWindow.setBadgeCount(...args: unknown[]): void",
-    returns: "`undefined`.",
-    notes: [
-      "It does nothing and prints an advisory once that points at `navigator.setAppBadge()` and `navigator.clearAppBadge()`.",
-    ],
-    workaround: "Call `navigator.setAppBadge(count)`.",
-    related: ["set-app-badge", "clear-app-badge"],
-  },
-  {
-    slug: "set-skip-taskbar",
-    name: "appWindow.setSkipTaskbar()",
-    kind: "method",
-    summary: "The Electron call that removes the main window's taskbar button; it does nothing yet.",
-    platforms: all(PLAN),
-    syntax: "appWindow.setSkipTaskbar(...args: unknown[]): void",
-    returns: "`undefined`.",
-    notes: [NOT_YET],
-    workaround:
-      'On Windows, `appWindow.hide()` removes the taskbar button with the window. For a pop-out, use `<SkWindow :taskbar="false">`.',
-    related: ["hide", "sk-window-taskbar"],
-  },
-  {
-    slug: "set-icon",
-    name: "appWindow.setIcon()",
-    kind: "method",
-    summary: "The Electron call that changes the window icon at run time; it does nothing yet.",
-    platforms: all(PLAN),
-    syntax: "appWindow.setIcon(...args: unknown[]): void",
-    returns: "`undefined`.",
-    notes: [NOT_YET],
-    workaround: "Set the icon at build time with `windows.icon` and `macos.icon` in `sk.config.json`.",
-    related: ["config-windows-icon", "config-macos-icon"],
-  },
   {
     slug: "set-app-badge",
     name: "navigator.setAppBadge()",
@@ -5194,7 +5099,7 @@ const taskbar = section("Taskbar and dock", [
       "On Windows, the badge goes on the window that owns the current call. Which window that is from a timer or a pop-out's handler is not verified.",
     ],
     limitations: ["On Linux, `navigator.setAppBadge` is `undefined`."],
-    related: ["clear-app-badge", "set-badge-count", "is-minimized"],
+    related: ["clear-app-badge", "is-minimized"],
     aliases: ["badge", "Badging API", "dock badge"],
   },
   {
@@ -5313,7 +5218,7 @@ if (appTray.available) {
       },
     ],
     limitations: ["On Linux, the window's icon comes from the `.desktop` entry that matches the app's `id`."],
-    related: ["config-macos-icon", "config-id", "set-icon"],
+    related: ["config-macos-icon", "config-id"],
   },
   {
     slug: "config-macos-icon",

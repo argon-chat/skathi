@@ -139,8 +139,6 @@ declare global {
   function focus(): void;
   /** A no-op, as in every browser. */
   function blur(): void;
-  /** Not implemented: rejects with `NotSupportedError`. */
-  function getScreenDetails(): Promise<never>;
 
   function open(url?: string, target?: string, features?: string): null;
 

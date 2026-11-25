@@ -286,7 +286,7 @@ Several reads describe different rectangles:
 
 Multi-monitor support is limited today:
 
-- `screen` describes only the display the main window is on. [`screen.isExtended`](/window-api/screen/) tells you whether there are others, and [`window.getScreenDetails()`](/window-api/get-screen-details/) rejects with `NotSupportedError`.
+- `screen` describes only the display the main window is on. [`screen.isExtended`](/window-api/screen/) tells you whether there are others, and `window.getScreenDetails` is not defined.
 - On Windows, `setBounds()` can move the window to another monitor; the position is then clamped into that monitor's work area.
 - On Windows with monitors at different scales, `getBounds()` divides every coordinate by the window's current scale, so a position on another monitor is not in that monitor's CSS pixels.
 - A pop-out can cover a chosen monitor with `<SkWindow cover="monitor" :monitor="1">`, on Windows only. The [pop-out guide](/guides/pop-out-windows/) shows it.
@@ -349,7 +349,7 @@ export async function showUnread(count: number): Promise<void> {
 
 By default `window.focus()` does not steal focus: it asks for attention instead. Set `"focus": "raise"` in the `window` block to make it bring the window to the front. `appWindow.show()` always raises.
 
-> **Note:** [`setProgressBar()`](/window-api/set-progress-bar/), [`setOverlayIcon()`](/window-api/set-overlay-icon/), [`setBadgeCount()`](/window-api/set-badge-count/), [`setSkipTaskbar()`](/window-api/set-skip-taskbar/) and [`setIcon()`](/window-api/set-icon/) exist on `appWindow` but are not implemented yet. Each prints an advisory once and does nothing. Use `navigator.setAppBadge()` for badges; there is no way to show taskbar progress or change the icon at runtime yet.
+> **Note:** There is no way to show taskbar progress or change the icon at runtime yet. Use `navigator.setAppBadge()` for badges.
 
 ## Pitfalls
 

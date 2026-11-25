@@ -2,7 +2,7 @@
 //! `navigator.windowControlsOverlay` and the `appWindow` extension.
 //!
 //! [`snapshot`] reads the window once per frame and [`pump`] diffs it into events in a fixed order
-//! (resize, visibility, JS observer). Getters read the published snapshot; mutators queue when no
+//! (resize, visibility, window events). Getters read the published snapshot; mutators queue when no
 //! `Phase::Commit` is live.
 
 use std::cell::{Cell, RefCell};
@@ -16,8 +16,12 @@ use sk_runtime::{host_fn, with_commit, JsRuntime};
 
 use crate::json::{self, Json};
 
+#[path = "window_app.rs"]
+mod app;
 #[path = "window_controls.rs"]
 mod controls;
+#[path = "window_web.rs"]
+mod web;
 
 const UNDEF: u64 = 0xa;
 
@@ -531,7 +535,7 @@ host_fn!(fn sk_window_advise(g, args) {
 
 #[cfg(target_os = "windows")]
 mod win {
-    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     pub fn hwnd() -> Option<HWND> {
@@ -693,12 +697,6 @@ mod win {
         Some(v.as_bool())
     }
 
-    pub fn cursor_pos() -> Option<(f32, f32)> {
-        let mut p = POINT::default();
-        unsafe { GetCursorPos(&mut p) }.ok()?;
-        Some((p.x as f32, p.y as f32))
-    }
-
     /// The window's monitor plus its rect and work area, in physical px; the display cache key.
     pub fn monitor_key() -> Option<(isize, [i32; 8])> {
         use windows::Win32::Graphics::Gdi::{
@@ -761,9 +759,6 @@ mod win {
         None
     }
     pub fn dark_mode() -> Option<bool> {
-        None
-    }
-    pub fn cursor_pos() -> Option<(f32, f32)> {
         None
     }
     pub fn monitor_key() -> Option<(isize, [i32; 8])> {
@@ -977,8 +972,6 @@ thread_local! {
     static PAGE_HIDDEN: Cell<Option<bool>> = const { Cell::new(None) };
     // The HWND stays hidden while its first styled frame is prepared; not a page becoming document.hidden.
     static STARTUP_REVEAL_PENDING: Cell<bool> = const { Cell::new(false) };
-    /// The `__sk_window_observe` callback, protected against GC.
-    static OBSERVER: Cell<u64> = const { Cell::new(0) };
     /// Mutators that arrived outside `Phase::Commit`; drained at the top of the next frame.
     static PENDING: RefCell<VecDeque<Op>> = const { RefCell::new(VecDeque::new()) };
     /// Set across the dispatch step: mutators queue instead of applying, since the frame funnel could re-enter.
@@ -1716,16 +1709,6 @@ fn snapshot_json(s: &Snapshot) -> String {
             ]),
         ),
         (
-            "focusPolicy",
-            Json::s(if crate::quiet::never_focus() {
-                "never"
-            } else if cfg.focus_raise {
-                "raise"
-            } else {
-                "attention"
-            }),
-        ),
-        (
             "screen",
             Json::obj(vec![
                 ("width", Json::n(s.screen.0)),
@@ -1762,7 +1745,7 @@ thread_local! {
 
 /// Runs inside `pump_frame`'s `Phase::Commit` before `rt.pump`, and from `platform_changed`. Order
 /// is the contract: drain queued mutators, snapshot, resize on a viewport/DPI change, visibility,
-/// then the JS observer. Resize before the observer makes `fullscreenchange` fire after the
+/// then the window events. Resize before them makes `fullscreenchange` fire after the
 /// viewport has resized, as the Fullscreen spec requires.
 pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     drain_pending(window, cx);
@@ -1773,20 +1756,20 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     SNAPSHOT.with(|c| *c.borrow_mut() = s.clone());
     let prev = PREV.with(|p| p.borrow().clone());
 
-    let json = snapshot_json(&s);
     let ctx = JsRuntime::with(|rt| rt.raw());
 
-    // Before anything fires: `redjs_dom_resize` dispatches `resize` synchronously, and its handlers must not see last frame's numbers.
-    let dirty = prev.as_ref().is_none_or(|p| *p != s);
-    if dirty {
-        notify("sync", &json);
+    // Before anything fires: renderers re-read `appWindow` before `resize` handlers run.
+    if prev.as_ref().is_none_or(|p| *p != s) {
+        app::changed();
     }
 
     // Before `resize`, so `matchMedia` in its handlers sees the new environment.
     keep_theme(window);
     let dark = effective_dark(window);
     JsRuntime::with(|rt| crate::power::refresh(rt, window, cx, !hidden(&s)));
-    let env_changed = sk_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
+    if sk_tree::set_env(css_env(&s, dark, cx.reduce_motion())) {
+        web::note_env_changed();
+    }
 
     publish_viewport(&s);
     // The first pump fires `resize` too.
@@ -1889,18 +1872,10 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     }
     PREV.with(|p| *p.borrow_mut() = Some(s.clone()));
 
-    if !kinds.is_empty() {
-        let names = kinds.join(",");
-        IN_DISPATCH.with(|f| f.set(true));
-        notify(&names, &json);
-        IN_DISPATCH.with(|f| f.set(false));
-    }
-
-    if env_changed && BOOTED.with(|b| b.get()) {
-        IN_DISPATCH.with(|f| f.set(true));
-        notify("mediachange", &json);
-        IN_DISPATCH.with(|f| f.set(false));
-    }
+    IN_DISPATCH.with(|f| f.set(true));
+    app::dispatch(&kinds);
+    web::dispatch_media_changes();
+    IN_DISPATCH.with(|f| f.set(false));
 }
 
 fn backdrop_moved(p: &Snapshot, s: &Snapshot) -> bool {
@@ -1945,36 +1920,9 @@ pub fn content_loaded() {
     JsRuntime::with(|rt| unsafe { sk_runtime::redjs::ffi::redjs_dom_content_loaded(rt.raw()) });
 }
 
-/// Calls the registered observer; its boolean is the close veto when `kind` is `close-requested`.
-fn notify(kind: &str, state_json: &str) -> bool {
-    let f = OBSERVER.with(|o| o.get());
-    // No JS after a caught native panic: nothing can veto a close, so the window's own X still works.
-    if f == 0 || sk_runtime::bridge::poisoned() {
-        return true;
-    }
-    // `close-requested` comes from gpui's should-close callback, outside any publication: run an owed checkpoint first.
-    sk_runtime::bridge::settle_owed_drain();
-    JsRuntime::with(|rt| {
-        let args = [rt.ctx().string(kind), rt.ctx().string(state_json)];
-        let out = match rt.ctx().call(Value(f), Value::undefined(), &args) {
-            Ok(v) => v.as_bool().unwrap_or(true),
-            Err(sk_runtime::redjs::api::Error::Exception(e)) => {
-                let err = rt.describe(e);
-                eprintln!("[window observer] {}\n{}", err.header, err.stack);
-                sk_tree::log::record("error", format!("[window observer] {}", err.header));
-                true
-            }
-            Err(_) => true,
-        };
-        rt.ctx().drain_microtasks();
-        out
-    })
-}
-
 /// A user close request: `close-requested`, then `beforeunload`; either may keep the window.
 pub fn should_close() -> bool {
-    let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
-    notify("close-requested", &json)
+    app::close_requested()
 }
 
 #[derive(Clone)]
@@ -2304,8 +2252,7 @@ pub(crate) fn request_user_close() {
 
 /// Dispatches `pagehide` once per session; the JS side ignores repeats. Outside any JS call.
 pub(crate) fn page_hide() {
-    let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
-    notify("pagehide", &json);
+    app::page_hide();
 }
 
 /// Main thread.
@@ -2342,40 +2289,14 @@ fn drain_pending(window: &mut Window, cx: &mut gpui::App) {
     }
 }
 
-fn arg_f32(v: Value) -> Option<f32> {
-    let n = v.as_number()?;
-    n.is_finite().then_some(n as f32)
-}
-
-fn arg_bool(v: Value) -> bool {
-    v.as_bool()
-        .unwrap_or_else(|| v.as_number().is_some_and(|n| n != 0.0))
-}
-
+// A debug view of the window state; re-reads the window under a live Commit.
 host_fn!(fn sk_window_state(_g, _args) {
-    // Re-reads the window under a live Commit so state is exact right after `maximize()` (geometry still lags a frame); outside a Commit the published snapshot is returned.
-    if let Some(s) = with_commit(|window, cx| snapshot(window, cx)) {
-        SNAPSHOT.with(|c| *c.borrow_mut() = s);
-    }
+    app::refresh();
     let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-host_fn!(fn sk_window_observe(g, args) {
-    let f = args.arg(0);
-    unsafe { sk_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    OBSERVER.with(|o| o.set(f.0));
-    UNDEF
-});
-
-host_fn!(fn sk_window_set_title(g, args) {
-    let t = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    submit(Op::Title(t));
-    UNDEF
-});
-
 host_fn!(fn sk_window_verb(g, args) {
-    // One host fn for all arity-0 verbs: a global per verb costs a name in every app's scope.
     let verb = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     match verb.as_str() {
         "minimize" => submit(Op::Minimize),
@@ -2387,57 +2308,17 @@ host_fn!(fn sk_window_verb(g, args) {
         "startDragging" => submit(Op::StartDragging),
         "hide" => submit(Op::Hide),
         "show" => request_activate(),
-        other => advise(&format!("unknown appWindow verb {other:?} (host protocol mismatch)")),
+        other => advise(&format!("unknown appWindow verb {other:?}")),
     }
     UNDEF
 });
 
-host_fn!(fn sk_window_set_fullscreen(g, args) {
-    let mode = args.arg(1);
-    let fade = if mode.is_undefined() {
-        false
-    } else {
-        match unsafe { read_string(g, mode.0) }.as_deref() {
-            Some("fade") => true,
-            Some("system") => false,
-            _ => return unsafe { sk_runtime::host::throw(g, "TypeError", "Use fade or system for the fullscreen transition.") },
-        }
-    };
-    submit(Op::Fullscreen(arg_bool(args.arg(0)), fade));
-    UNDEF
-});
-
-host_fn!(fn sk_window_activate(_g, args) {
-    // 0 = request attention (the default; never steals focus), 1 = raise (`window.focus: "raise"`).
-    submit(Op::Activate(arg_bool(args.arg(0))));
-    UNDEF
-});
-
-host_fn!(fn sk_window_set_bounds(_g, args) {
-    let mask = args.arg(4).as_number().unwrap_or(0.0) as u32;
-    let has = |bit: u32| mask & (1 << bit) != 0;
-    submit(Op::Bounds {
-        x: has(0).then(|| arg_f32(args.arg(0))).flatten(),
-        y: has(1).then(|| arg_f32(args.arg(1))).flatten(),
-        w: has(2).then(|| arg_f32(args.arg(2))).flatten(),
-        h: has(3).then(|| arg_f32(args.arg(3))).flatten(),
-        content: has(4),
-    });
-    UNDEF
-});
-
-host_fn!(fn sk_window_set_always_on_top(_g, args) {
-    submit(Op::AlwaysOnTop(arg_bool(args.arg(0))));
-    UNDEF
-});
-
-host_fn!(fn sk_window_set_backdrop(g, args) {
+fn set_backdrop(name: &str) {
     if crate::embed::pinned_backdrop().is_some() {
         advise("`appWindow.backdrop` is not applied: the embedding program fixed the window's backdrop.");
-        return UNDEF;
+        return;
     }
-    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    match Backdrop::from_str(&name) {
+    match Backdrop::from_str(name) {
         Some((b, note)) => {
             if let Some(n) = note {
                 advise(n);
@@ -2453,68 +2334,78 @@ host_fn!(fn sk_window_set_backdrop(g, args) {
              transparent | none."
         )),
     }
-    UNDEF
-});
+}
 
-host_fn!(fn sk_window_set_theme(g, args) {
-    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    match Theme::from_str(&name) {
+fn set_theme(name: &str) {
+    match Theme::from_str(name) {
         Some(t) => submit(Op::SetTheme(t)),
-        None => advise(&format!("unknown `theme`: {name:?} — expected system | light | dark.")),
+        None => advise(&format!(
+            "unknown `theme`: {name:?} — expected system | light | dark."
+        )),
     }
-    UNDEF
-});
+}
 
-host_fn!(fn sk_window_set_overlay(g, args) {
-    // `height` alone (arg 1 absent) keeps the live cluster, `false` retires it, an object installs or updates it.
-    if let Some(h) = arg_f32(args.arg(0)) {
+/// What `setTitleBarOverlay()` and `defineWindow({ titleBarHeight })` ask for.
+enum OverlayMode {
+    /// Only the height moves; the live cluster stays as it is.
+    Keep,
+    Off,
+    /// Colours are empty when not given.
+    On {
+        color: String,
+        symbol_color: String,
+    },
+}
+
+fn set_overlay(height: Option<f32>, mode: OverlayMode) {
+    if let Some(h) = height {
         LIVE.with(|l| l.borrow_mut().title_bar_height = h.max(0.0));
         submit(Op::Control(controls::Action::RefreshTraffic));
         if fallback_titlebar() {
             sk_runtime::with_app(|cx| cx.defer(crate::refresh_main));
         }
     }
-    let mode = args.arg(1).as_number().unwrap_or(-1.0);
-    let read = |i: u32| unsafe { read_string(g, args.arg(i).0) }.unwrap_or_default();
     match mode {
-        m if m == 0.0 => LIVE.with(|l| l.borrow_mut().overlay = None),
-        // An object; colours are empty strings when not given.
-        m if m == 1.0 => {
+        OverlayMode::Keep => {}
+        OverlayMode::Off => LIVE.with(|l| l.borrow_mut().overlay = None),
+        OverlayMode::On {
+            color,
+            symbol_color,
+        } => {
             if config().title_bar_style == TitleBarStyle::Default {
                 advise(A27);
-                return UNDEF;
+                return;
             }
             if cfg!(target_os = "macos") {
-                if arg_f32(args.arg(0)).is_none() || !read(2).is_empty() || !read(3).is_empty() {
+                if height.is_none() || !color.is_empty() || !symbol_color.is_empty() {
                     advise(NO_OVERLAY_MACOS);
                 }
-                return UNDEF;
+                return;
             }
-            let mut adv = Vec::new();
-            let mut parse = |s: String, key: &str| -> Option<u32> {
+            let parse = |s: &str, key: &str| -> Option<u32> {
                 if s.is_empty() {
                     return None;
                 }
-                let c = parse_color(&s);
+                let c = parse_color(s);
                 if c.is_none() {
-                    adv.push(format!(
+                    advise(&format!(
                         "`setTitleBarOverlay({{ {key}: {s:?} }})` is not a hex colour — expected \
                          `#rgb`, `#rrggbb` or `#rrggbbaa`. Ignored."
                     ));
                 }
                 c
             };
-            let color = parse(read(2), "color");
-            let symbol_color = parse(read(3), "symbolColor");
-            for a in adv {
-                advise(&a);
-            }
-            LIVE.with(|l| l.borrow_mut().overlay = Some(Overlay { color, symbol_color }));
+            let color = parse(&color, "color");
+            let symbol_color = parse(&symbol_color, "symbolColor");
+            LIVE.with(|l| {
+                l.borrow_mut().overlay = Some(Overlay {
+                    color,
+                    symbol_color,
+                })
+            });
         }
-        _ => {}
     }
-    UNDEF
-});
+}
 
 const A27: &str =
     "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
@@ -2534,29 +2425,6 @@ pub fn overlay() -> Option<(f32, Overlay, f32)> {
     s.overlay
         .map(|o| (s.title_bar_height, o, controls::button_opacity()))
 }
-
-host_fn!(fn sk_window_match_media(g, args) {
-    let query = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let json = match sk_css::match_media_with_demand(&query, &sk_tree::env()) {
-        Ok((matches, pressure)) => Json::obj(vec![("matches", Json::Bool(matches)), ("pressure", Json::Bool(pressure))]),
-        Err(why) => Json::obj(vec![
-            ("matches", Json::Bool(false)),
-            ("error", Json::s(format!("`{query}` {why}"))),
-        ]),
-    }
-    .to_json();
-    JsRuntime::with(|rt| rt.ctx().string(&json)).0
-});
-
-host_fn!(fn sk_window_pressure_media_demand(_g, args) {
-    crate::power::set_match_media_demand(args.arg(0).0 == sk_runtime::redjs::webapi::util::TRUE);
-    Value::undefined().0
-});
-
-host_fn!(fn sk_window_pressure_media_listener(g, args) {
-    use sk_runtime::redjs::webapi::{events, util::enc_bool};
-    enc_bool(unsafe { events::has_listener(g, args.arg(0).0, "change") })
-});
 
 // Debug hook: a synthesised click cannot exercise `WM_NCHITTEST`, so read back the hitboxes the last
 // frame of one window handed gpui (absent id = the primary).
@@ -2587,19 +2455,6 @@ host_fn!(fn sk_window_hitboxes(_g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-host_fn!(fn sk_window_cursor(_g, _args) {
-    // Synthesised mouse events carry no `screenX`/`screenY`.
-    let json = match win::cursor_pos() {
-        Some((x, y)) => {
-            let scale = SNAPSHOT.with(|s| s.borrow().scale).max(0.01);
-            Json::obj(vec![("x", Json::n(x / scale)), ("y", Json::n(y / scale))])
-        }
-        None => Json::Null,
-    }
-    .to_json();
-    JsRuntime::with(|rt| rt.ctx().string(&json)).0
-});
-
 // A caption button's activation behaviour: `el.click()` acts as a real press does. Queued, so the
 // action (a close asks `close-requested`) runs outside the click's JS.
 host_fn!(fn sk_window_control_click(_g, args) {
@@ -2626,59 +2481,9 @@ host_fn!(fn sk_window_control_click(_g, args) {
 
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const std::ffi::c_void)] = &[
-        (
-            "__sk_window_install_controls",
-            1,
-            controls::install as *const _,
-        ),
         ("__sk_window_state", 0, sk_window_state as *const _),
-        ("__sk_window_observe", 1, sk_window_observe as *const _),
-        ("__sk_window_set_title", 1, sk_window_set_title as *const _),
         ("__sk_window_verb", 1, sk_window_verb as *const _),
-        (
-            "__sk_window_set_fullscreen",
-            1,
-            sk_window_set_fullscreen as *const _,
-        ),
-        ("__sk_window_activate", 1, sk_window_activate as *const _),
-        (
-            "__sk_window_set_bounds",
-            5,
-            sk_window_set_bounds as *const _,
-        ),
-        (
-            "__sk_window_set_always_on_top",
-            1,
-            sk_window_set_always_on_top as *const _,
-        ),
-        (
-            "__sk_window_set_backdrop",
-            1,
-            sk_window_set_backdrop as *const _,
-        ),
-        ("__sk_window_set_theme", 1, sk_window_set_theme as *const _),
-        (
-            "__sk_window_set_overlay",
-            4,
-            sk_window_set_overlay as *const _,
-        ),
-        (
-            "__sk_window_match_media",
-            1,
-            sk_window_match_media as *const _,
-        ),
-        (
-            "__sk_window_pressure_media_demand",
-            1,
-            sk_window_pressure_media_demand as *const _,
-        ),
-        (
-            "__sk_window_pressure_media_listener",
-            1,
-            sk_window_pressure_media_listener as *const _,
-        ),
         ("__sk_window_hitboxes", 1, sk_window_hitboxes as *const _),
-        ("__sk_window_cursor", 0, sk_window_cursor as *const _),
         ("__sk_window_advise", 1, sk_window_advise as *const _),
         (
             "__sk_window_control_click",
@@ -2689,6 +2494,8 @@ pub fn install(rt: &JsRuntime) {
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
     }
+    web::install(rt);
+    app::install(rt);
 }
 
 #[cfg(test)]

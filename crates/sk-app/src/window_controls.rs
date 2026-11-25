@@ -2,10 +2,7 @@ use super::*;
 use gpui::{point, px, size, App, Pixels, Point, Size, WindowSizeConstraints};
 use sk_runtime::{
     host,
-    redjs::{
-        glue,
-        webapi::util::{atom, get, make_fn, HostFn},
-    },
+    redjs::webapi::util::{get, HostFn},
 };
 use std::ffi::c_void;
 use std::time::Instant;
@@ -566,37 +563,19 @@ host_fn!(fn bounds(g, args) {
     });
     UNDEF
 });
-host_fn!(pub(super) fn install(g, args) {
-    let obj = args.arg(0).0;
-    unsafe {
-        for (name, arity, f) in [
-            ("setMinSize", 1, min_size as HostFn),
-            ("setMaxSize", 1, max_size),
-            ("setAspectRatio", 1, aspect),
-            ("setTrafficLightPosition", 1, traffic),
-            ("setWindowButtonsVisible", 2, set_buttons),
-            ("getWindowButtonsRect", 0, button_rect),
-            ("setBounds", 2, bounds),
-            ("show", 1, show),
-            ("hide", 1, hide),
-        ] {
-            host::method(g, obj, name, arity, f);
-        }
-        for (name, read, write) in [
-            ("opacity", get_opacity as HostFn, set_opacity as HostFn),
-            ("visibleOnAllWorkspaces", get_spaces, set_spaces),
-        ] {
-            let key = atom(g, name);
-            glue::rjs_define_accessor(
-                g,
-                obj,
-                key,
-                make_fn(g, name, 0, read),
-                make_fn(g, name, 1, write),
-                0,
-            );
-            glue::rjs_atom_free(g, key);
-        }
-    }
-    UNDEF
-});
+/// The `appWindow` members implemented here.
+pub(super) const METHODS: [(&str, u32, HostFn); 9] = [
+    ("setMinSize", 1, min_size),
+    ("setMaxSize", 1, max_size),
+    ("setAspectRatio", 1, aspect),
+    ("setTrafficLightPosition", 1, traffic),
+    ("setWindowButtonsVisible", 2, set_buttons),
+    ("getWindowButtonsRect", 0, button_rect),
+    ("setBounds", 2, bounds),
+    ("show", 1, show),
+    ("hide", 1, hide),
+];
+pub(super) const ACCESSORS: [(&str, HostFn, HostFn); 2] = [
+    ("opacity", get_opacity, set_opacity),
+    ("visibleOnAllWorkspaces", get_spaces, set_spaces),
+];

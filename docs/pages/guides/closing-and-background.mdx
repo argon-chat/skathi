@@ -41,7 +41,7 @@ The decision is synchronous. You cannot `await` a dialog inside the listener: ca
 
 ### pagehide
 
-[`pagehide`](/window-api/event-pagehide/) fires once per session, before the windows hide, on every way the app closes or quits. Synchronous `localStorage` writes made in it reach disk. [`unload`](/window-api/event-unload/) never fires; Skathi accepts the listener and prints an advisory, as the web is removing that event.
+[`pagehide`](/window-api/event-pagehide/) fires once per session, before the windows hide, on every way the app closes or quits. Synchronous `localStorage` writes made in it reach disk. [`unload`](/window-api/event-unload/) never fires; Skathi accepts the listener, as the web is removing that event.
 
 ### Which routes run which events
 

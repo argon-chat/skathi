@@ -52,13 +52,14 @@ function world(initialFullscreen = false) {
     "Element",
     "Event",
     "ro",
-    "refresh",
+    "host",
+    "appWindow",
     "warn",
     "__sk_window_set_fullscreen",
     "__sk_fullscreen_element",
     "__sk_fullscreen_window",
     "requestAnimationFrame",
-    "setTimeout",
+    "MutationObserver",
     "globalThis",
     body + "\nreturn { onFullscreenWindowChanged, exitAllFullscreen };",
   )(
@@ -66,7 +67,12 @@ function world(initialFullscreen = false) {
     Element,
     Event,
     (object: object, key: string, get: () => unknown) => Object.defineProperty(object, key, { get }),
-    () => ({ fullscreen: windowFullscreen, clientWidth: client.width, clientHeight: client.height }),
+    { refresh: () => {} },
+    {
+      get chrome() {
+        return { client: { ...client } };
+      },
+    },
     () => {},
     (on: boolean) => windowCalls.push(on),
     (id: number) => {
@@ -84,7 +90,7 @@ function world(initialFullscreen = false) {
       frames.push(callback);
       return frames.length;
     },
-    setTimeout,
+    global.MutationObserver,
     global,
   );
   return {
@@ -290,47 +296,5 @@ describe("element fullscreen lifecycle", () => {
     await Promise.all([entering, exiting]);
     expect(changes).toBe(2);
     expect(w.document.fullscreenElement).toBeNull();
-  });
-});
-
-describe("native window fullscreen notifications", () => {
-  test("window listeners see the new state without a DOM fullscreen owner", () => {
-    const observerSource = source.slice(
-      source.indexOf("  __sk_window_observe("),
-      source.indexOf("  globalThis.__SK_WINDOW__ = {"),
-    );
-    let observe: (kinds: string, json: string) => boolean;
-    const nativeChanges: boolean[] = [];
-    const appWindow = new Function(
-      "EventTarget",
-      "Event",
-      "emit",
-      "onFullscreenWindowChanged",
-      "__sk_window_observe",
-      "liveQueries",
-      "pressureQueries",
-      "let S; const publish = (json) => { S = JSON.parse(json); };\n" +
-        "const appWindow = new EventTarget(); appWindow.isFullscreen = () => S.fullscreen;\n" +
-        new Bun.Transpiler({ loader: "ts" }).transformSync(observerSource) +
-        "\nreturn appWindow;",
-    )(
-      EventTarget,
-      Event,
-      (target: EventTarget, kind: string) => target.dispatchEvent(new Event(kind)),
-      (on: boolean) => nativeChanges.push(on),
-      (callback: typeof observe) => {
-        observe = callback;
-      },
-      [],
-      [],
-    );
-    const seen: boolean[] = [];
-    appWindow.addEventListener("fullscreenchange", () => seen.push(appWindow.isFullscreen()));
-    observe!("sync", JSON.stringify({ fullscreen: false }));
-    expect(seen).toEqual([]);
-    observe!("fullscreenchange", JSON.stringify({ fullscreen: true }));
-    observe!("fullscreenchange", JSON.stringify({ fullscreen: false }));
-    expect(seen).toEqual([true, false]);
-    expect(nativeChanges).toEqual([true, false]);
   });
 });

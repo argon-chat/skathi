@@ -371,7 +371,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
     focusChange = noteHostFocus(name, target as MirrorElement);
     focusRelated = (a && nodeById(a)) || null;
   }
-  // Sticky activation: the windowing prelude arms it from the engine's own EventTarget, which gpui events never
+  // Sticky activation: the window host arms it from the engine's own EventTarget, which gpui events never
   // reach, so the host's events call its hook here; without it `beforeunload` could never veto a close. The host
   // forwards only events something listens for, so a host `click`, `mouseup` or `pointerup` stands in for the
   // press. `el.click()` and `dispatchEvent` never come through here.

@@ -1,5 +1,5 @@
-// The tier-3 windowing namespace: `import { appWindow } from "@skathi-native/runtime"`. The implementation lives in the host's JS
-// prelude; what these tests pin is the NAMESPACE: apps reach it through an import, and a host without the prelude
+// The tier-3 windowing namespace: `import { appWindow } from "@skathi-native/runtime"`. The implementation lives in the
+// host; what these tests pin is the NAMESPACE: apps reach it through an import, and a runtime without the host
 // degrades loudly instead of silently.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -41,23 +41,28 @@ describe("appWindow namespace", () => {
   });
 });
 
-// The prelude's shape: getters and `is*()` over a plain snapshot, and `onChange` subscribers called after it moves.
+// The host's shape: a class whose prototype holds getters and `is*()` over a plain snapshot, and `onChange`
+// subscribers called after it moves.
 function snapshotHost() {
   const state = { title: "One", maximized: false, outer: { x: 0, y: 0, width: 800, height: 600 } };
   const listeners = new Set<() => void>();
-  const appWindow = new EventTarget() as EventTarget & Record<string, unknown>;
-  Object.defineProperty(appWindow, "title", {
-    get: () => state.title,
-    set: (v: string) => {
+  class AppWindow extends EventTarget {
+    get title() {
+      return state.title;
+    }
+    set title(v: string) {
       state.title = v;
       for (const fn of listeners) fn();
-    },
-    configurable: true,
-    enumerable: true,
-  });
-  appWindow.isMaximized = () => state.maximized;
-  appWindow.getBounds = () => ({ ...state.outer });
-  appWindow.maximize = () => {};
+    }
+    isMaximized() {
+      return state.maximized;
+    }
+    getBounds() {
+      return { ...state.outer };
+    }
+    maximize() {}
+  }
+  const appWindow = new AppWindow();
   const publish = (next: Partial<typeof state>) => {
     Object.assign(state, next);
     for (const fn of listeners) fn();

@@ -624,7 +624,7 @@ export function createRuntime(
     FileList: FakeFileList,
     DataTransfer: FakeDataTransfer,
     requestAnimationFrame: (cb: () => void) => setTimeout(cb, 0),
-    // The windowing host (crates/sk-app/src/window.prelude.js) publishes itself on the real global before the
+    // The windowing host (crates/sk-app/src/window_app.rs) publishes itself on the real global before the
     // bundle evaluates, and runtime-window's tests fake it the same way; carry it into the private world.
     __SK_WINDOW__: (globalThis as { __SK_WINDOW__?: unknown }).__SK_WINDOW__,
     ...ENGINE_CLASSES,

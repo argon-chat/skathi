@@ -399,7 +399,7 @@ declare var __SK_CSS__: string[] | undefined;
 /** Installed by `mount()`; the host calls it before re-evaluating a bundle. */
 declare var __SK_TEARDOWN__: (() => void) | undefined;
 
-/** The windowing host. Absent in the test harness and in embedders without the prelude (`runtime.ts` then exports an inert `appWindow`). */
+/** The windowing host. Absent in the test harness and in embedders without the window host (`runtime.ts` then exports an inert `appWindow`). */
 declare var __SK_WINDOW__: SkWindowHost | undefined;
 
 interface SkWindowHost {
@@ -455,7 +455,6 @@ interface SkAppWindow extends EventTarget {
   hide(options?: { fade?: number }): void;
   isVisible(): boolean;
   startDragging(): void;
-  startResizeDragging(): void;
   setFullscreen(on: boolean, options?: { transition?: "system" | "fade" }): void;
   isMaximized(): boolean;
   isMinimized(): boolean;
@@ -485,14 +484,9 @@ interface SkAppWindow extends EventTarget {
   alwaysOnTop: boolean;
   readonly scaleFactor: number;
   readonly chrome: SkWindowChrome;
-  setProgressBar(...args: unknown[]): void;
-  setOverlayIcon(...args: unknown[]): void;
-  setBadgeCount(...args: unknown[]): void;
-  setSkipTaskbar(...args: unknown[]): void;
-  setIcon(...args: unknown[]): void;
 }
 
-/** Sticky activation: the host's dispatcher calls this on `keydown`/`mousedown` (gpui events never reach the prelude's EventTarget); without it `beforeunload` could never veto a close. */
+/** Sticky activation: the host's dispatcher calls this on `keydown`/`mousedown` (gpui events never reach the engine's own EventTarget); without it `beforeunload` could never veto a close. */
 declare var __skStickyActivation: (() => void) | undefined;
 
 declare var __VUE_HMR_RUNTIME__: SkVueHmrRuntime | undefined;

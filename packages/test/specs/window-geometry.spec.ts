@@ -25,7 +25,7 @@ async function until<T>(what: string, probe: () => Promise<T>, ms = 8000): Promi
 
 type Outer = { x: number; y: number; width: number; height: number };
 const outer = async (): Promise<Outer> =>
-  JSON.parse(await app.eval(`JSON.stringify(__SK_WINDOW__.refresh() && __SK_WINDOW__.appWindow.getBounds())`));
+  JSON.parse(await app.eval(`JSON.stringify((__SK_WINDOW__.refresh(), __SK_WINDOW__.appWindow.getBounds()))`));
 
 describe("main window geometry", () => {
   test(
@@ -84,7 +84,11 @@ describe("main window geometry", () => {
       await app.eval(`__SK_WINDOW__.appWindow.center(); "ok"`);
       await sleep(300);
       const r = await outer();
-      const s = JSON.parse(await app.eval("JSON.stringify(__SK_WINDOW__.state().screen)"));
+      const s = JSON.parse(
+        await app.eval(
+          "JSON.stringify({ availLeft: screen.availLeft, availTop: screen.availTop, availWidth: screen.availWidth, availHeight: screen.availHeight })",
+        ),
+      );
       expect(Math.abs(r.x - (s.availLeft + (s.availWidth - r.width) / 2))).toBeLessThanOrEqual(1);
       expect(Math.abs(r.y - (s.availTop + (s.availHeight - r.height) / 2))).toBeLessThanOrEqual(1);
     },

@@ -31,7 +31,7 @@ That has one consequence to keep in mind. Global JavaScript APIs describe the **
 
 Pop-outs follow [`appWindow.theme`](/window-api/theme/). They do not follow later changes to `appWindow.backdrop`: each pop-out's material defaults to the `backdrop` in `sk.config.json`, or to its own [`backdrop`](/window-api/sk-window-backdrop/) prop.
 
-`window.open()` is not a way to get a second window. It always returns `null`: an `http:`, `https:` or `mailto:` URL opens in the system browser or mail client, and any other call prints an advisory that points you at `<SkWindow>`.
+`window.open()` is not a way to get a second window. It always returns `null`: an `http:`, `https:` or `mailto:` URL opens in the system browser or mail client, and any other call does nothing. Use `<SkWindow>` instead.
 
 ## Open and close a pop-out
 
@@ -201,7 +201,7 @@ All `<SkWindow>` numbers are CSS px. A few rules decide where a pop-out lands:
 - **`cover="monitor"`** covers the main window's monitor. `monitor` picks another by its index in the Windows display enumeration. That index is not the same as an index into `screen` or any other API. An index with no monitor behind it falls back to the main window's monitor with an advisory, and changing `monitor` moves a shown cover window live.
 - **`mapFromMain()`** maps through screen coordinates, so a tooltip overlay on one monitor can track an element of a main window on another.
 
-There is no list of displays: [`getScreenDetails()`](/window-api/get-screen-details/) rejects with `NotSupportedError`. [`screen`](/window-api/screen/) describes the main window's display, and `screen.isExtended` tells you whether there is more than one.
+There is no list of displays: `window.getScreenDetails` is not defined. [`screen`](/window-api/screen/) describes the main window's display, and `screen.isExtended` tells you whether there is more than one.
 
 ## Platform support
 
