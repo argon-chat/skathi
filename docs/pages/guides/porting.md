@@ -78,23 +78,24 @@ report from one package is a reason to look for another package. [Web platform](
 
 ### From Tauri
 
-| In Tauri                                    | In Skathi                                                                                                            |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `#[tauri::command]` and `invoke()`          | A `pub fn` of a `#[skathi::module]`, imported as `native:<name>` and called like any function                        |
-| An `async` command                          | A `#[task]` method: it runs on a worker thread and the app gets a promise                                            |
-| `emit` and `listen`                         | An event of the module, declared in `#[skathi::module(events(…))]`                                                   |
-| Managed state (`State<T>`)                  | The module's own struct: its methods take `&self`                                                                    |
-| Hand-written types, or tauri-specta         | `sk types` writes the `.d.ts` from the Rust signatures                                                               |
-| Capabilities and permissions files          | [`permissions` in sk.config.json](/sk-config/#permissions) for what the app's script may reach, such as `skathi:ffi` |
-| `tauri.conf.json` → `app.windows`           | [`window` in sk.config.json](/sk-config/#window)                                                                     |
-| `WebviewWindow` for more windows            | [`<SkWindow>`](/guides/pop-out-windows/)                                                                             |
-| `data-tauri-drag-region`                    | `app-region: drag` in CSS                                                                                            |
-| The tray, global-shortcut and shell plugins | [`appTray`](/app-api/app-tray/), [`appHotkeys`](/app-api/app-hotkeys/), [`appShell`](/app-api/app-shell/)            |
-| The dialog and fs plugins                   | [File System Access](/web-platform/file-system-access/) pickers and handles, or a native module                      |
-| The store plugin                            | `localStorage` and IndexedDB, with [`appStorage`](/app-api/app-storage/)                                             |
-| The single-instance and deep-link plugins   | [`appLaunch`](/app-api/app-launch/)                                                                                  |
-| The updater plugin and the bundler          | Yours, as above                                                                                                      |
-| `tauri::Builder` in `main`                  | Optional. Without Rust of your own there is no `main` to write: `sk` uses a prebuilt host                            |
+| In Tauri                                    | In Skathi                                                                                                              |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `#[tauri::command]` and `invoke()`          | A `pub fn` of a `#[skathi::module]`, imported as `native:<name>` and called like any function                          |
+| An `async` command                          | A `#[task]` method: it runs on a worker thread and the app gets a promise                                              |
+| `emit` and `listen`                         | An event of the module, declared in `#[skathi::module(events(…))]`                                                     |
+| Managed state (`State<T>`)                  | The module's own struct: its methods take `&self`                                                                      |
+| Hand-written types, or tauri-specta         | `sk types` writes the `.d.ts` from the Rust signatures                                                                 |
+| Capabilities and permissions files          | [`permissions` in sk.config.json](/sk-config/#permissions) for what the app's script may reach, such as `skathi:ffi`   |
+| `tauri.conf.json` → `app.windows`           | [`window` in sk.config.json](/sk-config/#window)                                                                       |
+| `WebviewWindow` for more windows            | [`<SkWindow>`](/guides/pop-out-windows/)                                                                               |
+| `data-tauri-drag-region`                    | `app-region: drag` in CSS                                                                                              |
+| `startResizeDragging(direction)`            | [`appWindow.startResizeDragging()`](/window-api/start-resize-dragging/) with the same directions, on Windows and Linux |
+| The tray, global-shortcut and shell plugins | [`appTray`](/app-api/app-tray/), [`appHotkeys`](/app-api/app-hotkeys/), [`appShell`](/app-api/app-shell/)              |
+| The dialog and fs plugins                   | [File System Access](/web-platform/file-system-access/) pickers and handles, or a native module                        |
+| The store plugin                            | `localStorage` and IndexedDB, with [`appStorage`](/app-api/app-storage/)                                               |
+| The single-instance and deep-link plugins   | [`appLaunch`](/app-api/app-launch/)                                                                                    |
+| The updater plugin and the bundler          | Yours, as above                                                                                                        |
+| `tauri::Builder` in `main`                  | Optional. Without Rust of your own there is no `main` to write: `sk` uses a prebuilt host                              |
 
 A Tauri app keeps its Rust. The functions behind its commands move into modules almost as they are,
 and [Embedding](/embedding/overview/) is the arrangement where your program stays the program and

@@ -1,0 +1,12 @@
+{
+  "$comment": "Strips just inside each edge and the bottom-right corner that call appWindow.startResizeDragging() on pointerdown, under a hidden title bar.",
+
+  "name": "sk-test-window-resize-drag",
+
+  "window": {
+    "title": "Skathi — window resize drag (fixture)",
+    "width": 360,
+    "height": 220,
+    "titleBarStyle": "hidden"
+  }
+}

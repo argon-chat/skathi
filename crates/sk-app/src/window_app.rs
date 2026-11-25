@@ -12,8 +12,9 @@ use sk_runtime::redjs::webapi::util::*;
 use sk_runtime::{host, host_fn, with_commit, JsRuntime};
 
 use super::{
-    config, controls, display_mode, host_controls, set_backdrop, set_overlay, set_theme, snapshot,
-    submit, titlebar_rect, web, Op, OverlayMode, Snapshot, TitleBarStyle, SNAPSHOT,
+    config, controls, display_mode, host_controls, resize_direction, set_backdrop, set_overlay,
+    set_theme, snapshot, submit, titlebar_rect, web, Op, OverlayMode, Snapshot, TitleBarStyle,
+    SNAPSHOT,
 };
 
 thread_local! {
@@ -167,6 +168,29 @@ verb!(unmaximize, Op::Unmaximize);
 verb!(toggle_maximize, Op::ToggleMaximize);
 verb!(center, Op::Center);
 verb!(start_dragging, Op::StartDragging);
+
+host_fn!(fn start_resize_dragging(g, args) {
+    let direction = args.arg(0).0;
+    let edge = if direction == UNDEF {
+        None
+    } else {
+        match unsafe { read_string(g, direction) }.as_deref().and_then(resize_direction) {
+            Some(edge) => Some(edge),
+            None => {
+                return unsafe {
+                    host::throw(
+                        g,
+                        "TypeError",
+                        "Use North, NorthEast, East, SouthEast, South, SouthWest, West or NorthWest \
+                         for the resize direction, or no argument for the edge nearest the pointer.",
+                    )
+                };
+            }
+        }
+    };
+    submit(Op::StartResizeDragging(edge));
+    UNDEF
+});
 
 host_fn!(fn close(_g, _args) {
     web::close_window();
@@ -501,6 +525,7 @@ pub(super) fn install(rt: &JsRuntime) {
         ("close", 0, close),
         ("center", 0, center),
         ("startDragging", 0, start_dragging),
+        ("startResizeDragging", 0, start_resize_dragging),
         ("setFullscreen", 2, set_fullscreen),
         ("isMaximized", 0, is_maximized),
         ("isMinimized", 0, is_minimized),
@@ -596,6 +621,29 @@ mod tests {
             let v = rt.ctx().eval(js).unwrap_or_else(|_| panic!("{js} threw"));
             rt.ctx().to_rust_string(v).unwrap_or_default()
         })
+    }
+
+    #[test]
+    fn an_unknown_resize_direction_throws_a_type_error() {
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|rt| {
+                web::install(rt);
+                install(rt);
+            });
+            let threw = |arg: &str| {
+                eval(&format!(
+                    "(() => {{ try {{ __SK_WINDOW__.appWindow.startResizeDragging({arg}); return 'none'; }}
+                       catch (e) {{ return e instanceof TypeError ? 'TypeError' : String(e); }} }})()"
+                ))
+            };
+            for bad in ["'east'", "'right'", "null", "4"] {
+                assert_eq!(threw(bad), "TypeError", "{bad}");
+            }
+            for good in ["'SouthEast'", ""] {
+                assert_eq!(threw(good), "none", "{good}");
+            }
+            super::super::PENDING.with(|p| p.borrow_mut().clear());
+        });
     }
 
     #[test]

@@ -167,11 +167,66 @@ A `"hidden"` window keeps its resize edges, so there is nothing to build. What y
 
 Where the edges are depends on the OS:
 
-- **Windows:** the window keeps its OS resize frame on all four edges. Along the top edge the host answers the resize hit test before your drag region, so the top few pixels of the title bar resize the window rather than move it. There is no top band while the window is maximized.
+- **Windows:** the window keeps its OS resize frame on all four edges; on the left, right and bottom it lies just outside the visible edge. Along the top edge the host answers the resize hit test before your drag region, so the top few pixels of the title bar resize the window rather than move it. There is no top band while the window is maximized.
 - **macOS:** AppKit resizes the window from its edges as usual.
 - **Linux:** with client-side decorations the host adds 6 px resize strips on each edge and corner, except while the window is maximized, fullscreen or tiled. When the compositor draws server-side decorations, the host leaves resizing to it.
 
 `"resizable": false` removes the edges on every OS. On Linux it also removes the host strips and fixes the window's size for the window manager.
+
+### Resize strips
+
+On Windows, only the top resize band lies inside the window: the top few pixels of the client area. The left, right and bottom bands are the invisible frame just outside the visible edge, so a press a few pixels inside those edges reaches your page and does not resize. An app ported from Tauri or Electron that draws its own strips there starts the resize with [`appWindow.startResizeDragging()`](/window-api/start-resize-dragging/):
+
+```vue
+<script setup lang="ts">
+import { appWindow } from "skathi:app";
+</script>
+
+<template>
+  <div class="strip west" @pointerdown="appWindow.startResizeDragging('West')" />
+  <div class="strip east" @pointerdown="appWindow.startResizeDragging('East')" />
+  <div class="strip south" @pointerdown="appWindow.startResizeDragging('South')" />
+  <div class="strip corner" @pointerdown="appWindow.startResizeDragging('SouthEast')" />
+</template>
+
+<style scoped>
+.strip {
+  position: fixed;
+}
+.west,
+.east {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+  cursor: ew-resize;
+}
+.west {
+  left: 0;
+}
+.east {
+  right: 0;
+}
+.south {
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 5px;
+  cursor: ns-resize;
+}
+.corner {
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
+}
+</style>
+```
+
+- The direction is Tauri's: `North`, `NorthEast`, `East`, `SouthEast`, `South`, `SouthWest`, `West` or `NorthWest`. Without one, the edge nearest the pointer is used: a corner within 8 CSS px of two edges, otherwise the closer edge.
+- The resize follows the mouse until the button is released, with the minimum and maximum size and the aspect ratio applied. The page keeps running meanwhile.
+- A maximized or fullscreen window does not resize, and neither does one with `"resizable": false`. Hide the strips in those states.
+- On Linux it starts the window manager's resize. On macOS it does nothing and logs an advisory: AppKit already resizes from the window's own edges, and has no call to start a resize from inside the window.
 
 [`minWidth`](/window-api/config-window-min-width/) and [`minHeight`](/window-api/config-window-min-height/) each work alone. On Windows a `minWidth` above 500 also advises that snap layouts will refuse the window. Skathi has no maximum size option.
 
@@ -187,6 +242,7 @@ Where the edges are depends on the OS:
 | Edge resizing                             | OS frame, plus a host band on the top edge | AppKit                                      | Host strips (client-side decorations)        |
 | `resizable`, `minimizable`, `maximizable` | Supported                                  | Supported                                   | Supported                                    |
 | `startDragging()`                         | Supported                                  | Supported                                   | Supported                                    |
+| `startResizeDragging()`                   | Supported                                  | No effect, with an advisory                 | Supported                                    |
 
 ### macOS
 
@@ -219,5 +275,5 @@ On Linux the host draws the chrome itself. It moves the window from your drag re
 - [Windows](/guides/windows/): window state, theme and backdrop, fullscreen.
 - [Pop-out windows](/guides/pop-out-windows/): a pop-out with `chrome="hidden"` draws its own caption the same way.
 - [Closing and running in the background](/guides/closing-and-background/): what the close button triggers.
-- Reference: [`titleBarStyle`](/window-api/config-window-title-bar-style/), [`titleBarHeight`](/window-api/config-window-title-bar-height/), [`titleBarFallback`](/window-api/config-window-title-bar-fallback/), [`titleBarOverlay`](/window-api/config-window-title-bar-overlay/), [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/), [`appWindow.chrome`](/window-api/chrome/), [`app-region`](/window-api/app-region/), [`--window-control`](/window-api/window-control/), [`env(titlebar-area-*)`](/window-api/env-titlebar-area/), [`display-mode`](/window-api/display-mode/), [`navigator.windowControlsOverlay`](/window-api/window-controls-overlay/), [`geometrychange`](/window-api/event-geometrychange/), [`toggleMaximize()`](/window-api/toggle-maximize/), [`startDragging()`](/window-api/start-dragging/).
+- Reference: [`titleBarStyle`](/window-api/config-window-title-bar-style/), [`titleBarHeight`](/window-api/config-window-title-bar-height/), [`titleBarFallback`](/window-api/config-window-title-bar-fallback/), [`titleBarOverlay`](/window-api/config-window-title-bar-overlay/), [`setTitleBarOverlay()`](/window-api/set-title-bar-overlay/), [`appWindow.chrome`](/window-api/chrome/), [`app-region`](/window-api/app-region/), [`--window-control`](/window-api/window-control/), [`env(titlebar-area-*)`](/window-api/env-titlebar-area/), [`display-mode`](/window-api/display-mode/), [`navigator.windowControlsOverlay`](/window-api/window-controls-overlay/), [`geometrychange`](/window-api/event-geometrychange/), [`toggleMaximize()`](/window-api/toggle-maximize/), [`startDragging()`](/window-api/start-dragging/), [`startResizeDragging()`](/window-api/start-resize-dragging/).
 - CSS: [`app-region`](/css/app-region/), [`--window-control`](/css/window-control/), [`env()`](/css/function-env/), [`display-mode`](/css/media-display-mode/).

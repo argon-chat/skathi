@@ -420,6 +420,9 @@ interface SkWindowRect {
   height: number;
 }
 
+/** `appWindow.startResizeDragging()`'s edge, in Tauri's spelling. */
+type SkResizeDirection = "North" | "NorthEast" | "East" | "SouthEast" | "South" | "SouthWest" | "West" | "NorthWest";
+
 /** `appWindow.chrome`: `client` is the client area; `contentInset` is how far host-drawn chrome insets the viewport in it (`inner* === client* - inset`; zero in custom-chrome mode). */
 interface SkWindowChrome {
   readonly trafficLightPosition: { x: number; y: number } | null;
@@ -458,6 +461,11 @@ interface SkAppWindow extends EventTarget {
   hide(options?: { fade?: number }): void;
   isVisible(): boolean;
   startDragging(): void;
+  /**
+   * Starts the system resize from an edge while the left button is held, as Tauri's; no effect on macOS. Without a
+   * direction, the edge nearest the pointer (a corner within 8 px of two edges). An unknown direction throws a `TypeError`.
+   */
+  startResizeDragging(direction?: SkResizeDirection): void;
   setFullscreen(on: boolean, options?: { transition?: "system" | "fade" }): void;
   isMaximized(): boolean;
   isMinimized(): boolean;

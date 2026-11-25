@@ -1949,7 +1949,61 @@ enum Op {
     SetBackdrop(Backdrop),
     SetTheme(Theme),
     StartDragging,
+    /// `None`: the edge nearest the pointer.
+    StartResizeDragging(Option<gpui::ResizeEdge>),
     Hide,
+}
+
+/// Tauri's `ResizeDirection` names.
+fn resize_direction(name: &str) -> Option<gpui::ResizeEdge> {
+    use gpui::ResizeEdge::*;
+    Some(match name {
+        "North" => Top,
+        "NorthEast" => TopRight,
+        "East" => Right,
+        "SouthEast" => BottomRight,
+        "South" => Bottom,
+        "SouthWest" => BottomLeft,
+        "West" => Left,
+        "NorthWest" => TopLeft,
+        _ => return None,
+    })
+}
+
+/// Within this many CSS px of two edges, the pointer picks the corner between them.
+const RESIZE_CORNER: f32 = 8.0;
+
+/// The edge nearest `(x, y)` in a `width` × `height` client area.
+fn resize_edge_at(x: f32, y: f32, width: f32, height: f32) -> gpui::ResizeEdge {
+    use gpui::ResizeEdge::*;
+    let (left, dx) = if x < width / 2.0 {
+        (true, x)
+    } else {
+        (false, width - x)
+    };
+    let (top, dy) = if y < height / 2.0 {
+        (true, y)
+    } else {
+        (false, height - y)
+    };
+    if dx <= RESIZE_CORNER && dy <= RESIZE_CORNER {
+        match (left, top) {
+            (true, true) => TopLeft,
+            (true, false) => BottomLeft,
+            (false, true) => TopRight,
+            (false, false) => BottomRight,
+        }
+    } else if dx <= dy {
+        if left {
+            Left
+        } else {
+            Right
+        }
+    } else if top {
+        Top
+    } else {
+        Bottom
+    }
 }
 
 /// `SetWindowPos` sends `WM_SIZE`/`WM_MOVE` re-entrantly inside `Phase::Commit`, where `App` is
@@ -2086,6 +2140,23 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             window.refresh();
         }
         Op::StartDragging => window.start_window_move(),
+        Op::StartResizeDragging(edge) => {
+            if cfg!(target_os = "macos") {
+                advise(NO_RESIZE_DRAG_MACOS);
+                return;
+            }
+            let edge = edge.unwrap_or_else(|| {
+                let at = window.mouse_position();
+                let size = window.viewport_size();
+                resize_edge_at(
+                    at.x.as_f32(),
+                    at.y.as_f32(),
+                    size.width.as_f32(),
+                    size.height.as_f32(),
+                )
+            });
+            window.start_window_resize(edge);
+        }
         Op::Hide => {
             if !win::hide() {
                 window.minimize_window();
@@ -2411,6 +2482,9 @@ const A27: &str =
     "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
                    draws the caption buttons and owns their colours. The overlay is for \
                    custom-chrome windows.";
+const NO_RESIZE_DRAG_MACOS: &str =
+    "`appWindow.startResizeDragging()` does nothing on macOS: AppKit cannot start a resize from \
+     inside the window. The window's own edges resize it; leave them free of app-drawn strips.";
 const NO_OVERLAY_MACOS: &str =
     "`titleBarOverlay` does nothing on macOS: the traffic lights are the window's caption \
      buttons there, and `env(titlebar-area-x)` starts past them. Draw no caption buttons of \
@@ -2501,6 +2575,47 @@ pub fn install(rt: &JsRuntime) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_directions_are_tauris_names_exactly() {
+        use gpui::ResizeEdge::*;
+        for (name, edge) in [
+            ("North", Top),
+            ("NorthEast", TopRight),
+            ("East", Right),
+            ("SouthEast", BottomRight),
+            ("South", Bottom),
+            ("SouthWest", BottomLeft),
+            ("West", Left),
+            ("NorthWest", TopLeft),
+        ] {
+            assert_eq!(resize_direction(name), Some(edge), "{name}");
+        }
+        for name in ["east", "EAST", "right", "bottom-right", "", " East"] {
+            assert_eq!(resize_direction(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_pointer_picks_the_nearest_edge_and_corners_only_close_to_both() {
+        use gpui::ResizeEdge::*;
+        let at = |x, y| resize_edge_at(x, y, 800.0, 600.0);
+        assert_eq!(at(797.0, 300.0), Right);
+        assert_eq!(at(797.0, 12.0), Right, "a strip below the corner band");
+        assert_eq!(at(2.0, 300.0), Left);
+        assert_eq!(at(400.0, 1.0), Top);
+        assert_eq!(at(400.0, 598.0), Bottom);
+        assert_eq!(at(796.0, 595.0), BottomRight);
+        assert_eq!(at(3.0, 4.0), TopLeft);
+        assert_eq!(at(792.0, 8.0), TopRight);
+        assert_eq!(at(0.0, 599.0), BottomLeft);
+        assert_eq!(
+            at(790.0, 594.0),
+            Bottom,
+            "past the band on one axis: the nearer edge"
+        );
+        assert_eq!(at(400.0, 250.0), Top, "the middle: still the nearest edge");
+    }
 
     #[test]
     fn hex_colours_parse_in_all_three_lengths() {

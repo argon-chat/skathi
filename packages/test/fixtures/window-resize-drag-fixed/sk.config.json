@@ -1,0 +1,13 @@
+{
+  "$comment": "The window-resize-drag page in a window with resizable: false.",
+
+  "name": "sk-test-window-resize-drag-fixed",
+
+  "window": {
+    "title": "Skathi — window resize drag, not resizable (fixture)",
+    "width": 360,
+    "height": 220,
+    "titleBarStyle": "hidden",
+    "resizable": false
+  }
+}

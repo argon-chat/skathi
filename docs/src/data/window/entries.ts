@@ -3392,7 +3392,60 @@ function grab(e: MouseEvent) {
       },
     ],
     edgeCases: ["Whether the matching `mouseup` reaches the app is not verified."],
-    related: ["app-region"],
+    related: ["app-region", "start-resize-dragging"],
+  },
+  {
+    slug: "start-resize-dragging",
+    name: "appWindow.startResizeDragging()",
+    kind: "method",
+    summary: "Starts resizing the main window from one edge or corner with the mouse, from a `pointerdown` handler.",
+    platforms: os(OK, NO, OK),
+    since: "Unreleased",
+    syntax: "appWindow.startResizeDragging(direction?: string): void",
+    params: [
+      {
+        name: "direction",
+        type: "string",
+        description:
+          "The edge, in Tauri's spelling and case: `North`, `NorthEast`, `East`, `SouthEast`, `South`, `SouthWest`, `West` or `NorthWest`. Without it, the edge nearest the pointer: a corner when the pointer is within 8 CSS px of two edges, otherwise the closer edge.",
+        optional: true,
+      },
+    ],
+    returns: "`undefined`. An unknown direction throws a `TypeError`.",
+    notes: [
+      "It hands the press to the platform's window resize, which follows the mouse and ends when the user releases the button. The minimum and maximum size and the aspect ratio apply during it.",
+      "On Windows the resize starts after the handler returns, and the page keeps running while the window resizes. It needs the left button still held then; after a release it does nothing.",
+      'It is for resize strips the app draws inside its own edges, under `titleBarStyle: "hidden"`. See [Custom title bar](/guides/custom-title-bar/#resize-strips).',
+      "Like Tauri's `startResizeDragging()`.",
+    ],
+    examples: [
+      {
+        title: "Resize strips on the right edge and the bottom-right corner",
+        lang: "vue",
+        code: `<script setup lang="ts">
+${IMPORT}
+</script>
+
+<template>
+  <div class="strip east" @pointerdown="appWindow.startResizeDragging('East')" />
+  <div class="strip corner" @pointerdown="appWindow.startResizeDragging('SouthEast')" />
+</template>
+
+<style scoped>
+.strip { position: fixed; }
+.east { right: 0; top: 10px; bottom: 10px; width: 5px; cursor: e-resize; }
+.corner { right: 0; bottom: 0; width: 10px; height: 10px; cursor: se-resize; }
+</style>`,
+      },
+    ],
+    edgeCases: [
+      "A maximized or fullscreen window does not resize, and neither does one created with `resizable: false`.",
+      "From a pop-out, it resizes the main window, as `startDragging()` moves it.",
+    ],
+    limitations: [
+      "macOS: it does nothing and logs an advisory once. AppKit has no call that starts a resize from inside the window; the window's own edges resize it.",
+    ],
+    related: ["start-dragging", "config-window-resizable"],
   },
   {
     slug: "window-controls-overlay",
