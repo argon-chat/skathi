@@ -2,7 +2,7 @@
 // window geometry, document.title and navigator.windowControlsOverlay.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { launch } from "../src/index";
+import { launch, LINUX } from "../src/index";
 
 const app = await launch({
   app: "packages/test/fixtures/fullscreen/src/main.ts",
@@ -50,10 +50,15 @@ describe("matchMedia", () => {
         return "ok";
       })()`);
       await app.eval(`__mq.abort.abort(); "ok"`);
-      await gc();
-      await gc();
-      expect(await js<boolean>(`__mq.unheld.deref() === undefined`)).toBe(true);
-      expect(await js<boolean>(`__mq.aborted.deref() === undefined`)).toBe(true);
+      // The conservative stack scan can keep a dead query for a collection or two.
+      await until(
+        async () => {
+          await gc();
+          return js<boolean>(`__mq.unheld.deref() === undefined && __mq.aborted.deref() === undefined`);
+        },
+        Boolean,
+        "the unheld queries to be collected",
+      );
 
       await setTheme("dark");
       const fired = await until(
@@ -109,7 +114,8 @@ describe("the window", () => {
     T,
   );
 
-  test(
+  // Linux CI is X11 under a window manager, where a move places the frame and the position read is the client's.
+  test.skipIf(LINUX)(
     "moveTo and moveBy place the window, and screenX/screenY follow",
     async () => {
       const work = await js<{ x: number; y: number }>(`({ x: screen.availLeft, y: screen.availTop })`);

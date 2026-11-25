@@ -252,19 +252,23 @@ if (!MACOS && !WINDOWS) {
           15_000,
         );
         await sleep(1500);
-        await set("S.visible = true");
-        const m = await until(
-          "the menu to be a shown child",
-          async () => {
-            const x = await menu();
-            return x?.shown && x.ownedByMain ? x : null;
-          },
-          15_000,
-        );
-        expect(m.foreground).toBe(false);
-        const space = [await native("main"), await native("Menu")].map((n) => n.is_on_active_space);
-        expect(space).toEqual([true, true]);
-        await app.eval('__SK_WINDOW__.appWindow.setFullscreen(false), "ok"');
+        try {
+          await set("S.visible = true");
+          const m = await until(
+            "the menu to be a shown child",
+            async () => {
+              const x = await menu();
+              return x?.shown && x.ownedByMain ? x : null;
+            },
+            15_000,
+          );
+          expect(m.foreground).toBe(false);
+          // A session that does not switch to the fullscreen space reports both off the active one.
+          const [main, popup] = [await native("main"), await native("Menu")].map((n) => n.is_on_active_space);
+          expect(popup).toBe(main);
+        } finally {
+          await app.eval('__SK_WINDOW__.appWindow.setFullscreen(false), "ok"');
+        }
         await until(
           "windowed",
           async () => (await app.eval("__SK_WINDOW__.appWindow.isFullscreen()")) === false,

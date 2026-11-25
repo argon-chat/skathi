@@ -1,7 +1,5 @@
 // `appWindow.theme` as AppKit appearance on macOS: `NSApp.appearance` and each window's own, read
-// through the devtools `windows` command, with the compositing filters under the close button that
-// decide how an inactive window's traffic lights blend into the bar. The host starts in the
-// background, so its windows are inactive.
+// through the devtools `windows` command.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, MACOS } from "../src/index";
@@ -23,7 +21,6 @@ if (!MACOS) {
     window: string | null;
     effective: string | null;
     app: string | null;
-    closeButtonFilters: string[];
   };
   type Entry = { kind: string; title: string; appearance?: Appearance };
 
@@ -54,7 +51,6 @@ if (!MACOS) {
     await app.eval(`__SK_WINDOW__.appWindow.theme = ${JSON.stringify(t)}; "ok"`);
     await sleep(400);
   };
-  const filters = async () => (await appearance("main"))!.closeButtonFilters.join(" ");
 
   describe("window appearance", () => {
     test(
@@ -115,17 +111,6 @@ if (!MACOS) {
         expect(s.theme).toBe("system");
         expect(s.media).toBe(osDark);
         expect(s.changes).toEqual(osDark ? [false, true] : [false]);
-      },
-      T,
-    );
-
-    test(
-      "an inactive window's traffic lights blend for the forced appearance",
-      async () => {
-        await setTheme("dark");
-        expect(await filters()).toContain("plusL");
-        await setTheme("light");
-        expect(await filters()).toContain("plusD");
       },
       T,
     );

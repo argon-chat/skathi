@@ -2843,10 +2843,6 @@ fn cmd_windows(native: bool) -> String {
                         ("window", name(a.window)),
                         ("effective", name(a.effective)),
                         ("app", name(a.app)),
-                        (
-                            "closeButtonFilters",
-                            Json::arr(a.close_button_filters.into_iter().map(Json::s).collect()),
-                        ),
                     ]),
                 ));
             }

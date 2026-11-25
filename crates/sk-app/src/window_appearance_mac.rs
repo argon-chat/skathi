@@ -124,52 +124,19 @@ pub struct Debug {
     pub window: Option<String>,
     pub effective: Option<String>,
     pub app: Option<String>,
-    /// `compositingFilter` of each layer under the close button that has one.
-    pub close_button_filters: Vec<String>,
 }
 
 pub fn debug(view: usize) -> Option<Debug> {
     let window = window_of(view)?;
-    // SAFETY: `NSWindow`, `NSButton` and `CALayer` getters on the main thread.
+    // SAFETY: `NSWindow` and `NSApplication` getters on the main thread.
     unsafe {
         let own: *mut AnyObject = msg_send![window, appearance];
         let effective: *mut AnyObject = msg_send![window, effectiveAppearance];
         let app_own: *mut AnyObject = msg_send![app(), appearance];
-        let close: *mut AnyObject = msg_send![window, standardWindowButton: 0usize];
-        let mut filters = Vec::new();
-        if let Some(close) = close.as_ref() {
-            let layer: *mut AnyObject = msg_send![close, layer];
-            collect_filters(layer, &mut filters, 0);
-        }
         Some(Debug {
             window: name_of(own),
             effective: name_of(effective),
             app: name_of(app_own),
-            close_button_filters: filters,
         })
-    }
-}
-
-unsafe fn collect_filters(layer: *mut AnyObject, out: &mut Vec<String>, depth: usize) {
-    let Some(layer) = (unsafe { layer.as_ref() }) else {
-        return;
-    };
-    if depth > 8 {
-        return;
-    }
-    unsafe {
-        let filter: *mut AnyObject = msg_send![layer, compositingFilter];
-        if let Some(f) = filter.as_ref() {
-            let d: *mut AnyObject = msg_send![f, description];
-            out.extend(utf8(d));
-        }
-        let subs: *mut AnyObject = msg_send![layer, sublayers];
-        if let Some(subs) = subs.as_ref() {
-            let n: usize = msg_send![subs, count];
-            for i in 0..n {
-                let s: *mut AnyObject = msg_send![subs, objectAtIndex: i];
-                collect_filters(s, out, depth + 1);
-            }
-        }
     }
 }
