@@ -688,6 +688,13 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
         // The synchronous layout draws only the primary window.
         popout::notify_all(cx);
     }
+    let proxied = sk_tree::take_proxy_redraws();
+    if !proxied.is_empty() {
+        if proxied.contains(&sk_tree::windows::key(window)) {
+            window.refresh();
+        }
+        popout::notify(cx, &proxied);
+    }
     // After the flush, so a socket is never told about a revision the tree has not reached.
     #[cfg(sk_devtools)]
     devtools::ws::broadcast_frame();

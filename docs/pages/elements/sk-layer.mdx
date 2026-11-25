@@ -136,6 +136,32 @@ Size the element as you would a `<div>`: it has no intrinsic size. What reaches 
 
 A layout change and the layer's move are shown in the same frame, so the layer does not lag behind the page during a resize or an animation of `width` and `height`.
 
+## Frosted glass over a layer
+
+The platform composes the layer under the page after Skathi has drawn it, so on its own a [`backdrop-filter`](/css/backdrop-filter/) or a backdrop effect over the element sees a transparent hole. When the embedder gives its layer a picture (see [What backdrops see](/embedding/native-layer/#what-backdrops-see)), those readers see the layer's picture under the page instead, cut to the element's box and rounded corners:
+
+```vue
+<template>
+  <div class="player">
+    <sk-layer name="player" class="video" />
+    <div class="controls">…</div>
+  </div>
+</template>
+
+<style scoped>
+.controls {
+  position: absolute;
+  inset: auto 0 0 0;
+  backdrop-filter: blur(20px);
+}
+</style>
+```
+
+- [`object-fit`](/css/object-fit/) and [`object-position`](/css/object-position/) on the element fit the picture into its box, as on `<sk-surface>`; the default is `fill`.
+- Outside the reader's own shape nothing changes: the page and the live layer show as before.
+- Several layers stack in paint order, the one painted last on top.
+- A reader inside an element with a filter, a mask or a blend mode sees only that element's own content, as it always does.
+
 ## Input and focus
 
 The element is an ordinary hit target. Clicks, pointer events and the wheel go to the element and to your listeners, as on a `<div>`; nothing is forwarded to the layer. `pointer-events: none` lets them through to what is under it in the page. With a `tabindex` it takes focus.

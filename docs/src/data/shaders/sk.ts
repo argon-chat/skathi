@@ -349,6 +349,20 @@ float4 rawBackdropAtPx(float2 px);`,
     related: ["sk-backdrop", "color-from-premultiplied"],
   },
   {
+    slug: "effect-input-page-backdrop-at",
+    name: "EffectInput.pageBackdropAt",
+    kind: "method",
+    summary: "The page alone at a point: `rawBackdropAt` without the pictures of `<sk-layer>` elements under it.",
+    syntax: `float4 pageBackdropAt(float2 uv);
+float4 pageBackdropAtPx(float2 px);`,
+    returns: "Premultiplied, sRGB-encoded RGBA with the page's own alpha; zero without `[SkBackdrop]`.",
+    notes: [
+      "`backdropAt` and `rawBackdropAt` hold the page over the pictures of `<sk-layer>` elements under it, as the viewer sees it; this holds the page alone. Without such pictures the two are equal.",
+      "The engine writes this back outside the element's shape, so the live layer keeps showing through a transparent page there. An effect that draws in its bleed on purpose composites over it.",
+    ],
+    related: ["effect-input-backdrop-at", "sk-backdrop"],
+  },
+  {
     slug: "effect-input-content-at",
     name: "EffectInput.contentAt",
     kind: "method",

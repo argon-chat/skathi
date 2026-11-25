@@ -38,6 +38,17 @@ pub struct Composition {
     pub underlay: NonNull<c_void>,
 }
 
+/// A page frame of a layer's window, as [`Layer::frame_submitted`] hears of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LayerFrame {
+    /// The page frame's number in its window, from 1, one more each frame.
+    pub sequence: u64,
+    /// When it was handed to the platform, in [`crate::surface::monotonic_ns`]'s clock: a submit
+    /// time, not when the display shows it.
+    pub submitted_at: u64,
+}
+
 /// A native layer under one `<sk-layer>` element. Its methods run on the UI thread inside the
 /// page's paint or present: return quickly and do not call back into Skathi. Dropped when the
 /// element goes.
@@ -50,8 +61,23 @@ pub trait Layer {
     /// element was not painted in the last frame).
     fn place(&mut self, placement: Option<Placement>);
     /// Windows: Skathi committed the composition device right after presenting the frame that
-    /// carried the last `attach` or `place`, so those changes are on screen with it.
+    /// carried the last `attach` or `place`, so those changes are on screen with it. Only after
+    /// such a frame; [`Self::frame_submitted`] hears of every frame.
     fn presented(&mut self) {}
+    /// The surface whose frames are this layer's picture, asked once when the layer is made. With
+    /// one, backdrop effects and `backdrop-filter` over the element see the picture where the
+    /// layer is, rounded and clipped like it; it is never drawn into the page itself. Publish to
+    /// it as to an `<sk-surface>`, while its `info().visible` says a backdrop reads it.
+    fn picture(&mut self) -> Option<crate::surface::SurfaceHandle> {
+        None
+    }
+    /// Its place among the layers of its window in paint order, 0 the bottom: a later-painted
+    /// `<sk-layer>` lies over an earlier one, in backdrops too. Called before `place` when it changes.
+    fn stack(&mut self, _index: u32) {}
+    /// A page frame of its window was handed to the platform (presented to the swap chain, or
+    /// committed to the layer tree) while the layer is placed: every frame, on every platform,
+    /// right after the window's present call returns.
+    fn frame_submitted(&mut self, _frame: LayerFrame) {}
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -72,6 +98,8 @@ struct Live {
     placed: Option<Placement>,
     /// Told something since the last commit of its window's composition device.
     awaiting: bool,
+    picture: Option<crate::surface::SurfaceHandle>,
+    stacked: Option<u32>,
 }
 
 type Make = Rc<dyn Fn() -> Box<dyn Layer>>;
@@ -82,6 +110,9 @@ thread_local! {
     static PAINTED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     static DREW: RefCell<Vec<WinKey>> = const { RefCell::new(Vec::new()) };
     static HOOKED: RefCell<HashSet<WinKey>> = RefCell::new(HashSet::new());
+    static SUBMIT_HOOKED: RefCell<HashSet<WinKey>> = RefCell::new(HashSet::new());
+    /// Layers painted so far in each window's frame.
+    static STACKED: RefCell<HashMap<WinKey, u32>> = RefCell::new(HashMap::new());
 }
 
 /// Has every `<sk-layer name="…">` of that name show a layer made by `make`: one per element.
@@ -152,6 +183,34 @@ fn hook(window: &Window, win: WinKey) {
     }
 }
 
+fn hook_submits(window: &mut Window, win: WinKey) {
+    if SUBMIT_HOOKED.with(|h| h.borrow_mut().insert(win)) {
+        window.vn_on_frame_submitted(Box::new(move |sequence| submitted(win, sequence)));
+    }
+}
+
+fn submitted(win: WinKey, sequence: u64) {
+    let frame = LayerFrame {
+        sequence,
+        submitted_at: crate::surface::monotonic_ns(),
+    };
+    LAYERS.with(|l| {
+        let Ok(mut layers) = l.try_borrow_mut() else {
+            return;
+        };
+        for live in layers.values_mut() {
+            if live.placed.is_some() && live.home.is_some_and(|h| h.window == win) {
+                live.layer.frame_submitted(frame);
+            }
+        }
+    });
+}
+
+/// The surface `<sk-layer>` `id`'s layer named as its picture.
+pub(crate) fn picture(id: u32) -> Option<crate::surface::SurfaceHandle> {
+    LAYERS.with(|l| l.borrow().get(&id)?.picture.clone())
+}
+
 fn committed(win: WinKey) {
     LAYERS.with(|l| {
         for live in l.borrow_mut().values_mut() {
@@ -164,6 +223,7 @@ fn committed(win: WinKey) {
 }
 
 pub(crate) fn drawing(win: WinKey) {
+    STACKED.with(|s| s.borrow_mut().remove(&win));
     if LAYERS.with(|l| l.borrow().is_empty()) {
         return;
     }
@@ -185,7 +245,17 @@ pub(crate) fn painted(id: u32, name: &str, placement: Placement, window: &mut Wi
         composition,
         container: container_of(handle),
     };
-    match settle(id, name, home, held, placement) {
+    let index = STACKED.with(|s| {
+        let mut s = s.borrow_mut();
+        let next = s.entry(home.window).or_insert(0);
+        *next += 1;
+        *next - 1
+    });
+    let told = settle(id, name, home, held, placement, index);
+    if told.is_some() {
+        hook_submits(window, home.window);
+    }
+    match told {
         None => crate::render::warn_compat(
             &format!("sk-layer:{name}"),
             &format!("<sk-layer name=\"{name}\"> shows nothing: the embedding program registered no layer of that name"),
@@ -206,6 +276,7 @@ fn settle(
     home: Home,
     held: Option<Held>,
     placement: Placement,
+    index: u32,
 ) -> Option<bool> {
     let make = LAYERS.with(|l| {
         let mut layers = l.borrow_mut();
@@ -218,13 +289,16 @@ fn settle(
         MAKERS.with(|m| m.borrow().get(name).cloned())
     });
     if let Some(make) = make {
+        let mut layer = make();
         let live = Live {
             name: name.to_string(),
-            layer: make(),
+            picture: layer.picture(),
+            layer,
             home: None,
             _held: None,
             placed: None,
             awaiting: false,
+            stacked: None,
         };
         LAYERS.with(|l| l.borrow_mut().insert(id, live));
     }
@@ -236,12 +310,18 @@ fn settle(
             live._held = held;
             live.home = Some(home);
             live.placed = None;
+            live.stacked = None;
             live.layer.attach(&LayerHost {
                 window: home.window,
                 handle: home.handle,
                 composition: home.composition,
                 native_window: NonNull::new(home.container[0] as *mut c_void),
             });
+            told = true;
+        }
+        if live.stacked != Some(index) {
+            live.stacked = Some(index);
+            live.layer.stack(index);
             told = true;
         }
         if live.placed != Some(placement) {
@@ -324,6 +404,8 @@ pub(crate) fn forget_window(win: WinKey) {
     }));
     DREW.with(|d| d.borrow_mut().retain(|w| *w != win));
     HOOKED.with(|h| h.borrow_mut().remove(&win));
+    SUBMIT_HOOKED.with(|h| h.borrow_mut().remove(&win));
+    STACKED.with(|s| s.borrow_mut().remove(&win));
 }
 
 pub fn shutdown() {
@@ -378,11 +460,76 @@ mod tests {
             composition: None,
             container,
         };
-        settle(id, "player", home, None, placement)
+        settle(id, "player", home, None, placement, 0)
     }
 
     fn paint(id: u32, window: WinKey, placement: Placement) -> Option<bool> {
         paint_in(id, window, [0; 2], placement)
+    }
+
+    struct Stacked(Rc<RefCell<Vec<String>>>, u32);
+
+    impl Layer for Stacked {
+        fn attach(&mut self, _: &LayerHost) {}
+        fn place(&mut self, placement: Option<Placement>) {
+            let at = placement.map_or("hide".to_string(), |p| format!("place {}", p.bounds[0]));
+            self.0.borrow_mut().push(format!("{} {at}", self.1));
+        }
+        fn stack(&mut self, index: u32) {
+            self.0
+                .borrow_mut()
+                .push(format!("{} stack {index}", self.1));
+        }
+        fn frame_submitted(&mut self, frame: LayerFrame) {
+            self.0
+                .borrow_mut()
+                .push(format!("{} frame {}", self.1, frame.sequence));
+        }
+    }
+
+    #[test]
+    fn layers_hear_their_paint_order_before_their_place_and_every_frame_of_their_window() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let take = |log: &Rc<RefCell<Vec<String>>>| std::mem::take(&mut *log.borrow_mut());
+        let (made, next) = (log.clone(), Rc::new(std::cell::Cell::new(0)));
+        register("stacked", move || {
+            next.set(next.get() + 1);
+            Box::new(Stacked(made.clone(), next.get()))
+        });
+        let home = |window| Home {
+            window,
+            handle: None,
+            composition: None,
+            container: [0; 2],
+        };
+        let paint = |id, window, x, index| settle(id, "stacked", home(window), None, at(x), index);
+        paint(21, 1, 0.0, 0);
+        paint(22, 1, 1.0, 1);
+        paint(23, 2, 2.0, 0);
+        assert_eq!(
+            take(&log),
+            [
+                "1 stack 0",
+                "1 place 0",
+                "2 stack 1",
+                "2 place 1",
+                "3 stack 0",
+                "3 place 2"
+            ]
+        );
+        paint(22, 1, 1.0, 0);
+        paint(21, 1, 0.0, 1);
+        assert_eq!(take(&log), ["2 stack 0", "1 stack 1"], "the order swapped");
+        submitted(1, 9);
+        let mut heard = take(&log);
+        heard.sort();
+        assert_eq!(
+            heard,
+            ["1 frame 9", "2 frame 9"],
+            "window 2's layer hears nothing"
+        );
+        forget_window(1);
+        forget_window(2);
     }
 
     #[test]

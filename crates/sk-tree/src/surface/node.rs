@@ -2,7 +2,7 @@
 //! into, the painted size reported to the producer and to JS, and the events.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{App, RenderImage, Window};
@@ -38,6 +38,10 @@ struct Node {
     /// Why the last GPU frame was not shown, once logged.
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     refused: Option<String>,
+    /// An `<sk-layer>`'s picture: not drawn into the page, shown only while `read`.
+    proxy: bool,
+    /// A backdrop of its window sampled it in the frame last drawn there.
+    read: bool,
 }
 
 thread_local! {
@@ -46,6 +50,31 @@ thread_local! {
     static DEFERRED: RefCell<Vec<(u32, Event)>> = const { RefCell::new(Vec::new()) };
     /// Each window's native handle, as present feedback names it.
     static PRESENT_KEYS: RefCell<HashMap<WinKey, u64>> = RefCell::new(HashMap::new());
+    /// Windows other than the ticking one with a new proxy frame a backdrop reads there.
+    static PROXY_REDRAWS: RefCell<Vec<WinKey>> = const { RefCell::new(Vec::new()) };
+}
+
+fn new_node(surface: SurfaceHandle, win: WinKey, proxy: bool) -> Node {
+    Node {
+        surface,
+        window: win,
+        tile: None,
+        #[cfg(windows)]
+        latched: None,
+        seen: 0,
+        frame: 0,
+        painted: (0, 0, 1.0),
+        reported: (0, 0),
+        visible: false,
+        ready: false,
+        display: None,
+        headroom: 1.0,
+        hdr: false,
+        attached: false,
+        refused: None,
+        proxy,
+        read: false,
+    }
 }
 
 #[cfg(windows)]
@@ -78,30 +107,83 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
         if name.is_empty() {
             return None;
         }
-        let node = m.entry(id).or_insert_with(|| Node {
-            surface: super::surface(name),
-            window: win,
-            tile: None,
-            #[cfg(windows)]
-            latched: None,
-            seen: 0,
-            frame: 0,
-            painted: (0, 0, 1.0),
-            reported: (0, 0),
-            visible: false,
-            ready: false,
-            display: None,
-            headroom: 1.0,
-            hdr: false,
-            attached: false,
-            refused: None,
-        });
+        let node = m
+            .entry(id)
+            .or_insert_with(|| new_node(super::surface(name), win, false));
         node.window = win;
         node.tile
             .as_ref()
             .filter(|t| t.window() == win && node.ready)
             .map(LiveTile::image)
     })
+}
+
+/// The picture an `<sk-layer>` shows under the page.
+pub(crate) struct ProxyPicture {
+    pub(crate) image: Option<Arc<RenderImage>>,
+    /// The frame's size in pixels, 0 while there is none.
+    pub(crate) size: (u32, u32),
+    pub(crate) headroom: f32,
+}
+
+/// Called from the paint of `<sk-layer>` `id`, whose box is `width` x `height` device pixels in
+/// `win`: binds the node to `surface`, the layer's proxy, and returns the picture it holds.
+pub(crate) fn note_proxy(
+    id: u32,
+    win: WinKey,
+    surface: &SurfaceHandle,
+    width: f32,
+    height: f32,
+    scale: f32,
+) -> ProxyPicture {
+    NODES.with(|m| {
+        let mut m = m.borrow_mut();
+        let element = m
+            .values()
+            .any(|n| !n.proxy && Arc::ptr_eq(n.surface.shared(), surface.shared()));
+        surface.lock_state().proxy = !element;
+        if m.get(&id)
+            .is_some_and(|n| !Arc::ptr_eq(n.surface.shared(), surface.shared()))
+        {
+            if let Some(old) = m.remove(&id) {
+                forget(old);
+            }
+        }
+        let node = m
+            .entry(id)
+            .or_insert_with(|| new_node(surface.clone(), win, true));
+        node.window = win;
+        node.painted = (
+            width.round().max(0.0) as u32,
+            height.round().max(0.0) as u32,
+            scale,
+        );
+        let tile = node
+            .tile
+            .as_ref()
+            .filter(|t| t.window() == win && node.ready);
+        ProxyPicture {
+            image: tile.map(LiveTile::image),
+            size: tile.map_or((0, 0), LiveTile::size),
+            headroom: if node.hdr { node.headroom } else { 1.0 },
+        }
+    })
+}
+
+/// Takes which proxies a backdrop of `win` sampled in its frame last drawn.
+pub(crate) fn note_reads(win: WinKey, read: &[u64]) {
+    NODES.with(|m| {
+        for (&id, node) in m.borrow_mut().iter_mut() {
+            if node.proxy && node.window == win {
+                node.read = read.contains(&u64::from(id));
+            }
+        }
+    });
+}
+
+/// The windows besides the ticking one that must draw to show a new proxy frame.
+pub(crate) fn take_proxy_redraws() -> Vec<WinKey> {
+    PROXY_REDRAWS.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }
 
 fn paint_headroom(id: u32) -> f32 {
@@ -243,6 +325,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     #[cfg(target_os = "macos")]
     super::metal::watch_device();
     let here = windows::key(window);
+    note_reads(here, &window.vn_underlays_read());
     let page_hidden = live::page_hidden();
     let here_shown = window.is_visible();
     let mut events = DEFERRED.with(|d| std::mem::take(&mut *d.borrow_mut()));
@@ -250,6 +333,7 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     let mut draw = false;
     let mut infos: HashMap<*const super::Shared, SurfaceInfo> = HashMap::new();
     let mut shown = Shown::Nowhere;
+    let mut refresh_here = false;
     NODES.with(|m| {
         for (&id, node) in m.borrow_mut().iter_mut() {
             let attached = attached(id);
@@ -258,7 +342,27 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 && (node.window != here || here_shown)
                 && node.painted.0 > 0
                 && node.painted.1 > 0
-                && live::visible(id, node.window);
+                && live::visible(id, node.window)
+                && (!node.proxy || node.read);
+            if node.proxy {
+                let mut moved = Vec::new();
+                if attached {
+                    follow_headroom(id, node, &mut moved);
+                }
+                node.attached = attached;
+                let fresh = node.surface.lock_state().seq != node.seen;
+                if node.visible && !moved.is_empty() && node.window == here {
+                    refresh_here = true;
+                } else if node.visible && (fresh || !moved.is_empty()) && node.window != here {
+                    PROXY_REDRAWS.with(|r| {
+                        let mut r = r.borrow_mut();
+                        if !r.contains(&node.window) {
+                            r.push(node.window);
+                        }
+                    });
+                }
+                continue;
+            }
             if attached && node.painted.0 > 0 && (node.painted.0, node.painted.1) != node.reported {
                 node.reported = (node.painted.0, node.painted.1);
                 events.push((
@@ -275,6 +379,9 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
             }
         }
     });
+    if refresh_here {
+        window.refresh();
+    }
     // After the switch, so the display reported says whether this window now draws HDR.
     let hdr = update_output(window, here);
     NODES.with(|m| {
@@ -283,27 +390,16 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
                 let on = display::of(node.window);
                 if on.known && node.display.is_none_or(|d| on.differs(&d)) {
                     node.display = Some(on);
-                    events.push((id, Event::Display(on)));
+                    if !node.proxy {
+                        events.push((id, Event::Display(on)));
+                    }
                 }
                 let limit = crate::inherit::dynamic_range_limit(id);
                 let info = infos.entry(Arc::as_ptr(node.surface.shared())).or_default();
-                // The largest visible element sets the size; a hidden one's last size only stands in.
-                let rank = |visible: bool, w: u32, h: u32| (visible, u64::from(w) * u64::from(h));
-                if rank(node.visible, node.painted.0, node.painted.1)
-                    > rank(info.visible, info.width, info.height)
-                {
-                    info.width = node.painted.0;
-                    info.height = node.painted.1;
-                    info.scale = node.painted.2;
-                    info.display = on;
-                    info.dynamic_range_limit = limit;
-                } else if !info.display.known {
-                    info.display = on;
-                }
-                info.visible |= node.visible;
+                fold_info(info, node, on, limit);
             }
             if node.window == here {
-                let (s, event) = write(window, here, id, node, hdr, &mut touch);
+                let (s, event) = write_node(window, here, id, node, hdr, &mut touch);
                 shown = shown.max(s);
                 events.extend(event.map(|e| (id, e)));
             }
@@ -314,18 +410,56 @@ pub(crate) fn tick(window: &mut Window, cx: &mut App) -> bool {
     finish(touch, &mut draw);
     #[cfg(target_os = "macos")]
     update_pacing(window, here);
-    for surface in super::all() {
-        let info = infos
-            .get(&Arc::as_ptr(surface.shared()))
-            .copied()
-            .unwrap_or_default();
+    publish_infos(super::all(), &infos);
+    carry(window, here);
+    dispatch(events, window, cx);
+    draw
+}
+
+/// Adds a node to its surface's info: the largest visible node sets the size (a hidden one's last
+/// size only stands in), and the surface is visible while any node is, element or picture.
+fn fold_info(
+    info: &mut SurfaceInfo,
+    node: &Node,
+    on: SurfaceDisplay,
+    limit: sk_css::DynamicRangeLimit,
+) {
+    let rank = |visible: bool, w: u32, h: u32| (visible, u64::from(w) * u64::from(h));
+    if rank(node.visible, node.painted.0, node.painted.1)
+        > rank(info.visible, info.width, info.height)
+    {
+        info.width = node.painted.0;
+        info.height = node.painted.1;
+        info.scale = node.painted.2;
+        info.display = on;
+        info.dynamic_range_limit = limit;
+    } else if !info.display.known {
+        info.display = on;
+    }
+    info.visible |= node.visible;
+}
+
+/// Hands each surface its info; only a surface no element shows waits for a backdrop to read it
+/// before it wakes the frame loop.
+fn publish_infos(surfaces: Vec<SurfaceHandle>, infos: &HashMap<*const super::Shared, SurfaceInfo>) {
+    let (pictures, elements) = NODES.with(|m| {
+        let m = m.borrow();
+        let of = |proxy: bool| -> HashSet<*const super::Shared> {
+            m.values()
+                .filter(|n| n.proxy == proxy)
+                .map(|n| Arc::as_ptr(n.surface.shared()))
+                .collect()
+        };
+        (of(true), of(false))
+    });
+    for surface in surfaces {
+        let key = Arc::as_ptr(surface.shared());
+        let info = infos.get(&key).copied().unwrap_or_default();
+        surface.lock_state().proxy = pictures.contains(&key) && !elements.contains(&key);
         surface.set_info(info);
         #[cfg(any(windows, target_os = "macos"))]
         surface.lock_state().trim_slots(std::time::Instant::now());
     }
-    carry(window, here);
-    dispatch(events, window, cx);
-    draw
 }
 
 #[cfg(windows)]
@@ -413,6 +547,7 @@ fn wanted_headroom(here: WinKey, reach: f32) -> f32 {
             .iter()
             .filter(|(_, n)| {
                 n.window == here
+                    && !n.proxy
                     && n.visible
                     && n.surface.format() == SurfaceFormat::Rgba16Float
                     && n.surface.lock_state().frame.is_some()
@@ -428,6 +563,7 @@ pub(crate) fn window_tick(window: &mut Window) {
         return;
     }
     let here = windows::key(window);
+    note_reads(here, &window.vn_underlays_read());
     #[cfg(target_os = "macos")]
     update_pacing(window, here);
     let hdr = update_output(window, here);
@@ -435,7 +571,7 @@ pub(crate) fn window_tick(window: &mut Window) {
     NODES.with(|m| {
         for (&id, node) in m.borrow_mut().iter_mut() {
             if node.window == here {
-                if let (_, Some(event)) = write(window, here, id, node, hdr, &mut touch) {
+                if let (_, Some(event)) = write_node(window, here, id, node, hdr, &mut touch) {
                     DEFERRED.with(|d| d.borrow_mut().push((id, event)));
                 }
             }
@@ -481,6 +617,28 @@ fn finish(touch: Vec<u32>, draw: &mut bool) {
             t.touch(id);
         }
     });
+}
+
+/// [`write`]; a proxy's new picture redraws its own window only, and its element hears no
+/// surface events.
+fn write_node(
+    window: &mut Window,
+    here: WinKey,
+    id: u32,
+    node: &mut Node,
+    window_hdr: bool,
+    touch: &mut Vec<u32>,
+) -> (Shown, Option<Event>) {
+    if !node.proxy {
+        return write(window, here, id, node, window_hdr, touch);
+    }
+    let mut own = Vec::new();
+    let (shown, _) = write(window, here, id, node, window_hdr, &mut own);
+    if shown == Shown::Draw || !own.is_empty() {
+        window.refresh();
+        return (Shown::Nowhere, None);
+    }
+    (shown, None)
 }
 
 fn write(
@@ -791,6 +949,7 @@ fn dispatch(events: Vec<(u32, Event)>, window: &mut Window, cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{FrameDropReason, FrameEvent};
     use super::*;
 
     #[test]
@@ -884,6 +1043,131 @@ mod tests {
         surface.clear();
         assert_eq!(wanted_headroom(win, 4.0), 1.0, "cleared");
         note_build(id, win, "");
+    }
+
+    #[test]
+    fn a_proxy_is_read_only_in_the_window_whose_backdrops_sampled_it() {
+        let (a, b) = (0x7ffe_0005, 0x7ffe_0006);
+        let (one, two) = (0x7ffc, 0x7ffb);
+        let s = super::super::surface("tests:proxy-reads");
+        let picture = note_proxy(a, one, &s, 100.4, 50.0, 2.0);
+        assert_eq!(picture.size, (0, 0), "no frame yet");
+        note_proxy(b, two, &s, 10.0, 10.0, 1.0);
+        let read = |id: u32| NODES.with(|m| m.borrow()[&id].read);
+        note_reads(one, &[u64::from(a), u64::from(b)]);
+        assert!(read(a));
+        assert!(!read(b), "window one's reads say nothing about window two");
+        note_reads(two, &[u64::from(b)]);
+        note_reads(one, &[]);
+        assert!(!read(a));
+        assert!(read(b));
+        assert_eq!(NODES.with(|m| m.borrow()[&a].painted), (100, 50, 2.0));
+        NODES.with(|m| {
+            let mut m = m.borrow_mut();
+            m.remove(&a).map(forget);
+            m.remove(&b).map(forget);
+        });
+    }
+
+    #[test]
+    fn a_proxy_frame_is_presented_by_the_page_present_that_composited_it() {
+        let (id, win, present_window) = (0x7ffe_0007, 0x7ffa, 0x7ffe_7700);
+        let s = super::super::surface("tests:proxy-frames");
+        note_proxy(id, win, &s, 64.0, 64.0, 1.0);
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = heard.clone();
+        let _watch = s.on_frame(move |e| sink.lock().unwrap().push(e));
+        let unread = s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        feedback::deliver();
+        assert_eq!(
+            std::mem::take(&mut *heard.lock().unwrap()),
+            [FrameEvent::dropped(unread, FrameDropReason::Hidden)],
+            "no backdrop reads it"
+        );
+        note_reads(win, &[u64::from(id)]);
+        s.set_info(SurfaceInfo {
+            visible: true,
+            ..SurfaceInfo::default()
+        });
+        let skipped = s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        let composited = s.present_bgra(&[0; 4], 1, 1, 4).unwrap();
+        let key = feedback::key(s.shared());
+        feedback::with(|t| {
+            t.settle(key, composited);
+            t.pin(key, composited, present_window);
+            t.carry(present_window, HashMap::from([(key, composited)]));
+            t.queued(present_window, 1);
+            t.resolved(
+                present_window,
+                1,
+                gpui::present_feedback::PresentOutcome::Displayed {
+                    at_ns: 5000,
+                    refresh_ns: 1000,
+                    exact: true,
+                },
+                |_| None,
+            );
+        });
+        feedback::deliver();
+        let heard = std::mem::take(&mut *heard.lock().unwrap());
+        assert_eq!(
+            heard[0],
+            FrameEvent::dropped(skipped, FrameDropReason::Superseded)
+        );
+        assert!(
+            matches!(heard[1], FrameEvent::Presented { frame, shown_at: 5000, .. } if frame == composited),
+            "{heard:?}"
+        );
+        NODES.with(|m| m.borrow_mut().remove(&id).map(forget));
+    }
+
+    #[test]
+    fn a_surface_both_shown_and_pictured_is_visible_and_wakes_while_either_use_is() {
+        let (element, picture, win) = (0x7ffe_000a, 0x7ffe_000b, 0x7ff9);
+        let s = super::super::surface("tests:both");
+        note_build(element, win, "tests:both");
+        note_proxy(picture, win, &s, 64.0, 64.0, 1.0);
+        let tick = |shown: Option<bool>, read: bool| {
+            NODES.with(|m| {
+                let mut m = m.borrow_mut();
+                match shown {
+                    Some(shown) => m.get_mut(&element).expect("built").visible = shown,
+                    None => {
+                        m.remove(&element).map(forget);
+                    }
+                }
+                m.get_mut(&picture).expect("painted").visible = read;
+            });
+            let mut infos = HashMap::new();
+            NODES.with(|m| {
+                for node in m.borrow().values() {
+                    if Arc::ptr_eq(node.surface.shared(), s.shared()) {
+                        let info = infos.entry(Arc::as_ptr(s.shared())).or_default();
+                        fold_info(info, node, SurfaceDisplay::default(), Default::default());
+                    }
+                }
+            });
+            publish_infos(vec![s.clone()], &infos);
+            (s.info().visible, s.wants_frames())
+        };
+        assert_eq!(
+            tick(Some(true), false),
+            (true, true),
+            "the element is on screen"
+        );
+        assert_eq!(
+            tick(Some(false), true),
+            (true, true),
+            "a backdrop reads the picture"
+        );
+        assert_eq!(
+            tick(Some(false), false),
+            (false, true),
+            "neither, but an element still wakes as one"
+        );
+        assert_eq!(tick(None, false), (false, false), "only an unread picture");
+        assert_eq!(tick(None, true), (true, true), "only a read picture");
+        NODES.with(|m| m.borrow_mut().remove(&picture).map(forget));
     }
 
     fn count_of(id: u32) -> usize {

@@ -16,6 +16,9 @@
 //! - `animate(name)` clears a texture to a moving colour at 60 Hz, at the element's painted size.
 //! - `layerLog()` answers and clears what the `<sk-layer name="probe">` layer was told:
 //!   `attach:<window>`, `place:x,y,w,h` in CSS px, `hide` and `presented`.
+//! - `<sk-layer name="pictured">` names the surface `pictured` as its picture; `pictureLog()`
+//!   answers and clears its `stack:<index>`, `submitted:<sequence>` and the surface's
+//!   `presented:<frame>` / `dropped:<frame>:<reason>`.
 //! - `<sk-layer name="plasma">` (Windows) shows a layer that draws: a DirectComposition visual
 //!   with a swap chain of its own, rendered with D3D11 at the display's rate.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
@@ -51,7 +54,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use sk_app::embed::{
-    Builder, Call, Layer, LayerHost, LayerPlacement, SurfaceFormat, SurfaceHandle,
+    Builder, Call, FrameEvent, FrameWatch, Layer, LayerFrame, LayerHost, LayerPlacement,
+    SurfaceFormat, SurfaceHandle,
 };
 
 static LAYER_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -79,6 +83,48 @@ impl Layer for ProbeLayer {
 
     fn presented(&mut self) {
         LAYER_LOG.lock().unwrap().push("presented".into());
+    }
+}
+
+static PICTURE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// `<sk-layer name="pictured">`: a layer that draws nothing itself and names the surface
+/// `pictured` as its picture.
+struct PicturedLayer {
+    _watch: FrameWatch,
+}
+
+impl PicturedLayer {
+    fn new() -> Self {
+        let watch = sk_app::embed::surface("pictured").on_frame(|event| {
+            let told = match event {
+                FrameEvent::Presented { frame, .. } => format!("presented:{frame}"),
+                FrameEvent::Dropped { frame, reason } => format!("dropped:{frame}:{reason:?}"),
+            };
+            PICTURE_LOG.lock().unwrap().push(told);
+        });
+        Self { _watch: watch }
+    }
+}
+
+impl Layer for PicturedLayer {
+    fn attach(&mut self, _: &LayerHost) {}
+
+    fn place(&mut self, _: Option<LayerPlacement>) {}
+
+    fn picture(&mut self) -> Option<SurfaceHandle> {
+        Some(sk_app::embed::surface("pictured"))
+    }
+
+    fn stack(&mut self, index: u32) {
+        PICTURE_LOG.lock().unwrap().push(format!("stack:{index}"));
+    }
+
+    fn frame_submitted(&mut self, frame: LayerFrame) {
+        PICTURE_LOG
+            .lock()
+            .unwrap()
+            .push(format!("submitted:{}", frame.sequence));
     }
 }
 
@@ -138,12 +184,17 @@ fn main() {
         .activate(false)
         .setup(|host| {
             host.layer("probe", || Box::new(ProbeLayer));
+            host.layer("pictured", || Box::new(PicturedLayer::new()));
             #[cfg(windows)]
             host.layer("plasma", || Box::new(plasma::Plasma::new()));
             Ok(())
         })
         .function("layerLog", |call| {
             let told = std::mem::take(&mut *LAYER_LOG.lock().unwrap());
+            call.resolve(json!(told).to_string());
+        })
+        .function("pictureLog", |call| {
+            let told = std::mem::take(&mut *PICTURE_LOG.lock().unwrap());
             call.resolve(json!(told).to_string());
         })
         .function("present", |call| {

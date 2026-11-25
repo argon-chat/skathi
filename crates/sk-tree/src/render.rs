@@ -5697,11 +5697,21 @@ fn build_layer<V: 'static>(
     }
     presentational_size(t, id, d.style());
     let radii = d.style().corner_radii.clone();
+    let fit = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.extras.object_fit)
+        .map(gpui_object_fit)
+        .unwrap_or(gpui::ObjectFit::Fill);
+    let position = object_position_of(d.style());
     let reporter = gpui::canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
             let (place, _) = underlay_placement(bounds, &radii, window);
             crate::layer::painted(id, &name, place, window);
+            if let Some(surface) = crate::layer::picture(id) {
+                paint_layer_picture(id, &surface, bounds, place, fit, position, window);
+            }
         },
     )
     .absolute()
@@ -5716,6 +5726,52 @@ fn build_layer<V: 'static>(
         cx,
     )
     .into_any_element()
+}
+
+/// Records `<sk-layer>` `id`'s picture under the page where its layer is, fitted into the box by
+/// `object-fit` and `object-position` as on `<sk-surface>`; backdrops composite it.
+fn paint_layer_picture(
+    id: u32,
+    surface: &crate::surface::SurfaceHandle,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    place: crate::iframe::Placement,
+    fit: gpui::ObjectFit,
+    position: gpui::ObjectPosition,
+    window: &mut Window,
+) {
+    let scale = window.scale_factor();
+    let [_, _, width, height] = place.bounds;
+    let picture =
+        crate::surface::node::note_proxy(id, windows::key(window), surface, width, height, scale);
+    let content = if picture.size.0 > 0 && picture.size.1 > 0 {
+        let frame = gpui::size(
+            gpui::DevicePixels(picture.size.0 as i32),
+            gpui::DevicePixels(picture.size.1 as i32),
+        );
+        let fitted = fit.get_bounds_at(bounds, frame, position);
+        [
+            f32::from(fitted.origin.x) * scale,
+            f32::from(fitted.origin.y) * scale,
+            f32::from(fitted.size.width) * scale,
+            f32::from(fitted.size.height) * scale,
+        ]
+    } else {
+        place.bounds
+    };
+    let underlay = gpui::VnUnderlayPlace {
+        bounds: place.bounds,
+        radii: place.radii,
+        clip: place.clip,
+        content,
+        opacity: place.opacity,
+    };
+    let image = picture.image;
+    let painted = window.with_signed_image_headroom(picture.headroom, |window| {
+        window.vn_paint_underlay(u64::from(id), underlay, image)
+    });
+    if let Err(error) = painted {
+        log::warn!("<sk-layer> picture not recorded: {error:#}");
+    }
 }
 
 /// `<sk-surface name="…">`: a replaced box, 300 x 150 unless CSS sizes it, showing the frame a native

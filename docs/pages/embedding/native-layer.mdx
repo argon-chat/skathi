@@ -55,6 +55,9 @@ let builder = skathi::Builder::new().setup(|host| {
 - **`attach`** is called when the element is painted in a window for the first time, when it moves to another window, when the window's view is moved into another native window or under another superview (macOS), and when the window rebuilt what it composes with (a lost device on Windows). A placement always follows it.
 - **`place`** is called from the paint that draws the element, before that frame is presented, and only when the placement changed. `None` means the element was not painted in the last frame: `display: none`, scrolled out, or culled.
 - **`presented`** (optional, Windows) is called once Skathi has committed your changes with the frame that carried them; see below.
+- **`stack`** (optional) gives the layer its place among the `<sk-layer>` elements of its window in paint order, `0` at the bottom. It is called before `place` when that place changes. A layer painted later lies over an earlier one: put your visuals in that order.
+- **`frame_submitted`** (optional) is called for every page frame of the layer's window while the layer is placed, on Windows, macOS and Linux; see [Frames of the page](#frames-of-the-page).
+- **`picture`** (optional) names a surface whose frames stand in for the layer in backdrop effects; see [What backdrops see](#what-backdrops-see).
 - All run on Skathi's UI thread inside the page's paint or present. Return quickly and do not call into Skathi from them.
 
 `LayerPlacement` is in device pixels of the window:
@@ -123,5 +126,44 @@ Skathi's own window keeps no part in the page meanwhile: its delegate is ignored
 When the page closes, by `appWindow.close()`, by `Handle::close` or by a close request from its own window controls, it ends as it does in its own window: a close that asks first (`close-requested`, `beforeunload`) asks here too and can be refused, the [close events](/guides/closing-and-background/) fire, and your close hooks run. Skathi then takes its view out of your window, stops listening to it and releases it, and its own empty window goes with the page. Your window is not closed, hidden or changed otherwise. The view goes back into Skathi's window; if you moved Skathi's content view into your window too, only the page's view is taken out of it, and the content view stays where you put it. Do not keep using the view after the page has closed.
 
 **Linux.** `attach` and `place` are called, but there is no place under the page yet.
+
+## What backdrops see
+
+The layer is composed under the page by the platform, after Skathi has drawn its frame, so `backdrop-filter` and [backdrop effects](/guides/shader-library/) over the element see only the page: a frosted panel over your video blurs a transparent hole. To fix that, give Skathi a picture of the layer. `picture` returns a [`SurfaceHandle`](/embedding/native-frames/), asked once when the layer is made, and you present your frames to it as to any `<sk-surface>`:
+
+```rust
+impl Layer for Player {
+    fn picture(&mut self) -> Option<SurfaceHandle> {
+        Some(self.picture.clone()) // skathi::surface("player-picture"), made once
+    }
+    // attach, place, ...
+}
+
+// On the player's thread, after each frame it presents itself, the same picture
+// through any of the surface's present calls:
+if picture.info().visible {
+    picture.present_bgra(&pixels, width, height, width as usize * 4)?;
+}
+```
+
+- **Only backdrops see it.** The picture is never drawn into the page. Backdrop readers whose region meets the layer see the page over the picture, cut to the layer's box, `clip` and rounded corners, faded by its opacity, and fitted into the box by the element's `object-fit` and `object-position` (`fill` by default). Outside their shapes the page stays as it is, with its own alpha, so the live layer keeps showing through.
+- **Present while it is visible.** `info().visible` is true while a backdrop of the layer's window sampled the picture in the frame last drawn there, or while an `<sk-surface>` showing the same surface can be on screen; a `SurfaceEvent::Changed` tells you when that flips. While neither holds, presents are accepted but redraw nothing, and Skathi does not wake for them. A new frame redraws only the windows that read or show it, and only when it is newer than the one shown.
+- **A reader that appears.** Reads are known once a frame is drawn, so the first frame drawn with a new reader shows the picture the layer held before: nothing the very first time, the last frame written otherwise. If a frame is already presented, the next frame shows it. If you only start presenting when `visible` turns true, add your own latency to that. To keep the gap to one frame, present your newest frame even while `visible` is false, or at least the last one before you stop: such a present only stores the frame.
+- **Frame events mean the page.** `FrameEvent::Presented` for the picture's frame M means the page frame that composited M was presented, timed like `<sk-surface>` frames. A frame no page frame composited before a newer one arrived is `Dropped` as `Superseded`, and one presented while nothing reads or shows it is `Dropped` as `Hidden`.
+- **The same surface in the page.** A surface can be a layer's picture and be shown by `<sk-surface>` elements at the same time. Each use works as it would alone: the elements update as any `<sk-surface>` does, readers see the picture, and a frame is `Presented` when either use put it on screen.
+- **Colour** is handled as on `<sk-surface>`: 8-bit frames are sRGB, half-float frames are mapped to the window's headroom. A proxy does not switch its window to HDR output; it keeps extended range when the window is already HDR. The picture keeps its alpha.
+- **Several layers.** Pictures stack in the elements' paint order, the one painted last on top, the same order `stack` tells you. Every reader on the page sees every picture under it, including one whose element is painted after the reader.
+- **Where it applies.** Readers drawn straight into the window see pictures: `backdrop-filter` and backdrop effects on ordinary elements. Readers inside an isolated group (an element with a filter, a mask, `mix-blend-mode`, or a content effect) see only what the group drew, as before. The D3D12, Metal and wgpu renderers composite pictures; the Direct3D 11 fallback does not, and its readers see the page alone. A window with no picture costs nothing: no extra pass and no extra texture.
+
+## Frames of the page
+
+`frame_submitted` hears each page frame of the layer's window while the layer is placed, with a `LayerFrame`:
+
+| Field          | Means                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `sequence`     | the frame's number in its window, from 1, one more each frame                             |
+| `submitted_at` | when the frame was handed to the platform, in `monotonic_ns`'s clock: not when it is seen |
+
+It runs on the UI thread, right after the window's present call returns: after `Present` on the swap chain (Windows), after the frame is committed to the layer tree (macOS), after the frame is submitted (Linux). `presented` is unchanged: on Windows it still comes only after a frame that carried `attach` or `place` changes, once Skathi has committed them. For when a frame reached the screen, use the picture's `FrameEvent::Presented`.
 
 Next: [Window, tray and hotkeys](/embedding/desktop/).

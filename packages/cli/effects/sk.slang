@@ -309,6 +309,10 @@ public struct SkQualityAttribute
 // t7 is the element's content (`[SkContent]`), t8 its history (`[SkHistory]`):
 // WGSL group 2 bindings 7 and 8, Metal texture(7) and texture(8). Every effect
 // pipeline binds them, transparent when the effect has neither.
+//
+// t13 is the snapshot without the pictures of native layers under the page
+// (`<sk-layer>` sources): WGSL group 2 binding 10, Metal texture(13). A backdrop
+// effect has it bound, t2's texture when there are no such pictures.
 
 public struct SkBounds
 {
@@ -369,6 +373,8 @@ public StructuredBuffer<SkEffectQuad> sk_effect_quads : register(t1);
 public Texture2D<float4> sk_backdrop_input : register(t0);
 [[vk::binding(2, 2)]]
 public Texture2D<float4> sk_backdrop_original : register(t2);
+[[vk::binding(10, 2)]]
+public Texture2D<float4> sk_backdrop_page : register(t13);
 [[vk::binding(1, 2)]]
 public SamplerState sk_clamp_sampler : register(s1);
 [[vk::binding(7, 2)]]
@@ -492,7 +498,10 @@ public struct EffectInput
     // backdrop effect drawn in the same group (they never overlap). The
     // blurred one is a lower-resolution pyramid level: blurred to
     // `[SkBackdropRadius]`, or the raw snapshot when the effect has none.
-    // All four return zero for an effect without `[SkBackdrop]`.
+    // Where a native layer that shows a picture (`<sk-layer>` with a proxy
+    // surface) lies under the page, both hold the page over that picture, as
+    // the viewer sees it; `pageBackdropAt` holds the page alone.
+    // All of them return zero for an effect without `[SkBackdrop]`.
 
     float2 backdropUv(float2 uv)
     {
@@ -535,6 +544,23 @@ public struct EffectInput
     public float4 rawBackdropAtPx(float2 px)
     {
         return this.rawBackdropAt(this.pxToUv(px));
+    }
+
+    /// The page alone at a window UV: `rawBackdropAt` without the pictures of
+    /// native layers under it, with the page's own alpha. What the engine
+    /// writes back outside the element's shape; an effect that draws there on
+    /// purpose (`[SkBleed]`) composites over this, so the live layer shows through.
+    public float4 pageBackdropAt(float2 uv)
+    {
+        return this.hasBackdrop
+            ? sk_backdrop_page.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
+            : float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// The page alone at a point in this element's device pixels.
+    public float4 pageBackdropAtPx(float2 px)
+    {
+        return this.pageBackdropAt(this.pxToUv(px));
     }
 
     /// A point in this element's device pixels as a window UV.
@@ -912,8 +938,9 @@ public EffectInput sk_begin(uint id, float4 frag_position)
 /// Runs the effect and applies everything the engine owns: the straight-alpha
 /// convention, the premultiplied clamp, the drawn quad's antialiased coverage,
 /// the element opacity, and — for a backdrop effect, which draws with blending
-/// disabled and therefore owns every pixel of its quad — restoring the
-/// untouched snapshot outside that coverage.
+/// disabled and therefore owns every pixel of its quad — restoring the page
+/// outside that coverage: the snapshot without the pictures of native layers
+/// under it, so no stale copy of one lands over the live layer.
 ///
 /// The result is PREMULTIPLIED whatever `straightAlpha` says. Every renderer
 /// blends a non-backdrop effect as premultiplied source-over (One,
@@ -939,9 +966,8 @@ public float4 sk_finish<T : IEffect>(T material, EffectInput i)
     float4 result;
     if (i.hasBackdrop)
     {
-        float4 original =
-            sk_backdrop_original.SampleLevel(sk_clamp_sampler, i.uv, 0.0);
-        result = lerp(original, shaded, coverage);
+        float4 page = sk_backdrop_page.SampleLevel(sk_clamp_sampler, i.uv, 0.0);
+        result = lerp(page, shaded, coverage);
     }
     else
     {

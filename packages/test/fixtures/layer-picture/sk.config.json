@@ -1,0 +1,13 @@
+{
+  "$comment": "<sk-layer> pictures: a layer whose proxy surface backdrop readers see (crates/sk-app/examples/surface.rs).",
+
+  "name": "sk-test-layer-picture",
+
+  "window": {
+    "title": "Skathi — layer picture (fixture)",
+    "width": 360,
+    "height": 240,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

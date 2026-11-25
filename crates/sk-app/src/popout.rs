@@ -240,7 +240,22 @@ fn child_fullscreen(id: WindowId, view: usize, event: gpui::WindowFullscreenTran
 /// window at a time; under load a pop-out whose only change was a `<canvas>` went seconds without
 /// a frame. One task at a time.
 pub fn notify_all(cx: &mut App) {
-    let ids: Vec<WindowId> = POPOUTS.with(|p| p.borrow().iter().map(|w| w.id).collect());
+    notify_where(cx, |_| true);
+}
+
+/// [`notify_all`] for the pop-outs among `keys` only.
+pub fn notify(cx: &mut App, keys: &[sk_tree::WinKey]) {
+    notify_where(cx, |id| keys.contains(&id.as_u64()));
+}
+
+fn notify_where(cx: &mut App, wanted: impl Fn(WindowId) -> bool) {
+    let ids: Vec<WindowId> = POPOUTS.with(|p| {
+        p.borrow()
+            .iter()
+            .map(|w| w.id)
+            .filter(|&id| wanted(id))
+            .collect()
+    });
     if ids.is_empty() {
         return;
     }

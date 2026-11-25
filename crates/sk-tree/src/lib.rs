@@ -116,6 +116,11 @@ pub use tree::{
 pub use view_transition::build_overlay as build_view_transition;
 pub use windows::WinKey;
 
+/// Windows other than the ticking one whose backdrops read a `<sk-layer>` picture that moved.
+pub fn take_proxy_redraws() -> Vec<WinKey> {
+    surface::node::take_proxy_redraws()
+}
+
 /// The numeric payload a native input event carries into JS. Mouse: a=x b=y c=button, d=modifier
 /// bits | click count << 4. Wheel: a=deltaX b=deltaY. Input: `key` = the new value. Scroll:
 /// a=scrollLeft b=scrollTop. Modifier bits: 1 ctrl, 2 shift, 4 alt, 8 meta.

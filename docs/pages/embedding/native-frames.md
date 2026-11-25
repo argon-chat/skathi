@@ -108,6 +108,8 @@ std::thread::spawn(move || {
 
 Nothing waits for the UI. A present stores the frame and returns; the element takes the newest one on its next paint, and only while it is visible: a frame presented under `display: none`, outside a scroll clip or in a hidden window costs no upload. A producer that presents faster than the screen refreshes only loses frames, never time: while the newest GPU frame is still being copied, the element shows the newest frame whose copy has finished, so a producer at or above the refresh rate drops frames instead of freezing. `stats().shown` against `stats().presented` tells how many reach the screen; [`on_frame`](#knowing-when-a-frame-is-on-screen) tells which, and when.
 
+A surface can also be the picture of an `<sk-layer>` ([What backdrops see](/embedding/native-layer/#what-backdrops-see)). The backdrops over the layer then count as one more place it is shown: `info().visible` is true while an element showing it can be on screen or one of those backdrops read it in the frame last drawn, and the layer's box competes with the elements' for `info()`'s size.
+
 ## GPU frames, Windows and macOS
 
 On Windows and macOS the frame can stay on the GPU. Pick the path by what the producer renders with:

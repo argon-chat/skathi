@@ -221,7 +221,8 @@ pub struct SurfaceInfo {
     pub height: u32,
     /// That element's window scale factor.
     pub scale: f32,
-    /// Whether any element showing it can be on screen. A hidden one takes no frames.
+    /// Whether an element showing it can be on screen, or a backdrop read it as a layer's picture
+    /// ([`crate::layer::Layer::picture`]) in the frame its window drew last. Publish while true.
     pub visible: bool,
     /// The display that element is on; the last one known while no element shows the surface.
     pub display: SurfaceDisplay,
@@ -461,6 +462,9 @@ pub(crate) struct State {
     /// The newest frame present feedback was told is ready to be shown.
     settled: u64,
     info: SurfaceInfo,
+    /// Only an `<sk-layer>`'s picture ([`crate::layer::Layer::picture`]), shown by no element:
+    /// wakes wait for `info.visible`.
+    pub(crate) proxy: bool,
     pub(crate) format: SurfaceFormat,
     #[cfg(windows)]
     gpu: d3d11::SurfaceGpu,
@@ -782,7 +786,7 @@ impl SurfaceHandle {
             bgra: bgra.into(),
             halves,
         })?;
-        sk_runtime::frames::wake();
+        self.wake();
         Ok(frame)
     }
 
@@ -831,7 +835,7 @@ impl SurfaceHandle {
             bgra: packed.into(),
             halves: None,
         })?;
-        sk_runtime::frames::wake();
+        self.wake();
         Ok(frame)
     }
 
@@ -855,7 +859,7 @@ impl SurfaceHandle {
             }
         }
         drop(st);
-        sk_runtime::frames::wake();
+        self.wake();
     }
 
     /// The renderer's D3D11 device. Textures for [`Self::present_d3d11_texture`] are made on it.
@@ -882,7 +886,7 @@ impl SurfaceHandle {
         {
             // SAFETY: the caller's.
             let frame = unsafe { d3d11::present_texture(&self.shared.state, texture) }?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(not(windows))]
@@ -938,7 +942,7 @@ impl SurfaceHandle {
             // SAFETY: the caller's.
             let (frame, release) =
                 unsafe { d3d12::present(&self.shared.state, resource, resource_state, ready) }?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(FramePresent { frame, release })
         }
         #[cfg(not(windows))]
@@ -965,7 +969,7 @@ impl SurfaceHandle {
             let frame = texture
                 .inner
                 .present(&self.shared.state, sync, texture.timeout_ms)?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(target_os = "macos")]
@@ -983,7 +987,7 @@ impl SurfaceHandle {
                 ));
             }
             let frame = metal::present_shared(&self.shared.state, &texture.inner, None)?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -1015,7 +1019,7 @@ impl SurfaceHandle {
                 d3d11::SharedSync::Fence(wait, release),
                 texture.timeout_ms,
             )?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(target_os = "macos")]
@@ -1029,7 +1033,7 @@ impl SurfaceHandle {
             }
             let frame =
                 metal::present_shared(&self.shared.state, &texture.inner, Some((wait, release)))?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -1085,7 +1089,7 @@ impl SurfaceHandle {
         {
             // SAFETY: the caller's.
             let (frame, release) = unsafe { metal::present(&self.shared.state, texture, ready) }?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(FramePresent { frame, release })
         }
         #[cfg(not(target_os = "macos"))]
@@ -1128,7 +1132,7 @@ impl SurfaceHandle {
             };
             // SAFETY: the caller's.
             let frame = unsafe { metal::present_pixel_buffer(&self.shared.state, buffer, cpu) }?;
-            sk_runtime::frames::wake();
+            self.wake();
             Ok(frame)
         }
         #[cfg(not(target_os = "macos"))]
@@ -1140,6 +1144,20 @@ impl SurfaceHandle {
 
     fn state(&self) -> MutexGuard<'_, State> {
         lock(&self.shared.state)
+    }
+
+    /// Asks for a frame to show what changed; a layer's picture only while a backdrop reads it.
+    fn wake(&self) {
+        if self.wants_frames() {
+            sk_runtime::frames::wake();
+        }
+    }
+
+    /// Whether a new frame asks the frame loop for a tick: always while an element shows the
+    /// surface, only while a backdrop reads it when it is only a layer's picture.
+    pub(crate) fn wants_frames(&self) -> bool {
+        let state = self.state();
+        !state.proxy || state.info.visible
     }
 
     pub(crate) fn shared(&self) -> &Arc<Shared> {

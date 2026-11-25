@@ -571,7 +571,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 12,
+      "schema": 13,
       "slang": "2026.12",
       "kind": "user",
       "effects": [

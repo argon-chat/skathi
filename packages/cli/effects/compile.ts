@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 12;
+export const SCHEMA = 13;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -81,9 +81,23 @@ const TARGETS: Target[] = [
 ];
 
 // Group 0 the globals, 1 the instance buffer, 2 the backdrop, its sampler and the snapshot, the
-// `SkTexture` images (3..6), the element's content (7) and history (8), and the images' repeating
-// sampler (9).
-const WGSL_BINDINGS = new Set(["0:0", "1:0", "2:0", "2:1", "2:2", "2:3", "2:4", "2:5", "2:6", "2:7", "2:8", "2:9"]);
+// `SkTexture` images (3..6), the element's content (7) and history (8), the images' repeating
+// sampler (9), and the snapshot without underlay sources (10).
+const WGSL_BINDINGS = new Set([
+  "0:0",
+  "1:0",
+  "2:0",
+  "2:1",
+  "2:2",
+  "2:3",
+  "2:4",
+  "2:5",
+  "2:6",
+  "2:7",
+  "2:8",
+  "2:9",
+  "2:10",
+]);
 
 /// The renderer builds one pipeline layout for every effect; a resource outside it would fail at
 /// pipeline creation on the user's machine, so refuse it here.
@@ -99,13 +113,14 @@ function checkWgslBindings(code: string, file: string) {
   }
 }
 
-/// The prelude's resources on Metal, where Slang keeps the HLSL registers (b0, t1, t0, t2, t3..t8, s1, s2). One
+/// The prelude's resources on Metal, where Slang keeps the HLSL registers (b0, t1, t0, t2, t3..t8, t13, s1, s2). One
 /// argument table for every effect, so the renderer binds these and nothing else.
 const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["buffer(0)", "GlobalParams", "constant, the 48-byte globals"],
   ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 264 bytes each"],
   ["texture(0)", "sk_backdrop_input", "the blurred backdrop"],
   ["texture(2)", "sk_backdrop_original", "the render-target snapshot"],
+  ["texture(13)", "sk_backdrop_page", "the snapshot without underlays"],
   ["texture(7)", "sk_content", "the element's content"],
   ["texture(8)", "sk_history", "the effect's history"],
   ["sampler(1)", "sk_clamp_sampler", "clamp to edge"],
