@@ -1451,6 +1451,7 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
+ "libc",
  "objc2 0.6.4",
 ]
 
@@ -3756,6 +3757,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "583300ad934cba24ff5292aee751ecc070f7ca6b39a574cc21b7b5e588e06a0b"
+dependencies = [
+ "dispatch2",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-security",
+]
+
+[[package]]
 name = "objc2-core-text"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3808,6 +3821,7 @@ dependencies = [
  "libc",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-core-services",
 ]
 
 [[package]]
@@ -3895,6 +3909,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "709fe137109bd1e8b5a99390f77a7d8b2961dafc1a1c5db8f2e60329ad6d895a"
 dependencies = [
+ "bitflags 2.13.1",
+ "objc2 0.6.4",
  "objc2-core-foundation",
 ]
 
@@ -5356,6 +5372,8 @@ version = "0.8.5"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "block2 0.6.2",
+ "dispatch2",
  "embed-resource",
  "encoding_rs",
  "flate2",
@@ -5366,8 +5384,11 @@ dependencies = [
  "mach2 0.6.0",
  "memmap2",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
+ "objc2-core-services",
  "objc2-core-video",
+ "objc2-foundation 0.3.2",
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "pollster",
@@ -5402,6 +5423,7 @@ dependencies = [
  "specta",
  "specta-serde",
  "specta-typescript",
+ "tempfile",
  "toml 1.1.4+spec-1.1.0",
  "wgpu",
  "windows 0.62.2",
@@ -5913,6 +5935,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
+ "objc2-core-services",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",

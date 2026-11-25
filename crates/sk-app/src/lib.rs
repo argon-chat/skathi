@@ -1116,6 +1116,8 @@ fn run_app() {
         app
     };
     app.run(|cx: &mut App| {
+        #[cfg(target_os = "macos")]
+        shutdown::observe_appkit_termination();
         // `--devtools`: the app is the inspector, from this executable.
         #[cfg(sk_devtools)]
         let devtools_mode = inspector::is_devtools_host();

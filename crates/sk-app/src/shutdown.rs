@@ -117,6 +117,24 @@ pub fn step<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     out
 }
 
+#[cfg(target_os = "macos")]
+pub fn observe_appkit_termination() {
+    use block2::RcBlock;
+    use objc2_app_kit::NSApplicationWillTerminateNotification;
+    use objc2_foundation::NSNotificationCenter;
+
+    // On session shutdown AppKit exits directly after GPUI's quit hooks. The
+    // process-lifetime observer gives the host its normal cleanup and exit code.
+    unsafe {
+        let _ = NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationWillTerminateNotification),
+            None,
+            None,
+            &RcBlock::new(|_| finish()),
+        );
+    }
+}
+
 pub fn finish() -> ! {
     begin("quit");
     if ENDING.swap(true, Ordering::SeqCst) {

@@ -6,9 +6,13 @@ edition = "2021"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-include = ["src/**/*", "build.rs", "build_native_inspector.rs", "devtools/app.prod.js", "devtools/window.json"]
+include = ["src/**/*", "tests/appkit_quit.rs", "build.rs", "build_native_inspector.rs", "devtools/app.prod.js", "devtools/window.json"]
 # Compiles `apps/devtools` into the executable and emits `cfg(sk_devtools)`.
 build = "build.rs"
+
+[[test]]
+name = "appkit_quit"
+harness = false
 
 [features]
 battery = ["sk-runtime/battery"]
@@ -154,6 +158,11 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+dispatch2 = "0.3.1"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSMenu", "NSMenuItem"] }
+objc2-core-services = { version = "0.3.2", default-features = false, features = ["AERegistry", "AppleEvents"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSAppleEventDescriptor", "NSRunLoop", "objc2-core-services"] }
+tempfile = "3"
 # examples/surface.rs renders Metal frames, IOSurfaces and CVPixelBuffers for `<sk-surface>`.
 objc2 = "0.6"
 objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFDictionary", "CFString"] }
@@ -184,6 +193,9 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/crates/gpui_platform", version = "0.8.5", default-features = false, features = ["font-kit"] }
+block2 = "0.6.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSNotification", "NSOperation", "NSString", "block2"] }
 libc = "0.2"
 mach2 = "0.6"
 
