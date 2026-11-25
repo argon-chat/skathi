@@ -1,0 +1,14 @@
+{
+  "name": "sk-test-window-appearance",
+
+  "window": {
+    "title": "Skathi — window appearance (fixture)",
+    "width": 420,
+    "height": 260,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 36,
+    "titleBarFallback": false,
+    "backdrop": "none",
+    "theme": "dark"
+  }
+}

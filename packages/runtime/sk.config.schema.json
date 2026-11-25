@@ -113,6 +113,11 @@
           "type": "string",
           "enum": ["mica", "mica-alt", "tabbed", "acrylic", "blur", "transparent", "none", "opaque"]
         },
+        "theme": {
+          "description": "The color scheme the app starts with, as appWindow.theme: \"system\" (default) follows the OS, \"light\" and \"dark\" force one. Set before the window is first shown.",
+          "type": "string",
+          "enum": ["system", "light", "dark"]
+        },
         "resizable": { "description": "Whether the user can resize the window.", "type": "boolean" },
         "minimizable": { "description": "Whether the window has a minimize button.", "type": "boolean" },
         "maximizable": { "description": "Whether the window can be maximized.", "type": "boolean" },

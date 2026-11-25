@@ -122,7 +122,7 @@ Everything else is a property or method of `appWindow`, plus the web globals. Ch
 | Backdrop                            | `backdrop`                                | yes            | [`appWindow.backdrop`](/window-api/backdrop/)                |
 | Always on top                       | `alwaysOnTop`                             | yes            | [`appWindow.alwaysOnTop`](/window-api/always-on-top/)        |
 | `window.focus()` raises             | `focus: "raise"`                          | no             | no                                                           |
-| Theme                               | none                                      | yes            | [`appWindow.theme`](/window-api/theme/)                      |
+| Theme                               | `theme`                                   | yes            | [`appWindow.theme`](/window-api/theme/)                      |
 | Start position and monitor          | `x`, `y`, `center`, `monitor`             | no             | [`setBounds()`](/window-api/set-bounds/)                     |
 | Maximized, fullscreen               | none                                      | no             | `maximize()`, `setFullscreen()` at startup                   |
 
@@ -304,14 +304,16 @@ Multi-monitor support is limited today:
 
 [`appWindow.theme`](/window-api/theme/) is `"system"`, `"light"` or `"dark"`, like Electron's `nativeTheme.themeSource`. It drives `@media (prefers-color-scheme)` for the whole app, so the stylesheet above follows it with no extra code.
 
-- It starts at `"system"` on every launch. No config key sets it and it is not saved, which is why the sample stores the choice itself.
+- It starts at `"system"` on every launch, or at `window.theme` from `sk.config.json`, which is in place before the window is first shown. It is not saved, which is why the sample stores the choice itself.
 - Names are case-sensitive: `"Dark"` prints an advisory and is ignored.
 - There is no theme event. To react in script, listen for `change` on `matchMedia("(prefers-color-scheme: dark)")`.
 
-| Effect of `appWindow.theme`                    | Windows                                  | macOS                  | Linux                  |
-| ---------------------------------------------- | ---------------------------------------- | ---------------------- | ---------------------- |
-| `prefers-color-scheme` in CSS and `matchMedia` | yes                                      | yes                    | yes                    |
-| Native caption colours and backdrop tint       | yes, for every window, pop-outs included | no: they follow the OS | no: they follow the OS |
+| Effect of `appWindow.theme`                    | Windows                                  | macOS                                    | Linux                  |
+| ---------------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------- |
+| `prefers-color-scheme` in CSS and `matchMedia` | yes                                      | yes                                      | yes                    |
+| Native caption colours and backdrop tint       | yes, for every window, pop-outs included | yes, for every window, pop-outs included | no: they follow the OS |
+
+On macOS the theme also reaches what AppKit opens for the app: the file dialogs, alerts, menus and the color panel. The traffic lights follow it too, so over a dark title bar on a Mac in light mode, set `"dark"` and the lights of an inactive window stay readable.
 
 ### Backdrop
 

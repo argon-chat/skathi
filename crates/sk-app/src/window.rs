@@ -18,6 +18,9 @@ use crate::json::{self, Json};
 
 #[path = "window_app.rs"]
 mod app;
+#[cfg(target_os = "macos")]
+#[path = "window_appearance_mac.rs"]
+pub(crate) mod appearance;
 #[path = "window_controls.rs"]
 mod controls;
 #[path = "window_web.rs"]
@@ -148,7 +151,8 @@ pub(crate) fn effective_backdrop(b: Backdrop, drawn: bool) -> Backdrop {
     }
 }
 
-/// `appWindow.theme`: drives DWM dark mode and `prefers-color-scheme`; `System` follows the OS.
+/// `appWindow.theme`: drives `prefers-color-scheme` and the windows' dark mode (DWM on Windows,
+/// `NSAppearance` on macOS); `System` follows the OS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     System,
@@ -266,6 +270,7 @@ pub struct Config {
     pub title_bar_fallback: bool,
     pub title_bar_overlay: Option<Overlay>,
     pub backdrop: Backdrop,
+    pub theme: Theme,
     pub resizable: bool,
     pub minimizable: bool,
     pub maximizable: bool,
@@ -298,6 +303,7 @@ impl Default for Config {
             title_bar_fallback: true,
             title_bar_overlay: None,
             backdrop: Backdrop::Mica,
+            theme: Theme::System,
             resizable: true,
             minimizable: true,
             maximizable: true,
@@ -430,6 +436,14 @@ pub fn load_config(raw: Option<String>) -> Config {
                 None => advisories.push(format!(
                     "unknown `backdrop`: {s:?} — expected mica | mica-alt | tabbed | acrylic | \
                      blur | transparent | none."
+                )),
+            }
+        }
+        if let Some(s) = v.get("theme").and_then(Json::as_str) {
+            match Theme::from_str(s) {
+                Some(t) => cfg.theme = t,
+                None => advisories.push(format!(
+                    "unknown `theme`: {s:?} — expected system | light | dark; using system."
                 )),
             }
         }
@@ -1018,7 +1032,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         *l.borrow_mut() = Live {
             title: cfg.title.clone(),
             backdrop: cfg.backdrop,
-            theme: Theme::System,
+            theme: cfg.theme,
             always_on_top: cfg.always_on_top,
             title_bar_height: cfg.title_bar_height,
             // OS chrome draws the real buttons; on macOS the traffic lights are always the window's.
@@ -1056,6 +1070,10 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         .detach();
     sk_tree::windows::set_primary(key);
     capture_hwnd(window);
+    // The window opens hidden, so a configured theme is in place before it is first shown.
+    #[cfg(target_os = "macos")]
+    appearance::set_app(cfg.theme);
+    keep_theme(window);
     // OS chrome: a stray `move` region would hand the OS `HTCAPTION` over client area and swallow clicks.
     sk_tree::set_os_chrome(cfg.title_bar_style == TitleBarStyle::Default);
     if cfg.always_on_top {
@@ -1541,10 +1559,21 @@ thread_local! {
         RefCell::new(std::collections::HashMap::new());
 }
 
-/// Keeps a window's DWM dark mode on `appWindow.theme`. gpui rewrites the OS appearance on an OS
-/// theme change, which would undo a forced theme, so the first frame after a change (a window's
-/// first included) writes the forced one back. Nothing is written under `system`.
+/// Keeps a window's dark mode on `appWindow.theme`. On Windows gpui rewrites the OS appearance on
+/// an OS theme change, which would undo a forced theme, so the first frame after a change (a
+/// window's first included) writes the forced one back; nothing is written under `system`. On
+/// macOS each frame checks the window's own `NSAppearance`, which also covers pop-outs opened
+/// later and a view moved into another window.
 fn keep_theme(window: &Window) {
+    #[cfg(target_os = "macos")]
+    appearance::keep(
+        crate::popout_mac::view_of(
+            <Window as HasWindowHandle>::window_handle(window)
+                .ok()
+                .map(|h| h.as_raw()),
+        ),
+        LIVE.with(|l| l.borrow().theme),
+    );
     let key = sk_tree::windows::key(window);
     let Some(hwnd) = hwnd_of(key) else { return };
     let os = os_dark(window);
@@ -1559,6 +1588,21 @@ fn keep_theme(window: &Window) {
 
 fn apply_theme(theme: Theme, window: &Window) {
     LIVE.with(|l| l.borrow_mut().theme = theme);
+    // Before `os_dark` is read: AppKit updates the effective appearance at once, so under
+    // `system` the read is the OS's and not the theme just cleared.
+    #[cfg(target_os = "macos")]
+    {
+        appearance::set_app(theme);
+        let views: Vec<usize> = NATIVE_WINDOWS.with(|w| {
+            w.borrow()
+                .values()
+                .map(|&h| crate::popout_mac::view_of(Some(h)))
+                .collect()
+        });
+        for view in views {
+            appearance::keep(view, theme);
+        }
+    }
     let dark = theme.is_dark(os_dark(window));
     let hwnds: Vec<isize> =
         HWND_CACHE.with(|m| m.borrow().values().copied().filter(|&h| h != 0).collect());

@@ -2832,6 +2832,24 @@ fn cmd_windows(native: bool) -> String {
             {
                 entry.push(("native", platform));
             }
+            #[cfg(target_os = "macos")]
+            if let Some(a) = crate::window::appearance::debug(crate::popout_mac::view_of(
+                crate::window::native_window(Some(id)),
+            )) {
+                let name = |n: Option<String>| n.map_or(Json::Null, Json::s);
+                entry.push((
+                    "appearance",
+                    Json::obj(vec![
+                        ("window", name(a.window)),
+                        ("effective", name(a.effective)),
+                        ("app", name(a.app)),
+                        (
+                            "closeButtonFilters",
+                            Json::arr(a.close_button_filters.into_iter().map(Json::s).collect()),
+                        ),
+                    ]),
+                ));
+            }
         }
         if let Some((_, owner, margin)) = popup {
             entry.push(("owner", Json::n(owner as f64)));

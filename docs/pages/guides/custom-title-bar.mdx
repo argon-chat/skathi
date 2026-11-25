@@ -248,6 +248,8 @@ import { appWindow } from "skathi:app";
 
 With `"hidden"` the title bar is transparent and your content runs under it. AppKit's traffic lights stay. Skathi places them 12 px from the left edge and centers them vertically in `titleBarHeight`, once, when the window is created.
 
+AppKit draws the traffic lights for the window's appearance, which follows [`appWindow.theme`](/window-api/theme/). The lights of an inactive window are blended into the bar for a light or a dark one, so a dark bar on a Mac in light mode wants `"dark"`: set [`window.theme`](/window-api/config-window-theme/) in `sk.config.json` so it holds from the first frame.
+
 Your `app-region` areas move the window and `--window-control` elements act on mouse-up, as on Linux. The band at the top where AppKit's own title bar would be does not drag the window; only your drag regions do. The host caption cluster from `titleBarOverlay` is ignored with an advisory: the traffic lights are the window's buttons.
 
 `env(titlebar-area-x)` starts past the traffic lights (78 px by default), and `env(titlebar-area-width)` subtracts the current inset from the window width, so a bar laid out with them clears the lights on every OS:
