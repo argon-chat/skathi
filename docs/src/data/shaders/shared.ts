@@ -13,6 +13,7 @@ export const categories = [
   "sk.noise",
   "sk.sample",
   "sk.light",
+  "sk.tone",
 ] as const;
 
 export type Category = (typeof categories)[number];

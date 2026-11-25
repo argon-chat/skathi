@@ -52,7 +52,8 @@ Two things the engine does that the library does not:
 - **The scene blends in sRGB-encoded space**, as browsers do. A backdrop sample is the result of
   that blending, premultiplied in encoded space; `fromPremultiplied` divides by alpha before it
   decodes, which is the inverse of what produced it.
-- **The engine clamps what `shade` returns** to valid premultiplied 0..1. The library clamps
+- **The engine clamps what `shade` returns** to valid premultiplied 0..1 (in an HDR window, to
+  the brightest value under the pixel; see [HDR light](#hdr-light-sktone)). The library clamps
   nothing on the way: a colour above SDR white, or outside the sRGB gamut, keeps its values through
   linear sRGB, XYZ, Lab, LCH, OKLab and OKLCH, so a chain of operations does not lose it halfway.
 
@@ -218,8 +219,9 @@ uses 0.000004.
 
 `sk.math` holds the few helpers the other modules are built on, and it is yours to import too:
 `SK_PI` and `SK_TAU`, `floorMod` (a modulo that wraps a negative value upwards, as GLSL `mod` does
-and HLSL `fmod` does not), `safeDiv` (a division that returns a fallback instead of an infinity)
-and `remap` / `remapClamped` to move a value from one range to another. The constants carry the
+and HLSL `fmod` does not), `safeDiv` (a division that returns a fallback instead of an infinity),
+`safeAtan2` (an angle that is 0 at the origin, where the built-in `atan2` is undefined on every
+backend) and `remap` / `remapClamped` to move a value from one range to another. The constants carry the
 `SK_` prefix so they never collide with a `PI` an effect declares itself.
 
 ## Blending like CSS: sk.blend
@@ -563,3 +565,51 @@ The rim bends the backdrop inwards, as a real lens shows what lies further in. A
 left puts a glint on the upper rim, and Fresnel brightens the edge where the glass turns away.
 There is no single `shade` combinator for this: writing the showcase's glass with one made it longer
 than these few calls.
+
+## HDR light: sk.tone
+
+In an HDR window the frame holds light above SDR white, from an HDR video or image. A backdrop
+effect passes it through: what `shade` returns is cut at the brightest value under the pixel, not
+at SDR white, so ordinary frosted glass does not dim a highlight behind it. To work with that light,
+add `[SkBackdropLinear]`. The backdrop then arrives as premultiplied linear light, 1.0 at SDR white,
+an HDR highlight above it; the `[SkBackdropRadius]` blur is taken in that light in half float; and
+`shade` returns linear light the same way. `return input.backdrop;` changes nothing, in an SDR
+window or an HDR one.
+
+`sk.tone` shapes that light. `exposure(x, stops)` scales it in stops. `softClip(x, knee, limit)`
+leaves light up to `knee` alone and rolls brighter light off towards `limit`, so highlights keep
+their order instead of flattening at a cut. `Reinhard`, `ReinhardExtended`, `Hable` and
+`AcesFitted` map all of it into 0..1 for an SDR look, per channel with `perChannel` or keeping hue
+with `byLuminance`. `pqEncode`, `hlgEncode` and the nits conversions handle signals measured in
+absolute light.
+
+### Glass over HDR video that keeps its highlights
+
+```slang
+import sk;
+import sk.tone;
+
+[SkEffect("video-glass")]
+[SkBackdropLinear]
+struct VideoGlass : IEffect
+{
+    [SkLength] [SkBackdropRadius] [SkDefault("20")] float radius;
+    [SkColor] [SkDefault("#ffffff18")] float4 tint;
+    [SkDefault("-0.5")] [SkRange(-3.0, 1.0)] float stops;
+
+    float4 shade(EffectInput input)
+    {
+        float4 light = input.backdrop;
+        float3 seen = exposure(light.rgb / max(light.a, 1e-4), stops);
+        seen = softClip(seen, 1.5, 4.0);
+        float3 film = sk_frame_to_linear(float4(tint.rgb, 1.0)).rgb;
+        return float4(lerp(seen, film, tint.a) * light.a, light.a);
+    }
+};
+```
+
+The blur spreads a highlight as light spreads, so a bright window in the video glows through the
+glass instead of turning into a grey smear. Half a stop darker keeps the panel readable; light up to
+1.5 × SDR white passes as it is, and a 10 × specular highlight still shows, rolled off below 4 ×. The
+tint is an sRGB colour, so it is decoded into light before it is mixed in. In an SDR window the
+same effect runs unchanged: the backdrop never exceeds 1.0, and the soft clip never engages.

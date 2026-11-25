@@ -28,8 +28,9 @@
 use std::sync::{OnceLock, RwLock};
 
 use gpui::{
-    effect_id, EffectSpec, EffectTextureParam, EFFECT_FLAG_HISTORY, EFFECT_FLAG_NEEDS_BACKDROP,
-    EFFECT_FLAG_NEEDS_CONTENT, EFFECT_PARAM_SLOTS, EFFECT_TEXTURE_SLOTS,
+    effect_id, EffectSpec, EffectTextureParam, EFFECT_FLAG_BACKDROP_LINEAR, EFFECT_FLAG_HISTORY,
+    EFFECT_FLAG_NEEDS_BACKDROP, EFFECT_FLAG_NEEDS_CONTENT, EFFECT_PARAM_SLOTS,
+    EFFECT_TEXTURE_SLOTS,
 };
 
 /// The `effects.json` layout this build understands; a mismatch means the artifacts came from a
@@ -209,6 +210,8 @@ struct RawEffect {
     content: bool,
     #[serde(default)]
     history: bool,
+    #[serde(default)]
+    backdrop_linear: bool,
     signature: String,
     backdrop_radius_param: Option<u8>,
     #[serde(default)]
@@ -389,6 +392,7 @@ pub fn parse_manifest(
                 (raw.backdrop, EFFECT_FLAG_NEEDS_BACKDROP),
                 (raw.content, EFFECT_FLAG_NEEDS_CONTENT),
                 (raw.history, EFFECT_FLAG_HISTORY),
+                (raw.backdrop_linear, EFFECT_FLAG_BACKDROP_LINEAR),
             ]
             .into_iter()
             .filter(|(set, _)| *set)
@@ -571,7 +575,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 13,
+      "schema": 14,
       "slang": "2026.12",
       "kind": "user",
       "effects": [
@@ -677,6 +681,15 @@ mod tests {
         assert_eq!(
             ripple.defaults().flags,
             EFFECT_FLAG_NEEDS_CONTENT | EFFECT_FLAG_HISTORY
+        );
+        let linear = USER_MANIFEST.replace(
+            "\"backdrop\": false,",
+            "\"backdrop\": true, \"backdropLinear\": true,",
+        );
+        let ripple = parse_manifest(&linear, effect_id::COUNT, false, "<test>").unwrap()[0];
+        assert_eq!(
+            ripple.defaults().flags,
+            EFFECT_FLAG_NEEDS_BACKDROP | EFFECT_FLAG_BACKDROP_LINEAR
         );
     }
 

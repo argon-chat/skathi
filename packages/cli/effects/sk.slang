@@ -69,6 +69,17 @@ public struct SkBackdropAttribute
 {
 };
 
+/// This effect works in linear light. Its backdrop arrives linear, extended
+/// and premultiplied: 1.0 is SDR white, an HDR highlight keeps its value
+/// above it, and the blur behind `[SkBackdropRadius]` is taken in linear
+/// light in half float. What `shade` returns is read the same way and is not
+/// cut at SDR white. `input.content` and `SkTexture` images stay
+/// sRGB-encoded; `sk_frame_to_linear` converts them. Implies `[SkBackdrop]`.
+[__AttributeUsage(_AttributeTargets.Struct)]
+public struct SkBackdropLinearAttribute
+{
+};
+
 /// This effect shades its element's OWN painting: `input.content`,
 /// `contentAt`, `contentAtPx`. The element and its whole subtree (background,
 /// border, shadows, outline, children, text, video, carets, animations) paint
@@ -405,7 +416,9 @@ public cbuffer GlobalParams : register(b0)
     public float sk_grayscale_enhanced_contrast;
     public float sk_subpixel_enhanced_contrast;
     public uint sk_is_bgr;
-    public uint sk_global_pad0;
+    /// Nonzero when the frame is half float and may hold values above SDR
+    /// white (an HDR window).
+    public uint sk_extended_range;
     public uint sk_global_pad1;
     public uint sk_global_pad2;
 };
@@ -416,6 +429,7 @@ public static const uint SK_FLAG_NEEDS_CONTENT = 2u;
 public static const uint SK_FLAG_HISTORY = 4u;
 public static const uint SK_FLAG_HISTORY_PASS = 8u;
 public static const uint SK_FLAG_BACKDROP_REACH = 32u;
+public static const uint SK_FLAG_BACKDROP_LINEAR = 64u;
 
 
 // ===========================================================================
@@ -436,7 +450,8 @@ public struct EffectInput
     /// Element box size in device pixels.
     public float2 size;
     /// The backdrop behind this pixel, premultiplied: `backdropAt(uv)`. All
-    /// zero for effects that did not ask for it.
+    /// zero for effects that did not ask for it. sRGB-encoded, or linear light
+    /// with `[SkBackdropLinear]`.
     public float4 backdrop;
     /// Signed distance to the ELEMENT's rounded rect in device pixels:
     /// negative inside, 0 on the edge, positive outside.
@@ -481,6 +496,10 @@ public struct EffectInput
     public uint quad;
     /// `[SkBackdropReach]`: backdrop reads clamp to the drawn quad grown by it.
     bool backdropBounded;
+    /// `[SkBackdropLinear]`: every backdrop read is linear light.
+    public bool backdropLinear;
+    /// t0 holds a linear pyramid: `[SkBackdropLinear]` with a blur radius.
+    bool backdropLinearBlur;
 
     /// Parameter slot `slot` (0..31) — the raw packing behind the named
     /// fields on your effect struct. Bypasses the schema; prefer the fields.
@@ -493,7 +512,8 @@ public struct EffectInput
     // before this effect, so any point may be sampled, not only the element's
     // own area; outside the window they clamp to its edge. With
     // `[SkBackdropReach]` they hold only the drawn quad grown by the reach, and
-    // a read beyond it is clamped to that edge. Neither holds the element's
+    // a read beyond it is clamped to that edge. With `[SkBackdropLinear]`
+    // every read is linear light (`sk_frame_to_linear`). Neither holds the element's
     // own background (a backdrop effect paints beneath it) nor another
     // backdrop effect drawn in the same group (they never overlap). The
     // blurred one is a lower-resolution pyramid level: blurred to
@@ -520,9 +540,10 @@ public struct EffectInput
     /// `[SkBackdropRadius]` when the effect declares one.
     public float4 backdropAt(float2 uv)
     {
-        return this.hasBackdrop
+        float4 texel = this.hasBackdrop
             ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
             : float4(0.0, 0.0, 0.0, 0.0);
+        return this.backdropLinear && !this.backdropLinearBlur ? sk_frame_to_linear(texel) : texel;
     }
 
     /// The backdrop at a point in this element's device pixels (`input.px`
@@ -535,9 +556,10 @@ public struct EffectInput
     /// The untouched backdrop at a window UV, never blurred.
     public float4 rawBackdropAt(float2 uv)
     {
-        return this.hasBackdrop
+        float4 texel = this.hasBackdrop
             ? sk_backdrop_original.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
             : float4(0.0, 0.0, 0.0, 0.0);
+        return this.backdropLinear ? sk_frame_to_linear(texel) : texel;
     }
 
     /// The untouched backdrop at a point in this element's device pixels.
@@ -552,9 +574,10 @@ public struct EffectInput
     /// purpose (`[SkBleed]`) composites over this, so the live layer shows through.
     public float4 pageBackdropAt(float2 uv)
     {
-        return this.hasBackdrop
+        float4 texel = this.hasBackdrop
             ? sk_backdrop_page.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
             : float4(0.0, 0.0, 0.0, 0.0);
+        return this.backdropLinear ? sk_frame_to_linear(texel) : texel;
     }
 
     /// The page alone at a point in this element's device pixels.
@@ -871,6 +894,75 @@ public float4 sk_clamp_premultiplied(float4 color)
     return float4(clamp(color.rgb, 0.0, float3(a, a, a)), a);
 }
 
+/// `sk_clamp_premultiplied` for a half-float frame, where rgb above alpha is
+/// light above SDR white that the HDR output pass shows as such: rgb is cut at
+/// `alpha * headroom` (sRGB-encoded) instead, and at the largest half float.
+public float4 sk_clamp_extended(float4 color, float headroom)
+{
+    float a = saturate(color.a);
+    float bound = min(a * max(headroom, 1.0), 65504.0);
+    return float4(clamp(color.rgb, float3(0.0, 0.0, 0.0), float3(bound, bound, bound)), a);
+}
+
+float sk_straight_peak(float4 color)
+{
+    float peak = max(max(color.r, color.g), color.b);
+    return color.a > 0.0 ? peak / (color.a > 0.0 ? color.a : 1.0) : 0.0;
+}
+
+/// The headroom an effect that reads the frame may pass through at this pixel:
+/// the brightest straight value under it, at least 1.
+float sk_frame_headroom(EffectInput i)
+{
+    float4 raw = i.hasBackdrop ? sk_backdrop_original.SampleLevel(sk_clamp_sampler, i.uv, 0.0) : float4(0.0, 0.0, 0.0, 0.0);
+    float4 page = i.hasBackdrop ? sk_backdrop_page.SampleLevel(sk_clamp_sampler, i.uv, 0.0) : float4(0.0, 0.0, 0.0, 0.0);
+    float4 blurred = i.hasBackdrop ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, i.uv, 0.0) : float4(0.0, 0.0, 0.0, 0.0);
+    return max(max(max(sk_straight_peak(raw), sk_straight_peak(page)),
+        max(sk_straight_peak(blurred), sk_straight_peak(i.content))), 1.0);
+}
+
+float3 sk_srgb_decode_signed(float3 encoded)
+{
+    float3 m = abs(encoded);
+    float3 curve = exp2(2.4 * log2(max((m + 0.055) / 1.055, float3(1e-30, 1e-30, 1e-30))));
+    return sign(encoded) * select(m > 0.04045, curve, m / 12.92);
+}
+
+float3 sk_srgb_encode_signed(float3 light)
+{
+    float3 m = abs(light);
+    float3 curve = 1.055 * exp2(log2(max(m, float3(1e-30, 1e-30, 1e-30))) / 2.4) - 0.055;
+    return sign(light) * select(m > 0.0031308, curve, 12.92 * m);
+}
+
+/// A premultiplied, sRGB-encoded frame value -> premultiplied linear light,
+/// 1.0 SDR white, extended above it and below 0. The light an HDR output pass
+/// shows for it: up to alpha decoded as stored, the part above alpha decoded
+/// straight. Exactly inverted by `sk_linear_to_frame`.
+public float4 sk_frame_to_linear(float4 frame)
+{
+    float a = saturate(frame.a);
+    float safe = a > 0.0 ? a : 1.0;
+    float3 low = sk_srgb_decode_signed(frame.rgb);
+    float knee = sk_srgb_decode_signed(float3(a, a, a)).x;
+    float3 high = knee + (sk_srgb_decode_signed(frame.rgb / safe) - 1.0) * a;
+    float3 light = a > 0.0 ? select(frame.rgb > a, high, low) : low;
+    return float4(light, frame.a);
+}
+
+/// Premultiplied linear light -> the frame's premultiplied, sRGB-encoded value;
+/// the inverse of `sk_frame_to_linear`.
+public float4 sk_linear_to_frame(float4 light)
+{
+    float a = saturate(light.a);
+    float safe = a > 0.0 ? a : 1.0;
+    float knee = sk_srgb_decode_signed(float3(a, a, a)).x;
+    float3 low = sk_srgb_encode_signed(light.rgb);
+    float3 high = a * sk_srgb_encode_signed((light.rgb - knee) / safe + 1.0);
+    float3 frame = a > 0.0 ? select(light.rgb > knee, high, low) : low;
+    return float4(frame, light.a);
+}
+
 /// Builds the `EffectInput` for this pixel. Called by the generated wrapper.
 public EffectInput sk_begin(uint id, float4 frag_position)
 {
@@ -922,6 +1014,10 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.historyPass = history_pass;
     i.quad = id;
     i.backdropBounded = (q.flags & SK_FLAG_BACKDROP_REACH) != 0u;
+    i.backdropLinear = has_backdrop && (q.flags & SK_FLAG_BACKDROP_LINEAR) != 0u;
+    // Mirrors `EffectQuad::effective_kernel_levels() > 0`, which decides
+    // whether the renderer builds the linear pyramid.
+    i.backdropLinearBlur = i.backdropLinear && !(q.backdrop_blur_radius <= 0.0);
     i.bleed = q.bleed;
     i.backdrop = i.backdropAt(uv);
     i.content = i.contentAt(uv);
@@ -945,6 +1041,13 @@ public EffectInput sk_begin(uint id, float4 frag_position)
 /// The result is PREMULTIPLIED whatever `straightAlpha` says. Every renderer
 /// blends a non-backdrop effect as premultiplied source-over (One,
 /// OneMinusSrcAlpha); blending it by source alpha would apply alpha twice.
+///
+/// In a half-float frame an effect that reads the frame (backdrop or content)
+/// is cut at the headroom of what lies under the pixel (`sk_frame_headroom`)
+/// instead of at SDR white, so HDR light it passes through keeps its value
+/// while its own colour is cut as in an 8-bit frame. With `[SkBackdropLinear]`
+/// the result is linear light, not cut above: the restore outside the shape is
+/// mixed in linear light and the sum encoded back into the frame's values.
 public float4 sk_finish<T : IEffect>(T material, EffectInput i)
 {
     if (i.historyPass)
@@ -956,7 +1059,9 @@ public float4 sk_finish<T : IEffect>(T material, EffectInput i)
     {
         shaded = float4(shaded.rgb * shaded.a, shaded.a);
     }
-    shaded = sk_clamp_premultiplied(shaded);
+    bool extended = sk_extended_range != 0u && (i.hasBackdrop || i.hasContent);
+    float headroom = i.backdropLinear ? 65504.0 : (extended ? sk_frame_headroom(i) : 1.0);
+    shaded = extended || i.backdropLinear ? sk_clamp_extended(shaded, headroom) : sk_clamp_premultiplied(shaded);
 
     float sd_draw = i.sd - i.bleed;
     float coverage = saturate(0.5 - sd_draw) * saturate(i.opacity) * i.clip;
@@ -967,13 +1072,17 @@ public float4 sk_finish<T : IEffect>(T material, EffectInput i)
     if (i.hasBackdrop)
     {
         float4 page = sk_backdrop_page.SampleLevel(sk_clamp_sampler, i.uv, 0.0);
-        result = lerp(page, shaded, coverage);
+        // A half-float target may round toward zero: nudged by 2^-16, a value
+        // that only made the round trip through linear light keeps its own half.
+        result = i.backdropLinear
+            ? sk_linear_to_frame(lerp(sk_frame_to_linear(page), shaded, coverage)) * float4(1.0000153, 1.0000153, 1.0000153, 1.0)
+            : lerp(page, shaded, coverage);
     }
     else
     {
         result = shaded * coverage;
     }
-    return sk_clamp_premultiplied(result);
+    return extended ? sk_clamp_extended(result, headroom) : sk_clamp_premultiplied(result);
 }
 
 // ===========================================================================
