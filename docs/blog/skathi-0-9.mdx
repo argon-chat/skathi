@@ -111,6 +111,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 - `box-shadow` blur is as wide as a browser draws it; it was twice as soft. ([#126](https://github.com/argon-chat/skathi/issues/126))
 - `<button>` and `input[type=button|submit|reset]` centre their text by default. ([#123](https://github.com/argon-chat/skathi/issues/123))
 - `<sk-layer>`: the corner radii an embedder receives are in device pixels; they were scaled twice. The opacity is the one the element is shown at, its ancestors' included, so a layer fades with a parent that fades. ([#128](https://github.com/argon-chat/skathi/pull/128))
+- Windows, HDR: translucent content over a transparent window (`backdrop: "mica"` and the like) was several times too bright, a `glow()` halo most visibly. It is now as bright as in an SDR window.
 - A `<textarea>` no longer scrolls back to the caret on every frame, so the wheel can move it away.
 - Windows: with an aspect ratio set, dragging a corner no longer swings the window between a wide and a tall fit. ([#116](https://github.com/argon-chat/skathi/issues/116))
 - macOS, embedded: Cmd+Q quits at once instead of waiting out a four-second deadline. ([#112](https://github.com/argon-chat/skathi/issues/112))
