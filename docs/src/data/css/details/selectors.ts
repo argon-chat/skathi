@@ -265,7 +265,7 @@ const active = ref("General");
       "A custom property set on hover also updates `var()` in base rules and on descendants that inherit it. Moving the pointer away restores the value from the cascade.",
       "`:hover` is the topmost element under the pointer and its DOM ancestors. An overlay on top takes the hover even if it listens for nothing.",
       "`pointer-events: none` keeps an element from being hit, not from being hovered: it is still `:hover` while a descendant that takes pointer events is under the pointer.",
-      "For a custom property in `.btn:hover:focus`, both states must match. Paint and layout declarations use the highest-priority state named by the selector. The priority order is `:active`, `:hover`, `:focus-visible`, `:focus`, then `:focus-within`.",
+      "`.btn:hover:focus` applies only while both states hold. When rules on several states apply at once, importance, specificity and source order decide between them as in a browser, so `#form input:focus { outline: none }` outweighs `:focus-visible { outline: 2px solid }`.",
       "When content moves under a still pointer, `:hover` catches up within about 100 ms.",
     ],
   },

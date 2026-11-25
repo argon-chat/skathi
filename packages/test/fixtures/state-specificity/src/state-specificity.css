@@ -1,0 +1,32 @@
+#root {
+  display: flex;
+  gap: 40px;
+  padding: 40px;
+  height: 100%;
+  box-sizing: border-box;
+  background: #fff;
+}
+label {
+  display: inline-flex;
+  padding: 0 10px;
+  height: 34px;
+  align-items: center;
+  background: #333;
+  border-radius: 8px;
+}
+input {
+  width: 60px;
+  border: none;
+  background: transparent;
+  color: #fff;
+}
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid #818cf8;
+  outline-offset: 1px;
+}
+#l input:focus {
+  outline: none;
+}

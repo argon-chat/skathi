@@ -34,6 +34,12 @@
 #inset {
   box-shadow: inset 0 0 0 12px rgb(230, 20, 20);
 }
+#falloff {
+  width: 120px;
+  height: 140px;
+  background: #fff;
+  box-shadow: 0 0 16px #000;
+}
 #clipped {
   overflow: hidden;
   box-shadow: 0 0 0 16px rgb(230, 20, 20);

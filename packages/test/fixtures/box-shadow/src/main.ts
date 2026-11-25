@@ -3,9 +3,10 @@ import "./box-shadow.css";
 
 createApp({
   render: () =>
-    h(
-      "div",
-      { id: "root" },
-      ["ring", "blur", "mixed", "ellipse", "square", "inset", "clipped"].map((id) => h("div", { id, class: "cell" })),
-    ),
+    h("div", { id: "root" }, [
+      ...["ring", "blur", "mixed", "ellipse", "square", "inset", "clipped"].map((id) =>
+        h("div", { id, class: "cell" }),
+      ),
+      h("div", { id: "falloff" }),
+    ]),
 }).mount();

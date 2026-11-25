@@ -86,8 +86,8 @@ pub enum UserSelect {
 pub struct DropShadow {
     pub dx: f32,
     pub dy: f32,
-    /// The Gaussian's **sigma**, px. CSS's third length and gpui's `blur_radius` are both sigmas,
-    /// so it transfers 1:1.
+    /// The Gaussian's **sigma**, px. `drop-shadow()`'s third length and gpui's `blur_radius` are
+    /// both sigmas, so it transfers 1:1 (a `box-shadow` blur is twice the sigma and is halved).
     pub blur: f32,
     pub color: Option<gpui::Hsla>,
 }
@@ -3858,6 +3858,7 @@ pub fn text_shadow_css(shadows: &[gpui::TextShadow], current_color: Hsla) -> Str
 }
 
 /// A `box-shadow` list as `getComputedStyle` writes it: colour, the four lengths, then `inset`.
+/// `shadows` are mapped ones, whose `blur_radius` is half the authored blur.
 pub fn box_shadow_css(shadows: &[gpui::BoxShadow]) -> String {
     if shadows.is_empty() {
         return "none".into();
@@ -3871,7 +3872,7 @@ pub fn box_shadow_css(shadows: &[gpui::BoxShadow]) -> String {
                 css_rgb(s.color),
                 round(s.offset.x),
                 round(s.offset.y),
-                round(s.blur_radius),
+                round(s.blur_radius * 2.0),
                 round(s.spread_radius)
             );
             if s.inset {
@@ -6001,7 +6002,8 @@ fn apply_property(
                 out.push(gpui::BoxShadow {
                     color: c,
                     offset: gpui::point(px(x), px(y)),
-                    blur_radius: px(css_length_px(&s.blur).unwrap_or(0.0)),
+                    // CSS's blur radius is twice the Gaussian's sigma; gpui's is the sigma.
+                    blur_radius: px(css_length_px(&s.blur).unwrap_or(0.0) / 2.0),
                     spread_radius: px(css_length_px(&s.spread).unwrap_or(0.0)),
                     inset: s.inset,
                 });
@@ -8520,7 +8522,7 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         let shadows = r.box_shadow.expect("box-shadow mapped");
         assert_eq!(shadows.len(), 1);
-        assert_eq!(shadows[0].blur_radius, px(2.0));
+        assert_eq!(shadows[0].blur_radius, px(1.0), "sigma is half the blur");
     }
 
     #[test]
@@ -9331,8 +9333,13 @@ mod tests {
         assert_eq!(shadows[1].spread_radius, px(4.0));
         assert!(!shadows[0].inset && !shadows[1].inset);
         assert!(shadows[2].inset, "the third is an inset shadow");
-        assert_eq!(shadows[2].blur_radius, px(2.0));
+        assert_eq!(shadows[2].blur_radius, px(1.0), "sigma is half the blur");
         assert_eq!(shadows[2].offset.y, px(1.0));
+        assert!(
+            box_shadow_css(&shadows).ends_with(" 0px 1px 2px 0px inset"),
+            "{}",
+            box_shadow_css(&shadows)
+        );
         let mut d = Vec::new();
         let mut r = StyleRefinement::default();
         r.box_shadow = Some(vec![gpui::BoxShadow {

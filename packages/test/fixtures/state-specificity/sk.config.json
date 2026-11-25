@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-state-specificity",
+
+  "window": {
+    "title": "Skathi — state-specificity (fixture)",
+    "width": 360,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

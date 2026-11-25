@@ -107,3 +107,41 @@ describe("box-shadow around a rounded box with no background", () => {
     T,
   );
 });
+
+// Abramowitz and Stegun 7.1.26, |error| < 1.5e-7.
+const erfc = (x: number): number => {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y =
+    t *
+    (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) *
+    Math.exp(-x * x);
+  return x >= 0 ? y : 2 - y;
+};
+
+describe("box-shadow blur", () => {
+  test.skipIf(!SCREENSHOTS)(
+    "falls off as a Gaussian whose sigma is half the blur radius",
+    async () => {
+      await Bun.sleep(500);
+      const shot = readPng(await app.screenshot());
+      const k = shot.width / 640;
+      const b = await box("falloff");
+      const sigma = 16 / 2;
+      const y = Math.floor((b.y + b.h / 2) * k);
+      const wrong: string[] = [];
+      for (const d of [1, 4, 8, 12, 16, 24]) {
+        const x = Math.floor((b.x + b.w + d) * k);
+        const at = (x + 0.5) / k - (b.x + b.w);
+        const want = 255 * (1 - 0.5 * erfc(at / (sigma * Math.SQRT2)));
+        const [r, g, bl] = shot.at(x, y);
+        const luma = (r + g + bl) / 3;
+        if (Math.abs(luma - want) > 12) wrong.push(`${d}px out: luma ${luma.toFixed(0)}, want ${want.toFixed(0)}`);
+      }
+      expect(wrong).toEqual([]);
+      expect(await app.eval(`getComputedStyle(document.getElementById("falloff")).boxShadow`)).toBe(
+        "rgb(0, 0, 0) 0px 0px 16px 0px",
+      );
+    },
+    T,
+  );
+});

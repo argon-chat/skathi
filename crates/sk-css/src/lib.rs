@@ -134,6 +134,155 @@ fn rung_of(states: u8) -> Option<usize> {
     }
 }
 
+const STATE_INTERACTIONS: [(u8, Interaction); 5] = [
+    (STATE_HOVER, Interaction::Hover),
+    (STATE_ACTIVE, Interaction::Active),
+    (STATE_FOCUS, Interaction::Focus),
+    (STATE_FOCUS_VISIBLE, Interaction::FocusVisible),
+    (STATE_FOCUS_WITHIN, Interaction::FocusWithin),
+];
+
+/// The states that hold whenever a rung's own state does.
+fn rung_implies(rung: usize) -> u8 {
+    match rung {
+        0 => STATE_ACTIVE,
+        1 => STATE_HOVER,
+        2 => STATE_FOCUS_VISIBLE | STATE_FOCUS | STATE_FOCUS_WITHIN,
+        3 => STATE_FOCUS | STATE_FOCUS_WITHIN,
+        _ => STATE_FOCUS_WITHIN,
+    }
+}
+
+/// A folded state bucket: one of the element's own rungs, or one of its group (ancestor) rungs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Own(usize),
+    Group(usize),
+}
+
+impl Slot {
+    /// The order the renderer applies the buckets in, weakest first: hover (own and group) is
+    /// folded into the element's style at build, the group focus buckets after it, then gpui's
+    /// focus rungs, group active and active.
+    fn position(self) -> u8 {
+        match self {
+            Slot::Group(1) => 0,
+            Slot::Own(1) => 1,
+            Slot::Group(4) => 2,
+            Slot::Group(3) => 3,
+            Slot::Group(2) => 4,
+            Slot::Own(4) => 5,
+            Slot::Own(3) => 6,
+            Slot::Own(2) => 7,
+            Slot::Group(_) => 8,
+            Slot::Own(_) => 9,
+        }
+    }
+}
+
+/// The states a rule's declarations wait for: on the element itself, and on a group ancestor.
+#[derive(Clone, Copy, Default)]
+struct Need {
+    own: u8,
+    anchor: Option<(u64, u8)>,
+}
+
+impl Need {
+    /// What is left once `slot` applies (anchored at `slot_anchor` for a group slot).
+    fn beyond(self, slot: Slot, slot_anchor: Option<u64>) -> Need {
+        let (own, on_ancestors) = match slot {
+            // The hover path and focus-within run up through every ancestor.
+            Slot::Own(rung) => (
+                rung_implies(rung),
+                match rung {
+                    0 => 0,
+                    1 => STATE_HOVER,
+                    _ => STATE_FOCUS_WITHIN,
+                },
+            ),
+            Slot::Group(_) => (0, 0),
+        };
+        let anchor = self.anchor.and_then(|(key, states)| {
+            let held = match slot {
+                Slot::Group(rung) if slot_anchor == Some(key) => rung_implies(rung),
+                _ => on_ancestors,
+            };
+            let rest = states & !held;
+            (rest != 0).then_some((key, rest))
+        });
+        Need {
+            own: self.own & !own,
+            anchor,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.own == 0 && self.anchor.is_none()
+    }
+
+    /// Whether every state holds now; each one read is added to `watch`, so the element is folded
+    /// again when it changes.
+    fn holds<D: MatchDom>(self, node: &D, watch: &mut Vec<(u64, Interaction)>) -> bool {
+        let mut note = |key: u64, state: Interaction| {
+            if !watch.contains(&(key, state)) {
+                watch.push((key, state));
+            }
+        };
+        let mut all = true;
+        for (bit, state) in STATE_INTERACTIONS {
+            if self.own & bit != 0 {
+                note(node.key(), state);
+                all &= node.generated_interaction(state);
+            }
+        }
+        if let Some((key, states)) = self.anchor {
+            let anchor = std::iter::successors(node.parent(), |n| n.parent())
+                .take(1024)
+                .find(|n| n.key() == key);
+            for (bit, state) in STATE_INTERACTIONS {
+                if states & bit != 0 {
+                    note(key, state);
+                    all &= anchor.is_some_and(|n| n.generated_interaction(state));
+                }
+            }
+        }
+        all
+    }
+}
+
+/// Folds a later rule into a bucket the renderer applies after the rule's own, so that it still
+/// wins there. A bucket whose state does not imply the rule's takes it only while the rule's
+/// states hold, and only when it changes something the bucket sets. Returns whether it was folded.
+fn fold_over<D: MatchDom>(
+    need: Need,
+    node: &D,
+    bucket: &mut StyleRefinement,
+    watch: &mut Vec<(u64, Interaction)>,
+    live: &mut bool,
+    apply: impl FnOnce(&mut StyleRefinement),
+) -> bool {
+    if need.is_empty() {
+        apply(bucket);
+        return true;
+    }
+    if !D::CASCADE_STATE {
+        return false;
+    }
+    let mut over = bucket.clone();
+    apply(&mut over);
+    let mut kept = over.clone();
+    kept.refine(bucket);
+    if kept == over {
+        return false;
+    }
+    *live = true;
+    if need.holds(node, watch) {
+        *bucket = over;
+        return true;
+    }
+    false
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ComputedStates {
     pub base: Rc<StyleRefinement>,
@@ -1767,7 +1916,7 @@ impl Engine {
                     .as_deref()
                     .cloned()
                     .unwrap_or_default();
-                if !generated
+                if pseudo.is_some_and(|p| p.control_index().is_some())
                     && states.count_ones() > 1
                     && (converted.normal.is_some()
                         || converted.important.is_some()
@@ -2456,6 +2605,79 @@ impl Engine {
                 }
             }};
         }
+        // Whether the fold read live interaction state, which makes it unshareable.
+        let mut live_fold = false;
+        // A state rule also wins, against the earlier rules there, in the buckets applied after its
+        // own when their states hold together.
+        macro_rules! over_later_buckets {
+            ($half:expr, $home:expr, $need:expr) => {{
+                let (half, home, need): (Half<'_>, Slot, Need) = ($half, $home, $need);
+                let rungs = [
+                    (any_active, &mut active),
+                    (any_hover, &mut hover),
+                    (any_focus_visible, &mut focus_visible),
+                    (any_focus, &mut focus),
+                    (any_focus_within, &mut focus_within),
+                ];
+                for (index, (seen, bucket)) in rungs.into_iter().enumerate() {
+                    let slot = Slot::Own(index);
+                    if !seen || slot.position() <= home.position() {
+                        continue;
+                    }
+                    let folded = fold_over(
+                        need.beyond(slot, None),
+                        &node,
+                        bucket,
+                        &mut custom_dependencies,
+                        &mut live_fold,
+                        |into| {
+                            let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
+                            half.apply(
+                                state_vars[index].as_ref().unwrap_or(&vars),
+                                env,
+                                rung_font[index].unwrap_or(font_size),
+                                parent_font_size,
+                                &rung_faces[index],
+                                parent_font,
+                                into,
+                                &mut scratch,
+                                &mut quiet,
+                            );
+                        },
+                    );
+                    if folded {
+                        rung_outline[index].refine(&half.outline);
+                    }
+                }
+                for (rung, (key, bucket)) in group.rungs_mut() {
+                    let slot = Slot::Group(rung);
+                    if slot.position() <= home.position() {
+                        continue;
+                    }
+                    fold_over(
+                        need.beyond(slot, Some(*key)),
+                        &node,
+                        bucket,
+                        &mut custom_dependencies,
+                        &mut live_fold,
+                        |into| {
+                            let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
+                            half.apply(
+                                &vars,
+                                env,
+                                font_size,
+                                parent_font_size,
+                                &computed_font,
+                                parent_font,
+                                into,
+                                &mut scratch,
+                                &mut quiet,
+                            );
+                        },
+                    );
+                }
+            }};
+        }
         for important_pass in [false, true] {
             for r in &matched {
                 if let Some(decoration) = held_decoration.take() {
@@ -2583,6 +2805,18 @@ impl Engine {
                     let Some(key) = nearest_group_ancestor(&node, &r.selector, a.offset) else {
                         continue;
                     };
+                    let need = Need {
+                        own: r.states,
+                        anchor: Some((key, a.states)),
+                    };
+                    let home = Slot::Group(rung_of(a.states).unwrap_or(4));
+                    let rest = need.beyond(home, Some(key));
+                    if D::CASCADE_STATE && !rest.is_empty() {
+                        live_fold = true;
+                        if !rest.holds(&node, &mut custom_dependencies) {
+                            continue;
+                        }
+                    }
                     let Some(bucket) = group.bucket(a.states, key) else {
                         continue;
                     };
@@ -2602,9 +2836,23 @@ impl Engine {
                         keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
                     keep_base_svg_paint(&mut extras, svg_before, diagnostics);
+                    over_later_buckets!(half, home, need);
                     continue;
                 }
                 let rung = rung_of(r.states);
+                let need = Need {
+                    own: r.states,
+                    anchor: None,
+                };
+                if let Some(index) = rung {
+                    let rest = need.beyond(Slot::Own(index), None);
+                    if D::CASCADE_STATE && !rest.is_empty() {
+                        live_fold = true;
+                        if !rest.holds(&node, &mut custom_dependencies) {
+                            continue;
+                        }
+                    }
+                }
                 let bucket = match rung {
                     None => &mut base,
                     Some(0) => {
@@ -2654,8 +2902,9 @@ impl Engine {
                 if let Some(before) = svg_before {
                     keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
-                if rung.is_none() {
-                    over_state_buckets!(half);
+                match rung {
+                    None => over_state_buckets!(half),
+                    Some(index) => over_later_buckets!(half, Slot::Own(index), need),
                 }
             }
             if let Some(decoration) = held_decoration.take() {
@@ -3108,7 +3357,7 @@ impl Engine {
                 parent_font,
             )));
         }
-        if let Some(key) = share_key.filter(|_| !states.percentage_sizing) {
+        if let Some(key) = share_key.filter(|_| !states.percentage_sizing && !live_fold) {
             share::insert(key, &states);
         }
         states
@@ -3347,6 +3596,19 @@ impl GroupFold {
         ]
         .into_iter()
         .flatten()
+    }
+
+    /// Each filled bucket with its rung.
+    fn rungs_mut(&mut self) -> impl Iterator<Item = (usize, &mut (u64, StyleRefinement))> {
+        [
+            (0, &mut self.active),
+            (1, &mut self.hover),
+            (2, &mut self.focus_visible),
+            (3, &mut self.focus),
+            (4, &mut self.focus_within),
+        ]
+        .into_iter()
+        .filter_map(|(rung, slot)| slot.as_mut().map(|slot| (rung, slot)))
     }
 
     fn bucket(&mut self, states: u8, key: u64) -> Option<&mut StyleRefinement> {
@@ -6987,7 +7249,7 @@ mod tests {
         let s = cascade(&engine, &d, &Env::default());
         let shadows = s[2].base.box_shadow.as_ref().expect("box-shadow");
         assert_eq!(shadows.len(), 3, "{shadows:?}");
-        assert_eq!(shadows[2].blur_radius, gpui::px(2.0));
+        assert_eq!(shadows[2].blur_radius, gpui::px(1.0));
     }
 
     #[test]
@@ -7224,6 +7486,207 @@ mod tests {
                     .all(|message| !message.contains("strongest")),
                 "{diagnostics:?}"
             );
+        }
+    }
+
+    /// The tree's view during a cascade: every state rule matches, and live state is read apart.
+    #[derive(Clone, Copy)]
+    struct CascadeRef<'d>(LiveRef<'d>);
+
+    impl<'d> MatchDom for CascadeRef<'d> {
+        const CASCADE_STATE: bool = true;
+        fn generated_interaction(&self, state: Interaction) -> bool {
+            self.0.interaction(state).unwrap_or(false)
+        }
+        fn key(&self) -> u64 {
+            self.0.key()
+        }
+        fn parent(&self) -> Option<Self> {
+            self.0.parent().map(CascadeRef)
+        }
+        fn prev_sibling(&self) -> Option<Self> {
+            self.0.prev_sibling().map(CascadeRef)
+        }
+        fn next_sibling(&self) -> Option<Self> {
+            self.0.next_sibling().map(CascadeRef)
+        }
+        fn has_tag(&self, name: &str) -> bool {
+            self.0.has_tag(name)
+        }
+        fn tag_eq(&self, other: &Self) -> bool {
+            self.0.tag_eq(&other.0)
+        }
+        fn has_class(&self, name: &str) -> bool {
+            self.0.has_class(name)
+        }
+        fn tag_name(&self) -> &str {
+            self.0.tag_name()
+        }
+        fn each_class(&self, f: &mut dyn FnMut(&str)) {
+            self.0.each_class(f)
+        }
+        fn has_scope(&self, name: &str) -> bool {
+            self.0.has_scope(name)
+        }
+        fn attr(&self, name: &str) -> Option<&str> {
+            self.0.attr(name)
+        }
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+        fn is_root(&self) -> bool {
+            self.0.is_root()
+        }
+    }
+
+    fn live_state(sheet: &str, hovered: &[usize], focused: usize) -> ComputedStates {
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("label", "", 0, vec![("id", "l")]),
+                ("input", "btn", 1, vec![("id", "i"), ("type", "number")]),
+            ],
+        };
+        let engine = Engine::compile(sheet);
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        engine.compute_node(
+            CascadeRef(LiveRef {
+                r: DocRef { doc: &doc, i: 2 },
+                hovered,
+                focused,
+                keyboard: true,
+            }),
+            None,
+            &Rc::default(),
+            None,
+            &Env::default(),
+            &mut Vec::new(),
+        )
+    }
+
+    fn ring_width(rung: &Option<Rc<StyleRefinement>>) -> Option<f32> {
+        rung.as_ref()
+            .and_then(|r| r.vn_outline)
+            .map(|o| f32::from(o.width))
+    }
+
+    #[test]
+    fn a_more_specific_focus_rule_beats_a_focus_visible_rule() {
+        let s = live_state(
+            ":focus { outline: none } \
+             :focus-visible { outline: 2px solid #818cf8; outline-offset: 1px } \
+             #l input:focus { outline: none }",
+            &[],
+            2,
+        );
+        assert_eq!(ring_width(&s.focus_visible), Some(0.0));
+        assert!(
+            s.custom_state_dependencies.is_none(),
+            "focus-visible implies focus"
+        );
+
+        let s = live_state(
+            ":focus { outline: none } :focus-visible { outline: 2px solid #818cf8 }",
+            &[],
+            2,
+        );
+        assert_eq!(ring_width(&s.focus_visible), Some(2.0));
+
+        let s = live_state(
+            ".btn { outline: 2px solid #00f } :focus-visible { outline-color: #f00 } \
+             #i:focus { outline: none }",
+            &[],
+            2,
+        );
+        assert_eq!(
+            ring_width(&s.focus_visible),
+            Some(0.0),
+            "the shorthand resets the ring"
+        );
+    }
+
+    #[test]
+    fn a_hover_rule_beats_a_less_specific_active_rule_while_hovered() {
+        let sheet = ".btn:active { opacity: .2 } .btn.btn:hover { opacity: .9 }";
+        let active = |s: &ComputedStates| s.active.as_ref().and_then(|r| r.opacity);
+        let s = live_state(sheet, &[2], 0);
+        assert_eq!(active(&s), Some(0.9));
+        assert_eq!(s.hover.as_ref().and_then(|r| r.opacity), Some(0.9));
+        assert!(s
+            .custom_state_dependencies
+            .as_ref()
+            .is_some_and(|d| d.contains(&(2, Interaction::Hover))));
+        let s = live_state(sheet, &[], 0);
+        assert_eq!(active(&s), Some(0.2), "pressed without hover");
+        assert!(s
+            .custom_state_dependencies
+            .as_ref()
+            .is_some_and(|d| d.contains(&(2, Interaction::Hover))));
+
+        let s = live_state(
+            ".btn.btn:active { opacity: .2 } .btn:hover { opacity: .9 }",
+            &[2],
+            0,
+        );
+        assert_eq!(active(&s), Some(0.2));
+        assert!(
+            s.custom_state_dependencies.is_none(),
+            "no conflict to watch"
+        );
+    }
+
+    #[test]
+    fn important_state_declarations_win_across_rungs() {
+        let fv = |s: &ComputedStates| s.focus_visible.as_ref().and_then(|r| r.opacity);
+        assert_eq!(
+            fv(&live_state(
+                ".btn:focus { opacity: .2 !important } #i:focus-visible { opacity: .9 }",
+                &[],
+                2
+            )),
+            Some(0.2)
+        );
+        assert_eq!(
+            fv(&live_state(
+                "#i:focus { opacity: .2 } .btn:focus-visible { opacity: .9 !important }",
+                &[],
+                2
+            )),
+            Some(0.9)
+        );
+        let s = live_state(
+            ".btn:hover { opacity: .5 !important } #i { opacity: .1 }",
+            &[2],
+            0,
+        );
+        assert_eq!(s.hover.as_ref().and_then(|r| r.opacity), Some(0.5));
+    }
+
+    #[test]
+    fn a_more_specific_base_rule_beats_a_state_rule() {
+        let s = live_state(".btn:hover { opacity: .5 } #i { opacity: .1 }", &[2], 0);
+        assert_eq!(s.base.opacity, Some(0.1));
+        assert_eq!(s.hover.as_ref().and_then(|r| r.opacity), Some(0.1));
+    }
+
+    #[test]
+    fn a_rule_naming_several_states_waits_for_all_of_them() {
+        let sheet = ".btn:hover:focus { opacity: .8 } .btn:focus { opacity: .3 }";
+        let opacity = |rung: &Option<Rc<StyleRefinement>>| rung.as_ref().and_then(|r| r.opacity);
+        let both = live_state(sheet, &[2], 2);
+        assert_eq!(opacity(&both.focus), Some(0.8));
+        let hovered = live_state(sheet, &[2], 0);
+        assert_eq!(opacity(&hovered.hover), None);
+        assert_eq!(opacity(&hovered.focus), Some(0.3));
+        let focused = live_state(sheet, &[], 2);
+        assert_eq!(opacity(&focused.focus), Some(0.3));
+        for s in [&both, &hovered, &focused] {
+            let watched = s
+                .custom_state_dependencies
+                .as_deref()
+                .cloned()
+                .unwrap_or_default();
+            assert!(watched.contains(&(2, Interaction::Focus)), "{watched:?}");
         }
     }
 
@@ -8495,21 +8958,33 @@ mod tests {
     }
 
     #[test]
-    fn the_hover_fold_follows_gpuis_own_rung_order() {
-        let engine = Engine::compile(
-            ".group:hover .icon { opacity: 0.5 } .icon:hover { opacity: 0.9 } \
-             .icon { opacity: 0.1 }",
-        );
-        let d = group_doc();
-        let states = cascade(&engine, &d, &Env::default());
-        let icon = &states[2];
-        assert!(
-            icon.hovered(false, false).is_none(),
-            "base state is not a fold"
-        );
-        assert_eq!(icon.hovered(false, true).unwrap().opacity, Some(0.5));
-        assert_eq!(icon.hovered(true, false).unwrap().opacity, Some(0.9));
-        assert_eq!(icon.hovered(true, true).unwrap().opacity, Some(0.9));
+    fn the_hover_fold_lets_the_more_specific_rule_win() {
+        for (sheet, both) in [
+            (
+                ".group:hover .icon { opacity: 0.5 } .icon:hover { opacity: 0.9 } \
+                 .icon { opacity: 0.1 }",
+                0.5,
+            ),
+            (
+                ".group:hover .icon { opacity: 0.5 } .icon.icon.icon:hover { opacity: 0.9 }",
+                0.9,
+            ),
+        ] {
+            let engine = Engine::compile(sheet);
+            let d = group_doc();
+            let states = cascade(&engine, &d, &Env::default());
+            let icon = &states[2];
+            assert!(
+                icon.hovered(false, false).is_none(),
+                "base state is not a fold"
+            );
+            assert_eq!(icon.hovered(false, true).unwrap().opacity, Some(0.5));
+            assert_eq!(
+                icon.hovered(true, true).unwrap().opacity,
+                Some(both),
+                "{sheet}"
+            );
+        }
     }
 
     #[test]

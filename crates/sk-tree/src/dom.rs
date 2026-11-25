@@ -248,6 +248,10 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "color",
     "text-shadow",
     "box-shadow",
+    "outline-style",
+    "outline-width",
+    "outline-color",
+    "outline-offset",
     "color-scheme",
     "image-rendering",
     "aspect-ratio",
@@ -467,6 +471,24 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 .or(cs.base.box_shadow.as_deref())
                 .unwrap_or_default(),
         ),
+        "outline-style" | "outline-width" | "outline-color" | "outline-offset" => {
+            let ring = live_outline(t, id, cs);
+            let drawn = ring.filter(|r| r.width > gpui::px(0.0));
+            match name {
+                "outline-style" => match drawn.map(|r| r.style) {
+                    None => "none",
+                    Some(gpui::BorderStyle::Dashed) => "dashed",
+                    Some(_) => "solid",
+                }
+                .into(),
+                "outline-width" => format!("{}px", drawn.map_or(0.0, |r| f32::from(r.width))),
+                "outline-offset" => format!("{}px", ring.map_or(0.0, |r| f32::from(r.offset))),
+                _ => match ring {
+                    Some(r) => css_rgb(r.color),
+                    None => computed_in(t, id, "color")?,
+                },
+            }
+        }
         "scale" | "perspective" | "filter" => "none".into(),
         "will-change" => "auto".into(),
         "contain" => "none".into(),
@@ -797,6 +819,49 @@ fn secs(d: std::time::Duration) -> String {
 
 fn signed_secs(d: sk_css::Delay) -> String {
     format!("{}s", d.as_secs_f64() as f32)
+}
+
+/// The outline drawn now: the base ring under each state rung that holds, in the renderer's order.
+fn live_outline(t: &Tree, id: u32, cs: &sk_css::ComputedStates) -> Option<gpui::Outline> {
+    use crate::live_state::{active_holds, focus_holds};
+    use sk_css::Interaction as I;
+    let mut ring = cs.base.vn_outline;
+    let mut over = |rung: Option<&gpui::StyleRefinement>| {
+        if let Some(own) = rung.and_then(|r| r.vn_outline) {
+            ring = Some(own);
+        }
+    };
+    if let Some((anchor, rung)) = &cs.group_hover {
+        if tree::is_hovered(*anchor as u32) {
+            over(Some(rung));
+        }
+    }
+    if tree::is_hovered(id) {
+        over(cs.hover.as_deref());
+    }
+    if let Some(group) = &cs.group_focus {
+        let mut folded = gpui::StyleRefinement::default();
+        group.fold(&mut folded, |key, state| focus_holds(t, key as u32, state));
+        over(Some(&folded));
+    }
+    for (rung, state) in [
+        (&cs.focus_within, I::FocusWithin),
+        (&cs.focus, I::Focus),
+        (&cs.focus_visible, I::FocusVisible),
+    ] {
+        if focus_holds(t, id, state) {
+            over(rung.as_deref());
+        }
+    }
+    if let Some((anchor, rung)) = &cs.group_active {
+        if active_holds(t, *anchor as u32) {
+            over(Some(rung));
+        }
+    }
+    if active_holds(t, id) {
+        over(cs.active.as_deref());
+    }
+    ring
 }
 
 fn css_rgb(c: gpui::Hsla) -> String {
