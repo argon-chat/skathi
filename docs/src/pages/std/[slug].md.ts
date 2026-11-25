@@ -1,9 +1,9 @@
 import type { APIRoute, GetStaticPaths } from "astro";
 import { stdReference } from "../../lib/std";
-import { entryMarkdown, ordered, type RefEntry } from "../../lib/reference";
+import { entryMarkdown, pages, type RefEntry } from "../../lib/reference";
 
 export const getStaticPaths = (() =>
-  ordered(stdReference).map((entry) => ({
+  pages(stdReference).map((entry) => ({
     params: { slug: entry.slug },
     props: { entry },
   }))) satisfies GetStaticPaths;

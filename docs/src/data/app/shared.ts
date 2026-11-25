@@ -9,6 +9,7 @@ export const categories = [
   "Haptics",
   "Storage",
   "Shell",
+  "Files",
   "Permissions",
   "Screen capture",
   "Locale",

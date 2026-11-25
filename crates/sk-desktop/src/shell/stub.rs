@@ -1,4 +1,4 @@
-//! Non-Windows: the calls exist and refuse, so the crate builds and validation tests run everywhere.
+//! Platforms without a backend: the calls exist and refuse, so the crate builds and validation tests run everywhere.
 
 use std::path::Path;
 

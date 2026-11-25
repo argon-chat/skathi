@@ -4,7 +4,7 @@ import { getPosts, postUrl } from "../lib/blog";
 import { checkGroups, checkPage, codeUrl } from "../lib/check";
 import { configPage, configSections, optionId, type ConfigOption } from "../lib/config";
 import { getDocs, pageUrl, sections, statusLabels } from "../lib/docs";
-import { entryUrl, kindLabel, ordered, plain, statuses } from "../lib/reference";
+import { entryUrl, kindLabel, pages, plain, statuses } from "../lib/reference";
 import { references } from "../lib/references";
 import type { SearchData, SearchRecord } from "../lib/search";
 
@@ -162,7 +162,7 @@ async function postRecords(): Promise<SearchRecord[]> {
 function referenceRecords(): SearchRecord[] {
   return Object.values(references).flatMap((reference) => {
     const group = groups.indexOf(groupOf[reference.id] ?? apiGroup);
-    return ordered(reference).map((entry): SearchRecord => {
+    return pages(reference).map((entry): SearchRecord => {
       const body = [
         ...(entry.values ?? []).map((value) => value.value),
         ...(entry.params ?? []).map((param) => param.name),

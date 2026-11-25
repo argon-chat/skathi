@@ -1,8 +1,8 @@
 //! The shell: open a URL or file with its handler, reveal a file, move a file to the trash.
 //!
 //! Validation is pure, runs on the frame thread and refuses synchronously; the OS call runs on one `sk-shell`
-//! thread (a COM STA) that also does the `stat` in front of each call, so the frame thread never touches a
-//! user path. With `SK_SHELL=record` nothing reaches the OS: each call is validated and stat'ed, then
+//! thread (a COM STA on Windows) that also does the `stat` in front of each call, so the frame thread never
+//! touches a user path. With `SK_SHELL=record` nothing reaches the OS: each call is validated and stat'ed, then
 //! settles successfully and logs `[shell] <op> <target> (recorded)`.
 
 use std::path::{Path, PathBuf};
@@ -21,15 +21,23 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux as imp;
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as imp;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 mod stub;
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 use stub as imp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     OpenExternal(String),
-    OpenPath(PathBuf),
+    OpenPath {
+        path: PathBuf,
+        allow_executable: bool,
+    },
     ShowItem(PathBuf),
     Trash(PathBuf),
 }
@@ -38,7 +46,7 @@ impl Op {
     fn verb(&self) -> &'static str {
         match self {
             Op::OpenExternal(_) => "openExternal",
-            Op::OpenPath(_) => "openPath",
+            Op::OpenPath { .. } => "openPath",
             Op::ShowItem(_) => "showItemInFolder",
             Op::Trash(_) => "trashItem",
         }
@@ -46,7 +54,9 @@ impl Op {
     fn target(&self) -> String {
         match self {
             Op::OpenExternal(u) => u.clone(),
-            Op::OpenPath(p) | Op::ShowItem(p) | Op::Trash(p) => p.display().to_string(),
+            Op::OpenPath { path, .. } | Op::ShowItem(path) | Op::Trash(path) => {
+                path.display().to_string()
+            }
         }
     }
 }
@@ -147,8 +157,8 @@ fn alternate_stream(p: &Path) -> bool {
     rest.contains(':')
 }
 
-/// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows will run, install,
-/// or hand to a script host when "opened". Keeps a save-then-open flow from launching `report.pdf.exe`.
+/// Extensions `openPath` refuses without `{ allowExecutable: true }`: everything Windows or macOS will run,
+/// install, or hand to a script host when "opened". Keeps a save-then-open flow from launching `report.pdf.exe`.
 const EXECUTABLE_EXTS: &[&str] = &[
     "exe",
     "com",
@@ -213,6 +223,23 @@ const EXECUTABLE_EXTS: &[&str] = &[
     "shb",
     "xll",
     "website",
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "workflow",
+    "action",
+    "scpt",
+    "scptd",
+    "applescript",
+    "pkg",
+    "mpkg",
+    "prefpane",
+    "saver",
+    "mobileconfig",
+    "fileloc",
+    "webloc",
+    "inetloc",
 ];
 
 /// Would the shell RUN this rather than open it? The extension is read as Windows reads it: trailing dots
@@ -264,19 +291,26 @@ pub fn start_open_external(url: &str, content: bool) -> Result<u32, Fail> {
     Ok(submit(Op::OpenExternal(validate_external(url, content)?)))
 }
 
+fn refused_executable(path: &Path) -> Fail {
+    Fail::new(
+        "NotAllowedError",
+        format!(
+            "openPath refused {path:?}: it is a program or a script, and opening it would run it — \
+             pass {{ allowExecutable: true }} if that is intended"
+        ),
+    )
+    .code("EEXECUTABLE")
+}
+
 pub fn start_open_path(path: &str, allow_executable: bool) -> Result<u32, Fail> {
     let p = validate_path(path, "openPath")?;
     if !allow_executable && is_executable(&p, std::env::var("PATHEXT").ok().as_deref()) {
-        return Err(Fail::new(
-            "NotAllowedError",
-            format!(
-                "openPath refused {path:?}: it is a program or a script, and opening it would run it — \
-                 pass {{ allowExecutable: true }} if that is intended"
-            ),
-        )
-        .code("EEXECUTABLE"));
+        return Err(refused_executable(&p));
     }
-    Ok(submit(Op::OpenPath(p)))
+    Ok(submit(Op::OpenPath {
+        path: p,
+        allow_executable,
+    }))
 }
 
 pub fn start_show_item(path: &str) -> Result<u32, Fail> {
@@ -339,10 +373,20 @@ fn submit(op: Op) -> u32 {
 fn run(op: &Op) -> Result<(), Fail> {
     match op {
         Op::OpenExternal(_) => {}
-        Op::OpenPath(p) | Op::ShowItem(p) | Op::Trash(p) => {
+        Op::OpenPath { path: p, .. } | Op::ShowItem(p) | Op::Trash(p) => {
             if let Err(e) = std::fs::symlink_metadata(p) {
                 return Err(fail_from_io(&e, op.verb(), &p.display().to_string()));
             }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Op::OpenPath {
+        path,
+        allow_executable: false,
+    } = op
+    {
+        if imp::runs_as_program(path) {
+            return Err(refused_executable(path));
         }
     }
     if recording() {
@@ -358,7 +402,7 @@ fn run(op: &Op) -> Result<(), Fail> {
     }
     match op {
         Op::OpenExternal(url) => imp::open_external(url),
-        Op::OpenPath(p) => imp::open_path(p),
+        Op::OpenPath { path, .. } => imp::open_path(path),
         Op::ShowItem(p) => imp::show_item(p),
         Op::Trash(p) => imp::trash(p),
     }
@@ -494,6 +538,13 @@ mod tests {
             r"C:\a\evil.exe.",
             r"C:\a\evil.exe ",
             r"C:\a\evil.exe. . ",
+            "/a/Thing.app",
+            "/a/Thing.app/",
+            "/a/run.command",
+            "/a/x.workflow",
+            "/a/x.scpt",
+            "/a/x.pkg",
+            "/a/x.webloc",
         ] {
             assert!(exe(yes), "{yes} must be refused");
         }
@@ -531,5 +582,53 @@ mod tests {
         };
         let f = start_open_path(setup, false).unwrap_err();
         assert_eq!((f.name, f.code), ("NotAllowedError", Some("EEXECUTABLE")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_executable_file_without_a_program_extension_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("sk-desktop-shell-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = dir.join("tool");
+        std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let f = run(&Op::OpenPath {
+            path: tool,
+            allow_executable: false,
+        })
+        .unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((f.name, f.code), ("NotAllowedError", Some("EEXECUTABLE")));
+    }
+
+    #[test]
+    fn recording_reaches_no_os_call_but_still_stats() {
+        std::env::set_var("SK_SHELL", "record");
+        assert!(recording(), "nothing below may run unrecorded");
+        let dir =
+            std::env::temp_dir().join(format!("sk-desktop-shell-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        let ops = [
+            Op::OpenExternal("https://example.com".into()),
+            Op::OpenPath {
+                path: file.clone(),
+                allow_executable: false,
+            },
+            Op::ShowItem(file.clone()),
+            Op::Trash(file.clone()),
+        ];
+        let results: Vec<_> = ops.iter().map(run).collect();
+        let missing = run(&Op::ShowItem(dir.join("missing.txt")));
+        let kept = file.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        for r in results {
+            assert!(r.is_ok(), "{:?}", r.err().map(|f| f.message));
+        }
+        assert!(kept, "a recorded trash leaves the file");
+        assert_eq!(missing.unwrap_err().code, Some("ENOENT"));
     }
 }

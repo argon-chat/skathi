@@ -61,7 +61,7 @@ report from one package is a reason to look for another package. [Web platform](
 | `app.setAsDefaultProtocolClient()`         | [`appLaunch.registerProtocol()`](/app-api/launch-register-protocol/), on Windows                                      |
 | `Tray` and its `Menu`                      | [`appTray`](/app-api/app-tray/), on Windows and macOS                                                                 |
 | `globalShortcut`                           | [`appHotkeys`](/app-api/app-hotkeys/), on Windows and macOS                                                           |
-| `shell.openExternal`, `showItemInFolder`   | [`appShell`](/app-api/app-shell/), on Windows and Linux                                                               |
+| `shell.openExternal`, `showItemInFolder`   | [`appShell`](/app-api/app-shell/)                                                                                     |
 | `dialog.showOpenDialog`, `showSaveDialog`  | [`showOpenFilePicker()` and its siblings](/web-platform/file-system-access/), or `<input type=file>`                  |
 | `dialog.showMessageBox`                    | A dialog component of your own. `alert()` and `confirm()` show nothing                                                |
 | `Menu` for a context menu                  | A menu component of your own, opened from a `contextmenu` handler                                                     |

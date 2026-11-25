@@ -42,6 +42,8 @@ export interface StdEntry extends Detail {
   workaround?: string;
   related?: string[];
   aliases?: string[];
+  /** The entry's page lives in another reference; the row links there and gets no page here. */
+  link?: { url: string; title: string };
 }
 
 export const OK: Status = "supported";

@@ -48,7 +48,8 @@ remove them in `onUnmounted` in Vue; in Svelte, return the unsubscribe function 
 | [`appHotkeys`](/app-api/app-hotkeys/)         | Yes                           | Yes, with Accessibility access       | No                             |
 | [`appHaptics`](/app-api/app-haptics/)         | Haptic mouse, trackpad or pen | Force Touch trackpad                 | No                             |
 | [`appStorage`](/app-api/app-storage/)         | Yes                           | Yes                                  | Yes                            |
-| [`appShell`](/app-api/app-shell/)             | Yes                           | Not yet                              | Yes                            |
+| [`appShell`](/app-api/app-shell/)             | Yes                           | Yes                                  | Yes                            |
+| [`appFiles`](/app-api/app-files/)             | Yes                           | Yes                                  | Yes                            |
 | [`appPermissions`](/app-api/app-permissions/) | Yes                           | Microphone, camera, screen recording | Microphone                     |
 | [`appCapture`](/app-api/app-capture/)         | Yes                           | Yes                                  | No                             |
 | [`appLocale`](/app-api/app-locale/)           | Yes                           | Yes                                  | Yes                            |

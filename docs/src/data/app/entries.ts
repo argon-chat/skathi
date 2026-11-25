@@ -1,5 +1,6 @@
 import { capture } from "./capture";
 import { devtools } from "./devtools";
+import { files } from "./files";
 import { haptics } from "./haptics";
 import { host } from "./host";
 import { hotkeys } from "./hotkeys";
@@ -21,7 +22,9 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   Storage:
     "`appStorage` says where `localStorage` and IndexedDB keep their data, moves them, and encrypts them at rest with the platform's key store. It also names the user's standard folders.",
   Shell:
-    "`appShell` hands URLs and files to the system: open with the default app, reveal in the file manager, move to the trash. Every call returns a promise and rejects with an `Error` that has a Node-style `code`. Implemented on Windows and Linux; on macOS the calls reject for now.",
+    "`appShell` hands URLs and files to the system: open with the default app, reveal in the file manager, move to the trash. Every call returns a promise and rejects with an `Error` that has a Node-style `code`. Windows, macOS and Linux.",
+  Files:
+    "`appFiles` gives the disk path behind a `File`, a directory entry or a file system handle the host made, for code that needs the path rather than the bytes.",
   Permissions:
     "`appPermissions` is `navigator.permissions` with a standalone `request()` and a fourth state, `unsupported`, for a permission the platform has no switch for. On Windows, Skathi asks for the microphone with its own dialog, since the system never asks a desktop app.",
   "Screen capture":
@@ -42,6 +45,7 @@ export const entries: readonly AppEntry[] = [
   ...haptics,
   ...storage,
   ...shell,
+  ...files,
   ...permissions,
   ...capture,
   ...locale,

@@ -22,7 +22,7 @@ export type { Category, StdEntry };
 
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "skathi:app":
-    "Ending and restarting the app and reading its version. The same module exports the `app*` objects (tray, hotkeys, storage and the rest), which have their own reference: [App APIs](/app-api/).",
+    "Ending and restarting the app and reading its version, and the `app*` objects for the desktop around it: windows, tray, hotkeys, storage, the shell and the rest. Their rows open their pages in the [App API](/app-api/) and [Window API](/window-api/) references.",
   "skathi:runtime":
     "The Skathi the app runs on: its version, the features the host was built with, and whether the code was compiled ahead of time or packed into a single file.",
   "skathi:os":

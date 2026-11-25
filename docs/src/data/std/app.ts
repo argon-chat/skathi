@@ -1,6 +1,34 @@
-import { importLine, section } from "./shared";
+import runtimeModule from "../../../../packages/runtime/src/std/app.ts?raw";
+import { appReference } from "../../lib/app";
+import { entryUrl } from "../../lib/reference";
+import { windowReference } from "../../lib/window";
+import { importLine, section, type Draft } from "./shared";
 
 const IMPORT = importLine("skathi:app", "app");
+
+/** The `app*` objects the runtime's `skathi:app` re-exports, in its order; each row points at its own page. */
+const exported = [...runtimeModule.matchAll(/^export \{([^}]*)\}/gm)]
+  .flatMap((match) => (match[1] ?? "").split(","))
+  .map((name) => name.trim())
+  .filter((name) => /^app[A-Z]\w*$/.test(name));
+
+function exportRow(name: string): Draft {
+  for (const reference of [appReference, windowReference]) {
+    const entry = reference.entries.find((e) => e.name === name);
+    if (!entry) continue;
+    return {
+      slug: entry.slug,
+      name,
+      kind: "object",
+      summary: entry.summary,
+      platforms: entry.platforms,
+      ...(entry.since ? { since: entry.since } : {}),
+      ...(entry.platformSince ? { platformSince: entry.platformSince } : {}),
+      link: { url: entryUrl(reference, entry.slug), title: reference.title },
+    };
+  }
+  throw new Error(`skathi:app exports ${name}, which has no entry in the App API or Window API reference`);
+}
 const EMBEDDED_RESTART =
   "In an app that runs inside another program, `restart()` throws an `Error` named `NotSupportedError`: the process is the embedder's. Ask the embedder to restart through a [native module](/embedding/native-modules/).";
 
@@ -16,7 +44,7 @@ app.quit(options?: { exitCode?: number }): void
 app.restart(options?: { args?: string[] }): void
 app.getVersion(): string`,
     notes: [
-      "The module also exports every [App API](/app-api/) object (`appTray`, `appShell`, `appWindow` and the rest). Import them from `skathi:app`. Importing them from `@skathi-native/runtime` still works but is deprecated.",
+      "The module also exports the `app*` objects listed with it here; each has its page in the [App API](/app-api/) or [Window API](/window-api/) reference. Importing them from `@skathi-native/runtime` still works but is deprecated.",
       "`quit()` and `restart()` end the app the way [`appWindow.close()`](/window-api/) does. See [Closing, hiding and quitting](/guides/closing-and-background/).",
       "`getVersion()` is the app's own version. The version of Skathi is [`runtime.version`](/std/runtime/).",
       "The three methods work on Windows, macOS and Linux. In an embedded app `quit()` tells the embedder the app closed, `restart()` throws, and `getVersion()` reads the embedder's payload.",
@@ -177,4 +205,5 @@ export async function sendReport(text: string): Promise<void> {
     related: ["app", "runtime"],
     aliases: ["app.getVersion", "app version", "version"],
   },
+  ...exported.map(exportRow),
 ]);

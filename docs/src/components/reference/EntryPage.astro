@@ -8,6 +8,7 @@ import StatusMark from "./StatusMark.vue";
 import { repository } from "../../lib/docs";
 import {
   categoryId,
+  entryHref,
   entryMarkdownUrl,
   entryUrl,
   find,
@@ -356,7 +357,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         <h2 id="related">Related</h2>
         <div class="related-list">
           {related.map((r) => (
-            <a class="related-chip" href={entryUrl(reference, r.slug)}>
+            <a class="related-chip" href={entryHref(reference, r)}>
               <StatusMark status={r.status} size={13} />
               {plain(r.name)}
             </a>

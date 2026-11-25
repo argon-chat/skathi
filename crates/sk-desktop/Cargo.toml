@@ -127,6 +127,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSTextField",
     "NSView",
     "NSWindow",
+    "NSWorkspace",
     "objc2-core-foundation",
 ] }
 objc2-media-player = { version = "0.3.2", default-features = false, features = [

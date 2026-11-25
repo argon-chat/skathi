@@ -1,9 +1,11 @@
-import { OK, PLAN, all, importLine, os, section } from "./shared";
+import type { PlatformSince } from "../css/entries";
+import { OK, all, importLine, section } from "./shared";
 
 const IMPORT = importLine("appShell");
-const PLATFORMS = os(OK, PLAN, OK);
+const PLATFORMS = all(OK);
+const PLATFORM_SINCE: PlatformSince = { macos: "Unreleased" };
 const MAC =
-  'On macOS, every call rejects with an `Error` named `NotSupportedError` (`code: "ENOSYS"`): not implemented yet.';
+  "On macOS, the calls go to `NSWorkspace` and `NSFileManager`: Launch Services picks the app, Finder reveals, and the item moves to the Trash of its volume.";
 const LINUX_TOOLS =
   "On Linux, the calls run the freedesktop tools and wait for them: `xdg-open`, the file manager's D-Bus interface and `gio trash`. A missing tool rejects with `NotSupportedError` (`ENOSYS`), one that fails with `OperationError`.";
 const PATH_RULES =
@@ -17,6 +19,7 @@ export const shell = section("Shell", [
     summary:
       "Opens URLs and files with their default app, reveals a file in the file manager, and moves files to the trash.",
     platforms: PLATFORMS,
+    platformSince: PLATFORM_SINCE,
     syntax: `${IMPORT}
 
 appShell.openExternal(url: string): Promise<void>
@@ -29,6 +32,7 @@ appShell.trashItem(path: string): Promise<void>`,
       "The OS work runs on a thread of its own, one call after another, so the UI never waits on the shell or the disk.",
       "With the environment variable `SK_SHELL=record`, calls are checked as usual and then resolve without reaching the OS, each logging a `[shell]` line. Use it in tests.",
       "Links in content (`<a href>`, `window.open`) open only `http`, `https` and `mailto`; `appShell.openExternal()` is the way to open another scheme the app trusts.",
+      MAC,
     ],
     examples: [
       {
@@ -45,7 +49,7 @@ export async function openLogs(): Promise<void> {
 }`,
       },
     ],
-    limitations: [MAC, LINUX_TOOLS],
+    limitations: [LINUX_TOOLS],
     related: [
       "shell-open-external",
       "shell-open-path",
@@ -62,12 +66,14 @@ export async function openLogs(): Promise<void> {
     summary:
       "Opens a URL with the app the system registers for its scheme: the browser for `https:`, the mail app for `mailto:`, and so on.",
     platforms: PLATFORMS,
+    platformSince: PLATFORM_SINCE,
     syntax: "appShell.openExternal(url: string): Promise<void>",
     params: [{ name: "url", type: "string", description: "An absolute URL with any scheme but `file:`." }],
     returns:
       "A promise that resolves once the shell has accepted the URL, not when the other app has finished opening it.",
     notes: [
       "Custom schemes (`zoommtg:`, `ms-settings:privacy`, another app's protocol) are allowed. Treat a URL built from user or network input with care: it starts whatever handles its scheme.",
+      "On macOS, the promise settles once Launch Services has started the handling app or said why it could not.",
     ],
     examples: [
       {
@@ -87,9 +93,9 @@ const props = defineProps<{ href: string }>();
     edgeCases: [
       "A `file:` URL rejects with a `TypeError` that points to `openPath()`; so does a Windows path such as `C:\\x`, which looks like a one-letter scheme.",
       "An empty URL, one that is not absolute, or one with a control character rejects with a `TypeError`.",
-      "On Windows, a scheme no app handles rejects with `NotFoundError` (`ENOASSOC`).",
+      "On Windows and macOS, a scheme no app handles rejects with `NotFoundError` (`ENOASSOC`).",
     ],
-    limitations: [MAC, LINUX_TOOLS],
+    limitations: [LINUX_TOOLS],
     related: ["shell-open-path", "app-shell", "launch-register-protocol"],
     aliases: ["shell.openExternal", "open URL", "open in browser"],
   },
@@ -100,6 +106,7 @@ const props = defineProps<{ href: string }>();
     summary:
       "Opens a file with its default app, or a folder in the file manager. Programs and scripts are refused unless allowed.",
     platforms: PLATFORMS,
+    platformSince: PLATFORM_SINCE,
     syntax: "appShell.openPath(path: string, options?: { allowExecutable?: boolean }): Promise<void>",
     params: [
       { name: "path", type: "string", description: "An absolute path to a file or folder." },
@@ -113,7 +120,8 @@ const props = defineProps<{ href: string }>();
     ],
     returns: "A promise that resolves once the shell has accepted the file.",
     notes: [
-      "Without `allowExecutable`, a file Windows would run rather than open is refused on every platform: `.exe`, `.msi`, `.bat`, `.cmd`, `.ps1`, `.js`, `.vbs`, `.lnk`, `.url`, `.reg`, `.jar` and about sixty more, plus every extension in `PATHEXT`. The extension is read as Windows reads it, so `report.pdf.exe.` counts as `.exe`.",
+      "Without `allowExecutable`, a file Windows or macOS would run rather than open is refused on every platform: `.exe`, `.msi`, `.bat`, `.cmd`, `.ps1`, `.js`, `.vbs`, `.lnk`, `.url`, `.reg`, `.jar` and about sixty more, plus every extension in `PATHEXT`; and `.app`, `.command`, `.tool`, `.terminal`, `.workflow`, `.action`, `.scpt`, `.applescript`, `.pkg`, `.mpkg`, `.prefPane`, `.saver`, `.mobileconfig`, `.webloc`, `.inetloc` and `.fileloc`. The extension is read as Windows reads it, so `report.pdf.exe.` counts as `.exe`.",
+      "On macOS, a file whose type is a program to Launch Services is refused too: an executable file without a document extension, which Terminal would run. A symbolic link is judged by its target. Disk images (`.dmg`) open, since mounting one runs nothing.",
       "On Windows, the file's own folder is the working directory of the app that opens it.",
     ],
     examples: [
@@ -139,9 +147,9 @@ export async function openExport(path: string): Promise<string | null> {
     edgeCases: [
       'A refused program rejects with an `Error` named `NotAllowedError` and `code: "EEXECUTABLE"`.',
       PATH_RULES,
-      "On Windows, a file type with no associated app rejects with `NotFoundError` (`ENOASSOC`).",
+      "On Windows and macOS, a file type with no associated app rejects with `NotFoundError` (`ENOASSOC`).",
     ],
-    limitations: [MAC, LINUX_TOOLS],
+    limitations: [LINUX_TOOLS],
     related: ["shell-show-item-in-folder", "shell-open-external", "storage-get-user-folder", "app-desktop-error"],
     aliases: ["shell.openPath", "open file", "launch file"],
   },
@@ -151,11 +159,13 @@ export async function openExport(path: string): Promise<string | null> {
     kind: "method",
     summary: "Opens the folder that contains a file in the file manager, with the file selected.",
     platforms: PLATFORMS,
+    platformSince: PLATFORM_SINCE,
     syntax: "appShell.showItemInFolder(path: string): Promise<void>",
     params: [{ name: "path", type: "string", description: "An absolute path to a file or folder." }],
     returns: "A promise that resolves once the file manager has been asked.",
     notes: [
       "On Windows, Explorer opens the parent folder with the item selected; a drive root opens itself.",
+      "On macOS, Finder opens a window on the parent folder with the item selected, and comes to the front.",
       "On Linux, the file manager is asked over D-Bus (`org.freedesktop.FileManager1`) to select the item. Without one that answers, the parent folder opens with `xdg-open`, nothing selected.",
     ],
     examples: [
@@ -170,7 +180,7 @@ export function reveal(path: string): void {
       },
     ],
     edgeCases: [PATH_RULES],
-    limitations: [MAC, LINUX_TOOLS],
+    limitations: [LINUX_TOOLS],
     related: ["shell-open-path", "shell-trash-item"],
     aliases: ["shell.showItemInFolder", "reveal in Explorer", "show in folder", "reveal in Finder"],
   },
@@ -180,11 +190,13 @@ export function reveal(path: string): void {
     kind: "method",
     summary: "Moves a file or folder to the Recycle Bin or the trash. It never deletes permanently.",
     platforms: PLATFORMS,
+    platformSince: PLATFORM_SINCE,
     syntax: "appShell.trashItem(path: string): Promise<void>",
     params: [{ name: "path", type: "string", description: "An absolute path to a file or folder." }],
     returns: "A promise that resolves once the item is in the trash.",
     notes: [
       "On Windows, the move shows no dialog and can be undone from Explorer like any other delete.",
+      "On macOS, the item moves to the Trash of its volume, as Finder's Move to Trash does, without a dialog.",
       "On Linux, it runs `gio trash`.",
     ],
     examples: [
@@ -206,11 +218,11 @@ export async function removeAttachment(path: string): Promise<"trashed" | "kept"
       },
     ],
     edgeCases: [
-      'On Windows, a drive without a Recycle Bin, or an item too large for it, rejects with an `Error` named `InvalidStateError` and `code: "ENOTRASH"`; nothing is deleted.',
+      'On Windows, a drive without a Recycle Bin, or an item too large for it, rejects with an `Error` named `InvalidStateError` and `code: "ENOTRASH"`; nothing is deleted. On macOS, so does a volume without a Trash, such as a read-only one.',
       "A file another program holds open rejects with `NoModificationAllowedError` (`EBUSY`) on Windows.",
       PATH_RULES,
     ],
-    limitations: [MAC, LINUX_TOOLS],
+    limitations: [LINUX_TOOLS],
     related: ["shell-show-item-in-folder", "app-desktop-error"],
     aliases: ["shell.trashItem", "recycle bin", "move to trash", "delete file"],
   },
@@ -231,13 +243,21 @@ export async function removeAttachment(path: string): Promise<"trashed" | "kept"
       {
         value: "ENOASSOC",
         status: OK,
-        note: "`NotFoundError`, Windows: no app is registered for the file type or URL scheme.",
+        note: "`NotFoundError`, Windows and macOS: no app is registered for the file type or URL scheme.",
       },
       { value: "EEXECUTABLE", status: OK, note: "`NotAllowedError`: `openPath()` refused a program or script." },
       { value: "EACCES", status: OK, note: "`NotAllowedError`: access is denied." },
-      { value: "EBUSY", status: OK, note: "`NoModificationAllowedError`, Windows: another program uses the file." },
-      { value: "ENOTRASH", status: OK, note: "`InvalidStateError`, Windows: the item cannot go to the Recycle Bin." },
-      { value: "ECANCELED", status: OK, note: "`AbortError`, Windows: the operation was cancelled." },
+      {
+        value: "EBUSY",
+        status: OK,
+        note: "`NoModificationAllowedError`, Windows and macOS: another program uses the file.",
+      },
+      {
+        value: "ENOTRASH",
+        status: OK,
+        note: "`InvalidStateError`, Windows and macOS: the item cannot go to the Recycle Bin or the Trash.",
+      },
+      { value: "ECANCELED", status: OK, note: "`AbortError`, Windows and macOS: the operation was cancelled." },
       {
         value: "ENOSYS",
         status: OK,
@@ -249,7 +269,7 @@ export async function removeAttachment(path: string): Promise<"trashed" | "kept"
       "It is a plain `Error`, not a `DOMException`: test `error.code` or `error.name`, not `instanceof DOMException`.",
       "A bad argument is a `TypeError` without `code`.",
       "On Linux, a tool that exits with an error rejects with `OperationError` and no `code`.",
-      "`osError` is the Win32 error code (or the HRESULT) on Windows, the `errno` from the file check elsewhere.",
+      "`osError` is the Win32 error code (or the HRESULT) on Windows, the `NSError` code on macOS, and the `errno` from the file check elsewhere.",
     ],
     examples: [
       {

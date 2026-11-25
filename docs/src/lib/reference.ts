@@ -26,6 +26,8 @@ export interface RefEntry extends Detail {
   animates?: "interpolated" | "discrete";
   related?: string[];
   aliases?: string[];
+  /** The entry's page lives in another reference; the row links there and gets no page here. */
+  link?: { url: string; title: string };
 }
 
 export interface Reference {
@@ -61,6 +63,7 @@ export type CatalogEntry = Pick<
   | "skathiOnly"
   | "aliases"
   | "platformSince"
+  | "link"
 > & { changed?: Release; split?: boolean; fresh?: string };
 
 export const platforms: readonly {
@@ -152,6 +155,20 @@ export function ordered(ref: Reference): RefEntry[] {
   return ref.categories.flatMap((category) => ref.entries.filter((entry) => entry.category === category));
 }
 
+/** The entries that have a page in this reference, in catalog order. */
+export function pages(ref: Reference): RefEntry[] {
+  return ordered(ref).filter((entry) => !entry.link);
+}
+
+/** Where an entry's row and links point: its own page, or the page in the reference it belongs to. */
+export function entryHref(ref: Reference, entry: Pick<RefEntry, "slug" | "link">): string {
+  return entry.link?.url ?? entryUrl(ref, entry.slug);
+}
+
+function markdownPage(ref: Reference, entry: Pick<RefEntry, "slug" | "link">): string {
+  return entry.link ? entry.link.url.replace(/\/$/, ".md") : entryMarkdownUrl(ref, entry.slug);
+}
+
 export function find(ref: Reference, slug: string): RefEntry | undefined {
   return ref.entries.find((entry) => entry.slug === slug);
 }
@@ -225,6 +242,7 @@ export function catalogEntries(ref: Reference): CatalogEntry[] {
     if (entry.experimental) slim.experimental = true;
     if (entry.skathiOnly) slim.skathiOnly = true;
     if (entry.aliases?.length) slim.aliases = entry.aliases;
+    if (entry.link) slim.link = entry.link;
     if (platformsDiffer(entry)) slim.split = true;
     return slim;
   });
@@ -321,7 +339,7 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
       "",
       "## Related",
       "",
-      ...related.map((r) => `- [${r.name}](${new URL(entryMarkdownUrl(ref, r.slug), site).href})`),
+      ...related.map((r) => `- [${r.name}](${new URL(markdownPage(ref, r), site).href})`),
     );
   return `${lines.join("\n")}\n`;
 }
@@ -340,7 +358,7 @@ export function catalogMarkdown(ref: Reference, site: URL): string {
                 .join(", ")
             : "all";
           const notes = [...(entry.limitations ?? []), ...(entry.workaround ? [entry.workaround] : [])].join(" ");
-          return `| [\`${entry.name}\`](${new URL(entryMarkdownUrl(ref, entry.slug), site).href}) | ${statuses[entry.status].label} | ${where} | ${sinceText(entry)} | ${notes} |`;
+          return `| [\`${entry.name}\`](${new URL(markdownPage(ref, entry), site).href}) | ${statuses[entry.status].label} | ${where} | ${sinceText(entry)} | ${notes} |`;
         });
       return [
         `## ${category}`,

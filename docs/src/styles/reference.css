@@ -459,6 +459,10 @@
     color: var(--planned);
     border-color: color-mix(in srgb, var(--planned) 40%, transparent);
   }
+  .flag-link {
+    color: var(--muted);
+    border-color: var(--border-strong);
+  }
   .flag-new,
   .sheet-badge-new {
     display: inline-flex;

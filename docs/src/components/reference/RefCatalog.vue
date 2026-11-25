@@ -369,7 +369,11 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
         </h2>
         <ul v-if="results.length" class="catalog-rows">
           <li v-for="(entry, index) in results" :key="entry.slug">
-            <a :href="`${base}${entry.slug}/`" class="catalog-row" :class="{ 'is-active': index === active }">
+            <a
+              :href="entry.link?.url ?? `${base}${entry.slug}/`"
+              class="catalog-row"
+              :class="{ 'is-active': index === active }"
+            >
               <span class="row-main">
                 <span class="row-name">
                   <span v-if="isProseName(entry.name)" class="row-name-text" v-html="inline(entry.name)"></span
@@ -381,6 +385,7 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
                   >
                   <span v-if="entry.skathiOnly" class="flag flag-skathi">Skathi</span>
                   <span v-if="entry.experimental" class="flag flag-experimental">Experimental</span>
+                  <span v-if="entry.link" class="flag flag-link">{{ entry.link.title }}</span>
                   <span v-if="entry.fresh" class="flag flag-new" :title="entry.fresh">{{ newLabel }}</span>
                 </span>
                 <span class="row-summary"
@@ -409,13 +414,14 @@ onUnmounted(() => window.removeEventListener("keydown", onGlobalKey));
           <p v-if="group.note" class="group-note" v-html="group.note"></p>
           <ul class="catalog-rows">
             <li v-for="entry in group.items" :key="entry.slug">
-              <a :href="`${base}${entry.slug}/`" class="catalog-row">
+              <a :href="entry.link?.url ?? `${base}${entry.slug}/`" class="catalog-row">
                 <span class="row-main">
                   <span class="row-name">
                     <code v-if="!isProseName(entry.name)">{{ entry.name }}</code
                     ><span v-else class="row-name-text" v-html="inline(entry.name)"></span>
                     <span v-if="entry.skathiOnly" class="flag flag-skathi">Skathi</span>
                     <span v-if="entry.experimental" class="flag flag-experimental">Experimental</span>
+                    <span v-if="entry.link" class="flag flag-link">{{ entry.link.title }}</span>
                     <span v-if="entry.fresh" class="flag flag-new" :title="entry.fresh">{{ newLabel }}</span>
                   </span>
                   <span class="row-summary" v-html="inline(entry.summary)"></span>
