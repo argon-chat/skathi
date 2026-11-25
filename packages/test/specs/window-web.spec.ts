@@ -27,6 +27,17 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, what: str
   return v;
 }
 
+// The conservative stack scan can keep a dead object for a collection or two.
+const collected = (...refs: string[]) =>
+  until(
+    async () => {
+      await gc();
+      return js<boolean>(refs.map((r) => `${r}.deref() === undefined`).join(" && "));
+    },
+    Boolean,
+    `${refs.join(", ")} to be collected`,
+  );
+
 const setTheme = (theme: string) => app.eval(`__SK_WINDOW__.appWindow.theme = ${JSON.stringify(theme)}; "ok"`);
 
 describe("matchMedia", () => {
@@ -50,15 +61,7 @@ describe("matchMedia", () => {
         return "ok";
       })()`);
       await app.eval(`__mq.abort.abort(); "ok"`);
-      // The conservative stack scan can keep a dead query for a collection or two.
-      await until(
-        async () => {
-          await gc();
-          return js<boolean>(`__mq.unheld.deref() === undefined && __mq.aborted.deref() === undefined`);
-        },
-        Boolean,
-        "the unheld queries to be collected",
-      );
+      await collected("__mq.unheld", "__mq.aborted");
 
       await setTheme("dark");
       const fired = await until(
@@ -68,9 +71,7 @@ describe("matchMedia", () => {
       );
       expect(fired.sort()).toEqual(["legacy:true", "listener:true", "once:true", "onchange:true"]);
 
-      await gc();
-      await gc();
-      expect(await js<boolean>(`__mq.once.deref() === undefined`)).toBe(true);
+      await collected("__mq.once");
       await setTheme("light");
       const back = await until(
         () => js<string[]>(`__mq.seen`),
