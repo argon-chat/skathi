@@ -59,13 +59,13 @@ let builder = skathi::Builder::new().setup(|host| {
 
 `LayerPlacement` is in device pixels of the window:
 
-| Field     | Means                                            |
-| --------- | ------------------------------------------------ |
-| `bounds`  | the element's box: `[x, y, width, height]`       |
-| `clip`    | the part of it inside the clips of its ancestors |
-| `radii`   | its corner radii, top-left clockwise             |
-| `scale`   | the window's scale factor                        |
-| `opacity` | the element's own `opacity`                      |
+| Field     | Means                                                           |
+| --------- | --------------------------------------------------------------- |
+| `bounds`  | the element's box: `[x, y, width, height]`                      |
+| `clip`    | the part of it inside the clips of its ancestors                |
+| `radii`   | its corner radii, top-left clockwise                            |
+| `scale`   | the window's scale factor                                       |
+| `opacity` | the opacity the element is shown at: its own and its ancestors' |
 
 A CSS transform on the element or an ancestor is not applied to the placement.
 

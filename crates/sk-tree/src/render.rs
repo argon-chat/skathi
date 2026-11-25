@@ -5615,12 +5615,11 @@ fn build_iframe<V: 'static>(
     if let Some(style) = crate::iframe::cursor(id) {
         d = d.cursor(style);
     }
-    let opacity = d.style().opacity.unwrap_or(1.0);
     let radii = d.style().corner_radii.clone();
     let reporter = gpui::canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
-            let (place, corners) = underlay_placement(bounds, &radii, opacity, window);
+            let (place, corners) = underlay_placement(bounds, &radii, window);
             crate::iframe::painted_in(id, window);
             crate::iframe::placed(id, place);
             // The document is composited under the app's surface: erase what the app painted in the
@@ -5644,11 +5643,11 @@ fn build_iframe<V: 'static>(
     .into_any_element()
 }
 
-/// Where a box painted at `bounds` is in the window, for what is composited under the page.
+/// Where a box painted at `bounds` is in the window, for what is composited under the page. Called
+/// from the box's paint, so the opacity is the one it is shown at: its own and its ancestors'.
 fn underlay_placement(
     bounds: gpui::Bounds<gpui::Pixels>,
     radii: &gpui::CornersRefinement<gpui::AbsoluteLength>,
-    opacity: f32,
     window: &Window,
 ) -> (crate::iframe::Placement, gpui::Corners<gpui::Pixels>) {
     let mask = window.content_mask().bounds;
@@ -5660,15 +5659,21 @@ fn underlay_placement(
         bottom_right: radius(radii.bottom_right),
         bottom_left: radius(radii.bottom_left),
     };
-    let s = window.scale_factor();
-    let device_radii = [
+    // Logical pixels, like `bounds`: `placement` scales both to device pixels.
+    let radii = [
         corners.top_left,
         corners.top_right,
         corners.bottom_right,
         corners.bottom_left,
     ]
-    .map(|r| f32::from(r) * s);
-    let place = crate::iframe::placement(bounds, mask, device_radii, s, opacity);
+    .map(f32::from);
+    let place = crate::iframe::placement(
+        bounds,
+        mask,
+        radii,
+        window.scale_factor(),
+        window.vn_element_opacity(),
+    );
     (place, corners)
 }
 
@@ -5691,12 +5696,11 @@ fn build_layer<V: 'static>(
         d = apply_computed_style(d, cs, id, now);
     }
     presentational_size(t, id, d.style());
-    let opacity = d.style().opacity.unwrap_or(1.0);
     let radii = d.style().corner_radii.clone();
     let reporter = gpui::canvas(
         |_, _, _| {},
         move |bounds, (), window, _| {
-            let (place, _) = underlay_placement(bounds, &radii, opacity, window);
+            let (place, _) = underlay_placement(bounds, &radii, window);
             crate::layer::painted(id, &name, place, window);
         },
     )
