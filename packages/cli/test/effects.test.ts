@@ -191,6 +191,28 @@ struct Grade : IEffect
     expect(await refused("    [SkLinear] float amount;")).toContain("SkLinear");
   });
 
+  test("a backdrop reach is one length slot that implies the backdrop", async () => {
+    const lens = (fields: string) =>
+      app({
+        "lens.slang": `import sk;\n[SkEffect("lens")]\nstruct Lens : IEffect\n{\n${fields}\n    float4 shade(EffectInput input) { return input.backdropAtPx(input.px + depth); }\n};\n`,
+      });
+    const [built] = (
+      await compileAppEffects(
+        lens('    [SkColor] float4 tint;\n    [SkLength] [SkBackdropReach] [SkDefault("12")] float depth;'),
+        compiler!,
+      )
+    ).compiled;
+    expect(built!.effect).toMatchObject({ backdrop: true, backdropReachParam: 4, backdropRadiusParam: null });
+    expect(built!.effect.params[1]).toMatchObject({ name: "depth", kind: "length", slot: 4 });
+
+    for (const fields of [
+      "    [SkBackdropReach] float depth;",
+      "    [SkLength] [SkBackdropReach] float depth;\n    [SkLength] [SkBackdropReach] float rim;",
+    ]) {
+      expect(await compileAppEffects(lens(fields), compiler!).catch((e: unknown) => e)).toBeInstanceOf(EffectsError);
+    }
+  });
+
   test("compile to every target and a manifest that names them", async () => {
     const root = app({ "ripple.slang": RIPPLE });
     const built = await compileAppEffects(root, compiler!);

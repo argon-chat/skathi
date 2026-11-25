@@ -6,6 +6,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
 import Icon from "../Icon.astro";
 import StatusMark from "./StatusMark.vue";
 import { repository } from "../../lib/docs";
+import slang from "../../lib/slang";
 import {
   categoryId,
   entryHref,
@@ -275,7 +276,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
               {example.note && <p class="example-note" set:html={inline(example.note)} />}
               <Code
                 code={example.code.trim()}
-                lang={example.lang}
+                lang={example.lang === "slang" ? slang : example.lang}
                 themes={{ light: "github-light", dark: "github-dark" }}
                 defaultColor={false}
               />

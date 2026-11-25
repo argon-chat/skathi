@@ -100,6 +100,8 @@ pub struct EffectSchema {
     pub flags: u32,
     pub params: &'static [ParamSchema],
     pub backdrop_radius_param: Option<u8>,
+    /// `[SkBackdropReach]`: how far outside its quad the effect samples the backdrop.
+    pub backdrop_reach_param: Option<u8>,
     pub bleed_param: Option<u8>,
     /// Slot whose value, when positive, means the effect animates and the window must keep repainting.
     pub animated_param: Option<u8>,
@@ -159,6 +161,7 @@ impl EffectSchema {
             flags: self.flags,
             length_mask: self.length_mask(),
             backdrop_radius_param: self.backdrop_radius_param,
+            backdrop_reach_param: self.backdrop_reach_param,
             bleed_param: self.bleed_param,
             animated: false,
             animated_param: self.animated_param,
@@ -208,6 +211,8 @@ struct RawEffect {
     history: bool,
     signature: String,
     backdrop_radius_param: Option<u8>,
+    #[serde(default)]
+    backdrop_reach_param: Option<u8>,
     bleed_param: Option<u8>,
     animated_param: Option<u8>,
     #[serde(default)]
@@ -390,6 +395,7 @@ pub fn parse_manifest(
             .fold(0, |flags, (_, flag)| flags | flag),
             params: Box::leak(params.into_boxed_slice()),
             backdrop_radius_param: raw.backdrop_radius_param,
+            backdrop_reach_param: raw.backdrop_reach_param,
             bleed_param: raw.bleed_param,
             animated_param: raw.animated_param,
             pointer_param: raw.pointer_param,
@@ -565,7 +571,7 @@ mod tests {
     const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 11,
+      "schema": 12,
       "slang": "2026.12",
       "kind": "user",
       "effects": [

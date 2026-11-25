@@ -1,6 +1,6 @@
 export interface Example {
   title: string;
-  lang: "vue" | "svelte" | "css" | "ts" | "html";
+  lang: "vue" | "svelte" | "css" | "ts" | "html" | "slang";
   code: string;
   note?: string;
 }

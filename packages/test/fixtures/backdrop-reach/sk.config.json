@@ -1,0 +1,13 @@
+{
+  "$comment": "A backdrop effect with [SkBackdropReach] beside the same effect without it, over vertical colour bands.",
+
+  "name": "sk-test-backdrop-reach",
+
+  "window": {
+    "title": "Skathi — backdrop reach (fixture)",
+    "width": 360,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -61,7 +61,9 @@ public struct SkEffectAttribute
 /// This effect reads `input.backdrop`, so the renderer must snapshot the
 /// render target and draw the quad with blending disabled. Costs a full
 /// render-target copy per effect group — do not add it unless `shade` really
-/// samples the backdrop. Implied by `[SkBackdropRadius]`.
+/// samples the backdrop; declare `[SkBackdropReach]` to copy only the part of
+/// the window the effect reads. Implied by `[SkBackdropRadius]` and
+/// `[SkBackdropReach]`.
 [__AttributeUsage(_AttributeTargets.Struct)]
 public struct SkBackdropAttribute
 {
@@ -208,6 +210,17 @@ public struct SkBackdropRadiusAttribute
 {
 };
 
+/// This length parameter is how far outside the drawn quad (the border box
+/// dilated by `[SkBleed]`) the effect samples its backdrop. The renderer then
+/// snapshots and blurs only the quad grown by it, instead of the whole window,
+/// and every backdrop read beyond it is clamped to that edge. Without it an
+/// effect may sample anywhere and pays for the whole window. Implies
+/// `[SkBackdrop]`. At most one per effect.
+[__AttributeUsage(_AttributeTargets.Var)]
+public struct SkBackdropReachAttribute
+{
+};
+
 /// While this parameter is > 0 the effect is treated as animated and the
 /// window keeps repainting. Put it on the parameter that actually drives
 /// `input.time` (a speed), so `speed: 0` costs nothing. At most one per
@@ -322,7 +335,7 @@ public struct SkCornerShapes
 
 /// Keep in sync with `gpui::EffectQuad` (vendor/gpui/crates/gpui/src/scene.rs),
 /// `struct EffectQuad` in gpui_windows/src/effects.hlsl and in
-/// gpui_wgpu/src/shaders_effects.wgsl. 64 words / 256 bytes.
+/// gpui_wgpu/src/shaders_effects.wgsl. 66 words / 264 bytes.
 ///
 /// The parameter block is `float[]`, not `float4`s: a WGSL storage buffer
 /// aligns a `vec4` to 16 bytes, which would move it from offset 72 to 80.
@@ -345,6 +358,9 @@ public struct SkEffectQuad
     public uint flags;
     /// The element's CSS `corner-shape`.
     public SkCornerShapes corner_shapes;
+    /// `[SkBackdropReach]` in device pixels, with `SK_FLAG_BACKDROP_REACH`.
+    public float backdrop_reach;
+    public uint pad;
 };
 
 [[vk::binding(0, 1)]]
@@ -393,6 +409,7 @@ public static const uint SK_FLAG_NEEDS_BACKDROP = 1u;
 public static const uint SK_FLAG_NEEDS_CONTENT = 2u;
 public static const uint SK_FLAG_HISTORY = 4u;
 public static const uint SK_FLAG_HISTORY_PASS = 8u;
+public static const uint SK_FLAG_BACKDROP_REACH = 32u;
 
 
 // ===========================================================================
@@ -456,6 +473,8 @@ public struct EffectInput
     public bool historyPass;
     /// This quad's index in the instance buffer.
     public uint quad;
+    /// `[SkBackdropReach]`: backdrop reads clamp to the drawn quad grown by it.
+    bool backdropBounded;
 
     /// Parameter slot `slot` (0..31) — the raw packing behind the named
     /// fields on your effect struct. Bypasses the schema; prefer the fields.
@@ -466,19 +485,34 @@ public struct EffectInput
 
     // The backdrop. Both textures cover the whole window as it was painted
     // before this effect, so any point may be sampled, not only the element's
-    // own area; outside the window they clamp to its edge. Neither holds the
-    // element's own background (a backdrop effect paints beneath it) nor
-    // another backdrop effect drawn in the same group (they never overlap).
-    // The blurred one is a lower-resolution pyramid level: blurred to
+    // own area; outside the window they clamp to its edge. With
+    // `[SkBackdropReach]` they hold only the drawn quad grown by the reach, and
+    // a read beyond it is clamped to that edge. Neither holds the element's
+    // own background (a backdrop effect paints beneath it) nor another
+    // backdrop effect drawn in the same group (they never overlap). The
+    // blurred one is a lower-resolution pyramid level: blurred to
     // `[SkBackdropRadius]`, or the raw snapshot when the effect has none.
     // All four return zero for an effect without `[SkBackdrop]`.
+
+    float2 backdropUv(float2 uv)
+    {
+        float2 at = uv;
+        if (this.backdropBounded)
+        {
+            SkBounds bounds = sk_effect_quads[this.quad].bounds;
+            float reach = sk_effect_quads[this.quad].backdrop_reach;
+            at = clamp(uv, (bounds.origin - reach) / sk_viewport_size,
+                (bounds.origin + bounds.size + reach) / sk_viewport_size);
+        }
+        return at;
+    }
 
     /// The backdrop at a window UV (`input.uv` space), blurred to
     /// `[SkBackdropRadius]` when the effect declares one.
     public float4 backdropAt(float2 uv)
     {
         return this.hasBackdrop
-            ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, uv, 0.0)
+            ? sk_backdrop_input.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
             : float4(0.0, 0.0, 0.0, 0.0);
     }
 
@@ -493,7 +527,7 @@ public struct EffectInput
     public float4 rawBackdropAt(float2 uv)
     {
         return this.hasBackdrop
-            ? sk_backdrop_original.SampleLevel(sk_clamp_sampler, uv, 0.0)
+            ? sk_backdrop_original.SampleLevel(sk_clamp_sampler, this.backdropUv(uv), 0.0)
             : float4(0.0, 0.0, 0.0, 0.0);
     }
 
@@ -861,6 +895,7 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.hasHistory = (q.flags & SK_FLAG_HISTORY) != 0u;
     i.historyPass = history_pass;
     i.quad = id;
+    i.backdropBounded = (q.flags & SK_FLAG_BACKDROP_REACH) != 0u;
     i.bleed = q.bleed;
     i.backdrop = i.backdropAt(uv);
     i.content = i.contentAt(uv);

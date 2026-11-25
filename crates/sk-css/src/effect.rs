@@ -437,7 +437,7 @@ pub(crate) mod tests {
     }
 
     const USER_MANIFEST: &str = r#"{
-      "schema": 11,
+      "schema": 12,
       "kind": "user",
       "effects": [
         {

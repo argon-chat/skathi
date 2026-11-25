@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 11;
+export const SCHEMA = 12;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -96,7 +96,7 @@ function checkWgslBindings(code: string, file: string) {
 /// argument table for every effect, so the renderer binds these and nothing else.
 const METAL_BINDINGS: Array<[at: string, name: string, what: string]> = [
   ["buffer(0)", "GlobalParams", "constant, the 48-byte globals"],
-  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 256 bytes each"],
+  ["buffer(1)", "sk_effect_quads", "device EffectQuad[], 264 bytes each"],
   ["texture(0)", "sk_backdrop_input", "the blurred backdrop"],
   ["texture(2)", "sk_backdrop_original", "the render-target snapshot"],
   ["texture(7)", "sk_content", "the element's content"],
@@ -166,6 +166,8 @@ export type EffectSchema = {
   history: boolean;
   params: ParamSchema[];
   backdropRadiusParam: number | null;
+  /// `[SkBackdropReach]`: how far outside its quad the effect samples the backdrop.
+  backdropReachParam: number | null;
   bleedParam: number | null;
   animatedParam: number | null;
   /// `[SkPointer]`'s first slot: the host writes the pointer there; not a CSS argument.
@@ -508,6 +510,7 @@ const HOST_FILLED_REFUSES = [
   "SkAnimated",
   "SkBleed",
   "SkBackdropRadius",
+  "SkBackdropReach",
 ];
 
 function buildSchema(
@@ -547,6 +550,7 @@ function buildSchema(
   const params: ParamSchema[] = [];
   const fields: Field[] = [];
   let backdropRadiusParam: number | null = null;
+  let backdropReachParam: number | null = null;
   let bleedParam: number | null = null;
   let animatedParam: number | null = null;
   let pointerParam: number | null = null;
@@ -727,11 +731,12 @@ function buildSchema(
       return slot;
     };
     backdropRadiusParam = marker("SkBackdropRadius", backdropRadiusParam, "length");
+    backdropReachParam = marker("SkBackdropReach", backdropReachParam, "length");
     bleedParam = marker("SkBleed", bleedParam, "length");
     animatedParam = marker("SkAnimated", animatedParam, "number");
   }
 
-  if (backdropRadiusParam !== null) backdrop = true;
+  if (backdropRadiusParam !== null || backdropReachParam !== null) backdrop = true;
 
   // Type-directed matching needs a skippable parameter's kind to differ from the next one's, else
   // `ripple(1)` is ambiguous.
@@ -763,6 +768,7 @@ function buildSchema(
       history: attr(structAttrs, "SkHistory") !== undefined,
       params,
       backdropRadiusParam,
+      backdropReachParam,
       bleedParam,
       animatedParam,
       pointerParam,
@@ -1002,6 +1008,7 @@ export function effectFiles(
       generatedSha256: Object.fromEntries(c.outputs.map((o) => [o.target, sha256(o.code)])),
       signature: c.effect.signature,
       backdropRadiusParam: c.effect.backdropRadiusParam,
+      backdropReachParam: c.effect.backdropReachParam,
       bleedParam: c.effect.bleedParam,
       animatedParam: c.effect.animatedParam,
       pointerParam: c.effect.pointerParam,

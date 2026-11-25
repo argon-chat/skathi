@@ -547,6 +547,26 @@ const hot = ref(false);
   --shading: noise(0.4, 2px, 18);
 }`,
       },
+      {
+        title: "Declare how far a backdrop effect reads",
+        lang: "slang",
+        code: `import sk;
+
+[SkEffect("ripple-glass")]
+struct RippleGlass : IEffect
+{
+    // Every read below lands at most \`depth\` outside the element.
+    [SkLength] [SkBackdropReach] [SkDefault("12")] [SkRange(0.0, 48.0)]
+    float depth;
+
+    float4 shade(EffectInput input)
+    {
+        float2 bend = float2(sin(input.px.y * 0.2), cos(input.px.x * 0.2));
+        return input.backdropAtPx(input.px + bend * depth);
+    }
+};`,
+        note: "A `[SkBackdrop]` effect may read the backdrop anywhere, so each frame it is drawn the renderer copies the whole window for it, and blurs the whole window when it has a `[SkBackdropRadius]`. With `[SkBackdropReach]` on a length parameter, only the drawn quad grown by that length is copied and blurred, so the cost follows the element instead of the window. A read beyond the reach returns the backdrop at the edge of that area. The attribute implies `[SkBackdrop]`, and an effect has at most one.",
+      },
     ],
     edgeCases: [
       "Built in are `frost(<strength>, <radius>?, <tint>?)`, `noise(<amount>, <scale>?, <speed>?)` and `glow(<color>?, <radius>, <strength>)`; an app adds its own as `shaders/<name>.slang`.",
