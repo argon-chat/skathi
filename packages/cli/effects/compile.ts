@@ -1001,7 +1001,7 @@ export function effectFiles(
     slang: PIN.slang,
     compiler: `redslangc ${PIN.version}`,
     kind,
-    preludeSha256: sha256(readText(PRELUDE)),
+    preludeSha256: sha256([PRELUDE, ...STD_MODULES.map(([, file]) => file)].map(readText).join("\0")),
     effects: compiled.map((c, index) => ({
       id: index,
       name: c.effect.name,
