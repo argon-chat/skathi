@@ -7,12 +7,14 @@
 use std::ffi::c_void;
 use std::io::Cursor;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use image::codecs::gif::GifDecoder;
 use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
-use image::{AnimationDecoder, ImageDecoder as _, ImageFormat, Limits};
+use image::{
+    AnimationDecoder, ExtendedColorType, ImageDecoder as _, ImageEncoder as _, ImageFormat, Limits,
+};
 use sk_runtime::host;
 use sk_runtime::redjs::ffi::{redjs_protect, redjs_unprotect, RjsAbInfo};
 use sk_runtime::redjs::glue;
@@ -35,14 +37,52 @@ const ON_CHUNK: &str = "skathi.onChunk";
 const ON_FAIL: &str = "skathi.onFail";
 const TRACKS: &str = "skathi.tracks";
 
-const DECODABLE: &[(&str, ImageFormat)] = &[
-    ("image/png", ImageFormat::Png),
-    ("image/jpeg", ImageFormat::Jpeg),
-    ("image/webp", ImageFormat::WebP),
-    ("image/gif", ImageFormat::Gif),
-    ("image/bmp", ImageFormat::Bmp),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Codec {
+    Raster(ImageFormat),
+    Svg,
+}
+
+use Codec::{Raster, Svg};
+
+/// The first type of a codec is the one `ImageDecoder.type` reports; the others are aliases.
+const DECODABLE: &[(&str, Codec)] = &[
+    ("image/png", Raster(ImageFormat::Png)),
+    ("image/jpeg", Raster(ImageFormat::Jpeg)),
+    ("image/webp", Raster(ImageFormat::WebP)),
+    ("image/gif", Raster(ImageFormat::Gif)),
+    ("image/bmp", Raster(ImageFormat::Bmp)),
+    ("image/x-icon", Raster(ImageFormat::Ico)),
+    ("image/vnd.microsoft.icon", Raster(ImageFormat::Ico)),
+    ("image/tiff", Raster(ImageFormat::Tiff)),
+    ("image/x-portable-anymap", Raster(ImageFormat::Pnm)),
+    ("image/x-portable-bitmap", Raster(ImageFormat::Pnm)),
+    ("image/x-portable-graymap", Raster(ImageFormat::Pnm)),
+    ("image/x-portable-pixmap", Raster(ImageFormat::Pnm)),
+    ("image/svg+xml", Svg),
+    ("image/qoi", Raster(ImageFormat::Qoi)),
+    ("image/x-tga", Raster(ImageFormat::Tga)),
+    ("image/x-targa", Raster(ImageFormat::Tga)),
+    ("image/vnd.radiance", Raster(ImageFormat::Hdr)),
+    ("image/x-farbfeld", Raster(ImageFormat::Farbfeld)),
+    ("image/vnd-ms.dds", Raster(ImageFormat::Dds)),
+    ("image/vnd.ms-dds", Raster(ImageFormat::Dds)),
 ];
-const ENCODABLE: &[&str] = &["image/png", "image/jpeg", "image/webp"];
+const ENCODABLE: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/x-icon",
+    "image/bmp",
+    "image/qoi",
+    "image/tiff",
+    "image/x-tga",
+    "image/x-portable-anymap",
+    "image/x-farbfeld",
+    "image/vnd.radiance",
+];
+const ICO_SIDE: u32 = 256;
 
 #[derive(Debug)]
 enum Failure {
@@ -62,9 +102,16 @@ struct Pixels {
     rgba: Vec<u8>,
 }
 
-fn format_of(mime: &str) -> Option<ImageFormat> {
+fn codec_of(mime: &str) -> Option<Codec> {
     let mime = mime.trim().to_ascii_lowercase();
-    DECODABLE.iter().find(|(m, _)| *m == mime).map(|(_, f)| *f)
+    DECODABLE.iter().find(|(m, _)| *m == mime).map(|(_, c)| *c)
+}
+
+fn canonical(codec: Codec) -> &'static str {
+    DECODABLE
+        .iter()
+        .find(|(_, c)| *c == codec)
+        .map_or("", |(m, _)| *m)
 }
 
 fn limits() -> Limits {
@@ -183,13 +230,59 @@ fn still(bytes: &[u8], format: ImageFormat, index: usize) -> Result<Pixels, Fail
     })
 }
 
+/// The renderer `<img>` draws an SVG with, so text finds the same fonts.
+static SVG_RENDERER: LazyLock<gpui::SvgRenderer> =
+    LazyLock::new(|| gpui::SvgRenderer::new(Arc::new(crate::payload::GpuiAssets)));
+
+/// The SVG's own size in pixels, read as `<img>` reads it.
+fn svg_size(bytes: &[u8]) -> Result<(u32, u32), Failure> {
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default())
+        .map_err(|e| Failure::Encoding(format!("the SVG could not be read: {e}")))?;
+    let size = tree.size();
+    let size = (size.width().round() as u32, size.height().round() as u32);
+    admit(size)?;
+    Ok(size)
+}
+
+fn svg(bytes: &[u8], index: usize, max_side: Option<u32>) -> Result<Pixels, Failure> {
+    if index != 0 {
+        return Err(no_frame(index, 1));
+    }
+    let (width, height) = svg_size(bytes)?;
+    let (width, height) = max_side.map_or((width, height), |side| fitted(width, height, side));
+    let failed = |e: usvg::Error| Failure::Encoding(format!("the SVG could not be drawn: {e}"));
+    let parsed = SVG_RENDERER.parse_svg(bytes).map_err(failed)?;
+    let size = gpui::size(
+        gpui::DevicePixels(width as i32),
+        gpui::DevicePixels(height as i32),
+    );
+    let image = SVG_RENDERER
+        .render_parsed(&parsed, gpui::SvgSize::ExactSize(size))
+        .map_err(failed)?;
+    let drawn = image.size(0);
+    let mut rgba = image.as_bytes(0).unwrap_or_default().to_vec();
+    // gpui hands back straight BGRA.
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Ok(Pixels {
+        width: drawn.width.0 as u32,
+        height: drawn.height.0 as u32,
+        rgba,
+    })
+}
+
 /// Frame `index` of the file, upright by its EXIF orientation, no larger than `max_side` a side.
 fn decode(
     bytes: &[u8],
-    format: ImageFormat,
+    codec: Codec,
     index: usize,
     max_side: Option<u32>,
 ) -> Result<Pixels, Failure> {
+    let format = match codec {
+        Raster(format) => format,
+        Svg => return svg(bytes, index, max_side),
+    };
     let pixels = match animation(bytes, format)? {
         Some((frames, canvas)) => match walk(frames, canvas, Some(index))? {
             Walk::Frame(pixels) => pixels,
@@ -204,7 +297,11 @@ fn decode(
 }
 
 /// The number of frames, and whether the file is an animation of more than one.
-fn probe(bytes: &[u8], format: ImageFormat) -> Result<(usize, bool), Failure> {
+fn probe(bytes: &[u8], codec: Codec) -> Result<(usize, bool), Failure> {
+    let format = match codec {
+        Raster(format) => format,
+        Svg => return svg_size(bytes).map(|_| (1, false)),
+    };
     match animation(bytes, format)? {
         Some((frames, canvas)) => match walk(frames, canvas, None)? {
             Walk::Count(0) => Err(Failure::Encoding("the animation has no frames".into())),
@@ -220,13 +317,21 @@ fn probe(bytes: &[u8], format: ImageFormat) -> Result<(usize, bool), Failure> {
     }
 }
 
-fn fit(pixels: Pixels, side: u32) -> Pixels {
-    let longest = pixels.width.max(pixels.height);
+/// `width` x `height` made no larger than `side` a side, never enlarged.
+fn fitted(width: u32, height: u32, side: u32) -> (u32, u32) {
+    let longest = width.max(height);
     if longest <= side {
-        return pixels;
+        return (width, height);
     }
     let scale = |n: u32| ((n as f64 * side as f64 / longest as f64).round() as u32).clamp(1, side);
-    let (width, height) = (scale(pixels.width), scale(pixels.height));
+    (scale(width), scale(height))
+}
+
+fn fit(pixels: Pixels, side: u32) -> Pixels {
+    let (width, height) = fitted(pixels.width, pixels.height, side);
+    if (width, height) == (pixels.width, pixels.height) {
+        return pixels;
+    }
     Pixels {
         rgba: sk_resample::downscale(
             &pixels.rgba,
@@ -248,6 +353,15 @@ fn encode(
     mime: &'static str,
     quality: Option<f64>,
 ) -> Result<Vec<u8>, Failure> {
+    match codec_of(mime) {
+        Some(Raster(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP)) => {}
+        Some(Raster(format)) => return encode_still(rgba, width, height, format),
+        _ => {
+            return Err(Failure::Encoding(format!(
+                "the image could not be encoded as {mime}"
+            )))
+        }
+    }
     let quality = if mime == "image/jpeg" { quality } else { None };
     let (made, bytes) =
         sk_runtime::redjs::webapi::canvas2d::encode::encode(rgba, width, height, mime, quality);
@@ -257,6 +371,75 @@ fn encode(
         )));
     }
     Ok(bytes)
+}
+
+/// One image in a type the canvas does not write, from straight RGBA8.
+fn encode_still(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    format: ImageFormat,
+) -> Result<Vec<u8>, Failure> {
+    let mut out = Vec::new();
+    let rgba8 = ExtendedColorType::Rgba8;
+    match format {
+        ImageFormat::Gif => {
+            image::codecs::gif::GifEncoder::new(&mut out).encode(rgba, width, height, rgba8)?
+        }
+        ImageFormat::Ico => {
+            if width > ICO_SIDE || height > ICO_SIDE {
+                return Err(Failure::Encoding(format!(
+                    "the image is {width}x{height}; image/x-icon holds images of up to {ICO_SIDE} pixels a side, so resize it first"
+                )));
+            }
+            image::codecs::ico::IcoEncoder::new(&mut out).write_image(rgba, width, height, rgba8)?
+        }
+        ImageFormat::Bmp => {
+            image::codecs::bmp::BmpEncoder::new(&mut out).write_image(rgba, width, height, rgba8)?
+        }
+        ImageFormat::Qoi => {
+            image::codecs::qoi::QoiEncoder::new(&mut out).write_image(rgba, width, height, rgba8)?
+        }
+        ImageFormat::Tiff => image::codecs::tiff::TiffEncoder::new(Cursor::new(&mut out))
+            .write_image(rgba, width, height, rgba8)?,
+        ImageFormat::Tga => {
+            image::codecs::tga::TgaEncoder::new(&mut out).write_image(rgba, width, height, rgba8)?
+        }
+        ImageFormat::Pnm => image::codecs::pnm::PnmEncoder::new(&mut out)
+            .with_subtype(image::codecs::pnm::PnmSubtype::ArbitraryMap)
+            .write_image(rgba, width, height, rgba8)?,
+        ImageFormat::Farbfeld => {
+            let wide: Vec<u8> = rgba
+                .iter()
+                .flat_map(|&c| (c as u16 * 257).to_ne_bytes())
+                .collect();
+            image::codecs::farbfeld::FarbfeldEncoder::new(&mut out).write_image(
+                &wide,
+                width,
+                height,
+                ExtendedColorType::Rgba16,
+            )?
+        }
+        ImageFormat::Hdr => {
+            let rgb: Vec<u8> = rgba
+                .chunks_exact(4)
+                .flat_map(|p| &p[..3])
+                .flat_map(|&c| (c as f32 / 255.0).to_ne_bytes())
+                .collect();
+            image::codecs::hdr::HdrEncoder::new(&mut out).write_image(
+                &rgb,
+                width,
+                height,
+                ExtendedColorType::Rgb32F,
+            )?
+        }
+        _ => {
+            return Err(Failure::Encoding(format!(
+                "the image could not be encoded as {format:?}"
+            )))
+        }
+    }
+    Ok(out)
 }
 
 type Finish = Box<dyn FnOnce() + Send>;
@@ -526,7 +709,7 @@ enum Want {
 
 struct DecoderState {
     mime: &'static str,
-    format: ImageFormat,
+    format: Codec,
     data: Data,
     /// What was asked for before the stream ended.
     waiting: Vec<(Want, host::Settler)>,
@@ -548,7 +731,7 @@ unsafe fn submit(
     g: *mut c_void,
     this: u64,
     data: Arc<[u8]>,
-    format: ImageFormat,
+    format: Codec,
     want: Want,
     settler: host::Settler,
 ) {
@@ -737,10 +920,10 @@ std_fn!(fn decoder_new(g, args) {
     }
     let data = get(g, init, "data");
     let mime = string(g, get(g, init, "type"), "ImageDecoder: type")?;
-    let Some(format) = format_of(&mime) else {
+    let Some(format) = codec_of(&mime) else {
         return dom(g, "NotSupportedError", &format!("ImageDecoder: {mime:?} is not a type this host decodes"));
     };
-    let mime = DECODABLE.iter().find(|(_, f)| *f == format).map_or("", |(m, _)| *m);
+    let mime = canonical(format);
     let stream = is_cell(data) && kind(g, get(g, data, "getReader")) == KIND_FUNCTION;
     let bytes = if stream {
         Data::Streaming(Vec::new())
@@ -832,13 +1015,13 @@ std_fn!(fn decoder_is_type_supported(g, args) {
     let v = args.arg(0).0;
     Ok(promise_of(g, || {
         let mime = string(g, v, "ImageDecoder.isTypeSupported: the type")?;
-        Ok(host::resolved(g, enc_bool(format_of(&mime).is_some())))
+        Ok(host::resolved(g, enc_bool(codec_of(&mime).is_some())))
     }))
 });
 
 fn encodable(mime: &str) -> Option<&'static str> {
-    let mime = mime.trim().to_ascii_lowercase();
-    ENCODABLE.iter().copied().find(|m| *m == mime)
+    let mime = canonical(codec_of(mime)?);
+    ENCODABLE.contains(&mime).then_some(mime)
 }
 
 std_fn!(fn encoder_is_type_supported(g, args) {
@@ -1026,7 +1209,7 @@ mod tests {
     fn each_format_decodes_to_its_pixels() {
         let img = two_pixels();
         for format in [ImageFormat::Png, ImageFormat::WebP] {
-            let p = decode(&file(&img, format), format, 0, None).unwrap();
+            let p = decode(&file(&img, format), Raster(format), 0, None).unwrap();
             assert_eq!((p.width, p.height), (2, 1), "{format:?}");
             assert_eq!(
                 p.rgba,
@@ -1044,11 +1227,11 @@ mod tests {
         let rgb = image::DynamicImage::ImageRgba8(opaque.clone()).into_rgb8();
         let mut bmp = Cursor::new(Vec::new());
         rgb.write_to(&mut bmp, ImageFormat::Bmp).unwrap();
-        let p = decode(bmp.get_ref(), ImageFormat::Bmp, 0, None).unwrap();
+        let p = decode(bmp.get_ref(), Raster(ImageFormat::Bmp), 0, None).unwrap();
         assert_eq!(p.rgba, opaque.as_raw().as_slice());
         let mut jpeg = Cursor::new(Vec::new());
         rgb.write_to(&mut jpeg, ImageFormat::Jpeg).unwrap();
-        let p = decode(jpeg.get_ref(), ImageFormat::Jpeg, 0, None).unwrap();
+        let p = decode(jpeg.get_ref(), Raster(ImageFormat::Jpeg), 0, None).unwrap();
         assert_eq!((p.width, p.height), (32, 16));
         assert!(
             near(&p.rgba[..4], &[255, 0, 0, 255], 24),
@@ -1081,7 +1264,7 @@ mod tests {
         turned.extend_from_slice(b"Exif\0\0");
         turned.extend_from_slice(&tiff);
         turned.extend_from_slice(&jpeg[2..]);
-        let p = decode(&turned, ImageFormat::Jpeg, 0, None).unwrap();
+        let p = decode(&turned, Raster(ImageFormat::Jpeg), 0, None).unwrap();
         assert_eq!((p.width, p.height), (16, 32));
         let at = |x: usize, y: usize| &p.rgba[(y * 16 + x) * 4..(y * 16 + x) * 4 + 4];
         assert!(
@@ -1099,8 +1282,8 @@ mod tests {
     #[test]
     fn an_animation_has_its_frames_counted_and_decoded_one_by_one() {
         let bytes = gif(&[[255, 0, 0, 255], [0, 0, 255, 255], [0, 255, 0, 255]]);
-        assert_eq!(probe(&bytes, ImageFormat::Gif).unwrap(), (3, true));
-        let second = decode(&bytes, ImageFormat::Gif, 1, None).unwrap();
+        assert_eq!(probe(&bytes, Raster(ImageFormat::Gif)).unwrap(), (3, true));
+        let second = decode(&bytes, Raster(ImageFormat::Gif), 1, None).unwrap();
         assert_eq!((second.width, second.height), (4, 2));
         assert!(
             near(&second.rgba[..4], &[0, 0, 255, 255], 8),
@@ -1108,17 +1291,17 @@ mod tests {
             &second.rgba[..4]
         );
         assert!(matches!(
-            decode(&bytes, ImageFormat::Gif, 3, None),
+            decode(&bytes, Raster(ImageFormat::Gif), 3, None),
             Err(Failure::Range(_))
         ));
         let still = file(&two_pixels(), ImageFormat::Png);
-        assert_eq!(probe(&still, ImageFormat::Png).unwrap(), (1, false));
+        assert_eq!(probe(&still, Raster(ImageFormat::Png)).unwrap(), (1, false));
         assert!(matches!(
-            decode(&still, ImageFormat::Png, 1, None),
+            decode(&still, Raster(ImageFormat::Png), 1, None),
             Err(Failure::Range(_))
         ));
         assert_eq!(
-            probe(&gif(&[[1, 2, 3, 255]]), ImageFormat::Gif).unwrap(),
+            probe(&gif(&[[1, 2, 3, 255]]), Raster(ImageFormat::Gif)).unwrap(),
             (1, false)
         );
     }
@@ -1138,6 +1321,119 @@ mod tests {
         out
     }
 
+    /// An ICO of one entry holding `image`.
+    fn ico(image: &[u8]) -> Vec<u8> {
+        let mut out = vec![0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0];
+        out.extend_from_slice(&(image.len() as u32).to_le_bytes());
+        out.extend_from_slice(&22u32.to_le_bytes());
+        out.extend_from_slice(image);
+        out
+    }
+
+    /// A DXT1 DDS of `width` x `height` followed by `blocks`.
+    fn dds(width: u32, height: u32, blocks: &[u8]) -> Vec<u8> {
+        let mut out = b"DDS ".to_vec();
+        for word in [124, 0x1007, height, width, 0, 0, 0] {
+            out.extend_from_slice(&u32::to_le_bytes(word));
+        }
+        out.extend_from_slice(&[0; 44]);
+        out.extend_from_slice(&32u32.to_le_bytes());
+        out.extend_from_slice(&4u32.to_le_bytes());
+        out.extend_from_slice(b"DXT1");
+        out.extend_from_slice(&[0; 20]);
+        out.extend_from_slice(&0x1000u32.to_le_bytes());
+        out.extend_from_slice(&[0; 16]);
+        out.extend_from_slice(blocks);
+        out
+    }
+
+    /// A little-endian RGB TIFF whose one IFD says `width` x `height`, with no pixel data.
+    fn tiff_header(width: u32, height: u32) -> Vec<u8> {
+        let entries: [(u16, u16, u32); 9] = [
+            (256, 4, width),
+            (257, 4, height),
+            (258, 3, 8),
+            (259, 3, 1),
+            (262, 3, 2),
+            (273, 4, 8),
+            (277, 3, 3),
+            (278, 4, height),
+            (279, 4, 0),
+        ];
+        let mut out = b"II*\0".to_vec();
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, kind, value) in entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&1u32.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&[0; 4]);
+        out
+    }
+
+    #[test]
+    fn the_other_types_round_trip_or_decode_to_their_pixels() {
+        let (red, blue, clear) = ([255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 0, 0]);
+        let img = RgbaImage::from_fn(2, 2, |x, y| {
+            Rgba([red, blue, clear, TRANSLUCENT][(y * 2 + x) as usize])
+        });
+        let opaque = |p: [u8; 4]| [p[0], p[1], p[2], 255];
+        let binary = |p: [u8; 4]| if p[3] == 0 { p } else { opaque(p) };
+        let same = |p: [u8; 4]| p;
+        let round_trips: [(&str, &dyn Fn([u8; 4]) -> [u8; 4], u8); 9] = [
+            ("image/gif", &binary, 0),
+            ("image/x-icon", &same, 0),
+            ("image/bmp", &same, 0),
+            ("image/qoi", &same, 0),
+            ("image/tiff", &same, 0),
+            ("image/x-tga", &same, 0),
+            ("image/x-portable-anymap", &same, 0),
+            ("image/x-farbfeld", &same, 0),
+            ("image/vnd.radiance", &opaque, 1),
+        ];
+        for (mime, expect, by) in round_trips {
+            let encoded = encode(img.as_raw(), 2, 2, encodable(mime).unwrap(), Some(0.1)).unwrap();
+            let p = decode(&encoded, codec_of(mime).unwrap(), 0, None).unwrap();
+            let want: Vec<u8> = img.pixels().flat_map(|p| expect(p.0)).collect();
+            assert_eq!((p.width, p.height), (2, 2), "{mime}");
+            assert!(near(&p.rgba, &want, by), "{mime}: {:?}", p.rgba);
+        }
+        assert!(matches!(
+            encode(&vec![0; 257 * 4], 257, 1, "image/x-icon", None),
+            Err(Failure::Encoding(_))
+        ));
+
+        let mut cur = encode(img.as_raw(), 2, 2, "image/x-icon", None).unwrap();
+        cur[2] = 2;
+        cur[10..14].copy_from_slice(&[1, 0, 1, 0]);
+        let p = decode(&cur, codec_of("image/x-icon").unwrap(), 0, None).unwrap();
+        assert_eq!(p.rgba, img.as_raw().as_slice(), "a cursor reads as an icon");
+
+        let only_decoded: [(&str, Vec<u8>, &[u8]); 3] = [
+            ("image/x-portable-pixmap", [&b"P6\n2 1\n255\n"[..], &[255, 0, 0, 0, 0, 255]].concat(), &[255, 0, 0, 255, 0, 0, 255, 255]),
+            // Colour 0 red, colour 1 blue; the first row reads 0, 1, 0, 1.
+            ("image/vnd.ms-dds", dds(4, 4, &[0x00, 0xF8, 0x1F, 0x00, 0x44, 0, 0, 0]), &[255, 0, 0, 255, 0, 0, 255, 255]),
+            (
+                "image/svg+xml",
+                br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="1" height="1" fill="#f00"/><rect x="1" width="1" height="1" fill="#00f"/></svg>"##.to_vec(),
+                &[255, 0, 0, 255, 0, 0, 255, 255],
+            ),
+        ];
+        for (mime, bytes, first) in only_decoded {
+            let codec = codec_of(mime).unwrap();
+            let p = decode(&bytes, codec, 0, None).unwrap();
+            assert_eq!(&p.rgba[..8], first, "{mime}");
+            assert_eq!(probe(&bytes, codec).unwrap(), (1, false), "{mime}");
+        }
+
+        let wide = br##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="200" height="200" fill="#f00"/><rect x="200" width="200" height="200" fill="#00f"/></svg>"##;
+        let p = decode(wide, Svg, 0, Some(10)).unwrap();
+        assert_eq!((p.width, p.height, p.rgba.len()), (10, 5, 200));
+        assert_eq!((&p.rgba[..4], &p.rgba[36..40]), (&red[..], &blue[..]));
+    }
+
     #[test]
     fn hostile_files_fail_without_allocating_their_claimed_size() {
         for (w, h) in [
@@ -1145,19 +1441,70 @@ mod tests {
             (12000, 12000),
             (0x7fff_ffff, 0x7fff_ffff),
         ] {
-            let header = png_header(w, h);
-            assert!(
-                matches!(
-                    decode(&header, ImageFormat::Png, 0, None),
-                    Err(Failure::Encoding(_))
+            let (w16, h16) = (w.min(0xffff) as u16, h.min(0xffff) as u16);
+            let headers = [
+                ("image/png", png_header(w, h)),
+                ("image/x-icon", ico(&png_header(w, h))),
+                (
+                    "image/qoi",
+                    [&b"qoif"[..], &w.to_be_bytes(), &h.to_be_bytes(), &[4, 0]].concat(),
                 ),
-                "{w}x{h}"
-            );
-            assert!(
-                matches!(probe(&header, ImageFormat::Png), Err(Failure::Encoding(_))),
-                "{w}x{h}"
-            );
+                (
+                    "image/x-farbfeld",
+                    [&b"farbfeld"[..], &w.to_be_bytes(), &h.to_be_bytes()].concat(),
+                ),
+                (
+                    "image/x-tga",
+                    [
+                        &[0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
+                        &w16.to_le_bytes(),
+                        &h16.to_le_bytes(),
+                        &[32, 8],
+                    ]
+                    .concat(),
+                ),
+                (
+                    "image/x-portable-anymap",
+                    format!("P6\n{w} {h}\n255\n").into_bytes(),
+                ),
+                (
+                    "image/vnd.radiance",
+                    format!("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {h} +X {w}\n").into_bytes(),
+                ),
+                (
+                    "image/vnd-ms.dds",
+                    dds(w.next_multiple_of(4), h.next_multiple_of(4), &[]),
+                ),
+                ("image/tiff", tiff_header(w, h)),
+                (
+                    "image/svg+xml",
+                    format!(
+                        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"/>"#
+                    )
+                    .into_bytes(),
+                ),
+            ];
+            for (mime, header) in headers {
+                let codec = codec_of(mime).unwrap();
+                assert!(
+                    matches!(decode(&header, codec, 0, None), Err(Failure::Encoding(_))),
+                    "{mime} {w}x{h}"
+                );
+                assert!(
+                    matches!(probe(&header, codec), Err(Failure::Encoding(_))),
+                    "{mime} {w}x{h}"
+                );
+            }
         }
+        assert!(matches!(
+            decode(
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="4"/>"#,
+                Svg,
+                0,
+                None
+            ),
+            Err(Failure::Encoding(_))
+        ));
         let whole = file(
             &RgbaImage::from_pixel(64, 64, Rgba([9, 9, 9, 255])),
             ImageFormat::Png,
@@ -1165,7 +1512,7 @@ mod tests {
         for cut in [8, 40, whole.len() / 2, whole.len() - 13] {
             assert!(
                 matches!(
-                    decode(&whole[..cut], ImageFormat::Png, 0, None),
+                    decode(&whole[..cut], Raster(ImageFormat::Png), 0, None),
                     Err(Failure::Encoding(_))
                 ),
                 "cut at {cut}"
@@ -1174,18 +1521,18 @@ mod tests {
         let animation = gif(&[[255, 0, 0, 255], [0, 0, 255, 255]]);
         assert!(decode(
             &animation[..animation.len() - 20],
-            ImageFormat::Gif,
+            Raster(ImageFormat::Gif),
             1,
             None
         )
         .is_err());
         assert!(matches!(
-            decode(b"not an image at all", ImageFormat::WebP, 0, None),
+            decode(b"not an image at all", Raster(ImageFormat::WebP), 0, None),
             Err(Failure::Encoding(_))
         ));
         assert!(
             matches!(
-                decode(&whole, ImageFormat::Jpeg, 0, None),
+                decode(&whole, Raster(ImageFormat::Jpeg), 0, None),
                 Err(Failure::Encoding(_))
             ),
             "the declared type decides"
@@ -1195,12 +1542,18 @@ mod tests {
     #[test]
     fn max_side_and_resizes_keep_the_shape_and_the_colour() {
         let big = RgbaImage::from_pixel(40, 20, Rgba(TRANSLUCENT));
-        let p = decode(&file(&big, ImageFormat::Png), ImageFormat::Png, 0, Some(10)).unwrap();
+        let p = decode(
+            &file(&big, ImageFormat::Png),
+            Raster(ImageFormat::Png),
+            0,
+            Some(10),
+        )
+        .unwrap();
         assert_eq!((p.width, p.height, p.rgba.len()), (10, 5, 200));
         assert!(near(&p.rgba[..4], &TRANSLUCENT, 1), "{:?}", &p.rgba[..4]);
         let small = decode(
             &file(&big, ImageFormat::Png),
-            ImageFormat::Png,
+            Raster(ImageFormat::Png),
             0,
             Some(100),
         )
@@ -1222,19 +1575,24 @@ mod tests {
         let img = two_pixels();
         let png = encode(img.as_raw(), 2, 1, "image/png", None).unwrap();
         assert_eq!(
-            decode(&png, ImageFormat::Png, 0, None).unwrap().rgba,
+            decode(&png, Raster(ImageFormat::Png), 0, None)
+                .unwrap()
+                .rgba,
             img.as_raw().as_slice()
         );
         let webp = encode(img.as_raw(), 2, 1, "image/webp", Some(0.1)).unwrap();
         assert_eq!(
-            decode(&webp, ImageFormat::WebP, 0, None).unwrap().rgba,
+            decode(&webp, Raster(ImageFormat::WebP), 0, None)
+                .unwrap()
+                .rgba,
             img.as_raw().as_slice(),
             "lossless"
         );
         let jpeg = encode(img.as_raw(), 2, 1, "image/jpeg", Some(0.9)).unwrap();
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
-        assert!(encodable("image/gif").is_none() && encodable("image/bmp").is_none());
+        assert!(encodable("image/svg+xml").is_none() && encodable("image/vnd.ms-dds").is_none());
         assert_eq!(encodable(" IMAGE/PNG "), Some("image/png"));
+        assert_eq!(encodable("image/x-targa"), Some("image/x-tga"));
     }
 
     #[test]
@@ -1293,7 +1651,7 @@ mod tests {
                     "InvalidStateError"
                 );
                 assert_eq!(
-                    eval("(() => { try { new __sk_std.image.ImageDecoder({ data: new Uint8Array(1), type: 'image/tiff' }); return 'ok'; } catch (e) { return e.name; } })()"),
+                    eval("(() => { try { new __sk_std.image.ImageDecoder({ data: new Uint8Array(1), type: 'image/avif' }); return 'ok'; } catch (e) { return e.name; } })()"),
                     "NotSupportedError"
                 );
                 assert_eq!(eval("typeof Image === 'function' && Image !== __sk_std.image.Image ? 'html' : 'lost'"), "html");

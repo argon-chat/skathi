@@ -2,7 +2,28 @@
 
 import type { NativeBuffer } from "./memory";
 
-export type ImageType = "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "image/bmp";
+/** What `ImageEncoder` writes; an alias is answered with the first type of its group. */
+export type EncodableImageType =
+  | "image/png"
+  | "image/jpeg"
+  | "image/webp"
+  | "image/gif"
+  | "image/bmp"
+  | "image/x-icon"
+  | "image/vnd.microsoft.icon"
+  | "image/tiff"
+  | "image/x-portable-anymap"
+  | "image/x-portable-bitmap"
+  | "image/x-portable-graymap"
+  | "image/x-portable-pixmap"
+  | "image/qoi"
+  | "image/x-tga"
+  | "image/x-targa"
+  | "image/vnd.radiance"
+  | "image/x-farbfeld";
+
+/** What `ImageDecoder` reads: everything `ImageEncoder` writes, plus SVG and DDS. */
+export type ImageType = EncodableImageType | "image/svg+xml" | "image/vnd-ms.dds" | "image/vnd.ms-dds";
 
 /** Decoded pixels: straight RGBA8 in native memory, `width × height × 4` bytes. */
 export interface Image {
@@ -71,8 +92,8 @@ export interface ImageDecoderConstructor {
 
 export interface ImageEncoderStatics {
   readonly prototype: object;
-  /** The file's bytes. PNG, JPEG (`quality` 0 to 1, 0.92 by default) and lossless WebP. */
-  encode(image: Image | ImageBitmap, options: { type: ImageType; quality?: number }): Promise<Uint8Array>;
+  /** The file's bytes. `quality` (0 to 1, 0.92 by default) is used by JPEG only; WebP is lossless. */
+  encode(image: Image | ImageBitmap, options: { type: EncodableImageType; quality?: number }): Promise<Uint8Array>;
   isTypeSupported(type: string): boolean;
 }
 

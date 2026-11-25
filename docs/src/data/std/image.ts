@@ -83,7 +83,7 @@ const [r, g, b, a] = image.pixels.subarray(at, at + 4);`,
     name: "ImageDecoder",
     kind: "class",
     summary:
-      "Decodes PNG, JPEG, WebP, GIF and BMP files on worker threads, frame by frame, in the shape of WebCodecs' `ImageDecoder`.",
+      "Decodes PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, SVG and more on worker threads, frame by frame, in the shape of WebCodecs' `ImageDecoder`.",
     syntax: `${importLine("skathi:image", "ImageDecoder")}
 
 new ImageDecoder(init: { data: BufferSource | NativeBuffer | ReadableStream<Uint8Array>; type: string })
@@ -105,7 +105,7 @@ decoder.close(): void`,
         name: "init.type",
         type: "string",
         description:
-          "The file's MIME type, which picks the decoder: `image/png`, `image/jpeg`, `image/webp`, `image/gif` or `image/bmp`. The bytes are not sniffed.",
+          "The file's MIME type, which picks the decoder: one of the types below, or an alias listed with it. The bytes are not sniffed.",
       },
       {
         name: "options.frameIndex",
@@ -128,6 +128,35 @@ decoder.close(): void`,
       { value: "image/webp", status: OK, note: "Lossy, lossless and animated." },
       { value: "image/gif", status: OK, note: "Every frame, composited onto the canvas as a browser shows it." },
       { value: "image/bmp", status: OK },
+      {
+        value: "image/x-icon",
+        status: OK,
+        note: "Alias `image/vnd.microsoft.icon`. One image of the icon: the one with the most bits per pixel, then the largest; of equals, the last listed. A `.cur` cursor reads the same way.",
+      },
+      { value: "image/tiff", status: OK, note: "The first page. 16-bit samples are reduced to 8 bits." },
+      {
+        value: "image/x-portable-anymap",
+        status: OK,
+        note: "Aliases `image/x-portable-bitmap`, `image/x-portable-graymap` and `image/x-portable-pixmap`: PBM, PGM, PPM and PAM, binary or text.",
+      },
+      {
+        value: "image/svg+xml",
+        status: OK,
+        note: "Drawn at the SVG's own `width` and `height` (its `viewBox`, or 100 × 100, without them), or straight at the smaller `maxSide` size, and at most 8192 pixels a side. Text is drawn in the system fonts, as `<img>` draws it. One frame; animation is not run.",
+      },
+      { value: "image/qoi", status: OK },
+      { value: "image/x-tga", status: OK, note: "Alias `image/x-targa`." },
+      {
+        value: "image/vnd.radiance",
+        status: OK,
+        note: "Radiance HDR. Values are scaled 0 to 1 onto 0 to 255 with no tone mapping: anything brighter than 1 is clipped to white.",
+      },
+      { value: "image/x-farbfeld", status: OK, note: "16-bit samples are reduced to 8 bits." },
+      {
+        value: "image/vnd-ms.dds",
+        status: OK,
+        note: "Alias `image/vnd.ms-dds`. DXT1, DXT3 and DXT5 (BC1 to BC3) textures whose sides are multiples of 4; the top mip level only.",
+      },
       { value: "image/avif", status: NO, note: "Not decoded: `isTypeSupported()` resolves `false`." },
       {
         value: "tracks",
@@ -156,7 +185,7 @@ decoder.close(): void`,
       SAME_EVERYWHERE,
     ],
     edgeCases: [
-      "The constructor throws a `TypeError` without an init object, a type or data, or for empty data; `NotSupportedError` for a type outside the five; a `RangeError` for more than 256 MiB of bytes; and `InvalidStateError` for a freed `NativeBuffer`.",
+      "The constructor throws a `TypeError` without an init object, a type or data, or for empty data; `NotSupportedError` for a type not listed above; a `RangeError` for more than 256 MiB of bytes; and `InvalidStateError` for a freed `NativeBuffer`.",
       "`decode()` rejects with `EncodingError` for a truncated or corrupt file, one that is not of its declared type, or one over the limits; with a `RangeError` for a `frameIndex` past the last frame or a `maxSide` of 0; with the stream's own error if the stream fails; and with `InvalidStateError` after `close()`.",
     ],
     examples: [
@@ -181,17 +210,18 @@ decoder.close();`,
     slug: "image-encoder",
     name: "ImageEncoder",
     kind: "class",
-    summary: "Encodes an `Image` or an `ImageBitmap` to a PNG, JPEG or WebP file on a worker thread.",
+    summary:
+      "Encodes an `Image` or an `ImageBitmap` to a PNG, JPEG, WebP, GIF, ICO, TIFF or other image file on a worker thread.",
     syntax: `${importLine("skathi:image", "ImageEncoder")}
 
-static ImageEncoder.encode(image: Image | ImageBitmap, options: { type: ImageType; quality?: number }): Promise<Uint8Array>
+static ImageEncoder.encode(image: Image | ImageBitmap, options: { type: EncodableImageType; quality?: number }): Promise<Uint8Array>
 static ImageEncoder.isTypeSupported(type: string): boolean`,
     params: [
       { name: "image", type: "Image | ImageBitmap", description: "The pixels to write." },
       {
         name: "options.type",
-        type: "ImageType",
-        description: "`image/png`, `image/jpeg` or `image/webp`.",
+        type: "EncodableImageType",
+        description: "One of the types below. The aliases `ImageDecoder` takes work here too and write the same file.",
       },
       {
         name: "options.quality",
@@ -209,18 +239,48 @@ static ImageEncoder.isTypeSupported(type: string): boolean`,
         note: "No alpha: translucent pixels are composited onto black first, as `canvas.toBlob()` does.",
       },
       { value: "image/webp", status: OK, note: "Lossless only, with alpha; `quality` is ignored." },
-      { value: "image/gif", status: NO, note: "Decoded but not encoded: `encode()` rejects with `NotSupportedError`." },
-      { value: "image/bmp", status: NO, note: "Decoded but not encoded." },
+      {
+        value: "image/gif",
+        status: OK,
+        note: "One frame. Up to 256 colours are kept exactly; more are reduced to a palette of 256. Alpha is all or nothing: a pixel with any opacity becomes opaque.",
+      },
+      {
+        value: "image/x-icon",
+        status: OK,
+        note: "One image, with alpha, up to 256 pixels a side; a larger one rejects with `EncodingError`, so resize it first.",
+      },
+      { value: "image/bmp", status: OK, note: "32 bits per pixel, with alpha." },
+      { value: "image/qoi", status: OK, note: "Lossless, with alpha." },
+      { value: "image/tiff", status: OK, note: "Uncompressed, with alpha." },
+      { value: "image/x-tga", status: OK, note: "With alpha." },
+      {
+        value: "image/x-portable-anymap",
+        status: OK,
+        note: "A binary PAM (`P7`, `RGB_ALPHA`), which keeps alpha; PPM has none. Readers that take only PBM, PGM and PPM do not open it.",
+      },
+      { value: "image/x-farbfeld", status: OK, note: "With alpha; each 8-bit sample is widened to 16 bits." },
+      {
+        value: "image/vnd.radiance",
+        status: OK,
+        note: "No alpha, which is dropped. The 8-bit values are written as 0 to 1, with no conversion to linear light, so the file holds nothing brighter than white.",
+      },
+      {
+        value: "image/svg+xml",
+        status: NO,
+        note: "Decoded but not encoded: `encode()` rejects with `NotSupportedError`.",
+      },
+      { value: "image/vnd-ms.dds", status: NO, note: "Decoded but not encoded." },
     ],
     notes: [
-      "The encoder is the one `canvas.toBlob()` and `OffscreenCanvas.convertToBlob()` use, run on a worker thread and without a canvas.",
+      "PNG, JPEG and WebP use the encoder `canvas.toBlob()` and `OffscreenCanvas.convertToBlob()` use, run on a worker thread and without a canvas.",
+      "Each type writes a single image: an animated GIF or an icon of several sizes is not made here.",
       "The file comes back as a `Uint8Array` over native memory, without a copy.",
       "An `Image` is encoded in place: its `pixels` are detached until the promise settles. An `ImageBitmap` is copied first and can be used meanwhile.",
       "There is no web standard for encoding an image without a canvas, so the name is Skathi's own.",
       SAME_EVERYWHERE,
     ],
     edgeCases: [
-      "`encode()` rejects with `NotSupportedError` for a type it does not write, a `RangeError` for a `quality` outside 0 to 1, a `TypeError` for a source that is not an image, and `InvalidStateError` for a closed `Image` or `ImageBitmap`.",
+      "`encode()` rejects with `NotSupportedError` for a type it does not write, `EncodingError` for an icon over 256 pixels a side, a `RangeError` for a `quality` outside 0 to 1, a `TypeError` for a source that is not an image, and `InvalidStateError` for a closed `Image` or `ImageBitmap`.",
     ],
     examples: [
       {

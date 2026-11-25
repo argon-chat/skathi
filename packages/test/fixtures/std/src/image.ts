@@ -1,4 +1,4 @@
-import { ImageDecoder, ImageEncoder } from "skathi:image";
+import { type EncodableImageType, ImageDecoder, ImageEncoder } from "skathi:image";
 import { NativeBuffer } from "skathi:memory";
 
 // Values a premultiplied canvas gives back unchanged.
@@ -43,6 +43,13 @@ export async function image() {
   context?.drawImage(bitmap, 0, 0);
   const drawn = context ? [...context.getImageData(0, 0, 1, 1).data] : [];
 
+  const qoi = await ImageEncoder.encode(source, { type: "image/qoi" });
+  const fromQoi = (await new ImageDecoder({ data: qoi, type: "image/qoi" }).decode()).image;
+  const svg = new TextEncoder().encode(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><rect width="1" height="1" fill="#f00"/><rect x="1" width="1" height="1" fill="#00f"/></svg>',
+  );
+  const fromSvg = (await new ImageDecoder({ data: svg, type: "image/svg+xml" }).decode()).image;
+
   const unread = new ImageDecoder({ data: new Blob([png]).stream(), type: "image/png" });
   const waiting = rejection(unread.decode());
   unread.close();
@@ -54,6 +61,11 @@ export async function image() {
     small: [small.width, small.height, small.pixels.length],
     jpeg: [jpeg[0], jpeg[1], fromJpeg.width, fromJpeg.height],
     bitmap: [bitmap.width, bitmap.height, drawn.join()],
+    more: [
+      await ImageDecoder.isTypeSupported("IMAGE/SVG+XML"),
+      [...fromQoi.pixels].join() === CHECKER.join(),
+      [...fromSvg.pixels].join(),
+    ],
     supported: [
       await ImageDecoder.isTypeSupported("image/gif"),
       await ImageDecoder.isTypeSupported("image/avif"),
@@ -65,7 +77,7 @@ export async function image() {
       wrongType: await rejection(new ImageDecoder({ data: png, type: "image/jpeg" }).decode()),
       noFrame: await rejection(new ImageDecoder({ data: png, type: "image/png" }).decode({ frameIndex: 1 })),
       enlarge: await rejection(small.resize(3, 1)),
-      gif: await rejection(ImageEncoder.encode(small, { type: "image/gif" })),
+      unwritable: await rejection(ImageEncoder.encode(small, { type: String("image/svg+xml") as EncodableImageType })),
       closed: await rejection(decoded.resize(1, 1)),
       aborted: await waiting,
       freed: await rejection(Promise.resolve().then(() => new ImageDecoder({ data: file, type: "image/png" }))),

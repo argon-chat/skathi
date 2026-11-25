@@ -90,8 +90,10 @@ webview = ["dep:sk-webview"]
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false, features = [
     "stacker",
 ] }
-# `skathi:image` decodes what redjs links for `createImageBitmap`, so no codec is added.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+# `skathi:image`: ico, tiff and pnm are linked for `<img>` already; the rest are small and pure Rust.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "ico", "tiff", "pnm", "qoi", "tga", "hdr", "ff", "dds"] }
+# The intrinsic size of an SVG for `skathi:image`, read as `<img>` reads it; gpui rasterises it.
+usvg = { version = "0.46.0", default-features = false }
 log = "0.4"
 raw-window-handle = "0.6"
 anyhow = "1"
