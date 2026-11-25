@@ -569,7 +569,7 @@ struct RippleGlass : IEffect
       },
     ],
     edgeCases: [
-      "Built in are `frost(<strength>, <radius>?, <tint>?)`, `noise(<amount>, <scale>?, <speed>?)` and `glow(<color>?, <radius>, <strength>)`; an app adds its own as `shaders/<name>.slang`.",
+      "Built in are `frost(<strength>, <radius>?, <tint>?)`, `noise(<amount>, <scale>?, <speed>?)` and `glow(<color>?, <radius>, <strength>)`; an app adds its own as `shaders/<name>.slang`, written against the [shader library](/shaders/) (`sk` and `sk.color`; see [Writing effects with the shader library](/guides/shader-library/)).",
       "A number outside the effect's range is clamped, with an advisory: `frost(1.4)` runs at strength `1`.",
       "Only one effect function applies; the others are dropped with an advisory.",
       "`var()` inside `--shading` is not resolved; the effect is skipped with an advisory.",

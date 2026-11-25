@@ -161,7 +161,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         <div class="syntax">
           <Code
             code={entry.syntax.trim()}
-            lang="ts"
+            lang={reference.syntax === "slang" ? slang : "ts"}
             themes={{ light: "github-light", dark: "github-dark" }}
             defaultColor={false}
           />

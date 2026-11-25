@@ -1,6 +1,7 @@
 import { appReference } from "./app";
 import { cssReference } from "./css";
 import type { Reference } from "./reference";
+import { shadersReference } from "./shaders";
 import { stdReference } from "./std";
 import { webReference } from "./web";
 import { windowReference } from "./window";
@@ -12,4 +13,5 @@ export const references: Readonly<Record<string, Reference>> = {
   [windowReference.id]: windowReference,
   [appReference.id]: appReference,
   [stdReference.id]: stdReference,
+  [shadersReference.id]: shadersReference,
 };

@@ -39,12 +39,15 @@ export interface Reference {
   categoryNotes: Readonly<Partial<Record<string, string>>>;
   entries: readonly RefEntry[];
   source: string;
+  /** The language of the entries' Syntax blocks; TypeScript unless set. */
+  syntax?: "slang";
 }
 
 /** What a browser does with an entry only Skathi has: CSS is skipped there, a script fails. */
 export function skathiOnlyNote(ref: Reference): string {
   if (ref.id === "css") return "Browsers ignore it; Skathi reads it.";
   if (ref.id === "std") return "A browser has no such module, and an import of it fails there.";
+  if (ref.id === "shaders") return "It is Slang for Skathi's --shading effects, which browsers do not run.";
   return "A browser does not have it, and code that uses it fails there.";
 }
 
@@ -301,7 +304,7 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
   if (entry.animates) lines.push(`- Animates: ${entry.animates}.`);
   if (entry.mdn) lines.push(`- MDN: ${entry.mdn}`);
   if (entry.syntax) {
-    lines.push("", "## Syntax", "", "```ts", entry.syntax.trim(), "```");
+    lines.push("", "## Syntax", "", `\`\`\`${ref.syntax ?? "ts"}`, entry.syntax.trim(), "```");
     if (entry.params?.length)
       lines.push(
         "",

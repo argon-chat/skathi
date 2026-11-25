@@ -84,6 +84,35 @@ An app's effect is compiled, and its pipelines built, in the first frame that dr
 
 `true` builds every effect of the app; a list of names, such as `["glass"]`, builds only those and is the better choice for an app with many effects that are seldom on screen. It is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133))
 
+## Shader standard library
+
+An effect used to get `import sk;` and ten helpers. It now has a library of modules beside it, and the first is `sk.color`:
+
+```slang
+import sk;
+import sk.color;
+
+[SkEffect("tinted-glass")]
+struct TintedGlass : IEffect
+{
+    [SkColor] [SkDefault("#3d7fff")] float4 tint;
+    [SkLength] [SkBackdropRadius] [SkDefault("12")] float blur;
+
+    float4 shade(EffectInput input)
+    {
+        Color back = Color.fromPremultiplied(input.backdrop);
+        Color glass = back.mix<Oklch>(Color.fromSrgb(tint), 0.35);
+        if (glass.contrast(Color.fromHex(0xffffff)) < 4.5)
+            glass = glass.darken(0.15);
+        return glass.withAlpha(1.0).toPremultiplied();
+    }
+};
+```
+
+A `Color` is linear light with straight alpha, and its constructors are named after what an effect holds: `fromSrgb` for an `[SkColor]` argument, `fromPremultiplied` for a backdrop or content sample, `fromHex`, `fromLinear`. Getting the encoding wrong used to be silent; now it is a different function name. Conversions cover the CSS Color 4 spaces, sRGB, HSL, HWB, Lab, LCH, OKLab, OKLCH and XYZ, with the spec's constants, and `mix<Space>` is `color-mix()` with its hue rules. Then the colord set: `lighten`, `saturate`, `rotate`, `invert`, `luminance`, WCAG `contrast`, ΔE OK and CIEDE2000, and the harmonies.
+
+Values above SDR white in an HDR window survive every conversion that can hold them. The same table of more than 300 cases runs on DirectX 12, Metal and wgpu and gives the same answers. Only what an effect calls is compiled into it. The [guide](/guides/shader-library/) walks through three effects, and the [shader library reference](/shaders/) has a page for each type and function, the attributes of `sk` included.
+
 ## Windows
 
 **`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. A new `"window": { "theme" }` key in sk.config.json sets the starting theme on every platform, before the window is first shown, so a dark app does not flash light. ([#117](https://github.com/argon-chat/skathi/issues/117))

@@ -8,6 +8,7 @@ import { devEffectsWatch, EFFECTS_CHANGED, watchAppEffects } from "../cli/effect
 import { compileAppEffects, EffectsError, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler, unpack } from "../effects/redslangc";
 import { FIXTURES } from "./check-fixtures";
+import { CSS_SAMPLES, caseEffect, cases, deltaE2000Lab, SHARMA_PAIRS, SPACES } from "./sk-color-table";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-effects-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -256,6 +257,52 @@ struct Grade : IEffect
   test("sk check reports a shader that does not compile at its line", async () => {
     const findings = await effectFindings(join(FIXTURES, "check-shaders"));
     expect(findings.map((f) => [f.code, f.range.start.line])).toEqual([["SK0005", 6]]);
+  });
+
+  test("an effect imports sk.color, and only what it calls reaches each target", async () => {
+    const root = app({
+      "tint.slang": RIPPLE.replace("import sk;", "import sk;\nimport sk.color;").replace(
+        "return sk_premultiply(tint * input.coverage);",
+        "return Color.fromSrgb(tint).mix<Oklch>(Color.fromPremultiplied(input.backdrop), 0.5).toPremultiplied();",
+      ),
+    });
+    const [tint] = (await compileAppEffects(root, compiler!)).compiled;
+    for (const { target, code } of tint!.outputs) {
+      expect([target, /Color_mix_\w*\(/.test(code), /Oklch_fromLinearSrgb/.test(code)]).toEqual([target, true, true]);
+      expect([target, code.match(/deltaE2000|Hwb_|Color_triadic|Color_lighten/g)]).toEqual([target, null]);
+      expect(code).not.toContain(root.replace(/\\/g, "/"));
+    }
+  });
+
+  test("the whole sk.color golden table compiles for every renderer", async () => {
+    const all = cases();
+    const per = Math.ceil(all.length / 3);
+    const root = app(
+      Object.fromEntries(
+        [0, 1, 2].map((i) => [`table${i}.slang`, caseEffect(`table${i}`, all.slice(i * per, (i + 1) * per))]),
+      ),
+    );
+    const built = await compileAppEffects(root, compiler!);
+    expect(built.files.map((f) => f.name).filter((n) => n.startsWith("table0"))).toEqual([
+      "table0.hlsl",
+      "table0.wgsl",
+      "table0.metal",
+    ]);
+    expect(built.warnings.filter((w) => w.file.startsWith("sk/"))).toEqual([]);
+  }, 30_000);
+});
+
+describe("the sk.color reference", () => {
+  test("reproduces CSS Color 4's worked conversions", () => {
+    for (const s of CSS_SAMPLES) {
+      const got = SPACES[s.to[0]].fromLinear(SPACES[s.from[0]].toLinear(s.from[1]));
+      const worst = Math.max(...got.map((v, i) => Math.abs(v - s.to[1][i]!)));
+      expect([s.what, worst <= s.tol]).toEqual([s.what, true]);
+    }
+  });
+
+  test("reproduces Sharma's CIEDE2000 pairs", () => {
+    for (const [a, b, want] of SHARMA_PAIRS) expect(deltaE2000Lab(a, b)).toBeCloseTo(want, 4);
   });
 });
 

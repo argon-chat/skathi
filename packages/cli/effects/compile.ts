@@ -24,6 +24,13 @@ export const SCHEMA = 12;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
+/// The standard library beside the prelude: `effects/sk/color.slang` is `import sk.color;`. Served by
+/// name rather than through a search path, so `#line` directives never carry a machine's path.
+export const STD_MODULES: Array<[name: string, file: string]> = readdirSync(join(import.meta.dir, "sk"))
+  .filter((f) => f.endsWith(".slang"))
+  .sort()
+  .map((f) => [`sk.${f.slice(0, -".slang".length)}`, join(import.meta.dir, "sk", f)]);
+
 /// The built-in numbering is a contract: this list, `gpui::effect_id`, the pipeline tables in
 /// `gpui_windows` and `gpui_wgpu`, and the ids in `crates/sk-effects/generated/effects.json`. It is not alphabetical.
 export const BUILTIN_EFFECTS = ["frost", "noise", "glow"];
@@ -345,6 +352,7 @@ async function redslangc(r: Request): Promise<RunResult> {
     r.sourceName,
     "--import",
     `sk=${PRELUDE}`,
+    ...STD_MODULES.flatMap(([name, file]) => ["--import", `${name}=${file}`]),
     ...r.includes.flatMap((dir) => ["-I", dir]),
     ...r.targets.flatMap((t) => ["-t", t.spec]),
     "-e",

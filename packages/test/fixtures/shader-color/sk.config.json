@@ -1,0 +1,13 @@
+{
+  "$comment": "The sk.color golden table on the GPU: each tile is an effect that encodes its cases' results into pixels.",
+
+  "name": "sk-test-shader-color",
+
+  "window": {
+    "title": "Skathi — shader colour library (fixture)",
+    "width": 300,
+    "height": 260,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

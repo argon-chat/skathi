@@ -1,0 +1,215 @@
+---
+title: Writing effects with the shader library
+label: Shader library
+description: Import Skathi's Slang modules into an effect, work with colours whose encoding is in the type, and mix, lighten and check contrast the way CSS and colord do.
+section: Guides
+order: 17.5
+---
+
+An effect is a Slang struct in the app's `shaders/` folder, used from CSS as `--shading: name(args)`.
+Besides `sk`, the module every effect imports, Skathi ships a standard library of shader modules.
+The first is `sk.color`: colours, the CSS colour spaces, mixing, contrast and harmonies. This guide
+shows how to import it, how it models colour, and three effects built with it. Every type and
+function has its page in the [shader library reference](/shaders/).
+
+## Import a module
+
+```slang
+import sk;
+import sk.color;
+```
+
+The modules come with the CLI: `sk build`, `sk dev` and `sk check` hand them to the compiler, the
+same way on every machine. A dotted name is a module of the library, so `sk.color` is the colour
+module and does not clash with a `color.slang` of your own.
+
+Your own helpers work the same way. A `.slang` file in `shaders/` without an `[SkEffect]` struct is a
+module, not an effect: `shaders/waves.slang` is `import waves;` from any effect beside it.
+
+Only what an effect calls reaches its compiled shader. Importing `sk.color` and calling `mix` adds
+the OKLab conversion and nothing else; the rest of the module costs a few tens of milliseconds of
+compile time per effect and nothing at run time.
+
+## The colour model
+
+A `Color` holds **linear-light sRGB with straight alpha**. That is the space where light adds up,
+and it holds every colour the engine hands an effect, HDR included. What differs is the encoding of
+the colour you start from, so each constructor is named after it:
+
+| You hold                                                        | Its encoding                 | Read it with              | Give it back with   |
+| --------------------------------------------------------------- | ---------------------------- | ------------------------- | ------------------- |
+| An `[SkColor]` field, a colour written as numbers in the shader | sRGB-encoded, straight alpha | `Color.fromSrgb(c)`       | `toSrgb()`          |
+| `input.backdrop`, `backdropAt`, `input.content`, a colour image | sRGB-encoded, premultiplied  | `Color.fromPremultiplied` | `toPremultiplied()` |
+| A `#hex` colour                                                 | sRGB-encoded bytes           | `Color.fromHex(0x7fd4ff)` | `toSrgb()`          |
+| Light you computed, a `[SkLinear]` texture that holds light     | linear, straight alpha       | `Color.fromLinear(c)`     | `toLinear()`        |
+| Coordinates in a CSS colour space                               | that space's units           | `Color.from<Oklch>(c)`    | `c.to<Oklch>()`     |
+
+`shade` returns premultiplied, sRGB-encoded RGBA, so most effects end with `toPremultiplied()`. An
+effect that declares `static override bool straightAlpha() { return true; }` ends with `toSrgb()`.
+
+Two things the engine does that the library does not:
+
+- **The scene blends in sRGB-encoded space**, as browsers do. A backdrop sample is the result of
+  that blending, premultiplied in encoded space; `fromPremultiplied` divides by alpha before it
+  decodes, which is the inverse of what produced it.
+- **The engine clamps what `shade` returns** to valid premultiplied 0..1. The library clamps
+  nothing on the way: a colour above SDR white, or outside the sRGB gamut, keeps its values through
+  linear sRGB, XYZ, Lab, LCH, OKLab and OKLCH, so a chain of operations does not lose it halfway.
+
+### HDR windows
+
+In an HDR window the scene is a half-float target, and a backdrop or content sample can be above
+1.0, or below 0 for a colour outside sRGB. `fromPremultiplied` decodes such channels with the sRGB
+curve extended past 1 and mirrored below 0, as scRGB does, so a highlight comes out as linear light
+above 1. `luminance()` then reads above 1 too. The HSL-based operations, `lighten`, `saturate` and
+the rest, stop at 0 and 1 for an SDR colour but never pull an HDR value back into range.
+
+An `[SkColor]` argument is always SDR: a `color(srgb-linear 2 0 0)` in CSS is clipped to sRGB before
+it reaches the shader.
+
+## A tint that keeps text readable
+
+Frosted glass tinted with the app's accent, with white text on it. A light backdrop and a light
+tint would make the text unreadable, so the effect darkens the glass until white reaches 4.5:1, the
+WCAG level for body text:
+
+```slang
+import sk;
+import sk.color;
+
+[SkEffect("tinted-glass")]
+struct TintedGlass : IEffect
+{
+    [SkColor] [SkDefault("#3d7fff")] float4 tint;
+    [SkDefault("0.35")] [SkRange(0.0, 1.0)] float amount;
+    [SkLength] [SkBackdropRadius] [SkDefault("12")] float blur;
+
+    float4 shade(EffectInput input)
+    {
+        Color back = Color.fromPremultiplied(input.backdrop);
+        Color glass = back.mix<Oklch>(Color.fromSrgb(tint), amount);
+        Color white = Color.fromHex(0xffffff);
+        for (int i = 0; i < 6 && glass.contrast(white) < 4.5; i++)
+            glass = glass.darken(0.06);
+        return glass.withAlpha(1.0).toPremultiplied();
+    }
+};
+```
+
+```css
+.toolbar {
+  color: white;
+  --shading: tinted-glass(#3d7fff, 0.35, 14px);
+}
+```
+
+The mix is in OKLCH, so the tint keeps its hue at any strength; in sRGB a blue tint over a yellow
+backdrop goes through grey first. `darken` steps HSL lightness the way colord and Sass do; for
+steps of even perceived size, lower L in OKLCH instead.
+
+## A gradient that turns through the hues
+
+Two `[SkColor]` stops mixed in OKLCH across the element, the hue drifting with time. `Longer` takes
+the hue the long way round, through every colour between the two stops:
+
+```slang
+import sk;
+import sk.color;
+
+[SkEffect("aurora")]
+struct Aurora : IEffect
+{
+    [SkColor] [SkDefault("#ff5f6d")] float4 start;
+    [SkColor] [SkDefault("#3fd2c7")] float4 end;
+    [SkAnimated] [SkDefault("1")] float speed;
+
+    float4 shade(EffectInput input)
+    {
+        Color a = Color.fromSrgb(start);
+        Color b = Color.fromSrgb(end);
+        Color c = a.mix<Oklch>(b, input.local.x, HueInterpolation.Longer);
+        float3 lch = c.to<Oklch>();
+        lch.z += input.time * speed * 20.0;
+        return Color.from<Oklch>(lch, c.alpha).toPremultiplied();
+    }
+};
+```
+
+Turning the hue in OKLCH keeps lightness and chroma, so the band does not pulse brighter at yellow
+and darker at blue as it would with `rotate`, which turns the HSL hue. A hue turned outside the
+sRGB gamut gives linear values below 0 or above 1; the engine clips them when it draws.
+
+## A readable-text check
+
+A development overlay: it shows the backdrop as it is, and stripes every pixel where text of a
+given colour would fall below a contrast ratio. Put it on a text container while tuning a design:
+
+```slang
+import sk;
+import sk.color;
+
+[SkEffect("contrast-check")]
+struct ContrastCheck : IEffect
+{
+    [SkColor] [SkDefault("#ffffff")] float4 ink;
+    [SkDefault("4.5")] [SkRange(1.0, 21.0)] float minimum;
+
+    float4 shade(EffectInput input)
+    {
+        Color back = Color.fromPremultiplied(input.backdrop);
+        float ratio = back.contrast(Color.fromSrgb(ink));
+        float stripe = step(0.5, frac((input.px.x + input.px.y) / 12.0));
+        Color warn = Color.fromHex(0xff2d55);
+        Color shown = ratio < minimum ? back.mix<LinearSrgb>(warn, 0.6 * stripe) : back;
+        return shown.withAlpha(1.0).toPremultiplied();
+    }
+};
+```
+
+`contrast` is the WCAG ratio of the two relative luminances, 1 to 21. It ignores alpha, so give it
+an opaque colour: the backdrop sample here is what is on screen, already composited.
+
+## Choosing a space to mix in
+
+`mix<S>(other, t)` is CSS `color-mix(in S, …)`: the same premultiplied interpolation and the same
+hue rules, in any space of the module. `mix(other, t)` without a space is OKLab, the CSS default.
+
+| Space        | Use it for                                                        |
+| ------------ | ----------------------------------------------------------------- |
+| `Oklab`      | Blending two colours evenly; the default                          |
+| `Oklch`      | Keeping a hue while changing strength; gradients through the hues |
+| `LinearSrgb` | Light: a cross-fade, glow, anything that adds up like light does  |
+| `Srgb`       | Matching what CSS transitions and `color-mix(in srgb, …)` do      |
+| `Hsl`, `Hwb` | Matching designs specified in those terms                         |
+| `Lab`, `Lch` | Matching tools that use CIE Lab                                   |
+
+A grey has no hue. When one side of a mix in a polar space is grey, the other colour's hue is used,
+so mixing white into red in OKLCH stays red instead of passing through hue 0.
+
+## Generic code over colour spaces
+
+Spaces are types that implement `IColorSpace`, and the compiler specialises generic code for each
+one it is used with. A helper of your own can take the space as a parameter:
+
+```slang
+import sk.color;
+
+Color shiftLightness<S : IColorSpace>(Color c, float amount)
+{
+    float3 v = c.to<S>();
+    v.x += amount;
+    return Color.from<S>(v, c.alpha);
+}
+
+// shiftLightness<Oklch>(c, 0.1), shiftLightness<Lab>(c, 10.0)
+```
+
+There is no dynamic dispatch and no cost for the spaces you do not name.
+
+## Precision
+
+The shaders compute in 32-bit floats. Conversions agree with the CSS Color 4 sample code to about
+1e-4 in sRGB and OKLab and 0.01 in Lab, and they agree with each other across DirectX 12, Metal and
+wgpu: the test suite runs the same table of conversions, manipulations, mixes and differences on
+each backend. Hue thresholds are float-sized: an OKLCH chroma of 0.0001 or less is grey, where CSS
+uses 0.000004.
