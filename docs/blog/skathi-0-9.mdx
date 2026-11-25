@@ -127,15 +127,33 @@ A `Color` is linear light with straight alpha, and its constructors are named af
 
 Values above SDR white in an HDR window survive every conversion that can hold them. The same table of more than 300 cases runs on DirectX 12, Metal and wgpu and gives the same answers. Only what an effect calls is compiled into it. The [guide](/guides/shader-library/) walks through three effects, and the [shader library reference](/shaders/) has a page for each type and function, the attributes of `sk` included.
 
-Seven more modules follow the same rules:
+Eight more modules follow the same rules:
 
-- **`sk.math`**: `SK_PI`, `floorMod`, `safeDiv`, `remap`.
+- **`sk.math`**: `SK_PI`, `floorMod`, `safeDiv`, `remap`, and `safeAtan2`, defined at the origin on every GPU.
 - **`sk.blend`**: the sixteen CSS blend modes as `blend<Multiply>(src, dst)` and the Porter-Duff operators as `composite<SrcOver>`, on premultiplied colour.
 - **`sk.sdf`**: 2D signed distance fields, from `Sdf.circle` to `Sdf.star`, with unions, smooth unions and repetition, and `coverage`, `stroke` and `glow` to turn a distance into pixels.
 - **`sk.ease`**: CSS `cubic-bezier`, `steps` and `linear()` stops, the Penner curves, springs, and `progress` for a time envelope.
 - **`sk.noise`**: Perlin, simplex, value and Worley noise with analytic derivatives, and fractals that take any noise as a type: `fbm<Simplex>(p)`. Its hashes are integer PCG, so a pattern lands on the same pixels on DirectX 12, Metal and Vulkan, and every function states its range. Dither helpers, triangular-PDF `dither` among them, remove banding from long gradients.
 - **`sk.sample`**: one `ISampler` over the backdrop, content, history and textures, with Gaussian, disc, motion and zoom blurs, chromatic aberration, dispersion, displacement, bicubic resampling and sharpening built on it. Each kernel comes with a reach helper for `[SkBackdropReach]`.
 - **`sk.light`**: flat UI depth. Bevel normals from any signed distance, Snell refraction as a pixel offset that plugs into `sk.sample`, Fresnel, Blinn-Phong, GGX, rim and anisotropic highlights, and shadows that match CSS `box-shadow` for the same blur.
+- **`sk.tone`**: Reinhard, filmic and ACES-fitted curves, exposure in stops, a soft clip that rolls highlights into the headroom left, nits conversions, and PQ and HLG.
+
+### HDR light behind an effect
+
+In an HDR window, frosted glass and every other backdrop effect cut the video or image behind it to SDR white: a 1000-nit highlight came out of the glass at about a hundred. Highlights now pass through at their real brightness, `backdrop-filter: blur()` included, and an SDR window looks exactly as before.
+
+An effect that wants to work on that light asks for it:
+
+```slang
+[SkEffect("hdr-glass")]
+[SkBackdropLinear]
+struct HdrGlass : IEffect
+{
+    float4 shade(EffectInput input) { /* ... */ }
+}
+```
+
+With `[SkBackdropLinear]` the backdrop arrives premultiplied in linear light, 1.0 being SDR white and highlights above it, the blur is done on light and not on sRGB codes, and what `shade` returns is taken as linear light without the cut at SDR white. `return input.backdrop;` is an exact identity. ([#131](https://github.com/argon-chat/skathi/issues/131))
 
 ## Windows
 
