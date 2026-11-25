@@ -10,7 +10,8 @@ struct Glass : IEffect
     [SkLinear] [SkDefault("#8080ffff")]
     SkTexture normals;
 
-    [SkLength] [SkDefault("10")] [SkRange(0.0, 64.0)]
+    // A normal's x and y lie in -1..1, so no read lands farther than `depth` outside the element.
+    [SkLength] [SkBackdropReach] [SkDefault("10")] [SkRange(0.0, 64.0)]
     float depth;
 
     [SkDefault("1")] [SkRange(0.25, 8.0)]
