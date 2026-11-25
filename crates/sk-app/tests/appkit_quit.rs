@@ -15,10 +15,11 @@ mod macos {
     use objc2::{sel, MainThreadMarker};
     use objc2_app_kit::NSApplication;
     use objc2_core_services::{
-        kAEQuitApplication, kAEQuitReason, kAEReallyLogOut, kAnyTransactionID,
-        kAutoGenerateReturnID, kCoreEventClass,
+        kAEDefaultTimeout, kAENoReply, kAEQuitApplication, kAEQuitReason, kAEReallyLogOut,
+        kAnyTransactionID, kAutoGenerateReturnID, kCoreEventClass, typeNull, AEDesc, AEDisposeDesc,
+        AESendMessage,
     };
-    use objc2_foundation::{NSAppleEventDescriptor, NSAppleEventSendOptions, NSRunLoop};
+    use objc2_foundation::{NSAppleEventDescriptor, NSRunLoop};
     use sk_app::embed::Builder;
 
     const CASE: &str = "SK_TEST_APPKIT_QUIT";
@@ -29,9 +30,10 @@ mod macos {
             run_host(case);
             return;
         }
-        for case in ["menu", "main-queue", "session"]
+        for case in ["menu", "main-queue"]
             .into_iter()
             .chain(std::iter::repeat_n("dock", 6))
+            .chain(["session"])
         {
             let profile = tempfile::tempdir().unwrap();
             eprintln!("Testing AppKit quit via {case}");
@@ -76,7 +78,11 @@ mod macos {
                     }),
                     "dock" | "session" => {
                         let session = case == "session";
-                        thread::spawn(move || send_quit_event(session));
+                        // Deliver after launch, once the app can receive Apple Events.
+                        unsafe {
+                            NSRunLoop::mainRunLoop()
+                                .performBlock(&RcBlock::new(move || send_quit_event(session)))
+                        };
                     }
                     _ => unreachable!(),
                 }
@@ -111,7 +117,7 @@ mod macos {
 
     fn send_quit_event(session: bool) {
         let event = NSAppleEventDescriptor::appleEventWithEventClass_eventID_targetDescriptor_returnID_transactionID(
-            kCoreEventClass, kAEQuitApplication, Some(&NSAppleEventDescriptor::currentProcessDescriptor()),
+            kCoreEventClass, kAEQuitApplication, Some(&NSAppleEventDescriptor::descriptorWithProcessIdentifier(std::process::id() as i32)),
             kAutoGenerateReturnID as i16, kAnyTransactionID,
         );
         if session {
@@ -120,7 +126,21 @@ mod macos {
                 kAEQuitReason,
             );
         }
-        let _ =
-            event.sendEventWithOptions_timeout_error(NSAppleEventSendOptions::WaitForReply, 10.);
+        // SAFETY: the descriptor owns its event and the reply slot starts empty.
+        let mut reply = AEDesc {
+            descriptorType: typeNull,
+            dataHandle: std::ptr::null_mut(),
+        };
+        let status = unsafe {
+            let status = AESendMessage(
+                event.aeDesc(),
+                &mut reply,
+                kAENoReply as i32,
+                kAEDefaultTimeout.into(),
+            );
+            AEDisposeDesc(&mut reply);
+            status
+        };
+        assert_eq!(status, 0, "sending quit Apple Event to the test process");
     }
 }
