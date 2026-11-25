@@ -299,7 +299,9 @@ if (!MACOS && !WINDOWS) {
       T,
     );
 
-    test.skipIf(!ACTIVE)(
+    // A posted click does not move key on the hosted runner, so there the test above proves only that
+    // the click lands. SK_TEST_REAL_INPUT=1 runs this control where clicks are real.
+    test.skipIf(!ACTIVE || !process.env.SK_TEST_REAL_INPUT)(
       "control: the same posted click on a focusable pop-out does take key from the main window",
       async () => {
         await set("S.control = true");
