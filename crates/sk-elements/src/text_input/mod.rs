@@ -407,7 +407,7 @@ pub fn text_input(
     if multiline {
         let scroll_state = state.clone();
         element = element.on_scroll(move |event, window, cx| {
-            let delta = event.delta.pixel_delta(px(20.0)).y;
+            let delta = event.delta.vn_scroll_pixels().y;
             scroll_state.update(cx, |this, cx| this.scroll_by(-delta, window, cx));
         });
     }

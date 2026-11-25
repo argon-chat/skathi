@@ -13,6 +13,13 @@ export interface App {
   restart(options?: { args?: string[] }): void;
   /** `"version"` from sk.config.json, else package.json's; `"0.0.0"` without either. */
   getVersion(): string;
+  /**
+   * How far a mouse-wheel notch scrolls the app's scroll containers, text areas and editors, as a
+   * multiple of a browser's distance; starts at sk.config.json `input.wheelScrollScale`, else 1. Kept
+   * between 0.1 and 10; a value that is not a finite number above 0 throws a `TypeError`.
+   * `WheelEvent` deltas and touchpad scrolling are not scaled.
+   */
+  wheelScrollScale: number;
 }
 
 declare const __sk_std: { app: App };

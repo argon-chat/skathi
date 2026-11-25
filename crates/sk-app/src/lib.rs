@@ -104,6 +104,7 @@ mod stdlib;
 mod text_rendering;
 mod transparency;
 pub mod tray;
+mod wheel_scroll;
 mod window;
 
 #[cfg(not(feature = "prod"))]
@@ -1207,6 +1208,7 @@ fn run_app() {
         #[cfg(feature = "storages")]
         let http_cache_mb = http_client::cache_mb(window_json.as_deref());
         sk_tree::color_picker::use_system_dialog(system_color_picker(window_json.as_deref()));
+        wheel_scroll::apply(window_json.as_deref());
         let cfg = window::load_config(window_json);
 
         // Before `JsRuntime::init` so the bundle's first line sees the settled state.

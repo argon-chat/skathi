@@ -37,12 +37,13 @@ export const app = section("skathi:app", [
     slug: "app",
     name: "app",
     kind: "object",
-    summary: "Ends the app, starts it again, and reads its version.",
+    summary: "Ends the app, starts it again, reads its version, and sets how far the wheel scrolls.",
     syntax: `${IMPORT}
 
 app.quit(options?: { exitCode?: number }): void
 app.restart(options?: { args?: string[] }): void
-app.getVersion(): string`,
+app.getVersion(): string
+app.wheelScrollScale: number`,
     notes: [
       "The module also exports the `app*` objects listed with it here; each has its page in the [App API](/app-api/) or [Window API](/window-api/) reference. Importing them from `@skathi-native/runtime` still works but is deprecated.",
       "`quit()` and `restart()` end the app the way [`appWindow.close()`](/window-api/) does. See [Closing, hiding and quitting](/guides/closing-and-background/).",
@@ -68,7 +69,7 @@ const version = app.getVersion();
 </template>`,
       },
     ],
-    related: ["app-quit", "app-restart", "app-get-version", "runtime"],
+    related: ["app-quit", "app-restart", "app-get-version", "app-wheel-scroll-scale", "runtime"],
     aliases: ["skathi:app", "App", "exit", "relaunch", "app version"],
   },
   {
@@ -204,6 +205,50 @@ export async function sendReport(text: string): Promise<void> {
     ],
     related: ["app", "runtime"],
     aliases: ["app.getVersion", "app version", "version"],
+  },
+  {
+    slug: "app-wheel-scroll-scale",
+    name: "app.wheelScrollScale",
+    kind: "object",
+    summary: "How far a mouse-wheel notch scrolls the app, as a multiple of a browser's distance.",
+    syntax: "app.wheelScrollScale: number",
+    returns:
+      'The scale now in use: `"input": { "wheelScrollScale" }` from `sk.config.json` at start, else `1`, until the app sets another.',
+    notes: [
+      "At `1` a notch scrolls what it does in a browser: 100 px at Windows' default of 3 lines to scroll, 40 px per line on macOS, 120 px on Linux.",
+      "It scales scroll containers, `<textarea>` and `<sk-editor>`, and takes effect at the next notch, in every window.",
+      "`WheelEvent.deltaX` and `deltaY` are not scaled: a `wheel` listener sees a browser's deltas whatever the scale. Touchpad scrolling, already in pixels, is not scaled either.",
+      "A value is kept between `0.1` and `10`.",
+    ],
+    examples: [
+      {
+        title: "A scroll speed slider",
+        lang: "vue",
+        code: `<script setup lang="ts">
+import { ref } from "vue";
+import { app } from "skathi:app";
+
+const speed = ref(app.wheelScrollScale);
+
+function onInput() {
+  app.wheelScrollScale = speed.value;
+}
+</script>
+
+<template>
+  <label>
+    Scroll speed
+    <input type="range" min="0.5" max="3" step="0.25" v-model.number="speed" @input="onInput" />
+  </label>
+</template>`,
+      },
+    ],
+    edgeCases: [
+      "A value that is not a finite number above 0 (`0`, `-1`, `NaN`, `Infinity`, a string) throws a `TypeError` and the scale stays as it was.",
+      "A value above `10` is stored as `10`, one below `0.1` as `0.1`; reading it back gives the stored value.",
+    ],
+    related: ["app"],
+    aliases: ["wheelScrollScale", "scroll speed", "wheel speed", "mouse wheel"],
   },
   ...exported.map(exportRow),
 ]);

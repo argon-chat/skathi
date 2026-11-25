@@ -341,7 +341,6 @@ pub struct Scrollbar {
     axes: (bool, bool),
     style: ScrollbarStyle,
     overscroll: Overscroll,
-    line_height: Pixels,
     on_wheel: Option<Rc<dyn Fn(Point<Pixels>, &mut Window, &mut App) -> bool>>,
     on_scrolled: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     on_gesture: Option<Rc<dyn Fn(Gesture)>>,
@@ -355,7 +354,6 @@ impl Scrollbar {
             axes: (true, true),
             style,
             overscroll: Overscroll::CHAINING,
-            line_height: px(16.),
             on_wheel: None,
             on_scrolled: None,
             on_gesture: None,
@@ -388,11 +386,6 @@ impl Scrollbar {
 
     pub fn overscroll(mut self, overscroll: Overscroll) -> Self {
         self.overscroll = overscroll;
-        self
-    }
-
-    pub fn line_height(mut self, line_height: Pixels) -> Self {
-        self.line_height = line_height;
         self
     }
 
@@ -690,7 +683,6 @@ impl Element for Scrollbar {
             let state = state.clone();
             let overscroll = self.overscroll;
             let (wants_x, wants_y) = self.axes;
-            let line_height = self.line_height;
             let hitbox_id = viewport.id;
             let on_wheel = self.on_wheel.clone();
             let on_scrolled = self.on_scrolled.clone();
@@ -714,7 +706,7 @@ impl Element for Scrollbar {
                     }
                 });
                 let now = Instant::now();
-                let raw = event.delta.pixel_delta(line_height);
+                let raw = event.delta.vn_scroll_pixels();
                 let mut s = state.get();
 
                 // Axis lock is per gesture so a diagonal swipe cannot change owners.
@@ -779,7 +771,7 @@ impl Element for Scrollbar {
                 // DOM `wheel` first: it is cancelable and fires before scrolling.
                 let prevented = on_wheel
                     .as_ref()
-                    .map(|f| f(dom_delta(raw), window, cx))
+                    .map(|f| f(dom_delta(event.delta.vn_event_pixels()), window, cx))
                     .unwrap_or(false);
 
                 let mut moved = false;

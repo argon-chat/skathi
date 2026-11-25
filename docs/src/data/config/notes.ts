@@ -43,7 +43,7 @@ export const groups: readonly ConfigGroup[] = [
   {
     title: "Runtime",
     intro: "Settings the host reads at start. Each also works inside `window`, where it wins over the top-level key.",
-    keys: ["devtools", "httpCache", "colorPicker"],
+    keys: ["devtools", "httpCache", "colorPicker", "input"],
   },
   {
     title: "Text",
@@ -169,6 +169,8 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
   "window.httpCache": { default: "the top-level `httpCache`", example: { maxMB: 64 } },
   "window.httpCache.maxMB": { example: 64 },
   "window.colorPicker": { default: "the top-level `colorPicker`", example: "system", since: "0.5.0" },
+  "window.input": { default: "the top-level `input`", example: { wheelScrollScale: 1.5 } },
+  "window.input.wheelScrollScale": { example: 1.5 },
   devtools: {
     default: "`true`",
     notes: [
@@ -192,6 +194,19 @@ export const notes: Readonly<Record<string, ConfigNote>> = {
     ],
     example: "system",
     since: "0.5.0",
+  },
+  input: {
+    default: '`{ "wheelScrollScale": 1 }`',
+    example: { wheelScrollScale: 1.5 },
+  },
+  "input.wheelScrollScale": {
+    default: "`1`",
+    notes: [
+      "At 1 a notch scrolls what it does in a browser: 100 px at Windows' default of 3 lines to scroll, 40 px per line on macOS, 120 px on Linux.",
+      "It scales scroll containers, `<textarea>` and `<sk-editor>`. `WheelEvent.deltaX` and `deltaY` stay a browser's, and touchpad scrolling, already in pixels, is not scaled.",
+      "[`app.wheelScrollScale`](/std/app-wheel-scroll-scale/) reads and changes it at run time.",
+    ],
+    example: 1.5,
   },
   textRendering: {
     default: '`"skathi-mode"` on Windows and Linux, `"optimized"` on macOS',

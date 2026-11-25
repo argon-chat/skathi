@@ -135,6 +135,7 @@ function windowConfig(): string {
     win.httpCache = cfg.httpCache;
   }
   if (cfg.colorPicker !== undefined && win.colorPicker === undefined) win.colorPicker = cfg.colorPicker;
+  if (cfg.input !== undefined && win.input === undefined) win.input = cfg.input;
   return JSON.stringify(win, null, 2);
 }
 

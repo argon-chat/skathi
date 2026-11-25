@@ -1,0 +1,12 @@
+{
+  "name": "wheel-notch",
+  "input": { "wheelScrollScale": 2 },
+
+  "window": {
+    "title": "Skathi — wheel notch (fixture)",
+    "width": 640,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -127,7 +127,8 @@
           "type": "boolean"
         },
         "httpCache": { "$ref": "#/definitions/httpCache" },
-        "colorPicker": { "$ref": "#/definitions/colorPicker" }
+        "colorPicker": { "$ref": "#/definitions/colorPicker" },
+        "input": { "$ref": "#/definitions/input" }
       }
     },
     "devtools": {
@@ -239,6 +240,7 @@
     },
     "httpCache": { "$ref": "#/definitions/httpCache" },
     "colorPicker": { "$ref": "#/definitions/colorPicker" },
+    "input": { "$ref": "#/definitions/input" },
     "assets": {
       "description": "Directories or globs, relative to the app root, packaged with the app. Default: [\"assets\"].",
       "type": "array",
@@ -836,6 +838,18 @@
     "colorPicker": {
       "description": "What <input type=\"color\"> opens. \"builtin\": Skathi's picker, drawn in the window under the input. \"system\": the OS color dialog (ChooseColor on Windows, NSColorPanel on macOS, zenity or kdialog on Linux).",
       "enum": ["builtin", "system"]
+    },
+    "input": {
+      "description": "How input moves the app's own content.",
+      "type": "object",
+      "properties": {
+        "wheelScrollScale": {
+          "description": "How far a mouse-wheel notch scrolls scroll containers, text areas and the editor, as a multiple of a browser's distance; kept between 0.1 and 10. WheelEvent deltas and touchpad scrolling are not scaled. Default 1.",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "httpCache": {
       "description": "The disk HTTP cache: { \"maxMB\": N } caps it (0 turns it off); false turns it off. Default 256 MB.",

@@ -825,7 +825,7 @@ impl Frame for Handle {
             PointerKind::Down(2) => (COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_DOWN, 0),
             PointerKind::Up(2) => (COREWEBVIEW2_MOUSE_EVENT_KIND_RIGHT_BUTTON_UP, 0),
             PointerKind::Down(_) | PointerKind::Up(_) => return,
-            // Win32 wheel units: 120 per notch, positive AWAY from the user; one notch is taken as 100 px.
+            // Win32 wheel units: 120 per notch, positive AWAY from the user; a notch is 100 CSS px.
             PointerKind::Wheel(dx, dy) if dy != 0.0 || dx == 0.0 => (
                 COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL,
                 ((-dy * 1.2).round() as i32) as u32,

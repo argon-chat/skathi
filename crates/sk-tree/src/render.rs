@@ -1263,7 +1263,6 @@ fn scrollbar_for<V: 'static>(
     id: u32,
     node: &crate::tree::Node,
     handle: &ScrollHandle,
-    window: &Window,
     auto_hide: bool,
     cx: &mut Context<V>,
 ) -> sk_elements::Scrollbar {
@@ -1309,8 +1308,7 @@ fn scrollbar_for<V: 'static>(
     // `wheel` hook exists only when the container or an ancestor listens.
     let sb = sk_elements::Scrollbar::new(("sk-scrollbar", id), handle.clone(), style)
         .axes(scrolls_x, scrolls_y)
-        .overscroll(overscroll)
-        .line_height(window.line_height());
+        .overscroll(overscroll);
     let _ = cx;
     let sb = if wheel_listener_above(t, id) {
         sb.on_wheel(move |delta, window, cx| {
@@ -2738,8 +2736,7 @@ fn build_node<V: 'static>(
                         if let Some(h) = &scroll_handle {
                             let auto_hide = cx.should_auto_hide_scrollbars();
                             kids.push(
-                                scrollbar_for(t, id, node, h, window, auto_hide, cx)
-                                    .into_any_element(),
+                                scrollbar_for(t, id, node, h, auto_hide, cx).into_any_element(),
                             );
                         }
                     }
@@ -4468,7 +4465,7 @@ where
             if !claim_wheel(&mut **cx) {
                 return;
             }
-            let (dx, dy) = dom_wheel_delta(ev.delta.pixel_delta(gpui::px(16.0)));
+            let (dx, dy) = dom_wheel_delta(ev.delta.vn_event_pixels());
             let payload = EventPayload {
                 a: dx,
                 b: dy,
@@ -5582,11 +5579,9 @@ fn build_iframe<V: 'static>(
                 if crate::iframe::has_document(id) {
                     cx.stop_propagation();
                 }
-                let delta = ev.delta.pixel_delta(window.line_height());
-                let s = window.scale_factor();
+                let (dx, dy) = dom_wheel_delta(ev.delta.vn_event_pixels());
                 let m = ev.modifiers;
-                // gpui: positive is away from the user (up); the frame's is down.
-                let kind = PointerKind::Wheel(-f32::from(delta.x) * s, -f32::from(delta.y) * s);
+                let kind = PointerKind::Wheel(dx as f32, dy as f32);
                 crate::iframe::pointer(id, kind, at(ev.position, window), 0, m.shift, m.control);
             })
             .on_hover(move |hovered: &bool, window, _| {

@@ -101,7 +101,7 @@ pub enum PointerKind {
     /// 0 left, 1 middle, 2 right — the DOM's `button`.
     Down(u8),
     Up(u8),
-    /// Device pixels to scroll by, x then y, positive down and right.
+    /// CSS pixels to scroll by, x then y, positive down and right, as `WheelEvent` reports them.
     Wheel(f32, f32),
     Leave,
 }

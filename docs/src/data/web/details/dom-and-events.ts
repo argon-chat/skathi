@@ -469,6 +469,8 @@ function onWheel(e: WheelEvent) {
     ],
     edgeCases: [
       "`deltaMode` is always `0`: the deltas are in pixels.",
+      "A mouse-wheel notch reports what Chromium reports: 100 on Windows at the system's default of 3 lines to scroll (a line is 100/3 px, so the system setting scales it), 40 per line on macOS, and 120 on Linux. Touchpad deltas are the gesture's own pixels. `input.wheelScrollScale` in [sk.config.json](/sk-config/#input) changes how far the app scrolls, not these deltas.",
+      "On Windows, Shift+wheel reports its distance in `deltaX` with `deltaY = 0`, using the system's characters-to-scroll setting; Chromium keeps it in `deltaY` with `shiftKey` set.",
       "A trackpad pinch sets `ctrlKey` and reports `deltaY = -100 * Math.log(scaleStep)`. Alt, Shift and Meta retain their physical state. Each pinch update leaves the scroll position alone.",
       "A cancelled `wheel` scrolls nothing, neither the element it targets nor a scroll container around it.",
       "The `wheel` event fires before the `scroll` event it causes.",

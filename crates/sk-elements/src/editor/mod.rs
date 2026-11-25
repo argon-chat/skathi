@@ -341,7 +341,7 @@ pub fn editor(
 
     let scroll_state = state.clone();
     element = element.on_scroll(move |event, window, cx| {
-        let d = event.delta.pixel_delta(px(20.0));
+        let d = event.delta.vn_scroll_pixels();
         let (dx, dy) = if d.x == px(0.0) && event.modifiers.shift {
             (d.y, px(0.0))
         } else {

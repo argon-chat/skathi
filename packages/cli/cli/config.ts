@@ -4,6 +4,7 @@
 //   "productName", "version"     display name (default window.title ?? name); default: package.json version
 //   "httpCache": { "maxMB": 256 }  disk HTTP cache cap; 0 or false = none
 //   "colorPicker": "system"      <input type=color> opens the OS dialog instead of the in-window picker
+//   "input": { "wheelScrollScale": 2 }  a wheel notch scrolls the app twice as far (WheelEvent unchanged)
 //   "id", "singleInstance", "raiseOnSecondInstance", "protocols"  launch identity and URL schemes
 //   "assets", "publicDir"        what is packaged (relative to the app root); Vite's public/, keyed relative to it
 //   "packs": [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }]
@@ -217,6 +218,7 @@ export const TOP_LEVEL: ReadonlySet<string> = new Set([
   "permissions",
   "httpCache",
   "colorPicker",
+  "input",
   "assets",
   "publicDir",
   "packs",
@@ -874,6 +876,25 @@ export function loadAppConfig(
     throw new ConfigError(
       'sk.config.json "colorPicker" must be "builtin" (the in-window picker) or "system" (the OS dialog)',
     );
+  }
+
+  if (raw.input !== undefined) {
+    const input = raw.input as Record<string, unknown> | null;
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ConfigError('sk.config.json "input" must be an object: { "wheelScrollScale": <number> }');
+    }
+    const extra = Object.keys(input).filter((k) => k !== "wheelScrollScale");
+    if (extra.length) {
+      throw new ConfigError(
+        `sk.config.json "input" has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")}; the known key is wheelScrollScale`,
+      );
+    }
+    const scale = input.wheelScrollScale;
+    if (scale !== undefined && (typeof scale !== "number" || !Number.isFinite(scale) || scale <= 0)) {
+      throw new ConfigError(
+        'sk.config.json "input.wheelScrollScale" must be a number above 0 (1 scrolls as a browser does)',
+      );
+    }
   }
 
   if (raw.httpCache !== undefined && raw.httpCache !== false) {

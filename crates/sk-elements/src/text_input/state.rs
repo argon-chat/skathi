@@ -348,6 +348,9 @@ pub struct TextInputState {
     masked: bool,
     scroll_left: Pixels,
     scroll_top: Pixels,
+    /// The caret offset and revision a multiline field last scrolled into view: it follows the caret
+    /// only when one of them changes, so the wheel can move away from it.
+    revealed: Option<(usize, u64)>,
     /// How far right the content sits because of `text-align`. Applied in the one number mapping
     /// content space to window space ([`Self::content_left`]) so caret, selection, IME and clicks
     /// agree. Zero once the content overflows.
@@ -432,6 +435,7 @@ impl TextInputState {
             align_offset: px(0.0),
             scroll_left: px(0.0),
             scroll_top: px(0.0),
+            revealed: None,
             blink_anchor: cx.background_executor().now(),
             blink_task: None,
         }
@@ -1392,13 +1396,17 @@ impl TextInputState {
     }
 
     fn clamp_scroll(&mut self, viewport: gpui::Size<Pixels>) {
-        let caret = self.position_for_index(self.cursor_offset());
+        let offset = self.cursor_offset();
+        let caret = self.position_for_index(offset);
         if self.multiline {
             self.scroll_left = px(0.0);
-            if caret.y < self.scroll_top {
-                self.scroll_top = caret.y;
-            } else if caret.y + self.line_height > self.scroll_top + viewport.height {
-                self.scroll_top = caret.y + self.line_height - viewport.height;
+            if self.revealed != Some((offset, self.revision)) {
+                self.revealed = Some((offset, self.revision));
+                if caret.y < self.scroll_top {
+                    self.scroll_top = caret.y;
+                } else if caret.y + self.line_height > self.scroll_top + viewport.height {
+                    self.scroll_top = caret.y + self.line_height - viewport.height;
+                }
             }
             let max_scroll = (self.content_height - viewport.height).max(px(0.0));
             self.scroll_top = self.scroll_top.clamp(px(0.0), max_scroll);

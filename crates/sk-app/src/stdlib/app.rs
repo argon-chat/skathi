@@ -1,4 +1,4 @@
-//! `skathi:app`: ending the app, starting it again, and its version.
+//! `skathi:app`: ending the app, starting it again, its version, and its wheel scroll scale.
 
 use std::ffi::{c_void, OsString};
 
@@ -89,6 +89,20 @@ host_fn!(fn get_version(g, _args) {
     unsafe { js_string(g, &version) }
 });
 
+host_fn!(fn get_wheel_scroll_scale(_g, _args) {
+    enc_f64(crate::wheel_scroll::get())
+});
+
+host_fn!(fn set_wheel_scroll_scale(g, args) {
+    let Some(scale) = dec_f64(args.arg(0).0).and_then(crate::wheel_scroll::clamp) else {
+        return unsafe {
+            throw_type_error(g, "app.wheelScrollScale must be a finite number above 0 (1 scrolls as a browser does)")
+        };
+    };
+    crate::wheel_scroll::set(scale);
+    UNDEF
+});
+
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
     let class = super::support::class(
         g,
@@ -103,7 +117,11 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
                 ("getVersion", 0, get_version),
             ],
             getters: &[],
-            accessors: &[],
+            accessors: &[(
+                "wheelScrollScale",
+                get_wheel_scroll_scale,
+                set_wheel_scroll_scale,
+            )],
         },
     );
     define(g, std, "app", new_object(g, class.proto), 0);
