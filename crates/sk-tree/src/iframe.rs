@@ -633,6 +633,7 @@ pub fn shutdown() {
     EVENTS.with(|q| q.borrow_mut().clear());
 }
 
+/// `bounds`, `mask` and `radii` in logical pixels; the placement is in device pixels.
 pub(crate) fn placement(
     bounds: Bounds<Pixels>,
     mask: Bounds<Pixels>,

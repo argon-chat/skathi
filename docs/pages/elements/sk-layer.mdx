@@ -131,7 +131,7 @@ Size the element as you would a `<div>`: it has no intrinsic size. What reaches 
 
 - the element's box and the part of it inside its ancestors' clips, so scrolling and `overflow` work;
 - its own [`border-radius`](/css/border-radius/);
-- its own [`opacity`](/css/opacity/);
+- its [`opacity`](/css/opacity/) as shown, its own and its ancestors' multiplied, so the layer fades with a parent that fades;
 - whether it is painted at all: under `display: none` or scrolled out of view the layer is hidden, and it comes back with the element.
 
 A layout change and the layer's move are shown in the same frame, so the layer does not lag behind the page during a resize or an animation of `width` and `height`.
