@@ -1,0 +1,13 @@
+{
+  "$comment": "sk.light and sk.sample over the engine's real samplers: showcase effects by hand and with the library, kernels over a ramp and a flat colour.",
+
+  "name": "sk-test-shader-glass",
+
+  "window": {
+    "title": "Skathi — shader glass (fixture)",
+    "width": 960,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

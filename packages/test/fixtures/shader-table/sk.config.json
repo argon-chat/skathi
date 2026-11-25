@@ -1,0 +1,13 @@
+{
+  "$comment": "A shader-library golden table on the GPU: each tile is an effect that encodes its cases' results into pixels.",
+
+  "name": "sk-test-shader-table",
+
+  "window": {
+    "title": "Skathi — shader library table (fixture)",
+    "width": 300,
+    "height": 480,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

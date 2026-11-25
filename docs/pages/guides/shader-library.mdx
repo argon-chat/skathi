@@ -213,3 +213,353 @@ The shaders compute in 32-bit floats. Conversions agree with the CSS Color 4 sam
 wgpu: the test suite runs the same table of conversions, manipulations, mixes and differences on
 each backend. Hue thresholds are float-sized: an OKLCH chroma of 0.0001 or less is grey, where CSS
 uses 0.000004.
+
+## Shared maths: sk.math
+
+`sk.math` holds the few helpers the other modules are built on, and it is yours to import too:
+`SK_PI` and `SK_TAU`, `floorMod` (a modulo that wraps a negative value upwards, as GLSL `mod` does
+and HLSL `fmod` does not), `safeDiv` (a division that returns a fallback instead of an infinity)
+and `remap` / `remapClamped` to move a value from one range to another. The constants carry the
+`SK_` prefix so they never collide with a `PI` an effect declares itself.
+
+## Blending like CSS: sk.blend
+
+`sk.blend` is the vocabulary of CSS `mix-blend-mode` and of canvas compositing, with the W3C
+formulas. A blend mode is a type, and `blend<M>(below, above)` blends `above` into `below` with it
+and composites the result source-over, exactly as a browser does for an element with
+`mix-blend-mode`:
+
+```slang
+float4 r = blend<Blend.Multiply>(input.backdrop, sk_premultiply(tint));
+```
+
+Both arguments and the result are premultiplied. The engine's colours are sRGB-encoded, and so is
+the space CSS blends in, so the backdrop, the content and a premultiplied `[SkColor]` go straight in.
+To blend linear light instead, which is how screen and multiply behave physically, use
+`blendLinear<M>` on two `Color`s.
+
+The sixteen modes are `Blend.Normal`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`,
+`ColorDodge`, `ColorBurn`, `HardLight`, `SoftLight`, `Difference`, `Exclusion`, `Hue`,
+`Saturation`, `Color` and `Luminosity`. `composite<Op>` takes the Porter-Duff operators instead:
+`Composite.SourceOver`, `DestinationOut` (an eraser), `SourceAtop`, `Xor`, `PlusLighter` and the
+rest. A mode of your own is a struct with a static `apply(below, above)` on straight colours; the
+compositing around it stays the spec's.
+
+### An overlay tint over the backdrop
+
+```slang
+import sk;
+import sk.blend;
+
+[SkEffect("overlay-tint")]
+[SkBackdrop]
+struct OverlayTint : IEffect
+{
+    [SkColor] [SkDefault("#ff7a1a")] float4 tint;
+    [SkRange(0.0, 1.0)] [SkDefault("0.8")] float strength;
+
+    float4 shade(EffectInput input)
+    {
+        return blend<Blend.Overlay>(input.backdrop, sk_premultiply(tint), strength);
+    }
+};
+```
+
+`--shading: overlay-tint(#ff7a1a, 0.8)` on an element gives the same pixels as a `#ff7a1a` layer
+with `mix-blend-mode: overlay; opacity: 0.8` over the same backdrop. Values above 1 in an HDR
+window pass through the separable modes except where a formula is bounded: `color-dodge` and
+`color-burn` stop at 0 and 1, and the four non-separable modes clip into 0..1 as the spec does.
+
+## Shapes from distances: sk.sdf
+
+A signed distance field says how far a point is from a shape's edge: negative inside, zero on it,
+positive outside. `sk.sdf` measures it in device pixels with y down, the same convention as
+`input.sd`, so a shape you draw and the element's own edge antialias alike. Shapes sit at the
+origin: centre the point (`input.px - input.size * 0.5`) and move it, not the shape.
+
+```slang
+float2 p = input.px - input.size * 0.5;
+float d = Sdf.roundedBox(p, float2(40.0, 16.0), 16.0);        // a pill
+d = Sdf.smoothUnion(d, Sdf.circle(p - float2(36.0, -14.0), 9.0), 6.0);
+float fill = Sdf.coverage(d);                                  // 0..1, antialiased
+float edge = Sdf.stroke(d, 2.0, StrokeAlign.Inside);           // a 2 px inner border
+```
+
+The shapes are exact: circle, box, rounded box with per-corner radii in CSS order, segment, capsule,
+triangle, regular polygon, star, arc, ring, pie, half-plane and cross; the ellipse is within a
+thousandth of a pixel for aspect ratios up to 10:1. `union`, `intersection`, `subtraction` and
+`xor` combine distances, and their `smooth` forms fillet the seam over a radius in pixels.
+`translate`, `rotate`, `mirror`, `repeat` and `polarRepeat` move the point before a shape reads it.
+`coverage`, `stroke`, `feather` and `glow` turn a distance into the alpha to draw with.
+
+Shapes and operations are plain functions: composing them as generic types compiled to about twice
+the code and read worse. A field that a helper must sample several times, `Sdf.gradient` or
+`Sdf.normal` for lighting, is a struct implementing `ISdf` that wraps the calls.
+
+### A badge with a soft shadow
+
+```slang
+import sk;
+import sk.sdf;
+
+/// A rounded body with a dot welded to its top-right corner.
+float badge(float2 p, float2 extent)
+{
+    float body = Sdf.roundedBox(p, extent, 10.0);
+    float dot = Sdf.circle(p - float2(extent.x - 4.0, -extent.y + 4.0), 7.0);
+    return Sdf.smoothUnion(body, dot, 4.0);
+}
+
+[SkEffect("sdf-badge")]
+struct SdfBadge : IEffect
+{
+    [SkColor] [SkDefault("#2b6cff")] float4 fill;
+    [SkLength] [SkBleed] [SkDefault("12")] float shadow;
+
+    float4 shade(EffectInput input)
+    {
+        float2 p = input.px - input.size * 0.5;
+        float2 extent = input.size * 0.5 - 8.0;
+        float d = badge(p, extent);
+        float drop = badge(Sdf.translate(p, float2(0.0, 3.0)), extent);
+        float4 under = float4(0.0, 0.0, 0.0, 0.35) * Sdf.glow(drop, shadow);
+        float4 body = sk_premultiply(fill) * Sdf.coverage(d);
+        float4 ring = float4(1.0, 1.0, 1.0, 1.0) * (0.6 * Sdf.stroke(d, 1.5, StrokeAlign.Inside));
+        return sk_over(sk_over(under, body), ring);
+    }
+};
+```
+
+The shadow is the same shape moved 3 px down, and `glow` falls to exactly zero at `shadow` pixels,
+so the `[SkBleed]` of the same length holds all of it.
+
+## Timing with easings: sk.ease
+
+`sk.ease` turns a time into a curve. `progress(time, start, seconds)` is 0..1 through an interval
+that began at `start`, which is how an effect times itself from `input.time` and a moment it was
+given: a `[SkAnimatedFor]` field written from JS, or a component of `[SkPointerTimes]`. An easing
+then shapes that progress:
+
+- `CubicBezier(x1, y1, x2, y2)` is CSS `cubic-bezier()`, with `CubicBezier.ease()`, `easeIn()`,
+  `easeOut()` and `easeInOut()` for the keywords. It solves the curve with ten safeguarded Newton
+  steps, a fixed count, and continues along its end tangents outside 0..1 as CSS does.
+- `Steps(count, position)` is CSS `steps()`, and `LinearStops<N>` is CSS `linear()` with its stops
+  written out.
+- `easeInQuad` to `easeInOutBounce` are the thirty curves of easings.net.
+- `Spring(duration, bounce)` is a damped spring in closed form; its `at` takes seconds, not
+  progress, so it gives the same motion at any frame rate.
+
+For repeating motion, `loop`, `pingPong` and `pulse` turn `input.time` into a sawtooth, a triangle
+or a periodic bump, and `attackHoldRelease` is an envelope that rises, holds and falls once.
+
+### A click ripple
+
+```slang
+import sk;
+import sk.ease;
+import sk.sdf;
+
+[SkEffect("click-ripple")]
+struct ClickRipple : IEffect
+{
+    [SkColor] [SkDefault("#ffffff60")] float4 tint;
+    // The time and place of the last click, written from JS: performance.now() / 1000 and 0..1.
+    [SkAnimatedFor(0.6)] [SkDefault("-100")] float clickedAt;
+    [SkDefault("0.5 0.5")] float2 origin;
+
+    float4 shade(EffectInput input)
+    {
+        float t = progress(input.time, clickedAt, 0.6);
+        float reach = length(input.size);
+        float radius = CubicBezier.easeOut().at(t) * reach;
+        float d = Sdf.circle(input.px - origin * input.size, radius);
+        float fade = 1.0 - easeInQuad(t);
+        float a = Sdf.coverage(d) * fade * (t < 1.0 ? 1.0 : 0.0);
+        return sk_premultiply(tint) * a;
+    }
+};
+```
+
+Set `clickedAt` to `performance.now() / 1000` and `origin` to the click's position in the element
+on each click; `[SkAnimatedFor(0.6)]` keeps the window repainting for the 0.6 s the ripple lasts and
+not a frame longer.
+
+## Noise and dither: sk.noise
+
+`sk.noise` starts from integer hashes. `pcg` and `pcg3d` mix uint words with multiplies, shifts and
+xors, and `hash`, `hash2` and `hash3` turn a cell `floor(p)` into one, two or three floats in
+[0, 1). Integer arithmetic rounds nowhere, so the same pixel gets the same value on DirectX 12,
+Metal and wgpu. The older `sk_hash12` from `sk` hashes with floats and does not: a sparkle
+pattern built on it moves between machines.
+
+The noises are types: `Perlin`, `Simplex` and `ValueNoise` in 2D and 3D, each with `at` and
+analytic `derivatives`, and `tiled` forms that repeat after a whole number of cells. A fractal
+takes the noise as a type argument, so one `fbm` serves every noise, yours included, and compiles
+to the same code as a loop written out by hand:
+
+```slang
+float clouds = fbm<Simplex>(input.px / 120.0, 5.0);             // [-1, 1]
+float billows = turbulence<Perlin>(input.px / 60.0);            // [0, 1]
+float2 flow = curl<Simplex>(input.px / 80.0, 3.0);              // divergence-free
+Cell c = worley(input.px / 40.0);                               // f1, f2, cell, id
+```
+
+Every function states its range, and none clamps it: Perlin and simplex stay within [-1, 1] by
+construction, `fbm` divides by its weights to stay there, and `turbulence` and `ridged` are in
+[0, 1]. Octaves stop at `MAX_OCTAVES` (8), a fixed bound the compiler unrolls. A 3D noise
+animates a 2D pattern without sliding it: `fbm<Perlin>(float3(p, input.time * speed))`.
+
+For the last step before a pixel is stored there are dither patterns: `ign` (interleaved gradient
+noise), `r2` (a low-discrepancy sequence), `bayer` (ordered, 2 to 8 square) and `dither`, which adds
+triangular noise of one quantisation step each way so a slow gradient has no bands.
+
+### Film grain without banding
+
+```slang
+import sk;
+import sk.noise;
+
+[SkEffect("film-grain")]
+[SkBackdrop]
+struct FilmGrain : IEffect
+{
+    [SkRange(0.0, 0.3)] [SkDefault("0.06")] float strength;
+    [SkAnimated] [SkDefault("24")] float fps;
+
+    float4 shade(EffectInput input)
+    {
+        float frame = floor(input.time * fps);
+        // A new grain every frame, the same on every GPU, mean 0.
+        float grain = triangular(hash(float3(floor(input.px), frame)));
+        float3 rgb = input.backdrop.rgb + grain * strength * input.backdrop.a;
+        return float4(dither(rgb, input.px, frame, 255.0), input.backdrop.a) * input.coverage;
+    }
+};
+```
+
+`--shading: film-grain(0.06, 24)` over a dark gradient adds visible grain and removes the bands
+an 8-bit target would show. `triangular` turns the uniform hash into noise with a mean of 0, so the
+grain does not brighten the picture. `dither` then hides the last quantisation step. Setting
+`fps` to 0 freezes the grain and stops the repaints.
+
+## Kernels over the engine's samplers: sk.sample
+
+The engine samples the backdrop, the element's content and its history for you. `sk.sample` puts
+one interface, `ISampler`, over all of them, plus images, and builds kernels on it:
+
+- `Backdrop(input)`, the backdrop blurred to `[SkBackdropRadius]`; `RawBackdrop(input)`, unblurred;
+  `PageBackdrop(input)`, the page without native layers;
+- `Content(input)` with `[SkContent]`, and `History(input)` with `[SkHistory]`;
+- `Image(texture)` for an `SkTexture`, `Image(texture, true)` to repeat it.
+
+Kernels take a point in the source's pixels: `input.px` for the element's samplers, texels for an
+image. Everything is premultiplied in and out, and a kernel over transparent pixels returns exactly
+0, never a NaN.
+
+Each kernel reads a known distance from the point, and its `…Reach` helper returns that distance in
+pixels: `gaussianReach<Gaussian9>()` is 5, `discReach(8.0)` 9, `dispersionReach(offset, spread)`
+grows with the offset. Declare at least that much as `[SkBackdropReach]`: the engine then copies
+and blurs only the element grown by the reach. A read beyond it is clamped to the copied edge, so a
+kernel near the rim repeats the edge pixels instead of darkening; with the right reach it reads the
+real ones.
+
+**The pyramid or a kernel?** `[SkBackdropRadius]` blurs the backdrop once per frame through a
+downsampled pyramid. That costs the same for 4 px as for 60, and `Backdrop(input)` reads the
+result. Use it for any blur wider than a few pixels. The kernels here are for what the pyramid
+cannot do: blur the content or the history, add a few pixels of softness that change across the
+element, streak in a direction, open a bokeh disc, split colours, resample with a bicubic filter
+or sharpen. They cost per pixel: `gaussian<Gaussian13>` is 49 reads.
+
+### A frosted panel with a dispersive rim
+
+```slang
+import sk;
+import sk.light;
+import sk.sample;
+
+[SkEffect("frosted-panel")]
+struct FrostedPanel : IEffect
+{
+    [SkLength] [SkBackdropRadius] [SkDefault("18")] float blur;
+    // How far the rim reads past the panel; the bend follows from it so the two always agree.
+    [SkLength] [SkBackdropReach] [SkDefault("13")] float reach;
+    [SkLength] [SkDefault("14")] float rimWidth;
+    [SkColor] [SkDefault("#ffffff26")] float4 tint;
+
+    float4 shade(EffectInput input)
+    {
+        const float spread = 0.2;
+        float bend = (reach - 1.0) / (1.0 + spread);   // dispersionReach(bend, spread) == reach
+        float rim = 1.0 - saturate(-input.sd / rimWidth);
+        float2 inward = -normalize(screenGradient(input.sd) + 1e-6);
+        float4 frost = dispersion(Backdrop(input), input.px, inward * bend * rim * rim, spread);
+        float4 glass = frost * (1.0 - tint.a) + sk_premultiply(tint);
+        return glass * input.coverage;
+    }
+};
+```
+
+The engine blurs the backdrop to 18 px. Near the edge the panel reads it from up to 10 px further
+in, red further than blue, as thick glass splits light at its rim. Because `bend` is derived from
+`reach`, the declared reach always covers the furthest read.
+
+## Light for flat UI: sk.light
+
+`sk.light` gives a flat element depth. Everything starts from a normal. `bevelNormal(sd, gradient,
+width)` builds one from any signed distance: `input.sd` with `screenGradient(input.sd)`, or a shape
+from `sk.sdf` with `Sdf.gradient`. It rises over `width` pixels from the edge in a `Circle`,
+`Squircle` or `Linear` profile. `heightNormal`, `normalFromSlope` and `unpackNormal` cover height
+fields, noise slopes and normal maps.
+
+With a normal you can:
+
+- **bend what is behind**: `refractionOffset(n, thickness, ior)` follows the view ray through
+  glass by Snell's law and returns where to read, as a pixel offset. It is the one call between
+  this module and `sk.sample`: pass it to `displace`, or to `dispersion` for coloured fringes. It
+  is at most `thickness × √(ior² − 1)`, 1.12 × the thickness for glass, which is the reach to
+  declare;
+- **reflect**: `fresnelSchlick(n.z, f0FromIor(1.5))` is how much the surface mirrors at that angle,
+  from 4 % head-on to all of it at grazing angles;
+- **catch light**: `lambert` and `wrapLambert` for diffuse light; `blinnPhong`, `ggx` (physically
+  based), `rim` and `anisotropic` for highlights. They are all functions of plain vectors;
+  `Light` and `Surface` bundle the arguments when you light the same surface several times.
+- **cast shadows**: `dropShadow(sd, blur)` and `innerShadow` give the opacity CSS `box-shadow`
+  draws for that blur (sigma = blur / 2), so an effect's shadow matches the page's own.
+
+Highlights are added with `addLight`: on a premultiplied pixel in encoded values (cheap, and
+glints look right), or on a `Color` in linear light.
+
+### A glass button
+
+```slang
+import sk;
+import sk.color;
+import sk.light;
+import sk.sample;
+
+[SkEffect("glass-button")]
+struct GlassButton : IEffect
+{
+    [SkLength] [SkDefault("16")] float bevel;
+    [SkLength] [SkBackdropReach] [SkDefault("30")] float reach;
+    [SkColor] [SkDefault("#ffffff20")] float4 tint;
+
+    float4 shade(EffectInput input)
+    {
+        // The deepest bend is thickness x sqrt(ior^2 - 1); the blur reads 3 px beyond it.
+        float thickness = (reach - gaussianReach<Gaussian5>()) / sqrt(1.5 * 1.5 - 1.0);
+        float3 n = bevelNormal(input.sd, screenGradient(input.sd), bevel);
+        float2 bend = refractionOffset(n, thickness, 1.5);
+        Color seen = Color.fromPremultiplied(gaussian<Gaussian5>(Backdrop(input), input.px + bend));
+        Color glass = seen.mix(Color.fromSrgb(tint), tint.a);
+        float3 l = normalize(float3(-0.5, -0.7, 0.6));
+        float highlight = blinnPhong(n, l, 80.0) + 0.3 * rim(n, 3.0) * fresnelSchlick(n.z, f0FromIor(1.5));
+        return (addLight(glass, float3(highlight, highlight, highlight)).toPremultiplied()) * input.coverage;
+    }
+};
+```
+
+The rim bends the backdrop inwards, as a real lens shows what lies further in. A light from the top
+left puts a glint on the upper rim, and Fresnel brightens the edge where the glass turns away.
+There is no single `shade` combinator for this: writing the showcase's glass with one made it longer
+than these few calls.

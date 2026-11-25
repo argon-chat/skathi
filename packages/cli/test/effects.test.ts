@@ -8,7 +8,16 @@ import { devEffectsWatch, EFFECTS_CHANGED, watchAppEffects } from "../cli/effect
 import { compileAppEffects, EffectsError, writeEffectFiles } from "../effects/compile";
 import { resolveCompiler, unpack } from "../effects/redslangc";
 import { FIXTURES } from "./check-fixtures";
+import { type Case, tableEffect } from "./shader-table";
+import * as blendTable from "./sk-blend-table";
 import { CSS_SAMPLES, caseEffect, cases, deltaE2000Lab, SHARMA_PAIRS, SPACES } from "./sk-color-table";
+import * as easeTable from "./sk-ease-table";
+import { KNOWN } from "./sk-ease-table";
+import * as sdfTable from "./sk-sdf-table";
+import { ellipse, roundedBox } from "./sk-sdf-table";
+import * as lightTable from "./sk-light-table";
+import * as noiseTable from "./sk-noise-table";
+import * as sampleTable from "./sk-sample-table";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-effects-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -304,6 +313,168 @@ describe("the sk.color reference", () => {
   test("reproduces Sharma's CIEDE2000 pairs", () => {
     for (const [a, b, want] of SHARMA_PAIRS) expect(deltaE2000Lab(a, b)).toBeCloseTo(want, 4);
   });
+});
+
+describe.skipIf(!compiler)("sk.blend, sk.sdf and sk.ease", () => {
+  const body = "return sk_premultiply(tint * input.coverage);";
+  const uses: Array<[module: string, shade: string, kept: RegExp, dropped: RegExp]> = [
+    [
+      "sk.blend",
+      "return blend<Blend.Overlay>(input.backdrop, sk_premultiply(tint));",
+      /sk_blend_hard_light/,
+      /SoftLight|sk_blend_clip|sk_blend_sat|PlusDarker|Color_/,
+    ],
+    [
+      "sk.sdf",
+      "float d = Sdf.roundedBox(input.px - input.size * 0.5, input.size * 0.4, 12.0); return tint * Sdf.coverage(d);",
+      /Sdf_roundedBox/,
+      /ellipse|Sdf_star|Sdf_polygon|Sdf_triangle|gradient|sk_sdf_sector/,
+    ],
+    [
+      "sk.ease",
+      "return tint * CubicBezier.easeOut().at(progress(input.time, 0.0, 0.6));",
+      /sk_bezier_t/,
+      /Spring|LinearStops|Elastic|sk_ease_bounce|inverseSmootherstep/,
+    ],
+  ];
+
+  test("importing them unused changes no target's output", async () => {
+    const imports = uses.map(([m]) => `import ${m};`).join(" ");
+    const out = async (source: string) => {
+      const [only] = (await compileAppEffects(app({ "ripple.slang": source }), compiler!)).compiled;
+      return only!.outputs.map((o) => o.code.replaceAll(/sk-effects-\w+\/app-\w+|src-sha256: \w+/g, ""));
+    };
+    expect(await out(RIPPLE.replace("import sk;", `import sk; ${imports}`))).toEqual(await out(RIPPLE));
+  });
+
+  for (const [module, shade, kept, dropped] of uses) {
+    test(`an effect imports ${module}, and only what it calls reaches each target`, async () => {
+      const root = app({
+        "use.slang": RIPPLE.replace("import sk;", `import sk;\nimport ${module};`).replace(body, shade),
+      });
+      const [use] = (await compileAppEffects(root, compiler!)).compiled;
+      for (const { target, code } of use!.outputs) {
+        expect([target, kept.test(code), code.match(new RegExp(dropped, "g"))]).toEqual([target, true, null]);
+      }
+    });
+  }
+
+  const tables: Array<[string, { IMPORTS: string[]; DECLARATIONS?: string; cases: () => Case[] }]> = [
+    ["sk.blend", blendTable],
+    ["sk.sdf", sdfTable],
+    ["sk.ease", easeTable],
+  ];
+  for (const [module, table] of tables) {
+    test(`the whole ${module} golden table compiles for every renderer`, async () => {
+      const all = table.cases();
+      const per = Math.ceil(all.length / 4);
+      const root = app(
+        Object.fromEntries(
+          [0, 1, 2, 3].map((i) => [
+            `table${i}.slang`,
+            tableEffect(`table${i}`, all.slice(i * per, (i + 1) * per), table.IMPORTS, table.DECLARATIONS),
+          ]),
+        ),
+      );
+      const built = await compileAppEffects(root, compiler!);
+      expect(built.files.map((f) => f.name).filter((n) => n.startsWith("table0"))).toEqual([
+        "table0.hlsl",
+        "table0.wgsl",
+        "table0.metal",
+      ]);
+      expect(built.warnings.filter((w) => w.file.startsWith("sk/"))).toEqual([]);
+    }, 30_000);
+  }
+});
+
+describe("the sk.ease and sk.sdf references", () => {
+  test("reproduce published easing values", () => {
+    for (const k of KNOWN) expect([k.what, Math.abs(k.got() - k.want) <= k.tol]).toEqual([k.what, true]);
+  });
+
+  test("measure an ellipse with equal axes and a fully rounded square as circles", () => {
+    for (const p of [
+      [0, 0],
+      [7, -3],
+      [40, 25],
+      [-18, 12],
+    ] as Array<[number, number]>) {
+      expect(ellipse(p, [20, 20])).toBeCloseTo(Math.hypot(...p) - 20, 9);
+      expect(roundedBox(p, [20, 20], [20, 20, 20, 20])).toBeCloseTo(Math.hypot(...p) - 20, 9);
+    }
+  });
+});
+
+describe.skipIf(!compiler)("sk.noise, sk.sample and sk.light", () => {
+  const body = "return sk_premultiply(tint * input.coverage);";
+  const uses: Array<[module: string, shade: string, kept: RegExp, dropped: RegExp]> = [
+    [
+      "sk.noise",
+      "return tint * fbm<Simplex>(input.px * 0.05);",
+      /Simplex_at/,
+      /Perlin|ValueNoise|worley|sk_grad3|bayer|curl/,
+    ],
+    [
+      "sk.sample",
+      "return gaussian<Gaussian9>(Backdrop(input), input.px) * tint.a;",
+      /Gaussian9_weight/,
+      /Gaussian13|Gaussian5|catmullRom|bspline|disc|kaleidoscope|chromatic|\bHistory_/,
+    ],
+    [
+      "sk.light",
+      "float3 n = bevelNormal(input.sd, screenGradient(input.sd), 12.0); return tint * blinnPhong(n, normalize(float3(-0.5, -0.7, 0.6)), 40.0);",
+      /bevelNormal/,
+      /ggx|sk_erf|anisotropic|fresnelDielectric|\bSurface_|\bLight_|Oklch/,
+    ],
+  ];
+
+  test("importing them unused changes no target's output", async () => {
+    const imports = uses.map(([m]) => `import ${m};`).join(" ");
+    const out = async (source: string) => {
+      const [only] = (await compileAppEffects(app({ "ripple.slang": source }), compiler!)).compiled;
+      return only!.outputs.map((o) => o.code.replaceAll(/sk-effects-\w+\/app-\w+|src-sha256: \w+/g, ""));
+    };
+    expect(await out(RIPPLE.replace("import sk;", `import sk; ${imports}`))).toEqual(await out(RIPPLE));
+  });
+
+  for (const [module, shade, kept, dropped] of uses) {
+    test(`an effect imports ${module}, and only what it calls reaches each target`, async () => {
+      const root = app({
+        "use.slang": RIPPLE.replace("import sk;", `import sk;\nimport ${module};`).replace(body, shade),
+      });
+      const [use] = (await compileAppEffects(root, compiler!)).compiled;
+      for (const { target, code } of use!.outputs) {
+        expect([target, kept.test(code), code.match(new RegExp(dropped, "g"))]).toEqual([target, true, null]);
+      }
+    });
+  }
+
+  const tables: Array<[string, { caseEffect: (name: string, chunk: Case[]) => string; cases: () => Case[] }]> = [
+    ["sk.noise", noiseTable],
+    ["sk.sample", sampleTable],
+    ["sk.light", lightTable],
+  ];
+  for (const [module, table] of tables) {
+    test(`the whole ${module} golden table compiles for every renderer`, async () => {
+      const all = table.cases();
+      const per = Math.ceil(all.length / 4);
+      const root = app(
+        Object.fromEntries(
+          [0, 1, 2, 3].map((i) => [
+            `table${i}.slang`,
+            table.caseEffect(`table${i}`, all.slice(i * per, (i + 1) * per)),
+          ]),
+        ),
+      );
+      const built = await compileAppEffects(root, compiler!);
+      expect(built.files.map((f) => f.name).filter((n) => n.startsWith("table0"))).toEqual([
+        "table0.hlsl",
+        "table0.wgsl",
+        "table0.metal",
+      ]);
+      expect(built.warnings.filter((w) => w.file.startsWith("sk/"))).toEqual([]);
+    }, 60_000);
+  }
 });
 
 test.skipIf(!compiler)(

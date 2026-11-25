@@ -3,7 +3,17 @@ import type { Detail } from "../details";
 
 export type Kind = "attribute" | "struct" | "interface" | "method" | "function" | "field" | "enum" | "type";
 
-export const categories = ["sk", "sk.color"] as const;
+export const categories = [
+  "sk",
+  "sk.color",
+  "sk.math",
+  "sk.blend",
+  "sk.sdf",
+  "sk.ease",
+  "sk.noise",
+  "sk.sample",
+  "sk.light",
+] as const;
 
 export type Category = (typeof categories)[number];
 
