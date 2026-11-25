@@ -246,6 +246,7 @@ pub const COMPUTED_PROPERTIES: &[&str] = &[
     "font-width",
     "font-variation-settings",
     "color",
+    "text-align",
     "text-shadow",
     "box-shadow",
     "outline-style",
@@ -471,6 +472,18 @@ fn computed_in(t: &Tree, id: u32, name: &str) -> Option<String> {
                 .or(cs.base.box_shadow.as_deref())
                 .unwrap_or_default(),
         ),
+        "text-align" => {
+            let declared = std::iter::successors(t.node(id), |n| t.node(n.parent))
+                .take(1024)
+                .find_map(|n| n.computed.as_ref().and_then(|cs| cs.base.text.text_align));
+            match declared {
+                None => "start",
+                Some(gpui::TextAlign::Center) => "center",
+                Some(gpui::TextAlign::Right) => "right",
+                Some(_) => "left",
+            }
+            .into()
+        }
         "outline-style" | "outline-width" | "outline-color" | "outline-offset" => {
             let ring = live_outline(t, id, cs);
             let drawn = ring.filter(|r| r.width > gpui::px(0.0));

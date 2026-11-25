@@ -1000,7 +1000,8 @@ impl<'a> Half<'a> {
 /// every author rule beats these.
 pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none } \
     :where(sub) { vertical-align: sub; font-size: smaller } \
-    :where(sup) { vertical-align: super; font-size: smaller }";
+    :where(sup) { vertical-align: super; font-size: smaller } \
+    :where(button, input[type=button], input[type=submit], input[type=reset]) { text-align: center }";
 
 /// An element's used color scheme from its computed `color-scheme` (inherited in `vars`): `None`
 /// under `normal`, else whether it is dark, the environment's preference winning when both are
@@ -5321,6 +5322,33 @@ mod tests {
     }
 
     #[test]
+    fn buttons_centre_their_text_below_every_author_rule() {
+        use gpui::TextAlign::{Center, Left};
+        let align =
+            |css: &str, tag: &'static str, attrs: &'static [(&'static str, &'static str)]| {
+                let node = Node {
+                    tag,
+                    class: "box",
+                    attrs,
+                };
+                Engine::compile(css)
+                    .compute(node, None, &Env::default())
+                    .base
+                    .text
+                    .text_align
+            };
+        assert_eq!(align("", "button", &[]), Some(Center));
+        assert_eq!(align("", "input", &[("type", "submit")]), Some(Center));
+        assert_eq!(align("", "input", &[("type", "text")]), None);
+        assert_eq!(align("", "div", &[]), None);
+        assert_eq!(
+            align("* { text-align: left }", "button", &[]),
+            Some(Left),
+            "even `*`"
+        );
+    }
+
+    #[test]
     fn attribute_substring_operators() {
         let a: &'static [(&'static str, &'static str)] = &[("data-x", "alpha-beta gamma")];
         assert!(attr_matches(r#"[data-x^="alpha"]"#, a));
@@ -6259,6 +6287,7 @@ mod tests {
                 ":where([hidden])",
                 ":where(sub)",
                 ":where(sup)",
+                ":where(button, input[type=\"button\"], input[type=\"submit\"], input[type=\"reset\"])",
                 ".a *",
                 "*",
                 ".a ~ *",
