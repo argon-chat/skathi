@@ -23,6 +23,7 @@ mod macos {
 
     const CASE: &str = "SK_TEST_APPKIT_QUIT";
     const HOST_EXIT: i32 = 23;
+
     pub(super) fn run() {
         if let Ok(case) = env::var(CASE) {
             run_host(case);
@@ -33,6 +34,7 @@ mod macos {
             .chain(std::iter::repeat_n("dock", 6))
         {
             let profile = tempfile::tempdir().unwrap();
+            eprintln!("Testing AppKit quit via {case}");
             let status = Command::new(env::current_exe().unwrap())
                 .env(CASE, case)
                 .env("SK_DATA_DIR", profile.path())
@@ -50,7 +52,16 @@ mod macos {
             eprintln!("AppKit did not hand control back to the host");
             std::process::exit(1);
         });
-        Builder::new()
+        let builder = Builder::new();
+        #[cfg(feature = "prod")]
+        let builder = {
+            use sk_payload::{kind, name, write_unaligned};
+            builder.payload_bytes(write_unaligned(&[
+                (kind::META, name::META, br#"{"name":"appkit-quit-test"}"#),
+                (kind::SCRIPT, name::SCRIPT, b"void 0;"),
+            ]))
+        };
+        builder
             .activate(false)
             .visible(false)
             .setup(move |_| {
