@@ -84,9 +84,23 @@ An app's effect is compiled, and its pipelines built, in the first frame that dr
 
 `true` builds every effect of the app; a list of names, such as `["glass"]`, builds only those and is the better choice for an app with many effects that are seldom on screen. It is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133))
 
+### A native layer behind glass
+
+A native layer under the page, a video an embedder presents itself, was invisible to a backdrop effect: the effect saw the hole the page leaves for it. A `Layer` can now name a surface as its picture:
+
+```rust
+fn picture(&mut self) -> Option<SurfaceHandle> {
+    Some(self.surface.clone())
+}
+```
+
+Backdrop effects and `backdrop-filter` over the `<sk-layer>` then see that picture where the layer is, rounded and clipped like it, on Metal, DirectX 12 and wgpu. It is never drawn into the page itself, so the layer's own presentation is what shows around the effect, and `input.pageBackdropAt(uv)` gives an effect the page without it. The surface's `info().visible` says when something reads or shows it. ([#129](https://github.com/argon-chat/skathi/issues/129))
+
+Two more methods come with it. `Layer::stack(index)` tells a layer its place among the layers of its window, and `Layer::frame_submitted(LayerFrame)` reports every page frame of the window with its number and submit time, so an embedder can line its own present up with the page. A picture's `FrameEvent::Presented` names the page frame that composited it. ([#132](https://github.com/argon-chat/skathi/issues/132))
+
 ## Shader standard library
 
-An effect used to get `import sk;` and ten helpers. It now has a library of modules beside it, and the first is `sk.color`:
+An effect used to get `import sk;` and ten helpers. It now has a library of modules beside it. `sk.color` first:
 
 ```slang
 import sk;
@@ -112,6 +126,16 @@ struct TintedGlass : IEffect
 A `Color` is linear light with straight alpha, and its constructors are named after what an effect holds: `fromSrgb` for an `[SkColor]` argument, `fromPremultiplied` for a backdrop or content sample, `fromHex`, `fromLinear`. Getting the encoding wrong used to be silent; now it is a different function name. Conversions cover the CSS Color 4 spaces, sRGB, HSL, HWB, Lab, LCH, OKLab, OKLCH and XYZ, with the spec's constants, and `mix<Space>` is `color-mix()` with its hue rules. Then the colord set: `lighten`, `saturate`, `rotate`, `invert`, `luminance`, WCAG `contrast`, ΔE OK and CIEDE2000, and the harmonies.
 
 Values above SDR white in an HDR window survive every conversion that can hold them. The same table of more than 300 cases runs on DirectX 12, Metal and wgpu and gives the same answers. Only what an effect calls is compiled into it. The [guide](/guides/shader-library/) walks through three effects, and the [shader library reference](/shaders/) has a page for each type and function, the attributes of `sk` included.
+
+Seven more modules follow the same rules:
+
+- **`sk.math`**: `SK_PI`, `floorMod`, `safeDiv`, `remap`.
+- **`sk.blend`**: the sixteen CSS blend modes as `blend<Multiply>(src, dst)` and the Porter-Duff operators as `composite<SrcOver>`, on premultiplied colour.
+- **`sk.sdf`**: 2D signed distance fields, from `Sdf.circle` to `Sdf.star`, with unions, smooth unions and repetition, and `coverage`, `stroke` and `glow` to turn a distance into pixels.
+- **`sk.ease`**: CSS `cubic-bezier`, `steps` and `linear()` stops, the Penner curves, springs, and `progress` for a time envelope.
+- **`sk.noise`**: Perlin, simplex, value and Worley noise with analytic derivatives, and fractals that take any noise as a type: `fbm<Simplex>(p)`. Its hashes are integer PCG, so a pattern lands on the same pixels on DirectX 12, Metal and Vulkan, and every function states its range. Dither helpers, triangular-PDF `dither` among them, remove banding from long gradients.
+- **`sk.sample`**: one `ISampler` over the backdrop, content, history and textures, with Gaussian, disc, motion and zoom blurs, chromatic aberration, dispersion, displacement, bicubic resampling and sharpening built on it. Each kernel comes with a reach helper for `[SkBackdropReach]`.
+- **`sk.light`**: flat UI depth. Bevel normals from any signed distance, Snell refraction as a pixel offset that plugs into `sk.sample`, Fresnel, Blinn-Phong, GGX, rim and anisotropic highlights, and shadows that match CSS `box-shadow` for the same blur.
 
 ## Windows
 
@@ -159,6 +183,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 <Aside kind="warning" title="What 0.9 does not do yet">
 
 - **Backdrop reach.** The built-in `frost` still copies the whole window, and so does an effect inside an effect layer.
+- **A layer's picture** is not seen by a backdrop effect inside an isolated group (an effect layer, `opacity` on an ancestor), nor on the Direct3D 11 fallback renderer. A reader's first frame over a layer shows the picture last published, so keep the newest frame published while nothing reads it.
 - **`startResizeDragging`** does nothing on macOS, where AppKit has no call for it.
 - **The window theme** on Linux still reaches only `prefers-color-scheme`.
 
