@@ -186,10 +186,11 @@ describe("the panels", () => {
     "the Performance panel reads the target's rolling frame clock",
     async () => {
       await inspector.locator(".tab").nth(2).click();
-      await expect(inspector.locator(".stat.big .v")).toBeVisible();
-      const fps = Number(await inspector.locator(".stat.big .v").textContent());
+      const clock = inspector.locator('[data-metric="fps"]');
+      await expect(clock).toBeVisible();
+      const fps = Number.parseFloat(await clock.textContent());
       bunExpect(fps).toBeGreaterThan(1);
-      await expect(inspector.locator(".bar").first()).toBeVisible();
+      await expect(inspector.locator(".bars .fbar, .bars .bar").first()).toBeVisible();
     },
     T,
   );

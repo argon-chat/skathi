@@ -16,6 +16,7 @@ createApp({
       h("div", { class: "lh-em" }, [h("div", { id: "lh-em" }, "em")]),
       h("div", { id: "hov", class: "hov" }, [h("i")]),
       h("div", { id: "ch", class: "ch" }),
+      h("span", { id: "ch-digits" }, "0000"),
     ]),
 }).mount();
 

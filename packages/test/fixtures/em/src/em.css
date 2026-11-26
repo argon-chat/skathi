@@ -68,8 +68,11 @@
   height: 1px;
 }
 
-.ch {
+.ch,
+#ch-digits {
   font-size: 12px;
+}
+.ch {
   width: 4ch;
   height: 2px;
   background: #fff;

@@ -202,7 +202,7 @@ function residentTitle(key: string): string {
         </div>
         <div class="meta">
           <span>budget {{ budget.toFixed(2) }} ms{{ perf.budgetMs ? "" : " (assumed 60 Hz)" }}</span>
-          <span title="Frames per second over the ring, waiting included: low while idle on purpose"
+          <span data-metric="fps" title="Frames per second over the ring, waiting included: low while idle on purpose"
             >{{ perf.fps.toFixed(1) }} fps with waiting</span
           >
           <span title="Frames that drew; the rest ran the pump with nothing to repaint"
@@ -256,7 +256,7 @@ function residentTitle(key: string): string {
       <template v-else>
         <div class="stats">
           <div class="stat big">
-            <span class="v">{{ perf.fps.toFixed(1) }}</span
+            <span class="v" data-metric="fps">{{ perf.fps.toFixed(1) }}</span
             ><span class="u">fps</span>
             <span class="k">average over the ring</span>
           </div>
