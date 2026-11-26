@@ -62,13 +62,18 @@ An effect that reads its backdrop used to make the renderer copy the whole windo
 An effect can now say how far it reads. Mark a length parameter with `[SkBackdropReach]`:
 
 ```slang
+import sk;
+
 [SkEffect("glass")]
 struct Glass : IEffect
 {
     [SkLength] [SkBackdropReach] float depth;
 
-    float4 shade(EffectInput input) { /* ... */ }
-}
+    float4 shade(EffectInput input)
+    {
+        return input.backdropAtPx(input.px + float2(depth, 0.0));
+    }
+};
 ```
 
 The renderer then copies and blurs only the element's box grown by that length, on Metal, DirectX 12 and wgpu alike, and a read beyond it is clamped to that edge. The marker implies `[SkBackdrop]`. An effect without it works as before. ([#130](https://github.com/argon-chat/skathi/issues/130))
@@ -81,7 +86,7 @@ An app's effect is compiled, and its pipelines built, in the first frame that dr
 { "effects": { "prewarm": true } }
 ```
 
-`true` builds every app effect. With a list such as `["glass"]`, showing the warmed glass leaves other effects for the first frame that draws each one. Prewarming is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133), [#134](https://github.com/argon-chat/skathi/issues/134))
+`true` builds every app effect. With a list such as `["glass"]`, showing the warmed glass leaves other effects for the first frame that draws each one. In the four-effect DirectX 12 test, the first draw of the warmed effect went from compiling three extra pipelines to compiling zero. Prewarming is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133), [#134](https://github.com/argon-chat/skathi/issues/134))
 
 ### A native layer behind glass
 
@@ -139,24 +144,26 @@ Eight more modules follow the same rules:
 
 ### HDR light behind an effect
 
-In an HDR window, frosted glass and every other backdrop effect cut the video or image behind it to SDR white: a 1000-nit highlight came out of the glass at about a hundred. Highlights now pass through at their real brightness, `backdrop-filter: blur()` included, and an SDR window looks exactly as before.
+Backdrop effects used to clip highlights in HDR windows to SDR white. Ordinary backdrop effects and `backdrop-filter: blur()` now preserve values above white. We verified this in half-float render targets on DirectX 12, wgpu and Metal on an M4 Mac mini. A visual check on a physical HDR display is still pending.
 
 An effect that wants to work on that light asks for it:
 
 ```slang
+import sk;
+
 [SkEffect("hdr-glass")]
 [SkBackdropLinear]
 struct HdrGlass : IEffect
 {
-    float4 shade(EffectInput input) { /* ... */ }
-}
+    float4 shade(EffectInput input) { return input.backdrop; }
+};
 ```
 
 With `[SkBackdropLinear]` the backdrop arrives premultiplied in linear light, 1.0 being SDR white and highlights above it, the blur is done on light and not on sRGB codes, and what `shade` returns is taken as linear light without the cut at SDR white. `return input.backdrop;` is an exact identity. ([#131](https://github.com/argon-chat/skathi/issues/131))
 
 ## Windows
 
-**`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. A new `"window": { "theme" }` key in sk.config.json sets the starting theme on every platform, before the window is first shown, so a dark app does not flash light. ([#117](https://github.com/argon-chat/skathi/issues/117))
+**`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. Set `{ "window": { "theme": "dark" } }` in `sk.config.json` to apply a dark theme before the first window appears on any platform. ([#117](https://github.com/argon-chat/skathi/issues/117))
 
 **Pop-outs on macOS.** `focusable={false}` makes a pop-out a non-activating panel: a click reaches it and the main window stays key. `taskbar={false}` makes it a child of the main window, so it moves, hides and minimizes with it. `mapFromMain()` holds across displays. ([#118](https://github.com/argon-chat/skathi/issues/118), [#119](https://github.com/argon-chat/skathi/issues/119), [#120](https://github.com/argon-chat/skathi/issues/120))
 
@@ -207,6 +214,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 
 - **Backdrop reach.** The built-in `frost` still copies the whole window, and so does an effect inside an effect layer.
 - **A layer's picture** is not seen by a backdrop effect inside an isolated group (an effect layer, `opacity` on an ancestor), nor on the Direct3D 11 fallback renderer. A reader's first frame over a layer shows the picture last published, so keep the newest frame published while nothing reads it.
+- **Window verification.** On an M4 Mac mini a real window showed the layer's picture inside the rounded reader and the page alone outside it. The equivalent window pixels on Linux still need verification.
 - **`startResizeDragging`** does nothing on macOS, where AppKit has no call for it.
 - **The window theme** on Linux still reaches only `prefers-color-scheme`.
 
@@ -214,9 +222,9 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 
 ## Upgrading
 
-Run the commands at the top of this post and `bunx sk check`.
+Run the commands at the top of this post and `bunx sk check`. The prebuilt hosts and the full changelog are in the [GitHub release](https://github.com/argon-chat/skathi/releases/tag/v0.9.0).
 
-- Rebuild the app: effects compiled by an earlier `sk` are refused by the 0.9 host.
+- Rebuild your app's effects with the 0.9 CLI. The 0.9 host requires effect manifest schema 14.
 - A wheel notch scrolls farther than before, about twice as far on Windows. `"input": { "wheelScrollScale": 0.5 }` brings the old distance back.
 - A button wider than its label shows the label in the middle. `text-align: left` on it restores the old look.
 - `box-shadow` blur is half as soft for the same value. Double the blur radius where a design was tuned by eye.
