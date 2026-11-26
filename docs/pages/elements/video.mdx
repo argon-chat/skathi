@@ -2,7 +2,7 @@
 title: "<video>"
 label: "<video>"
 metaTitle: "<video>: play video through the OS player"
-description: How <video> plays through Media Foundation, AVFoundation or GStreamer, which attributes, properties and events it supports, how frames reach the screen, sizing and CSS, and why <audio> plays nothing.
+description: How <video> and <audio> play through Media Foundation, AVFoundation or GStreamer, which sources and events they support, and how video frames reach the screen.
 section: Elements
 order: 6
 ---
@@ -361,7 +361,13 @@ Sound goes to the system's default output device.
 
 ## Audio
 
-`<audio>` plays nothing. It has the media element's JavaScript API, but no player behind it: `play()` resolves, no sound comes out and no events fire. To play sound, decode it with [Web Audio](/web-platform/web-audio/): `fetch` the file, `decodeAudioData`, and play an `AudioBufferSourceNode`. [`navigator.mediaSession`](/web-platform/navigator-media-session/) shows what the app plays in the system's media controls; it is not tied to any element, so set it yourself.
+Since Skathi 0.9.0, `<audio>` plays files through the system player. Set `src` directly on the element, as in `<audio src="assets/phrase.wav"></audio>`, and call `play()` from your button. Audio file playback uses the host's `video` Cargo feature, which is on by default. It accepts the same [source types](#sources) as `<video>`.
+
+Listen for `playing` when playback starts and `ended` when the clip finishes. The promise returned by `play()` resolves immediately, even if the file is missing. A missing local file can leave `readyState` at `0` and report the problem only in the host log, without an `error` event.
+
+For older hosts with Web Audio, fetch the clip and decode it once with `decodeAudioData()`. For each play, create a new `AudioBufferSourceNode`, set its `buffer` to the decoded clip, connect it to the context's destination and call `start()`. See [Web Audio](/web-platform/web-audio/).
+
+Set the media metadata yourself to show what the app plays in the system's media controls. See [`navigator.mediaSession`](/web-platform/navigator-media-session/).
 
 ## Compared with the browser
 
@@ -370,7 +376,6 @@ Sound goes to the system's default output device.
 - `autoplay`, `muted` and `loop` stay live, and `volume`, `playbackrate` and `currenttime` are extra attributes.
 - `error`, `buffered` and `seekable` are plain objects.
 - A hidden video keeps playing; a detached one pauses.
-- `<audio>` plays nothing.
 
 ## See also
 

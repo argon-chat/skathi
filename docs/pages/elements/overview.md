@@ -10,7 +10,7 @@ Most of a Skathi page is boxes: a `<div>`, a `<span>`, a `<p>`, a `<button>` is 
 
 - **Decoding happens off the UI thread.** Images, Lottie animations and stickers are read and decoded on threads of their own, so a page full of them does not stall scrolling or typing. Decodes are shared: the same avatar in a hundred rows, or the same sticker in fifty messages, is decoded once.
 - **Animation frames go straight to the GPU.** A `<lottie>` or `<sk-sticker>` frame is rasterized on a worker and written into the element's GPU tile, and a busy 2D canvas is updated in place, so a new frame costs a repaint, not a rebuild of the page.
-- **Media uses the operating system.** `<video>` plays through Media Foundation, AVFoundation or GStreamer, so the app ships no codecs, and on Windows decoded frames stay on the GPU. File and color pickers and the Save As dialog are the system's own.
+- **Media uses the operating system.** `<video>` and `<audio>` play through Media Foundation, AVFoundation or GStreamer. On Windows decoded video frames stay on the GPU. File and color pickers and the Save As dialog are the system's own.
 - **Native frames are part of the page.** `<sk-surface>` shows what your own native code renders, a libmpv player or a game engine's viewport, as an ordinary box that CSS clips and rounds and your UI draws over. There is no second window glued on top.
 - **They are still the elements you know.** `src`, `load`, `v-model`, `bind:value`, `object-fit` and `border-radius` work as on the web. Each page says plainly where Skathi differs from a browser.
 
@@ -30,7 +30,8 @@ Each page opens with what you would build with the element and short recipes in 
 
 | Element                                              | What it does                                                                                               |
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [`<video>`](/elements/video/)                        | Plays video through the OS player: Media Foundation, AVFoundation or GStreamer. `<audio>` plays nothing.   |
+| [`<video>`](/elements/video/)                        | Plays video through the OS player and draws the frames into the element.                                   |
+| [`<audio>`](/elements/video/#audio)                  | Plays audio files through the OS player.                                                                   |
 | [`<img>`](/elements/img/)                            | Decodes images off the UI thread, shares decodes between elements and keeps small copies of shrunk images. |
 | [`<svg>`](/elements/svg/)                            | Inline SVG is one leaf: its subtree is serialized and drawn by resvg, without per-shape hit testing.       |
 | [`<canvas>`](/elements/canvas/)                      | A 2D context rasterized on the CPU, or a WebGPU context on D3D12, Metal or Vulkan.                         |
@@ -60,8 +61,7 @@ Some HTML elements have no behavior of their own yet. They lay out as ordinary b
 - `<dialog>`: `showModal()`, `show()` and `close()` do not exist, and a `<dialog>` without `open` is still shown. `::backdrop` is dropped.
 - `<details>` and `<summary>`: the summary is focusable, but a click does not toggle `open`, and the content of a closed `<details>` is not hidden.
 - `<progress>` and `<meter>` draw nothing.
-- `<audio>` plays nothing; see [`<video>`](/elements/video/#audio).
 
 ## Elements and Cargo features
 
-An embedder can build a host without some elements. `<lottie>` and `<sk-sticker>` need the `lottie` feature, `<video>` the `video` feature and `<iframe>` the `webview` feature, all on by default. Without its feature, an element keeps its CSS box, draws nothing and prints one console warning that names the feature. [Features and size](/embedding/features/) lists them.
+An embedder can build a host without some elements. `<lottie>` and `<sk-sticker>` need the `lottie` feature, `<video>` the `video` feature and `<iframe>` the `webview` feature, all on by default. Without its feature, an element keeps its CSS box, draws nothing and prints one console warning that names the feature. The `video` feature also enables file playback on `<audio>`. See [Features and size](/embedding/features/).
