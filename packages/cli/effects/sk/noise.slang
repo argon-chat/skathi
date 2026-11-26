@@ -14,12 +14,16 @@
 
 module "sk.noise";
 
+// Slang inlines the hash, lattice and cellular calls marked below. Leaving them nested in a shader
+// that combines Worley noise and 3D derivatives can hang the virtual Metal GPU.
+
 // ===========================================================================
 //  Hashes
 // ===========================================================================
 
 /// PCG hash of one word (O'Neill's PCG output permutation, one round): uint in, uint out.
 /// About 3 multiplies. Bit-exact on every backend.
+[ForceInline]
 public uint pcg(uint v)
 {
     uint state = v * 747796405u + 2891336453u;
@@ -28,18 +32,21 @@ public uint pcg(uint v)
 }
 
 /// PCG of two words, nested: `pcg(v.x + pcg(v.y))`.
+[ForceInline]
 public uint pcg(uint2 v)
 {
     return pcg(v.x + pcg(v.y));
 }
 
 /// PCG of three words, nested: `pcg(v.x + pcg(v.y + pcg(v.z)))`.
+[ForceInline]
 public uint pcg(uint3 v)
 {
     return pcg(v.x + pcg(v.y + pcg(v.z)));
 }
 
 /// Three independent words from three (Jarzynski and Olano's `pcg3d`). About 9 multiplies.
+[ForceInline]
 public uint3 pcg3d(uint3 v)
 {
     uint3 s = v * 1664525u + 1013904223u;
@@ -56,16 +63,19 @@ public uint3 pcg3d(uint3 v)
 }
 
 /// The top 24 bits of a hash as a float in [0, 1).
+[ForceInline]
 float sk_unit(uint h)
 {
     return float(h >> 8u) * (1.0 / 16777216.0);
 }
 
+[ForceInline]
 float2 sk_unit(uint2 h)
 {
     return float2(h >> 8u) * (1.0 / 16777216.0);
 }
 
+[ForceInline]
 float3 sk_unit(uint3 h)
 {
     return float3(h >> 8u) * (1.0 / 16777216.0);
@@ -73,16 +83,19 @@ float3 sk_unit(uint3 h)
 
 /// The integer cell holding p as a two's complement word. Clamped into int range first: a float
 /// out of it converts to an undefined int on Metal and WGSL.
+[ForceInline]
 uint sk_cell(float p)
 {
     return uint(int(clamp(floor(p), -2147483648.0, 2147483520.0)));
 }
 
+[ForceInline]
 uint2 sk_cell(float2 p)
 {
     return uint2(int2(clamp(floor(p), -2147483648.0, 2147483520.0)));
 }
 
+[ForceInline]
 uint3 sk_cell(float3 p)
 {
     return uint3(int3(clamp(floor(p), -2147483648.0, 2147483520.0)));
@@ -209,6 +222,7 @@ float3 sk_value2(uint2 c00, uint2 c11, float2 f)
 }
 
 /// Cell coordinates wrapped into [0, period).
+[ForceInline]
 uint2 sk_wrap(float2 cell, float2 period)
 {
     float2 p = max(round(period), float2(1.0, 1.0));
@@ -217,6 +231,7 @@ uint2 sk_wrap(float2 cell, float2 period)
 
 /// Trilinear blend with fade weights of eight corner values (v0: x00, x10, x01, x11 at z0;
 /// v1 the same at z1) and the corners' gradients; returns (value, gradient).
+[ForceInline]
 float4 sk_blend3(float4 v0, float4 v1, float3 g[8], float3 f)
 {
     float2 ux = sk_fade(f.x);
@@ -243,6 +258,7 @@ float4 sk_blend3(float4 v0, float4 v1, float3 g[8], float3 f)
     return float4(n, g + d);
 }
 
+[ForceInline]
 uint sk_corner(uint3 c, uint i)
 {
     return pcg(c + uint3(i & 1u, (i >> 1u) & 1u, (i >> 2u) & 1u));
@@ -278,6 +294,7 @@ public struct Perlin : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy), analytic.
+    [ForceInline]
     public static float3 derivatives(float2 p)
     {
         float2 i = floor(p);
@@ -305,6 +322,7 @@ public struct Perlin : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy, d/dz), analytic.
+    [ForceInline]
     public static float4 derivatives(float3 p)
     {
         float3 i = floor(p);
@@ -334,6 +352,7 @@ public struct ValueNoise : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy), analytic.
+    [ForceInline]
     public static float3 derivatives(float2 p)
     {
         float2 i = floor(p);
@@ -361,6 +380,7 @@ public struct ValueNoise : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy, d/dz), analytic.
+    [ForceInline]
     public static float4 derivatives(float3 p)
     {
         float3 i = floor(p);
@@ -425,6 +445,7 @@ public struct Simplex : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy), analytic.
+    [ForceInline]
     public static float3 derivatives(float2 p)
     {
         return sk_simplex2(p, float2(1.0, 0.0));
@@ -450,6 +471,7 @@ public struct Simplex : INoise, INoise3
     }
 
     /// (value, d/dx, d/dy, d/dz), analytic.
+    [ForceInline]
     public static float4 derivatives(float3 p)
     {
         float3 i = floor(p + (p.x + p.y + p.z) * (1.0 / 3.0));
@@ -495,11 +517,13 @@ public struct Cell
 };
 
 /// The feature point of a cell: its centre moved by up to jitter/2 on each axis.
+[ForceInline]
 float2 sk_feature(uint2 cell, float jitter)
 {
     return 0.5 + (sk_unit(pcg3d(uint3(cell, 0u)).xy) - 0.5) * jitter;
 }
 
+[ForceInline]
 Cell sk_worley(float2 p, float jitter, float2 period, bool tiled)
 {
     float2 i = floor(p);
@@ -536,12 +560,14 @@ Cell sk_worley(float2 p, float jitter, float2 period, bool tiled)
 
 /// Cellular (Worley) noise: one feature point per cell, searched over the 3x3 cells around p
 /// (9 `pcg3d`). `jitter` 0 is a square grid, 1 (default) fully random.
+[ForceInline]
 public Cell worley(float2 p, float jitter = 1.0)
 {
     return sk_worley(p, jitter, float2(1.0, 1.0), false);
 }
 
 /// `worley` that repeats every `period` cells (rounded, at least 1) on each axis.
+[ForceInline]
 public Cell worley(float2 p, float jitter, float2 period)
 {
     return sk_worley(p, jitter, period, true);
@@ -549,6 +575,7 @@ public Cell worley(float2 p, float jitter, float2 period)
 
 /// Distance from p to the nearest edge of its Voronoi cell, in cells: 0 on an edge. Exact
 /// bisector distance, not F2 - F1. 18 `pcg3d` (two 3x3 searches).
+[ForceInline]
 public float worleyEdge(float2 p, float jitter = 1.0)
 {
     Cell near = worley(p, jitter);
@@ -587,6 +614,7 @@ public struct Cell3
 };
 
 /// 3D cellular noise over the 27 cells around p (27 `pcg3d`).
+[ForceInline]
 public Cell3 worley(float3 p, float jitter = 1.0)
 {
     float3 i = floor(p);

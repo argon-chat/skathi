@@ -20,27 +20,12 @@ export interface Table {
   imports: string[];
   declarations?: string;
   cases: Case[];
-  casesPerEffect?: number;
 }
 
-export async function shaderTable(table: Table): Promise<void> {
-  const compiler = (await resolveCompiler().catch(() => null))?.path ?? null;
-  const perFrame = table.casesPerEffect ? TILES * table.casesPerEffect : table.cases.length;
-  for (let start = 0; start < table.cases.length; start += perFrame) {
-    const cases = table.cases.slice(start, start + perFrame);
-    const range = cases.length < table.cases.length ? ` ${start + 1}–${start + cases.length}` : "";
-    await shaderFrame(table, cases, range, compiler);
-  }
-}
-
-async function shaderFrame(
-  { label, imports, declarations = "" }: Table,
-  cases: Case[],
-  range: string,
-  compiler: string | null,
-): Promise<void> {
+export async function shaderTable({ label, imports, declarations = "", cases }: Table): Promise<void> {
   const per = Math.ceil(cases.length / TILES);
   const chunks = Array.from({ length: TILES }, (_, i) => cases.slice(i * per, (i + 1) * per));
+  const compiler = (await resolveCompiler().catch(() => null))?.path ?? null;
   const scratch = mkdtempSync(join(tmpdir(), `sk-${label}-`));
   const effectsDir = join(scratch, "effects");
   if (compiler && SCREENSHOTS) {
@@ -71,7 +56,7 @@ async function shaderFrame(
   // Each attempt (bun test --retry) launches its own host, so a retry never inherits a broken one, and
   // decodes only a frame that two screenshots in a row agree on.
   test.skipIf(!compiler || !SCREENSHOTS)(
-    `${imports[imports.length - 1]}${range} matches the float64 reference on the GPU, case by case`,
+    `${imports[imports.length - 1]} matches the float64 reference on the GPU, case by case`,
     async () => {
       const app = await launch({
         app: "packages/test/fixtures/shader-table/src/main.ts",
