@@ -23,7 +23,7 @@ bun_event_loop = { path = ".cache/bun/src/event_loop" }
 bun_resolver = { path = ".cache/bun/src/resolver" }
 bun_zstd = { path = ".cache/bun/src/zstd" }
 const_format = "0.2"
-redjs = { path = "../../vendor/redjs/redjs", version = "0.7.0", default-features = false, features = ["aot-compiler"] }
+redjs = { path = "../../vendor/redjs/redjs", version = "0.8.0", default-features = false, features = ["aot-compiler"] }
 
 [build-dependencies]
 cc = "1"

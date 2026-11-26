@@ -29,7 +29,7 @@ name = "audio_route"
 harness = false
 
 [dependencies]
-redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.7.0", optional = true }
+redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.8.0", optional = true }
 gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }

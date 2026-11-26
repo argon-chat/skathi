@@ -112,7 +112,7 @@ sk-elements = { path = "../sk-elements", version = "0.8.5" }
 # graph, so one plain dependency would turn every sk-runtime default back on.
 sk-runtime = { path = "../sk-runtime", version = "0.8.5", default-features = false, features = ["net-h2"] }
 # Direct, so build.rs gets the engine pin (DEP_REDJS_WEBKIT_VERSION).
-redjs = { path = "../../vendor/redjs/redjs", version = "0.7.0", default-features = false, features = ["canvas"] }
+redjs = { path = "../../vendor/redjs/redjs", version = "0.8.0", default-features = false, features = ["canvas"] }
 sk-tree = { path = "../sk-tree", version = "0.8.5", default-features = false }
 sk-webview = { path = "../sk-webview", version = "0.8.5", optional = true }
 sk-sticker = { path = "../sk-sticker", version = "0.8.5", default-features = false, optional = true }

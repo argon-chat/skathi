@@ -4811,7 +4811,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "redjs"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-channel",
  "bytes",
@@ -4854,11 +4854,11 @@ dependencies = [
 
 [[package]]
 name = "redjs-macros"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "redjs-webgpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "half",
  "pollster",
