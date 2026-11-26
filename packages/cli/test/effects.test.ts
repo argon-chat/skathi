@@ -18,7 +18,6 @@ import { ellipse, roundedBox } from "./sk-sdf-table";
 import * as lightTable from "./sk-light-table";
 import * as noiseTable from "./sk-noise-table";
 import * as sampleTable from "./sk-sample-table";
-import * as toneTable from "./sk-tone-table";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-effects-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -224,15 +223,6 @@ struct Grade : IEffect
     }
   });
 
-  test("a linear backdrop implies the backdrop and reaches the manifest", async () => {
-    const root = app({
-      "glass.slang": `import sk;\n[SkEffect("glass")]\n[SkBackdropLinear]\nstruct Glass : IEffect\n{\n    float4 shade(EffectInput input) { return input.backdrop; }\n};\n`,
-    });
-    const built = await compileAppEffects(root, compiler!);
-    expect(built.compiled[0]!.effect).toMatchObject({ backdrop: true, backdropLinear: true });
-    expect(JSON.parse(built.files.at(-1)!.text).effects[0]).toMatchObject({ backdrop: true, backdropLinear: true });
-  });
-
   test("compile to every target and a manifest that names them", async () => {
     const root = app({ "ripple.slang": RIPPLE });
     const built = await compileAppEffects(root, compiler!);
@@ -373,7 +363,6 @@ describe.skipIf(!compiler)("sk.blend, sk.sdf and sk.ease", () => {
     ["sk.blend", blendTable],
     ["sk.sdf", sdfTable],
     ["sk.ease", easeTable],
-    ["sk.tone", toneTable],
   ];
   for (const [module, table] of tables) {
     test(`the whole ${module} golden table compiles for every renderer`, async () => {
@@ -401,10 +390,6 @@ describe.skipIf(!compiler)("sk.blend, sk.sdf and sk.ease", () => {
 describe("the sk.ease and sk.sdf references", () => {
   test("reproduce published easing values", () => {
     for (const k of KNOWN) expect([k.what, Math.abs(k.got() - k.want) <= k.tol]).toEqual([k.what, true]);
-  });
-
-  test("reproduce published PQ, HLG and tone curve values", () => {
-    for (const k of toneTable.KNOWN) expect([k.what, Math.abs(k.got() - k.want) <= k.tol]).toEqual([k.what, true]);
   });
 
   test("measure an ellipse with equal axes and a fully rounded square as circles", () => {
@@ -440,12 +425,6 @@ describe.skipIf(!compiler)("sk.noise, sk.sample and sk.light", () => {
       "float3 n = bevelNormal(input.sd, screenGradient(input.sd), 12.0); return tint * blinnPhong(n, normalize(float3(-0.5, -0.7, 0.6)), 40.0);",
       /bevelNormal/,
       /ggx|sk_erf|anisotropic|fresnelDielectric|\bSurface_|\bLight_|Oklch/,
-    ],
-    [
-      "sk.tone",
-      "return tint * float4(byLuminance(AcesFitted(), input.local.xyx * 4.0), 1.0);",
-      /AcesFitted/,
-      /Hable|Reinhard|pqEncode|pqDecode|hlg|SoftClip/,
     ],
   ];
 

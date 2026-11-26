@@ -33,8 +33,6 @@ const REPO = resolve(import.meta.dir, "..");
 const BUILTIN_SHADERS = join(REPO, "crates/sk-effects/shaders");
 const GENERATED = join(REPO, "crates/sk-effects/generated");
 const GPUI_CRATES = join(REPO, "vendor/gpui/crates");
-// App effects (its shaders/) the D3D12 renderer tests install, compiled with the real prelude.
-const TEST_SHADERS = join(REPO, "crates/sk-effects/renderer-tests");
 const RENDERER_COPIES: { crate: string; wants: (name: string) => boolean }[] = [
   { crate: "gpui_windows", wants: (name) => name.endsWith(".hlsl") || name === "effects.json" },
   { crate: "gpui_wgpu", wants: (name) => name.endsWith(".wgsl") },
@@ -97,16 +95,11 @@ async function builtins(compiler: string, check: boolean) {
   }
   const files = effectFiles("builtin", compiled, (f) => `crates/sk-effects/shaders/${basename(f)}`);
   if (!existsSync(GPUI_CRATES)) throw new Error("vendor/gpui is not checked out (git submodule update --init)");
-  const tests = await compileAppEffects(TEST_SHADERS, compiler);
   const outputs = [
     { dir: GENERATED, files },
     ...RENDERER_COPIES.map((copy) => ({
       dir: join(GPUI_CRATES, copy.crate, "effects"),
       files: files.filter((f) => copy.wants(f.name)),
-    })),
-    ...RENDERER_COPIES.map((copy) => ({
-      dir: join(GPUI_CRATES, copy.crate, "effects/test"),
-      files: tests.files.filter((f) => copy.wants(f.name)),
     })),
   ];
 

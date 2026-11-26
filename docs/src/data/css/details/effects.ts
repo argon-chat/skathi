@@ -571,7 +571,6 @@ struct RippleGlass : IEffect
     edgeCases: [
       "Built in are `frost(<strength>, <radius>?, <tint>?)`, `noise(<amount>, <scale>?, <speed>?)` and `glow(<color>?, <radius>, <strength>)`; an app adds its own as `shaders/<name>.slang`, written against the [shader library](/shaders/) (`sk` and `sk.color`; see [Writing effects with the shader library](/guides/shader-library/)).",
       "A number outside the effect's range is clamped, with an advisory: `frost(1.4)` runs at strength `1`.",
-      "In an HDR window a backdrop effect, `frost` included, keeps the HDR light behind it instead of cutting it at SDR white. An effect marked `[SkBackdropLinear]` reads and returns linear light, blurs in it, and can shape highlights with [`sk.tone`](/shaders/#sktone).",
       "Only one effect function applies; the others are dropped with an advisory.",
       "`var()` inside `--shading` is not resolved; the effect is skipped with an advisory.",
       "A transition between two values of the same effect interpolates its arguments; between different effects, or to and from `none`, it cross-fades.",

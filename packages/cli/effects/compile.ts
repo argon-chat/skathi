@@ -20,7 +20,7 @@ import { PIN, ShaderCompilerError } from "./redslangc";
 
 /// Bumped when the prelude or generated wrapper changes codegen or schema shape; rides in every
 /// header and effects.json. Rust refuses an effects.json with an unknown schema.
-export const SCHEMA = 14;
+export const SCHEMA = 13;
 
 export const PRELUDE = join(import.meta.dir, "sk.slang");
 
@@ -186,8 +186,6 @@ export type EffectSchema = {
   content: boolean;
   /// `[SkHistory]`: keeps state per element from frame to frame.
   history: boolean;
-  /// `[SkBackdropLinear]`: reads its backdrop in linear, extended light and returns linear light.
-  backdropLinear: boolean;
   params: ParamSchema[];
   backdropRadiusParam: number | null;
   /// `[SkBackdropReach]`: how far outside its quad the effect samples the backdrop.
@@ -761,8 +759,7 @@ function buildSchema(
     animatedParam = marker("SkAnimated", animatedParam, "number");
   }
 
-  const backdropLinear = attr(structAttrs, "SkBackdropLinear") !== undefined;
-  if (backdropRadiusParam !== null || backdropReachParam !== null || backdropLinear) backdrop = true;
+  if (backdropRadiusParam !== null || backdropReachParam !== null) backdrop = true;
 
   // Type-directed matching needs a skippable parameter's kind to differ from the next one's, else
   // `ripple(1)` is ambiguous.
@@ -792,7 +789,6 @@ function buildSchema(
       backdrop,
       content: attr(structAttrs, "SkContent") !== undefined,
       history: attr(structAttrs, "SkHistory") !== undefined,
-      backdropLinear,
       params,
       backdropRadiusParam,
       backdropReachParam,
@@ -1029,7 +1025,6 @@ export function effectFiles(
       backdrop: c.effect.backdrop,
       content: c.effect.content,
       history: c.effect.history,
-      backdropLinear: c.effect.backdropLinear,
       ...Object.fromEntries(c.outputs.map((o) => [o.target, `${stemOf(c.file)}.${o.target}`])),
       source: sourceOf(c.file),
       sourceSha256: c.sourceSha256,

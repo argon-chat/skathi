@@ -48,11 +48,10 @@ struct Tint : IEffect
     syntax: attribute("struct", "SkBackdrop"),
     notes: [
       "The renderer copies the render target for the effect and draws its quad with blending disabled: the effect owns every pixel of it, and the engine restores the untouched backdrop outside the element's coverage.",
-      "Backdrop samples are premultiplied and sRGB-encoded; `Color.fromPremultiplied` reads them. `[SkBackdropLinear]` hands them over in linear light instead.",
-      "In an HDR window the result may keep the HDR light it read: it is cut at the brightest value under the pixel rather than at SDR white, so glass over HDR video does not dim its highlights. In an SDR window it is cut at SDR white as before.",
-      "Without `[SkBackdropReach]` each frame copies the whole window. Implied by `[SkBackdropRadius]`, `[SkBackdropReach]` and `[SkBackdropLinear]`.",
+      "Backdrop samples are premultiplied and sRGB-encoded; `Color.fromPremultiplied` reads them.",
+      "Without `[SkBackdropReach]` each frame copies the whole window. Implied by `[SkBackdropRadius]` and `[SkBackdropReach]`.",
     ],
-    related: ["sk-backdrop-reach", "sk-backdrop-radius", "sk-backdrop-linear", "effect-input-backdrop-at"],
+    related: ["sk-backdrop-reach", "sk-backdrop-radius", "effect-input-backdrop-at"],
   },
   {
     slug: "sk-content",
@@ -186,46 +185,6 @@ struct Tint : IEffect
     ],
   },
   {
-    slug: "sk-backdrop-linear",
-    name: "[SkBackdropLinear]",
-    kind: "attribute",
-    summary:
-      "The effect works in linear light: its backdrop arrives linear and extended, and its result is read back so.",
-    since: "Unreleased",
-    syntax: attribute("struct", "SkBackdropLinear"),
-    notes: [
-      "`input.backdrop`, `backdropAt`, `rawBackdropAt` and `pageBackdropAt` return premultiplied linear light: 1.0 is SDR white, an HDR highlight keeps its value above it, and values below 0 are colours outside sRGB. On macOS with a Display P3 window the primaries are Display P3.",
-      "The `[SkBackdropRadius]` blur is taken in linear light in half float, so a bright highlight spreads as light does instead of as sRGB codes.",
-      "What `shade` returns is premultiplied linear light, not cut at SDR white; alpha is still clamped to 0..1. `return input.backdrop;` is an exact identity in SDR and HDR windows.",
-      "`input.content`, `history` and `SkTexture` images stay sRGB-encoded; `sk_frame_to_linear` converts them.",
-      "Implies `[SkBackdrop]`.",
-    ],
-    examples: [
-      {
-        title: "Frosted glass that keeps HDR highlights",
-        lang: "slang",
-        code: `import sk;
-import sk.tone;
-
-[SkEffect("hdr-glass")]
-[SkBackdropLinear]
-struct HdrGlass : IEffect
-{
-    [SkLength] [SkBackdropRadius] [SkDefault("16")] float radius;
-
-    float4 shade(EffectInput input)
-    {
-        // Highlights up to 2x SDR white pass as they are, brighter ones roll off below 6x.
-        float4 light = input.backdrop;
-        float3 straight = light.rgb / max(light.a, 1e-4);
-        return float4(softClip(straight, 2.0, 6.0) * light.a, light.a);
-    }
-};`,
-      },
-    ],
-    related: ["sk-backdrop", "sk-frame-to-linear", "tone-soft-clip"],
-  },
-  {
     slug: "sk-animated",
     name: "[SkAnimated]",
     kind: "attribute",
@@ -343,7 +302,7 @@ struct Wash : IEffect
     float2 local;       // 0..1 across the element; outside it in the bleed
     float2 px;          // device pixels from the element's top-left
     float2 size;        // the element's size in device pixels
-    float4 backdrop;    // backdropAt(uv): premultiplied, sRGB-encoded (linear with [SkBackdropLinear])
+    float4 backdrop;    // backdropAt(uv): premultiplied, sRGB-encoded
     float sd;           // signed distance to the element's rounded rect, device px
     float coverage;     // antialiased coverage of that rect
     float time;         // seconds, performance.now() / 1000
@@ -352,8 +311,7 @@ struct Wash : IEffect
     float opacity;      // the element's opacity, applied by the engine
     float clip;         // coverage of a rounded overflow clip, applied by the engine
     bool hasBackdrop;
-    bool backdropLinear; // [SkBackdropLinear]: backdrop reads are linear light
-    float4 content;    // contentAt(uv), with [SkContent]
+    float4 content;     // contentAt(uv), with [SkContent]
     bool hasContent;
     float4 history;     // historyAtPx(px), with [SkHistory]
     bool hasHistory;
@@ -382,8 +340,7 @@ struct Wash : IEffect
 float4 backdropAtPx(float2 px);
 float4 rawBackdropAt(float2 uv);
 float4 rawBackdropAtPx(float2 px);`,
-    returns:
-      "Premultiplied, sRGB-encoded RGBA (premultiplied linear light with `[SkBackdropLinear]`); zero without `[SkBackdrop]`.",
+    returns: "Premultiplied, sRGB-encoded RGBA; zero without `[SkBackdrop]`.",
     notes: [
       "The backdrop covers the whole window as it was before this effect; outside the window it clamps to the edge. With `[SkBackdropReach]` a read clamps to the drawn quad grown by the reach.",
       "It holds neither the element's own background nor another backdrop effect of the same group.",
@@ -491,34 +448,6 @@ float2 historySize();`,
     kind: "function",
     summary: "Premultiplied `above` composited over premultiplied `below`, as the engine blends.",
     syntax: `float4 sk_over(float4 below, float4 above);`,
-  },
-  {
-    slug: "sk-frame-to-linear",
-    name: "sk_frame_to_linear",
-    kind: "function",
-    summary:
-      "A premultiplied, sRGB-encoded sample to premultiplied linear light, 1.0 at SDR white, as the HDR output shows it; `sk_linear_to_frame` is its exact inverse.",
-    since: "Unreleased",
-    syntax: `float4 sk_frame_to_linear(float4 frame);
-float4 sk_linear_to_frame(float4 light);`,
-    notes: [
-      "Up to alpha a channel is decoded as stored; the part above alpha, HDR light, is decoded straight and added. Negative values decode with their sign.",
-      "Use it for `input.content` or an `SkTexture` in a `[SkBackdropLinear]` effect, or to work in linear light in any effect and encode the result back.",
-    ],
-    aliases: ["sk_linear_to_frame"],
-    related: ["sk-backdrop-linear", "color-from-premultiplied"],
-  },
-  {
-    slug: "sk-clamp-extended",
-    name: "sk_clamp_extended",
-    kind: "function",
-    summary:
-      "A premultiplied colour made valid for a half-float frame: alpha clamped to 0..1, rgb to 0..`alpha * headroom`.",
-    since: "Unreleased",
-    syntax: `float4 sk_clamp_extended(float4 color, float headroom);`,
-    notes: [
-      "The engine applies it to what `shade` returns in an HDR window, with the brightest value under the pixel as `headroom`; call it to keep an intermediate result in the same bounds. A headroom below 1 counts as 1, and the bound never exceeds the largest half float.",
-    ],
   },
   {
     slug: "sk-luma",
