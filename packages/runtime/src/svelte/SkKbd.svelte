@@ -22,7 +22,14 @@
 </script>
 
 {#if model.groups.length}
-  <kbd role="group" aria-label={model.label} {...attrs} class={["sk-kbd", className]} data-scope={map?.scope} data-variant={variant}>
+  <kbd
+    role="group"
+    aria-label={model.label}
+    {...attrs}
+    class={["sk-kbd", className]}
+    data-scope={map?.scope}
+    data-variant={variant}
+  >
     {#each model.groups as group}
       <span class="sk-kbd-step" aria-hidden="true">
         {#if group.before}<span class="sk-kbd-between">{group.before}</span>{/if}

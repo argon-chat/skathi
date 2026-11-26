@@ -232,10 +232,10 @@ jobs:
           id=$(displayplacer list | awk '/^Persistent screen id:/ { print $4; exit }')
           displayplacer "id:$id res:1920x1080 hz:60 color_depth:7 scaling:off origin:(0,0) degree:0"
           displayplacer list | grep -m1 '^Resolution:'
+      # A partial restore of the CSS checker's Rust cache cleans target/, including a built host.
+      - uses: ./.github/actions/css-checker
       - name: Host
         run: cargo build --locked -p sk-app --target ${{ matrix.target }}
-      # Built before the specs: a spec that builds an app would otherwise build it inside its timeout.
-      - uses: ./.github/actions/css-checker
       # -noreset: the server must not reset between two hosts, or the next one cannot connect.
       - if: runner.os == 'Linux'
         name: Specs

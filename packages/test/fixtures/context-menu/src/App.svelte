@@ -14,8 +14,16 @@
   const files = ["Notes.txt", "Draft.txt"];
   let last = $state("");
   const shortcut = defineKeymap({ keys: "Control+KeyQ" });
-  onMount(() => shortcut.bind(() => { last = "Shortcut fired"; }));
-  onMount(() => shortcut.on("up", (event) => { if (event.cancelled) last = "Shortcut cancelled"; }));
+  onMount(() =>
+    shortcut.bind(() => {
+      last = "Shortcut fired";
+    }),
+  );
+  onMount(() =>
+    shortcut.on("up", (event) => {
+      if (event.cancelled) last = "Shortcut cancelled";
+    }),
+  );
   let extra = $state(false);
   let detached = $state(false);
   Object.assign(globalThis, {

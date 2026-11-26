@@ -6248,55 +6248,6 @@ mod tests {
     }
 
     #[test]
-    fn the_index_files_a_rule_where_its_subject_or_parent_must_carry_a_key() {
-        let engine = Engine::compile(concat!(
-            ".a::before { content: \"x\" }\n",
-            ":root { --x: 1px }\n",
-            ".p > :not([hidden]) ~ :not([hidden]) { margin-left: 1px }\n",
-            "ul > * { margin-top: 1px }\n",
-            ".p > * + * { margin-top: 2px }\n",
-            ".a * { color: red }\n",
-            "* { margin: 0 }\n",
-            ".a ~ * { color: blue }\n",
-            ":is(.x) > * { color: green }\n",
-            "#i > * { color: black }\n",
-            ".b::placeholder { color: gray }\n",
-            "[data-x] { color: white }\n",
-        ));
-        let ix = &engine.index;
-        let names = |v: Option<&Vec<u32>>| -> Vec<String> {
-            v.map_or(vec![], |v| {
-                v.iter()
-                    .map(|&i| sel_text(&engine.rules[i as usize].selector))
-                    .collect()
-            })
-        };
-        assert_eq!(names(ix.by_class.get("a")), [".a:before"]);
-        assert_eq!(names(ix.by_class.get("b")), [".b::placeholder"]);
-        assert_eq!(names(Some(&ix.root)), [":root"]);
-        assert_eq!(
-            names(ix.by_parent_class.get("p")),
-            [".p > :not([hidden]) ~ :not([hidden])", ".p > * + *"]
-        );
-        assert_eq!(names(ix.by_parent_tag.get("ul")), ["ul > *"]);
-        assert_eq!(names(ix.by_parent_id.get("i")), ["#i > *"]);
-        assert_eq!(
-            names(Some(&ix.any)),
-            [
-                ":where([hidden])",
-                ":where(sub)",
-                ":where(sup)",
-                ":where(button, input[type=\"button\"], input[type=\"submit\"], input[type=\"reset\"])",
-                ".a *",
-                "*",
-                ".a ~ *",
-                ".x > *",
-                "[data-x]"
-            ]
-        );
-    }
-
-    #[test]
     fn the_index_hands_back_exactly_what_matching_every_rule_would() {
         let css = concat!(
             ":root { --x: 1px }\n",

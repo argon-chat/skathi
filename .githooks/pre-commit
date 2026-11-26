@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refuses a commit whose staged Rust or JS/TS/Vue/JSON/CSS/YAML/Markdown files are not formatted.
+# Check staged Rust files with rustfmt and web files with Bun.
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
 failed=0
@@ -21,7 +21,7 @@ if [ -n "$rust" ]; then
   fi
 fi
 
-web=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|cjs|ts|mts|cts|tsx|jsx|vue|json|jsonc|css|scss|md|ya?ml|html)$')
+web=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|cjs|ts|mts|cts|tsx|jsx|vue|svelte|json|jsonc|css|scss|mdx?|ya?ml|html)$')
 if [ -n "$web" ]; then
   if ! out=$(bun fmt --check $web 2>&1); then
     echo "Not formatted (run bun fmt):" >&2

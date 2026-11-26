@@ -90,14 +90,14 @@ subscriptions while a tool, panel, or game mode is inactive.
 
 <Sample src="recipes/shortcutGestures.ts" />
 
-| Event | When the handler runs |
-| --- | --- |
-| `down` | As soon as the final chord matches. Holding a key through auto-repeat gives one down. |
-| `up` | When a required button is released. An interrupted hold also receives an up with `event.cancelled` set to `true`. Use this for push-to-talk cleanup. |
-| `press` | Immediately after each completed release, including a hold or either press in a double click. |
-| `click` | Once for a single activation. Delivery is immediate unless the map also has a `doubleClick` listener. |
+| Event         | When the handler runs                                                                                                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `down`        | As soon as the final chord matches. Holding a key through auto-repeat gives one down.                                                                                                                     |
+| `up`          | When a required button is released. An interrupted hold also receives an up with `event.cancelled` set to `true`. Use this for push-to-talk cleanup.                                                      |
+| `press`       | Immediately after each completed release, including a hold or either press in a double click.                                                                                                             |
+| `click`       | Once for a single activation. Delivery is immediate unless the map also has a `doubleClick` listener.                                                                                                     |
 | `doubleClick` | Two completed activations of the same alternative within `doubleClickMs`. The pair consumes both single clicks. Local mouse clicks must use the same target and stay within four CSS pixels on each axis. |
-| `hold` | Once after `holdMs` with the chord still held. A recognized hold consumes the click. |
+| `hold`        | Once after `holdMs` with the chord still held. A recognized hold consumes the click.                                                                                                                      |
 
 Both timing windows default to 500 ms. Keyboard shortcuts support the same gestures as mouse buttons.
 A wheel step completes immediately. For a sequence, the gesture begins when its last chord matches.
@@ -155,13 +155,13 @@ In a shared stylesheet, give `SkKbd` a class to style one hint, or target `.sk-k
 The examples use a wrapper and Vue's `:deep()` or Svelte's `:global()` so their scoped styles reach the
 elements inside the component.
 
-| Selector | What it styles |
-| --- | --- |
-| `.sk-kbd` | The whole hint. Set `font-family`, `font-size`, and `line-height` here. Its `gap` separates chords and alternatives. |
-| `.sk-kbd-step` | One simultaneous chord. Its `gap` controls the spacing inside the chord. |
-| `.sk-kbd-key` | Each keycap's background, border, padding, and font weight. Use `[data-device="mouse"]` or `[data-device="gamepad"]` on this element for device-specific styles. |
-| `.sk-kbd-glyph` | The built-in mouse or controller diagram. It uses `currentColor`. Hide it when a custom symbol supplies the whole icon. |
-| `.sk-kbd-join`, `.sk-kbd-between` | The visible join inside a chord and the words between chords or alternatives, respectively. |
+| Selector                          | What it styles                                                                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.sk-kbd`                         | The whole hint. Set `font-family`, `font-size`, and `line-height` here. Its `gap` separates chords and alternatives.                                             |
+| `.sk-kbd-step`                    | One simultaneous chord. Its `gap` controls the spacing inside the chord.                                                                                         |
+| `.sk-kbd-key`                     | Each keycap's background, border, padding, and font weight. Use `[data-device="mouse"]` or `[data-device="gamepad"]` on this element for device-specific styles. |
+| `.sk-kbd-glyph`                   | The built-in mouse or controller diagram. It uses `currentColor`. Hide it when a custom symbol supplies the whole icon.                                          |
+| `.sk-kbd-join`, `.sk-kbd-between` | The visible join inside a chord and the words between chords or alternatives, respectively.                                                                      |
 
 With `variant="plain"`, style the root, steps, and between-chord words. Each step draws its keys as text.
 Use `.sk-kbd[data-scope="global"]` to give hints for global keymaps their own styling.
