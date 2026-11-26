@@ -191,6 +191,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 - Effects combining cellular and 3D noise could hang the virtual Mac's Metal GPU. The shader library now inlines those calculations.
 - Screenshot tests for shaders, clipping and native surfaces now sample at the window's reported pixel scale. AppKit can open a window one pixel wider than requested.
 - The inspector's frame-rate check reads the FPS counter, and the CSS `ch` check measures the width of zeroes in the active font.
+- Windows overlay tests now check the taskbar policy for both a nonactivating HUD and a full-monitor cover.
 - A rule with `:focus-within` on the element itself was matched but never painted. ([#124](https://github.com/argon-chat/skathi/issues/124))
 - Where several rules with states set the same property, the later rule wins as in a browser, and a selector with two states applies only while both hold. ([#125](https://github.com/argon-chat/skathi/issues/125))
 - `box-shadow` blur is as wide as a browser draws it; it was twice as soft. ([#126](https://github.com/argon-chat/skathi/issues/126))

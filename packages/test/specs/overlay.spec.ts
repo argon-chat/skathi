@@ -117,7 +117,7 @@ if (process.platform !== "win32") {
 
   describe("overlay", () => {
     test(
-      "opens as a tool window that is never activated: no taskbar button, no NonRudeHWND, not owned",
+      "a nonactivating HUD keeps its taskbar policy and opens as an unowned tool window",
       async () => {
         const hud = await win("HUD");
         await sleep(500);
@@ -126,7 +126,7 @@ if (process.platform !== "win32") {
         expect(hud.toolWindow).toBe(true);
         expect(hud.appWindow).toBe(false);
         expect(hud.noActivate).toBe(true);
-        expect(hud.nonRude).toBe(false);
+        expect(hud.nonRude).toBe(true);
         expect(hud.ownedByMain).toBe(false);
         expect(hud.foreground).toBe(false);
         expect(await overlayInForeground()).toBeNull();
@@ -225,6 +225,7 @@ if (process.platform !== "win32") {
         expect(cover.shown).toBe(true);
         expect(cover.rect).toEqual(all[0]!);
         expect(cover.toolWindow).toBe(true);
+        expect(cover.nonRude).toBe(false);
         expect(cover.transparent).toBe(true);
         expect(await overlayInForeground()).toBeNull();
 
