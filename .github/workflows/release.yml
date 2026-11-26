@@ -56,7 +56,8 @@ jobs:
     needs: [vendor]
     uses: ./.github/workflows/sk-aot.yml
     with:
-      ref: ${{ github.event.inputs.tag || github.ref_name }}
+      # The two RedJS path dependency versions in the standalone AOT lockfile were stale in v0.9.0.
+      ref: ${{ inputs.tag == 'v0.9.0' && '2782548b7ea467f6c8c54d1436df15d15eb066d1' || github.event.inputs.tag || github.ref_name }}
 
   hosts:
     name: Hosts (${{ matrix.name }})
