@@ -963,8 +963,10 @@ public float4 sk_linear_to_frame(float4 light)
     return float4(frame, light.a);
 }
 
-/// Builds the `EffectInput` for this pixel. Called by the generated wrapper.
-public EffectInput sk_begin(uint id, float4 frag_position)
+/// Builds the `EffectInput` for this pixel. Called by the generated wrapper,
+/// with `linear` a literal so an effect without `[SkBackdropLinear]` compiles
+/// without the linear-light conversions.
+public EffectInput sk_begin(uint id, float4 frag_position, bool linear = false)
 {
     SkEffectQuad q = sk_effect_quads[id];
     bool history_pass = (q.flags & SK_FLAG_HISTORY_PASS) != 0u;
@@ -1014,7 +1016,7 @@ public EffectInput sk_begin(uint id, float4 frag_position)
     i.historyPass = history_pass;
     i.quad = id;
     i.backdropBounded = (q.flags & SK_FLAG_BACKDROP_REACH) != 0u;
-    i.backdropLinear = has_backdrop && (q.flags & SK_FLAG_BACKDROP_LINEAR) != 0u;
+    i.backdropLinear = linear && has_backdrop && (q.flags & SK_FLAG_BACKDROP_LINEAR) != 0u;
     // Mirrors `EffectQuad::effective_kernel_levels() > 0`, which decides
     // whether the renderer builds the linear pyramid.
     i.backdropLinearBlur = i.backdropLinear && !(q.backdrop_blur_radius <= 0.0);
