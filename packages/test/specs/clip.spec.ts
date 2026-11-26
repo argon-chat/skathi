@@ -7,6 +7,7 @@ const app = await launch({
   label: "clip",
 });
 afterAll(() => app.close());
+const scale = Number(await app.eval("devicePixelRatio"));
 
 const T = 30_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -32,14 +33,13 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_00
 
 const shoot = async () => {
   const shot = readPng(await app.screenshot());
-  const k = shot.width / 720;
   return {
-    at: (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k)),
+    at: (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * scale), Math.floor((y + 0.5) * scale)),
     count: (b: Bounds, hit: (rgb: Rgb) => boolean) => {
       let n = 0;
       for (let y = 0; y < b.h; y++)
         for (let x = 0; x < b.w; x++)
-          if (hit(shot.at(Math.floor((b.x + x + 0.5) * k), Math.floor((b.y + y + 0.5) * k)))) n++;
+          if (hit(shot.at(Math.floor((b.x + x + 0.5) * scale), Math.floor((b.y + y + 0.5) * scale)))) n++;
       return n;
     },
   };

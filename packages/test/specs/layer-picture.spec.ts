@@ -22,6 +22,7 @@ const app = await launch({
   env: { SK_WINDOW_FOCUS: "never" },
 });
 afterAll(() => app.close());
+const scale = Number(await app.eval("devicePixelRatio"));
 
 const T = 60_000;
 type Rgb = [number, number, number];
@@ -67,8 +68,7 @@ const box = async (selector: string): Promise<Bounds> => {
 
 const shoot = async () => {
   const shot = readPng(await app.screenshot());
-  const k = shot.width / 360;
-  return (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k));
+  return (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * scale), Math.floor((y + 0.5) * scale));
 };
 
 const red = ([r, g, b]: Rgb) => r > 200 && g < 140 && b < 140;

@@ -35,6 +35,7 @@ const open = (label: string, env?: Record<string, string>) =>
   });
 const app = await open("surface");
 afterAll(() => app.close());
+const scale = Number(await app.eval("devicePixelRatio"));
 
 const T = 60_000;
 type Rgb = [number, number, number];
@@ -98,8 +99,7 @@ const box = async (selector: string): Promise<Bounds> => {
 
 const shoot = async () => {
   const shot = readPng(await app.screenshot());
-  const k = shot.width / 720;
-  return (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k));
+  return (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * scale), Math.floor((y + 0.5) * scale));
 };
 
 const near = (got: Rgb, want: Rgb, by = 3) => got.every((c, i) => Math.abs(c - want[i]!) <= by);
@@ -130,7 +130,6 @@ test.skipIf(!SCREENSHOTS)(
       const frame = await box("#filter-frame");
       const row = async () => {
         const shot = readPng(await app.screenshot());
-        const scale = shot.width / 720;
         const start = Math.round(frame.x * scale);
         const width = Math.round((frame.x + frame.w) * scale) - start;
         const y = Math.round((frame.y + frame.h / 2) * scale);

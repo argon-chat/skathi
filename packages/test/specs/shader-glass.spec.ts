@@ -27,6 +27,7 @@ afterAll(() => {
   app?.close();
   rmSync(effectsDir, { recursive: true, force: true });
 });
+const scale = app ? Number(await app.eval("devicePixelRatio")) : 1;
 
 type Shot = ReturnType<typeof readPng>;
 
@@ -35,9 +36,8 @@ type Shot = ReturnType<typeof readPng>;
  * pixels in from the element's edge. The ramp is dithered per pixel, so single pixels differ by up to 6.
  */
 function diff(shot: Shot, a: [number, number], b: [number, number], inset = 0): number {
-  const k = shot.width / W;
   const at = (cell: [number, number], x: number, y: number) =>
-    shot.at(Math.round((cell[1] * 120 + x) * k), Math.round((cell[0] * 120 + y) * k));
+    shot.at(Math.round((cell[1] * 120 + x) * scale), Math.round((cell[0] * 120 + y) * scale));
   let worst = 0;
   for (let by = 20 + inset; by + 8 <= 100 - inset; by += 8)
     for (let bx = 20 + inset; bx + 8 <= 100 - inset; bx += 8) {
@@ -55,11 +55,10 @@ function diff(shot: Shot, a: [number, number], b: [number, number], inset = 0): 
 
 /** The largest channel difference of a cell's element from a colour. */
 function from(shot: Shot, cell: [number, number], rgb: [number, number, number]): number {
-  const k = shot.width / W;
   let worst = 0;
   for (let y = 20; y < 100; y++)
     for (let x = 20; x < 100; x++) {
-      const p = shot.at(Math.round((cell[1] * 120 + x) * k), Math.round((cell[0] * 120 + y) * k));
+      const p = shot.at(Math.round((cell[1] * 120 + x) * scale), Math.round((cell[0] * 120 + y) * scale));
       worst = Math.max(worst, ...p.map((c, i) => Math.abs(c - rgb[i]!)));
     }
   return worst;
