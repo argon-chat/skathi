@@ -49,6 +49,7 @@ mod mac {
         request: FrameRequest,
         events: Vec<MediaEvent>,
         frames: Vec<((u32, u32), f64)>,
+        last_frame_poll: (f64, f64),
         pixels: Option<Vec<u8>>,
     }
 
@@ -63,14 +64,17 @@ mod mac {
                 request: FrameRequest { max_size },
                 events: Vec::new(),
                 frames: Vec::new(),
+                last_frame_poll: (0.0, 0.0),
                 pixels: None,
             }
         }
 
         fn tick(&mut self) {
+            let requested_at = self.state.current_time();
             let advance = self.state.advance(Instant::now(), &self.request);
             self.events.extend(advance.events);
             if advance.new_frame {
+                self.last_frame_poll = (requested_at, self.state.current_time());
                 let info = self.state.frame_info().expect("a new frame has info");
                 self.frames.push(info);
                 let image = self.state.frame().expect("a new frame has an image");
@@ -253,9 +257,12 @@ mod mac {
             pts.windows(2).all(|w| w[1] > w[0]),
             "pts not increasing: {pts:?}"
         );
+        let picture = *pts.last().unwrap();
+        let (requested, returned) = d.last_frame_poll;
+        println!("last frame {picture:.3}s, polled at {requested:.3}..{returned:.3}s");
         assert!(
-            (pts.last().unwrap() - d.state.current_time()).abs() < 0.1,
-            "picture follows the clock"
+            requested - picture < 0.1 && picture - returned < 0.1,
+            "frame at {picture:.3}s follows the player clock during its poll ({requested:.3}..{returned:.3}s)"
         );
         let play = d.take_events();
         assert!(position(&play, MediaEvent::Play) < position(&play, MediaEvent::Playing));
