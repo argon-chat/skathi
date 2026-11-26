@@ -266,7 +266,7 @@ ConstantBuffer<${effect.struct}> sk_reflect : register(b3);
 [shader("fragment")]
 float4 ${ENTRY}(nointerpolation uint sk_id : TEXCOORD0, float4 sk_position : SV_Position) : SV_Target
 {
-    EffectInput sk_in = sk_begin(sk_id, sk_position, ${effect.backdropLinear});
+    EffectInput sk_in = sk_begin(sk_id, sk_position);
 
     // Parameter unpacking, generated from the reflection of
     // \`${effect.struct}\`: field order IS slot order IS CSS argument order.
