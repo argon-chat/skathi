@@ -21,6 +21,7 @@ pub(super) enum Place {
     Wayland {
         /// In the opener's px.
         anchor: Bounds<Pixels>,
+        placement: super::Placement,
         size: Size<Pixels>,
     },
 }
@@ -51,6 +52,7 @@ pub(super) fn locate(
     gap: f32,
     size: (f32, f32),
     margin: f32,
+    placement: super::Placement,
 ) -> Result<Place, &'static str> {
     match kind(window).ok_or("the window is neither X11 nor Wayland")? {
         Kind::X11(owner) => {
@@ -58,7 +60,7 @@ pub(super) fn locate(
             let found = x11::anchor(owner, s, rect, window.bounds())
                 .ok_or("no monitor under the anchor")?;
             Ok(Place::X11 {
-                spot: super::frame_in(found.rect, found.work, gap, size, margin, s),
+                spot: super::frame_in(placement, found.rect, found.work, gap, size, margin, s),
                 inset: (margin * s).round() as i32,
                 scale: s,
                 above: found.top_level,
@@ -77,6 +79,7 @@ pub(super) fn locate(
                 (below - 1.0, 1.0)
             };
             Ok(Place::Wayland {
+                placement,
                 anchor: Bounds {
                     origin: gpui::point(px(x - margin), px(top)),
                     size: gpui::size(px(w.max(1.0)), px(height)),
@@ -113,7 +116,11 @@ pub(super) fn options(
                 None,
             )
         }
-        Place::Wayland { anchor, size } => (
+        Place::Wayland {
+            anchor,
+            size,
+            placement,
+        } => (
             Bounds {
                 origin: gpui::point(px(0.0), px(0.0)),
                 size: *size,
@@ -121,11 +128,34 @@ pub(super) fn options(
             gpui::WindowKind::AnchoredPopup(PopupOptions {
                 parent: owner,
                 anchor_rect: *anchor,
-                anchor: PopupAnchor::BottomLeft,
+                anchor: if *placement == super::Placement::Beside {
+                    PopupAnchor::TopRight
+                } else {
+                    PopupAnchor::BottomLeft
+                },
                 gravity: PopupGravity::BottomRight,
-                constraint_adjustment: PopupConstraintAdjustment::FLIP_Y
-                    | PopupConstraintAdjustment::SLIDE_X
-                    | PopupConstraintAdjustment::SLIDE_Y,
+                constraint_adjustment: match placement {
+                    super::Placement::Below => {
+                        PopupConstraintAdjustment::FLIP_Y
+                            | PopupConstraintAdjustment::SLIDE_X
+                            | PopupConstraintAdjustment::SLIDE_Y
+                    }
+                    super::Placement::Beside => {
+                        PopupConstraintAdjustment::FLIP_X
+                            | PopupConstraintAdjustment::SLIDE_Y
+                            | PopupConstraintAdjustment::SLIDE_X
+                            | PopupConstraintAdjustment::RESIZE_Y
+                            | PopupConstraintAdjustment::RESIZE_X
+                    }
+                    super::Placement::Point => {
+                        PopupConstraintAdjustment::FLIP_X
+                            | PopupConstraintAdjustment::FLIP_Y
+                            | PopupConstraintAdjustment::SLIDE_X
+                            | PopupConstraintAdjustment::SLIDE_Y
+                            | PopupConstraintAdjustment::RESIZE_Y
+                            | PopupConstraintAdjustment::RESIZE_X
+                    }
+                },
                 offset: gpui::point(px(0.0), px(0.0)),
                 // A grab would move the keyboard to the popup and deactivate the opener; as
                 // elsewhere the opener keeps it and closes the popup on presses outside it.
@@ -136,7 +166,11 @@ pub(super) fn options(
     }
 }
 
-pub(super) fn attach(popup: &mut Window, place: &Place) -> Result<Native, &'static str> {
+pub(super) fn attach(
+    popup: &mut Window,
+    place: &Place,
+    _menu: bool,
+) -> Result<Native, &'static str> {
     match place {
         Place::X11 {
             spot, inset, above, ..
@@ -185,10 +219,18 @@ pub(super) fn update(
         }
         (
             Native::Wayland,
-            Place::Wayland { anchor: a, size: s },
-            Place::Wayland { anchor, size },
+            Place::Wayland {
+                anchor: a,
+                size: s,
+                placement: p,
+            },
+            Place::Wayland {
+                anchor,
+                size,
+                placement,
+            },
         ) => {
-            if a != anchor {
+            if a != anchor || p != placement {
                 return false;
             }
             if s != size {

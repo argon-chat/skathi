@@ -1,0 +1,68 @@
+:where(.sk-context-menu) {
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-width: 420px;
+  padding: 4px;
+  border: 1px solid #17191c28;
+  border-radius: 8px;
+  background-color: #f6f6f5b8;
+  color: #202124;
+  font-family: system-ui;
+  font-size: 13px;
+}
+:where(.sk-menu-item) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+:where(.sk-menu-item[data-active]) {
+  background-color: #181b2012;
+}
+:where(.sk-menu-item[aria-disabled="true"]) {
+  color: #74767b;
+}
+:where(.sk-menu-item[data-keyboard]) {
+  outline: 2px solid #2864a9;
+  outline-offset: -2px;
+}
+:where(.sk-menu-arrow) {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  margin-right: 3px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+:where(.sk-menu-separator) {
+  height: 1px;
+  flex-shrink: 0;
+  margin: 4px 6px;
+  background-color: #17191c29;
+}
+@media (prefers-color-scheme: dark) {
+  :where(.sk-context-menu) {
+    background-color: #232429b8;
+    color: #f3f3f4;
+    border-color: #ffffff26;
+  }
+  :where(.sk-menu-item[data-active]) {
+    background-color: #ffffff1c;
+  }
+  :where(.sk-menu-item[data-keyboard]) {
+    outline-color: #a2cdff;
+  }
+  :where(.sk-menu-item[aria-disabled="true"]) {
+    color: #999ba2;
+  }
+  :where(.sk-menu-separator) {
+    background-color: #ffffff29;
+  }
+}

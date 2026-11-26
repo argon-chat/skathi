@@ -283,12 +283,14 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     expect(rt.global.document.activeElement).toBe(b);
   });
 
-  test("'already' and 'refused' fire nothing and change nothing", () => {
+  test("refused focus leaves the document alone and already-focused restores its mirror without events", () => {
     const { rt, a, log } = focusWorld();
     rt.host.focus.answer = () => "refused";
     focus(a);
+    expect(rt.global.document.activeElement).not.toBe(a);
     rt.host.focus.answer = () => "already";
     focus(a);
+    expect(rt.global.document.activeElement).toBe(a);
     expect(log).toEqual([]);
     expect(rt.advisories()).toEqual([]);
   });

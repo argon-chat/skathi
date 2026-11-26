@@ -1,71 +1,46 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { SkWindow, type SkWindowBounds, type SkWindowTarget } from "@skathi-native/runtime";
+import { ref, useTemplateRef } from "vue";
+import {
+  SkContextMenu,
+  SkMenuItem,
+  SkMenuSeparator,
+  SkSubmenu,
+  type SkContextMenuHandle,
+} from "@skathi-native/runtime";
 
-type Rect = { x: number; y: number; width: number; height: number };
-type Menu = { mapFromMain(target: SkWindowTarget | null): Rect | null };
-
-const actions = ["Cut", "Copy", "Paste"];
-const page = ref<SkWindowTarget | null>(null);
-const menu = ref<Menu | null>(null);
-const open = ref(false);
-const last = ref("nothing yet");
-const bounds = ref<SkWindowBounds>({ x: 100, y: 100, width: 160, height: 112 });
-
-function showAt(e: MouseEvent) {
-  const r = menu.value?.mapFromMain(page.value) ?? null;
-  if (!r) return;
-  const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  const { x = 0, y = 0 } = bounds.value;
-  bounds.value = { ...bounds.value, x: x + r.x + e.clientX - box.left, y: y + r.y + e.clientY - box.top };
-  open.value = true;
-}
-
-function pick(action: string) {
-  last.value = action;
-  open.value = false;
-}
+const menu = useTemplateRef<SkContextMenuHandle<string>>("menu");
+const files = ["Notes.txt", "Draft.txt"];
+const last = ref("");
 </script>
 
 <template>
-  <main ref="page" class="page" @contextmenu.prevent="showAt" @click="open = false">
-    <p>Right-click anywhere. Last action: {{ last }}.</p>
+  <main class="files">
+    <button
+      v-for="file in files"
+      :key="file"
+      @contextmenu.prevent="menu?.open($event, file)"
+      @click="menu?.open($event.currentTarget as Element, file)"
+    >
+      {{ file }}
+    </button>
+    <output>{{ last }}</output>
   </main>
-  <SkWindow
-    ref="menu"
-    title="Menu"
-    chrome="hidden"
-    backdrop="transparent"
-    :resizable="false"
-    :focusable="false"
-    :taskbar="false"
-    :visible="open"
-    :bounds="bounds"
-  >
-    <div class="menu">
-      <div v-for="a in actions" :key="a" class="item" @click="pick(a)">{{ a }}</div>
-    </div>
-  </SkWindow>
+  <SkContextMenu ref="menu" v-slot="{ context: file }" aria-label="File actions" backdrop="acrylic">
+    <SkMenuItem @select="last = 'Opened ' + file">Open</SkMenuItem>
+    <SkMenuItem disabled>Rename</SkMenuItem>
+    <SkMenuSeparator />
+    <SkSubmenu label="Copy">
+      <SkMenuItem @select="last = 'Copied ' + file">File name</SkMenuItem>
+    </SkSubmenu>
+  </SkContextMenu>
 </template>
 
 <style>
-.page {
-  height: 100%;
-  padding: 24px;
-}
-.menu {
+.files {
   display: flex;
   flex-direction: column;
-  padding: 4px;
-  border-radius: 8px;
-  background: #1b1b1bf0;
-  color: #ffffff;
-}
-.item {
-  padding: 6px 12px;
-  border-radius: 4px;
-}
-.item:hover {
-  background: #0090ff;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
 }
 </style>

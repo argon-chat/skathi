@@ -853,6 +853,7 @@ pub(crate) fn native_window(id: Option<u64>) -> Option<RawWindowHandle> {
 pub fn forget_window(key: sk_tree::WinKey) {
     NATIVE_WINDOWS.with(|windows| windows.borrow_mut().remove(&key));
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
+    OS_DARK_SEEN.with(|m| m.borrow_mut().remove(&key));
 }
 
 /// The native window a file dialog is owned by: the HWND, or on macOS the `NSWindow`.
@@ -1574,8 +1575,14 @@ fn keep_theme(window: &Window) {
         ),
         LIVE.with(|l| l.borrow().theme),
     );
+    if !cfg!(target_os = "windows") {
+        return;
+    }
     let key = sk_tree::windows::key(window);
-    let Some(hwnd) = hwnd_of(key) else { return };
+    // Owned menu windows first enter the HWND registry on their first frame.
+    let Some(hwnd) = hwnd_of(key).or_else(|| capture_hwnd(window)) else {
+        return;
+    };
     let os = os_dark(window);
     if OS_DARK_SEEN.with(|m| m.borrow_mut().insert(key, os)) == Some(os) {
         return;

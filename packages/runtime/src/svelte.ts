@@ -23,6 +23,11 @@ import {
 } from "@skathi-native/runtime";
 
 export { default as SkWindow } from "./svelte/SkWindow.svelte";
+export { default as SkContextMenu } from "./svelte/SkContextMenu.svelte";
+export { default as SkMenuItem } from "./svelte/SkMenuItem.svelte";
+export { default as SkMenuSeparator } from "./svelte/SkMenuSeparator.svelte";
+export { default as SkSubmenu } from "./svelte/SkSubmenu.svelte";
+export type { SkContextMenuHandle, SkMenuAnchor, SkMenuBackdrop } from "./context-menu";
 export {
   appCapture,
   appDevtools,

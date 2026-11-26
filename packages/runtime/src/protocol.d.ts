@@ -330,6 +330,15 @@ declare function __sk_window_map_rect(popoutNodeId: SkNodeId, nodeId: SkNodeId):
 
 declare function __sk_window_close(nodeId: SkNodeId): void;
 
+declare function __sk_context_menu_open(
+  root: number,
+  anchor: number,
+  x: number | undefined,
+  y: number | undefined,
+  submenu: boolean,
+  backdrop: string,
+): void;
+declare function __sk_context_menu_close(root: number): void;
 declare function __sk_window_popouts(): SkJson;
 
 /** TEST SURFACE. Dispatches a real platform click at the window's own client coordinates; `true` if it landed. */

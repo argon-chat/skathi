@@ -997,10 +997,10 @@ impl<'a> Half<'a> {
 
 /// `:where()` gives specificity 0 and the sheet is collected first, and no `@layer` is modelled, so
 /// every author rule beats these.
-pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none } \
+pub(crate) const UA_SHEET: &str = concat!(include_str!("context_menu.css"), ":where([hidden]) { display: none } \
     :where(sub) { vertical-align: sub; font-size: smaller } \
     :where(sup) { vertical-align: super; font-size: smaller } \
-    :where(button, input[type=button], input[type=submit], input[type=reset]) { text-align: center }";
+    :where(button, input[type=button], input[type=submit], input[type=reset]) { text-align: center }");
 
 /// An element's used color scheme from its computed `color-scheme` (inherited in `vars`): `None`
 /// under `normal`, else whether it is dark, the environment's preference winning when both are

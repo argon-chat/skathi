@@ -36,6 +36,26 @@ async function recordHaptics() {
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
 
+test("Context menu pins a file and moves it to another folder from its submenu", async () => {
+  await page("context-menu");
+  await waitFor("document.activeViewTransition === null");
+  const actions = app.locator('[aria-label="Actions for Cover artwork.png"]');
+  await actions.click({ real: true });
+  await app.locator('[role="menu"]').waitFor();
+  await app.press("Enter");
+  await ui(app.locator(".file").first()).toContainText("Cover artwork.png");
+  await ui(app.locator('[role="status"]')).toHaveText("Pinned Cover artwork.png");
+
+  await actions.press("Shift+F10");
+  await app.locator('[role="menu"]').waitFor();
+  await app.press("End");
+  await app.press("ArrowRight");
+  await app.locator('[role="menu"][aria-label="Move to"]').waitFor();
+  await app.press("Enter");
+  await ui(app.locator(".file").first()).toContainText("Drafts");
+  await ui(app.locator('[role="status"]')).toHaveText("Moved Cover artwork.png to Drafts");
+}, 30_000);
+
 test("Files accepts disk files and exports both the originals and the current editor text", async () => {
   const disk = join(dir, "drop-example.txt");
   writeFileSync(disk, "from disk");

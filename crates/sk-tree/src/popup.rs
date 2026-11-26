@@ -27,6 +27,14 @@ mod plat;
 pub(crate) enum Slot {
     Picker,
     Select,
+    Menu(u32),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placement {
+    Below,
+    Point,
+    Beside,
 }
 
 pub(crate) type Build = Rc<dyn Fn() -> AnyElement>;
@@ -58,6 +66,8 @@ impl Popup {
         gpui::deferred(Placed {
             anchor: self.anchor,
             fallback: self.fallback,
+            fixed: None,
+            placement: Placement::Below,
             gap: self.gap,
             child: (self.build)(),
             placed: self.placed,
@@ -118,6 +128,8 @@ fn handle_of(k: WinKey, cx: &App) -> Option<gpui::AnyWindowHandle> {
 struct Placed {
     anchor: u32,
     fallback: Rect,
+    fixed: Option<Rect>,
+    placement: Placement,
     gap: f32,
     child: AnyElement,
     placed: fn(WinKey, u32, Bounds<Pixels>),
@@ -173,9 +185,12 @@ impl gpui::Element for Placed {
     ) {
         let laid = window.layout_bounds(*child);
         let k = windows::key(window);
-        let rect = anchor_box(k, self.anchor, self.fallback);
+        let rect = self
+            .fixed
+            .unwrap_or_else(|| anchor_box(k, self.anchor, self.fallback));
         let viewport = window.viewport_size();
-        let (x, y) = place(
+        let (x, y) = place_at(
+            self.placement,
             rect,
             self.gap,
             (f32::from(laid.size.width), f32::from(laid.size.height)),
@@ -278,7 +293,7 @@ impl gpui::Element for Native {
                 gap: p.gap,
                 size: (f32::from(size.width), f32::from(size.height)),
                 content: Content {
-                    build: p.build.clone(),
+                    body: Body::Widget(p.build.clone()),
                     margin: p.margin,
                     text,
                     dismiss: p.dismiss,
@@ -302,9 +317,79 @@ impl gpui::Element for Native {
     }
 }
 
+pub(crate) fn menu_element(
+    menu: crate::context_menu::Menu,
+    fixed: Option<Rect>,
+    mut child: AnyElement,
+) -> AnyElement {
+    if !native() {
+        return gpui::deferred(Placed {
+            anchor: menu.anchor,
+            fallback: (0., 0., 0., 0.),
+            fixed,
+            placement: menu.placement,
+            gap: 0.,
+            child,
+            placed: |_, _, _| {},
+        })
+        .priority(1)
+        .with_stack_key(Rc::from([u128::MAX]))
+        .into_any_element();
+    }
+    gpui::canvas(
+        move |_, window, cx| {
+            let max = gpui::AvailableSpace::MaxContent;
+            let size = child.layout_as_root(gpui::size(max, max), window, cx);
+            let rect = fixed
+                .unwrap_or_else(|| anchor_box(windows::key(window), menu.anchor, (0., 0., 0., 0.)));
+            show(
+                Request {
+                    slot: Slot::Menu(menu.root),
+                    anchor: menu.anchor,
+                    rect,
+                    gap: 0.,
+                    size: (
+                        f32::from(size.width).max(1.),
+                        f32::from(size.height).max(1.),
+                    ),
+                    content: Content {
+                        body: Body::Menu(menu),
+                        margin: 0.,
+                        text: None,
+                        dismiss: |_, _| {},
+                    },
+                },
+                window,
+                cx,
+            );
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_0()
+    .into_any_element()
+}
+
 /// Where a popup of `size` goes against the box `rect`, inside `area`.
-pub(crate) fn place(rect: Rect, gap: f32, (pw, ph): (f32, f32), area: Rect) -> (f32, f32) {
-    let (x, y, _, h) = rect;
+fn place_at(
+    placement: Placement,
+    rect: Rect,
+    gap: f32,
+    (pw, ph): (f32, f32),
+    area: Rect,
+) -> (f32, f32) {
+    let (x, y, w, h) = rect;
+    if placement == Placement::Beside {
+        let (ax, ay, aw, ah) = area;
+        let right = x + w + gap;
+        let left = x - gap - pw;
+        let x = if right + pw <= ax + aw || (left < ax && ax + aw - right >= x - gap - ax) {
+            right
+        } else {
+            left
+        };
+        return (x.min(ax + aw - pw).max(ax), y.min(ay + ah - ph).max(ay));
+    }
     let (ax, ay, aw, ah) = area;
     let below = ay + ah - (y + h + gap);
     let above = y - gap - ay;
@@ -313,8 +398,12 @@ pub(crate) fn place(rect: Rect, gap: f32, (pw, ph): (f32, f32), area: Rect) -> (
     } else {
         (y - gap - ph).max(ay)
     };
-    let left = x.min(ax + aw - pw).max(ax);
-    (left, top)
+    let left = if placement == Placement::Point && x + pw > ax + aw {
+        x - pw
+    } else {
+        x
+    };
+    (left.min(ax + aw - pw).max(ax), top)
 }
 
 /// The most room a popup under or above `rect` has in `work`, both in screen units, over `scale`.
@@ -328,6 +417,7 @@ fn room_in(rect: Rect, work: Rect, gap: f32, scale: f32) -> f32 {
 /// A popup window's frame in screen units, around content placed against `rect` inside `work`,
 /// with `margin` room on each side: `[x, y, w, h]`, whole device pixels.
 fn frame_in(
+    placement: Placement,
     rect: Rect,
     work: Rect,
     gap: f32,
@@ -337,11 +427,11 @@ fn frame_in(
 ) -> [i32; 4] {
     let s = scale;
     let m = margin * s;
-    let (w, h) = (w * s, h * s);
-    let (x, y) = place(rect, gap * s, (w, h), work);
+    let (w, h) = ((w * s).min(work.2), (h * s).min(work.3));
+    let (x, y) = place_at(placement, rect, gap * s, (w, h), work);
     [
         (x - m).round() as i32,
-        (y - m).round() as i32,
+        (y.min(work.1 + work.3 - h).max(work.1) - m).round() as i32,
         (w + 2.0 * m).ceil() as i32,
         (h + 2.0 * m).ceil() as i32,
     ]
@@ -353,8 +443,13 @@ struct Text {
     color: Hsla,
 }
 
+enum Body {
+    Widget(Build),
+    Menu(crate::context_menu::Menu),
+}
+
 struct Content {
-    build: Build,
+    body: Body,
     margin: f32,
     text: Option<Text>,
     dismiss: fn(&mut Window, &mut App),
@@ -406,7 +501,7 @@ struct Root {
 }
 
 impl Render for Root {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let c = self.content.borrow();
         let mut root = div()
             .size_full()
@@ -431,7 +526,20 @@ impl Render for Root {
                 }
             });
         }
-        root.child((c.build)())
+        match &c.body {
+            Body::Widget(build) => root.child(build()),
+            Body::Menu(menu) => {
+                windows::set_painted_root(windows::key(window), menu.root);
+                let fill = (menu.prepare_window)(window, cx);
+                if let Some(fill) =
+                    fill.filter(|_| menu.backdrop == gpui::WindowBackgroundAppearance::Opaque)
+                {
+                    root = root.bg(fill);
+                }
+                crate::window_content_tick(window, cx);
+                root.child(crate::render::build_subtree(menu.root, window, cx))
+            }
+        }
     }
 }
 
@@ -489,7 +597,18 @@ pub(crate) fn room(window: &Window, rect: Rect, gap: f32) -> Option<f32> {
 fn show(req: Request, window: &mut Window, cx: &mut App) {
     set_wanted(req.slot, Some(req.anchor));
     let k = windows::key(window);
-    let place = match plat::locate(window, req.rect, req.gap, req.size, req.content.margin) {
+    let placement = match &req.content.body {
+        Body::Menu(menu) => menu.placement,
+        Body::Widget(_) => Placement::Below,
+    };
+    let place = match plat::locate(
+        window,
+        req.rect,
+        req.gap,
+        req.size,
+        req.content.margin,
+        placement,
+    ) {
         Ok(place) => place,
         Err(why) => return give_up(why, k, cx),
     };
@@ -586,14 +705,24 @@ fn apply(
         inactive_frame_interval: None,
         low_power_frame_interval: None,
         display_id,
-        window_background: gpui::WindowBackgroundAppearance::Transparent,
+        window_background: match &content.borrow().body {
+            Body::Widget(_) => gpui::WindowBackgroundAppearance::Transparent,
+            Body::Menu(menu) => menu.backdrop,
+        },
         ..Default::default()
     };
     let root = content.clone();
-    let opened = cx.open_window(options, move |_, cx| {
-        cx.new(|_| Root {
-            content: root,
-            owner,
+    let opened = cx.open_window(options, move |window, cx| {
+        let window_id = windows::key(window);
+        cx.new(|cx| {
+            if matches!(slot, Slot::Menu(_)) {
+                cx.on_release(move |_, _| crate::forget_window(window_id))
+                    .detach();
+            }
+            Root {
+                content: root,
+                owner,
+            }
         })
     });
     let handle: gpui::AnyWindowHandle = match opened {
@@ -601,7 +730,9 @@ fn apply(
         Err(e) => return give_up(&format!("opening its window failed: {e}"), owner, cx),
     };
     let attached = handle
-        .update(cx, |_, window, _| plat::attach(window, &place))
+        .update(cx, |_, window, _| {
+            plat::attach(window, &place, matches!(slot, Slot::Menu(_)))
+        })
         .unwrap_or(Err("the popup window closed as it opened"));
     let native = match attached {
         Ok(native) => native,
@@ -634,11 +765,15 @@ fn watch_closes(cx: &mut App) {
     }
     cx.on_window_closed(|cx, id| {
         let id = id.as_u64();
+        let mut orphan_menus = Vec::new();
         let mut orphans = Vec::new();
         let mut lost = None;
         HOSTS.with(|h| {
             h.borrow_mut().retain(|h| {
                 if h.owner == id {
+                    if let Slot::Menu(root) = h.slot {
+                        orphan_menus.push(root);
+                    }
                     orphans.push(h.handle);
                     false
                 } else if h.handle.window_id().as_u64() == id {
@@ -649,6 +784,9 @@ fn watch_closes(cx: &mut App) {
                 }
             })
         });
+        for root in orphan_menus {
+            cx.defer(move |cx| crate::context_menu::dismiss(root, cx));
+        }
         for handle in orphans {
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -657,6 +795,10 @@ fn watch_closes(cx: &mut App) {
         if let Some((slot, anchor, owner, dismiss)) = lost {
             if wanted(slot) == Some(anchor) {
                 set_wanted(slot, None);
+                if let Slot::Menu(root) = slot {
+                    cx.defer(move |cx| crate::context_menu::dismiss(root, cx));
+                    return;
+                }
                 if let Some(h) = handle_of(owner, cx) {
                     cx.defer(move |cx| {
                         let _ = h.update(cx, |_, window, cx| dismiss(window, cx));
@@ -671,6 +813,10 @@ fn watch_closes(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn place(rect: Rect, gap: f32, size: (f32, f32), area: Rect) -> (f32, f32) {
+        place_at(Placement::Below, rect, gap, size, area)
+    }
 
     #[test]
     fn the_popup_goes_under_the_box_and_above_it_when_only_that_fits() {
@@ -695,6 +841,59 @@ mod tests {
             place((10., 500., 50., 20.), 4., (200., 300.), vp),
             (10., 196.),
             "the gap is kept above too"
+        );
+    }
+
+    #[test]
+    fn menus_flip_at_the_pointer_and_beside_the_submenu_on_a_scaled_monitor() {
+        let work = (-1440., 60., 1440., 900.);
+        assert_eq!(
+            frame_in(
+                Placement::Point,
+                (-12., 942., 0., 0.),
+                work,
+                0.,
+                (180., 120.),
+                0.,
+                1.5
+            ),
+            [-282, 762, 270, 180]
+        );
+        assert_eq!(
+            frame_in(
+                Placement::Beside,
+                (-210., 900., 192., 42.),
+                work,
+                0.,
+                (180., 120.),
+                0.,
+                1.5
+            ),
+            [-480, 780, 270, 180]
+        );
+        assert_eq!(
+            frame_in(
+                Placement::Beside,
+                (-1420., 100., 180., 30.),
+                work,
+                0.,
+                (180., 120.),
+                0.,
+                1.5
+            ),
+            [-1240, 100, 270, 180]
+        );
+        assert_eq!(
+            frame_in(
+                Placement::Point,
+                (-6., 900., 0., 0.),
+                work,
+                0.,
+                (1100., 1600.),
+                0.,
+                1.5
+            ),
+            [-1440, 60, 1440, 900]
         );
     }
 

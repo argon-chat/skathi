@@ -2,6 +2,7 @@
 export const icons = {
   home: "M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z",
   window: "M3 5h18v14H3z M3 9h18 M6 7h.01",
+  menu: "M3 4h18v16H3z M7 8h10 M7 12h6 M7 16h8",
   haptics: "M3 10v4 M7 7v10 M12 3v18 M17 7v10 M21 10v4",
   tray: "M6 17V10a6 6 0 0 1 12 0v7 M4 17h16 M10 21h4",
   files: "M6 2h8l5 5v15H6z M14 2v5h5 M9 13h6 M9 17h6",

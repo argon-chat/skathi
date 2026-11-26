@@ -30,12 +30,21 @@ pub(super) fn locate(
     gap: f32,
     size: (f32, f32),
     margin: f32,
+    placement: super::Placement,
 ) -> Result<Place, &'static str> {
     let (anchor, work, owner) = anchor(window, rect).ok_or("no screen under the anchor")?;
     let s = window.scale_factor();
     let device = |r: Rect| (r.0 * s, r.1 * s, r.2 * s, r.3 * s);
     Ok(Place {
-        frame: super::frame_in(device(anchor), device(work), gap, size, margin, s),
+        frame: super::frame_in(
+            placement,
+            device(anchor),
+            device(work),
+            gap,
+            size,
+            margin,
+            s,
+        ),
         scale: s,
         owner: owner as usize,
     })
@@ -62,14 +71,25 @@ pub(super) fn options(
     )
 }
 
-pub(super) fn attach(popup: &mut Window, place: &Place) -> Result<Native, &'static str> {
+pub(super) fn attach(
+    popup: &mut Window,
+    place: &Place,
+    menu: bool,
+) -> Result<Native, &'static str> {
     let panel = ns_window(popup).ok_or("the popup window has no NSWindow")?;
     let owner = place.owner as *mut AnyObject;
     // SAFETY: both are live windows (the opener painted this frame), used on the main thread.
     unsafe {
         // A press in the panel leaves the opener key: it keeps the keyboard and stays active.
         let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
-        let _: () = msg_send![panel, setHasShadow: false];
+        let _: () = msg_send![panel, setHasShadow: menu];
+        if menu {
+            let content: *mut AnyObject = msg_send![panel, contentView];
+            let _: () = msg_send![content, setWantsLayer: true];
+            let layer: *mut AnyObject = msg_send![content, layer];
+            let _: () = msg_send![layer, setCornerRadius: 8.0_f64];
+            let _: () = msg_send![layer, setMasksToBounds: true];
+        }
         let level: isize = msg_send![owner, level];
         let _: () = msg_send![panel, setLevel: level];
         let _: () = msg_send![panel, setFrame: frame(place), display: false];

@@ -136,18 +136,17 @@ The usual host for such content is a transparent, click-through window that cove
 - The tip hides when the selected row scrolls out of the list, by comparing the row with the list's own mapped rect.
 - `mapFromMain()` returns `null` before `@open`, after the window closes, and when either element is not painted.
 
-> **Note:** `mapFromMain()` works on Windows and macOS; on Linux it always returns `null`. The sample still mounts the overlay only on Windows, because on macOS and Linux a `cover` window is not made borderless. On macOS, place a small pop-out at the element instead, as the menu below does. On Linux, show the tooltip inside the main window.
+> **Note:** `mapFromMain()` works on Windows and macOS; on Linux it always returns `null`. The sample still mounts the overlay only on Windows, because on macOS and Linux a `cover` window is not made borderless. On macOS, a small pop-out can be placed at the element. On Linux, show the tooltip inside the main window.
 
 ## Menus past the window's edge
 
-A context menu or a dropdown can extend past the main window's edges, as native menus do, when it is a pop-out. It must not take the focus from the main window, it belongs to it, and it opens at the element or the point that was clicked.
+Use `SkContextMenu` for a menu that can extend past its owner's edges. Pass the `contextmenu` event to `open(event, context)` to open at the pointer. The Menu key and Shift+F10 anchor it to the focused element. For a dropdown button, use `open(element, context)` to open under the button. One menu can serve every row in a list. Its slot receives the value from the latest call as `context`.
 
 <Sample src="pop-out-windows/ContextMenu" />
 
-- `:focusable="false"`: a click in the menu reaches it, while the main window stays the active one and gets no `blur`. Keys keep going to the main window, so handle arrows, Enter and Escape there and route them to the menu.
-- `:taskbar="false"`: the menu belongs to the main window. See [Owned windows](#owned-windows) for how that differs between Windows and macOS.
-- The menu is created once, hidden, and kept warm. `mapFromMain(page)` tells where the page is in the menu's own coordinates, so adding it, and the click's offset in the page, to the menu's current `bounds` position puts the menu's corner at the click. It works while the menu is hidden.
-- On macOS, a `:focusable="false"` pop-out with `chrome="hidden"` has no traffic lights.
+Use `SkMenuItem` for an action, `SkMenuSeparator` to group commands and `SkSubmenu` for another level. Items accept ordinary component content. Selecting an enabled item runs its `select` handler and closes the menu. Up and Down move between enabled items, Right opens a submenu, and Left or Escape returns to its parent. Escape at the top level, an outside press, or `close()` dismisses the menu.
+
+Each level uses an owned popup that keeps the opening window active. The native host positions it in the monitor's work area and flips submenus sideways at the edge. Wayland delegates placement to the compositor. If the host cannot open or place a native popup, Skathi draws subsequent menus inside the opening window for the rest of the session. The default `backdrop="acrylic"` uses the Windows system material, behind-window blur on macOS, and an opaque background on Linux. Use the `.sk-context-menu`, `.sk-menu-item` and `.sk-menu-separator` classes to style the menu.
 
 ## Click-through overlays
 

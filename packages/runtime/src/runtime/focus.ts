@@ -82,6 +82,9 @@ defineDom("focus", function (this: MirrorElement) {
     const old = (nodeById(Number(answer.slice(6))) as MirrorElement | undefined) ?? null;
     // The host's old node may be the target of a move in progress: it never got focus, nothing to blur.
     focusMoved(this, old === arriving || old === this ? null : old);
+  } else if (answer === "already" && !arriving) {
+    // Focus is per native window. Closing a pop-out can leave the shared document pointing at its old element.
+    focusedNode = this;
   } else if (answer === "pending") {
     warnCompat(
       "focus:deferred",

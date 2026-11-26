@@ -524,6 +524,31 @@ fn cover_rect(main: Option<isize>, monitor: Option<usize>) -> Option<popout_win:
 
 // Deferred: `App::open_window` draws the window before returning, and this runs inside the primary
 // window's update. Hence JS learns the window id through the `open` event, not a return value.
+host_fn!(fn sk_context_menu_open(g, args) {
+    let root = args.arg(0).as_number().unwrap_or_default() as u32;
+    let anchor = args.arg(1).as_number().unwrap_or_default() as u32;
+    let point = args.arg(2).as_number().zip(args.arg(3).as_number())
+        .filter(|(x,y)| x.is_finite() && y.is_finite()).map(|(x,y)| (x as f32,y as f32));
+    let submenu = args.arg(4).as_bool().unwrap_or(false);
+    let backdrop = unsafe { read_string(g, args.arg(5).0) }
+        .and_then(|name| Backdrop::parse(&name)).unwrap_or(Backdrop::Acrylic);
+    if root != anchor && sk_tree::with_tree(|t| t.node(root).is_some() && t.node(anchor).is_some()) {
+        sk_tree::context_menu::open(root, anchor, point, submenu, backdrop.to_gpui(), |window, cx| {
+            let size = window.viewport_size();
+            let env = crate::window::popout_env(window, cx, (size.width.into(), size.height.into()), false, 0.0);
+            sk_tree::set_env_for(sk_tree::windows::key(window), env);
+            crate::window::opaque_fill(Backdrop::None, crate::window::effective_dark(window))
+        });
+    }
+    UNDEF
+});
+
+host_fn!(fn sk_context_menu_close(_g, args) {
+    let root = args.arg(0).as_number().unwrap_or_default() as u32;
+    with_app(|cx| sk_tree::context_menu::close(root, cx));
+    UNDEF
+});
+
 host_fn!(fn sk_window_open(g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -1826,6 +1851,16 @@ pub fn install(rt: &JsRuntime) {
         "__sk_fullscreen_window",
         2,
         sk_fullscreen_window as *const _,
+    );
+    rt.register(
+        "__sk_context_menu_open",
+        6,
+        sk_context_menu_open as *const _,
+    );
+    rt.register(
+        "__sk_context_menu_close",
+        1,
+        sk_context_menu_close as *const _,
     );
     rt.register("__sk_window_open", 4, sk_window_open as *const _);
     rt.register("__sk_window_close", 1, sk_window_close_popout as *const _);

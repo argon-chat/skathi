@@ -61,6 +61,8 @@ export function mountDocument(render: (root: MirrorElement) => () => void): Mirr
 
 // `<SkWindow>`'s host side; the components are `@skathi-native/runtime`'s (Vue) and `@skathi-native/runtime/svelte`'s.
 export { SK_WINDOW_CREATION_TIME_PROPS, createSkWindowPopout, registerWindowRoot } from "./skwindow";
+export { contextMenuRenderer } from "./context-menu";
+export type { SkContextMenuHandle, SkMenuAnchor, SkMenuBackdrop } from "./context-menu";
 export type {
   SkWindowBounds,
   SkWindowEvents,

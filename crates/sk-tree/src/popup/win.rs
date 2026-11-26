@@ -7,7 +7,7 @@ use gpui::{px, App, Bounds, Pixels, Window};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_DONOTROUND,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -43,13 +43,14 @@ pub(super) fn locate(
     gap: f32,
     size: (f32, f32),
     margin: f32,
+    placement: super::Placement,
 ) -> Result<Place, &'static str> {
     let owner = hwnd(window).ok_or("the window has no HWND")?;
     let (anchor, monitor) =
         anchor(owner, window.scale_factor(), rect).ok_or("no monitor under the anchor")?;
     let s = monitor.scale;
     Ok(Place {
-        spot: super::frame_in(anchor, monitor.work, gap, size, margin, s),
+        spot: super::frame_in(placement, anchor, monitor.work, gap, size, margin, s),
         inset: (margin * s).round() as i32,
         owner: owner.0 as isize,
         monitor: (monitor.bounds.0, monitor.bounds.1),
@@ -89,10 +90,14 @@ pub(super) fn options(
     )
 }
 
-pub(super) fn attach(popup: &mut Window, place: &Place) -> Result<Native, &'static str> {
+pub(super) fn attach(
+    popup: &mut Window,
+    place: &Place,
+    menu: bool,
+) -> Result<Native, &'static str> {
     let hwnd = hwnd(popup).ok_or("the popup window has no HWND")?;
     let owner = HWND(place.owner as *mut core::ffi::c_void);
-    configure(hwnd, owner);
+    configure(hwnd, owner, menu);
     position(hwnd, place.spot, place.inset, Some(owner));
     Ok(Native(hwnd))
 }
@@ -180,7 +185,7 @@ thread_local! {
 
 /// Owned by `owner` (above it, gone with it) and never activated, so `owner` keeps the
 /// keyboard and looks active; square, borderless corners: the content draws its own.
-fn configure(popup: HWND, owner: HWND) {
+fn configure(popup: HWND, owner: HWND, menu: bool) {
     // SAFETY: both are live windows of this thread; the replaced procedure is kept and called.
     unsafe {
         SetWindowLongPtrW(popup, GWL_STYLE, (WS_POPUP | WS_CLIPSIBLINGS).0 as isize);
@@ -189,7 +194,11 @@ fn configure(popup: HWND, owner: HWND) {
         SetWindowLongPtrW(popup, GWLP_HWNDPARENT, owner.0 as isize);
         let previous = SetWindowLongPtrW(popup, GWLP_WNDPROC, procedure as *const () as isize);
         PROCS.with(|p| p.borrow_mut().insert(popup.0 as isize, (previous, 0)));
-        let corners = DWMWCP_DONOTROUND;
+        let corners = if menu {
+            DWMWCP_ROUND
+        } else {
+            DWMWCP_DONOTROUND
+        };
         let _ = DwmSetWindowAttribute(
             popup,
             DWMWA_WINDOW_CORNER_PREFERENCE,

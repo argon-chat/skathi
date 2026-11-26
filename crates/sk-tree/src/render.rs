@@ -932,6 +932,7 @@ fn watch_activation<V: 'static>(window: &mut Window, cx: &mut Context<V>) {
     }
     let sub = cx.observe_window_activation(window, |_, window, cx| {
         if !window.is_window_active() {
+            crate::context_menu::deactivate(window, cx);
             crate::haptics::blur(window);
             cancel_press(window, cx);
         }
@@ -2745,6 +2746,26 @@ fn build_node<V: 'static>(
                     }
                     if id == root {
                         kids.extend(crate::color_picker::layer(t, window, cx));
+                        kids.extend(crate::context_menu::layer(
+                            t,
+                            window,
+                            cx,
+                            |menu, window, cx| {
+                                build_node(
+                                    t,
+                                    menu,
+                                    root,
+                                    window,
+                                    cx,
+                                    now,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    Stacking::default(),
+                                )
+                            },
+                        ));
                     }
                     crate::cache::normalize_inner_root(id, d.style());
                     d.children(kids).into_any_element()

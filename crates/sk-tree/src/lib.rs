@@ -15,6 +15,7 @@ mod clipboard;
 mod color;
 pub mod color_picker;
 mod containers;
+pub mod context_menu;
 mod css_namespace;
 mod cull;
 mod dom;
@@ -855,6 +856,13 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 /// Per-frame work a SECONDARY window does from its own `render()`: its atlas resources and focus.
 /// The JS-facing half stays in [`frame_tick`] (one JS realm, once per frame group).
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    window_content_tick(window, cx);
+    render::apply_pending_blur(window, cx);
+    render::apply_pending_focus(window, cx);
+    render::ensure_root_focus(window, cx);
+}
+
+fn window_content_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     haptics::tick(window, cx);
     pointer::arm_hover_tick(window);
     img::evict_pending(window, cx);
@@ -864,9 +872,6 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     render::sticker::window_tick(window);
     surface::node::sample_display(window);
     surface::node::window_tick(window);
-    render::apply_pending_blur(window, cx);
-    render::apply_pending_focus(window, cx);
-    render::ensure_root_focus(window, cx);
 }
 
 /// Forgets everything a window held, because it has closed. Its atlas went with it, so tiles it

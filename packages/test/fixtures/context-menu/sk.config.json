@@ -1,0 +1,10 @@
+{
+  "name": "sk-test-context-menu",
+  "window": {
+    "title": "Context menu",
+    "width": 300,
+    "height": 140,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

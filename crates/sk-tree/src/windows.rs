@@ -185,7 +185,7 @@ pub fn set_painted_root(k: WinKey, root: u32) {
     }
     ROOTS.with(|m| {
         let mut m = m.borrow_mut();
-        if previous != 0 {
+        if m.get(&previous) == Some(&k) {
             m.remove(&previous);
         }
         if root != 0 {
@@ -247,7 +247,12 @@ pub fn forget(k: WinKey) -> Option<WindowState> {
     let state = WINDOWS.with(|m| m.borrow_mut().remove(&k));
     if let Some(s) = state.as_ref() {
         if s.painted_root != 0 {
-            ROOTS.with(|m| m.borrow_mut().remove(&s.painted_root));
+            ROOTS.with(|m| {
+                let mut roots = m.borrow_mut();
+                if roots.get(&s.painted_root) == Some(&k) {
+                    roots.remove(&s.painted_root);
+                }
+            });
         }
     }
     state
@@ -328,6 +333,15 @@ mod tests {
         forget(9);
         assert_eq!(window_of_root(55), None);
         assert!(peek(9, |_| ()).is_none());
+    }
+
+    #[test]
+    fn closing_a_replaced_popup_preserves_the_new_owner_of_its_subtree() {
+        reset();
+        set_painted_root(9, 55);
+        set_painted_root(10, 55);
+        forget(9);
+        assert_eq!(window_of_root(55), Some(10));
     }
 
     #[test]
