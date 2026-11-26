@@ -33,7 +33,7 @@ members = [
 exclude = ["vendor", "crates/sk-image", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
 [workspace.package]
-version = "0.8.5"
+version = "0.9.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/argon-chat/skathi"
 homepage = "https://skathi.land"

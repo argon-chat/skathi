@@ -57,10 +57,10 @@ process = ["sk-app/process"]
 webview = ["sk-app/webview"]
 
 [dependencies]
-sk-app = { path = "../sk-app", version = "0.8.5", default-features = false }
-skathi-macros = { path = "../skathi-macros", version = "0.8.5" }
+sk-app = { path = "../sk-app", version = "0.9.0", default-features = false }
+skathi-macros = { path = "../skathi-macros", version = "0.9.0" }
 # For its links metadata only (the Windows manifest).
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.9.0", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

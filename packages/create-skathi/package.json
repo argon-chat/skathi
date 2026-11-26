@@ -1,6 +1,6 @@
 {
   "name": "create-skathi",
-  "version": "0.8.5",
+  "version": "0.9.0",
   "description": "Start a new Skathi app: bun create skathi <dir>",
   "license": "MIT OR Apache-2.0",
   "repository": {

@@ -30,10 +30,10 @@ harness = false
 
 [dependencies]
 redjs-webgpu = { path = "../../vendor/redjs/redjs/webgpu", version = "0.8.0", optional = true }
-gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.8.5", default-features = false }
+gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", version = "0.9.0", default-features = false }
 # Same major as gpui's, so `image::Frame` unifies with `gpui::RenderImage`'s.
 image = { version = "0.25", default-features = false }
-sk-resample = { path = "../sk-resample", version = "0.8.5" }
+sk-resample = { path = "../sk-resample", version = "0.9.0" }
 
 [build-dependencies]
 cc = "1"
