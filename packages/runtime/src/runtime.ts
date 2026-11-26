@@ -39,6 +39,7 @@ export {
 export { Transition, TransitionGroup, resolveTransitionProps } from "./runtime/transitions";
 export { SkWindow } from "./skwindow-vue";
 export { SkContextMenu, SkMenuItem, SkMenuSeparator, SkSubmenu } from "./context-menu-vue";
+export { SkKbd } from "./kbd-vue";
 
 // `appWindow`'s state reads (`isMaximized()`, `title`, `chrome`, …) re-run the effect, computed or render that made them.
 const windowState = shallowRef(0);

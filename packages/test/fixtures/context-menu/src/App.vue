@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, useTemplateRef } from "vue";
+import { onScopeDispose, ref, useTemplateRef } from "vue";
 import {
   SkWindow,
+  defineKeymap,
   SkContextMenu,
+  SkKbd,
   SkMenuItem,
   SkMenuSeparator,
   SkSubmenu,
@@ -12,6 +14,17 @@ import {
 const menu = useTemplateRef<SkContextMenuHandle<string>>("menu");
 const files = ["Notes.txt", "Draft.txt"];
 const last = ref("");
+const shortcut = defineKeymap({ keys: "Control+KeyQ" });
+onScopeDispose(
+  shortcut.bind(() => {
+    last.value = "Shortcut fired";
+  }),
+);
+onScopeDispose(
+  shortcut.on("up", (event) => {
+    if (event.cancelled) last.value = "Shortcut cancelled";
+  }),
+);
 const extra = ref(false);
 const detached = ref(false);
 Object.assign(globalThis, {
@@ -32,6 +45,7 @@ Object.assign(globalThis, {
       {{ file }}
     </button>
     <output>{{ last }}</output>
+    <SkKbd id="layout-shortcut" :map="shortcut" />
   </main>
   <SkWindow v-if="detached" title="Detached files" :bounds="{ width: 250, height: 140 }">
     <button id="detached-trigger" @click="menu?.open($event.currentTarget as Element, 'Detached.txt')">
@@ -40,8 +54,11 @@ Object.assign(globalThis, {
   </SkWindow>
   <SkContextMenu ref="menu" v-slot="{ context: file }" aria-label="File actions" backdrop="acrylic">
     <SkMenuItem @select="last = 'Opened ' + file">Open</SkMenuItem>
-    <SkMenuItem disabled>Rename</SkMenuItem>
-    <SkMenuItem v-if="extra">Open in a separate application window</SkMenuItem>
+    <SkMenuItem disabled>Rename <SkKbd keys="F2" variant="plain" /></SkMenuItem>
+    <SkMenuItem v-if="extra">
+      Open in a separate application window
+      <SkKbd :keys="{ alternatives: [{ mouse: 'middle' }, { gamepad: 'south' }] }" gamepad-layout="playstation" />
+    </SkMenuItem>
     <SkMenuSeparator />
     <SkSubmenu label="Copy">
       <SkMenuItem @select="last = 'Copied ' + file">File name</SkMenuItem>

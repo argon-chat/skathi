@@ -8,9 +8,8 @@ order: 19
 
 import Sample from "../../src/components/Sample.astro";
 
-Each recipe is one file you can copy. They use no framework, so the same file works in a Vue and in
-a Svelte app: call the function where the app starts, and keep what a template shows in a `ref` or
-`$state`. Every recipe links to the reference for the platforms and the edge cases.
+The TypeScript recipes work in both Vue and Svelte apps. Call them where the app starts and keep
+template state in a `ref` or `$state`. Component examples have a tab for each framework.
 
 ## Open the files the app was started with
 
@@ -46,6 +45,145 @@ Call the function it returns to stop listening. On macOS the user has to grant A
 first: [`appHotkeys.status()`](/app-api/hotkeys-status/) says whether they have. Let the user choose
 the chord with [`captureOnce()`](/app-api/hotkeys-capture-once/) when the default can collide with
 another app's.
+
+## Display a keyboard shortcut
+
+`SkKbd` draws a shortcut with a single accessible name. `Mod` shows Command on macOS and Control on Windows and Linux.
+Explicit `Ctrl` always means Control. Use `variant="plain"` for a compact menu hint. The component is presentational.
+Attach the keyboard handler and any `aria-keyshortcuts` attribute to the control that performs the action.
+
+<Sample src="recipes/ShortcutKeys" />
+
+`defineKeymap({ keys: ["Mod", { code: "KeyQ" }], scope: "app" })` returns a `SkKeyMap`. Pass it to
+`<SkKbd :map="command" />` in Vue or `<SkKbd map={command} />` in Svelte. One command can have several hints.
+Call `command.bind(handler)` once where the action lives and keep its returned disposer. The default `app` scope
+uses events in the app's focused window. It ignores key repeats, composition, and bare shortcuts in text fields
+unless you set `allowInEditable: true` for text fields. Set `suppress: true` to consume a match.
+
+A physical code follows the current input source. The same `KeyQ` position displays **Q** on US QWERTY,
+**Й** on Russian ЙЦУКЕН and **A** on French AZERTY. Switching the OS keyboard layout refreshes mounted hints.
+The string `"Mod+KeyQ"` is equivalent. Use `"Mod+Q"` for a literal character binding. The `platform` prop
+controls modifier conventions independently of the active keyboard layout.
+
+Choose `scope: "global"` to activate a physical keyboard or mouse chord even when another app has focus
+on Windows or macOS. Global maps share the native hotkey service with `appHotkeys.setBindings()` and have
+independent lifetimes. They accept simultaneous chords, alternatives and recorded `HotkeyChord` values.
+Use app scope for successive chords and wheel gestures. An app map can present a gamepad alternative alongside
+a keyboard or mouse binding. Controller input availability follows the native [Gamepad API support](/web-platform/gamepad/).
+Set `mousePrimary: "right"` on the map when the right button acts as primary. Its handler and hints then use the same convention.
+
+In a chord, an array lists simultaneous keys literally, including `+`, a space, or a character from another alphabet.
+Use `sequence` for successive chords and `alternatives` for different ways to perform a command. Each alternative
+can itself be a sequence. Passing a captured `HotkeyChord` preserves modifier sides, mouse buttons, and keypad keys.
+Passing `null` leaves the label empty.
+
+The default platform follows the device. Set `platform` to `windows`, `macos`, or `linux` to preview another platform.
+For a captured key the component uses its current layout legend when available and falls back to its stable identity,
+such as `VK 0xBA` or `Scan 0xE012`. Override a captured key's legend through `labels.keys`, for example
+`{ keys: { "VK 0xBA": "Ж" } }`.
+
+### Handle presses, clicks, and holds
+
+Use `map.on(event, handler)` to subscribe to a gesture. Each call returns its own unsubscribe function.
+`bind(handler)` is shorthand for `on("down", handler)`. Enable or disable the whole map to keep its
+subscriptions while a tool, panel, or game mode is inactive.
+
+<Sample src="recipes/shortcutGestures.ts" />
+
+| Event | When the handler runs |
+| --- | --- |
+| `down` | As soon as the final chord matches. Holding a key through auto-repeat gives one down. |
+| `up` | When a required button is released. An interrupted hold also receives an up with `event.cancelled` set to `true`. Use this for push-to-talk cleanup. |
+| `press` | Immediately after each completed release, including a hold or either press in a double click. |
+| `click` | Once for a single activation. Delivery is immediate unless the map also has a `doubleClick` listener. |
+| `doubleClick` | Two completed activations of the same alternative within `doubleClickMs`. The pair consumes both single clicks. Local mouse clicks must use the same target and stay within four CSS pixels on each axis. |
+| `hold` | Once after `holdMs` with the chord still held. A recognized hold consumes the click. |
+
+Both timing windows default to 500 ms. Keyboard shortcuts support the same gestures as mouse buttons.
+A wheel step completes immediately. For a sequence, the gesture begins when its last chord matches.
+Overlapping alternatives keep the command down until the last active alternative is released.
+The handler receives the map, the event type, the zero-based `alternative` index, and the originating
+DOM event in `originalEvent` when available. Pass `{ once: true }` as the third argument to `on` for a one-shot listener.
+Give one listener its own condition with `map.on("press", handler, { when: () => selection.length > 0 })`.
+You can combine `when` with `once` to run on the first qualifying event. A conditional double-click listener
+delays a single click only when its predicate passes.
+
+`disable()` cancels pending clicks and holds. It releases a global registration back to the OS.
+`enable()` resumes with a fresh gesture. Use the `when` predicate for live application state such as an
+active tool. App shortcuts check it before consuming input. For global shortcuts the native hook applies
+`suppress` before JavaScript receives the event. Disable the map to let other apps receive that chord.
+
+### Mouse and gamepad buttons
+
+A mouse keycap highlights the button or wheel direction on a mouse outline. Use `{ mouse: event.button }` with a
+DOM mouse event, or name the input: `primary`, `secondary`, `middle`, `back`, `forward`, `left`, `right`, or
+`wheel-up`, `wheel-down`, `wheel-left`, `wheel-right`. Set `mousePrimary="right"` to put the logical primary button
+on the right in the diagram. Physical left and right and captured `HotkeyChord` buttons keep their identity.
+A DOM middle click has `button === 1`. Its `appHotkeys` mouse code is `3`. Pass each API's value in its own shape.
+
+For a controller, use a physical position such as `{ gamepad: "south" }`, `"left-trigger"`, `"left-stick"` (a press),
+or `"dpad-up"`. The default `gamepadLayout="generic"` marks the position. The `xbox`, `playstation` (DualSense) and
+`nintendo` (Switch Pro) layouts add the button's printed legend. Choose the layout for the controller independently
+of the operating system. Override a model-specific legend with, for example, `labels.keys["Gamepad:select"] = "Share"`.
+
+The numeric form accepts a zero-based button index and its mapping, for example
+`{ gamepad: index, mapping: pad.mapping }` when iterating `pad.buttons`. With `"standard"`, indices 0–16 select
+the standard positions. An omitted or unrecognized mapping, or an extra button, gives a raw label such as `Pad 17`.
+Customize that label with `labels.keys.GamepadButton17`. These prompts can be rendered from saved bindings.
+The position numbers follow the [W3C standard gamepad mapping](https://www.w3.org/TR/gamepad/#remapping).
+Controller polling through `navigator.getGamepads()` is currently unavailable in the native runtime.
+See [Gamepad API support](/web-platform/gamepad/).
+
+### Customize shortcut styles, symbols, and fonts
+
+This hint shows **↵** for Enter and **✕** for the controller's south face button. On Windows its accessible
+name is “Control plus Enter, or Cross button”. The same keymap can appear elsewhere with the default styling.
+
+<Sample src="recipes/StyledShortcut" />
+
+Set an entry in `labels.keys` to a string to use the same text on screen and in the accessible name. Use
+`{ text, label }` when the keycap shows a symbol. Each entry uses the key's canonical name, such as `Enter`,
+`MouseBack`, or `Gamepad:south`. For `Mod`, override `Meta` on macOS and `Control` on Windows and Linux.
+An override for a physical code such as `KeyQ` fixes its legend across keyboard layouts. Leave that entry out
+to follow the active layout.
+
+To translate connectors, set `labels.then` and `labels.or` for both display and speech. `labels.plus`
+supplies the spoken word between simultaneous keys. The visible chord uses the platform's punctuation.
+Set `aria-label` on `SkKbd` to supply the complete accessible name yourself.
+
+In a shared stylesheet, give `SkKbd` a class to style one hint, or target `.sk-kbd` to theme every hint.
+The examples use a wrapper and Vue's `:deep()` or Svelte's `:global()` so their scoped styles reach the
+elements inside the component.
+
+| Selector | What it styles |
+| --- | --- |
+| `.sk-kbd` | The whole hint. Set `font-family`, `font-size`, and `line-height` here. Its `gap` separates chords and alternatives. |
+| `.sk-kbd-step` | One simultaneous chord. Its `gap` controls the spacing inside the chord. |
+| `.sk-kbd-key` | Each keycap's background, border, padding, and font weight. Use `[data-device="mouse"]` or `[data-device="gamepad"]` on this element for device-specific styles. |
+| `.sk-kbd-glyph` | The built-in mouse or controller diagram. It uses `currentColor`. Hide it when a custom symbol supplies the whole icon. |
+| `.sk-kbd-join`, `.sk-kbd-between` | The visible join inside a chord and the words between chords or alternatives, respectively. |
+
+With `variant="plain"`, style the root, steps, and between-chord words. Each step draws its keys as text.
+Use `.sk-kbd[data-scope="global"]` to give hints for global keymaps their own styling.
+
+To use an icon font, put `pad-icons.ttf` in a `fonts` directory next to the stylesheet and import the stylesheet in the app.
+If the font maps its cross icon to `U+E001`, change the example's `Gamepad:south` entry to
+`{ text: "\uE001", label: "Cross button" }`. The range lets the other characters use the text font.
+
+```css
+@font-face {
+  font-family: "Pad Icons";
+  src: url("./fonts/pad-icons.ttf") format("truetype");
+  unicode-range: U+E001;
+}
+
+.command-hints .sk-kbd-key[data-device="gamepad"] {
+  font-family: "Pad Icons", monospace;
+}
+```
+
+You can bundle a text font the same way. Set its family first in the `.sk-kbd` font stack.
+See the [`@font-face` reference](/css/at-font-face/) for supported sources and formats.
 
 ## Show an unread count
 

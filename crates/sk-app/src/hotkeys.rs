@@ -72,10 +72,11 @@ impl Shared {
         let current = self.gate(event);
         let id = event.id.clone();
         let down = event.phase == "down";
+        let cancelled = event.cancelled;
         self.dispatcher
             .post(move |context| {
                 if current() {
-                    emit(context, &id, down);
+                    emit(context, &id, down, cancelled);
                 }
             })
             .is_ok()
@@ -127,6 +128,8 @@ struct Pending {
 }
 #[derive(Default)]
 struct State {
+    bindings: Vec<Binding>,
+    keymaps: Vec<Binding>,
     shared: Option<Arc<Shared>>,
     dispatcher: Option<JsDispatcher>,
     closed: bool,
@@ -181,7 +184,7 @@ fn shared(context: &Context) -> js::Result<Arc<Shared>> {
         .ok_or_else(|| error(context, "global hotkeys have shut down"))
 }
 
-fn emit(context: &Context, id: &str, down: bool) {
+fn emit(context: &Context, id: &str, down: bool, cancelled: bool) {
     let listeners = STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.listeners.is_empty() {
@@ -206,6 +209,12 @@ fn emit(context: &Context, id: &str, down: bool) {
                 &context.atom("phase"),
                 context.string(if down { "down" } else { "up" }),
             )
+        })
+        .and_then(|_| {
+            if cancelled {
+                context.define(payload, &context.atom("cancelled"), Value::boolean(true), 3)?;
+            }
+            Ok(())
         });
     if let Err(error) = filled {
         sk_tree::log::record(
@@ -237,7 +246,7 @@ fn release_held(context: &Context, shared: &Shared) {
     shared.epoch.fetch_add(1, Ordering::AcqRel);
     let held = STATE.with(|state| std::mem::take(&mut state.borrow_mut().held));
     for id in held {
-        emit(context, &id, false);
+        emit(context, &id, false, true);
     }
 }
 
@@ -549,23 +558,41 @@ fn status_value(context: &Context, status: &Status) -> js::Result<Value> {
     Ok(object)
 }
 
-fn set_bindings(context: &Context, value: Value) -> js::Result<Value> {
-    let bindings = decode(context, value)?;
+fn set_bindings(context: &Context, value: Value, keymaps: bool) -> js::Result<Value> {
+    let next = decode(context, value)?;
+    let mut bindings = STATE.with(|s| {
+        let s = s.borrow();
+        if keymaps {
+            s.bindings.clone()
+        } else {
+            s.keymaps.clone()
+        }
+    });
+    bindings.extend_from_slice(&next);
     let shared = shared(context)?;
     shared.ensure_started();
-    if !shared
+    let changed = shared
         .service
         .would_change(&bindings)
-        .map_err(|message| type_error(context, &message))?
-    {
-        return Ok(Value::boolean(false));
+        .map_err(|message| type_error(context, &message))?;
+    if changed {
+        shared
+            .service
+            .set_bindings(bindings)
+            .map_err(|message| type_error(context, &message))?;
     }
-    release_held(context, &shared);
-    shared
-        .service
-        .set_bindings(bindings)
-        .map(Value::boolean)
-        .map_err(|message| type_error(context, &message))
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        if keymaps {
+            s.keymaps = next;
+        } else {
+            s.bindings = next;
+        }
+    });
+    if changed {
+        release_held(context, &shared);
+    }
+    Ok(Value::boolean(changed))
 }
 fn capture_once(context: &Context) -> js::Result<Value> {
     let shared = shared(context)?;
@@ -637,6 +664,13 @@ fn reload(context: &Context) {
     if let Some(shared) = existing() {
         shared.realm.fetch_add(1, Ordering::AcqRel);
         shared.service.cancel_capture();
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            if !s.keymaps.is_empty() {
+                s.keymaps.clear();
+                let _ = shared.service.set_bindings(s.bindings.clone());
+            }
+        });
     }
     clear(context, false);
 }
@@ -695,8 +729,16 @@ fn namespace(context: &Context) -> js::Result<Value> {
     let object = roots.keep(context.object());
     let r = &mut roots;
     method(context, r, object, "setBindings", 1, |context, args| {
-        set_bindings(context, args.arg(0))
+        set_bindings(context, args.arg(0), false)
     })?;
+    method(
+        context,
+        r,
+        object,
+        "_setKeymapBindings",
+        1,
+        |context, args| set_bindings(context, args.arg(0), true),
+    )?;
     method(context, r, object, "status", 0, |context, _| {
         status_value(context, &shared(context)?.service.status())
     })?;
@@ -760,6 +802,8 @@ mod tests {
         STATE.with(|state| {
             let mut state = state.borrow_mut();
             state.closed = false;
+            state.bindings.clear();
+            state.keymaps.clear();
             state.dispatcher = Some(dispatcher);
             state.shared = Some(shared.clone());
         });
@@ -873,13 +917,44 @@ mod tests {
     }
 
     #[test]
+    fn managed_maps_coexist_with_legacy_bindings_and_reload_only_retires_maps() {
+        sk_runtime::testing::on_js_thread(|| {
+            JsRuntime::with(|runtime| {
+                let ctx = runtime.ctx();
+                let service = fresh(ctx);
+                let api = "__hotkeyProbe";
+                let legacy = "[{id:'existing', chord:{buttons:[{device:0,code:135}]}}]";
+                let map = "[{id:'map', chord:{buttons:[{device:0,code:131088}]}}]";
+                ctx.eval(&format!(
+                    "{api}.setBindings({legacy}); {api}._setKeymapBindings({map})"
+                ))
+                .unwrap();
+                let expected =
+                    decode(ctx, ctx.eval(&format!("{legacy}.concat({map})")).unwrap()).unwrap();
+                assert!(!service.service.would_change(&expected).unwrap());
+                assert!(ctx
+                    .eval(&format!("{api}._setKeymapBindings({legacy})"))
+                    .is_err());
+                assert!(!service.service.would_change(&expected).unwrap());
+                ctx.eval(&format!("{api}.setBindings([])")).unwrap();
+                let only_map = decode(ctx, ctx.eval(map).unwrap()).unwrap();
+                assert!(!service.service.would_change(&only_map).unwrap());
+                ctx.eval(&format!("{api}.setBindings({legacy})")).unwrap();
+                reload(ctx);
+                let after = decode(ctx, ctx.eval(legacy).unwrap()).unwrap();
+                assert!(!service.service.would_change(&after).unwrap());
+            })
+        });
+    }
+
+    #[test]
     fn hotkey_holds_are_released_once_and_stale_deliveries_are_gated() {
         sk_runtime::testing::on_js_thread(|| {
             JsRuntime::with(|runtime| {
                 let context = runtime.ctx();
                 let shared = fresh(context);
-                context.eval("globalThis.__hotkeyEvents=[];globalThis.__hotkeyOff=__hotkeyProbe.onFired(event=>__hotkeyEvents.push(event.id+':'+event.phase+':'+Object.keys(event).length))").unwrap();
-                emit(context, "push-to-talk", true);
+                context.eval("globalThis.__hotkeyEvents=[];globalThis.__hotkeyOff=__hotkeyProbe.onFired(event=>__hotkeyEvents.push([event.id,event.phase,Object.keys(event).length,!!event.cancelled].join(':')))").unwrap();
+                emit(context, "push-to-talk", true, false);
                 assert!(held("push-to-talk"));
                 assert_eq!(
                     context
@@ -896,13 +971,14 @@ mod tests {
                     id: "push-to-talk".into(),
                     phase: "down".into(),
                     generation: shared.service.current_generation(),
+                    cancelled: false,
                 });
                 release_held(context, &shared);
                 assert!(!queued_down(), "a queued down is retired by the release");
                 assert!(!held("push-to-talk"));
                 assert_eq!(
                     text(context, "__hotkeyEvents.join(',')"),
-                    "push-to-talk:down:2,push-to-talk:up:2"
+                    "push-to-talk:down:2:false,push-to-talk:up:2:true"
                 );
                 release_held(context, &shared);
                 assert_eq!(
@@ -910,14 +986,15 @@ mod tests {
                     Some(2.0),
                     "a repeated release must not repeat the up"
                 );
-                emit(context, "push-to-talk", true);
-                emit(context, "push-to-talk", false);
+                emit(context, "push-to-talk", true, false);
+                emit(context, "push-to-talk", false, false);
                 assert!(!held("push-to-talk"));
 
                 let event = Fired {
                     id: "ptt".into(),
                     phase: "down".into(),
                     generation: shared.service.current_generation(),
+                    cancelled: false,
                 };
                 let queued = shared.gate(&event);
                 assert!(queued());
@@ -942,12 +1019,14 @@ mod tests {
                     id: "ptt".into(),
                     phase: "up".into(),
                     generation: 0,
+                    cancelled: false,
                 });
                 assert!(current());
                 assert!(shared.post(&Fired {
                     id: "ptt".into(),
                     phase: "up".into(),
                     generation: 0,
+                    cancelled: false,
                 }));
                 reload(context);
                 assert!(!current(), "reload retires queued deliveries");
@@ -966,6 +1045,7 @@ mod tests {
                     id: "ptt".into(),
                     phase: "up".into(),
                     generation: 0,
+                    cancelled: false,
                 }));
                 runtime.pump(sk_runtime::runtime::PUMP_TIMERS);
                 assert_eq!(text(context, "String(__hotkeyEvents[4])"), "up");

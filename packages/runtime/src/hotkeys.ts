@@ -28,6 +28,8 @@ export interface HotkeyStatus {
 export interface HotkeyEvent {
   readonly id: string;
   readonly phase: "down" | "up";
+  /** True on a release synthesized when the service cancels an active chord. */
+  readonly cancelled?: true;
 }
 export interface AppHotkeys {
   /** Windows and macOS. */

@@ -62,6 +62,31 @@ export function mountDocument(render: (root: MirrorElement) => () => void): Mirr
 // `<SkWindow>`'s host side; the components are `@skathi-native/runtime`'s (Vue) and `@skathi-native/runtime/svelte`'s.
 export { SK_WINDOW_CREATION_TIME_PROPS, createSkWindowPopout, registerWindowRoot } from "./skwindow";
 export { contextMenuRenderer } from "./context-menu";
+export { kbdPresentation } from "./kbd";
+export { defineKeymap } from "./keymap";
+export type {
+  SkKeyMap,
+  SkKeyMapEvent,
+  SkKeyMapEventType,
+  SkKeyMapHandler,
+  SkKeyMapListenerOptions,
+  SkKeyMapOptions,
+} from "./keymap";
+export { onKeyLayoutChange } from "./keyboard-layout";
+export type {
+  SkKbdChord,
+  SkKbdDeviceInput,
+  SkKbdGamepadButton,
+  SkKbdGamepadLayout,
+  SkKbdKey,
+  SkKbdKeys,
+  SkKbdLabel,
+  SkKbdLabels,
+  SkKbdMouseButton,
+  SkKbdPlatform,
+  SkKbdProps,
+  SkKbdSequence,
+} from "./kbd";
 export type { SkContextMenuHandle, SkMenuAnchor, SkMenuBackdrop } from "./context-menu";
 export type {
   SkWindowBounds,

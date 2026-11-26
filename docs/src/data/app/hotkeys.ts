@@ -195,10 +195,12 @@ export function describe(chord: HotkeyChord): string {
 interface HotkeyEvent {
   readonly id: string;
   readonly phase: "down" | "up";
+  readonly cancelled?: true;
 }`,
     returns: "A function that removes the listener. Calling it twice does nothing.",
     notes: [
       "`down` fires when the chord completes, `up` when one of its buttons is released.",
+      "A synthetic `up` carries `cancelled: true` when a binding changes, capture starts, or the service interrupts a hold. Use it to stop a held action and skip actions that require a physical release.",
       "Every listener gets the same event object. A listener that throws is logged and the others still run.",
       "Events produced before a `setBindings()` that changed the set are dropped, except the `up` edges, so a held key is always released.",
       "In Svelte, return the unsubscribe function from `$effect`; in Vue, call it in `onUnmounted`.",

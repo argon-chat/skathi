@@ -1,15 +1,21 @@
 <script lang="ts">
   import {
     SkWindow,
+    defineKeymap,
     SkContextMenu,
+    SkKbd,
     SkMenuItem,
     SkMenuSeparator,
     SkSubmenu,
     type SkContextMenuHandle,
   } from "@skathi-native/runtime/svelte";
+  import { onMount } from "svelte";
   let menu: SkContextMenuHandle<string> | undefined = $state();
   const files = ["Notes.txt", "Draft.txt"];
   let last = $state("");
+  const shortcut = defineKeymap({ keys: "Control+KeyQ" });
+  onMount(() => shortcut.bind(() => { last = "Shortcut fired"; }));
+  onMount(() => shortcut.on("up", (event) => { if (event.cancelled) last = "Shortcut cancelled"; }));
   let extra = $state(false);
   let detached = $state(false);
   Object.assign(globalThis, {
@@ -25,6 +31,7 @@
     >
   {/each}
   <output>{last}</output>
+  <SkKbd id="layout-shortcut" map={shortcut} />
 </main>
 {#if detached}
   <SkWindow title="Detached files" bounds={{ width: 250, height: 140 }}>
@@ -34,8 +41,13 @@
 <SkContextMenu bind:this={menu} aria-label="File actions" backdrop="acrylic">
   {#snippet children({ context: file })}
     <SkMenuItem onselect={() => (last = "Opened " + file)}>Open</SkMenuItem>
-    <SkMenuItem disabled>Rename</SkMenuItem>
-    {#if extra}<SkMenuItem>Open in a separate application window</SkMenuItem>{/if}
+    <SkMenuItem disabled>Rename <SkKbd keys="F2" variant="plain" /></SkMenuItem>
+    {#if extra}
+      <SkMenuItem>
+        Open in a separate application window
+        <SkKbd keys={{ alternatives: [{ mouse: "middle" }, { gamepad: "south" }] }} gamepadLayout="playstation" />
+      </SkMenuItem>
+    {/if}
     <SkMenuSeparator />
     <SkSubmenu label="Copy">
       <SkMenuItem onselect={() => (last = "Copied " + file)}>File name</SkMenuItem>

@@ -24,6 +24,30 @@ import {
 
 export { default as SkWindow } from "./svelte/SkWindow.svelte";
 export { default as SkContextMenu } from "./svelte/SkContextMenu.svelte";
+export { default as SkKbd } from "./svelte/SkKbd.svelte";
+export { defineKeymap } from "@skathi-native/runtime";
+export type {
+  SkKeyMap,
+  SkKeyMapEvent,
+  SkKeyMapEventType,
+  SkKeyMapHandler,
+  SkKeyMapListenerOptions,
+  SkKeyMapOptions,
+} from "./keymap";
+export type {
+  SkKbdChord,
+  SkKbdDeviceInput,
+  SkKbdGamepadButton,
+  SkKbdGamepadLayout,
+  SkKbdKey,
+  SkKbdKeys,
+  SkKbdLabel,
+  SkKbdLabels,
+  SkKbdMouseButton,
+  SkKbdPlatform,
+  SkKbdProps,
+  SkKbdSequence,
+} from "./kbd";
 export { default as SkMenuItem } from "./svelte/SkMenuItem.svelte";
 export { default as SkMenuSeparator } from "./svelte/SkMenuSeparator.svelte";
 export { default as SkSubmenu } from "./svelte/SkSubmenu.svelte";

@@ -18,6 +18,10 @@ mod native;
 
 /// Set in a keyboard [`Button::code`] that holds a scan code rather than a virtual-key code.
 pub const RAW: u32 = 0x10000;
+/// A DOM physical key, encoded as a Windows set-1 scan position.
+pub const POSITION: u32 = 0x20000;
+/// Either side of a modifier (Shift, Control, Alt or Meta).
+pub const EITHER: u32 = 0x30000;
 /// Device 0 is the keyboard (Windows virtual-key codes, or [`RAW`] scan codes), device 1 the mouse
 /// (1 left, 2 right, 3 middle, 4 and 5 the side buttons).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -64,6 +68,8 @@ pub struct Fired {
     pub id: String,
     pub phase: String,
     pub generation: u64,
+    /// The service ended this hold without observing its physical release.
+    pub cancelled: bool,
 }
 impl Fired {
     fn down(id: &str) -> Self {
@@ -71,6 +77,7 @@ impl Fired {
             id: id.into(),
             phase: "down".into(),
             generation: 0,
+            cancelled: false,
         }
     }
     fn up(id: &str) -> Self {
@@ -78,6 +85,13 @@ impl Fired {
             id: id.into(),
             phase: "up".into(),
             generation: 0,
+            cancelled: false,
+        }
+    }
+    fn cancel(id: &str) -> Self {
+        Self {
+            cancelled: true,
+            ..Self::up(id)
         }
     }
 }
@@ -126,7 +140,7 @@ impl Dispatch {
         queue.urgent_up.clear();
         let held: Vec<_> = queue.delivered_down.iter().cloned().collect();
         for id in held {
-            let mut event = Fired::up(&id);
+            let mut event = Fired::cancel(&id);
             event.generation = generation;
             queue.urgent_up.insert(id, event);
         }
@@ -154,6 +168,7 @@ impl Dispatch {
                         event.id.clone(),
                         Fired {
                             phase: "up".into(),
+                            cancelled: true,
                             ..event
                         },
                     );
@@ -534,8 +549,11 @@ impl Hotkeys {
         }
     }
     fn input(&self, button: Button, down: bool) -> bool {
+        self.input_at(button, 0, down)
+    }
+    fn input_at(&self, button: Button, scan: u16, down: bool) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        let output = state.engine.input(button, down, Instant::now());
+        let output = state.engine.input_at(button, scan, down, Instant::now());
         let suppress = output.suppress;
         self.deliver(&mut state, output);
         suppress
@@ -587,6 +605,9 @@ fn normalize_bindings(mut bindings: Vec<Binding>) -> Result<Vec<Binding>, String
             let valid = match button.device {
                 0 => {
                     (1..=255).contains(&button.code)
+                        || (button.code >> 16 == POSITION >> 16 && button.code & 0xffff != 0)
+                        || (button.code >> 16 == EITHER >> 16
+                            && matches!(button.code & 0xffff, 0x10..=0x12 | 0x5b))
                         || (button.code & RAW != 0
                             && button.code <= 0x1ffff
                             && button.code & 0xffff != 0)
@@ -673,7 +694,7 @@ mod tests {
         dispatch.events(vec![Fired::up("x")]);
         let queue = dispatch.queue.lock().unwrap();
         assert!(queue.events.is_empty());
-        assert_eq!(queue.urgent_up.get("x"), Some(&Fired::up("x")));
+        assert_eq!(queue.urgent_up.get("x"), Some(&Fired::cancel("x")));
     }
     #[test]
     fn stalled_listener_reconfiguration_does_not_accumulate_undelivered_releases() {

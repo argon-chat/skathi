@@ -383,6 +383,7 @@ interface NetworkInformation extends EventTarget {
 declare var NetworkInformation: Function & { readonly prototype: NetworkInformation };
 
 interface Navigator {
+  readonly platform: string;
   readonly connection: NetworkInformation;
   readonly language: string;
   readonly languages: readonly string[];

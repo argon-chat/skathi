@@ -1259,6 +1259,7 @@ fn run_app() {
             return;
         }
         JsRuntime::init();
+        sk_tree::observe_layout(cx);
         #[cfg(target_os = "windows")]
         consent_window::install(cx);
         let setup_result = JsRuntime::with(|rt| -> Result<(), String> {

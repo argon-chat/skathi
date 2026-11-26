@@ -1,4 +1,4 @@
-use super::{Binding, Button, Chord, Fired};
+use super::{Binding, Button, Chord, EITHER, Fired, POSITION};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
@@ -19,6 +19,7 @@ struct Capture {
 pub(super) struct Engine {
     bindings: Vec<Binding>,
     pressed: BTreeSet<Button>,
+    positions: BTreeMap<Button, u16>,
     active: BTreeSet<String>,
     suppressed: BTreeSet<Button>,
     last_fired: BTreeMap<String, Instant>,
@@ -119,8 +120,39 @@ impl Engine {
         }
         output
     }
+    #[cfg(test)]
     pub fn input(&mut self, button: Button, down: bool, now: Instant) -> Output {
+        self.input_at(button, 0, down, now)
+    }
+    pub fn input_at(&mut self, mut button: Button, scan: u16, down: bool, now: Instant) -> Output {
         let mut output = Output::default();
+        if scan != 0 {
+            // The VK can change between down and up when the focused application changes layouts.
+            if let Some((&held, _)) = self.positions.iter().find(|(_, pos)| **pos == scan) {
+                button = held;
+            } else if down {
+                self.positions.insert(button, scan);
+            }
+        }
+        let matches = |required: &Button, actual: &Button| {
+            if required == actual {
+                return true;
+            }
+            if required.device != 0 || actual.device != 0 {
+                return false;
+            }
+            match required.code & 0xffff0000 {
+                POSITION => self.positions.get(actual) == Some(&(required.code as u16)),
+                EITHER => match required.code & 0xffff {
+                    0x10 => matches!(actual.code, 0xa0 | 0xa1),
+                    0x11 => matches!(actual.code, 0xa2 | 0xa3),
+                    0x12 => matches!(actual.code, 0xa4 | 0xa5),
+                    0x5b => matches!(actual.code, 0x5b | 0x5c),
+                    _ => false,
+                },
+                _ => false,
+            }
+        };
         if down {
             if !self.pressed.insert(button) {
                 output.suppress = self.suppressed.contains(&button);
@@ -144,22 +176,21 @@ impl Engine {
                 let mut best = 0;
                 let mut hits = Vec::new();
                 for binding in &self.bindings {
-                    if self.active.contains(&binding.id) || !binding.chord.buttons.contains(&button)
+                    let chord = &binding.chord.buttons;
+                    if self.active.contains(&binding.id)
+                        || !chord.iter().any(|b| matches(b, &button))
                     {
                         continue;
                     }
-                    if !binding
-                        .chord
-                        .buttons
-                        .iter()
-                        .all(|b| self.pressed.contains(b))
-                    {
+                    if !binding.chord.buttons.iter().all(|b| {
+                        self.pressed.contains(b) || self.pressed.iter().any(|p| matches(b, p))
+                    }) {
                         continue;
                     }
                     if self
                         .pressed
                         .iter()
-                        .any(|b| b.modifier() && !binding.chord.buttons.contains(b))
+                        .any(|b| b.modifier() && !chord.iter().any(|key| matches(key, b)))
                     {
                         continue;
                     }
@@ -193,20 +224,25 @@ impl Engine {
         } else {
             output.suppress = self.suppressed.remove(&button);
             let was_pressed = self.pressed.remove(&button);
-            if let Some(capture) = self.capture.as_mut() {
-                if capture.down.remove(&button)
-                    && capture.down.is_empty()
-                    && !capture.ever.is_empty()
-                {
-                    self.finish(&mut output);
-                }
-            }
+            let capture_done = self.capture.as_mut().is_some_and(|capture| {
+                capture.down.remove(&button) && capture.down.is_empty() && !capture.ever.is_empty()
+            });
             if was_pressed {
                 for binding in &self.bindings {
-                    if binding.chord.buttons.contains(&button) && self.active.remove(&binding.id) {
+                    if self.active.contains(&binding.id)
+                        && binding.chord.buttons.iter().any(|key| {
+                            matches(key, &button)
+                                && !self.pressed.iter().any(|held| matches(key, held))
+                        })
+                        && self.active.remove(&binding.id)
+                    {
                         output.events.push(Fired::up(&binding.id));
                     }
                 }
+            }
+            self.positions.remove(&button);
+            if capture_done {
+                self.finish(&mut output);
             }
         }
         output
@@ -214,7 +250,7 @@ impl Engine {
     fn release_active(&mut self) -> Output {
         let events = std::mem::take(&mut self.active)
             .iter()
-            .map(|id| Fired::up(id))
+            .map(|id| Fired::cancel(id))
             .collect();
         Output {
             events,
@@ -224,6 +260,7 @@ impl Engine {
     pub fn reset(&mut self) -> Output {
         let mut output = self.release_active();
         self.pressed.clear();
+        self.positions.clear();
         self.suppressed.clear();
         self.last_fired.clear();
         self.abort("cancelled", &mut output);
@@ -246,6 +283,29 @@ mod tests {
             suppress: None,
             trigger_cooldown_ms: None,
         }
+    }
+    #[test]
+    fn physical_chords_follow_scans_and_accept_either_modifier_side() {
+        let mut e = Engine::default();
+        let now = Instant::now();
+        e.set_bindings(vec![binding("find", &[EITHER | 0x11, POSITION | 0x10])]);
+        e.input_at(key(0xa3), 0xe01d, true, now);
+        assert!(e.input_at(key(0x51), 0x1e, true, now).events.is_empty());
+        e.input_at(key(0x51), 0x1e, false, now);
+        // AZERTY produces VK_A at the US Q position; the key-up can arrive following a layout switch.
+        assert_eq!(
+            e.input_at(key(0x41), 0x10, true, now).events,
+            [Fired::down("find")]
+        );
+        assert!(e.input_at(key(0x41), 0x10, true, now).events.is_empty());
+        e.input_at(key(0xa2), 0x1d, true, now);
+        assert!(e.input_at(key(0xa3), 0xe01d, false, now).events.is_empty());
+        assert_eq!(
+            e.input_at(key(0x51), 0x10, false, now).events,
+            [Fired::up("find")]
+        );
+        e.input_at(key(0xa0), 0x2a, true, now);
+        assert!(e.input_at(key(0x51), 0x10, true, now).events.is_empty());
     }
     #[test]
     fn the_mouse_matters_only_to_mouse_bindings_and_captures() {
@@ -376,7 +436,7 @@ mod tests {
                 .events,
             [Fired::down("hold")]
         );
-        assert_eq!(e.reset().events, [Fired::up("hold")]);
+        assert_eq!(e.reset().events, [Fired::cancel("hold")]);
     }
     #[test]
     fn reconfiguration_and_capture_start_release_active_push_to_talk() {
@@ -386,10 +446,10 @@ mod tests {
         e.input(key(0x70), true, now);
         assert_eq!(
             e.set_bindings(vec![binding("ptt", &[0x71])]).1.events,
-            [Fired::up("ptt")]
+            [Fired::cancel("ptt")]
         );
         e.input(key(0x71), true, now);
-        assert_eq!(e.begin_capture(now, vec![]).events, [Fired::up("ptt")]);
+        assert_eq!(e.begin_capture(now, vec![]).events, [Fired::cancel("ptt")]);
         assert!(e.input(key(0x71), true, now).events.is_empty());
     }
 }

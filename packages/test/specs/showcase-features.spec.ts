@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { create } from "../../cli/cli/create";
-import { expect as ui, launch, readPng, REPO, SCREENSHOTS, WORK_DIR } from "../src/index";
+import { expect as ui, launch, readPng, REPO, SCREENSHOTS, WINDOWS, WORK_DIR } from "../src/index";
 
 mkdirSync(WORK_DIR, { recursive: true });
 const dir = mkdtempSync(join(WORK_DIR, "showcase-features-"));
@@ -19,6 +19,11 @@ afterAll(async () => {
 });
 
 const page = (name: string) => app.locator(`nav a[href="/${name}"]`).click();
+const choose = (label: string, value: string) =>
+  app.eval(`{
+  const el = document.querySelector(${JSON.stringify('select[aria-label="' + label + '"]')});
+  el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("change", { bubbles: true }));
+}`);
 async function waitFor(js: string) {
   const deadline = Date.now() + 5000;
   while (!(await app.eval(js))) {
@@ -35,6 +40,101 @@ async function recordHaptics() {
     __sk_appHaptics.stop = id => { cues.push(["stop", id]); return true; };`);
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
+
+test("shortcut previews distinguish sequences, alternatives and recorded mouse buttons", async () => {
+  await page("tray");
+  await app.locator('[aria-label="Shortcut platform"]').waitFor();
+  await choose("Shortcut platform", "macos");
+  await ui(app.locator(".shortcut").first()).toContainText("⇧⌘P");
+  expect(await app.locator('kbd[aria-label="Command plus K, then Command plus C"]').count()).toBe(1);
+  expect(await app.locator('kbd[aria-label="Command plus Plus, or Command plus Numpad Plus"]').count()).toBe(1);
+  expect(await app.locator('kbd[aria-label="Right Control plus Mouse button 4"]').count()).toBe(1);
+  await choose("Shortcut platform", "windows");
+  await ui(app.locator(".shortcut").first()).toContainText("Ctrl+Shift+P");
+}, 30_000);
+
+test("mouse input and controller layouts update the device prompts", async () => {
+  await page("tray");
+  await waitFor("document.activeViewTransition === null");
+  await choose("Shortcut platform", "macos");
+  const devices = app.locator('[aria-label="Shortcut device"] button');
+  await devices.nth(1).click({ real: true });
+  const mouse = ".mouse-test";
+  const liveLabel = (name: string) => app.locator(mouse + ' output kbd[aria-label="' + name + '"]').waitFor();
+  await app.send("mouse", { selector: mouse, kind: "down", button: 1 });
+  await app.send("mouse", { selector: mouse, kind: "up", button: 1 });
+  await liveLabel("Middle mouse button");
+  await app.send("wheel", { selector: mouse, dy: -60 });
+  await liveLabel("Scroll up");
+  const mark = () =>
+    app.eval(
+      'document.querySelector(\'kbd[aria-label="Primary mouse button"] path[fill="currentColor"]\').getAttribute("d")',
+    );
+  const left = await mark();
+  await choose("Primary mouse button", "right");
+  expect(await mark()).not.toBe(left);
+  await devices.nth(2).click({ real: true });
+  for (const [layout, confirm] of [
+    ["xbox", "A"],
+    ["playstation", "Cross"],
+    ["nintendo", "B"],
+  ] as const) {
+    await choose("Controller layout", layout);
+    const legend = app.locator('kbd[aria-label="Return, or ' + confirm + ' button"] svg');
+    await legend.waitFor();
+    expect((await legend.boundingBox()).w).toBeGreaterThanOrEqual(16);
+  }
+  await ui(app.locator('kbd[aria-label="ZL, left trigger plus ZR, right trigger"]')).toHaveText("ZL+ZR");
+}, 30_000);
+
+test.skipIf(!WINDOWS)(
+  "the global keymap is enabled and disposed independently of its hints",
+  async () => {
+    await page("tray");
+    await app.locator('[aria-label="Shortcut device"] button').first().click();
+    const toggle = app.locator("#global-keymap-toggle");
+    await toggle.click();
+    try {
+      await ui(toggle).toHaveText("Unbind");
+      expect(await app.eval("__sk_appHotkeys.status().running")).toBe(true);
+      expect(await app.locator('kbd[data-scope="app"]').count()).toBe(1);
+    } finally {
+      if (await app.eval('document.querySelector("#global-keymap-toggle").getAttribute("aria-pressed") === "true"'))
+        await toggle.click();
+    }
+    await app.locator('#global-keymap-toggle[aria-pressed="false"] kbd[data-scope="global"]').waitFor();
+  },
+  30_000,
+);
+
+test("the gesture area recognizes a single click, double click, hold and pause", async () => {
+  await page("tray");
+  await waitFor("document.activeViewTransition === null");
+  await app.locator('[aria-label="Shortcut device"] button').nth(1).click({ real: true });
+  const status = app.locator('[aria-label="Recognized gesture"]');
+  const pause = app.locator('[aria-label="Recognize gestures"]');
+  const mouse = (kind: "down" | "up" | "click") => app.send("mouse", { selector: "#gesture-area", kind, button: 0 });
+  await mouse("click");
+  await ui(status).toHaveText("Single click");
+  await mouse("click");
+  await mouse("click");
+  await ui(status).toHaveText("Double click");
+  await mouse("down");
+  try {
+    await ui(status).toHaveText("Hold");
+  } finally {
+    await mouse("up");
+  }
+  await ui(status).toHaveText("Hold");
+  await pause.click({ real: true });
+  await mouse("click");
+  await ui(status).toHaveText("Paused");
+  await pause.click({ real: true });
+  await ui(status).toHaveText("Ready");
+  await app.eval('document.querySelector("#gesture-area").focus()');
+  await app.press("Space");
+  await ui(status).toHaveText("Single click");
+}, 30_000);
 
 test("Context menu pins a file and moves it to another folder from its submenu", async () => {
   await page("context-menu");

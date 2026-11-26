@@ -2,6 +2,93 @@ use crate::EventPayload;
 use gpui::{Keystroke, NativeKey, NativeKeyCode};
 use keycode::{KeyMap, KeyMapping};
 
+/// Publishes the physical key names at startup and whenever the desktop input source changes.
+pub fn observe_layout(cx: &gpui::App) {
+    fn publish(cx: &gpui::App) {
+        use sk_runtime::redjs::api::Value;
+        sk_runtime::JsRuntime::with(|rt| {
+            let ctx = rt.ctx();
+            let scans = ctx.object();
+            let legends = ctx.object();
+            let virtual_keys = ctx.object();
+            for value in [scans, legends, virtual_keys] {
+                ctx.protect(value);
+            }
+            let result = (|| -> sk_runtime::redjs::api::Result<()> {
+                for usage in 1..=0xe7 {
+                    let Ok(pos) = KeyMap::from_usb_code(0x07, usage) else {
+                        continue;
+                    };
+                    let Some(code) = pos.code else { continue };
+                    let name = code.to_string();
+                    if pos.win != 0 {
+                        ctx.set(scans, &ctx.atom(&name), Value::number(pos.win.into()))?;
+                    }
+                    #[cfg(windows)]
+                    let native = NativeKeyCode::Windows(pos.win);
+                    #[cfg(target_os = "macos")]
+                    let native = NativeKeyCode::Mac(pos.mac);
+                    #[cfg(not(any(windows, target_os = "macos")))]
+                    let native = NativeKeyCode::Evdev(pos.evdev);
+                    if !(name.starts_with("Key")
+                        || name.starts_with("Digit")
+                        || name.starts_with("Intl")
+                        || matches!(
+                            name.as_str(),
+                            "Backquote"
+                                | "Minus"
+                                | "Equal"
+                                | "BracketLeft"
+                                | "BracketRight"
+                                | "Backslash"
+                                | "Semicolon"
+                                | "Quote"
+                                | "Comma"
+                                | "Period"
+                                | "Slash"
+                        ))
+                    {
+                        continue;
+                    }
+                    if let Some(label) = cx
+                        .keyboard_layout()
+                        .key_label(native)
+                        .filter(|s| !s.trim().is_empty() && !s.chars().any(char::is_control))
+                    {
+                        ctx.set(legends, &ctx.atom(&name), ctx.string(&label))?;
+                    }
+                    #[cfg(windows)]
+                    {
+                        use windows::Win32::UI::Input::KeyboardAndMouse::{
+                            MapVirtualKeyW, MAPVK_VSC_TO_VK_EX,
+                        };
+                        let vk = unsafe { MapVirtualKeyW(pos.win.into(), MAPVK_VSC_TO_VK_EX) };
+                        if vk != 0 {
+                            ctx.set(virtual_keys, &ctx.atom(&vk.to_string()), ctx.string(&name))?;
+                        }
+                    }
+                }
+                ctx.global_set("__sk_keyScans", scans)?;
+                ctx.global_set("__sk_keyCodesByVk", virtual_keys)?;
+                ctx.global_set("__sk_keyLegends", legends)?;
+                let notify = ctx.global_get("__sk_keyLayoutChanged")?;
+                if ctx.kind(notify) == 9 {
+                    ctx.call(notify, Value::undefined(), &[])?;
+                }
+                Ok(())
+            })();
+            for value in [scans, legends, virtual_keys] {
+                ctx.unprotect(value);
+            }
+            if let Err(error) = result {
+                crate::log::record("error", format!("keyboard layout: {error:?}"));
+            }
+        });
+    }
+    publish(cx);
+    cx.on_keyboard_layout_change(|cx| publish(cx)).detach();
+}
+
 pub(super) struct Keyboard {
     key: String,
     code: String,

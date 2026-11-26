@@ -1,16 +1,27 @@
 <script setup lang="ts">
+import { defineKeymap, SkKbd } from "@skathi-native/runtime";
 import { appHotkeys, appTray } from "skathi:app";
 import { ref } from "vue";
 import Card from "../components/Card.vue";
 import Page from "../components/Page.vue";
+import ShortcutPrompts from "../components/ShortcutPrompts.vue";
 import { describe } from "../engine";
 import { useCounter } from "../stores/counter";
-import { chordLabel, DEFAULT_CHORD, useDesktop } from "../stores/desktop";
+import { globalCommand, useDesktop } from "../stores/desktop";
 
 const desktop = useDesktop();
 const counter = useCounter();
 const recording = ref(false);
 const status = ref("");
+
+function toggleGlobal() {
+  try {
+    desktop.bindHotkey(desktop.boundMap ? null : globalCommand);
+    status.value = "";
+  } catch (error) {
+    status.value = describe(error);
+  }
+}
 
 // Records the next key combination anywhere on the system; Esc cancels.
 async function record() {
@@ -18,7 +29,7 @@ async function record() {
   status.value = "Press a combination…";
   try {
     const chord = await appHotkeys.captureOnce();
-    desktop.bindHotkey(chord);
+    desktop.bindHotkey(defineKeymap({ keys: chord, scope: "global", triggerCooldownMs: 150 }));
     status.value = "";
   } catch (e) {
     status.value = describe(e);
@@ -30,6 +41,25 @@ async function record() {
 
 <template>
   <Page title="Tray & hotkeys" lead="Desktop integration that keeps working while the window is in the background.">
+    <ShortcutPrompts />
+    <Card title="Global hotkey" api="defineKeymap">
+      <template v-if="appHotkeys.available">
+        <div class="row">
+          <SkKbd v-if="desktop.boundMap" :map="desktop.boundMap" />
+          <span v-else class="muted">Not bound</span>
+          <button id="global-keymap-toggle" class="btn" :aria-pressed="!!desktop.boundMap" @click="toggleGlobal">
+            {{ desktop.boundMap ? "Unbind" : "Bind" }}
+            <SkKbd v-if="!desktop.boundMap" :map="globalCommand" variant="plain" />
+          </button>
+          <button v-if="!recording" class="btn" @click="record">Record another…</button>
+          <button v-else class="btn" @click="appHotkeys.cancelCapture()">Cancel</button>
+        </div>
+        <p class="muted">Pressed {{ desktop.presses }} times; each press counts up, from any app.</p>
+        <p v-if="status" class="faint">{{ status }}</p>
+      </template>
+      <p v-else class="muted">Global hotkeys need Windows or macOS.</p>
+    </Card>
+
     <Card title="Tray icon" api="appTray.set()">
       <template v-if="appTray.available">
         <div class="row">
@@ -43,24 +73,6 @@ async function record() {
         </p>
       </template>
       <p v-else class="muted">This platform has no tray in Skathi yet (Windows and macOS do).</p>
-    </Card>
-
-    <Card title="Global hotkey" api="appHotkeys">
-      <template v-if="appHotkeys.available">
-        <div class="row">
-          <span class="pill" :class="{ ok: desktop.chord }">
-            {{ desktop.chord ? chordLabel(desktop.chord) : "not bound" }}
-          </span>
-          <button class="btn" @click="desktop.bindHotkey(desktop.chord ? null : DEFAULT_CHORD)">
-            {{ desktop.chord ? "Unbind" : `Bind ${chordLabel(DEFAULT_CHORD)}` }}
-          </button>
-          <button v-if="!recording" class="btn" @click="record">Record another…</button>
-          <button v-else class="btn" @click="appHotkeys.cancelCapture()">Cancel</button>
-        </div>
-        <p class="muted">Pressed {{ desktop.presses }} times; each press counts up, from any app.</p>
-        <p v-if="status" class="faint">{{ status }}</p>
-      </template>
-      <p v-else class="muted">Global hotkeys need Windows or macOS.</p>
     </Card>
   </Page>
 </template>

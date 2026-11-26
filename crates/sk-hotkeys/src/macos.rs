@@ -137,6 +137,10 @@ fn modifier_button(key: u16, flags: u64) -> Option<(Button, bool)> {
         .map(|&(_, vk, mask)| (Button::keyboard(vk), flags & mask != 0))
 }
 
+fn scan_position(key: u16) -> u16 {
+    keycode::KeyMap::from_key_mapping(keycode::KeyMapping::Mac(key)).map_or(0, |pos| pos.win)
+}
+
 struct Context {
     owner: Weak<Hotkeys>,
     tap: Ref,
@@ -163,17 +167,17 @@ unsafe extern "C" fn event_callback(_: Ref, kind: u32, event: Event, context: Re
         let suppress = match kind {
             10 | 11 => {
                 let key = CGEventGetIntegerValueField(event, 9) as u16;
-                key_button(key).is_some_and(|button| owner.input(button, kind == 10))
+                key_button(key).is_some_and(|button| owner.input_at(button, scan_position(key), kind == 10))
             }
             12 => {
                 let key = CGEventGetIntegerValueField(event, 9) as u16;
                 if let Some((button, down)) = modifier_button(key, CGEventGetFlags(event)) {
-                    owner.input(button, down)
+                    owner.input_at(button, scan_position(key), down)
                 } else if key == 0x39 {
                     // Caps Lock toggles report flagsChanged instead of a normal
                     // key-up pair. Deliver a complete stroke, never a stuck hold.
-                    let consumed = owner.input(Button::keyboard(0x14), true);
-                    let released = owner.input(Button::keyboard(0x14), false);
+                    let consumed = owner.input_at(Button::keyboard(0x14), scan_position(key), true);
+                    let released = owner.input_at(Button::keyboard(0x14), scan_position(key), false);
                     consumed || released
                 } else { false }
             }

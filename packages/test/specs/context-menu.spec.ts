@@ -34,6 +34,44 @@ for (const [framework, entry] of [
       await app?.close();
     });
 
+    test("a mounted keymap relabels its physical key and handles the same position", async () => {
+      expect(await app.eval("__sk_keyScans.KeyQ")).toBe(0x10);
+      await app.eval("globalThis.savedKeyLegends = __sk_keyLegends");
+      const send = (code: string, selector = "button") =>
+        app.eval(`{ const target = document.querySelector(${JSON.stringify(selector)});
+        for (const type of ["keydown", "keyup"]) target.dispatchEvent(new KeyboardEvent(type, {
+          bubbles: true, cancelable: true, key: "й", code: ${JSON.stringify(code)}, ctrlKey: true
+        })); }`);
+      try {
+        await app.eval('__sk_keyLegends = {KeyQ: "й"}; __sk_keyLayoutChanged()');
+        await app.locator('#layout-shortcut[aria-label="Control plus Й"][data-scope="app"]').waitFor();
+        await send("KeyF");
+        expect(await app.eval('document.querySelector("output").textContent')).not.toBe("Shortcut fired");
+        await app.eval("showDetached(true)");
+        await app.locator("#detached-trigger").waitFor();
+        await send("KeyQ", "#detached-trigger");
+        expect(await app.eval('document.querySelector("output").textContent')).toBe("Shortcut fired");
+        await app.eval('__sk_keyLegends = {KeyQ: "a"}; __sk_keyLayoutChanged()');
+        await app.locator('#layout-shortcut[aria-label="Control plus A"]').waitFor();
+      } finally {
+        await app.eval("showDetached(false); __sk_keyLegends = savedKeyLegends; __sk_keyLayoutChanged()");
+      }
+    });
+
+    test("closing a detached window balances its held shortcut", async () => {
+      await app.eval("showDetached(true)");
+      try {
+        await app.locator("#detached-trigger").waitFor();
+        await app.eval(`document.querySelector("#detached-trigger").dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true, key: "k", code: "KeyQ", ctrlKey: true
+        }))`);
+        expect(await app.eval('document.querySelector("output").textContent')).toBe("Shortcut fired");
+      } finally {
+        await app.eval("showDetached(false)");
+      }
+      expect(await app.eval('document.querySelector("output").textContent')).toBe("Shortcut cancelled");
+    });
+
     test("opens at the pointer, handles disabled items, and selects from a native submenu", async () => {
       await app.eval('__SK_WINDOW__.appWindow.theme = "light"');
       const button = app.locator("button").nth(1);
@@ -42,6 +80,9 @@ for (const [framework, entry] of [
         y = Math.round(bounds.y + bounds.h - 3);
       await app.send("mouse", { x, y, kind: "click", button: 2 });
       const [popup] = await popups(app, 1);
+      const shortcut = app.locator('[role="menuitem"] kbd[aria-label="F2"]');
+      expect(await shortcut.count()).toBe(1);
+      expect((await shortcut.boundingBox()).w).toBeGreaterThan(8);
       const main = (await windows(app)).find((w) => w.kind === "main")!;
       expect(popup!.screen.w).toBeGreaterThan(150);
       expect(popup!.screen.h).toBeGreaterThan(96);
@@ -108,6 +149,10 @@ for (const [framework, entry] of [
       }
       expect(resized.screen.w).toBeGreaterThan(menu!.screen.w);
       expect(resized.screen.h).toBeGreaterThan(menu!.screen.h);
+      const prompt = app.locator('kbd[aria-label="Middle mouse button, or Cross button"]');
+      expect(await prompt.count()).toBe(1);
+      expect(await app.locator('.sk-kbd-key[data-device="mouse"] svg').count()).toBe(1);
+      expect(await app.locator('.sk-kbd-key[data-shape="face"] svg').count()).toBe(1);
       await app.eval("showDetached(false); resizeMenu()");
       await popups(app, 0);
       expect(await app.eval('document.querySelector("[role=menu]") === null')).toBe(true);

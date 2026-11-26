@@ -1,4 +1,6 @@
 import { defineDomGet } from "./dom-members";
+import { reportException } from "./report-exception";
+export { reportException } from "./report-exception";
 import type { Buckets, MirrorElement, MirrorNode, PropagationTarget } from "./types";
 import { MOUSE_SOURCE, pointer } from "./pointer-capture";
 import type { PointerReading, PointerSource } from "./pointer-capture";
@@ -589,15 +591,6 @@ interface PropagationState {
 }
 
 const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
-
-/** HTML's "report an exception": the window's `error` event and `onerror`, then the console unless cancelled. */
-export function reportException(e: unknown): void {
-  const report = (globalThis as { reportError?: unknown }).reportError;
-  if (typeof report === "function") return void (report as (e: unknown) => void)(e);
-  (globalThis.queueMicrotask ?? queueMicrotask)(() => {
-    throw e;
-  });
-}
 
 /** One listener call. A throwing listener does not end the dispatch: the error is reported as uncaught and the next listener runs. */
 export function callListener(

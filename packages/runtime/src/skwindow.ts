@@ -119,6 +119,8 @@ export const WINDOW_ROOT: unique symbol = Symbol("sk-window-root");
 
 /** Painted roots of the mounted `<SkWindow>`s; a node under one belongs to that window's document. Empty without a pop-out. */
 export const windowRoots = new Set<object>();
+/** @internal A pop-out stopped receiving physical input. */
+export const windowInputLoss = new Set<(root: SkWindowTarget) => void>();
 
 /** Marks `node` as a pop-out's painted root until the returned function runs. */
 export function registerWindowRoot(node: SkWindowTarget): () => void {
@@ -219,6 +221,9 @@ export function createSkWindowPopout(
   };
 
   const metrics = (): SkWindowMetrics => ({ width: state.width, height: state.height, scale: state.scale });
+  const releaseInput = () => {
+    if (node) for (const listener of windowInputLoss) listener(node);
+  };
 
   const onEvent = (kind: string, detailJson: string) => {
     let detail: Record<string, number> = {};
@@ -241,12 +246,14 @@ export function createSkWindowPopout(
         on.show({ firstFrameMs: detail.firstFrameMs ?? 0, ...metrics() });
         break;
       case "hide":
+        releaseInput();
         on.hide();
         break;
       case "focus":
         on.focus();
         break;
       case "blur":
+        releaseInput();
         on.blur();
         break;
       case "resize":
@@ -276,7 +283,10 @@ export function createSkWindowPopout(
           closed = true;
           windowId = 0;
           state.windowId = 0;
-          if (!already) on.close();
+          if (!already) {
+            releaseInput();
+            on.close();
+          }
         },
         onEvent,
       );
@@ -284,6 +294,7 @@ export function createSkWindowPopout(
     close() {
       if (closed || !node) return;
       closed = true;
+      releaseInput();
       __sk_window_close(node.__skId);
       if (windowId) on.close();
     },

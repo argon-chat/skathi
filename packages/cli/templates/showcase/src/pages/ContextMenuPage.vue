@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   SkContextMenu,
+  SkKbd,
   SkMenuItem,
   SkMenuSeparator,
   SkSubmenu,
@@ -54,7 +55,7 @@ async function copyName(file: SampleFile) {
 <template>
   <Page
     title="Context menu"
-    lead="Right-click a file, or open Actions to anchor its menu to the button. With Actions focused, try Shift+F10 and the arrow keys."
+    lead="Right-click a file, or open Actions to anchor its menu to the button."
   >
     <Card title="Sample files" api="<SkContextMenu>">
       <ul class="files">
@@ -74,6 +75,10 @@ async function copyName(file: SampleFile) {
           </button>
         </li>
       </ul>
+      <div class="row muted">
+        <span>With Actions focused, open its menu with</span>
+        <SkKbd :keys="{ alternatives: ['Shift+F10', 'ContextMenu'] }" variant="plain" />
+      </div>
       <div class="row controls">
         <label class="material">
           Menu backdrop

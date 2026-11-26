@@ -1,50 +1,13 @@
 // The tray icon and the global hotkey outlive the page that turns them on, so their state lives here.
-import type { HotkeyChord, TrayPixels } from "@skathi-native/runtime";
-import { appHotkeys, appTray, appWindow } from "skathi:app";
+import { defineKeymap, type SkKeyMap, type TrayPixels } from "@skathi-native/runtime";
+import { appTray, appWindow } from "skathi:app";
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { onScopeDispose, ref, shallowRef, watch } from "vue";
 import { productName } from "../product";
 import { useCounter } from "./counter";
 
-const CTRL = 0x11;
-const SHIFT = 0x10;
-const KEY_K = 0x4b;
-export const DEFAULT_CHORD: HotkeyChord = {
-  buttons: [
-    { device: 0, code: CTRL },
-    { device: 0, code: SHIFT },
-    { device: 0, code: KEY_K },
-  ],
-};
-
-const KEY_NAMES: Record<number, string> = {
-  0x10: "Shift",
-  0xa0: "Shift",
-  0xa1: "Shift",
-  0x11: "Ctrl",
-  0xa2: "Ctrl",
-  0xa3: "Ctrl",
-  0x12: "Alt",
-  0xa4: "Alt",
-  0xa5: "Alt",
-  0x5b: "Win",
-  0x5c: "Win",
-  0x20: "Space",
-  0x0d: "Enter",
-  0x09: "Tab",
-};
-
-/** Virtual-key codes on every platform: letters and digits are their ASCII codes, F1 is 0x70. */
-export function chordLabel(chord: HotkeyChord): string {
-  return chord.buttons
-    .map(({ device, code }) => {
-      if (device === 1) return `Mouse ${code}`;
-      if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a)) return String.fromCharCode(code);
-      if (code >= 0x70 && code <= 0x87) return `F${code - 0x6f}`;
-      return KEY_NAMES[code] ?? `0x${code.toString(16)}`;
-    })
-    .join(" + ");
-}
+export const appCommand = defineKeymap({ keys: ["Mod", { code: "KeyK" }], scope: "app", suppress: true });
+export const globalCommand = defineKeymap({ keys: "Control+Shift+KeyK", scope: "global", triggerCooldownMs: 150 });
 
 function trayIcon(): TrayPixels {
   const size = 32;
@@ -67,7 +30,9 @@ function trayIcon(): TrayPixels {
 export const useDesktop = defineStore("desktop", () => {
   const counter = useCounter();
   const trayShown = ref(false);
-  const chord = ref<HotkeyChord | null>(null);
+  const boundMap = shallowRef<SkKeyMap | null>(null);
+  const appPresses = ref(0);
+  onScopeDispose(appCommand.bind(() => appPresses.value++));
   const presses = ref(0);
 
   function showTray(on: boolean) {
@@ -101,16 +66,17 @@ export const useDesktop = defineStore("desktop", () => {
     () => trayShown.value && showTray(true),
   );
 
-  let unlisten: (() => void) | null = null;
-  function bindHotkey(next: HotkeyChord | null) {
-    appHotkeys.setBindings(next ? [{ id: "count-up", chord: next, triggerCooldownMs: 150 }] : []);
-    chord.value = next;
-    unlisten ??= appHotkeys.onFired((event) => {
-      if (event.id !== "count-up" || event.phase !== "down") return;
+  let unbind: (() => void) | undefined;
+  function bindHotkey(next: SkKeyMap | null) {
+    const stop = next?.bind(() => {
       presses.value++;
       counter.increment();
     });
+    unbind?.();
+    unbind = stop;
+    boundMap.value = next;
   }
+  onScopeDispose(() => unbind?.());
 
-  return { trayShown, chord, presses, showTray, bindHotkey };
+  return { trayShown, boundMap, appPresses, presses, showTray, bindHotkey };
 });

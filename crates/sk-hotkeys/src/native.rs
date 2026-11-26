@@ -314,12 +314,18 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     {
         let data = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         let button = keyboard_button(data.vkCode, data.scanCode, data.flags & LLKHF_EXTENDED != 0);
+        let scan = (data.scanCode & 0xff) as u16
+            | if data.flags & LLKHF_EXTENDED != 0 {
+                0xe000
+            } else {
+                0
+            };
         let down = matches!(wparam as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
         if let Some(button) = button {
             let consumed = OWNER.with(|slot| {
                 slot.borrow()
                     .upgrade()
-                    .is_some_and(|owner| owner.input(button, down))
+                    .is_some_and(|owner| owner.input_at(button, scan, down))
             });
             if consumed {
                 return 1;
@@ -399,6 +405,9 @@ fn mouse_button(message: u32, data: u32) -> Option<(Button, bool)> {
     Some((Button { device: 1, code }, down))
 }
 fn physical_vk(button: Button) -> Option<i32> {
+    if button.code >= super::POSITION {
+        return None;
+    }
     if button.device == 1 {
         let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
         return Some(match button.code {

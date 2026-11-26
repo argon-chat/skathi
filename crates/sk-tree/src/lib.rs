@@ -33,6 +33,7 @@ mod img;
 mod inherit;
 mod inline_style;
 mod keyboard;
+pub use keyboard::observe_layout;
 pub mod layer;
 mod live;
 mod live_state;

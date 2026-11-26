@@ -5526,6 +5526,7 @@ dependencies = [
 name = "sk-hotkeys"
 version = "0.9.0"
 dependencies = [
+ "keycode",
  "windows-sys 0.61.2",
 ]
 

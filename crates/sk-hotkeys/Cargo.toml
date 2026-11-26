@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+keycode = "1.0"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

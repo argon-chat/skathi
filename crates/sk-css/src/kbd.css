@@ -1,0 +1,58 @@
+:where(.sk-kbd) {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: system-ui;
+  font-size: 12px;
+  line-height: 16px;
+  vertical-align: middle;
+}
+:where(.sk-kbd-step) {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  white-space: nowrap;
+}
+:where(.sk-kbd-key) {
+  min-width: 20px;
+  padding: 1px 5px;
+  border: 1px solid #85899288;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background-color: #85899218;
+  text-align: center;
+  font-weight: 500;
+}
+:where(.sk-kbd-key[data-device]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 23px;
+  padding: 1px 6px;
+}
+:where(.sk-kbd-glyph) {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+:where(.sk-kbd-key[data-shape="face"], .sk-kbd-key[data-shape="stick"]) {
+  border-radius: 12px;
+}
+:where(.sk-kbd-key[data-shape="shoulder"]) {
+  border-radius: 7px 7px 3px 3px;
+}
+:where(.sk-kbd-key[data-shape="trigger"]) {
+  border-radius: 4px 4px 8px 8px;
+}
+:where(.sk-kbd-between) {
+  margin-right: 4px;
+}
+:where(.sk-kbd-join, .sk-kbd-between) {
+  font-weight: 400;
+}
+:where(.sk-menu-item > .sk-kbd) {
+  margin-left: auto;
+}

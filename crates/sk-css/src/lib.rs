@@ -997,7 +997,7 @@ impl<'a> Half<'a> {
 
 /// `:where()` gives specificity 0 and the sheet is collected first, and no `@layer` is modelled, so
 /// every author rule beats these.
-pub(crate) const UA_SHEET: &str = concat!(include_str!("context_menu.css"), ":where([hidden]) { display: none } \
+pub(crate) const UA_SHEET: &str = concat!(include_str!("context_menu.css"), include_str!("kbd.css"), ":where([hidden]) { display: none } \
     :where(sub) { vertical-align: sub; font-size: smaller } \
     :where(sup) { vertical-align: super; font-size: smaller } \
     :where(button, input[type=button], input[type=submit], input[type=reset]) { text-align: center }");
