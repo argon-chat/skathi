@@ -188,6 +188,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 ## Fixes worth knowing
 
 - On macOS, a screenshot reports the Metal error if the GPU fails to finish rendering its frame.
+- On macOS, a window configured to keep drawing while covered now starts delivering native surface frames when shown behind another window. The same fix restores backdrop readers over a layer's picture.
 - Effects combining cellular and 3D noise could hang the virtual Mac's Metal GPU. The shader library now inlines those calculations.
 - Screenshot tests for shaders, clipping and native surfaces now sample at the window's reported pixel scale. AppKit can open a window one pixel wider than requested.
 - The inspector's frame-rate check reads the FPS counter, and the CSS `ch` check measures the width of zeroes in the active font.
