@@ -937,25 +937,25 @@ const graphics = section("Graphics and media", [
       {
         value: "Hardware-backed optional features",
         status: OK,
-        since: "Unreleased",
+        since: "0.9.0",
         note: "Read `adapter.features` and pass the capabilities you need in `requiredFeatures`. `device.features` includes the core feature, the requested features and their dependencies. An unsupported requirement rejects the device request. Through 0.8.5 the adapter offers only the core feature and, where available, `timestamp-query`.",
       },
       {
         value: "importExternalTexture()",
         status: PART,
-        since: "Unreleased",
+        since: "0.9.0",
         note: "DirectX 12 and Metal bind an HTML video element or VideoFrame to a WGSL `texture_external`. A video element import lasts through the current task. A VideoFrame import stays valid until the frame closes.",
       },
       {
         value: "copyExternalImageToTexture() with video",
         status: OK,
-        since: "Unreleased",
+        since: "0.9.0",
         note: "Video elements and VideoFrames support source rectangles, flipY and destination mip and layer selection. Windows uses a GPU copy between compatible decoder and device, macOS wraps IOSurface-backed decoder buffers, and Linux uploads GStreamer's BGRA frames.",
       },
       {
         value: "VideoFrame",
         status: PART,
-        since: "Unreleased",
+        since: "0.9.0",
         note: "Capture a video element or an image, or construct a frame from packed RGBA, RGBX, BGRA or BGRX bytes. A frame retains its picture across playback and seeks. Times are in microseconds. Clones close independently.",
       },
       {
@@ -1205,7 +1205,7 @@ const graphics = section("Graphics and media", [
     related: ["media-stream"],
   }),
   api("webcodecs", "WebCodecs", PART, "Represents media frames and provides codec interfaces.", {
-    since: "Unreleased",
+    since: "0.9.0",
     aliases: ["VideoFrame", "VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder"],
     notes: [
       "`VideoFrame` captures a video element, image source or packed RGBA/BGRA buffer for WebGPU. It exposes dimensions, a timestamp, duration, `clone()` and `close()`.",

@@ -1,6 +1,6 @@
 import { type Draft, section } from "./shared";
 
-const since = "Unreleased" as const;
+const since = "0.9.0" as const;
 
 const mode = (css: string, name: string, formula: string, notes?: string[]): Draft => ({
   slug: `blend-${css}`,

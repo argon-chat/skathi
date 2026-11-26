@@ -1,6 +1,6 @@
 import { type Draft, section } from "./shared";
 
-const since = "Unreleased" as const;
+const since = "0.9.0" as const;
 
 const LIGHT = { name: "x", type: "float", description: "Scene light, 1.0 at SDR white; below 0 counts as 0." };
 

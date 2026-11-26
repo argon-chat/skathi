@@ -1,6 +1,6 @@
 import { type Draft, type Kind, section } from "./shared";
 
-const since = "Unreleased" as const;
+const since = "0.9.0" as const;
 
 const fn = (
   slug: string,

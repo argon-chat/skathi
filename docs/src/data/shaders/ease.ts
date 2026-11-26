@@ -1,6 +1,6 @@
 import { type Draft, section } from "./shared";
 
-const since = "Unreleased" as const;
+const since = "0.9.0" as const;
 
 const T = { name: "t", type: "float", description: "Progress; clamped to 0..1." };
 

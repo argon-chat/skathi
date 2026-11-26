@@ -3438,7 +3438,7 @@ function grab(e: MouseEvent) {
     kind: "method",
     summary: "Starts resizing the main window from one edge or corner with the mouse, from a `pointerdown` handler.",
     platforms: os(OK, NO, OK),
-    since: "Unreleased",
+    since: "0.9.0",
     syntax: "appWindow.startResizeDragging(direction?: string): void",
     params: [
       {

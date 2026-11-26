@@ -20,7 +20,7 @@ import Aside from "../src/components/blog/Aside.astro";
 import Feature from "../src/components/blog/Feature.astro";
 import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
 
-0.8.5 was about how text looks. 0.9 is about the parts of an app that are not text: video and sound that feed the GPU and the audio graph, effects over what is behind them, and windows that behave the same on a Mac as on Windows. A good share of it came from people porting real apps, and the issue numbers are in the text.
+0.8.5 was about how text looks. 0.9 is about the parts of an app that are not text: video and sound that feed the GPU and the audio graph, effects over what is behind them, and windows that behave the same on a Mac as on Windows. A good share of it came from people porting real apps.
 
 <FeatureGrid label="What is new in 0.9">
   <Feature icon="play" title="Media as input" href="#media-as-input" tone="pink">
@@ -45,7 +45,7 @@ import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
 
 ## Media as input
 
-**Video in WebGPU.** An HTML `<video>` and a `VideoFrame` can supply the pixels of a WebGPU texture. On DirectX 12 and Metal a frame can go straight into a `texture_external` binding; on Vulkan it is copied in. A frame keeps the media's resolution whatever size the element is painted at. The optional WebGPU features the adapter has are exposed too, and a device opts into them through `requiredFeatures`. ([#91](https://github.com/argon-chat/skathi/issues/91), [#92](https://github.com/argon-chat/skathi/issues/92))
+**Video in WebGPU.** An HTML `<video>` and a `VideoFrame` can supply the pixels of a WebGPU texture. On DirectX 12 and Metal a frame can go straight into a `texture_external` binding; on Vulkan it is copied in. A frame keeps the media's resolution whatever size the element is painted at. The optional WebGPU features the adapter has are exposed too, and a device opts into them through `requiredFeatures`.
 
 **Element audio in Web Audio.** The sound of an `<audio>` or `<video>` element can pass through an analyser, a filter, a gain or a panner. Attaching an element source moves its playback into the graph, and the route survives a change of `src`. `BiquadFilterNode` and `MediaStreamAudioDestinationNode` carry up to 32 channels.
 
@@ -76,7 +76,7 @@ struct Glass : IEffect
 };
 ```
 
-The renderer then copies and blurs only the element's box grown by that length, on Metal, DirectX 12 and wgpu alike, and a read beyond it is clamped to that edge. The marker implies `[SkBackdrop]`. An effect without it works as before. ([#130](https://github.com/argon-chat/skathi/issues/130))
+The renderer then copies and blurs only the element's box grown by that length, on Metal, DirectX 12 and wgpu alike, and a read beyond it is clamped to that edge. The marker implies `[SkBackdrop]`. An effect without it works as before.
 
 ### Effects built before they are drawn
 
@@ -86,7 +86,7 @@ An app's effect is compiled, and its pipelines built, in the first frame that dr
 { "effects": { "prewarm": true } }
 ```
 
-`true` builds every app effect. With a list such as `["glass"]`, showing the warmed glass leaves other effects for the first frame that draws each one. In the four-effect DirectX 12 test, the first draw of the warmed effect went from compiling three extra pipelines to compiling zero. Prewarming is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133), [#134](https://github.com/argon-chat/skathi/issues/134))
+`true` builds every app effect. With a list such as `["glass"]`, showing the warmed glass leaves other effects for the first frame that draws each one. In the four-effect DirectX 12 test, the first draw of the warmed effect went from compiling three extra pipelines to compiling zero. Prewarming is off by default.
 
 ### A native layer behind glass
 
@@ -98,9 +98,9 @@ fn picture(&mut self) -> Option<SurfaceHandle> {
 }
 ```
 
-Backdrop effects and `backdrop-filter` over the `<sk-layer>` then see that picture where the layer is, rounded and clipped like it, on Metal, DirectX 12 and wgpu. It is never drawn into the page itself, so the layer's own presentation is what shows around the effect, and `input.pageBackdropAt(uv)` gives an effect the page without it. The surface's `info().visible` says when something reads or shows it. ([#129](https://github.com/argon-chat/skathi/issues/129))
+Backdrop effects and `backdrop-filter` over the `<sk-layer>` then see that picture where the layer is, rounded and clipped like it, on Metal, DirectX 12 and wgpu. It is never drawn into the page itself, so the layer's own presentation is what shows around the effect, and `input.pageBackdropAt(uv)` gives an effect the page without it. The surface's `info().visible` says when something reads or shows it.
 
-Two more methods come with it. `Layer::stack(index)` tells a layer its place among the layers of its window, and `Layer::frame_submitted(LayerFrame)` reports every page frame of the window with its number and submit time, so an embedder can line its own present up with the page. A picture's `FrameEvent::Presented` names the page frame that composited it. ([#132](https://github.com/argon-chat/skathi/issues/132))
+Two more methods come with it. `Layer::stack(index)` tells a layer its place among the layers of its window, and `Layer::frame_submitted(LayerFrame)` reports every page frame of the window with its number and submit time, so an embedder can line its own present up with the page. A picture's `FrameEvent::Presented` names the page frame that composited it.
 
 ## Shader standard library
 
@@ -159,17 +159,17 @@ struct HdrGlass : IEffect
 };
 ```
 
-With `[SkBackdropLinear]` the backdrop arrives premultiplied in linear light, 1.0 being SDR white and highlights above it, the blur is done on light and not on sRGB codes, and what `shade` returns is taken as linear light without the cut at SDR white. `return input.backdrop;` is an exact identity. ([#131](https://github.com/argon-chat/skathi/issues/131))
+With `[SkBackdropLinear]` the backdrop arrives premultiplied in linear light, 1.0 being SDR white and highlights above it, the blur is done on light and not on sRGB codes, and what `shade` returns is taken as linear light without the cut at SDR white. `return input.backdrop;` is an exact identity.
 
 ## Windows
 
-**`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. Set `{ "window": { "theme": "dark" } }` in `sk.config.json` to apply a dark theme before the first window appears on any platform. ([#117](https://github.com/argon-chat/skathi/issues/117))
+**`appWindow.theme` on macOS.** A forced theme now sets the AppKit appearance of the app and of every window, pop-outs included, so the traffic lights, the window frame, vibrancy, and the panels and menus the system opens for the app follow it. Before, only `prefers-color-scheme` did. Set `{ "window": { "theme": "dark" } }` in `sk.config.json` to apply a dark theme before the first window appears on any platform.
 
-**Pop-outs on macOS.** `focusable={false}` makes a pop-out a non-activating panel: a click reaches it and the main window stays key. `taskbar={false}` makes it a child of the main window, so it moves, hides and minimizes with it. `mapFromMain()` holds across displays. ([#118](https://github.com/argon-chat/skathi/issues/118), [#119](https://github.com/argon-chat/skathi/issues/119), [#120](https://github.com/argon-chat/skathi/issues/120))
+**Pop-outs on macOS.** `focusable={false}` makes a pop-out a non-activating panel: a click reaches it and the main window stays key. `taskbar={false}` makes it a child of the main window, so it moves, hides and minimizes with it. `mapFromMain()` holds across displays.
 
 **`appShell` on macOS.** `openExternal`, `openPath`, `showItemInFolder` and `trashItem` work there, with the error names Windows and Linux use. A URL or file nothing opens rejects instead of prompting.
 
-**`appWindow.startResizeDragging(direction?)`** starts the system resize from an edge or a corner while the left button is held, on Windows and Linux. Without a direction it takes the edge nearest the pointer. ([#122](https://github.com/argon-chat/skathi/issues/122))
+**`appWindow.startResizeDragging(direction?)`** starts the system resize from an edge or a corner while the left button is held, on Windows and Linux. Without a direction it takes the edge nearest the pointer.
 
 **`matchMedia`** no longer keeps every query forever. A query lives while it has a `change` listener or `onchange`, and queries are evaluated again only when the environment changes.
 
@@ -181,7 +181,7 @@ Most of these codecs were already in the host for `<img>`, so they add little to
 
 ## The mouse wheel
 
-A notch of the wheel used to move different things by different amounts: 48 px in `WheelEvent`, and a line height of its own in each scroll container, `<textarea>` and `<sk-editor>`. It is now what Chromium reports on each platform, 100 px on Windows at the system default, and everything the app scrolls moves by that distance. ([#121](https://github.com/argon-chat/skathi/issues/121))
+A notch of the wheel used to move different things by different amounts: 48 px in `WheelEvent`, and a line height of its own in each scroll container, `<textarea>` and `<sk-editor>`. It is now what Chromium reports on each platform, 100 px on Windows at the system default, and everything the app scrolls moves by that distance.
 
 An app that wants another speed sets it once:
 
@@ -199,15 +199,15 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 - Screenshot tests for shaders, clipping and native surfaces now sample at the window's reported pixel scale. AppKit can open a window one pixel wider than requested.
 - The inspector's frame-rate check reads the FPS counter, and the CSS `ch` check measures the width of zeroes in the active font.
 - Windows overlay tests now check the taskbar policy for both a nonactivating HUD and a full-monitor cover.
-- A rule with `:focus-within` on the element itself was matched but never painted. ([#124](https://github.com/argon-chat/skathi/issues/124))
-- Where several rules with states set the same property, the later rule wins as in a browser, and a selector with two states applies only while both hold. ([#125](https://github.com/argon-chat/skathi/issues/125))
-- `box-shadow` blur is as wide as a browser draws it; it was twice as soft. ([#126](https://github.com/argon-chat/skathi/issues/126))
-- `<button>` and `input[type=button|submit|reset]` centre their text by default. ([#123](https://github.com/argon-chat/skathi/issues/123))
-- `<sk-layer>`: the corner radii an embedder receives are in device pixels; they were scaled twice. The opacity is the one the element is shown at, its ancestors' included, so a layer fades with a parent that fades. ([#128](https://github.com/argon-chat/skathi/pull/128))
+- A rule with `:focus-within` on the element itself was matched but never painted.
+- Where several rules with states set the same property, the later rule wins as in a browser, and a selector with two states applies only while both hold.
+- `box-shadow` blur is as wide as a browser draws it; it was twice as soft.
+- `<button>` and `input[type=button|submit|reset]` centre their text by default.
+- `<sk-layer>`: the corner radii an embedder receives are in device pixels; they were scaled twice. The opacity is the one the element is shown at, its ancestors' included, so a layer fades with a parent that fades.
 - Windows, HDR: translucent content over a transparent window (`backdrop: "mica"` and the like) was several times too bright, a `glow()` halo most visibly. It is now as bright as in an SDR window.
 - A `<textarea>` no longer scrolls back to the caret on every frame, so the wheel can move it away.
-- Windows: with an aspect ratio set, dragging a corner no longer swings the window between a wide and a tall fit. ([#116](https://github.com/argon-chat/skathi/issues/116))
-- macOS, embedded: Cmd+Q quits at once instead of waiting out a four-second deadline. ([#112](https://github.com/argon-chat/skathi/issues/112))
+- Windows: with an aspect ratio set, dragging a corner no longer swings the window between a wide and a tall fit.
+- macOS, embedded: Cmd+Q quits at once instead of waiting out a four-second deadline.
 - Layout moves to taffy 0.16: overflowing flex lines under a stretch alignment fall back to `flex-start`, and `calc()` track sizes count as fixed for `auto-fill` and `auto-fit`.
 
 <Aside kind="warning" title="What 0.9 does not do yet">

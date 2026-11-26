@@ -3,7 +3,7 @@ import { OK, all, importLine, section } from "./shared";
 
 const IMPORT = importLine("appShell");
 const PLATFORMS = all(OK);
-const PLATFORM_SINCE: PlatformSince = { macos: "Unreleased" };
+const PLATFORM_SINCE: PlatformSince = { macos: "0.9.0" };
 const MAC =
   "On macOS, the calls go to `NSWorkspace` and `NSFileManager`: Launch Services picks the app, Finder reveals, and the item moves to the Trash of its volume.";
 const LINUX_TOOLS =

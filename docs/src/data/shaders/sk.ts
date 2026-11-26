@@ -178,7 +178,7 @@ struct Tint : IEffect
     name: "[SkBackdropReach]",
     kind: "attribute",
     summary: "A length parameter that bounds how far outside its quad the effect reads the backdrop.",
-    since: "Unreleased",
+    since: "0.9.0",
     syntax: `[SkLength] [SkBackdropReach] [SkDefault("12")] float depth;`,
     notes: [
       "The renderer then copies and blurs only the drawn quad grown by it, instead of the whole window. A read beyond it is clamped to that edge.",
@@ -191,7 +191,7 @@ struct Tint : IEffect
     kind: "attribute",
     summary:
       "The effect works in linear light: its backdrop arrives linear and extended, and its result is read back so.",
-    since: "Unreleased",
+    since: "0.9.0",
     syntax: attribute("struct", "SkBackdropLinear"),
     notes: [
       "`input.backdrop`, `backdropAt`, `rawBackdropAt` and `pageBackdropAt` return premultiplied linear light: 1.0 is SDR white, an HDR highlight keeps its value above it, and values below 0 are colours outside sRGB. On macOS with a Display P3 window the primaries are Display P3.",
@@ -498,7 +498,7 @@ float2 historySize();`,
     kind: "function",
     summary:
       "A premultiplied, sRGB-encoded sample to premultiplied linear light, 1.0 at SDR white, as the HDR output shows it; `sk_linear_to_frame` is its exact inverse.",
-    since: "Unreleased",
+    since: "0.9.0",
     syntax: `float4 sk_frame_to_linear(float4 frame);
 float4 sk_linear_to_frame(float4 light);`,
     notes: [
@@ -514,7 +514,7 @@ float4 sk_linear_to_frame(float4 light);`,
     kind: "function",
     summary:
       "A premultiplied colour made valid for a half-float frame: alpha clamped to 0..1, rgb to 0..`alpha * headroom`.",
-    since: "Unreleased",
+    since: "0.9.0",
     syntax: `float4 sk_clamp_extended(float4 color, float headroom);`,
     notes: [
       "The engine applies it to what `shade` returns in an HDR window, with the brightest value under the pixel as `headroom`; call it to keep an intermediate result in the same bounds. A headroom below 1 counts as 1, and the bound never exceeds the largest half float.",
