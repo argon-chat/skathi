@@ -14,10 +14,8 @@ export interface Case {
   hues?: number[];
 }
 
-/** Results per row of probes; a result takes two cells. */
+/** Device pixels per row. Two pixels encode one float. */
 export const COLUMNS = 64;
-/** A probe cell's side in device pixels. */
-export const CELL = 4;
 const MARK = [0x5a, 0xa5];
 
 export const num = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
@@ -44,8 +42,10 @@ struct Table : IEffect
 {
     float4 shade(EffectInput input)
     {
-        uint2 cell = uint2(input.px / ${CELL}.0);
+        uint2 cell = uint2(input.px);
         uint index = cell.y * ${COLUMNS}u + cell.x;
+        if (cell.x >= ${COLUMNS}u || index >= ${chunk.length * 8}u)
+            return float4(0.0, 0.0, 0.0, 1.0);
         uint scalar = index / 2u;
         uint part = index % 2u;
         float4 v = sk_case(scalar / 4u, input.opacity);
@@ -53,22 +53,21 @@ struct Table : IEffect
         float x = component == 0u ? v.x : (component == 1u ? v.y : (component == 2u ? v.z : v.w));
         uint bits = asuint(x);
         uint word = part == 0u ? bits >> 16u : bits & 0xffffu;
-        bool inside = cell.x < ${COLUMNS}u && scalar / 4u < ${chunk.length}u;
         float3 rgb = float3(float(word >> 8u), float(word & 0xffu), part == 0u ? ${MARK[0]}.0 : ${MARK[1]}.0) / 255.0;
-        return float4(inside ? rgb : float3(0.0, 0.0, 0.0), 1.0);
+        return float4(rgb, 1.0);
     }
 };
 `;
 }
 
 /** Device-pixel rows an effect of `count` cases needs. */
-export const effectHeight = (count: number) => Math.ceil((count * 8) / COLUMNS) * CELL;
+export const effectHeight = (count: number) => Math.ceil((count * 8) / COLUMNS);
 
 /** The results back from a screenshot: `pixel(x, y)` reads RGB at a device pixel of the element. */
 export function decode(count: number, pixel: (x: number, y: number) => [number, number, number]): number[][] {
   const words: number[] = [];
   for (let i = 0; i < count * 8; i += 1) {
-    const [r, g, b] = pixel((i % COLUMNS) * CELL + CELL / 2, Math.floor(i / COLUMNS) * CELL + CELL / 2);
+    const [r, g, b] = pixel(i % COLUMNS, Math.floor(i / COLUMNS));
     if (b !== MARK[i % 2]) throw new Error(`probe cell ${i} has marker ${b}, not ${MARK[i % 2]}: misaligned read`);
     words.push((r << 8) | g);
   }

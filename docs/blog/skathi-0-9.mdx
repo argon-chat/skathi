@@ -82,7 +82,7 @@ An app's effect is compiled, and its pipelines built, in the first frame that dr
 { "effects": { "prewarm": true } }
 ```
 
-`true` builds every effect of the app; a list of names, such as `["glass"]`, builds only those and is the better choice for an app with many effects that are seldom on screen. It is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133))
+`true` builds every app effect. With a list such as `["glass"]`, showing the warmed glass leaves other effects for the first frame that draws each one. Prewarming is off by default. ([#133](https://github.com/argon-chat/skathi/issues/133), [#134](https://github.com/argon-chat/skathi/issues/134))
 
 ### A native layer behind glass
 
@@ -187,6 +187,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 
 ## Fixes worth knowing
 
+- On macOS, a screenshot reports the Metal error if the GPU fails to finish rendering its frame.
 - A rule with `:focus-within` on the element itself was matched but never painted. ([#124](https://github.com/argon-chat/skathi/issues/124))
 - Where several rules with states set the same property, the later rule wins as in a browser, and a selector with two states applies only while both hold. ([#125](https://github.com/argon-chat/skathi/issues/125))
 - `box-shadow` blur is as wide as a browser draws it; it was twice as soft. ([#126](https://github.com/argon-chat/skathi/issues/126))
