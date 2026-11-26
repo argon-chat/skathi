@@ -49,6 +49,16 @@ async function call(name: string, ...args: unknown[]): Promise<unknown> {
 const stats = () => call("stats", "pictured") as Promise<Stats>;
 const heard: string[] = [];
 const log = async () => (heard.push(...((await call("pictureLog")) as string[])), heard);
+const submittedPicture = (frame: string) => (event: string) =>
+  event.startsWith("submitted:") && event.endsWith(`:${frame}`);
+
+async function presentPicture(color: number[]): Promise<string> {
+  const start = (await log()).length;
+  await call("present", "pictured", "bgra", color, 64, 64);
+  const published = (await log()).slice(start).find((event) => event.startsWith("published:"));
+  if (!published) throw new Error("BGRA present did not report its frame ID");
+  return published.slice("published:".length);
+}
 
 async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_000): Promise<V> {
   const deadline = Date.now() + ms;
@@ -58,6 +68,13 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_00
     v = await read();
   }
   return v;
+}
+
+async function submission(frame: string, since = 0): Promise<string> {
+  const find = (events: string[]) => events.slice(since).find(submittedPicture(frame));
+  const event = find(await until(log, (events) => find(events) !== undefined));
+  if (!event) throw new Error(`no page submit reported picture ${frame}`);
+  return event;
 }
 
 const box = async (selector: string): Promise<Bounds> => {
@@ -74,16 +91,25 @@ const shoot = async () => {
 const red = ([r, g, b]: Rgb) => r > 200 && g < 140 && b < 140;
 
 test(
-  "a read proxy is visible to its producer and reports what it is told",
+  "each page submit that reads the picture reports the ID returned by its present",
   async () => {
     expect((await until(stats, (s) => s.visible)).visible).toBe(true);
     const told = await until(log, (l) => l.some((e) => e.startsWith("submitted:")));
     expect(told).toContain("stack:0");
-    await call("present", "pictured", "bgra", [0, 0, 255, 255], 64, 64);
+    const frame = await presentPicture([0, 0, 255, 255]);
     const shown = await until(stats, (s) => s.shown >= 1);
     expect(shown.shown).toBeGreaterThanOrEqual(1);
-    const events = await until(log, (l) => l.some((e) => e.startsWith("presented:")));
-    expect(events.some((e) => e.startsWith("presented:"))).toBe(true);
+    const first = await submission(frame);
+    const events = await until(log, (l) => l.includes(`presented:${frame}`));
+    expect(events).toContain(`presented:${frame}`);
+
+    const start = events.length;
+    await app.eval("document.getElementById('inline').style.left = '259px'; 0");
+    expect(await submission(frame, start)).not.toBe(first);
+
+    const replacement = await presentPicture([255, 0, 0, 255]);
+    expect(replacement).not.toBe(frame);
+    await submission(replacement);
   },
   T,
 );
@@ -104,14 +130,22 @@ test.skipIf(!SCREENSHOTS)(
 );
 
 test(
-  "an <sk-surface> showing the same surface keeps taking new frames with no reader left",
+  "an inline surface still presents while the layer reports no picture with its readers hidden",
   async () => {
+    const hiding = (await log()).length;
     await app.eval("globalThis.showGlass(false); document.getElementById('corner').style.display = 'none'; 0");
-    await Bun.sleep(200);
-    expect((await stats()).visible).toBe(true);
-    const before = (await stats()).shown;
-    await call("present", "pictured", "bgra", [0, 255, 0, 255], 64, 64);
-    expect((await until(stats, (s) => s.shown > before)).shown).toBeGreaterThan(before);
+    const noPicture = submittedPicture("none");
+    await submission("none", hiding);
+    const before = await stats();
+    expect(before.visible).toBe(true);
+    const start = (await log()).length;
+    const frame = await presentPicture([0, 255, 0, 255]);
+    const events = await until(log, (l) => l.includes(`presented:${frame}`) && l.slice(start).some(noPicture));
+    expect(events).toContain(`presented:${frame}`);
+    const submits = events.slice(start).filter((e) => e.startsWith("submitted:"));
+    expect(submits.length).toBeGreaterThan(0);
+    expect(submits.every(noPicture)).toBe(true);
+    expect((await stats()).shown).toBeGreaterThan(before.shown);
     if (SCREENSHOTS) {
       const inline = await box("#inline");
       const green = ([r, g, b]: Rgb) => g > 200 && r < 60 && b < 60;

@@ -5765,9 +5765,9 @@ fn paint_layer_picture(
         content,
         opacity: place.opacity,
     };
-    let image = picture.image;
+    let (image, frame) = picture.image.unzip();
     let painted = window.with_signed_image_headroom(picture.headroom, |window| {
-        window.vn_paint_underlay(u64::from(id), underlay, image)
+        window.vn_paint_underlay_frame(u64::from(id), underlay, image, frame)
     });
     if let Err(error) = painted {
         log::warn!("<sk-layer> picture not recorded: {error:#}");

@@ -100,7 +100,7 @@ fn picture(&mut self) -> Option<SurfaceHandle> {
 
 Backdrop effects and `backdrop-filter` over the `<sk-layer>` then see that picture where the layer is, rounded and clipped like it, on Metal, DirectX 12 and wgpu. It is never drawn into the page itself, so the layer's own presentation is what shows around the effect, and `input.pageBackdropAt(uv)` gives an effect the page without it. The surface's `info().visible` says when something reads or shows it.
 
-Two more methods come with it. `Layer::stack(index)` tells a layer its place among the layers of its window, and `Layer::frame_submitted(LayerFrame)` reports every page frame of the window with its number and submit time, so an embedder can line its own present up with the page. A picture's `FrameEvent::Presented` names the page frame that composited it.
+Two more methods come with it. `Layer::stack(index)` tells a layer its place among the layers of its window, and `Layer::frame_submitted(LayerFrame)` reports every page frame of the window with its number and submit time, so an embedder can line its own present up with the page. A picture's `FrameEvent::Presented` names the picture frame and reports when it reached the screen.
 
 ## Shader standard library
 

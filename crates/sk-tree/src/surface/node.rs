@@ -1,8 +1,9 @@
 //! The element side of `<sk-surface>`: per node, the [`LiveTile`] the surface's frame is written
 //! into, the painted size reported to the producer and to JS, and the events.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{App, RenderImage, Window};
@@ -22,7 +23,7 @@ struct Node {
     /// The surface's `seq` the tile holds (or that cleared it).
     seen: u64,
     /// The id of the frame the tile holds.
-    frame: u64,
+    frame: Rc<Cell<u64>>,
     /// The content box, physical px, and the scale, from the last paint.
     painted: (u32, u32, f32),
     reported: (u32, u32),
@@ -62,7 +63,7 @@ fn new_node(surface: SurfaceHandle, win: WinKey, proxy: bool) -> Node {
         #[cfg(windows)]
         latched: None,
         seen: 0,
-        frame: 0,
+        frame: Rc::new(Cell::new(0)),
         painted: (0, 0, 1.0),
         reported: (0, 0),
         visible: false,
@@ -120,7 +121,7 @@ pub(crate) fn note_build(id: u32, win: WinKey, name: &str) -> Option<Arc<RenderI
 
 /// The picture an `<sk-layer>` shows under the page.
 pub(crate) struct ProxyPicture {
-    pub(crate) image: Option<Arc<RenderImage>>,
+    pub(crate) image: Option<(Arc<RenderImage>, Rc<Cell<u64>>)>,
     /// The frame's size in pixels, 0 while there is none.
     pub(crate) size: (u32, u32),
     pub(crate) headroom: f32,
@@ -163,7 +164,7 @@ pub(crate) fn note_proxy(
             .as_ref()
             .filter(|t| t.window() == win && node.ready);
         ProxyPicture {
-            image: tile.map(LiveTile::image),
+            image: tile.map(|tile| (tile.image(), node.frame.clone())),
             size: tile.map_or((0, 0), LiveTile::size),
             headroom: if node.hdr { node.headroom } else { 1.0 },
         }
@@ -503,7 +504,7 @@ fn carry(window: &Window, here: WinKey) {
         m.borrow()
             .values()
             .filter(|n| n.window == here && n.visible && n.ready && n.tile.is_some())
-            .map(|n| (feedback::key(n.surface.shared()), n.frame))
+            .map(|n| (feedback::key(n.surface.shared()), n.frame.get()))
             .collect()
     });
     feedback::with(|t| t.carry(key, carrying));
@@ -827,7 +828,13 @@ fn write(
         }
     };
     node.seen = seq;
-    node.frame = frame_id;
+    // Replayed scenes keep their tile's cell. In-place uploads change its contents
+    // without another paint. A relocated tile starts a separate lifetime.
+    if node.proxy && (!fits || wrote == Shown::Draw) {
+        node.frame = Rc::new(Cell::new(frame_id));
+    } else {
+        node.frame.set(frame_id);
+    }
     node.surface.lock_state().note_shown(seq);
     let first = !std::mem::replace(&mut node.ready, true);
     let shown = if !fits || first || wrote == Shown::Draw {

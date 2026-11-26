@@ -47,6 +47,12 @@ pub struct LayerFrame {
     /// When it was handed to the platform, in [`crate::surface::monotonic_ns`]'s clock: a submit
     /// time, not when the display shows it.
     pub submitted_at: u64,
+    /// The frame ID of this layer's picture composited by a backdrop in this page frame.
+    /// Repeats while the same picture is used. `None` when no picture was composited.
+    pub picture: Option<u64>,
+    /// The platform's target display time for this page frame, in [`crate::surface::monotonic_ns`]'s
+    /// clock. The macOS Metal display link supplies one for its drawable.
+    pub target_present_at: Option<u64>,
 }
 
 /// A native layer under one `<sk-layer>` element. Its methods run on the UI thread inside the
@@ -185,22 +191,29 @@ fn hook(window: &Window, win: WinKey) {
 
 fn hook_submits(window: &mut Window, win: WinKey) {
     if SUBMIT_HOOKED.with(|h| h.borrow_mut().insert(win)) {
-        window.vn_on_frame_submitted(Box::new(move |sequence| submitted(win, sequence)));
+        window.vn_on_frame_submission(Box::new(move |frame| submitted(win, frame)));
     }
 }
 
-fn submitted(win: WinKey, sequence: u64) {
-    let frame = LayerFrame {
-        sequence,
-        submitted_at: crate::surface::monotonic_ns(),
-    };
+fn submitted(win: WinKey, frame: gpui::VnSubmittedFrame<'_>) {
+    let submitted_at = crate::surface::monotonic_ns();
     LAYERS.with(|l| {
         let Ok(mut layers) = l.try_borrow_mut() else {
             return;
         };
-        for live in layers.values_mut() {
+        for (&id, live) in layers.iter_mut() {
             if live.placed.is_some() && live.home.is_some_and(|h| h.window == win) {
-                live.layer.frame_submitted(frame);
+                let picture = frame
+                    .pictures
+                    .iter()
+                    .find(|(key, _)| *key == u64::from(id))
+                    .map(|(_, picture)| *picture);
+                live.layer.frame_submitted(LayerFrame {
+                    sequence: frame.sequence,
+                    submitted_at,
+                    picture,
+                    target_present_at: frame.target_present_at,
+                });
             }
         }
     });
@@ -481,9 +494,10 @@ mod tests {
                 .push(format!("{} stack {index}", self.1));
         }
         fn frame_submitted(&mut self, frame: LayerFrame) {
-            self.0
-                .borrow_mut()
-                .push(format!("{} frame {}", self.1, frame.sequence));
+            self.0.borrow_mut().push(format!(
+                "{} frame {} picture {:?} target {:?}",
+                self.1, frame.sequence, frame.picture, frame.target_present_at
+            ));
         }
     }
 
@@ -520,12 +534,22 @@ mod tests {
         paint(22, 1, 1.0, 0);
         paint(21, 1, 0.0, 1);
         assert_eq!(take(&log), ["2 stack 0", "1 stack 1"], "the order swapped");
-        submitted(1, 9);
+        submitted(
+            1,
+            gpui::VnSubmittedFrame {
+                sequence: 9,
+                pictures: &[(21, 117), (23, 130)],
+                target_present_at: Some(999),
+            },
+        );
         let mut heard = take(&log);
         heard.sort();
         assert_eq!(
             heard,
-            ["1 frame 9", "2 frame 9"],
+            [
+                "1 frame 9 picture Some(117) target Some(999)",
+                "2 frame 9 picture None target Some(999)"
+            ],
             "window 2's layer hears nothing"
         );
         forget_window(1);

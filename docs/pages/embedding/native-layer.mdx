@@ -159,11 +159,15 @@ if picture.info().visible {
 
 `frame_submitted` hears each page frame of the layer's window while the layer is placed, with a `LayerFrame`:
 
-| Field          | Means                                                                                     |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| `sequence`     | the frame's number in its window, from 1, one more each frame                             |
-| `submitted_at` | when the frame was handed to the platform, in `monotonic_ns`'s clock: not when it is seen |
+| Field               | Means                                                                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sequence`          | The page frame's number in its window, starting at 1.                                                                                                                                                                                                                          |
+| `submitted_at`      | When the page frame was handed to the platform, on the `monotonic_ns` clock.                                                                                                                                                                                                   |
+| `picture`           | The ID returned by the surface present for the picture a backdrop composited from this layer. It repeats when another page frame uses the same picture. `None` when this page frame used no picture from this layer, even if an inline `<sk-surface>` showed the same surface. |
+| `target_present_at` | The target time for showing this page frame, on the same clock. The macOS `CAMetalDisplayLink` supplies it for its drawable. `None` on other paths, including `nextDrawable`.                                                                                                  |
 
 It runs on the UI thread, right after the window's present call returns: after `Present` on the swap chain (Windows), after the frame is committed to the layer tree (macOS), after the frame is submitted (Linux). `presented` is unchanged: on Windows it still comes only after a frame that carried `attach` or `place` changes, once Skathi has committed them. For when a frame reached the screen, use the picture's `FrameEvent::Presented`.
+
+A player can match `picture` against its outstanding frame IDs and schedule its own drawable for `target_present_at` when available. The target is a scheduling hint.
 
 Next: [Window, tray and hotkeys](/embedding/desktop/).

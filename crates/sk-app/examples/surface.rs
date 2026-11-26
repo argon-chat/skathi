@@ -17,8 +17,8 @@
 //! - `layerLog()` answers and clears what the `<sk-layer name="probe">` layer was told:
 //!   `attach:<window>`, `place:x,y,w,h` in CSS px, `hide` and `presented`.
 //! - `<sk-layer name="pictured">` names the surface `pictured` as its picture; `pictureLog()`
-//!   answers and clears its `stack:<index>`, `submitted:<sequence>` and the surface's
-//!   `presented:<frame>` / `dropped:<frame>:<reason>`.
+//!   answers and clears its `stack:<index>` and `submitted:<sequence>:<picture|none>`, the
+//!   `published:<frame>` returned by a BGRA present, and `presented:<frame>` / `dropped:<frame>:<reason>`.
 //! - `<sk-layer name="plasma">` (Windows) shows a layer that draws: a DirectComposition visual
 //!   with a swap chain of its own, rendered with D3D11 at the display's rate.
 //! - `stats(name)` answers `{ presented, shown, width, height, visible, dynamicRangeLimit }`.
@@ -121,10 +121,13 @@ impl Layer for PicturedLayer {
     }
 
     fn frame_submitted(&mut self, frame: LayerFrame) {
+        let picture = frame
+            .picture
+            .map_or_else(|| "none".into(), |f| f.to_string());
         PICTURE_LOG
             .lock()
             .unwrap()
-            .push(format!("submitted:{}", frame.sequence));
+            .push(format!("submitted:{}:{picture}", frame.sequence));
     }
 }
 
@@ -254,7 +257,14 @@ fn main() {
                         let frame = bgra.repeat((width * height) as usize);
                         surface
                             .present_bgra(&frame, width, height, width as usize * 4)
-                            .map(drop)
+                            .map(|frame| {
+                                if surface.name() == "pictured" {
+                                    PICTURE_LOG
+                                        .lock()
+                                        .unwrap()
+                                        .push(format!("published:{frame}"));
+                                }
+                            })
                             .map_err(|e| e.to_string())
                     }
                 };
