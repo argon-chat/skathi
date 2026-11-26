@@ -188,6 +188,7 @@ or at run time with `app.wheelScrollScale` from `skathi:app`. It scales the app'
 ## Fixes worth knowing
 
 - On macOS, a screenshot reports the Metal error if the GPU fails to finish rendering its frame.
+- The shader-library tests use the window's actual pixel scale and check noise in smaller shaders so the virtual Mac can render every reference case.
 - A rule with `:focus-within` on the element itself was matched but never painted. ([#124](https://github.com/argon-chat/skathi/issues/124))
 - Where several rules with states set the same property, the later rule wins as in a browser, and a selector with two states applies only while both hold. ([#125](https://github.com/argon-chat/skathi/issues/125))
 - `box-shadow` blur is as wide as a browser draws it; it was twice as soft. ([#126](https://github.com/argon-chat/skathi/issues/126))

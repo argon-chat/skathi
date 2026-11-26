@@ -6,4 +6,5 @@ await shaderTable({
   imports: IMPORTS,
   declarations: DECLARATIONS,
   cases: parts(cases(), cost)[1]!,
+  casesPerEffect: 3,
 });
