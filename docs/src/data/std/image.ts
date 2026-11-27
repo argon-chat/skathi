@@ -92,6 +92,7 @@ static ImageDecoder.isTypeSupported(type: string): Promise<boolean>
 readonly decoder.type: string
 readonly decoder.complete: boolean
 readonly decoder.tracks: { readonly frameCount: number; readonly animated: boolean; readonly ready: Promise<void> }
+decoder.info(): Promise<ImageInfo>  // { width, height, orientation }
 decoder.decode(options?: { frameIndex?: number; maxSide?: number }): Promise<{ image: Image; complete: boolean }>
 decoder.close(): void`,
     params: [
@@ -159,6 +160,12 @@ decoder.close(): void`,
       },
       { value: "image/avif", status: NO, note: "Not decoded: `isTypeSupported()` resolves `false`." },
       {
+        value: "info()",
+        status: OK,
+        since: "Unreleased",
+        note: "Reads the full-resolution display size and EXIF orientation on a worker, before decoding any frame. Orientations 5 through 8 swap the width and height. The orientation is 1 when absent. A stream supplies its metadata once it ends.",
+      },
+      {
         value: "tracks",
         status: OK,
         note: "Counting the frames starts on first access, on a worker. `frameCount` and `animated` are 0 and `false` until `ready` resolves.",
@@ -176,7 +183,7 @@ decoder.close(): void`,
     ],
     notes: [
       "Decoding runs on worker threads, never on the thread that runs your code and draws the window, so even a large photo does not stall a frame. The promise settles in a later frame.",
-      "A photo is turned upright by its EXIF orientation, as browsers draw it: `width` and `height` are those of the upright image.",
+      "A photo and each composited APNG or animated WebP frame are turned upright by their EXIF orientation. Decode at full size to get the dimensions returned by `info()`.",
       "The decoded image is straight RGBA8 in native memory: a 16-bit PNG is reduced to 8 bits, and a grayscale or palette image is expanded.",
       "Decoding frame N of an animation decodes the frames before it too, since each one is drawn over the last. To show every frame, decode them in order.",
       "Unlike WebCodecs, `decode()` resolves with an [`Image`](/std/image/) instead of a `VideoFrame`, and `tracks` is the one track an image file has.",
@@ -186,9 +193,25 @@ decoder.close(): void`,
     ],
     edgeCases: [
       "The constructor throws a `TypeError` without an init object, a type or data, or for empty data; `NotSupportedError` for a type not listed above; a `RangeError` for more than 256 MiB of bytes; and `InvalidStateError` for a freed `NativeBuffer`.",
+      "`info()` rejects with `EncodingError` for unreadable headers or dimensions over the limits. A failed stream passes on its own error. Closing a pending request rejects it with `AbortError`, and calling `info()` on a closed decoder rejects with `InvalidStateError`.",
       "`decode()` rejects with `EncodingError` for a truncated or corrupt file, one that is not of its declared type, or one over the limits; with a `RangeError` for a `frameIndex` past the last frame or a `maxSide` of 0; with the stream's own error if the stream fails; and with `InvalidStateError` after `close()`.",
     ],
     examples: [
+      {
+        title: "Reserve space for a photo",
+        lang: "ts",
+        code: `import { ImageDecoder } from "skathi:image";
+
+export async function aspectRatio(file: File): Promise<number> {
+  const decoder = new ImageDecoder({ data: file.stream(), type: file.type });
+  try {
+    const { width, height } = await decoder.info();
+    return width / height;
+  } finally {
+    decoder.close();
+  }
+}`,
+      },
       {
         title: "Every frame of a GIF",
         lang: "ts",

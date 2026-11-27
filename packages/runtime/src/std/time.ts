@@ -1,6 +1,6 @@
 // `skathi:time`: durations, stopwatches, deadlines, backoff, rate limits, retries and timers.
-// The host installs `TimeSpan`, `Stopwatch`, `Backoff` and `Deadline`. `RateLimiter`, `RetryPolicy`
-// and `Timer` are promises, timers and callbacks into the app from end to end, so they are here.
+// The host installs `TimeSpan`, `Stopwatch`, `Backoff` and `Deadline`. The other classes schedule
+// promises, timers and callbacks into the app on its event loop.
 
 /** A length of time as one number of milliseconds. `+span` and `span < other` use that number. */
 export interface TimeSpan {
@@ -189,6 +189,56 @@ export class RateLimiter {
       this.#tokens += count;
       throw reason;
     });
+  }
+}
+
+/** Starts tasks in submission order, up to the concurrency limit. */
+export class TaskQueue {
+  #concurrency: number;
+  #active = 0;
+  #waiting = new Set<() => void>();
+
+  constructor(options: { concurrency: number }) {
+    if (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1) {
+      throw new RangeError("TaskQueue: concurrency must be a positive integer");
+    }
+    this.#concurrency = options.concurrency;
+  }
+
+  /** Aborting rejects this call immediately. A running task keeps its slot until it settles. */
+  run<T>(task: (signal: AbortSignal) => T | PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+    const stop = signal ?? new AbortController().signal;
+    if (stop.aborted) return Promise.reject(stop.reason);
+    return new Promise<T>((resolve, reject) => {
+      const start = async () => {
+        try {
+          stop.throwIfAborted();
+          resolve(await task(stop));
+        } catch (error) {
+          reject(error);
+        } finally {
+          signal?.removeEventListener("abort", cancel);
+          this.#active--;
+          this.#startNext();
+        }
+      };
+      const cancel = () => {
+        this.#waiting.delete(start);
+        reject(stop.reason);
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      this.#waiting.add(start);
+      this.#startNext();
+    });
+  }
+
+  #startNext(): void {
+    if (this.#active >= this.#concurrency) return;
+    const next = this.#waiting.values().next();
+    if (next.done) return;
+    this.#waiting.delete(next.value);
+    this.#active++;
+    queueMicrotask(next.value);
   }
 }
 

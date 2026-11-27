@@ -73,12 +73,22 @@ export interface ImageDecodeResult {
   complete: boolean;
 }
 
+export interface ImageInfo {
+  /** Full-resolution display dimensions with the file's orientation applied. */
+  readonly width: number;
+  readonly height: number;
+  /** EXIF orientation, or 1 when no orientation is specified. */
+  readonly orientation: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+}
+
 /** The shape of WebCodecs' `ImageDecoder`, with an `Image` in place of a `VideoFrame`. */
 export interface ImageDecoder {
   readonly type: string;
   /** Whether all of the data is in: always for bytes, at the end of a stream. */
   readonly complete: boolean;
   readonly tracks: ImageTrack;
+  /** Reads canvas dimensions and orientation on a worker, without decoding frames. */
+  info(): Promise<ImageInfo>;
   decode(options?: ImageDecodeOptions): Promise<ImageDecodeResult>;
   /** Rejects what is still waiting with `AbortError` and lets go of the data. */
   close(): void;

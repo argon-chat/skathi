@@ -1,4 +1,4 @@
-import { Backoff, Deadline, RateLimiter, RetryPolicy, Stopwatch, Timer, TimeSpan } from "skathi:time";
+import { Backoff, Deadline, RateLimiter, RetryPolicy, Stopwatch, TaskQueue, Timer, TimeSpan } from "skathi:time";
 import { Angle, DataSize, Frequency } from "skathi:units";
 
 const attempt = (run: () => unknown): string => {
@@ -18,6 +18,44 @@ const rejection = (promise: Promise<unknown>): Promise<string> =>
   );
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function taskQueue() {
+  const queue = new TaskQueue({ concurrency: 2 });
+  const batch = new AbortController();
+  const starts: string[] = [];
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = rejection(
+    queue.run((signal) => {
+      starts.push(signal === batch.signal ? "first" : "wrong signal");
+      return hold;
+    }, batch.signal),
+  );
+  const second = queue.run(() => {
+    starts.push("second");
+    return hold;
+  });
+  const cancelled = rejection(queue.run(() => starts.push("cancelled"), batch.signal));
+  const failure = rejection(
+    queue.run(() => {
+      starts.push("throws");
+      throw new TypeError();
+    }),
+  );
+  const last = queue.run(() => {
+    starts.push("last");
+    return 42;
+  });
+  await Promise.resolve();
+  batch.abort(new DOMException("folder changed", "AbortError"));
+  const reasons = await Promise.all([first, cancelled, rejection(queue.run(() => starts.push("late"), batch.signal))]);
+  const beforeRelease = [...starts];
+  release();
+  await second;
+  return { beforeRelease, starts, reasons, failure: await failure, last: await last };
+}
 
 export async function time() {
   const span = TimeSpan.parse("1h30m").add(TimeSpan.fromSeconds(30));
@@ -124,6 +162,7 @@ export async function time() {
     stillPaused,
     fired,
     repeated: afterReset >= 2 && repeats === afterReset,
+    queue: await taskQueue(),
     globals: ["TimeSpan", "Stopwatch", "DataSize"].filter((name) => name in globalThis),
   };
 }

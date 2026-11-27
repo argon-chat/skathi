@@ -1,5 +1,14 @@
 import { NativeBuffer } from "skathi:memory";
-import { Glob, Patch, StringBuilder, StringReader, StringWriter, TextDiff, TextSearch } from "skathi:text";
+import {
+  FuzzyMatcher,
+  Glob,
+  Patch,
+  StringBuilder,
+  StringReader,
+  StringWriter,
+  TextDiff,
+  TextSearch,
+} from "skathi:text";
 
 const attempt = (run: () => unknown): string => {
   try {
@@ -37,6 +46,7 @@ export function text() {
   const search = new TextSearch(["он", "она", "Кот"], { ignoreCase: true });
   const words = new TextSearch(["cat"], { wholeWord: true });
   const sentence = "😀 Она и кот";
+  const ranked = FuzzyMatcher.rank("дс", ["😀ДверьСада", "дс", "сад", "ДС"]);
 
   const sources = new Glob("src/**/*.{ts,vue}");
   return {
@@ -54,6 +64,14 @@ export function text() {
       .join(""),
     found: search.findAll(sentence).map((m) => [sentence.slice(m.index, m.index + m.length), m.pattern]),
     words: [words.test("concat"), words.test("a cat."), new TextSearch([]).test("anything")],
+    fuzzy: {
+      matches: ranked.map(({ index, ranges }) => [index, ranges.map((r) => [r.index, r.length])]),
+      scores: ranked.map((m) => m.score > ranked[ranked.length - 1]!.score),
+      limited: FuzzyMatcher.rank("😀", ["a😀", "😀"], { limit: 1 }),
+      overlap: FuzzyMatcher.rank("test", ["t-e-s-test"])[0]?.ranges,
+      empty: FuzzyMatcher.rank("", ["b", "a"], { limit: 1 }),
+      invalid: attempt(() => FuzzyMatcher.rank("a", ["a"], { limit: -1 })).split(":")[0],
+    },
     glob: [
       sources.match("src/a/b/App.vue"),
       sources.match("src/main.ts"),

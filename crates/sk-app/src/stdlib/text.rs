@@ -3,9 +3,11 @@
 //! means in JS.
 
 mod diff;
+mod fuzzy;
 mod merge;
 mod patch;
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
@@ -976,6 +978,45 @@ std_fn!(fn search_test(g, args) {
     Ok(enc_bool(state.automaton.is_match(&haystack.text)))
 });
 
+std_fn!(fn fuzzy_rank(g, args) {
+    let query = fuzzy::Query::new(&units(g, args.arg(0).0, "FuzzyMatcher.rank: query")?);
+    let candidates = args.arg(1).0;
+    let size = list(g, candidates, "FuzzyMatcher.rank: candidates")?;
+    let limit = match option(g, args.arg(2).0, "limit") {
+        UNDEF => size,
+        value => count(g, value, "FuzzyMatcher.rank: limit")?.min(size),
+    };
+    let mut matches = BTreeMap::new();
+    for index in 0..size {
+        let candidate = units(g, get_i(g, candidates, index as u32), "FuzzyMatcher.rank: each candidate")?;
+        if limit == 0 || (query.is_empty() && matches.len() == limit) {
+            continue;
+        }
+        if let Some((score, ranges)) = fuzzy::find(&query, &candidate) {
+            matches.insert((Reverse(score), index), ranges);
+            if matches.len() > limit {
+                matches.pop_last();
+            }
+        }
+    }
+    let result = new_array(g);
+    for (i, ((Reverse(score), index), ranges)) in matches.into_iter().enumerate() {
+        let spans = new_array(g);
+        for (j, range) in ranges.into_iter().enumerate() {
+            let span = new_object(g, UNDEF);
+            define(g, span, "index", enc_f64(range.start as f64), 0);
+            define(g, span, "length", enc_f64((range.end - range.start) as f64), 0);
+            set_i(g, spans, j as u32, span);
+        }
+        let entry = new_object(g, UNDEF);
+        define(g, entry, "index", enc_f64(index as f64), 0);
+        define(g, entry, "score", enc_f64(score as f64), 0);
+        define(g, entry, "ranges", spans, 0);
+        set_i(g, result, i as u32, entry);
+    }
+    Ok(result)
+});
+
 #[derive(Debug, PartialEq)]
 enum Token {
     Char(char),
@@ -1360,6 +1401,14 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
         },
     );
     define(g, module, "TextSearch", search.ctor, 0);
+
+    define(
+        g,
+        module,
+        "FuzzyMatcher",
+        namespace(g, "FuzzyMatcher", &[("rank", 2, fuzzy_rank)]),
+        0,
+    );
 
     let glob = support::class(
         g,

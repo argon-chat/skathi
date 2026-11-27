@@ -543,8 +543,38 @@ const blocked = new TextSearch(blockedWords, { ignoreCase: true });
 if (blocked.test(input.value)) showWarning();`,
       },
     ],
-    related: ["glob", "text-diff"],
+    related: ["fuzzy-matcher", "glob", "text-diff"],
     aliases: ["Aho-Corasick", "multi-pattern", "find all", "keywords", "highlight", "word filter", "indexOf many"],
+  },
+  {
+    slug: "fuzzy-matcher",
+    name: "FuzzyMatcher",
+    since: "Unreleased",
+    kind: "namespace",
+    summary: "Rank command names, paths or other labels and highlight the characters that matched.",
+    syntax: `${importLine("skathi:text", "FuzzyMatcher", "type FuzzyMatch")}
+
+FuzzyMatcher.rank(query: string, candidates: readonly string[], options?: { limit?: number }): FuzzyMatch[]`,
+    notes: [
+      "The query's characters must occur in order. Comparison uses the same one-character lowercase mapping as `TextSearch`. An exact label ranks first, followed by contiguous matches. For a subsequence, consecutive characters and word initials score higher, and gaps reduce the score.",
+      "Each result has the candidate's original `index`, its `score` and its highlight `ranges`. Each range groups consecutive matches as `{ index, length }` in UTF-16 code units. Use it directly with `String.slice()`.",
+      "Results are ordered by descending score. Ties keep the input order. An empty query returns the candidates in order with score 0 and empty ranges. The optional non-negative integer `limit` caps the number of results.",
+    ],
+    examples: [
+      {
+        title: "Highlight a branch name",
+        lang: "ts",
+        code: `import { FuzzyMatcher } from "skathi:text";
+
+const branches = ["fix/audio-output", "feature/branch-menu", "main"];
+for (const { index, ranges } of FuzzyMatcher.rank("brm", branches, { limit: 8 })) {
+  const label = branches[index]!;
+  const highlights = ranges.map(r => label.slice(r.index, r.index + r.length));
+  console.log(label, highlights); // feature/branch-menu, ["br", "m"]
+}`,
+      },
+    ],
+    related: ["text-search", "glob"],
   },
   {
     slug: "glob",

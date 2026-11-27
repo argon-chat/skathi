@@ -585,6 +585,38 @@ export function report(message: string): void {
     ],
   },
   {
+    slug: "task-queue",
+    name: "TaskQueue",
+    since: "Unreleased",
+    kind: "class",
+    summary: "Run a batch of tasks with a fixed limit on how many can be in progress.",
+    syntax: `${importLine("skathi:time", "TaskQueue")}
+
+new TaskQueue(options: { concurrency: number })
+queue.run<T>(task: (signal: AbortSignal) => T | PromiseLike<T>, signal?: AbortSignal): Promise<T>`,
+    notes: [
+      "Tasks start in submission order on the event loop. Each call resolves with its task's value or rejects with its error. A synchronous throw also releases the slot for the next task.",
+      "Pass the same signal to several calls to cancel a batch. Each call rejects with the signal's reason when aborted. The queue skips cancelled tasks that are waiting. A running callback receives the signal and keeps its slot until its work settles.",
+      "The constructor requires a positive safe integer for `concurrency`. A fractional, zero or negative limit throws a `RangeError`.",
+    ],
+    examples: [
+      {
+        title: "Load up to four previews at once",
+        lang: "ts",
+        code: `import { TaskQueue } from "skathi:time";
+
+const previews = new TaskQueue({ concurrency: 4 });
+export function loadPreviews(urls: string[], signal: AbortSignal): Promise<Blob[]> {
+  return Promise.all(urls.map(url => previews.run(async stop => {
+    const response = await fetch(url, { signal: stop });
+    return response.blob();
+  }, signal)));
+}`,
+      },
+    ],
+    related: ["rate-limiter", "deadline", "retry-policy"],
+  },
+  {
     slug: "timer",
     name: "Timer",
     kind: "class",

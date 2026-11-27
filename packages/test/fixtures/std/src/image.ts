@@ -23,6 +23,7 @@ export async function image() {
 
   const streamed = new ImageDecoder({ data: new Blob([png]).stream(), type: "image/png" });
   const completeBefore = streamed.complete;
+  const info = await streamed.info();
   await streamed.tracks.ready;
   const { image: decoded, complete } = await streamed.decode();
   const pixels = [...decoded.pixels];
@@ -52,9 +53,11 @@ export async function image() {
 
   const unread = new ImageDecoder({ data: new Blob([png]).stream(), type: "image/png" });
   const waiting = rejection(unread.decode());
+  const waitingInfo = rejection(unread.info());
   unread.close();
 
   return {
+    info,
     streamed: [completeBefore, streamed.complete, streamed.type, streamed.tracks.frameCount, streamed.tracks.animated],
     decoded: [decoded.width === 0, complete, pixels.length, pixels.join() === CHECKER.join()],
     thumb: [thumb.width, thumb.height, fromNative.type],
@@ -80,6 +83,8 @@ export async function image() {
       unwritable: await rejection(ImageEncoder.encode(small, { type: String("image/svg+xml") as EncodableImageType })),
       closed: await rejection(decoded.resize(1, 1)),
       aborted: await waiting,
+      abortedInfo: await waitingInfo,
+      closedInfo: await rejection(unread.info()),
       freed: await rejection(Promise.resolve().then(() => new ImageDecoder({ data: file, type: "image/png" }))),
     },
   };

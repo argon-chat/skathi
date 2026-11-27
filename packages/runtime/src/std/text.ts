@@ -238,6 +238,20 @@ export interface TextSearchConstructor {
   new (patterns: readonly string[], options?: TextSearchOptions): TextSearch;
 }
 
+export interface FuzzyMatch {
+  /** Position in the input list. */
+  index: number;
+  /** Higher scores are better matches for the same query. */
+  score: number;
+  /** Consecutive matched characters grouped in UTF-16 code units. */
+  ranges: { index: number; length: number }[];
+}
+
+export interface FuzzyMatcherStatics {
+  /** Ranks case-insensitive subsequences. Ties and an empty query preserve input order. */
+  rank(query: string, candidates: readonly string[], options?: { limit?: number }): FuzzyMatch[];
+}
+
 export interface GlobOptions {
   /** `true` by default. */
   caseSensitive?: boolean;
@@ -263,6 +277,7 @@ declare const __sk_std: {
     TextDiff: TextDiffStatics;
     Patch: PatchConstructor;
     TextSearch: TextSearchConstructor;
+    FuzzyMatcher: FuzzyMatcherStatics;
     Glob: GlobConstructor;
   };
 };
@@ -273,4 +288,5 @@ export const StringReader: StringReaderConstructor = __sk_std.text.StringReader;
 export const TextDiff: TextDiffStatics = __sk_std.text.TextDiff;
 export const Patch: PatchConstructor = __sk_std.text.Patch;
 export const TextSearch: TextSearchConstructor = __sk_std.text.TextSearch;
+export const FuzzyMatcher: FuzzyMatcherStatics = __sk_std.text.FuzzyMatcher;
 export const Glob: GlobConstructor = __sk_std.text.Glob;

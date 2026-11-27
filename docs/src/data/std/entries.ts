@@ -43,13 +43,13 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
   "skathi:memory":
     "Native memory JS reads and writes without a copy and frees when it says so: buffers the host allocates, an arena that frees a frame's buffers at once, and strided views over them. FFI, `skathi:binary` and `skathi:gpu` take the buffers as they are.",
   "skathi:image":
-    "Image files decoded and encoded on worker threads, without a canvas: PNG, JPEG, WebP, GIF and BMP in, PNG, JPEG and WebP out, every frame of an animation, and decoded pixels in native memory that JS reads without a copy.",
+    "Read image dimensions and orientation, decode still images and animated frames, and encode images on worker threads. JS can read the decoded pixels directly in native memory.",
   "skathi:gpu":
     "WGSL structs described once: the layout of a uniform, storage or vertex buffer, the declaration for the shader, and a writer that puts values at the right offsets; and two things every WebGPU app writes again, GPU pass timing and reading a texture or a buffer back. It goes with [WebGPU](/web-platform/webgpu/).",
   "skathi:text":
-    "Work on strings that is slow or long to write in JS: building text from many parts, reading it line by line, differences, three-way merges and git patches, a search for many words at once, and glob patterns.",
+    "Build and read strings, compute differences and three-way merges, apply git patches, search for many words at once, rank labels with fuzzy matching, and match paths with globs.",
   "skathi:time":
-    "Durations as values, measuring elapsed time, deadlines that travel with a call, retry delays, rate limiting and a timer that does not drift.",
+    "Durations as values, measuring elapsed time, deadlines that travel with a call, retry delays, rate limiting, bounded task queues and a timer that does not drift.",
   "skathi:units":
     "Quantities that carry their unit: sizes of data, frequencies and angles, with parsing, conversion and formatting.",
   "skathi:collections":

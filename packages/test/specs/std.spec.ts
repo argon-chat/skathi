@@ -271,6 +271,13 @@ describe("skathi:* modules", () => {
       expect(t.stillPaused).toEqual([0, true, false]);
       expect(t.fired).toEqual([1, false]);
       expect(t.repeated).toBe(true);
+      expect(t.queue).toEqual({
+        beforeRelease: ["first", "second"],
+        starts: ["first", "second", "throws", "last"],
+        reasons: ["AbortError", "AbortError", "AbortError"],
+        failure: "TypeError",
+        last: 42,
+      });
       expect(t.globals).toEqual([]);
     },
     T,
@@ -349,6 +356,22 @@ describe("skathi:* modules", () => {
         ["кот", 2],
       ]);
       expect(t.words).toEqual([false, true, false]);
+      expect(t.fuzzy.matches).toEqual([
+        [1, [[0, 2]]],
+        [3, [[0, 2]]],
+        [
+          0,
+          [
+            [2, 1],
+            [7, 1],
+          ],
+        ],
+      ]);
+      expect(t.fuzzy.scores).toEqual([true, true, false]);
+      expect(t.fuzzy.limited).toEqual([{ index: 1, score: expect.any(Number), ranges: [{ index: 0, length: 2 }] }]);
+      expect(t.fuzzy.empty).toEqual([{ index: 0, score: 0, ranges: [] }]);
+      expect(t.fuzzy.overlap).toEqual([{ index: 6, length: 4 }]);
+      expect(t.fuzzy.invalid).toBe("RangeError");
       expect(t.glob).toEqual([true, true, false, true, ["b.ts"]]);
       expect(t.errors.map((e: string) => e.split(":")[0])).toEqual([
         "TypeError",
@@ -593,6 +616,7 @@ describe("skathi:* modules", () => {
       const i = JSON.parse(raw);
       expect(i.failed).toBeUndefined();
       expect(i.result).toEqual({
+        info: { width: 4, height: 2, orientation: 1 },
         streamed: [false, true, "image/png", 1, false],
         decoded: [true, true, 32, true],
         thumb: [2, 1, "image/png"],
@@ -609,6 +633,8 @@ describe("skathi:* modules", () => {
           unwritable: "NotSupportedError",
           closed: "InvalidStateError",
           aborted: "AbortError",
+          abortedInfo: "AbortError",
+          closedInfo: "InvalidStateError",
           freed: "InvalidStateError",
         },
       });

@@ -12,6 +12,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use image::codecs::gif::GifDecoder;
 use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
+use image::metadata::Orientation;
 use image::{
     AnimationDecoder, ExtendedColorType, ImageDecoder as _, ImageEncoder as _, ImageFormat, Limits,
 };
@@ -102,6 +103,18 @@ struct Pixels {
     rgba: Vec<u8>,
 }
 
+impl Pixels {
+    fn upright(mut image: image::DynamicImage, orientation: Orientation) -> Self {
+        image.apply_orientation(orientation);
+        let rgba = image.into_rgba8();
+        Self {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        }
+    }
+}
+
 fn codec_of(mime: &str) -> Option<Codec> {
     let mime = mime.trim().to_ascii_lowercase();
     DECODABLE.iter().find(|(m, _)| *m == mime).map(|(_, c)| *c)
@@ -133,11 +146,13 @@ fn admit((width, height): (u32, u32)) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The frames of an animated file and the size of its canvas; `None` for a still image.
-fn animation(
-    bytes: &[u8],
-    format: ImageFormat,
-) -> Result<Option<(image::Frames<'_>, (u32, u32))>, Failure> {
+struct Animation<'a> {
+    frames: image::Frames<'a>,
+    size: (u32, u32),
+    orientation: Orientation,
+}
+
+fn animation(bytes: &[u8], format: ImageFormat) -> Result<Option<Animation<'_>>, Failure> {
     let cursor = Cursor::new(bytes);
     Ok(match format {
         ImageFormat::Gif => {
@@ -145,7 +160,11 @@ fn animation(
             let canvas = decoder.dimensions();
             admit(canvas)?;
             decoder.set_limits(limits())?;
-            Some((decoder.into_frames(), canvas))
+            Some(Animation {
+                frames: decoder.into_frames(),
+                size: canvas,
+                orientation: Orientation::NoTransforms,
+            })
         }
         ImageFormat::Png => {
             let mut decoder = PngDecoder::new(cursor)?;
@@ -155,16 +174,26 @@ fn animation(
             let canvas = decoder.dimensions();
             admit(canvas)?;
             decoder.set_limits(limits())?;
-            Some((decoder.apng()?.into_frames(), canvas))
+            let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+            Some(Animation {
+                frames: decoder.apng()?.into_frames(),
+                size: canvas,
+                orientation,
+            })
         }
         ImageFormat::WebP => {
-            let decoder = WebPDecoder::new(cursor)?;
+            let mut decoder = WebPDecoder::new(cursor)?;
             if !decoder.has_animation() {
                 return Ok(None);
             }
             let canvas = decoder.dimensions();
             admit(canvas)?;
-            Some((decoder.into_frames(), canvas))
+            let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+            Some(Animation {
+                frames: decoder.into_frames(),
+                size: canvas,
+                orientation,
+            })
         }
         _ => None,
     })
@@ -176,14 +205,11 @@ enum Walk {
 }
 
 /// Frame `stop_at`, or the number of frames when there is no such frame or none is asked for.
-fn walk(
-    frames: image::Frames<'_>,
-    (width, height): (u32, u32),
-    stop_at: Option<usize>,
-) -> Result<Walk, Failure> {
+fn walk(animation: Animation<'_>, stop_at: Option<usize>) -> Result<Walk, Failure> {
+    let (width, height) = animation.size;
     let per_frame = width as u64 * height as u64;
     let mut count = 0usize;
-    for frame in frames {
+    for frame in animation.frames {
         if (count as u64 + 1) * per_frame > ANIMATION_BUDGET {
             return Err(Failure::Encoding(format!(
                 "the animation has more than {count} frames of {width}x{height}, more than is decoded"
@@ -191,12 +217,8 @@ fn walk(
         }
         let frame = frame?;
         if stop_at == Some(count) {
-            let buffer = frame.into_buffer();
-            return Ok(Walk::Frame(Pixels {
-                width: buffer.width(),
-                height: buffer.height(),
-                rgba: buffer.into_raw(),
-            }));
+            let image = image::DynamicImage::ImageRgba8(frame.into_buffer());
+            return Ok(Walk::Frame(Pixels::upright(image, animation.orientation)));
         }
         count += 1;
     }
@@ -209,25 +231,27 @@ fn no_frame(index: usize, count: usize) -> Failure {
     ))
 }
 
+fn raster_decoder(
+    bytes: &[u8],
+    format: ImageFormat,
+) -> Result<impl image::ImageDecoder + '_, Failure> {
+    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(limits());
+    let decoder = reader.into_decoder()?;
+    admit(decoder.dimensions())?;
+    Ok(decoder)
+}
+
 fn still(bytes: &[u8], format: ImageFormat, index: usize) -> Result<Pixels, Failure> {
     if index != 0 {
         return Err(no_frame(index, 1));
     }
-    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
-    reader.limits(limits());
-    let mut decoder = reader.into_decoder()?;
-    admit(decoder.dimensions())?;
-    let orientation = decoder
-        .orientation()
-        .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut decoded = image::DynamicImage::from_decoder(decoder)?;
-    decoded.apply_orientation(orientation);
-    let rgba = decoded.into_rgba8();
-    Ok(Pixels {
-        width: rgba.width(),
-        height: rgba.height(),
-        rgba: rgba.into_raw(),
-    })
+    let mut decoder = raster_decoder(bytes, format)?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    Ok(Pixels::upright(
+        image::DynamicImage::from_decoder(decoder)?,
+        orientation,
+    ))
 }
 
 /// The renderer `<img>` draws an SVG with, so text finds the same fonts.
@@ -242,6 +266,37 @@ fn svg_size(bytes: &[u8]) -> Result<(u32, u32), Failure> {
     let size = (size.width().round() as u32, size.height().round() as u32);
     admit(size)?;
     Ok(size)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ImageInfo {
+    width: u32,
+    height: u32,
+    orientation: u8,
+}
+
+fn image_info(bytes: &[u8], codec: Codec) -> Result<ImageInfo, Failure> {
+    let ((width, height), orientation) = match codec {
+        Svg => (svg_size(bytes)?, Orientation::NoTransforms),
+        Raster(format) => {
+            let mut decoder = raster_decoder(bytes, format)?;
+            (
+                decoder.dimensions(),
+                decoder.orientation().unwrap_or(Orientation::NoTransforms),
+            )
+        }
+    };
+    let orientation = orientation.to_exif();
+    let (width, height) = if orientation >= 5 {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    Ok(ImageInfo {
+        width,
+        height,
+        orientation,
+    })
 }
 
 fn svg(bytes: &[u8], index: usize, max_side: Option<u32>) -> Result<Pixels, Failure> {
@@ -284,7 +339,7 @@ fn decode(
         Svg => return svg(bytes, index, max_side),
     };
     let pixels = match animation(bytes, format)? {
-        Some((frames, canvas)) => match walk(frames, canvas, Some(index))? {
+        Some(animation) => match walk(animation, Some(index))? {
             Walk::Frame(pixels) => pixels,
             Walk::Count(count) => return Err(no_frame(index, count)),
         },
@@ -303,17 +358,12 @@ fn probe(bytes: &[u8], codec: Codec) -> Result<(usize, bool), Failure> {
         Svg => return svg_size(bytes).map(|_| (1, false)),
     };
     match animation(bytes, format)? {
-        Some((frames, canvas)) => match walk(frames, canvas, None)? {
+        Some(animation) => match walk(animation, None)? {
             Walk::Count(0) => Err(Failure::Encoding("the animation has no frames".into())),
             Walk::Count(count) => Ok((count, count > 1)),
             Walk::Frame(_) => unreachable!("no frame was asked for"),
         },
-        None => {
-            let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
-            reader.limits(limits());
-            admit(reader.into_decoder()?.dimensions())?;
-            Ok((1, false))
-        }
+        None => raster_decoder(bytes, format).map(|_| (1, false)),
     }
 }
 
@@ -704,6 +754,7 @@ enum Data {
 
 enum Want {
     Frame { index: usize, max_side: Option<u32> },
+    Info,
     Tracks,
 }
 
@@ -727,6 +778,32 @@ fn closed(state: &DecoderState) -> bool {
     matches!(state.data, Data::Closed)
 }
 
+unsafe fn complete_request<R>(
+    g: *mut c_void,
+    this: u64,
+    settler: host::Settler,
+    method: &str,
+    result: Result<R, Failure>,
+    value: impl FnOnce(R) -> Js<u64>,
+) {
+    match result {
+        _ if decoder_state(g, this).map_or(true, |s| closed(s)) => settler.reject(
+            g,
+            host::error(
+                g,
+                "AbortError",
+                &format!("ImageDecoder.{method}: the decoder was closed"),
+            ),
+        ),
+        Err(f) => settler.reject(g, failure(g, &f)),
+        Ok(result) => match value(result) {
+            Ok(out) => settler.resolve(g, out),
+            Err(Thrown) => settler.reject(g, pending_exception(g)),
+        },
+    }
+    redjs_unprotect(g, this);
+}
+
 unsafe fn submit(
     g: *mut c_void,
     this: u64,
@@ -741,55 +818,38 @@ unsafe fn submit(
             g,
             move || decode(&data, format, index, max_side),
             move |g, result| unsafe {
-                redjs_unprotect(g, this);
-                if decoder_state(g, this).map_or(true, |s| closed(s)) {
-                    return settler.reject(
-                        g,
-                        host::error(
-                            g,
-                            "AbortError",
-                            "ImageDecoder.decode: the decoder was closed",
-                        ),
-                    );
-                }
-                match result {
-                    Ok(pixels) => match make_image(g, pixels) {
-                        Ok(image) => {
-                            let out = new_object(g, UNDEF);
-                            define(g, out, "image", image, 0);
-                            define(g, out, "complete", TRUE, 0);
-                            settler.resolve(g, out);
-                        }
-                        Err(Thrown) => settler.reject(g, pending_exception(g)),
-                    },
-                    Err(f) => settler.reject(g, failure(g, &f)),
-                }
+                complete_request(g, this, settler, "decode", result, |pixels| {
+                    let image = make_image(g, pixels)?;
+                    let out = new_object(g, UNDEF);
+                    define(g, out, "image", image, 0);
+                    define(g, out, "complete", TRUE, 0);
+                    Ok(out)
+                })
+            },
+        ),
+        Want::Info => on_worker(
+            g,
+            move || image_info(&data, format),
+            move |g, result| unsafe {
+                complete_request(g, this, settler, "info", result, |info| {
+                    let out = new_object(g, UNDEF);
+                    define(g, out, "width", enc_f64(info.width as f64), 0);
+                    define(g, out, "height", enc_f64(info.height as f64), 0);
+                    define(g, out, "orientation", enc_f64(info.orientation.into()), 0);
+                    Ok(out)
+                })
             },
         ),
         Want::Tracks => on_worker(
             g,
             move || probe(&data, format),
             move |g, result| unsafe {
-                redjs_unprotect(g, this);
-                if decoder_state(g, this).map_or(true, |s| closed(s)) {
-                    return settler.reject(
-                        g,
-                        host::error(
-                            g,
-                            "AbortError",
-                            "ImageDecoder.tracks: the decoder was closed",
-                        ),
-                    );
-                }
-                match result {
-                    Ok((frames, animated)) => {
-                        let tracks = slot_get(g, this, TRACKS);
-                        define(g, tracks, "frameCount", enc_f64(frames as f64), 0);
-                        define(g, tracks, "animated", enc_bool(animated), 0);
-                        settler.resolve(g, UNDEF);
-                    }
-                    Err(f) => settler.reject(g, failure(g, &f)),
-                }
+                complete_request(g, this, settler, "tracks", result, |(frames, animated)| {
+                    let tracks = slot_get(g, this, TRACKS);
+                    define(g, tracks, "frameCount", enc_f64(frames as f64), 0);
+                    define(g, tracks, "animated", enc_bool(animated), 0);
+                    Ok(UNDEF)
+                })
             },
         ),
     }
@@ -973,6 +1033,16 @@ std_fn!(fn decoder_tracks(g, args) {
     Ok(tracks)
 });
 
+std_fn!(fn decoder_info(g, args) {
+    let this = args.this().0;
+    Ok(promise_of(g, || {
+        decoder_state(g, this)?;
+        let (promise, settler) = host::deferred(g);
+        ask(g, this, Want::Info, settler)?;
+        Ok(promise)
+    }))
+});
+
 std_fn!(fn decoder_decode(g, args) {
     let this = args.this().0;
     let options = args.arg(0).0;
@@ -1121,7 +1191,11 @@ pub(super) unsafe fn install(g: *mut c_void, std: u64) {
             arity: 1,
             construct: Some(decoder_new),
             parent_proto: 0,
-            methods: &[("decode", 0, decoder_decode), ("close", 0, decoder_close)],
+            methods: &[
+                ("info", 0, decoder_info),
+                ("decode", 0, decoder_decode),
+                ("close", 0, decoder_close),
+            ],
             getters: &[
                 ("type", decoder_type),
                 ("complete", decoder_complete),
@@ -1172,6 +1246,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const TRANSLUCENT: [u8; 4] = [10, 20, 30, 128];
+    // Orientation 6 in a big-endian TIFF with one IFD entry.
+    const ROTATE_90_EXIF: &[u8] = &[
+        0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0,
+    ];
 
     fn file(img: &RgbaImage, format: ImageFormat) -> Vec<u8> {
         let mut out = Cursor::new(Vec::new());
@@ -1253,17 +1331,14 @@ mod tests {
         let mut out = Cursor::new(Vec::new());
         rgb.write_to(&mut out, ImageFormat::Jpeg).unwrap();
         let jpeg = out.into_inner();
-        // Orientation 6 (turn 90 degrees clockwise) in a big-endian TIFF of one IFD entry.
-        let tiff = [
-            0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0,
-            0, 0,
-        ];
-        let len = (2 + 6 + tiff.len()) as u16;
+        let len = (2 + 6 + ROTATE_90_EXIF.len()) as u16;
         let mut turned = jpeg[..2].to_vec();
         turned.extend_from_slice(&[0xFF, 0xE1, (len >> 8) as u8, len as u8]);
         turned.extend_from_slice(b"Exif\0\0");
-        turned.extend_from_slice(&tiff);
+        turned.extend_from_slice(ROTATE_90_EXIF);
         turned.extend_from_slice(&jpeg[2..]);
+        let info = image_info(&turned, Raster(ImageFormat::Jpeg)).unwrap();
+        assert_eq!((info.width, info.height, info.orientation), (16, 32, 6));
         let p = decode(&turned, Raster(ImageFormat::Jpeg), 0, None).unwrap();
         assert_eq!((p.width, p.height), (16, 32));
         let at = |x: usize, y: usize| &p.rgba[(y * 16 + x) * 4..(y * 16 + x) * 4 + 4];
@@ -1277,6 +1352,43 @@ mod tests {
             "blue below: {:?}",
             at(8, 27)
         );
+    }
+
+    #[test]
+    fn metadata_only_needs_the_image_header() {
+        let header = b"P6\n13 5\n255\n";
+        let format = Raster(ImageFormat::Pnm);
+        let info = image_info(header, format).unwrap();
+        assert_eq!((info.width, info.height, info.orientation), (13, 5, 1));
+        assert!(decode(header, format, 0, None).is_err());
+    }
+
+    #[test]
+    fn animated_frames_have_the_display_size_reported_by_info() {
+        fn chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
+            let mut crc = flate2::Crc::new();
+            crc.update(name);
+            crc.update(data);
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(name);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&crc.sum().to_be_bytes());
+        }
+
+        let png = file(&two_pixels(), ImageFormat::Png);
+        let mut apng = png[..33].to_vec(); // signature and IHDR
+        chunk(&mut apng, b"eXIf", ROTATE_90_EXIF);
+        chunk(&mut apng, b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0]);
+        let mut control = [0; 26];
+        control[4..8].copy_from_slice(&2u32.to_be_bytes());
+        control[8..12].copy_from_slice(&1u32.to_be_bytes());
+        chunk(&mut apng, b"fcTL", &control);
+        apng.extend_from_slice(&png[33..]);
+        let format = Raster(ImageFormat::Png);
+        let info = image_info(&apng, format).unwrap();
+        let frame = decode(&apng, format, 0, None).unwrap();
+        assert_eq!((info.width, info.height, info.orientation), (1, 2, 6));
+        assert_eq!((frame.width, frame.height), (info.width, info.height));
     }
 
     #[test]
