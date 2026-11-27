@@ -44,18 +44,23 @@ pub(super) fn locate(
     size: (f32, f32),
     margin: f32,
     placement: super::Placement,
-) -> Result<Place, &'static str> {
+) -> Result<(Place, Option<Rect>), &'static str> {
     let owner = hwnd(window).ok_or("the window has no HWND")?;
     let (anchor, monitor) =
         anchor(owner, window.scale_factor(), rect).ok_or("no monitor under the anchor")?;
     let s = monitor.scale;
-    Ok(Place {
-        spot: super::frame_in(placement, anchor, monitor.work, gap, size, margin, s),
-        inset: (margin * s).round() as i32,
-        owner: owner.0 as isize,
-        monitor: (monitor.bounds.0, monitor.bounds.1),
-        scale: s,
-    })
+    let spot = super::frame_in(placement, anchor, monitor.work, gap, size, margin, s);
+    let bounds = super::in_owner(spot, rect, anchor, window.scale_factor());
+    Ok((
+        Place {
+            spot,
+            inset: (margin * s).round() as i32,
+            owner: owner.0 as isize,
+            monitor: (monitor.bounds.0, monitor.bounds.1),
+            scale: s,
+        },
+        Some(bounds),
+    ))
 }
 
 pub(super) fn room(window: &Window, rect: Rect, gap: f32) -> Option<f32> {

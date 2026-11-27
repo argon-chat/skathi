@@ -32,6 +32,7 @@ const files = ref<SampleFile[]>([
 const ordered = computed(() => [...files.value].sort((a, b) => Number(b.pinned) - Number(a.pinned)));
 const menu = useTemplateRef<SkContextMenuHandle<SampleFile>>("menu");
 const backdrop = ref<SkMenuBackdrop>("acrylic");
+const debugAim = ref(true);
 const status = ref("");
 
 function togglePin(file: SampleFile) {
@@ -87,12 +88,18 @@ async function copyName(file: SampleFile) {
             <option value="none">Opaque</option>
           </select>
         </label>
-        <output class="muted" role="status">{{ status }}</output>
+        <label class="material">
+          <input v-model="debugAim" type="checkbox" aria-label="Show submenu safe zone" />
+          Show submenu safe zone
+        </label>
       </div>
+      <p v-if="debugAim" class="muted">
+        Hover Move to and cross the next row. Blue shows the safe zone, green shows where it held, and a red × marks where it released.
+      </p>
+      <output class="muted" role="status">{{ status }}</output>
     </Card>
-    <SkContextMenu ref="menu" v-slot="{ context: file }" :backdrop="backdrop" aria-label="File actions">
+    <SkContextMenu ref="menu" v-slot="{ context: file }" :backdrop="backdrop" :debug-aim="debugAim" aria-label="File actions">
       <SkMenuItem @select="togglePin(file)">{{ file.pinned ? "Unpin" : "Pin to top" }}</SkMenuItem>
-      <SkMenuItem @select="copyName(file)">Copy file name</SkMenuItem>
       <SkMenuSeparator />
       <SkSubmenu label="Move to">
         <SkMenuItem
@@ -104,6 +111,7 @@ async function copyName(file: SampleFile) {
           {{ folder }}
         </SkMenuItem>
       </SkSubmenu>
+      <SkMenuItem @select="copyName(file)">Copy file name</SkMenuItem>
     </SkContextMenu>
   </Page>
 </template>

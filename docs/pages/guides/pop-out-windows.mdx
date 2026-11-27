@@ -146,6 +146,10 @@ Use `SkContextMenu` for a menu that can extend past its owner's edges. Pass the 
 
 Use `SkMenuItem` for an action, `SkMenuSeparator` to group commands and `SkSubmenu` for another level. Items accept ordinary component content. Selecting an enabled item runs its `select` handler and closes the menu. Up and Down move between enabled items, Right opens a submenu, and Left or Escape returns to its parent. Escape at the top level, an outside press, or `close()` dismisses the menu.
 
+The trigger stays highlighted as you move diagonally across neighboring rows into its open submenu, even if you pause or make a small correction along the way. Turn away to highlight another row, or click it to act immediately.
+
+To inspect that movement, enable `debugAim` on the root `SkContextMenu` (Vue `<SkContextMenu debug-aim>`, Svelte `<SkContextMenu debugAim>`). The parent menu draws the hit-tested region in blue and traces the pointer. Green means a neighboring row yielded to the submenu. A red × marks the most recent sample that released it and stays visible even if another submenu opens. Closing the parent clears the trace. This overlay is off by default.
+
 Each level uses an owned popup that keeps the opening window active. The native host positions it in the monitor's work area and flips submenus sideways at the edge. Wayland delegates placement to the compositor. If the host cannot open or place a native popup, Skathi draws subsequent menus inside the opening window for the rest of the session. The default `backdrop="acrylic"` uses the Windows system material, behind-window blur on macOS, and an opaque background on Linux. Use the `.sk-context-menu`, `.sk-menu-item` and `.sk-menu-separator` classes to style the menu.
 
 ## Click-through overlays

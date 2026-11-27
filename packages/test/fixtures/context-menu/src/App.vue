@@ -26,8 +26,10 @@ onScopeDispose(
   }),
 );
 const extra = ref(false);
+const debugAim = ref(false);
 const detached = ref(false);
 Object.assign(globalThis, {
+  showMenuAim: (value: boolean) => (debugAim.value = value),
   resizeMenu: () => (extra.value = !extra.value),
   showDetached: (value: boolean) => (detached.value = value),
   closeMenu: () => menu.value?.close(),
@@ -52,7 +54,13 @@ Object.assign(globalThis, {
       Detached.txt
     </button>
   </SkWindow>
-  <SkContextMenu ref="menu" v-slot="{ context: file }" aria-label="File actions" backdrop="acrylic">
+  <SkContextMenu
+    ref="menu"
+    v-slot="{ context: file }"
+    aria-label="File actions"
+    backdrop="acrylic"
+    :debug-aim="debugAim"
+  >
     <SkMenuItem @select="last = 'Opened ' + file">Open</SkMenuItem>
     <SkMenuItem disabled>Rename <SkKbd keys="F2" variant="plain" /></SkMenuItem>
     <SkMenuItem v-if="extra">
@@ -62,6 +70,11 @@ Object.assign(globalThis, {
     <SkMenuSeparator />
     <SkSubmenu label="Copy">
       <SkMenuItem @select="last = 'Copied ' + file">File name</SkMenuItem>
+      <SkMenuItem>File path</SkMenuItem>
+      <SkMenuItem>Folder name</SkMenuItem>
+    </SkSubmenu>
+    <SkSubmenu label="Move">
+      <SkMenuItem @select="last = 'Archived ' + file">Archive</SkMenuItem>
     </SkSubmenu>
   </SkContextMenu>
 </template>

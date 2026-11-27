@@ -8,23 +8,34 @@ export interface SkContextMenuHandle<T = unknown> {
   close(): void;
 }
 
-type Location = { anchor: MirrorElement; point?: { x: number; y: number } };
+type Point = { x: number; y: number };
+type Location = { anchor: MirrorElement; point?: Point };
+const enum PointerAt {
+  Trigger,
+  Row,
+  Gap,
+  Reset,
+}
 type Level = {
   root: MirrorElement | null;
   nativeId: number;
   at: Location;
   backdrop: SkMenuBackdrop;
   active: MirrorElement | null;
+  pointer: Point | null;
+  parent: Level | undefined;
+  debugAim: boolean;
   keyboard: boolean;
   hide(): void;
 };
 const levels: Level[] = [];
 const submenus = new WeakMap<MirrorElement, (keyboard: boolean) => void>();
-let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingHover: { level: Level; item: MirrorElement; timer: ReturnType<typeof setTimeout> } | undefined;
 
-function cancelHover() {
-  clearTimeout(hoverTimer);
-  hoverTimer = undefined;
+function cancelHover(level?: Level) {
+  if (!pendingHover || (level && pendingHover.level !== level)) return;
+  clearTimeout(pendingHover.timer);
+  pendingHover = undefined;
 }
 
 function setActive(level: Level, item: MirrorElement | null, keyboard = false) {
@@ -81,24 +92,69 @@ function levelFor(el: MirrorElement | null): Level | undefined {
   return root ? levels.find((level) => level.root === root) : undefined;
 }
 
-function highlight(e: Event) {
-  cancelHover();
-  const target = element(e.target);
-  const level = levelFor(target);
-  const item = target?.closest('[role="menuitem"]');
-  if (!level || !item) return;
-  const enabled = item.getAttribute("aria-disabled") !== "true";
-  setActive(level, enabled ? item : null);
-  const i = levels.indexOf(level);
-  if (levels[i + 1]?.at.anchor === item) return;
-  hoverTimer = setTimeout(() => {
-    closeFrom(i + 1);
-    if (enabled) submenus.get(item)?.(false);
-  }, 160);
+function menuPointer(child: Level, p: Point | null, at: PointerAt): boolean {
+  return (
+    !!child.nativeId &&
+    typeof __sk_context_menu_pointer === "function" &&
+    __sk_context_menu_pointer(child.nativeId, p?.x ?? 0, p?.y ?? 0, at)
+  );
 }
 
-function pressOutside(e: Event) {
-  if (!levelFor(element(e.target))) closeFrom(0);
+function highlight(e: Event) {
+  const target = element(e.target);
+  const level = levelFor(target);
+  if (!level || level.root !== element(e.currentTarget)) return;
+  const { clientX: x, clientY: y } = e as MouseEvent;
+  level.pointer = { x, y };
+  if (level.parent) menuPointer(level, null, PointerAt.Reset);
+  const i = levels.indexOf(level);
+  const child = levels[i + 1];
+  const item = target?.closest('[role="menuitem"]');
+  if (child) {
+    if (item === child.at.anchor) {
+      menuPointer(child, level.pointer, PointerAt.Trigger);
+      setActive(level, item);
+      return;
+    }
+    if (menuPointer(child, level.pointer, item ? PointerAt.Row : PointerAt.Gap)) return;
+  }
+  if (!item) {
+    cancelHover(level);
+    return;
+  }
+  const enabled = item.getAttribute("aria-disabled") !== "true";
+  const open = enabled ? submenus.get(item) : undefined;
+  setActive(level, enabled ? item : null);
+  if (child) {
+    closeFrom(i + 1);
+    open?.(false);
+  } else if (!open) {
+    cancelHover(level);
+  } else if (pendingHover?.item !== item) {
+    cancelHover();
+    pendingHover = {
+      level,
+      item,
+      timer: setTimeout(() => {
+        pendingHover = undefined;
+        if (level.active === item && item.isConnected) open(false);
+      }, 160),
+    };
+  }
+}
+
+function leave(e: Event) {
+  const level = levelFor(element(e.currentTarget));
+  if (!level) return;
+  level.pointer = null;
+  cancelHover(level);
+}
+
+function pointerDown(e: Event) {
+  const level = levelFor(element(e.target));
+  if (!level) return closeFrom(0);
+  const { clientX: x, clientY: y } = e as MouseEvent;
+  level.pointer = { x, y };
 }
 
 function keydown(event: Event) {
@@ -147,6 +203,10 @@ function keydown(event: Event) {
       return;
   }
   cancelHover();
+  for (const entry of levels) {
+    if (entry.parent) menuPointer(entry, null, PointerAt.Reset);
+    entry.pointer = null;
+  }
   if (next) setActive(level, next, true);
   e.preventDefault();
   e.stopImmediatePropagation();
@@ -156,10 +216,10 @@ function listen(on: boolean) {
   if (on) {
     Object.assign(globalThis, { __sk_context_menu_dismiss: dismiss });
     document.addEventListener("keydown", keydown, true);
-    document.addEventListener("mousedown", pressOutside, true);
+    document.addEventListener("mousedown", pointerDown, true);
   } else {
     document.removeEventListener("keydown", keydown, true);
-    document.removeEventListener("mousedown", pressOutside, true);
+    document.removeEventListener("mousedown", pointerDown, true);
   }
 }
 
@@ -177,6 +237,7 @@ function location(from: SkMenuAnchor): Location | null {
 export function createContextMenu<T>(
   backdrop: () => SkMenuBackdrop | undefined,
   show: (open: boolean, context?: T) => void,
+  debugAim?: () => boolean,
 ) {
   let root: MirrorElement | null = null;
   let level: Level | null = null;
@@ -186,7 +247,17 @@ export function createContextMenu<T>(
     level.root = root;
     level.nativeId = root.__skId;
     const { anchor, point } = level.at;
-    __sk_context_menu_open(root.__skId, anchor.__skId, point?.x, point?.y, levels.indexOf(level) > 0, level.backdrop);
+    __sk_context_menu_open(
+      root.__skId,
+      anchor.__skId,
+      point?.x,
+      point?.y,
+      !!level.parent,
+      level.backdrop,
+      level.parent?.nativeId ?? 0,
+      level.debugAim,
+    );
+    if (level.parent?.pointer && !level.keyboard) menuPointer(level, level.parent.pointer, PointerAt.Trigger);
     if (level.keyboard) setActive(level, items(level)[0] ?? null, true);
   }
 
@@ -197,11 +268,15 @@ export function createContextMenu<T>(
   function start(at: Location, context: T | undefined, parent: Level | undefined, keyboard: boolean) {
     closeFrom(parent ? levels.indexOf(parent) + 1 : 0);
     if (!levels.length) listen(true);
+    if (parent) setActive(parent, at.anchor, keyboard);
     level = {
       root,
       nativeId: 0,
       at,
       active: null,
+      pointer: null,
+      parent,
+      debugAim: parent?.debugAim ?? debugAim?.() ?? false,
       keyboard,
       backdrop: backdrop() ?? parent?.backdrop ?? "acrylic",
       hide() {
@@ -230,11 +305,13 @@ export function createContextMenu<T>(
       const el = element(node);
       if (el === root) return;
       root?.removeEventListener("mouseover", highlight);
-      root?.removeEventListener("mouseleave", cancelHover);
+      root?.removeEventListener("mousemove", highlight);
+      root?.removeEventListener("mouseleave", leave);
       root = el;
       if (root) {
         root.addEventListener("mouseover", highlight);
-        root.addEventListener("mouseleave", cancelHover);
+        root.addEventListener("mousemove", highlight);
+        root.addEventListener("mouseleave", leave);
         present();
       }
     },

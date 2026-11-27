@@ -25,8 +25,10 @@
     }),
   );
   let extra = $state(false);
+  let debugAim = $state(false);
   let detached = $state(false);
   Object.assign(globalThis, {
+    showMenuAim: (value: boolean) => (debugAim = value),
     resizeMenu: () => (extra = !extra),
     showDetached: (value: boolean) => (detached = value),
     closeMenu: () => menu?.close(),
@@ -46,7 +48,7 @@
     <button id="detached-trigger" onclick={(e) => menu?.open(e.currentTarget, "Detached.txt")}>Detached.txt</button>
   </SkWindow>
 {/if}
-<SkContextMenu bind:this={menu} aria-label="File actions" backdrop="acrylic">
+<SkContextMenu bind:this={menu} aria-label="File actions" backdrop="acrylic" {debugAim}>
   {#snippet children({ context: file })}
     <SkMenuItem onselect={() => (last = "Opened " + file)}>Open</SkMenuItem>
     <SkMenuItem disabled>Rename <SkKbd keys="F2" variant="plain" /></SkMenuItem>
@@ -59,6 +61,11 @@
     <SkMenuSeparator />
     <SkSubmenu label="Copy">
       <SkMenuItem onselect={() => (last = "Copied " + file)}>File name</SkMenuItem>
+      <SkMenuItem>File path</SkMenuItem>
+      <SkMenuItem>Folder name</SkMenuItem>
+    </SkSubmenu>
+    <SkSubmenu label="Move">
+      <SkMenuItem onselect={() => (last = "Archived " + file)}>Archive</SkMenuItem>
     </SkSubmenu>
   {/snippet}
 </SkContextMenu>

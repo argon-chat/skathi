@@ -148,7 +148,7 @@ test("Context menu pins a file and moves it to another folder from its submenu",
 
   await actions.press("Shift+F10");
   await app.locator('[role="menu"]').waitFor();
-  await app.press("End");
+  await app.press("ArrowDown");
   await app.press("ArrowRight");
   await app.locator('[role="menu"][aria-label="Move to"]').waitFor();
   await app.press("Enter");

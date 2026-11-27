@@ -337,8 +337,11 @@ declare function __sk_context_menu_open(
   y: number | undefined,
   submenu: boolean,
   backdrop: string,
+  parent: number,
+  debugAim: boolean,
 ): void;
 declare function __sk_context_menu_close(root: number): void;
+declare function __sk_context_menu_pointer(root: number, x: number, y: number, at: 0 | 1 | 2 | 3): boolean;
 declare function __sk_window_popouts(): SkJson;
 
 /** TEST SURFACE. Dispatches a real platform click at the window's own client coordinates; `true` if it landed. */

@@ -5,12 +5,18 @@ use gpui::{AnyElement, App, Context, Window, WindowBackgroundAppearance};
 use crate::popup::{self, Placement, Slot};
 use crate::windows::{self, Rect, WinKey};
 
+pub(crate) mod aim;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Menu {
     pub root: u32,
     pub anchor: u32,
     owner: WinKey,
     point: Option<(f32, f32)>,
+    bounds_in_owner: Option<Rect>,
+    parent: u32,
+    aim: Option<aim::Aim>,
+    pub debug_aim: bool,
     pub placement: Placement,
     pub backdrop: WindowBackgroundAppearance,
     pub prepare_window: fn(&Window, &App) -> Option<gpui::Rgba>,
@@ -26,6 +32,8 @@ pub fn open(
     anchor: u32,
     point: Option<(f32, f32)>,
     submenu: bool,
+    parent: u32,
+    debug_aim: bool,
     backdrop: WindowBackgroundAppearance,
     prepare_window: fn(&Window, &App) -> Option<gpui::Rgba>,
 ) {
@@ -45,6 +53,10 @@ pub fn open(
             anchor,
             owner,
             point,
+            bounds_in_owner: None,
+            parent,
+            aim: None,
+            debug_aim,
             placement,
             backdrop,
             prepare_window,
@@ -57,6 +69,84 @@ pub fn open(
     });
 }
 
+pub(crate) fn placed(root: u32, bounds: Rect, cx: &mut App) {
+    MENUS.with_borrow_mut(|menus| {
+        let Some(m) = menus.iter_mut().find(|m| m.root == root) else {
+            return;
+        };
+        if m.bounds_in_owner == Some(bounds) {
+            return;
+        }
+        m.bounds_in_owner = Some(bounds);
+        if m.debug_aim && m.aim.is_some() {
+            aim::reposition(m.parent, root, aim::Zone::new(m.aim, Some(bounds)));
+            refresh_trace(m.owner, cx);
+        }
+    });
+}
+
+fn refresh_trace(owner: WinKey, cx: &mut App) {
+    cx.defer(move |cx| {
+        if let Some(handle) = popup::handle_of(owner, cx) {
+            let _ = handle.update(cx, |_, window, _| {
+                // A submenu can finish opening after its idle parent has already painted.
+                window.on_next_frame(|window, _| window.refresh());
+            });
+        }
+    });
+}
+
+#[derive(PartialEq, Eq)]
+pub enum PointerAt {
+    Trigger,
+    Row,
+    Gap,
+    Reset,
+}
+
+/// Updates the submenu approach and returns whether the crossed row should yield.
+pub fn pointer(root: u32, p: (f32, f32), at: PointerAt) -> bool {
+    MENUS.with_borrow_mut(|menus| {
+        let Some(m) = menus
+            .iter_mut()
+            .find(|m| m.root == root && m.placement == Placement::Beside)
+        else {
+            return false;
+        };
+        if at == PointerAt::Reset {
+            m.aim = None;
+            return false;
+        }
+        if at == PointerAt::Trigger {
+            m.aim = Some(aim::Aim::on_trigger(m.aim, p));
+            if !m.debug_aim {
+                return false;
+            }
+        }
+        let zone = aim::Zone::new(m.aim, m.bounds_in_owner);
+        let hit = zone.hit(p);
+        if at != PointerAt::Trigger {
+            if let (Some(a), Some(d)) = (&mut m.aim, hit) {
+                a.advance(d, p.0);
+            }
+        }
+        if m.debug_aim {
+            let state = if at == PointerAt::Trigger {
+                aim::State::Tracking
+            } else if hit.is_some() {
+                aim::State::Held
+            } else if at == PointerAt::Row {
+                aim::State::Released
+            } else {
+                aim::State::Tracking
+            };
+            aim::record(m.parent, root, zone, state, p);
+            sk_runtime::with_app(|cx| refresh_trace(m.owner, cx));
+        }
+        hit.is_some()
+    })
+}
+
 /// Closes a menu and cancels a pending native open for the same subtree.
 pub fn close(root: u32, cx: &mut App) -> bool {
     let menu = MENUS.with(|menus| {
@@ -65,6 +155,9 @@ pub fn close(root: u32, cx: &mut App) -> bool {
         Some(menus.remove(i))
     });
     if let Some(menu) = menu {
+        if menu.debug_aim {
+            aim::clear(root);
+        }
         popup::close(Slot::Menu(root), menu.anchor, cx);
         crate::set_popped_out(root, false);
         crate::tree::with_tree(|t| {

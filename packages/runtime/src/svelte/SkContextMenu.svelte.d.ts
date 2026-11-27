@@ -4,6 +4,7 @@ import type { SkContextMenuHandle, SkMenuBackdrop } from "../context-menu";
 
 type Props<T> = Omit<HTMLAttributes<HTMLDivElement>, "children" | "onclose"> & {
   backdrop?: SkMenuBackdrop;
+  debugAim?: boolean;
   onclose?: () => void;
   children?: Snippet<[{ context: T | undefined }]>;
 };

@@ -31,23 +31,21 @@ pub(super) fn locate(
     size: (f32, f32),
     margin: f32,
     placement: super::Placement,
-) -> Result<Place, &'static str> {
+) -> Result<(Place, Option<Rect>), &'static str> {
     let (anchor, work, owner) = anchor(window, rect).ok_or("no screen under the anchor")?;
     let s = window.scale_factor();
     let device = |r: Rect| (r.0 * s, r.1 * s, r.2 * s, r.3 * s);
-    Ok(Place {
-        frame: super::frame_in(
-            placement,
-            device(anchor),
-            device(work),
-            gap,
-            size,
-            margin,
-            s,
-        ),
-        scale: s,
-        owner: owner as usize,
-    })
+    let anchor = device(anchor);
+    let frame = super::frame_in(placement, anchor, device(work), gap, size, margin, s);
+    let bounds = super::in_owner(frame, rect, anchor, s);
+    Ok((
+        Place {
+            frame,
+            scale: s,
+            owner: owner as usize,
+        },
+        Some(bounds),
+    ))
 }
 
 pub(super) fn room(window: &Window, rect: Rect, gap: f32) -> Option<f32> {

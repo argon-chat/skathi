@@ -143,7 +143,7 @@ fn reset_bounds(win: WinKey) {
     });
 }
 
-fn rect_of(bounds: gpui::Bounds<gpui::Pixels>) -> Rect {
+pub(crate) fn rect_of(bounds: gpui::Bounds<gpui::Pixels>) -> Rect {
     (
         f32::from(bounds.origin.x),
         f32::from(bounds.origin.y),

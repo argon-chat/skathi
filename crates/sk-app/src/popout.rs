@@ -530,10 +530,12 @@ host_fn!(fn sk_context_menu_open(g, args) {
     let point = args.arg(2).as_number().zip(args.arg(3).as_number())
         .filter(|(x,y)| x.is_finite() && y.is_finite()).map(|(x,y)| (x as f32,y as f32));
     let submenu = args.arg(4).as_bool().unwrap_or(false);
+    let parent = args.arg(6).as_number().unwrap_or_default() as u32;
+    let debug_aim = args.arg(7).as_bool().unwrap_or(false);
     let backdrop = unsafe { read_string(g, args.arg(5).0) }
         .and_then(|name| Backdrop::parse(&name)).unwrap_or(Backdrop::Acrylic);
     if root != anchor && sk_tree::with_tree(|t| t.node(root).is_some() && t.node(anchor).is_some()) {
-        sk_tree::context_menu::open(root, anchor, point, submenu, backdrop.to_gpui(), |window, cx| {
+        sk_tree::context_menu::open(root, anchor, point, submenu, parent, debug_aim, backdrop.to_gpui(), |window, cx| {
             let size = window.viewport_size();
             let env = crate::window::popout_env(window, cx, (size.width.into(), size.height.into()), false, 0.0);
             sk_tree::set_env_for(sk_tree::windows::key(window), env);
@@ -547,6 +549,18 @@ host_fn!(fn sk_context_menu_close(_g, args) {
     let root = args.arg(0).as_number().unwrap_or_default() as u32;
     with_app(|cx| sk_tree::context_menu::close(root, cx));
     UNDEF
+});
+
+host_fn!(fn sk_context_menu_pointer(_g, args) {
+    use sk_tree::context_menu::PointerAt;
+    let root = args.arg(0).as_number().unwrap_or_default() as u32;
+    let at = match args.arg(3).as_number() {
+        Some(0.) => PointerAt::Trigger, Some(1.) => PointerAt::Row,
+        Some(2.) => PointerAt::Gap, Some(3.) => PointerAt::Reset,
+        _ => return Value::boolean(false).0,
+    };
+    let point = args.arg(1).as_number().zip(args.arg(2).as_number());
+    Value::boolean(point.is_some_and(|(x,y)| sk_tree::context_menu::pointer(root, (x as f32, y as f32), at))).0
 });
 
 host_fn!(fn sk_window_open(g, args) {
@@ -1854,13 +1868,18 @@ pub fn install(rt: &JsRuntime) {
     );
     rt.register(
         "__sk_context_menu_open",
-        6,
+        8,
         sk_context_menu_open as *const _,
     );
     rt.register(
         "__sk_context_menu_close",
         1,
         sk_context_menu_close as *const _,
+    );
+    rt.register(
+        "__sk_context_menu_pointer",
+        4,
+        sk_context_menu_pointer as *const _,
     );
     rt.register("__sk_window_open", 4, sk_window_open as *const _);
     rt.register("__sk_window_close", 1, sk_window_close_popout as *const _);

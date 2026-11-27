@@ -6,12 +6,14 @@
 
   let {
     backdrop,
+    debugAim = false,
     onclose,
     children,
     class: className,
     ...attrs
   }: Omit<HTMLAttributes<HTMLDivElement>, "children" | "onclose"> & {
     backdrop?: SkMenuBackdrop;
+    debugAim?: boolean;
     onclose?: () => void;
     children?: Snippet<[{ context: T | undefined }]>;
   } = $props();
@@ -24,6 +26,7 @@
       context = data;
       if (!value) onclose?.();
     },
+    () => debugAim,
   );
 
   export function open(anchor: SkMenuAnchor, context?: T) {

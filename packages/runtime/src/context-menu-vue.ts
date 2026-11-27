@@ -8,7 +8,7 @@ const preventFocus = (event: MouseEvent) => event.preventDefault();
 export const SkContextMenu = /*@__PURE__*/ defineComponent({
   name: "SkContextMenu",
   inheritAttrs: false,
-  props: { backdrop: backdropProp },
+  props: { backdrop: backdropProp, debugAim: Boolean },
   emits: ["close"],
   setup(props, { attrs, slots, expose, emit }) {
     const visible = ref(false);
@@ -20,6 +20,7 @@ export const SkContextMenu = /*@__PURE__*/ defineComponent({
         context.value = value;
         if (!open) emit("close");
       },
+      () => props.debugAim,
     );
     const attach: VNodeRef = (el) => menu.attach(el as HTMLElement | null);
     expose({ open: menu.open, close: menu.close });

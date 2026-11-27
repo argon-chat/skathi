@@ -71,6 +71,7 @@ impl Popup {
             gap: self.gap,
             child: (self.build)(),
             placed: self.placed,
+            menu: None,
         })
         .priority(1)
         .with_stack_key(Rc::from([u128::MAX]))
@@ -110,7 +111,7 @@ pub(crate) fn in_window(
     }
 }
 
-fn handle_of(k: WinKey, cx: &App) -> Option<gpui::AnyWindowHandle> {
+pub(super) fn handle_of(k: WinKey, cx: &App) -> Option<gpui::AnyWindowHandle> {
     HOSTS
         .with(|h| {
             h.borrow()
@@ -126,6 +127,7 @@ fn handle_of(k: WinKey, cx: &App) -> Option<gpui::AnyWindowHandle> {
 }
 
 struct Placed {
+    menu: Option<(u32, bool)>,
     anchor: u32,
     fallback: Rect,
     fixed: Option<Rect>,
@@ -203,9 +205,12 @@ impl gpui::Element for Placed {
         );
         let origin = gpui::point(px(x), px(y));
         let offset = origin - laid.origin;
-        window.with_element_offset(gpui::point(offset.x.round(), offset.y.round()), |window| {
-            self.child.prepaint(window, cx)
-        });
+        let offset = gpui::point(offset.x.round(), offset.y.round());
+        window.with_element_offset(offset, |window| self.child.prepaint(window, cx));
+        if let Some((root, _)) = self.menu {
+            let painted = Bounds::new(laid.origin + offset, laid.size);
+            crate::context_menu::placed(root, crate::render::rect_of(painted), cx);
+        }
         (self.placed)(
             k,
             self.anchor,
@@ -227,6 +232,9 @@ impl gpui::Element for Placed {
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
+        if let Some((root, true)) = self.menu {
+            crate::context_menu::aim::paint(root, window);
+        }
     }
 }
 
@@ -324,6 +332,7 @@ pub(crate) fn menu_element(
 ) -> AnyElement {
     if !native() {
         return gpui::deferred(Placed {
+            menu: Some((menu.root, menu.debug_aim)),
             anchor: menu.anchor,
             fallback: (0., 0., 0., 0.),
             fixed,
@@ -437,6 +446,17 @@ fn frame_in(
     ]
 }
 
+/// Maps a placed frame back to the opener's CSS pixels using the anchor common to both spaces.
+fn in_owner(frame: [i32; 4], local: Rect, screen: Rect, owner_scale: f32) -> Rect {
+    let [x, y, w, h] = frame.map(|v| v as f32);
+    (
+        local.0 + (x - screen.0) / owner_scale,
+        local.1 + (y - screen.1) / owner_scale,
+        w / owner_scale,
+        h / owner_scale,
+    )
+}
+
 struct Text {
     font: gpui::Font,
     size: Pixels,
@@ -530,6 +550,9 @@ impl Render for Root {
             Body::Widget(build) => root.child(build()),
             Body::Menu(menu) => {
                 windows::set_painted_root(windows::key(window), menu.root);
+                if let Some(bounds) = window.popup_bounds_in_parent() {
+                    crate::context_menu::placed(menu.root, crate::render::rect_of(bounds), cx);
+                }
                 let fill = (menu.prepare_window)(window, cx);
                 if let Some(fill) =
                     fill.filter(|_| menu.backdrop == gpui::WindowBackgroundAppearance::Opaque)
@@ -537,7 +560,20 @@ impl Render for Root {
                     root = root.bg(fill);
                 }
                 crate::window_content_tick(window, cx);
-                root.child(crate::render::build_subtree(menu.root, window, cx))
+                let id = menu.root;
+                root.child(crate::render::build_subtree(id, window, cx))
+                    .when(menu.debug_aim, |root| {
+                        root.child(
+                            gpui::canvas(
+                                |_, _, _| (),
+                                move |_, _, window, _| {
+                                    crate::context_menu::aim::paint(id, window);
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                    })
             }
         }
     }
@@ -601,7 +637,7 @@ fn show(req: Request, window: &mut Window, cx: &mut App) {
         Body::Menu(menu) => menu.placement,
         Body::Widget(_) => Placement::Below,
     };
-    let place = match plat::locate(
+    let (place, in_owner) = match plat::locate(
         window,
         req.rect,
         req.gap,
@@ -612,6 +648,9 @@ fn show(req: Request, window: &mut Window, cx: &mut App) {
         Ok(place) => place,
         Err(why) => return give_up(why, k, cx),
     };
+    if let (Body::Menu(menu), Some(bounds)) = (&req.content.body, in_owner) {
+        crate::context_menu::placed(menu.root, bounds, cx);
+    }
     let owner_bounds = window.bounds();
     let owner_handle = window.window_handle();
     cx.defer(move |cx| apply(req, k, owner_handle, owner_bounds, place, cx));

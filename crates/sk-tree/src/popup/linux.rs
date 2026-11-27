@@ -53,18 +53,23 @@ pub(super) fn locate(
     size: (f32, f32),
     margin: f32,
     placement: super::Placement,
-) -> Result<Place, &'static str> {
+) -> Result<(Place, Option<Rect>), &'static str> {
     match kind(window).ok_or("the window is neither X11 nor Wayland")? {
         Kind::X11(owner) => {
             let s = window.scale_factor();
             let found = x11::anchor(owner, s, rect, window.bounds())
                 .ok_or("no monitor under the anchor")?;
-            Ok(Place::X11 {
-                spot: super::frame_in(placement, found.rect, found.work, gap, size, margin, s),
-                inset: (margin * s).round() as i32,
-                scale: s,
-                above: found.top_level,
-            })
+            let spot = super::frame_in(placement, found.rect, found.work, gap, size, margin, s);
+            let bounds = super::in_owner(spot, rect, found.rect, s);
+            Ok((
+                Place::X11 {
+                    spot,
+                    inset: (margin * s).round() as i32,
+                    scale: s,
+                    above: found.top_level,
+                },
+                Some(bounds),
+            ))
         }
         Kind::Wayland => {
             // Compositors do not agree on whether a flip mirrors the positioner's offset, so the
@@ -78,14 +83,17 @@ pub(super) fn locate(
             } else {
                 (below - 1.0, 1.0)
             };
-            Ok(Place::Wayland {
-                placement,
-                anchor: Bounds {
-                    origin: gpui::point(px(x - margin), px(top)),
-                    size: gpui::size(px(w.max(1.0)), px(height)),
+            Ok((
+                Place::Wayland {
+                    placement,
+                    anchor: Bounds {
+                        origin: gpui::point(px(x - margin), px(top)),
+                        size: gpui::size(px(w.max(1.0)), px(height)),
+                    },
+                    size: gpui::size(px(size.0 + 2.0 * margin), px(size.1 + 2.0 * margin)),
                 },
-                size: gpui::size(px(size.0 + 2.0 * margin), px(size.1 + 2.0 * margin)),
-            })
+                None,
+            ))
         }
     }
 }
@@ -234,8 +242,9 @@ pub(super) fn update(
                 return false;
             }
             if s != size {
-                let size = *size;
-                let _ = popup.update(cx, |_, window, _| window.resize(size));
+                return popup
+                    .update(cx, |_, window, _| window.try_resize_popup(*size))
+                    .unwrap_or(false);
             }
             true
         }
