@@ -403,7 +403,7 @@ pub enum MetalFrameSource {
     Auto,
     /// Only `CAMetalDisplayLink` (macOS 14+; `nextDrawable` where it does not exist).
     DisplayLink,
-    /// Only `nextDrawable`, paced by `CVDisplayLink`.
+    /// `CVDisplayLink` paces draws into `nextDrawable`. Frames present with their Core Animation transaction.
     NextDrawable,
 }
 
