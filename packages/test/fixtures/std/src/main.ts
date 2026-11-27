@@ -1,5 +1,5 @@
 import { appShell as fromRuntime, createApp, h } from "@skathi-native/runtime";
-import { app, appShell } from "skathi:app";
+import { app, appNotifications, appShell } from "skathi:app";
 import { network } from "skathi:network";
 import { u8 } from "skathi:numeric";
 import { OS, os } from "skathi:os";
@@ -73,6 +73,7 @@ const attempt = (run: () => void): string => {
 Object.assign(globalThis, {
   __SK_TEST_STD__: {
     app,
+    appNotifications,
     toml: () => JSON.stringify(toml()),
     binary: () => JSON.stringify(binary()),
     encoding: () => JSON.stringify(encoding()),

@@ -49,6 +49,7 @@ fn wide(s: &str) -> Vec<u16> {
 const CONSENT: &str =
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";
 const PUSH_NOTIFICATIONS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications";
+const TOAST_POLICY: &str = r"SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications";
 /// Honoured as a DENY overlay only: its documented scope is packaged apps, so it never forces
 /// `Granted` over a user toggle.
 const APP_PRIVACY_POLICY: &str = r"SOFTWARE\Policies\Microsoft\Windows\AppPrivacy";
@@ -80,7 +81,6 @@ fn policy_value(cap: Capability) -> Option<&'static str> {
         Capability::Microphone => Some("LetAppsAccessMicrophone"),
         Capability::Camera => Some("LetAppsAccessCamera"),
         Capability::Geolocation => Some("LetAppsAccessLocation"),
-        Capability::Notifications => Some("LetAppsAccessNotifications"),
         _ => None,
     }
 }
@@ -227,9 +227,15 @@ pub fn read_state(cap: Capability) -> PermissionState {
     }
 }
 
-/// Toast state: the global `ToastEnabled` and per-AUMID `Enabled` (both absent = on). The user
+/// User or device policy and the global and per-AUMID switches can each block posting.
 fn notifications_state() -> PermissionState {
-    if read_dword(HKEY_CURRENT_USER, PUSH_NOTIFICATIONS, "ToastEnabled") == Some(0) {
+    // WPN.admx "Turn off toast notifications" applies to both user and device.
+    // The AppPrivacy notification switch governs reading other apps' notifications.
+    if [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER]
+        .into_iter()
+        .any(|root| read_dword(root, TOAST_POLICY, "NoToastApplicationNotification") == Some(1))
+        || read_dword(HKEY_CURRENT_USER, PUSH_NOTIFICATIONS, "ToastEnabled") == Some(0)
+    {
         return PermissionState::Denied;
     }
     match aumid() {
@@ -526,6 +532,11 @@ fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
         .collect();
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         out.push((root, APP_PRIVACY_POLICY.to_string(), policed.clone()));
+        out.push((
+            root,
+            TOAST_POLICY.to_string(),
+            vec![Capability::Notifications],
+        ));
     }
     out
 }

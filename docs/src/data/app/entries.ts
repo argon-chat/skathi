@@ -6,6 +6,7 @@ import { host } from "./host";
 import { hotkeys } from "./hotkeys";
 import { launch } from "./launch";
 import { locale } from "./locale";
+import { notifications } from "./notifications";
 import { permissions } from "./permissions";
 import { categories, type AppEntry, type Category } from "./shared";
 import { shell } from "./shell";
@@ -16,6 +17,8 @@ export { categories };
 export type { AppEntry, Category };
 
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
+  Notifications:
+    "`appNotifications` posts and withdraws desktop notifications. Use a stable ID to update a card and register a handler to receive opens, button clicks and replies.",
   Tray: "`appTray` puts one icon in the Windows notification area or the macOS menu bar, with a tooltip, a menu and a click handler; each `set()` replaces the whole model. Linux has no tray: `available` is `false`. See [Closing and running in the background](/guides/closing-and-background/).",
   "Global hotkeys":
     "`appHotkeys` watches the keyboard and mouse system-wide, also while another app has the focus, and reports a `down` and an `up` for each binding. Keys are Windows virtual-key codes on every platform. On macOS the app needs Accessibility access; Linux has no global hotkeys.",
@@ -41,6 +44,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
 
 export const entries: readonly AppEntry[] = [
   ...tray,
+  ...notifications,
   ...hotkeys,
   ...haptics,
   ...storage,

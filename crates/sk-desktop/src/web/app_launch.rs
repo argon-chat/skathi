@@ -305,7 +305,7 @@ pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
     host::method(g, obj, "isProtocolRegistered", 1, is_protocol_registered);
 
     // Once per process: a reload is not a launch.
-    if !OWN_LAUNCH.swap(true, Ordering::AcqRel) {
+    if take_own_launch(&OWN_LAUNCH, crate::args::process_toast_activation()) {
         enqueue(
             g,
             info["url"].as_str().map(str::to_string),
@@ -314,10 +314,25 @@ pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
     }
 }
 
+fn take_own_launch(seen: &AtomicBool, toast_activation: bool) -> bool {
+    !seen.swap(true, Ordering::AcqRel) && !toast_activation
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
     use sk_runtime::JsRuntime;
+
+    #[test]
+    fn a_toast_launch_does_not_enqueue_an_ordinary_launch_on_startup_or_reload() {
+        let seen = super::AtomicBool::new(false);
+        assert!(!super::take_own_launch(&seen, true));
+        assert!(!super::take_own_launch(&seen, false));
+
+        let seen = super::AtomicBool::new(false);
+        assert!(super::take_own_launch(&seen, false));
+        assert!(!super::take_own_launch(&seen, false));
+    }
 
     #[test]
     fn launches_queue_until_a_consumer_and_fire_the_event() {

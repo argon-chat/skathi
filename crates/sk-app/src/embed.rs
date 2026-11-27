@@ -102,6 +102,8 @@ pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
 
 struct Config {
     data_dir: Option<PathBuf>,
+    #[cfg(windows)]
+    profile_overridden: bool,
     #[cfg(feature = "storages")]
     storage_encrypted: Option<bool>,
     visible: bool,
@@ -186,6 +188,18 @@ pub(crate) fn storage_encrypted() -> Option<bool> {
 
 pub(crate) fn data_dir() -> Option<&'static Path> {
     CONFIG.get()?.data_dir.as_deref()
+}
+
+/// The environment's profile override, if this launch uses it.
+pub fn data_dir_override() -> Option<PathBuf> {
+    std::env::var_os("SK_DATA_DIR")
+        .filter(|path| !path.is_empty() && !sk_desktop::args::process_toast_activation())
+        .map(PathBuf::from)
+}
+
+#[cfg(windows)]
+pub(crate) fn profile_overridden() -> bool {
+    CONFIG.get().is_some_and(|c| c.profile_overridden)
 }
 
 fn resolve_data_dir(
@@ -756,7 +770,21 @@ impl Builder {
         if let Some(problem) = self.module_problem() {
             return Err(Error::Module(problem));
         }
-        let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("SK_DATA_DIR"))?;
+        let profile_override = data_dir_override();
+        let profile_overridden = profile_override.is_some();
+        #[cfg(windows)]
+        let profile_overridden = profile_overridden
+            && !self
+                .data_dir
+                .as_deref()
+                .zip(profile_override.as_deref())
+                .is_some_and(|(configured, override_dir)| {
+                    sk_desktop::launch::same_profile_dir(configured, override_dir)
+                });
+        let profile_override = profile_override
+            .filter(|_| profile_overridden)
+            .map(PathBuf::into_os_string);
+        let data_dir = resolve_data_dir(self.data_dir.take(), profile_override)?;
         #[cfg(not(feature = "storages"))]
         if self.storage_encrypted.is_some() {
             return Err(Error::DataDirectory(
@@ -775,15 +803,19 @@ impl Builder {
             // would corrupt quotes and repeated spaces inside a deep link.
             let args = sk_desktop::args::process();
             let launch = crate::boot_mode::launch_config();
-            if let sk_desktop::launch::Outcome::Exit(code) =
-                sk_desktop::launch::start_with_activation(
-                    args,
-                    launch.as_deref(),
-                    crate::boot_mode::app_name(),
-                    None,
-                    requests_activation(self.activate, self.visible),
-                )
-            {
+            if let sk_desktop::launch::Outcome::Exit(code) = sk_desktop::launch::start_with_profile(
+                args,
+                launch.as_deref(),
+                crate::boot_mode::app_name(),
+                None,
+                requests_activation(self.activate, self.visible)
+                    && !crate::notifications::background_launch(),
+                if profile_overridden {
+                    data_dir.as_deref()
+                } else {
+                    None
+                },
+            ) {
                 return Err(Error::LaunchExit(code));
             }
             sk_desktop::launch::register_declared();
@@ -819,6 +851,8 @@ impl Builder {
         }
         let config = Config {
             data_dir,
+            #[cfg(windows)]
+            profile_overridden,
             #[cfg(feature = "storages")]
             storage_encrypted: self.storage_encrypted,
             visible: self.visible,

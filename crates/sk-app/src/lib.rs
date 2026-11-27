@@ -77,6 +77,7 @@ mod memory;
 mod microphone;
 #[cfg(feature = "native-aot")]
 mod native_aot;
+mod notifications;
 mod occlusion;
 mod owner;
 mod payload;
@@ -1061,9 +1062,13 @@ pub fn run_exe() {
         } else {
             boot_mode::app_name()
         };
-        if let sk_desktop::launch::Outcome::Exit(code) =
-            sk_desktop::launch::start(args, launch_cfg.as_deref(), build_name, dev_slot)
-        {
+        if let sk_desktop::launch::Outcome::Exit(code) = sk_desktop::launch::start_with_activation(
+            args,
+            launch_cfg.as_deref(),
+            build_name,
+            dev_slot,
+            !notifications::background_launch(),
+        ) {
             std::process::exit(code);
         }
         if !args.host.devtools {
@@ -1093,7 +1098,13 @@ pub fn run_exe() {
 pub(crate) fn run_embedded() {
     let args = sk_desktop::args::process();
     if !embed::desktop_launch_prepared() {
-        let _ = sk_desktop::launch::start(args, None, boot_mode::app_name(), None);
+        let _ = sk_desktop::launch::start_with_activation(
+            args,
+            None,
+            boot_mode::app_name(),
+            None,
+            !notifications::background_launch(),
+        );
     }
     run_app();
     shutdown::finish();
@@ -1102,6 +1113,9 @@ pub(crate) fn run_embedded() {
 fn run_app() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
+    if !sk_desktop::args::process().host.devtools {
+        notifications::initialize();
+    }
     #[cfg(target_os = "windows")]
     if let Err(error) = gpui_windows::install_device_loss_observer(on_device_loss) {
         log::warn!("[gpu] {error:#}");
@@ -1128,6 +1142,8 @@ fn run_app() {
         app
     };
     app.run(|cx: &mut App| {
+        #[cfg(target_os = "linux")]
+        notifications::set_display(cx.compositor_name());
         #[cfg(target_os = "macos")]
         shutdown::observe_appkit_termination();
         // `--devtools`: the app is the inspector, from this executable.
@@ -1328,6 +1344,7 @@ fn run_app() {
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;
+                notifications::install(rt)?;
                 #[cfg(feature = "hotkeys")]
                 hotkeys::install(rt)?;
             }
@@ -1346,8 +1363,9 @@ fn run_app() {
         }
 
         let (bounds, display_id) = placement::initial_bounds(&cfg, cx);
-        let startup_visible = embed::visible();
-        let startup_focus = !devtools_mode && !quiet::never_focus() && embed::activates();
+        let notification_launch = notifications::background_launch();
+        let startup_visible = embed::visible() && !notification_launch;
+        let startup_focus = !notification_launch && !devtools_mode && !quiet::never_focus() && embed::activates();
         if startup_visible {
             window::begin_startup_reveal();
         }
@@ -1540,6 +1558,13 @@ fn run_app() {
             return;
         }
         refresh_main(cx);
+        // AppKit can deliver the action while the first JS context is starting.
+        let notification_launch = notification_launch || notifications::background_launch();
+        if notification_launch && startup_visible {
+            window::cancel_startup_reveal();
+        }
+        let startup_visible = startup_visible && !notification_launch;
+        let startup_focus = startup_focus && !notification_launch;
         if startup_visible {
             if let Some(handle) = MAIN_WINDOW.with(|w| w.get()) {
                 let _ = handle.update(cx, |_, window, cx| window::prepare_startup_reveal(window, cx));
@@ -1558,11 +1583,13 @@ fn run_app() {
             }
         }
         // A hidden window has no frame callback to own the boot wave: start its background clock.
-        if !embed::visible() {
+        if !startup_visible {
             background::note_frame();
-            reveal_if_unreachable(cx);
+            if !notification_launch {
+                reveal_if_unreachable(cx);
+            }
         }
-        if !devtools_mode && !quiet::never_focus() && embed::activates() {
+        if startup_focus && !notifications::background_launch() {
             cx.activate(true);
         }
         #[cfg(sk_devtools)]

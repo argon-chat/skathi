@@ -4,11 +4,16 @@
 //! Screen recording has no "not determined": a grant made in System Settings takes effect after a
 //! relaunch, so a refused screen request reads `denied` for the rest of the run.
 
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use objc2::{class, msg_send, runtime::Bool};
-use objc2_foundation::{NSBundle, NSString};
+use objc2_foundation::{NSBundle, NSError, NSString};
+use objc2_user_notifications::{
+    UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
+};
 use sk_runtime::redjs::webapi::permissions::{
     Capability, PermissionHost, PermissionState, RequestOutcome,
 };
@@ -39,6 +44,114 @@ fn media_type(media: Media) -> &'static NSString {
 
 pub struct MacHost {
     requests: OnceLock<Arc<Mutex<Requests>>>,
+}
+
+/// UserNotifications aborts when instantiated outside an application bundle.
+pub fn notification_bundle_available() -> bool {
+    static BUNDLED: OnceLock<bool> = OnceLock::new();
+    *BUNDLED.get_or_init(|| {
+        let bundle = NSBundle::mainBundle();
+        bundle.bundleIdentifier().is_some() && bundle.bundlePath().to_string().ends_with(".app")
+    })
+}
+
+struct NotificationSnapshot {
+    generation: u64,
+    completed_generation: u64,
+    last_read: Option<Instant>,
+    state: Option<PermissionState>,
+    changed: bool,
+}
+
+static NOTIFICATION_SETTINGS: Mutex<NotificationSnapshot> = Mutex::new(NotificationSnapshot {
+    generation: 0,
+    completed_generation: 0,
+    last_read: None,
+    state: None,
+    changed: false,
+});
+
+fn read_notification_settings(complete: impl Fn(PermissionState) + Send + Sync + 'static) {
+    let completion = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+        // SAFETY: the center owns settings for the duration of this callback.
+        let state = match unsafe { settings.as_ref() }.authorizationStatus() {
+            UNAuthorizationStatus::NotDetermined => PermissionState::Prompt,
+            UNAuthorizationStatus::Authorized
+            | UNAuthorizationStatus::Provisional
+            | UNAuthorizationStatus::Ephemeral => PermissionState::Granted,
+            _ => PermissionState::Denied,
+        };
+        complete(state);
+    });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .getNotificationSettingsWithCompletionHandler(&completion);
+}
+
+fn record_notification_state(generation: u64, state: PermissionState) {
+    let mut cache = NOTIFICATION_SETTINGS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if cache.completed_generation < generation {
+        cache.completed_generation = generation;
+        cache.changed |= cache.state.unwrap_or(PermissionState::Prompt) != state;
+        cache.state = Some(state);
+    }
+}
+
+fn begin_notification_read() -> u64 {
+    let mut cache = NOTIFICATION_SETTINGS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    cache.generation = cache.generation.wrapping_add(1);
+    cache.last_read = Some(Instant::now());
+    cache.generation
+}
+
+/// Starts a nonprompting refresh at launch and when the user returns from System Settings.
+pub fn refresh_notification_permission() {
+    if notification_bundle_available() {
+        let generation = begin_notification_read();
+        read_notification_settings(move |state| record_notification_state(generation, state));
+    }
+}
+
+/// Reads the current OS decision on the notification worker and warms the synchronous JS query.
+pub fn fresh_notification_permission() -> Result<PermissionState, &'static str> {
+    if !notification_bundle_available() {
+        return Ok(PermissionState::Unsupported);
+    }
+    let generation = begin_notification_read();
+    let (send, receive) = std::sync::mpsc::channel();
+    read_notification_settings(move |state| {
+        record_notification_state(generation, state);
+        let _ = send.send(state);
+    });
+    receive
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "Timed out reading macOS notification settings")
+}
+
+fn notification_status() -> PermissionState {
+    if !notification_bundle_available() {
+        return PermissionState::Unsupported;
+    }
+    let (generation, state) = {
+        let mut cache = NOTIFICATION_SETTINGS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let state = cache.state.unwrap_or(PermissionState::Prompt);
+        if cache
+            .last_read
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+        {
+            return state;
+        }
+        cache.generation = cache.generation.wrapping_add(1);
+        cache.last_read = Some(Instant::now());
+        (cache.generation, state)
+    };
+    read_notification_settings(move |s| record_notification_state(generation, s));
+    state
 }
 
 impl MacHost {
@@ -163,6 +276,51 @@ impl MacHost {
         }
         RequestOutcome::Pending(token)
     }
+
+    fn request_notifications(&self) -> RequestOutcome {
+        if !notification_bundle_available() {
+            return RequestOutcome::Settled(PermissionState::Unsupported);
+        }
+        let (token, ask) = self.lock().begin(Capability::Notifications);
+        if ask {
+            let requests = Arc::clone(self.requests());
+            let generation = begin_notification_read();
+            read_notification_settings(move |state| {
+                let finish = {
+                    let requests = Arc::clone(&requests);
+                    move |generation, state| {
+                        record_notification_state(generation, state);
+                        requests
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .complete(Capability::Notifications, state);
+                    }
+                };
+                match state {
+                    PermissionState::Prompt => {
+                        let completion =
+                            RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
+                                let generation = begin_notification_read();
+                                let finish = finish.clone();
+                                read_notification_settings(move |state| finish(generation, state));
+                            });
+                        UNUserNotificationCenter::currentNotificationCenter()
+                            .requestAuthorizationWithOptions_completionHandler(
+                                UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+                                &completion,
+                            );
+                    }
+                    PermissionState::Denied => {
+                        let _ = std::process::Command::new("/usr/bin/open")
+                            .arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension").spawn();
+                        finish(generation, state);
+                    }
+                    _ => finish(generation, state),
+                }
+            });
+        }
+        RequestOutcome::Pending(token)
+    }
 }
 
 fn open_privacy_pane(anchor: &str) {
@@ -215,6 +373,7 @@ impl PermissionHost for MacHost {
         match (cap, tcc::media(cap)) {
             (_, Some(media)) => self.media_state(media),
             (Capability::DisplayCapture, None) => self.screen_capture_state(),
+            (Capability::Notifications, None) => notification_status(),
             _ => PermissionState::Unsupported,
         }
     }
@@ -223,6 +382,7 @@ impl PermissionHost for MacHost {
         match (cap, tcc::media(cap)) {
             (_, Some(media)) => self.request_media(media),
             (Capability::DisplayCapture, None) => self.request_screen_capture(),
+            (Capability::Notifications, None) => self.request_notifications(),
             _ => RequestOutcome::Settled(self.status(cap)),
         }
     }
@@ -235,11 +395,17 @@ impl PermissionHost for MacHost {
     }
 
     fn drain_changes(&self) -> Option<Vec<Capability>> {
-        Some(
-            self.requests
-                .get()
-                .map(|q| std::mem::take(&mut q.lock().unwrap_or_else(|p| p.into_inner()).changes))
-                .unwrap_or_default(),
-        )
+        let mut changes = self
+            .requests
+            .get()
+            .map(|q| std::mem::take(&mut q.lock().unwrap_or_else(|p| p.into_inner()).changes))
+            .unwrap_or_default();
+        let mut cache = NOTIFICATION_SETTINGS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if std::mem::take(&mut cache.changed) && !changes.contains(&Capability::Notifications) {
+            changes.push(Capability::Notifications);
+        }
+        Some(changes)
     }
 }

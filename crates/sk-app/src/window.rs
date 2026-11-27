@@ -1988,6 +1988,8 @@ enum Op {
     UserClose,
     Fullscreen(bool, bool),
     Activate(bool),
+    #[cfg(target_os = "linux")]
+    ActivateWithToken(String),
     Bounds {
         x: Option<f32>,
         y: Option<f32>,
@@ -2095,6 +2097,18 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         return;
     };
     match op {
+        #[cfg(target_os = "linux")]
+        Op::ActivateWithToken(token) => {
+            use std::sync::atomic::Ordering;
+            if !crate::quiet::never_focus() {
+                controls::restore_alpha_on_show(window);
+                if APP_HIDDEN.swap(false, Ordering::AcqRel) {
+                    window.show_window(false, || true, |_| {});
+                }
+                REVEALED.store(true, Ordering::Release);
+                window.activate_window_with_token(&token);
+            }
+        }
         Op::Control(action) => controls::apply(action, window, cx),
         Op::Title(t) => {
             window.set_window_title(&t);
@@ -2391,6 +2405,11 @@ pub(crate) fn request_toggle_maximize() {
 /// Goes through gpui's activation path, which applies a hidden window's stored placement before showing it.
 pub(crate) fn request_activate() {
     submit(Op::Activate(true));
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn activate_with_token(token: String) {
+    submit(Op::ActivateWithToken(token));
 }
 
 /// Set once the primary window is first raised; after that a hidden start is no longer unreachable.

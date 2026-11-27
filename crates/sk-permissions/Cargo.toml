@@ -40,3 +40,4 @@ windows-sys = { version = "0.61", features = [
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "UNNotificationSettings", "UNUserNotificationCenter"] }

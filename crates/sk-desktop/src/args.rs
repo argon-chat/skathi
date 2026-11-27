@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 pub const PROTOCOL_LAUNCH: &str = "--sk-protocol-launch";
 /// Written into protocol registrations by older builds; still accepted when parsing.
 pub const LEGACY_PROTOCOL_LAUNCH: &str = "--vn-protocol-launch";
+pub(crate) const TOAST_ACTIVATION: &str = "--sk-toast-activation";
 
 fn is_protocol_launch(a: &str) -> bool {
     a == PROTOCOL_LAUNCH || a == LEGACY_PROTOCOL_LAUNCH
@@ -23,6 +24,7 @@ fn is_protocol_launch(a: &str) -> bool {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HostFlags {
     pub devtools: bool,
+    pub toast_activation: bool,
     pub target: Option<String>,
     pub window: Option<String>,
     pub parent: Option<String>,
@@ -305,6 +307,10 @@ pub fn set_embedded(exe: String, app_args: Vec<String>) -> bool {
     argv.extend(app_args.iter().cloned());
     ARGS.set(Args {
         exe,
+        host: HostFlags {
+            toast_activation: process_toast_activation(),
+            ..HostFlags::default()
+        },
         app_args,
         argv,
         ..Args::default()
@@ -317,8 +323,58 @@ pub fn process() -> &'static Args {
         let argv: Vec<String> = std::env::args_os()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        parse(&argv, raw_command_line().as_deref())
+        parse_process(
+            &argv,
+            raw_command_line().as_deref(),
+            process_toast_activation(),
+        )
     })
+}
+
+fn parse_process(argv: &[String], raw: Option<&str>, toast_activation: bool) -> Args {
+    if !toast_activation {
+        return parse(argv, raw);
+    }
+    let exe = argv.first().cloned().unwrap_or_default();
+    Args {
+        argv: vec![exe.clone()],
+        exe,
+        host: HostFlags {
+            toast_activation: true,
+            ..HostFlags::default()
+        },
+        ..Args::default()
+    }
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn is_toast_activation(argv: &[String]) -> bool {
+    match argv {
+        [_, marker] => marker == TOAST_ACTIVATION,
+        [_, marker, embedding] => {
+            marker == TOAST_ACTIVATION && embedding.eq_ignore_ascii_case("-Embedding")
+        }
+        _ => false,
+    }
+}
+
+pub fn process_toast_activation() -> bool {
+    #[cfg(windows)]
+    {
+        static TOAST: OnceLock<bool> = OnceLock::new();
+        *TOAST.get_or_init(|| {
+            sk_permissions::package::app_user_model_id().is_some()
+                && is_toast_activation(
+                    &std::env::args_os()
+                        .map(|a| a.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                )
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 #[cfg(windows)]
@@ -428,6 +484,34 @@ mod tests {
         let b = parse(&v(&["app.exe", "--", "--sk-dist", "x"]), None);
         assert_eq!(b.argv, v(&["app.exe", "--", "--sk-dist", "x"]));
         assert_eq!(b.host.sk_dist, None);
+    }
+
+    #[test]
+    fn a_packaged_toast_launch_keeps_the_broker_arguments_private() {
+        for argv in [
+            v(&["app.exe", TOAST_ACTIVATION]),
+            v(&["app.exe", TOAST_ACTIVATION, "-Embedding"]),
+        ] {
+            assert!(is_toast_activation(&argv));
+            let broker = parse_process(&argv, None, true);
+            assert!(broker.host.toast_activation);
+            assert_eq!(broker.argv, v(&["app.exe"]));
+            assert!(broker.app_args.is_empty());
+
+            let loose = parse_process(&argv, None, false);
+            assert!(!loose.host.toast_activation);
+            assert_eq!(loose.argv, argv);
+        }
+        assert!(!is_toast_activation(&v(&[
+            "app.exe",
+            "--",
+            TOAST_ACTIVATION
+        ])));
+        assert!(!is_toast_activation(&v(&[
+            "app.exe",
+            TOAST_ACTIVATION,
+            "document"
+        ])));
     }
 
     #[test]

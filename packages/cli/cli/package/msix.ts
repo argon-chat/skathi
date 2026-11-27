@@ -3,6 +3,7 @@
 // (appx.ts); `ctx.sign` signs it.
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import type { Rgba } from "../icon";
 import { iconAt, iconOnCanvas, iconSources } from "./icons";
@@ -344,7 +345,26 @@ const fileTypeName = (name: string, i: number, taken: Set<string>) => {
 export function appxManifest({ config, executable, assets, fileTypeLogos }: ManifestInput): string {
   const o = config.windows.msix;
   const id = config.identity;
-  const extensions: string[] = [];
+  // Package updates must keep the class used by notifications already in Action Center.
+  const digest = createHash("sha256")
+    .update(["skathi-toast-v1", o.publisher, o.identityName.toLowerCase()].join("\0"))
+    .digest();
+  digest[6] = (digest[6]! & 0x0f) | 0x80;
+  digest[8] = (digest[8]! & 0x3f) | 0x80;
+  const hex = digest.toString("hex");
+  const clsid = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join("-");
+  const extensions: string[] = [
+    '        <desktop:Extension Category="windows.toastNotificationActivation">',
+    `          <desktop:ToastNotificationActivation ToastActivatorCLSID="${clsid}"/>`,
+    "        </desktop:Extension>",
+    '        <com:Extension Category="windows.comServer">',
+    "          <com:ComServer>",
+    `            <com:ExeServer Executable="${xml(executable)}" Arguments="--sk-toast-activation" DisplayName="${xml(id.displayName)}">`,
+    `              <com:Class Id="${clsid}" DisplayName="${xml(id.displayName)}"/>`,
+    "            </com:ExeServer>",
+    "          </com:ComServer>",
+    "        </com:Extension>",
+  ];
   for (const p of config.protocols) {
     extensions.push(
       '        <uap3:Extension Category="windows.protocol">',
@@ -378,8 +398,10 @@ export function appxManifest({ config, executable, assets, fileTypeLogos }: Mani
     '<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"',
     '  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"',
     '  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"',
+    '  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"',
+    '  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"',
     '  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"',
-    '  IgnorableNamespaces="uap uap3 rescap">',
+    '  IgnorableNamespaces="uap uap3 desktop com rescap">',
     `  <Identity Name="${xml(o.identityName)}" Publisher="${xml(o.publisher)}" Version="${msixVersion(id.version)}" ProcessorArchitecture="${o.architecture}"/>`,
     "  <Properties>",
     `    <DisplayName>${xml(id.displayName)}</DisplayName>`,

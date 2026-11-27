@@ -154,6 +154,20 @@ describe("the MSIX manifest", () => {
     expect(manifest).toContain('Executable="bin\\Notes.exe" EntryPoint="Windows.FullTrustApplication"');
   });
 
+  test("Action Center starts the same executable and resolves the same COM class across updates", () => {
+    const clsid = /ToastActivatorCLSID="([a-f0-9-]{36})"/.exec(manifest)?.[1];
+    expect(clsid).toBeDefined();
+    expect(manifest).toContain(`<com:Class Id="${clsid}"`);
+    expect(manifest).toContain('<com:ExeServer Executable="bin\\Notes.exe" Arguments="--sk-toast-activation"');
+    const next = appxManifest({
+      config: { ...config, identity: { ...config.identity, version: "2.0.0" } },
+      executable: "new.exe",
+      assets: { storeLogo: "a.png", square150: "b.png", square44: "c.png", wide310: null },
+      fileTypeLogos: [null],
+    });
+    expect(next).toContain(`ToastActivatorCLSID="${clsid}"`);
+  });
+
   test("file types are listed with the dot, lowercased, and the file path as the argument", () => {
     expect(manifest).toContain('<uap:FileType ContentType="application/x-notes">.note</uap:FileType>');
     expect(manifest).toContain('Parameters="&quot;%1&quot;"');

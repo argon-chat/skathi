@@ -35,6 +35,15 @@ export { appHost } from "../apphost";
 export type { AppHost, AppHostError } from "../apphost";
 export { appTray } from "../tray";
 export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "../tray";
+export { appNotifications } from "../notifications";
+export type {
+  AppNotifications,
+  DesktopNotificationOptions,
+  NotificationAction,
+  NotificationActivation,
+  NotificationCapabilities,
+  NotificationReceipt,
+} from "../notifications";
 export { appHaptics } from "../haptics";
 export type { AppHaptics, HapticOptions, HapticPattern, HapticTrigger } from "../haptics";
 export { appFiles, type AppFiles } from "../files";

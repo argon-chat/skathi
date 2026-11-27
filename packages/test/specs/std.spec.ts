@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { arch, homedir, hostname, platform } from "node:os";
-import { killTree, launch, type SkApp } from "../src/index";
+import { killTree, launch, WINDOWS, type SkApp } from "../src/index";
 
 const T = 60_000;
 const apps: SkApp[] = [];
@@ -25,6 +25,75 @@ async function ended(app: SkApp): Promise<number | null> {
 }
 
 describe("skathi:* modules", () => {
+  test.if(WINDOWS && process.env.SK_TEST_LIVE_NOTIFICATIONS === "1")(
+    "posts, replaces and withdraws a live Windows notification",
+    async () => {
+      const app = await start();
+      const png = readFileSync(new URL("../fixtures/effect-textures/src/yellow.png", import.meta.url));
+      await app.eval(`(async () => {
+        const api = __SK_TEST_STD__.appNotifications;
+        const id = "skathi-smoke-" + crypto.randomUUID();
+        const opts = {id, title:"Skathi notification test", body:"This test closes automatically.",
+          sound:"silent", group:{id:"smoke",label:"Skathi tests"}, image:{png:Uint8Array.of(${Array.from(png).join(",")})},
+          actions:[{kind:"button",id:"read",label:"Mark as read"},{kind:"reply",id:"reply",label:"Reply"}]};
+        let step = "show";
+        try {
+          const first = await api.show(opts);
+          step = "replace";
+          const next = await api.show({...opts,title:"Skathi notification updated"});
+          step = "close";
+          await api.close(id);
+          step = "close absent";
+          await api.close(id);
+          globalThis.liveNotification = JSON.stringify({
+            sameId:first.id === id && next.id === id, actions:next.submittedActions, omitted:next.omitted,
+          });
+        } catch (err) {
+          globalThis.liveNotification = JSON.stringify({step, error:err.name, reason:err.message});
+          try { await api.close(id); } catch {}
+        }
+      })(); 1`);
+      let raw = "";
+      for (let i = 0; i < 150 && !raw; i++) {
+        raw = String(await app.eval("globalThis.liveNotification ?? ''"));
+        if (!raw) await Bun.sleep(50);
+      }
+      expect(raw).not.toBe("");
+      expect(JSON.parse(raw)).toEqual({ sameId: true, actions: ["read", "reply"], omitted: [] });
+    },
+    T,
+  );
+
+  test(
+    "desktop notifications report capabilities and reject invalid posts without prompting",
+    async () => {
+      const app = await start();
+      await app.eval(`(async () => {
+        const n = __SK_TEST_STD__.appNotifications;
+        const caps = await n.capabilities();
+        let error, imageError;
+        try { await n.show({title: " "}); } catch (e) { error = e.name; }
+        try { await n.show({title:"Test",image:{png:Uint8Array.of(137,80,78,71,13,10,26,10)}}); }
+        catch (e) { imageError = e.name; }
+        globalThis.notificationProbe = JSON.stringify({caps, error, imageError});
+      })().catch(e => globalThis.notificationProbe = JSON.stringify({failed: String(e)})); 1`);
+      let raw = "";
+      for (let i = 0; i < 100 && !raw; i++) {
+        raw = String(await app.eval("globalThis.notificationProbe ?? ''"));
+        if (!raw) await Bun.sleep(50);
+      }
+      expect(raw).not.toBe("");
+      const result = JSON.parse(raw);
+      expect(result.error).toBe("TypeError");
+      expect(result.imageError).toBe("TypeError");
+      expect(result.caps.available).toBe(result.caps.management !== "none");
+      expect(["none", "running", "relaunch"]).toContain(result.caps.activation);
+      expect(result.caps.maxActions).toBeLessThanOrEqual(2);
+      expect(typeof result.caps.silent).toBe("boolean");
+    },
+    T,
+  );
+
   test(
     "skathi:os, skathi:runtime and skathi:app answer for this machine and this app",
     async () => {

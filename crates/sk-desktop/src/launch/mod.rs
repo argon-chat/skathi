@@ -334,6 +334,14 @@ fn launch_url(args: &Args, protocols: &[String]) -> Option<String> {
 }
 
 pub(crate) fn deliver(mut msg: Forward) {
+    // COM will invoke the toast class factory in the primary process.
+    #[cfg(target_os = "windows")]
+    if !msg.raise
+        && crate::args::is_toast_activation(&msg.argv)
+        && sk_permissions::package::app_user_model_id().is_some()
+    {
+        return;
+    }
     if msg.url.is_none() {
         let declared = config().map(|c| c.protocols.as_slice()).unwrap_or_default();
         msg.url = protocol::declared_url(&msg.args, declared);
@@ -457,6 +465,19 @@ pub fn start_with_activation(
     dev_slot: Option<PathBuf>,
     activate: bool,
 ) -> Outcome {
+    start_with_profile(args, config_json, build_name, dev_slot, activate, None)
+}
+
+pub fn start_with_profile(
+    args: &Args,
+    config_json: Option<&str>,
+    build_name: Option<String>,
+    dev_slot: Option<PathBuf>,
+    activate: bool,
+    profile_override: Option<&Path>,
+) -> Outcome {
+    #[cfg(not(windows))]
+    let _ = profile_override;
     let config = LaunchConfig::parse(config_json);
     let identity = resolve_identity(&config, build_name);
     if !args.ignored.is_empty() {
@@ -493,14 +514,26 @@ pub fn start_with_activation(
     if !skip {
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
+            #[cfg(windows)]
+            let storage = instance_storage(
+                &identity.name,
+                profile_override.filter(|_| sk_permissions::package::app_user_model_id().is_some()),
+            );
+            #[cfg(not(windows))]
+            let storage = storage_name(&identity.name);
+            let mut argv = info.argv.clone();
+            if args.host.toast_activation {
+                argv.truncate(1);
+                argv.push(crate::args::TOAST_ACTIVATION.to_owned());
+            }
             let fwd = Forward {
-                argv: info.argv.clone(),
+                argv,
                 args: args.app_args.clone(),
                 cwd: info.cwd.clone(),
                 url: info.url.clone(),
-                raise: sender_requests_raise(activate, quiet()),
+                raise: sender_requests_raise(activate && !args.host.toast_activation, quiet()),
             };
-            match instance::claim(&identity.id, &storage_name(&identity.name), &fwd) {
+            match instance::claim(&identity.id, &storage, &fwd) {
                 instance::Claim::Primary => holds = true,
                 instance::Claim::Unavailable(why) => {
                     eprintln!("[skathi compat] singleInstance is declared but could not be enforced: {why}; running as a separate instance");
@@ -557,6 +590,43 @@ pub fn start_with_activation(
         dev_slot,
     });
     outcome
+}
+
+#[cfg(windows)]
+fn instance_storage(name: &str, override_dir: Option<&Path>) -> String {
+    let Some(path) = override_dir else {
+        return storage_name(name);
+    };
+    let path = normalized_profile_dir(path);
+    format!("profile:{:032x}", instance::fnv128(&[path.as_bytes()]))
+}
+
+#[cfg(windows)]
+pub fn same_profile_dir(a: &Path, b: &Path) -> bool {
+    a.is_absolute() && b.is_absolute() && normalized_profile_dir(a) == normalized_profile_dir(b)
+}
+
+#[cfg(windows)]
+pub fn normalized_profile_dir(path: &Path) -> String {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    // The profile may be new, so resolve aliases through its nearest existing ancestor.
+    for ancestor in absolute.ancestors() {
+        if let Ok(mut canonical) = ancestor.canonicalize() {
+            canonical.push(
+                absolute
+                    .strip_prefix(ancestor)
+                    .expect("ancestor is a prefix"),
+            );
+            return canonical
+                .to_string_lossy()
+                .trim_end_matches('\\')
+                .to_lowercase();
+        }
+    }
+    absolute
+        .to_string_lossy()
+        .trim_end_matches('\\')
+        .to_lowercase()
 }
 
 fn own_exe() -> String {
@@ -787,6 +857,41 @@ mod tests {
         assert_eq!(storage_name("..x.."), "x");
         assert_eq!(storage_name("///"), "vue-native-app");
         assert_eq!(storage_name(&"a".repeat(80)).len(), 64);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_packaged_override_cannot_take_the_default_profiles_instance_slot() {
+        let first = Path::new(r"C:\Profiles\first");
+        let second = Path::new(r"C:\Profiles\second");
+        let default = instance_storage("Notes", None);
+        assert_eq!(default, "notes");
+        assert_ne!(instance_storage("Notes", Some(first)), default);
+        assert_ne!(instance_storage("Notes", Some(second)), default);
+        assert_ne!(
+            instance_storage("Notes", Some(first)),
+            instance_storage("Notes", Some(second))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_profile_aliases_share_an_instance_slot_before_and_after_creation() {
+        assert!(!same_profile_dir(
+            &std::env::current_dir().unwrap(),
+            Path::new(".")
+        ));
+        let dir = std::env::temp_dir().join(format!("sk-profile-slot-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let profile = dir.join("NewProfile");
+        let alias = dir.canonicalize().unwrap().join("newPROFILE");
+        assert!(same_profile_dir(&profile, &alias));
+        let key = instance_storage("Notes", Some(&profile));
+        std::fs::create_dir(&profile).unwrap();
+        assert!(same_profile_dir(&profile, &alias));
+        assert_eq!(instance_storage("Notes", Some(&alias)), key);
+        std::fs::remove_dir(&profile).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

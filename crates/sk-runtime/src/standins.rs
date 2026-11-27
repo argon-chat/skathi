@@ -213,6 +213,18 @@ crate::host_fn!(fn tray_set(g, args) {
     unsafe { host::throw(g, "NotSupportedError", NO_TRAY) }
 });
 
+crate::host_fn!(fn notification_capabilities(g, _args) {
+    let caps = json!({
+        "available": false, "activation": "none", "management": "none", "maxActions": 0,
+        "inlineReply": false, "silent": false, "grouping": false, "image": false,
+    });
+    unsafe { host::resolved(g, host::to_js(g, &caps)) }
+});
+
+crate::host_fn!(fn notification_unavailable(g, _args) {
+    unsafe { host::rejected(g, "NotSupportedError", "This context has no desktop notification service") }
+});
+
 crate::host_fn!(fn nothing(_g, _args) {
     UNDEF
 });
@@ -301,6 +313,13 @@ pub unsafe fn install_missing(g: *mut c_void) {
         let o = host::install_object(g, "__sk_appTray", UNDEF);
         define(g, o, "available", FALSE, 0);
         host::method(g, o, "set", 1, tray_set);
+    }
+    if absent(g, "__sk_appNotifications") {
+        let o = host::install_object(g, "__sk_appNotifications", UNDEF);
+        host::method(g, o, "capabilities", 0, notification_capabilities);
+        host::method(g, o, "show", 1, notification_unavailable);
+        host::method(g, o, "close", 1, notification_unavailable);
+        host::method(g, o, "setActivationHandler", 1, nothing);
     }
     if absent(g, "__sk_appDevtools") {
         crate::app_devtools::install(g, None);
