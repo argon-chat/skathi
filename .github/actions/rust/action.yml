@@ -1,5 +1,5 @@
 name: Rust toolchain
-description: The pinned Rust toolchain, minimal profile, with the given targets.
+description: The pinned Rust toolchain with the given targets and a GitHub Actions compiler cache.
 
 inputs:
   targets:
@@ -9,6 +9,11 @@ inputs:
 runs:
   using: composite
   steps:
+    # A job can install a native target first and add the CSS checker's Wasm target later.
+    - if: env.SCCACHE_PATH == ''
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.20.1
     - name: Rust
       shell: bash
       run: |
@@ -18,3 +23,8 @@ runs:
           export PATH="$HOME/.cargo/bin:$PATH"
         fi
         rustup toolchain install 1.100.0 --profile minimal --target ${{ inputs.targets }}
+        {
+          echo 'SCCACHE_GHA_ENABLED=true'
+          echo 'RUSTC_WRAPPER=sccache'
+          echo 'CARGO_INCREMENTAL=0'
+        } >> "$GITHUB_ENV"

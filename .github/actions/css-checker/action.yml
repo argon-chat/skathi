@@ -23,9 +23,13 @@ runs:
       with:
         targets: wasm32-unknown-unknown
     - if: steps.cache.outputs.cache-hit != 'true'
-      uses: Swatinem/rust-cache@v2
+      uses: actions/cache@v4
       with:
-        shared-key: css-checker
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: css-checker-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
     - name: Build the CSS checker
       shell: bash
       run: bun scripts/css-engine.ts --ensure ${{ inputs.release == 'true' && '--release' || '' }}
