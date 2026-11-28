@@ -21,35 +21,6 @@ pub const NAME_ATTR: &str = "sk-vt-name";
 /// space-separated (empty when it has none).
 pub const ACTIVE_ATTR: &str = ":active-view-transition";
 
-/// The pseudo-elements' default styles. The renderer sets `--sk-vt-*` on each group: its captured
-/// geometry, old and new (the same when only one exists, which makes the group animation hold).
-pub(crate) const UA_SHEET: &str = "
-::view-transition { position: fixed; inset: 0; }
-::view-transition-group(*) {
-  position: absolute; top: 0; left: 0;
-  width: var(--sk-vt-width); height: var(--sk-vt-height); transform: var(--sk-vt-transform);
-  animation-name: -ua-view-transition-group-anim; animation-duration: 0.25s;
-  animation-fill-mode: both;
-}
-::view-transition-image-pair(*) {
-  position: absolute; inset: 0; isolation: var(--sk-vt-isolation, auto);
-}
-::view-transition-old(*), ::view-transition-new(*) {
-  position: absolute; top: 0; left: 0; width: 100%; height: auto;
-  mix-blend-mode: var(--sk-vt-blend, normal);
-}
-::view-transition-old(*) { animation-name: -ua-view-transition-fade-out; }
-::view-transition-new(*) { animation-name: -ua-view-transition-fade-in; }
-@keyframes -ua-view-transition-fade-out { to { opacity: 0; } }
-@keyframes -ua-view-transition-fade-in { from { opacity: 0; } }
-@keyframes -ua-view-transition-group-anim {
-  from {
-    width: var(--sk-vt-old-width); height: var(--sk-vt-old-height);
-    transform: var(--sk-vt-old-transform);
-  }
-}
-";
-
 /// The image pair and images inherit their group's animation timing in the spec's UA sheet
 /// (`animation-duration: inherit`, …), which the cascade here cannot say: each longhand still at
 /// its initial value takes the group's.

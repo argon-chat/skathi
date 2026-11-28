@@ -1059,6 +1059,10 @@ fn channel(p: &Property, defer_haptics: bool, diagnostics: &mut Vec<String>) -> 
             Some(v) => Channel::Dynamic(u.property_id.name().to_string(), v),
             None => Channel::Static,
         },
+        Property::All(_) => match value_text(p) {
+            Some(v) => Channel::Dynamic("all".to_string(), v),
+            None => Channel::Static,
+        },
         _ => Channel::Static,
     }
 }
@@ -1225,6 +1229,112 @@ fn current_color_substituted(name: &str, value: &str) -> Option<String> {
 
 /// Three failures, each advised: invalid substitution (missing variable, cycle), a substituted text
 /// that does not parse, or a property the mapper does not map. Invalid ones are dropped, as in CSS.
+/// `initial`, `inherit` and `unset` drop what earlier rules set: an unset inherited property
+/// follows the parent, any other its initial value. `inherit` on a property that does not inherit
+/// is not modelled and changes nothing; neither does `revert`.
+fn reset_to_default(name: &str, value: &str, r: &mut StyleRefinement) -> bool {
+    let keyword = value.to_ascii_lowercase();
+    let inherit_only = match keyword.as_str() {
+        "initial" | "unset" => false,
+        "inherit" => true,
+        _ => return false,
+    };
+    if name == "all" {
+        if inherit_only {
+            r.text = Default::default();
+            r.mouse_cursor = None;
+        } else {
+            *r = StyleRefinement::default();
+        }
+        return true;
+    }
+    let t = &mut r.text;
+    match name {
+        "color" => t.color = None,
+        "font" => {
+            t.font_family = None;
+            t.font_size = None;
+            t.font_weight = None;
+            t.font_style = None;
+            t.font_width = None;
+            t.line_height = None;
+        }
+        "font-family" => t.font_family = None,
+        "font-size" => t.font_size = None,
+        "font-weight" => t.font_weight = None,
+        "font-style" => t.font_style = None,
+        "font-stretch" | "font-width" => t.font_width = None,
+        "line-height" => t.line_height = None,
+        "text-align" => t.text_align = None,
+        "letter-spacing" => t.letter_spacing = None,
+        "word-spacing" => t.word_spacing = None,
+        "white-space" => t.white_space = None,
+        "overflow-wrap" | "word-wrap" => t.overflow_wrap = None,
+        "word-break" => t.word_break = None,
+        "cursor" => r.mouse_cursor = None,
+        _ => {
+            if inherit_only {
+                return false;
+            }
+            return reset_box_property(name, r);
+        }
+    };
+    true
+}
+
+fn reset_box_property(name: &str, r: &mut StyleRefinement) -> bool {
+    match name {
+        "background" | "background-color" | "background-image" => {
+            r.background = None;
+            r.background_layers = None;
+        }
+        "border" => {
+            r.border_widths = Default::default();
+            r.border_color = None;
+            r.vn_border_colors = Default::default();
+            r.border_style = None;
+        }
+        "border-width" => r.border_widths = Default::default(),
+        "border-top-width" | "border-block-start-width" => r.border_widths.top = None,
+        "border-right-width" | "border-inline-end-width" => r.border_widths.right = None,
+        "border-bottom-width" | "border-block-end-width" => r.border_widths.bottom = None,
+        "border-left-width" | "border-inline-start-width" => r.border_widths.left = None,
+        "border-color" => {
+            r.border_color = None;
+            r.vn_border_colors = Default::default();
+        }
+        "border-style" => r.border_style = None,
+        "border-radius" => {
+            r.corner_radii = Default::default();
+            r.vn_corner_radii = Default::default();
+        }
+        "padding" => r.padding = Default::default(),
+        "padding-top" | "padding-block-start" => r.padding.top = None,
+        "padding-right" | "padding-inline-end" => r.padding.right = None,
+        "padding-bottom" | "padding-block-end" => r.padding.bottom = None,
+        "padding-left" | "padding-inline-start" => r.padding.left = None,
+        "margin" => r.margin = Default::default(),
+        "margin-top" | "margin-block-start" => r.margin.top = None,
+        "margin-right" | "margin-inline-end" => r.margin.right = None,
+        "margin-bottom" | "margin-block-end" => r.margin.bottom = None,
+        "margin-left" | "margin-inline-start" => r.margin.left = None,
+        "width" | "inline-size" => r.size.width = None,
+        "height" | "block-size" => r.size.height = None,
+        "min-width" | "min-inline-size" => r.min_size.width = None,
+        "min-height" | "min-block-size" => r.min_size.height = None,
+        "max-width" | "max-inline-size" => r.max_size.width = None,
+        "max-height" | "max-block-size" => r.max_size.height = None,
+        "box-shadow" => r.box_shadow = None,
+        "outline" | "outline-width" | "outline-style" | "outline-color" | "outline-offset" => {
+            r.vn_outline = None
+        }
+        "opacity" => r.opacity = None,
+        "display" => r.display = None,
+        _ => return false,
+    }
+    true
+}
+
 pub(crate) fn apply_dynamic(
     name: &str,
     raw: &str,
@@ -1261,6 +1371,9 @@ pub(crate) fn apply_dynamic(
     };
     let from_siblings = siblings.is_some();
     let value = siblings.unwrap_or(value);
+    if reset_to_default(name, value.trim(), r) {
+        return;
+    }
     let value = crate::rgb_space::rewrite(&value).unwrap_or(value);
     use lightningcss::traits::IntoOwned as _;
     let parse = |value: &str| {

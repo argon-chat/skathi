@@ -36,6 +36,7 @@ mod registered;
 mod rgb_space;
 mod share;
 mod siblings;
+mod state_groups;
 pub use siblings::SiblingValues;
 pub mod snap;
 mod text_box;
@@ -997,10 +998,13 @@ impl<'a> Half<'a> {
 
 /// `:where()` gives specificity 0 and the sheet is collected first, and no `@layer` is modelled, so
 /// every author rule beats these.
-pub(crate) const UA_SHEET: &str = concat!(include_str!("context_menu.css"), include_str!("kbd.css"), ":where([hidden]) { display: none } \
-    :where(sub) { vertical-align: sub; font-size: smaller } \
-    :where(sup) { vertical-align: super; font-size: smaller } \
-    :where(button, input[type=button], input[type=submit], input[type=reset]) { text-align: center }");
+pub(crate) const UA_SHEET: &str = concat!(
+    include_str!("ua/base.css"),
+    include_str!("ua/forms.css"),
+    include_str!("ua/context_menu.css"),
+    include_str!("ua/kbd.css"),
+    include_str!("ua/view_transition.css"),
+);
 
 /// An element's used color scheme from its computed `color-scheme` (inherited in `vars`): `None`
 /// under `normal`, else whether it is dark, the environment's preference winning when both are
@@ -1443,14 +1447,12 @@ impl Engine {
 
     fn collect_ua(&mut self, order: &mut u32) {
         let parsed = UA_PARSED.with(|ua| {
-            *ua.get_or_init(|| {
-                let text: &'static str =
-                    Box::leak(format!("{UA_SHEET}{}", view_transition::UA_SHEET).into_boxed_str());
-                match StyleSheet::parse(text, ParserOptions::default()) {
+            *ua.get_or_init(
+                || match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
                     Ok(sheet) => Some(&*Box::leak(Box::new(sheet))),
                     Err(_) => None,
-                }
-            })
+                },
+            )
         });
         self.collecting_ua = true;
         match parsed {
@@ -1868,140 +1870,158 @@ impl Engine {
                 } else {
                     sel.clone().into_owned()
                 };
-                let sel = &owned;
-                let Some((states, ancestor)) = classify_states(sel, &mut self.diagnostics) else {
-                    continue;
+                // UA rules lose to every author rule; a split group keeps the specificity it had whole.
+                let specificity = if self.collecting_ua {
+                    0
+                } else {
+                    owned.specificity()
                 };
-                let pseudo = sel.pseudo_element().and_then(pseudo_box);
-                let control_origin = if pseudo.is_some_and(|p| {
-                    p.control_index().is_some() || matches!(p, PseudoElement::EditorPart(..))
-                }) {
-                    let Some(origin) = control_origin_selector(sel) else {
+                let variants: Vec<Selector<'static>> = match state_groups::expand(&sel_text(&owned))
+                {
+                    Some(texts) => texts
+                        .iter()
+                        .filter_map(|t| reparse_selector(t))
+                        .cloned()
+                        .collect(),
+                    None => vec![owned],
+                };
+                for owned in variants {
+                    let sel = &owned;
+                    let Some((states, ancestor)) = classify_states(sel, &mut self.diagnostics)
+                    else {
                         continue;
                     };
-                    Some(Box::new(origin))
-                } else {
-                    None
-                };
-                if !audit_selector(sel, &mut self.diagnostics) {
-                    continue;
-                }
-                if !probe_runnable(sel) {
-                    self.diagnostics.push(format!(
-                        "selector rejected (matcher cannot run it — :has()/nesting?): {}",
-                        sel_text(sel)
-                    ));
-                    continue;
-                }
-                let generated =
-                    matches!(pseudo, Some(PseudoElement::Before | PseudoElement::After))
-                        && (states | ancestor.map_or(0, |a| a.states))
-                            & !(STATE_HOVER | STATE_FOCUS_VISIBLE)
-                            == 0;
-                if pseudo.is_some()
-                    && !generated
-                    && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none()))
-                        || ancestor.is_some())
-                {
-                    self.diagnostics.push(format!(
+                    let pseudo = sel.pseudo_element().and_then(pseudo_box);
+                    let control_origin = if pseudo.is_some_and(|p| {
+                        p.control_index().is_some() || matches!(p, PseudoElement::EditorPart(..))
+                    }) {
+                        let Some(origin) = control_origin_selector(sel) else {
+                            continue;
+                        };
+                        Some(Box::new(origin))
+                    } else {
+                        None
+                    };
+                    if !audit_selector(sel, &mut self.diagnostics) {
+                        continue;
+                    }
+                    if !probe_runnable(sel) {
+                        self.diagnostics.push(format!(
+                            "selector rejected (matcher cannot run it — :has()/nesting?): {}",
+                            sel_text(sel)
+                        ));
+                        continue;
+                    }
+                    let generated =
+                        matches!(pseudo, Some(PseudoElement::Before | PseudoElement::After))
+                            && (states | ancestor.map_or(0, |a| a.states))
+                                & !(STATE_HOVER | STATE_FOCUS_VISIBLE)
+                                == 0;
+                    if pseudo.is_some()
+                        && !generated
+                        && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none()))
+                            || ancestor.is_some())
+                    {
+                        self.diagnostics.push(format!(
                         "a state-qualified pseudo-element rule is dropped (v1) — the generated                          box is not in the pointer-state ladder. Drive it from an ATTRIBUTE on                          the originating element instead (`[data-state=open]::after`), which does                          match: {}",
                         sel_text(sel)
                     ));
-                    continue;
-                }
-                // Advisories ride with the rule and are said when it matches: a Tailwind sheet
-                // carries a `focus:z-10` whether or not anything is focusable.
-                let mut rule_diagnostics: Vec<String> = converted
-                    .diagnostics
-                    .as_deref()
-                    .cloned()
-                    .unwrap_or_default();
-                if pseudo.is_some_and(|p| p.control_index().is_some())
-                    && states.count_ones() > 1
-                    && (converted.normal.is_some()
-                        || converted.important.is_some()
-                        || converted.normal_dynamic.is_some()
-                        || converted.important_dynamic.is_some()
-                        || converted.normal_font.is_some()
-                        || converted.important_font.is_some())
-                {
-                    rule_diagnostics.push(format!(
+                        continue;
+                    }
+                    // Advisories ride with the rule and are said when it matches: a Tailwind sheet
+                    // carries a `focus:z-10` whether or not anything is focusable.
+                    let mut rule_diagnostics: Vec<String> = converted
+                        .diagnostics
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_default();
+                    if pseudo.is_some_and(|p| p.control_index().is_some())
+                        && states.count_ones() > 1
+                        && (converted.normal.is_some()
+                            || converted.important.is_some()
+                            || converted.normal_dynamic.is_some()
+                            || converted.important_dynamic.is_some()
+                            || converted.normal_font.is_some()
+                            || converted.important_font.is_some())
+                    {
+                        rule_diagnostics.push(format!(
                         "Paint and layout declarations use the strongest state in gpui's state ladder (active, hover, focus-visible, focus, focus-within). Custom properties require every named state to match: {}",
                         sel_text(sel)
                     ));
-                }
-                if !generated
-                    && (states != 0 || ancestor.is_some())
-                    && !pseudo.is_some_and(|p| p.control_index().is_some())
-                {
-                    // Only fields the author wrote count: some `Extras` are derived
-                    // (`background_key_color`), and guarding on "any extra" flagged every
-                    // `hover:bg-*` utility.
-                    let names = extras_names(&declares_extras);
-                    if !names.is_empty() {
-                        rule_diagnostics.push(format!(
+                    }
+                    if !generated
+                        && (states != 0 || ancestor.is_some())
+                        && !pseudo.is_some_and(|p| p.control_index().is_some())
+                    {
+                        // Only fields the author wrote count: some `Extras` are derived
+                        // (`background_key_color`), and guarding on "any extra" flagged every
+                        // `hover:bg-*` utility.
+                        let names = extras_names(&declares_extras);
+                        if !names.is_empty() {
+                            rule_diagnostics.push(format!(
                             "{names} on a state selector applies unconditionally (v1) — these                              values are read from the base state only, not from gpui's state                              ladder: {}",
                             sel_text(sel)
                         ));
-                    }
-                    if declares_transition {
-                        // State refinements are installed into gpui's own state ladder and never
-                        // pass through our animator, so a `transition` declared on a state rule
-                        // cannot run.
-                        rule_diagnostics.push(format!(
+                        }
+                        if declares_transition {
+                            // State refinements are installed into gpui's own state ladder and never
+                            // pass through our animator, so a `transition` declared on a state rule
+                            // cannot run.
+                            rule_diagnostics.push(format!(
                             "transition declared on a state selector is ignored (v1) — move it                              to the base rule: {}",
                             sel_text(sel)
                         ));
+                        }
                     }
+                    self.sibling_combinators |= has_sibling_combinator(sel);
+                    self.group_states |= ancestor.is_some();
+                    self.generated_states |= generated && (states != 0 || ancestor.is_some());
+                    self.state_custom |= pseudo.is_none()
+                        && (states != 0 || ancestor.is_some())
+                        && (converted.normal_custom.is_some()
+                            || converted.important_custom.is_some());
+                    self.index.file(sel, self.rules.len() as u32);
+                    self.rules.push(RuleEntry {
+                        selector: owned,
+                        control_origin,
+                        normal: converted.normal.clone(),
+                        important: converted.important.clone(),
+                        normal_transitions: converted.normal_transitions.clone(),
+                        important_transitions: converted.important_transitions.clone(),
+                        normal_transition_declarations: converted
+                            .normal_transition_declarations
+                            .clone(),
+                        important_transition_declarations: converted
+                            .important_transition_declarations
+                            .clone(),
+                        normal_animations: converted.normal_animations.clone(),
+                        important_animations: converted.important_animations.clone(),
+                        normal_animation_patch: converted.normal_animation_patch.clone(),
+                        important_animation_patch: converted.important_animation_patch.clone(),
+                        normal_extras: converted.normal_extras.clone(),
+                        important_extras: converted.important_extras.clone(),
+                        normal_custom: converted.normal_custom.clone(),
+                        important_custom: converted.important_custom.clone(),
+                        normal_dynamic: converted.normal_dynamic.clone(),
+                        important_dynamic: converted.important_dynamic.clone(),
+                        normal_font: converted.normal_font.clone(),
+                        important_font: converted.important_font.clone(),
+                        specificity,
+                        order: *order,
+                        starting,
+                        states,
+                        ancestor,
+                        pseudo,
+                        vt,
+                        condition,
+                        container: self.collecting_container,
+                        cq,
+                        diagnostics: (!rule_diagnostics.is_empty())
+                            .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
+                        decls: decls.clone(),
+                    });
+                    *order += 1;
                 }
-                self.sibling_combinators |= has_sibling_combinator(sel);
-                self.group_states |= ancestor.is_some();
-                self.generated_states |= generated && (states != 0 || ancestor.is_some());
-                self.state_custom |= pseudo.is_none()
-                    && (states != 0 || ancestor.is_some())
-                    && (converted.normal_custom.is_some() || converted.important_custom.is_some());
-                self.index.file(sel, self.rules.len() as u32);
-                let specificity = sel.specificity();
-                self.rules.push(RuleEntry {
-                    selector: owned,
-                    control_origin,
-                    normal: converted.normal.clone(),
-                    important: converted.important.clone(),
-                    normal_transitions: converted.normal_transitions.clone(),
-                    important_transitions: converted.important_transitions.clone(),
-                    normal_transition_declarations: converted
-                        .normal_transition_declarations
-                        .clone(),
-                    important_transition_declarations: converted
-                        .important_transition_declarations
-                        .clone(),
-                    normal_animations: converted.normal_animations.clone(),
-                    important_animations: converted.important_animations.clone(),
-                    normal_animation_patch: converted.normal_animation_patch.clone(),
-                    important_animation_patch: converted.important_animation_patch.clone(),
-                    normal_extras: converted.normal_extras.clone(),
-                    important_extras: converted.important_extras.clone(),
-                    normal_custom: converted.normal_custom.clone(),
-                    important_custom: converted.important_custom.clone(),
-                    normal_dynamic: converted.normal_dynamic.clone(),
-                    important_dynamic: converted.important_dynamic.clone(),
-                    normal_font: converted.normal_font.clone(),
-                    important_font: converted.important_font.clone(),
-                    specificity,
-                    order: *order,
-                    starting,
-                    states,
-                    ancestor,
-                    pseudo,
-                    vt,
-                    condition,
-                    container: self.collecting_container,
-                    cq,
-                    diagnostics: (!rule_diagnostics.is_empty())
-                        .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
-                    decls: decls.clone(),
-                });
-                *order += 1;
             }
             let rules = first_rule..self.rules.len() as u32;
             if viewport && !rules.is_empty() {
@@ -3543,6 +3563,36 @@ fn ladder_state(pc: &PseudoClass<'_>) -> u8 {
     }
 }
 
+/// The states of a one-argument `:is()` / `:where()` whose argument is one compound, which are the
+/// element's own; `None` for any other list.
+fn lifted_group_states(list: &[Selector<'_>]) -> Option<u8> {
+    let [only] = list else {
+        return None;
+    };
+    let mut iter = only.iter();
+    let mut states = 0;
+    for c in &mut iter {
+        match c {
+            Component::NonTSPseudoClass(pc) => states |= ladder_state(pc),
+            Component::Is(l) | Component::Where(l) | Component::Any(_, l) => {
+                states |= lifted_group_states(l)?
+            }
+            _ => {}
+        }
+    }
+    iter.next_sequence().is_none().then_some(states)
+}
+
+fn component_states(c: &Component<'_, element::Impl>) -> u8 {
+    match c {
+        Component::NonTSPseudoClass(pc) => ladder_state(pc),
+        Component::Is(l) | Component::Where(l) | Component::Any(_, l) => {
+            lifted_group_states(l).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AncestorState {
     offset: usize,
@@ -3643,9 +3693,7 @@ pub(crate) fn classify_states(
     let mut compound_len = 0usize;
     for component in &mut iter {
         compound_len += 1;
-        if let Component::NonTSPseudoClass(pc) = component {
-            states |= ladder_state(pc);
-        }
+        states |= component_states(component);
     }
     // Past the first compound, a state pseudo is an ancestor-state rule, except across a
     // pseudo-element boundary: in `.nav:hover::after` the `:hover` is in the next sequence but on
@@ -3668,9 +3716,7 @@ pub(crate) fn classify_states(
         let mut here = 0u8;
         for component in &mut iter {
             compound_len += 1;
-            if let Component::NonTSPseudoClass(pc) = component {
-                here |= ladder_state(pc);
-            }
+            here |= component_states(component);
         }
         if here == 0 {
             continue;
@@ -3874,8 +3920,10 @@ where
             | Component::Where(list)
             | Component::Is(list)
             | Component::Any(_, list) => {
+                let lifted =
+                    !matches!(c, Component::Negation(_)) && lifted_group_states(list).is_some();
                 for inner in list.iter() {
-                    if !audit_components(inner, inner.iter_raw_match_order(), true, live, diagnostics) {
+                    if !audit_components(inner, inner.iter_raw_match_order(), nested || !lifted, live, diagnostics) {
                         ok = false;
                     }
                 }
@@ -4747,6 +4795,59 @@ mod tests {
         assert!(s.focus_visible.is_none());
         assert!(s.hover.is_none() && s.active.is_none());
         assert!(s.needs_focus_handle());
+    }
+
+    #[test]
+    fn states_inside_is_and_where_land_on_their_rungs() {
+        let s = states_of(
+            ":where(.box, .other):where(:hover) { opacity: 0.3 } \
+             .box:is(:focus-visible, :active) { opacity: 0.6 }",
+        );
+        assert!(s.base.opacity.is_none());
+        assert_eq!(s.hover.as_ref().and_then(|r| r.opacity), Some(0.3));
+        assert_eq!(s.focus_visible.as_ref().and_then(|r| r.opacity), Some(0.6));
+        assert_eq!(s.active.as_ref().and_then(|r| r.opacity), Some(0.6));
+    }
+
+    #[test]
+    fn css_wide_keywords_drop_what_earlier_rules_set() {
+        let button = || Node {
+            tag: "button",
+            class: "",
+            attrs: &[],
+        };
+        let s = Engine::compile("button { all: unset }").compute(button(), None, &Env::default());
+        assert!(s.base.background.is_none() && s.base.padding.left.is_none());
+        assert!(s.base.border_widths.left.is_none() && s.base.text.color.is_none());
+        let s = Engine::compile(
+            ".b { padding: 4px; color: red } button { padding: initial; color: inherit }",
+        )
+        .compute(button(), None, &Env::default());
+        assert!(s.base.padding.left.is_none() && s.base.text.color.is_none());
+        assert!(
+            s.base.background.is_some(),
+            "only the named properties reset"
+        );
+    }
+
+    #[test]
+    fn a_ua_state_rule_loses_to_a_plain_author_rule() {
+        let button = Node {
+            tag: "button",
+            class: "",
+            attrs: &[],
+        };
+        let s = Engine::compile("button { background-color: rgb(255 0 0) }").compute(
+            button,
+            None,
+            &Env::default(),
+        );
+        let red = s.base.background.clone();
+        assert!(red.is_some());
+        assert!(s
+            .hover
+            .as_ref()
+            .is_none_or(|h| h.background.is_none() || h.background == red));
     }
 
     #[test]
@@ -6760,7 +6861,11 @@ mod tests {
         let states = cascade(&engine, &d, &Env::default());
         let input = &states[3];
         assert!(input.placeholder.as_ref().unwrap().text.color.is_some());
-        assert_eq!(input.base.text.color, None, "the input itself is untouched");
+        let ua = cascade(&Engine::compile(""), &d, &Env::default());
+        assert_eq!(
+            input.base.text.color, ua[3].base.text.color,
+            "the input itself is untouched"
+        );
     }
 
     #[test]
@@ -6813,8 +6918,9 @@ mod tests {
             .expect("the rule reaches the input's button");
         assert!(button.background.is_some());
         assert!(button.padding.left.is_some());
-        assert!(
-            input.base.background.is_none(),
+        let ua = cascade(&Engine::compile(""), &d, &Env::default());
+        assert_eq!(
+            input.base.background, ua[3].base.background,
             "the input itself is untouched"
         );
         assert!(
@@ -6833,8 +6939,9 @@ mod tests {
         );
         let d = doc();
         let rules = engine.matched_rules(DocRef { doc: &d, i: 4 }, &Env::default());
-        assert_eq!(rules.len(), 1, "{rules:?}");
-        assert_eq!(rules[0].pseudo, Some("::file-selector-button"));
+        let author: Vec<_> = rules.iter().filter(|r| r.specificity > 0).collect();
+        assert_eq!(author.len(), 1, "{rules:?}");
+        assert_eq!(author[0].pseudo, Some("::file-selector-button"));
     }
 
     #[test]
@@ -7168,7 +7275,15 @@ mod tests {
             Some(0.5),
             "the sibling declaration survives"
         );
-        assert_eq!(s.base.text.color, None);
+        let without = Engine::compile(".btn { opacity: 0.5 }").compute_node(
+            DocRef { doc: &d, i: 3 },
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut Vec::new(),
+        );
+        assert_eq!(s.base.text.color, without.base.text.color);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 

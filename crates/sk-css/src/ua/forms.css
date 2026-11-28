@@ -1,0 +1,47 @@
+:where(
+  button,
+  select,
+  textarea,
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"], [type="image"])
+) {
+  box-sizing: border-box;
+  padding: 5px 9px;
+  border: 1px solid light-dark(#c3c5cb, #4b4d54);
+  border-radius: 6px;
+  background-color: light-dark(#ffffff, #2a2b2f);
+  color: light-dark(#1d1e21, #eeeef0);
+  font-family: system-ui;
+  font-size: 13px;
+  line-height: 1.35;
+}
+:where(button, input[type="button"], input[type="submit"], input[type="reset"], select) {
+  padding: 5px 12px;
+  background-color: light-dark(#f3f3f5, #35363b);
+}
+:where(button, input[type="button"], input[type="submit"], input[type="reset"]) {
+  text-align: center;
+}
+:where(button, input[type="button"], input[type="submit"], input[type="reset"], select):where(:hover) {
+  background-color: light-dark(#e9e9ed, #3e3f45);
+}
+:where(button, input[type="button"], input[type="submit"], input[type="reset"]):where(:active) {
+  background-color: light-dark(#dedfe4, #47484e);
+}
+:where(textarea, input):where(:hover) {
+  border-color: light-dark(#a3a6ad, #62656d);
+}
+:where(button, select, textarea, input):where(:focus-visible) {
+  outline: 2px solid light-dark(#2f6fdd, #8cb6ff);
+  outline-offset: 1px;
+}
+:where(textarea, input):where(:focus) {
+  border-color: light-dark(#2f6fdd, #8cb6ff);
+}
+:where(button, select, textarea, input):where(:disabled) {
+  border-color: light-dark(#d9dade, #3c3e44);
+  background-color: light-dark(#f6f6f7, #26272a);
+  color: light-dark(#9a9ca2, #75777e);
+}
+:where(textarea, input)::placeholder {
+  color: light-dark(#80838a, #8d9098);
+}

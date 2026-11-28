@@ -1,0 +1,11 @@
+:where([hidden]) {
+  display: none;
+}
+:where(sub) {
+  vertical-align: sub;
+  font-size: smaller;
+}
+:where(sup) {
+  vertical-align: super;
+  font-size: smaller;
+}
