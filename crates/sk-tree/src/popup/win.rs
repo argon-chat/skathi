@@ -15,10 +15,11 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, GetWindow, GetWindowLongPtrW, GetWindowRect, IsWindow,
-    SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
-    GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, MA_NOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, WM_MOUSEACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY,
-    WM_NCHITTEST, WNDPROC, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP,
+    SendMessageW, SetWindowLongPtrW, SetWindowPos, GWLP_HWNDPARENT, GWLP_WNDPROC, GWL_EXSTYLE,
+    GWL_STYLE, GW_HWNDPREV, HTTRANSPARENT, HWND_NOTOPMOST, MA_NOACTIVATE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW, WM_MOUSEACTIVATE,
+    WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WNDPROC, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::windows::Rect;
@@ -217,6 +218,7 @@ fn configure(popup: HWND, owner: HWND, menu: bool) {
             (&raw const border).cast(),
             std::mem::size_of_val(&border) as u32,
         );
+        SendMessageW(popup, WM_NCACTIVATE, Some(WPARAM(1)), Some(LPARAM(0)));
     }
 }
 
@@ -270,6 +272,8 @@ unsafe extern "system" fn procedure(
     match msg {
         // gpui activates a window on any press.
         WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
+        // DWM draws a system backdrop's solid fallback while a window is inactive, and this one never activates.
+        WM_NCACTIVATE => return unsafe { DefWindowProcW(hwnd, msg, WPARAM(1), LPARAM(-1)) },
         // No frame: the whole window is client area.
         WM_NCCALCSIZE if wparam.0 != 0 => return LRESULT(0),
         // The shadow's room is not the popup: presses there reach the window under it.

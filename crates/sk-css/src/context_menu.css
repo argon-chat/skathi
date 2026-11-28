@@ -4,10 +4,11 @@
   min-width: 180px;
   max-width: 420px;
   padding: 4px;
-  border: 1px solid #17191c28;
+  color-scheme: light dark;
+  border: 1px solid light-dark(#17191c28, #ffffff26);
   border-radius: 8px;
-  background-color: #f6f6f5b8;
-  color: #202124;
+  background-color: light-dark(#f6f6f54d, #2324294d);
+  color: light-dark(#202124, #f3f3f4);
   font-family: system-ui;
   font-size: 13px;
 }
@@ -23,13 +24,13 @@
   white-space: nowrap;
 }
 :where(.sk-menu-item[data-active]) {
-  background-color: #181b2012;
+  background-color: light-dark(#181b2012, #ffffff1c);
 }
 :where(.sk-menu-item[aria-disabled="true"]) {
-  color: #74767b;
+  color: light-dark(#74767b, #999ba2);
 }
 :where(.sk-menu-item[data-keyboard]) {
-  outline: 2px solid #2864a9;
+  outline: 2px solid light-dark(#2864a9, #a2cdff);
   outline-offset: -2px;
 }
 :where(.sk-menu-arrow) {
@@ -45,24 +46,5 @@
   height: 1px;
   flex-shrink: 0;
   margin: 4px 6px;
-  background-color: #17191c29;
-}
-@media (prefers-color-scheme: dark) {
-  :where(.sk-context-menu) {
-    background-color: #232429b8;
-    color: #f3f3f4;
-    border-color: #ffffff26;
-  }
-  :where(.sk-menu-item[data-active]) {
-    background-color: #ffffff1c;
-  }
-  :where(.sk-menu-item[data-keyboard]) {
-    outline-color: #a2cdff;
-  }
-  :where(.sk-menu-item[aria-disabled="true"]) {
-    color: #999ba2;
-  }
-  :where(.sk-menu-separator) {
-    background-color: #ffffff29;
-  }
+  background-color: light-dark(#17191c29, #ffffff29);
 }
