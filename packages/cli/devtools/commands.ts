@@ -433,6 +433,44 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "touch",
+    description:
+      "A touch contact at a window coordinate, dispatched the way a platform reports a finger: the page gets " +
+      '`pointerType: "touch"` pointer events, each --id its own pointer, captured to where it went down; the first ' +
+      "contact of a sequence is primary and also gets the mouse events and `click`. Pressure and contact size only " +
+      "when given, as a digitizer that reports them. No OS input.",
+    usage: [
+      "  touch    [selector] [--x N --y N] [--kind start|move|end|cancel] [--id N]",
+      "           [--pressure P] [--width N --height N]",
+      "                                     a touch contact through gpui's dispatch",
+    ],
+    args: {
+      selector: SELECTOR,
+      index: INDEX,
+      x: int("window x, when no selector is given"),
+      y: int("window y, when no selector is given"),
+      kind: str("start | move (default) | end | cancel"),
+      id: int("which contact (default 1); contacts down at once need different ids"),
+      pressure: int("contact pressure 0..1, as a digitizer that reports it"),
+      width: int("contact width, CSS px"),
+      height: int("contact height, CSS px"),
+    },
+    cli: (rest, flags) => {
+      const base = compact({
+        kind: flags.kind ? String(flags.kind) : "move",
+        id: num(flags.id),
+        pressure: num(flags.pressure),
+        width: num(flags.width),
+        height: num(flags.height),
+      });
+      if (rest[0]) return withIndex({ ...base, selector: rest[0] }, flags);
+      const x = num(flags.x);
+      const y = num(flags.y);
+      if (x === undefined || y === undefined) die("touch needs a selector, or both --x and --y");
+      return { ...base, x, y };
+    },
+  },
+  {
     cmd: "scroll",
     description:
       "Scroll a container by (dx, dy) CSS pixels through its own gpui ScrollHandle and fire the " +

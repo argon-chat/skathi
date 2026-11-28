@@ -17,7 +17,16 @@ import {
 } from "./events";
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
-import { pointer, pointerCaptures, pointerSource, releaseCapturedPointer } from "./pointer-capture";
+import {
+  announceImplicitCapture,
+  beginImplicitCapture,
+  pointer,
+  pointerCaptures,
+  pointerSource,
+  releaseCapturedPointer,
+  touches,
+} from "./pointer-capture";
+import type { PointerSource } from "./pointer-capture";
 import { nodeById, pendingImages } from "./nodes";
 import { deliverFrameMessage, isFrameEl } from "./media";
 import { DERIVED, DERIVED_OF } from "./event-names";
@@ -278,6 +287,31 @@ function systemDrag(g: DndGesture): boolean {
   return g.phase === "system";
 }
 
+const MOUSE_EVENTS = new Set([
+  "mousedown",
+  "mousemove",
+  "mouseup",
+  "mouseover",
+  "mouseout",
+  "mouseenter",
+  "mouseleave",
+]);
+
+/** The contact a touch event belongs to, from its press to its release or cancel. */
+function noteTouch(name: string, src: PointerSource, a: number, b: number, c: number, d: number) {
+  let state = touches.get(src.id);
+  if (name === "mousedown" || (!state && (name === "mousemove" || name === "mouseup" || name === "pointercancel"))) {
+    state = { buttons: 0, position: { x: a, y: b, button: c, modifiers: d }, source: src, compatSuppressed: false };
+    touches.set(src.id, state);
+  }
+  if (state && (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel")) {
+    state.position = { x: a, y: b, button: c, modifiers: d };
+    state.buttons = buttonsFor(name, c);
+    state.source = src;
+  }
+  return state;
+}
+
 const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, x, y, pen) => {
   if (evCode === 65 && (key === "drag" || key === "dragend")) {
     const g = dndState.gesture;
@@ -323,7 +357,9 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   if (name === "pointerlockchange" || name === "pointerlockerror")
     return propagateAtDocument(name, new Event(name, { bubbles: true }));
   const src = pointerSource(pen);
-  if (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel") {
+  const touch = src.type === "touch";
+  const contact = touch ? noteTouch(name, src, a, b, c, d) : undefined;
+  if (!touch && (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel")) {
     // The pointer that was pressed is done with when another one reports.
     if (src.id !== pointer.source.id) {
       releaseCapturedPointer(pointer.source.id);
@@ -341,10 +377,13 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
         releaseCapturedPointer(src.id);
       }
     }
-  } else if (name === "mouseenter" || name === "mouseleave" || name === "mouseover" || name === "mouseout") {
+  } else if (
+    !touch &&
+    (name === "mouseenter" || name === "mouseleave" || name === "mouseover" || name === "mouseout")
+  ) {
     pointer.source = src;
   }
-  if (dndState.gesture || dndState.swallowClick || (name === "selectstart" && dndState.seen)) {
+  if (!touch && (dndState.gesture || dndState.swallowClick || (name === "selectstart" && dndState.seen))) {
     const answer = dndDispatch(name, nodeId, a, b, d, key);
     if (answer !== undefined) return answer;
   }
@@ -410,6 +449,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   const boundary = name === "mouseover" || name === "mouseout";
   const related = boundary ? (key ? (nodeById(Number(key)) ?? null) : null) : undefined;
   const relate = (ev: Event) => (related === undefined ? ev : withRelatedTarget(ev, related));
+  if (touch && name === "mousedown") beginImplicitCapture(target, src.id);
   // `preventDefault()` on a derived pointer event cancels its source.
   const derived = DERIVED_OF[name];
   let proceed = true;
@@ -424,9 +464,14 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   // A pen whose `pointerdown` was cancelled fires no mouse events until it lifts (Pointer Events §"Mapping for
   // devices that do not support hover"); `click` still follows.
   if (src.type === "pen" && name === "mousedown") pointer.compatSuppressed = !proceed;
+  if (contact && name === "mousedown") contact.compatSuppressed = !proceed;
   const compat = name === "mousedown" || name === "mousemove" || name === "mouseup";
-  const suppressed = compat && src.type === "pen" && pointer.compatSuppressed;
-  if (name === "mouseup" || name === "pointercancel") pointer.compatSuppressed = false;
+  // A touch contact other than the primary fires no mouse events at all; the primary's boundary mouse events are not
+  // suppressed by a cancelled `pointerdown` (Pointer Events §11).
+  const suppressed = touch
+    ? MOUSE_EVENTS.has(name) && (!src.primary || (compat && !!contact?.compatSuppressed))
+    : compat && src.type === "pen" && pointer.compatSuppressed;
+  if (!touch && (name === "mouseup" || name === "pointercancel")) pointer.compatSuppressed = false;
   // Skipping the source event when nothing listens is safe: the only `preventDefault()` that could set the flag
   // is the one below, which already made `proceed` false. A click whose path holds a link, label or file input
   // must be built regardless: a `preventDefault()` on the path cancels the activation.
@@ -484,8 +529,10 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
         "already scrolled its own content (the boxes around it stay put)",
     );
   }
+  if (touch && name === "mousedown") announceImplicitCapture(src.id);
   if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(src.id);
-  if (name === "mousedown" && dndState.seen && !dndState.gesture) dndPress(target, a, b, c, proceed);
+  if (touch && (name === "mouseup" || name === "pointercancel")) touches.delete(src.id);
+  if (!touch && name === "mousedown" && dndState.seen && !dndState.gesture) dndPress(target, a, b, c, proceed);
   return proceed;
 };
 __sk_set_dispatcher(__DEV__ ? withCause(dispatchHostEvent) : dispatchHostEvent);

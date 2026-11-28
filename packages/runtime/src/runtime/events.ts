@@ -165,6 +165,19 @@ function penButtons(src: PointerSource, button: number, buttons: number): { butt
 
 /** The members a reading sets; a pen's pressure is 0 with no button down, as the spec has it. */
 function readingInit(src: PointerSource, r: PointerReading | undefined, buttons: number) {
+  if (src.type === "touch")
+    return {
+      pointerId: src.id,
+      pointerType: "touch",
+      isPrimary: src.primary,
+      width: r && r.width > 0 ? r.width : 1,
+      height: r && r.height > 0 ? r.height : 1,
+      pressure: buttons ? (r?.pressure ?? 0.5) : 0,
+      tangentialPressure: 0,
+      tiltX: 0,
+      tiltY: 0,
+      twist: 0,
+    };
   if (src.type !== "pen" || !r)
     return {
       pointerId: src.id,

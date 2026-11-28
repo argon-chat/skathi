@@ -68,6 +68,7 @@ export const overrides: Readonly<Record<string, string | null>> = {
   webrtc: "api.RTCPeerConnection",
   "navigator-language": "api.Navigator.language",
   "navigator-languages": "api.Navigator.languages",
+  "navigator-max-touch-points": "api.Navigator.maxTouchPoints",
   "navigator-user-agent-data": "api.Navigator.userAgentData",
   "navigator-permissions-query": "api.Permissions.query",
   "async-clipboard": "api.Clipboard",

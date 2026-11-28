@@ -1,0 +1,11 @@
+{
+  "name": "sk-test-touch",
+
+  "window": {
+    "title": "Skathi — touch (fixture)",
+    "width": 420,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

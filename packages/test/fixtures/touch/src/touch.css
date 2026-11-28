@@ -1,0 +1,24 @@
+#page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+#left,
+#right {
+  position: absolute;
+  top: 20px;
+  width: 180px;
+  height: 200px;
+}
+
+#left {
+  left: 20px;
+  background: rgb(230, 230, 240);
+}
+
+#right {
+  left: 220px;
+  background: rgb(240, 230, 230);
+}

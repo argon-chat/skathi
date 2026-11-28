@@ -349,8 +349,9 @@ const domAndEvents = section("DOM and events", [
     ["pointer events"],
     PART,
     [
-      'Events from the host come from the mouse (`pointerType` `"mouse"`, `pointerId` `1`) or a pen (`"pen"`, `pointerId` `2`). There is no touch input. `isPrimary` is `true`, and `width` and `height` are `1`.',
+      'Events from the host come from the mouse (`pointerType` `"mouse"`, `pointerId` `1`), a pen (`"pen"`, `pointerId` `2`) or a finger (`"touch"`, a `pointerId` of its own per contact). The mouse and the pen are always primary; of the fingers, the first contact of a touch sequence is.',
       "A mouse reports pressure `0.5` while a button is down and `0` on release. A macOS Force Touch trackpad also reports measured pressure during a press.",
+      "`width` and `height` are a finger's contact size where the touch screen reports it, and `1` otherwise and for the mouse and the pen.",
     ],
   ),
   prop("PointerEvent.pointerType", PART, 'The kind of device behind the event: `"mouse"`, `"pen"` or `"touch"`.', {
@@ -363,13 +364,23 @@ const domAndEvents = section("DOM and events", [
       "On Windows, pen input comes from `WM_POINTER` messages. Press-and-hold right-click, flicks and the Windows Ink feedback ripples are turned off for the window.",
       "On macOS, AppKit's tablet events are the pen, and leaving proximity ends its hover.",
       "On Linux, Wayland compositors that offer `zwp_tablet_v2` deliver pens.",
+      'Each finger on a touch screen is a pointer of its own, `"touch"`, with a `pointerId` that no other pointer has while it is down; ten and more contacts at once are delivered. The first contact of a touch sequence is primary (`isPrimary`); when it lifts while others are down, none becomes primary until all have lifted.',
+      "A finger cannot hover: `pointerover` and `pointerenter` come just before its `pointerdown`, `pointerout` and `pointerleave` just after its `pointerup` or `pointercancel`. It is captured to the element it went down on, as on the web: `gotpointercapture` follows `pointerdown` unless a listener released it, and `releasePointerCapture` hands it back to hit testing.",
+      "Only the primary finger fires the compatibility mouse events and `click`. A `preventDefault()` on its `pointerdown` keeps `mousedown`, `mousemove` and `mouseup` from firing; `click` and the mouse boundary events still fire, as in a browser.",
+      "On Windows, touch comes from `WM_POINTER` messages, with the contact rectangle and pressure where the screen reports them. A contact Windows cancels, such as a rejected palm, never fires `pointerdown`, or fires `pointercancel` if it was down. Windows does not turn the contacts into mouse input as well.",
     ],
     limitations: [
-      'No touch input: the host never reports `"touch"`.',
+      'On macOS and Linux the host does not deliver touch input yet; `"touch"` comes only on Windows.',
+      "Touch does not scroll, zoom or long-press yet, and `touch-action` has no effect on it.",
       "On Linux under X11, a pen moves the core pointer and arrives as the mouse.",
     ],
-    related: ["pointer-event", "pointer-event-pressure", "pointer-event-get-coalesced-events"],
-    aliases: ["pen", "stylus", "pointerId", "isPrimary"],
+    related: [
+      "pointer-event",
+      "pointer-event-pressure",
+      "pointer-event-get-coalesced-events",
+      "navigator-max-touch-points",
+    ],
+    aliases: ["pen", "stylus", "touch", "finger", "multi-touch", "pointerId", "isPrimary"],
   }),
   prop("PointerEvent.pressure", PART, "How hard the pen tip or Force Touch trackpad is pressed, from 0 to 1.", {
     since: "0.5.0",
@@ -379,6 +390,7 @@ const domAndEvents = section("DOM and events", [
       "On Windows, it is the pen's `POINTER_PEN_INFO` pressure, 0 to 1024, scaled to 0 to 1; a pen that does not report pressure reads `0.5` while touching.",
       "On macOS, a pen supplies its tablet pressure. A Force Touch trackpad reports a normal press in the lower half of the range and a force click in the upper half. A change in pressure alone fires a mouse `pointermove`.",
       "On Linux with Wayland, it is the tablet tool's pressure axis, 0 to 65535, scaled to 0 to 1.",
+      "A finger reports its `POINTER_TOUCH_INFO` pressure, 0 to 1024 scaled to 0 to 1, on a touch screen that measures it, and `0.5` while down on one that does not.",
     ],
     limitations: ["On Linux under X11, a pen arrives as the mouse and reads `0.5` while pressed."],
     related: ["pointer-event-pointer-type", "pointer-event-tangential-pressure", "pointer-event-tilt-x"],
@@ -494,7 +506,9 @@ const domAndEvents = section("DOM and events", [
   eventIface("DragEvent", "An event of a drag-and-drop interaction.", ["drag events", "drag and drop"]),
   iface("TouchEvent", PART, "An event from a touch surface, with its list of touch points.", {
     notes: ["Constructible."],
-    limitations: ["The host does not deliver touch input yet."],
+    limitations: [
+      'The host does not deliver `TouchEvent`s yet. On Windows a touch screen\'s contacts arrive as `pointerType: "touch"` pointer events.',
+    ],
     related: ["pointer-event"],
     aliases: ["touch events", "Touch", "TouchList"],
   }),
@@ -1231,6 +1245,14 @@ const systemIntegration = section("System integration", [
   prop("navigator.languages", OK, "The user's preferred languages, most preferred first.", {
     notes: [LANGUAGE_NOTE],
     related: ["navigator-language", "accept-language"],
+  }),
+  prop("navigator.maxTouchPoints", PART, "How many touch contacts the device reports at once.", {
+    platforms: { windows: OK, macos: PART, linux: PART },
+    notes: [
+      "On Windows, it is the number the touch digitizers report (`SM_MAXIMUMTOUCHES`), read each time, so plugging in or removing a touch screen changes it. It is `0` without one.",
+    ],
+    limitations: ["On macOS and Linux it is `0`: the host does not deliver touch input there yet."],
+    related: ["pointer-event-pointer-type"],
   }),
   prop("navigator.userAgentData", OK, "Structured information about the browser and platform.", {
     notes: ["`getHighEntropyValues` is supported."],

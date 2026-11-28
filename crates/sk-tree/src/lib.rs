@@ -68,6 +68,7 @@ mod svg;
 mod text_box;
 mod text_control;
 mod toggle;
+mod touch;
 mod tree;
 mod vertical_align;
 #[cfg(feature = "video")]

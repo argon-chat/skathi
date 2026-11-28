@@ -92,7 +92,7 @@ declare function __sk_set_layout_hook(fn: (op: number) => number): void;
 /** `true`: the next frame runs the layout step even if nothing lays out. `false`: every observation was released. */
 declare function __sk_layout_watch(observing: boolean): void;
 
-/** `(nodeId, code, a, b, c, d, key, data, x, y, pen) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`; `pen` is `[flags, count, ...readings, ...predicted]` for an event a pen caused, or a mouse move's positions since the last one (`pointerSource`). */
+/** `(nodeId, code, a, b, c, d, key, data, x, y, pen) -> proceed`. `a`-`d`/`key` are per-event (`SkEventPayload`); `data` is the clipboard DataTransfer for copy/cut/paste; `x`/`y` are window CSS px for `wheel`, the movement for `mousemove`; `pen` is `[flags, count, ...readings, ...predicted]` for an event a pen or a touch contact caused, or a mouse move's positions since the last one (`pointerSource`). */
 type SkDispatcher = (
   node: SkNodeId,
   code: SkEventCode | 64 | 65,

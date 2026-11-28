@@ -130,6 +130,24 @@ Buttons are named by position (`south`, `left-trigger`, `dpad-up`), so Xbox and 
   caption="A Steam Controller (2026) read through skathi:gamepad: stick axes, triggers and buttons as they move, with SkKbd legends."
 />
 
+## Touch
+
+A touch screen on Windows used to be a mouse with one very wide finger. Now every finger is a pointer of its own: `pointerType: "touch"`, its own `pointerId`, `isPrimary` on the first one, contact size and pressure where the screen reports them, and ten and more at once.
+
+```ts
+const fingers = new Map<number, { x: number; y: number }>();
+
+canvas.addEventListener("pointerdown", (e) => fingers.set(e.pointerId, { x: e.clientX, y: e.clientY }));
+canvas.addEventListener(
+  "pointermove",
+  (e) => fingers.has(e.pointerId) && fingers.set(e.pointerId, { x: e.clientX, y: e.clientY }),
+);
+canvas.addEventListener("pointerup", (e) => fingers.delete(e.pointerId));
+canvas.addEventListener("pointercancel", (e) => fingers.delete(e.pointerId));
+```
+
+Each finger stays captured to where it landed, a rejected palm never presses anything, and only the first finger clicks, so a mouse-only app still works with one hand. `navigator.maxTouchPoints` says what the screen can do. The devtools `touch` command sends contacts without any hardware.
+
 ## Notifications
 
 ```ts
@@ -201,6 +219,7 @@ These defaults lose to any rule of yours, whatever its specificity, like a brows
 - **Steam Controller** outside a Steam game session and away from its Puck relies on the OS driver or Steam Input. Steamworks action sets and glyphs need your own Steamworks integration.
 - **Global shortcuts** work on Windows and macOS only.
 - **Notifications on Linux** support a subset of the options; check `capabilities()`.
+- **Touch** is Windows only, arrives as pointer events (no `TouchEvent` yet), and does not scroll or pinch on its own yet.
 
 </Aside>
 

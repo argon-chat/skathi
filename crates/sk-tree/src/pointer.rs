@@ -35,6 +35,9 @@ pub(crate) fn arm(window: &mut Window) {
     if !window.has_vn_hit_refiner() {
         window.set_vn_hit_refiner(Some(std::rc::Rc::new(refine)));
     }
+    if !window.has_vn_touch_handler() {
+        window.set_vn_touch_handler(Some(std::rc::Rc::new(crate::touch::handle)));
+    }
 }
 
 fn window_root(t: &Tree, window: &Window) -> u32 {
@@ -168,6 +171,7 @@ pub(crate) fn routed_target(window: &Window) -> Option<u32> {
 pub(crate) fn capture_listeners(window: &mut Window) {
     window.on_mouse_event(|ev: &gpui::MouseDownEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
+            crate::touch::note_mouse_event(window);
             if ev.button == gpui::MouseButton::Left {
                 crate::pen::mouse_button(window, window.vn_pen().is_none());
             }
@@ -177,6 +181,7 @@ pub(crate) fn capture_listeners(window: &mut Window) {
     });
     window.on_mouse_event(|ev: &gpui::MouseUpEvent, phase, window, _| {
         if phase == DispatchPhase::Capture {
+            crate::touch::note_mouse_event(window);
             if ev.button == gpui::MouseButton::Left {
                 crate::pen::mouse_button(window, false);
             }
@@ -211,6 +216,7 @@ pub(crate) fn capture_listeners(window: &mut Window) {
         if phase != DispatchPhase::Capture {
             return;
         }
+        crate::touch::note_mouse_event(window);
         let moved = window.vn_mouse_movement();
         windows::here(window, |w| w.mouse_movement = w.mouse_movement + moved);
         crate::pen::note_move(window, ev.pressed_button);
@@ -427,33 +433,57 @@ const PEN_ID: f64 = 2.0;
 host_fn!(fn sk_pointer_capture(_g, args) {
     let id = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let pointer = args.arg(1).as_number().unwrap_or(0.0);
-    if pointer != MOUSE_ID && pointer != PEN_ID {
-        return Value::boolean(false).0;
-    }
     let capture = args.arg(2).as_bool().unwrap_or(false);
+    let done = if pointer == MOUSE_ID || pointer == PEN_ID {
+        capture_mouse(id, capture)
+    } else if pointer.fract() == 0.0 && pointer > 0.0 && pointer <= f64::from(u32::MAX) {
+        crate::touch::capture(id, pointer as u32, capture)
+    } else {
+        false
+    };
+    Value::boolean(done).0
+});
+
+/// Captures the pointer gpui's mouse events stand for (the mouse, a pen, the primary finger) to
+/// `id`, or releases it.
+pub(crate) fn capture_mouse(id: u32, capture: bool) -> bool {
     if !capture {
         windows::each(|_, w| {
             if w.pointer_capture == Some(id) {
                 w.pointer_capture = None;
             }
         });
-        return Value::boolean(true).0;
+        return true;
     }
     let k = windows::window_of_node(id);
     // A script cannot transfer client-space input into another native window.
-    if !windows::peek(k, |w| w.press.as_ref().is_some_and(crate::render::Press::is_active)).unwrap_or(false) {
-        return Value::boolean(false).0;
+    if !windows::peek(k, |w| {
+        w.press
+            .as_ref()
+            .is_some_and(crate::render::Press::is_active)
+    })
+    .unwrap_or(false)
+    {
+        return false;
     }
-    let valid = tree::read_tree(|t| {
-        let root = match windows::root_of(k) { 0 => t.root, popped => popped };
-        capture_path(t, id, root).is_some()
-    });
+    let valid = capturable_in(k, id);
     if valid {
         windows::each(|_, w| w.pointer_capture = None);
         windows::of(k, |w| w.pointer_capture = Some(id));
     }
-    Value::boolean(valid).0
-});
+    valid
+}
+
+/// Can `id` hold a capture in window `k`: an element painted there.
+pub(crate) fn capturable_in(k: windows::WinKey, id: u32) -> bool {
+    tree::read_tree(|t| {
+        let root = match windows::root_of(k) {
+            0 => t.root,
+            popped => popped,
+        };
+        capture_path(t, id, root).is_some()
+    })
+}
 
 pub(crate) fn install(rt: &JsRuntime) {
     rt.register("__sk_hit_at", 3, sk_hit_at as *const std::ffi::c_void);
@@ -543,11 +573,7 @@ pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
         return;
     }
     let path = if inside {
-        let tags = window.vn_tags_at(pos);
-        tree::read_tree(|t| match window_root(t, window) {
-            0 => Vec::new(),
-            root => resolve(t, tags, root).path,
-        })
+        path_at(window, pos)
     } else {
         Vec::new()
     };
@@ -557,7 +583,51 @@ pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
         (w.hover.path != path).then(|| std::mem::replace(&mut w.hover.path, path.clone()))
     });
     if let Some(old) = old {
-        hover_moved(&old, &path, pos, window, cx);
+        hover_moved(&old, &path, pos, -1.0, true, window, cx);
+    }
+}
+
+/// The target at `p` and its ancestors up to the window's root, target first.
+pub(crate) fn path_at(window: &Window, p: Point<Pixels>) -> Vec<u32> {
+    let tags = window.vn_tags_at(p);
+    tree::read_tree(|t| match window_root(t, window) {
+        0 => Vec::new(),
+        root => resolve(t, tags, root).path,
+    })
+}
+
+/// `id` and its ancestors up to the window's root, target first; empty when it is not in it.
+pub(crate) fn path_of(window: &Window, id: u32) -> Vec<u32> {
+    tree::read_tree(|t| capture_path(t, id, window_root(t, window))).unwrap_or_default()
+}
+
+/// The hover moves to `pos` now, not at the next frame: a pointer that cannot hover (a finger)
+/// gets its over and enter events before its press.
+pub(crate) fn hover_now(window: &mut Window, cx: &mut App, pos: Point<Pixels>) {
+    let path = path_at(window, pos);
+    let built = crate::render::layout_count();
+    let old = windows::here(window, |w| {
+        w.hover.from = Some((pos, true, built));
+        w.hover.when = Some(std::time::Instant::now());
+        (w.hover.path != path).then(|| std::mem::replace(&mut w.hover.path, path.clone()))
+    });
+    if let Some(old) = old {
+        hover_moved(&old, &path, pos, -1.0, true, window, cx);
+    }
+}
+
+/// The boundary events of a pointer that is not the mouse's (a second finger): `old` to `new`
+/// without touching `:hover`, which follows the mouse and the primary pointer.
+pub(crate) fn boundary_events(
+    old: &[u32],
+    new: &[u32],
+    pos: Point<Pixels>,
+    button: f64,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if old != new {
+        hover_moved(old, new, pos, button, false, window, cx);
     }
 }
 
@@ -572,25 +642,35 @@ fn boundary(old: &[u32], new: &[u32]) -> (Vec<u32>, Vec<u32>) {
     (left, entered)
 }
 
-fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window, cx: &mut App) {
+fn hover_moved(
+    old: &[u32],
+    new: &[u32],
+    pos: Point<Pixels>,
+    button: f64,
+    styles: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let (left, entered) = boundary(old, new);
-    // Before any handler: a `mouseenter` listener that restyles must find the transition already
-    // aimed at its target.
-    for &id in &left {
-        tree::note_hover(id, false);
-    }
-    for &id in &entered {
-        tree::note_hover(id, true);
-    }
-    let restyled = tree::with_tree(|t| {
-        let mut any = false;
-        for &id in left.iter().chain(&entered) {
-            any |= t.touch_hover_styled(id);
+    if styles {
+        // Before any handler: a `mouseenter` listener that restyles must find the transition
+        // already aimed at its target.
+        for &id in &left {
+            tree::note_hover(id, false);
         }
-        any
-    });
-    if restyled {
-        crate::render::request_repaint(window, cx);
+        for &id in &entered {
+            tree::note_hover(id, true);
+        }
+        let restyled = tree::with_tree(|t| {
+            let mut any = false;
+            for &id in left.iter().chain(&entered) {
+                any |= t.touch_hover_styled(id);
+            }
+            any
+        });
+        if restyled {
+            crate::render::request_repaint(window, cx);
+        }
     }
     // `mouseenter` and `mouseleave` fire at every element that joins or leaves the path and listens
     // for them, `pointer-events` notwithstanding: it decides what is hit, not who hears about it.
@@ -623,12 +703,12 @@ fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window
         return;
     }
     let mods = window.modifiers();
-    let payload = crate::render::mouse_payload(pos, -1.0, &mods);
+    let payload = crate::render::mouse_payload(pos, button, &mods);
     let related = |id: Option<u32>| id.map(|id| id.to_string()).unwrap_or_default();
     let (to_key, from_key) = (related(to), related(from));
     let with_key = |key| crate::EventPayload {
         key: Some(key),
-        ..crate::render::mouse_payload(pos, -1.0, &mods)
+        ..crate::render::mouse_payload(pos, button, &mods)
     };
     let (out_payload, over_payload) = (with_key(to_key.as_str()), with_key(from_key.as_str()));
     // Pointer Events order: out, leaves, over, enters.

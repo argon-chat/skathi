@@ -44,8 +44,39 @@ pub struct PenState {
     predictors: HashMap<Key, KalmanPredictor>,
 }
 
+/// A touch contact's packet: [`TOUCH`], [`PRIMARY`] for the primary contact, its `pointerId`
+/// times [`ID_SHIFT`].
+pub const TOUCH: f64 = 32.0;
+pub const PRIMARY: f64 = 64.0;
+pub const ID_SHIFT: f64 = 256.0;
+
 thread_local! {
     static NEXT: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };
+    /// The packet every pointer-family dispatch carries while it is set ([`with_packet`]).
+    static FORCED: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` with `packet` armed for every pointer-family dispatch in it, in place of the
+/// mouse's or pen's.
+pub(crate) fn with_packet<R>(packet: Vec<f64>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Vec<f64>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FORCED.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(FORCED.with(|c| c.borrow_mut().replace(packet)));
+    f()
+}
+
+/// One touch reading as a packet: the contact's `pointerId`, whether it is primary, and its
+/// position, pressure and size.
+pub(crate) fn touch_packet(pointer_id: u32, primary: bool, sample: &PenSample) -> Vec<f64> {
+    let mut flags = TOUCH + f64::from(pointer_id) * ID_SHIFT;
+    if primary {
+        flags += PRIMARY;
+    }
+    packet(flags, &[(*sample, Clock::now().ms(sample.time))], &[])
 }
 
 fn key(window: &Window) -> Key {
@@ -234,6 +265,17 @@ fn mouse_family(event: u32) -> bool {
 pub(crate) fn arm(window: &mut Window, event: u32) {
     NEXT.with(|n| n.borrow_mut().take());
     if !mouse_family(event) {
+        return;
+    }
+    if let Some(packet) = FORCED.with(|c| c.borrow().clone()) {
+        NEXT.with(|n| *n.borrow_mut() = Some(packet));
+        return;
+    }
+    if let Some(packet) = crate::touch::mouse_packet(window) {
+        if event == tree::EV_MOUSEMOVE {
+            clear_trail(window);
+        }
+        NEXT.with(|n| *n.borrow_mut() = Some(packet));
         return;
     }
     let key = key(window);

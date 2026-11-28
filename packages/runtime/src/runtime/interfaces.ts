@@ -422,15 +422,3 @@ defineInterface("Crypto", (x) => x != null && x === theGlobal("crypto"), null);
       configurable: true,
     });
 }
-
-// No touch screen, as desktop Chrome without one: `maxTouchPoints` is 0 and no touch event is delivered.
-{
-  const nav = typeof navigator !== "undefined" && navigator ? (navigator as object) : null;
-  if (nav && vacant(nav, "maxTouchPoints")) {
-    try {
-      Object.defineProperty(nav, "maxTouchPoints", { get: mark(() => 0), enumerable: true, configurable: true });
-    } catch {
-      /* a frozen navigator keeps its own shape */
-    }
-  }
-}

@@ -438,18 +438,13 @@ describe("interfaces over objects that already existed", () => {
   });
 });
 
-describe("touch, as desktop Chrome shows it on a machine without a touch screen", () => {
-  test("nothing says touch is there", () => {
+describe("touch events, which are not delivered", () => {
+  test("no ontouchstart, as desktop Chrome without a touch screen", () => {
     const { rt, g, vue } = world();
     const el = vue("div");
     expect("ontouchstart" in g).toBe(false);
     expect("ontouchstart" in el).toBe(false);
     void rt;
-    const navigator: { permissions: { query: () => Promise<unknown> }; maxTouchPoints?: number } = {
-      permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) },
-    };
-    createRuntime({ navigator });
-    expect(navigator.maxTouchPoints).toBe(0);
   });
 });
 

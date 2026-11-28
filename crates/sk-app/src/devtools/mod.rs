@@ -1219,6 +1219,19 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 },
             )
         }
+        "touch" => cmd_touch(
+            arg("selector").as_deref(),
+            num("index"),
+            num("x"),
+            num("y"),
+            arg("kind").as_deref(),
+            TouchExtras {
+                id: num("id").map_or(1, |n| n.clamp(0.0, 1e9) as u64),
+                pressure: num("pressure").map(|p| p.clamp(0.0, 1.0) as f32),
+                width: num("width").map(|w| w.max(0.0) as f32),
+                height: num("height").map(|h| h.max(0.0) as f32),
+            },
+        ),
         "eval" => match arg("js") {
             None => err("eval needs `js`"),
             Some(js) => cmd_eval(&js),
@@ -2239,6 +2252,68 @@ fn cmd_pen(
             ("x", Json::n(f64::from(point.0))),
             ("y", Json::n(f64::from(point.1))),
             ("kind", Json::s(kind.to_string())),
+        ])),
+    }
+}
+
+/// What a `touch` contact carries besides its kind and position: which finger, and what the
+/// digitizer reports of it (nothing, unless given).
+struct TouchExtras {
+    id: u64,
+    pressure: Option<f32>,
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+/// A touch contact through gpui's dispatch, the way a platform reports a finger. No OS input.
+fn cmd_touch(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    kind: Option<&str>,
+    extras: TouchExtras,
+) -> String {
+    let (node, point) = match aim(selector, index, x, y, "touch") {
+        Ok(aimed) => aimed,
+        Err(e) => return err(e),
+    };
+    let kind = kind.unwrap_or("move");
+    let phase = match kind {
+        "start" => gpui::TouchPhase::Started,
+        "move" => gpui::TouchPhase::Moved,
+        "end" => gpui::TouchPhase::Ended,
+        "cancel" => gpui::TouchPhase::Cancelled,
+        _ => {
+            return err(format!(
+                "unknown touch kind `{kind}` — start | move | end | cancel"
+            ))
+        }
+    };
+    let size = match (extras.width, extras.height) {
+        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some(gpui::size(gpui::px(w), gpui::px(h))),
+        _ => None,
+    };
+    let event = gpui::TouchEvent {
+        id: gpui::TouchId(extras.id),
+        phase,
+        position: gpui::point(gpui::px(point.0), gpui::px(point.1)),
+        predicted_position: None,
+        force: extras.pressure,
+        size,
+        orientation: None,
+    };
+    let done = in_window(node, |window, app| {
+        window.dispatch_event(gpui::PlatformInput::Touch(event), app);
+        window.refresh();
+    });
+    match done {
+        None => err("not in a commit phase"),
+        Some(()) => ok(Json::obj(vec![
+            ("x", Json::n(f64::from(point.0))),
+            ("y", Json::n(f64::from(point.1))),
+            ("kind", Json::s(kind.to_string())),
+            ("id", Json::n(extras.id as f64)),
         ])),
     }
 }

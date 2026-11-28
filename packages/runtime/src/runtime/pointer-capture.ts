@@ -6,7 +6,7 @@ import { hasListener, propagate, synthesize } from "./events";
 export const MOUSE_ID = 1;
 export const PEN_ID = 2;
 
-/** One pen (or, positions only, mouse) reading the host reports: window CSS px, degrees. */
+/** One pen, touch (or, positions only, mouse) reading the host reports: window CSS px, degrees. */
 export interface PointerReading {
   x: number;
   y: number;
@@ -28,10 +28,12 @@ export interface PredictedReading {
   time: number;
 }
 
-/** What drove a host mouse event: the mouse, or a pen with its readings (oldest first, the event's own last). */
+/** What drove a host mouse event: the mouse, a pen or a touch contact, with its readings (oldest first, the event's own last). */
 export interface PointerSource {
   id: number;
-  type: "mouse" | "pen";
+  type: "mouse" | "pen" | "touch";
+  /** The first contact of a touch sequence; the mouse and a pen always are. */
+  primary: boolean;
   eraser: boolean;
   barrel: boolean;
   mousePressure?: boolean;
@@ -42,6 +44,7 @@ export interface PointerSource {
 export const MOUSE_SOURCE: PointerSource = {
   id: MOUSE_ID,
   type: "mouse",
+  primary: true,
   eraser: false,
   barrel: false,
   readings: [],
@@ -53,10 +56,13 @@ const PEN_ERASER = 1;
 const PEN_BARREL = 2;
 const PEN_MOUSE = 8;
 const MOUSE_PRESSURE = 16;
+const TOUCH = 32;
+const TOUCH_PRIMARY = 64;
+const ID_SHIFT = 256;
 const READING_LEN = 10;
 const PREDICTED_LEN = 3;
 
-/** The host's pen packet (`[flags, count, ...readings, ...predicted]`); the mouse when there is none. */
+/** The host's pointer packet (`[flags, count, ...readings, ...predicted]`); the mouse when there is none. */
 export function pointerSource(raw: unknown): PointerSource {
   if (!Array.isArray(raw) || raw.length < 2 + READING_LEN) return MOUSE_SOURCE;
   const n = raw as number[];
@@ -80,10 +86,21 @@ export function pointerSource(raw: unknown): PointerSource {
   }
   const predicted: PredictedReading[] = [];
   for (; i + PREDICTED_LEN <= n.length; i += PREDICTED_LEN) predicted.push({ x: n[i]!, y: n[i + 1]!, time: n[i + 2]! });
+  if (flags & TOUCH)
+    return {
+      id: Math.floor(flags / ID_SHIFT),
+      type: "touch",
+      primary: !!(flags & TOUCH_PRIMARY),
+      eraser: false,
+      barrel: false,
+      readings,
+      predicted,
+    };
   if (flags & PEN_MOUSE) return { ...MOUSE_SOURCE, mousePressure: !!(flags & MOUSE_PRESSURE), readings, predicted };
   return {
     id: PEN_ID,
     type: "pen",
+    primary: true,
     eraser: !!(flags & PEN_ERASER),
     barrel: !!(flags & PEN_BARREL),
     readings,
@@ -91,24 +108,37 @@ export function pointerSource(raw: unknown): PointerSource {
   };
 }
 
+interface PointerState {
+  buttons: number;
+  position: { x: number; y: number; button: number; modifiers: number };
+  source: PointerSource;
+  compatSuppressed: boolean;
+}
+
 // -- pointer capture: one owner per pointer; the host routes input to it even outside its hitbox.
 export const pointerCaptures = new Map<number, MirrorElement>();
 const disconnectingCaptureRoots = new Set<MirrorNode>();
 /** The pointer the host last reported. `compatSuppressed`: a pen's `pointerdown` was cancelled, so its mouse events are not fired until it lifts. */
-export const pointer = {
+export const pointer: PointerState = {
   buttons: 0,
   position: { x: 0, y: 0, button: -1, modifiers: 0 },
   source: MOUSE_SOURCE,
   compatSuppressed: false,
 };
+/** Touch contacts that are down, by `pointerId`: each is a pointer of its own. */
+export const touches = new Map<number, PointerState>();
+/** Implicit captures not announced yet: a touch's, taken before its `pointerdown` listeners run. */
+const pendingImplicit = new Set<number>();
 
-function captureEvent(owner: MirrorElement, name: string): void {
+function captureEvent(owner: MirrorElement, name: string, pointerId: number): void {
+  if (pendingImplicit.has(pointerId)) return;
   if (hasListener(owner, name)) {
-    const p = pointer.position;
+    const state = touches.get(pointerId) ?? pointer;
+    const p = state.position;
     propagate(
       owner,
       name,
-      synthesize(name, p.x, p.y, p.button, p.modifiers, undefined, undefined, undefined, pointer.source),
+      synthesize(name, p.x, p.y, p.button, p.modifiers, undefined, undefined, undefined, state.source),
     );
   }
 }
@@ -117,7 +147,8 @@ export function releaseCapturedPointer(pointerId: number, owner?: MirrorElement)
   if (!current || (owner && owner !== current)) return;
   pointerCaptures.delete(pointerId);
   __sk_pointer_capture(current.__skId, pointerId, false);
-  captureEvent(current, "lostpointercapture");
+  captureEvent(current, "lostpointercapture", pointerId);
+  pendingImplicit.delete(pointerId);
 }
 export function releaseCapturesIn(node: MirrorNode): void {
   disconnectingCaptureRoots.add(node);
@@ -134,22 +165,46 @@ export function releaseCapturesIn(node: MirrorNode): void {
     disconnectingCaptureRoots.delete(node);
   }
 }
-defineDom("setPointerCapture", function (this: MirrorElement, pointerId: number) {
-  if (pointerId !== MOUSE_ID && (pointerId !== PEN_ID || pointer.source.type !== "pen"))
-    throw new DOMException("No active pointer with this id", "NotFoundError");
-  if (!pointer.buttons || pointerId !== pointer.source.id) return;
-  if (!this.__skId || (!this.parentNode && this !== appRoot))
+
+function capturePointer(el: MirrorElement, pointerId: number): void {
+  if (!el.__skId || (!el.parentNode && el !== appRoot))
     throw new DOMException("The capture target is not connected", "InvalidStateError");
-  for (let n: MirrorNode | null = this; n; n = n.parentNode) {
+  for (let n: MirrorNode | null = el; n; n = n.parentNode) {
     if (disconnectingCaptureRoots.has(n)) return;
   }
   const previous = pointerCaptures.get(pointerId);
-  if (previous === this) return;
-  if (!__sk_pointer_capture(this.__skId, pointerId, true)) return;
-  pointerCaptures.set(pointerId, this);
+  if (previous === el) return;
+  if (!__sk_pointer_capture(el.__skId, pointerId, true)) return;
+  pointerCaptures.set(pointerId, el);
   // A lost-capture listener may transfer capture again: publish the owner first, announce only if it stays.
-  if (previous) captureEvent(previous, "lostpointercapture");
-  if (pointerCaptures.get(pointerId) === this) captureEvent(this, "gotpointercapture");
+  if (previous) captureEvent(previous, "lostpointercapture", pointerId);
+  pendingImplicit.delete(pointerId);
+  if (pointerCaptures.get(pointerId) === el) captureEvent(el, "gotpointercapture", pointerId);
+}
+
+/**
+ * A touch contact's implicit capture (Pointer Events §9.5): as if `setPointerCapture` were called on the target just
+ * before its `pointerdown` listeners run; `gotpointercapture` follows them unless one released or moved it.
+ */
+export function beginImplicitCapture(target: MirrorNode, pointerId: number): void {
+  if (target.kind !== 1 || !target.__skId) return;
+  const el = target as MirrorElement;
+  if (!__sk_pointer_capture(el.__skId, pointerId, true)) return;
+  pointerCaptures.set(pointerId, el);
+  pendingImplicit.add(pointerId);
+}
+export function announceImplicitCapture(pointerId: number): void {
+  if (!pendingImplicit.delete(pointerId)) return;
+  const owner = pointerCaptures.get(pointerId);
+  if (owner) captureEvent(owner, "gotpointercapture", pointerId);
+}
+
+defineDom("setPointerCapture", function (this: MirrorElement, pointerId: number) {
+  const touch = touches.get(pointerId);
+  if (!touch && pointerId !== MOUSE_ID && (pointerId !== PEN_ID || pointer.source.type !== "pen"))
+    throw new DOMException("No active pointer with this id", "NotFoundError");
+  if (touch ? !touch.buttons : !pointer.buttons || pointerId !== pointer.source.id) return;
+  capturePointer(this, pointerId);
 });
 defineDom("hasPointerCapture", function (this: MirrorElement, pointerId: number) {
   return pointerCaptures.get(pointerId) === this;

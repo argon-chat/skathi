@@ -1281,6 +1281,7 @@ fn run_app() {
 
         // Seeded before `JsRuntime::init` so the first `navigator.onLine` read queues no event.
         sk_desktop::network::install();
+        sk_desktop::touch::install();
 
         #[cfg(all(sk_devtools, not(feature = "native-aot")))]
         if let Some(summary) = devtools_mode.then(|| inspector::engine_without_native(

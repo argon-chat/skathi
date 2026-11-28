@@ -2,7 +2,7 @@ import type { MirrorElement } from "./types";
 import { looseById, looseRoots, nodesById, pendingImages } from "./nodes";
 import { mk } from "./node-ops";
 import { disposeGlobalListener, dndRearm, dndState, globalHandlers, syncListenerFlag } from "./listeners";
-import { pointer, pointerCaptures, releaseCapturedPointer } from "./pointer-capture";
+import { pointer, pointerCaptures, releaseCapturedPointer, touches } from "./pointer-capture";
 import { observers } from "./mutation-observer";
 
 export let appRoot: MirrorElement | null = null; // made when the runtime evaluates, and again after a teardown
@@ -16,6 +16,7 @@ export function teardownDocumentRoot(root: MirrorElement, unmount?: () => void):
   }
   pointer.buttons = 0;
   for (const pointerId of Array.from(pointerCaptures.keys())) releaseCapturedPointer(pointerId);
+  touches.clear();
   dndState.gesture = null;
   dndState.seen = false;
   dndState.swallowClick = false;

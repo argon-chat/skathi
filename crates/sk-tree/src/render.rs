@@ -642,6 +642,7 @@ pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     // `:focus-visible` paints it.
     crate::live_state::note_modality(window);
     crate::pointer::resolve_hover(window, cx);
+    crate::off_input(|| crate::touch::flush(window, cx));
     let Some((p, target)) = take_pending_move(window, cx) else {
         crate::pen::clear_trail(window);
         return;
@@ -906,7 +907,7 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
     }
 }
 
-fn cancel_press(window: &mut Window, cx: &mut App) {
+pub(crate) fn cancel_press(window: &mut Window, cx: &mut App) {
     let captured = crate::pointer::captured_target(window);
     crate::live_state::set_active(window, None);
     let press = windows::here(window, |w| match &mut w.press {

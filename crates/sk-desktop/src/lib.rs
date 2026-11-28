@@ -30,6 +30,7 @@ pub mod power;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod share;
 pub mod shell;
+pub mod touch;
 pub mod tray;
 mod web;
 #[cfg(any(target_os = "windows", target_os = "macos"))]

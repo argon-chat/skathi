@@ -156,7 +156,7 @@ g.__SK_TEST_DOM__ = {
         "ontouchstart" in window,
         "ontouchstart" in dom.documentElement,
         "ontouchstart" in list,
-        navigator.maxTouchPoints,
+        Number.isInteger(navigator.maxTouchPoints) && navigator.maxTouchPoints >= 0,
         typeof g.TouchEvent,
         typeof g.Touch,
         typeof g.TouchList,
