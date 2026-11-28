@@ -137,6 +137,28 @@ struct Placed {
     placed: fn(WinKey, u32, Bounds<Pixels>),
 }
 
+/// How far `rect` moves up so a submenu's first row lines up with its trigger: the menu's top
+/// padding and border.
+fn beside_rect(placement: Placement, root: u32, (x, y, w, h): Rect) -> Rect {
+    if placement != Placement::Beside {
+        return (x, y, w, h);
+    }
+    let px = |l: gpui::AbsoluteLength| match l {
+        gpui::AbsoluteLength::Pixels(p) => f32::from(p),
+        gpui::AbsoluteLength::Rems(r) => r.0 * sk_css::rem_basis(),
+    };
+    let inset = crate::tree::read_tree(|t| {
+        let base = &t.node(root)?.computed.as_ref()?.base;
+        let padding = match base.padding.top {
+            Some(gpui::DefiniteLength::Absolute(l)) => px(l),
+            _ => 0.,
+        };
+        Some(padding + base.border_widths.top.map_or(0., px))
+    })
+    .unwrap_or(0.);
+    (x, y - inset, w, h)
+}
+
 fn anchor_box(k: WinKey, anchor: u32, fallback: Rect) -> Rect {
     windows::peek(k, |w| {
         w.bounds
@@ -190,6 +212,10 @@ impl gpui::Element for Placed {
         let rect = self
             .fixed
             .unwrap_or_else(|| anchor_box(k, self.anchor, self.fallback));
+        let rect = match self.menu {
+            Some((root, _)) => beside_rect(self.placement, root, rect),
+            None => rect,
+        };
         let viewport = window.viewport_size();
         let (x, y) = place_at(
             self.placement,
@@ -351,6 +377,7 @@ pub(crate) fn menu_element(
             let size = child.layout_as_root(gpui::size(max, max), window, cx);
             let rect = fixed
                 .unwrap_or_else(|| anchor_box(windows::key(window), menu.anchor, (0., 0., 0., 0.)));
+            let rect = beside_rect(menu.placement, menu.root, rect);
             show(
                 Request {
                     slot: Slot::Menu(menu.root),
