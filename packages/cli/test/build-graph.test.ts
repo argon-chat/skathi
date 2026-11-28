@@ -57,16 +57,20 @@ interface NpmMain {
 }
 /** Every `bun build.ts --watch` this file starts, killed at the end and on runner exit (a test's `finally` does not run on timeout). */
 const watchers: Bun.Subprocess[] = [];
-function watchBuild(entry: string, dist: string) {
+async function watchBuild(entry: string, dist: string) {
+  const log = Bun.file(join(dist, "watch.log"));
   const proc = Bun.spawn(["bun", "build.ts", entry, dist, "--watch"], {
     cwd: PKG_DIR,
-    // Nothing reads the output; a pipe nobody drains can stall the child.
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: log,
+    stderr: "inherit",
     env: { ...process.env, SK_OWNER_PID: String(process.pid) },
   });
   watchers.push(proc);
-  return proc;
+  for (let i = 0; i < 150 && proc.exitCode === null; i++) {
+    if ((await log.text()).includes("watching")) return proc;
+    await Bun.sleep(100);
+  }
+  throw new Error("watcher did not start:\n" + (await log.text()));
 }
 const killWatchers = () => {
   for (const proc of watchers) {
@@ -517,9 +521,8 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   };
 
   test("one instance across packages and the app; another version stays its own; an HMR pass keeps it", async () => {
-    const proc = watchBuild(join(dir, "src/main.ts"), dist);
+    const proc = await watchBuild(join(dir, "src/main.ts"), dist);
     try {
-      expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
       const manifest = JSON.parse(read("manifest.json")) as Manifest;
       const npm = manifest.modules.filter((m: string) => !m.startsWith(rel));
       expect(npm.filter((m: string) => m === "ctx-core")).toEqual(["ctx-core"]);
@@ -537,7 +540,6 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
       const core = await w.SK.importModule("ctx-core");
 
       const coreScript = script("ctx-core");
-      await Bun.sleep(300);
       writeFileSync(
         join(dir, "src/main.ts"),
         readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n",
@@ -627,9 +629,8 @@ describe("build.ts (dev): two entries of one package share its modules", () => {
   };
 
   test("one copy of the package's modules; a new entry rebuilds it and asks for a restart", async () => {
-    const proc = watchBuild(join(dir, "src/main.ts"), dist);
+    const proc = await watchBuild(join(dir, "src/main.ts"), dist);
     try {
-      expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
       const manifest = JSON.parse(read("manifest.json")) as Manifest;
       const group = manifest.modules.filter((m) => m.startsWith("multi~pkg~"));
       expect(group).toHaveLength(1);
@@ -645,7 +646,6 @@ describe("build.ts (dev): two entries of one package share its modules", () => {
       expect(main.found).toBe("shared");
       expect(main.cjs).toBe("cjs");
 
-      await Bun.sleep(300);
       writeFileSync(
         join(dir, "src/main.ts"),
         readFileSync(join(dir, "src/main.ts"), "utf8") + 'export { default as extra } from "multi/extra";\n',
@@ -673,7 +673,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
     writeFileSync(join(dir, "src/main.ts"), 'import data from "./data.json";\nexport const v = data.v;\n');
     const dist = mkdtempSync(join(tmpdir(), "sk-build-inline-"));
     tmpDirs.push(dist);
-    const proc = watchBuild(join(dir, "src/main.ts"), dist);
+    const proc = await watchBuild(join(dir, "src/main.ts"), dist);
     const read = (f: string) => {
       try {
         return readFileSync(join(dist, f), "utf8");
@@ -686,10 +686,8 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
       return ok();
     };
     try {
-      expect(await until(() => read("manifest.json").includes(rel))).toBe(true);
       const script = () => read(join("modules", rel.split("/").join("__") + ".js"));
       expect(script()).toMatch(/v:\s*1\b/);
-      await Bun.sleep(300); // past the watcher's first events
       writeFileSync(join(dir, "src/data.json"), '{ "v": 2 }\n');
       expect(await until(() => /v:\s*2\b/.test(script()))).toBe(true);
       expect(await until(() => read("changes.json").includes(rel))).toBe(true);
