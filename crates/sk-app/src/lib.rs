@@ -611,8 +611,7 @@ pub(crate) enum Wave {
 
 /// One JS wave inside one `Phase::Commit` publication.
 pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
-    let app_focused = window::app_focused(cx);
-    let focused = app_focused || quiet::never_focus();
+    let focused = window::app_focused(cx) || quiet::never_focus();
     with_published(window, cx, Phase::Commit, || {
         // HMR before the pump, so what Vue schedules while patching drains this frame.
         if wave == Wave::Frame {
@@ -633,7 +632,7 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
         };
         JsRuntime::with(|rt| {
             #[cfg(feature = "gamepad")]
-            gamepad::pump(rt, app_focused, !window::page_hidden());
+            gamepad::pump(rt, focused, !window::page_hidden());
             pressure_observer::deliver(rt, focused && !window::page_hidden());
             let pumped = std::time::Instant::now();
             let stats = rt.pump(flags);
