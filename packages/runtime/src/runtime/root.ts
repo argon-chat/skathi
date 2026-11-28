@@ -1,5 +1,5 @@
 import type { MirrorElement } from "./types";
-import { looseById, looseRoots, nodesById } from "./nodes";
+import { looseById, looseRoots, nodesById, pendingImages } from "./nodes";
 import { mk } from "./node-ops";
 import { disposeGlobalListener, dndRearm, dndState, globalHandlers, syncListenerFlag } from "./listeners";
 import { pointer, pointerCaptures, releaseCapturedPointer } from "./pointer-capture";
@@ -33,6 +33,7 @@ export function teardownDocumentRoot(root: MirrorElement, unmount?: () => void):
   }
   root.__skId = 0;
   nodesById.clear();
+  pendingImages.clear();
   looseById.clear();
   looseRoots.clear();
   globalThis.__SK_CSS__ = [];

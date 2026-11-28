@@ -393,6 +393,30 @@ describe("what the renderer and script share", () => {
 });
 
 describe("loose nodes are freed once the collector has them", () => {
+  test("detached images survive GC until their current load or error is delivered", async () => {
+    const { rt, doc } = world();
+    const seen: number[] = [];
+    const ids = Array.from({ length: 16 }, (_, index) => {
+      const img = doc.createElement("img");
+      img.addEventListener(index % 2 ? "load" : "error", () => seen.push(img.__skId));
+      img.setAttribute("src", "old.png");
+      img.setAttribute("src", "current.png");
+      rt.host.dispatcher(img.__skId, rt.EV_CODES.error, 0, 0, 0, 0, "old.png");
+      return img.__skId;
+    });
+    const collect = async () => {
+      await Bun.sleep(0);
+      Bun.gc(true);
+      rt.sweepLoose();
+    };
+    await collect();
+    for (const [index, id] of ids.entries())
+      rt.host.dispatcher(id, index % 2 ? rt.EV_CODES.load : rt.EV_CODES.error, 0, 0, 0, 0, "current.png");
+    expect(seen).toEqual(ids);
+    for (let i = 0; i < 10 && ids.filter((id) => rt.host.tree.live.has(id)).length > 2; i++) await collect();
+    expect(ids.filter((id) => rt.host.tree.live.has(id)).length).toBeLessThanOrEqual(2);
+  });
+
   test("a script-made subtree nothing holds is freed by the sweep, its box included", async () => {
     const { rt, doc, vue } = world();
     const holder = vue("div");

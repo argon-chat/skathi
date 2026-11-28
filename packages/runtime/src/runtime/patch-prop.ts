@@ -2,7 +2,7 @@ import type { EventHandlerOrList, MirrorElement } from "./types";
 import { hyphenate, patchStyle } from "./inline-style";
 import { I, canonicalEvent, hostCode } from "./event-names";
 import { warnCompat } from "../compat";
-import { handlers } from "./nodes";
+import { handlers, pendingImages } from "./nodes";
 import {
   adviseListBox,
   isOptionEl,
@@ -164,10 +164,13 @@ const COLOR_VALUE_ATTRS = new Set(["value", "type", "alpha", "colorspace", "hdr"
 
 export function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
   if (__DEV__) noteWrite(el);
-  if (next == null) __sk_set_prop(el.__skId, I(key), undefined);
-  else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
-    __sk_set_prop(el.__skId, I(key), String(next));
-  else
+  if (next == null || typeof next === "string" || typeof next === "number" || typeof next === "boolean") {
+    __sk_set_prop(el.__skId, I(key), next == null ? undefined : String(next));
+    if (key === "src" && el.tag === "img" && el.__skId) {
+      if (next == null) pendingImages.delete(el);
+      else pendingImages.add(el);
+    }
+  } else
     warnCompat(
       `prop:${key}`,
       `prop "${key}" with a non-primitive value is not supported by the native host yet; ` +

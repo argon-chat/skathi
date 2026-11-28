@@ -3,9 +3,11 @@ import { I } from "./event-names";
 import { optionsChangedIn } from "./select";
 import { notifyMutation } from "./mutation-observer";
 import { releaseCapturesIn } from "./pointer-capture";
-import type { HandlerMap, MirrorNode } from "./types";
+import type { HandlerMap, MirrorElement, MirrorNode } from "./types";
 
 export const nodesById = new Map<SkNodeId, MirrorNode>();
+// A detached img can have no owner other than its own load/error callback.
+export const pendingImages = new Set<MirrorElement>();
 
 // Loose nodes (made by `document.createElement`, `createTextNode`, `new DocumentFragment()`, or taken out of the tree)
 // are held weakly; `sweepLoose` frees the host nodes of collected subtrees. The host has no "detach", so a removed
@@ -94,6 +96,7 @@ export function forgetDeep(n: MirrorNode): void {
   releaseCapturesIn(n);
   forEachDeep(n, (d) => {
     handlers.delete(d);
+    if (d.kind === 1 && d.tag === "img") pendingImages.delete(d);
     if (nodesById.get(d.__skId) === d) nodesById.delete(d.__skId);
     else if (looseById.size) looseById.delete(d.__skId);
     d.__skId = 0;

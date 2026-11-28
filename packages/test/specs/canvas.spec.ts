@@ -35,7 +35,7 @@ const T = 60_000;
 /** Evaluate an async body in the page; its settled value, JSON-decoded. */
 async function inPage(body: string): Promise<unknown> {
   await app.eval(
-    `globalThis.__cv = undefined; (async () => { ${body} })().then(` +
+    `globalThis.__cv = undefined; globalThis.__cvStep = "page evaluation"; (async () => { ${body} })().then(` +
       `v => { globalThis.__cv = JSON.stringify({ ok: v }); }, ` +
       `e => { globalThis.__cv = JSON.stringify({ err: (e && e.name) + ': ' + (e && e.message) }); }); 'started'`,
   );
@@ -45,7 +45,7 @@ async function inPage(body: string): Promise<unknown> {
     if (raw) return JSON.parse(String(raw));
     await Bun.sleep(50);
   }
-  throw new Error("the page body never settled");
+  throw new Error("canvas test timed out during " + (await app.eval("globalThis.__cvStep")));
 }
 
 test(
@@ -265,6 +265,7 @@ test(
     const base = `http://127.0.0.1:${server.port}`;
     const got = await inPage(`
     const load = (src, attrs) => new Promise((res, rej) => {
+      globalThis.__cvStep = "loading " + src.slice(0, 80);
       const i = document.createElement('img');
       for (const k in attrs || {}) i.setAttribute(k, attrs[k]);
       i.onload = () => res(i);
@@ -284,6 +285,7 @@ test(
     const sx = src.getContext('2d');
     sx.fillStyle = '#f00'; sx.fillRect(0, 0, 1, 1);
     sx.fillStyle = '#00f'; sx.fillRect(1, 0, 1, 1);
+    globalThis.__cvStep = "canvas.toBlob";
     const blob = await new Promise(r => src.toBlob(r, 'image/png'));
     const out = {
       data: draw(await load(src.toDataURL('image/png'))),
@@ -292,7 +294,9 @@ test(
       cors: draw(await load('${base}/a.png?c', { crossorigin: 'anonymous' })),
       svg: draw(await load('${base}/a.svg')),
     };
-    const bmp = await createImageBitmap(await load('${base}/a.png?b'));
+    const bitmapSource = await load('${base}/a.png?b');
+    globalThis.__cvStep = "createImageBitmap";
+    const bmp = await createImageBitmap(bitmapSource);
     out.bitmap = [bmp.width, bmp.height];
     // Still loading: nothing drawn, nothing thrown.
     const pending = document.createElement('img');
@@ -301,11 +305,14 @@ test(
     pc.drawImage(pending, 0, 0);
     out.pending = Array.from(pc.getImageData(0, 0, 1, 1).data).join();
     // Broken: InvalidStateError.
-    const broken = await load('${base}/missing.png').then(() => 'loaded', (e) => e.message);
     const b = document.createElement('img');
-    b.src = '${base}/missing.png';
-    await new Promise(r => { b.onerror = r; });
-    try { pc.drawImage(b, 0, 0); out.broken = [broken, 'drew']; } catch (e) { out.broken = [broken, e.name]; }
+    globalThis.__cvStep = "waiting for missing.png error";
+    const event = await new Promise((resolve, reject) => {
+      b.onerror = e => resolve(e.type);
+      b.onload = () => reject(new Error("missing.png unexpectedly loaded"));
+      b.src = '${base}/missing.png';
+    });
+    try { pc.drawImage(b, 0, 0); out.broken = [event, 'drew']; } catch (e) { out.broken = [event, e.name]; }
     return out;
   `);
     const RED = "255,0,0,255";
@@ -319,7 +326,7 @@ test(
         svg: ["4x2", RED, BLUE, false],
         bitmap: [2, 1],
         pending: "0,0,0,0",
-        broken: [`did not load: ${base}/missing.png`, "InvalidStateError"],
+        broken: ["error", "InvalidStateError"],
       },
     });
   },

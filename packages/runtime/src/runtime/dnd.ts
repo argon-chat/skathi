@@ -18,7 +18,7 @@ import {
 import { focusOvertaken, noteHostFocus, withRelatedTarget } from "./focus";
 import { dndRearm, dndState } from "./listeners";
 import { pointer, pointerCaptures, pointerSource, releaseCapturedPointer } from "./pointer-capture";
-import { nodeById } from "./nodes";
+import { nodeById, pendingImages } from "./nodes";
 import { deliverFrameMessage, isFrameEl } from "./media";
 import { DERIVED, DERIVED_OF } from "./event-names";
 import type { DerivedEventName } from "./event-names";
@@ -403,6 +403,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   if (isImg && (name === "load" || name === "error")) {
     const img = target as MirrorElement;
     if (key == null || key !== img.attrs.src) return true;
+    pendingImages.delete(img);
     img._img = { src: key, ok: name === "load", w: name === "load" ? a : 0, h: name === "load" ? b : 0 };
   }
   // `mouseover`/`mouseout` name the element on the other side of the boundary in `key`.
