@@ -87,6 +87,36 @@ export function normalizeModuleThis(source: string, filename: string): string | 
   return parts.join("") + source.slice(end);
 }
 
+/** Bun folds direct import.meta.hot reads to undefined, even in an ESM dev build. */
+export function preserveDevHot(source: string, filename: string): string | null {
+  if (!source.includes("import") || !source.includes("hot")) return null;
+  const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, false);
+  const ranges: ts.MetaProperty[] = [];
+  function visit(node: ts.Node): void {
+    if (
+      (ts.isPropertyAccessExpression(node) && node.name.text === "hot") ||
+      (ts.isElementAccessExpression(node) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        node.argumentExpression.text === "hot")
+    ) {
+      let base: ts.Expression = node.expression;
+      while (ts.isParenthesizedExpression(base)) base = base.expression;
+      if (ts.isMetaProperty(base) && base.keywordToken === ts.SyntaxKind.ImportKeyword) ranges.push(base);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  if (!ranges.length) return null;
+  let end = 0;
+  const parts = ranges.map((meta) => {
+    const start = meta.getStart(file);
+    const prefix = source.slice(end, start);
+    end = meta.end;
+    return prefix + "(0, " + source.slice(start, end) + ")";
+  });
+  return parts.join("") + source.slice(end);
+}
+
 /** Bundlers may absorb legacy npm dependencies. Application sources must be ES modules. */
 export function appModuleError(id: string, format: string | undefined): string | null {
   if (

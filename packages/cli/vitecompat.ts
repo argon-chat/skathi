@@ -4,7 +4,7 @@
 // throwing a named NotSupportedError), ?worklet (the URL of the module bundled into one classic script),
 // .wasm (a stub with an advisory), .toml (`TOML.parse` of the text). Unsupported shapes fail by name.
 
-import { normalizeModuleThis } from "./esm";
+import { normalizeModuleThis, preserveDevHot } from "./esm";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
 import type { SFCTemplateBlock } from "vue/compiler-sfc";
@@ -771,6 +771,11 @@ export function transformSource(
   const esm = normalizeModuleThis(code, file);
   let changed = esm !== null;
   if (esm !== null) code = esm;
+  const hot = o.dev ? preserveDevHot(code, file) : null;
+  if (hot !== null) {
+    changed = true;
+    code = hot;
+  }
   const add = (what: string, n: number) => o.notes.set(what, (o.notes.get(what) ?? 0) + n);
   const g = expandGlobs(code, { file, docRoot: o.docRoot, relativeSpecs: o.dev });
   if (g) {
@@ -906,7 +911,10 @@ export function viteShapesPlugin(o: ShapesOptions) {
         if (/\.svelte\.[jt]s$/.test(args.path)) return undefined;
         const src = await Bun.file(args.path).text();
         const code =
-          src.includes("import.meta.glob") || src.includes("new URL") || src.includes("this")
+          src.includes("import.meta.glob") ||
+          src.includes("new URL") ||
+          src.includes("this") ||
+          (o.dev && src.includes("hot"))
             ? transformSource(src, args.path, o)
             : null;
         o.sourceLoaded?.(args.path, src, code ?? src);

@@ -4,6 +4,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
+import { defineModule } from "../../cli/esm";
+import { registration } from "../../cli/test/registration";
 import { expect, launch, MACOS } from "../src/index";
 import { cacheDistFor, resolveEntry } from "../src/dist";
 
@@ -125,9 +127,10 @@ describe("svelte", () => {
         join(cacheDistFor(resolveEntry(ENTRY)), "modules", APP_ID.split("/").join("__") + ".js"),
         "utf8",
       );
-      const edited = script.replace("add one", "add more").replace(/\}, "[0-9a-f]+"\);\s*$/, '}, "edited");');
-      bunExpect(edited).toContain('"edited"');
-      await app.eval(`${edited}\n"defined"`);
+      const [id, source] = registration(script);
+      const edited = source.replace("add one", "add more");
+      bunExpect(edited).not.toBe(source);
+      await app.eval(`${defineModule(id, edited)}\n"defined"`);
       await app.eval(`__SK__.hmrApply({ changed: [{ id: ${JSON.stringify(APP_ID)}, kind: "reload" }] }), "applied"`);
       await expect(app.locator("#inc")).toHaveText("add more");
       bunExpect(await ids()).toEqual(["2", "3", "1"]);

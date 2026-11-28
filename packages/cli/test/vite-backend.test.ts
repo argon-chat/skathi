@@ -305,6 +305,17 @@ test.each([true, false])("the packaged entry awaits its imported module (Vite %p
   expect(context.bound).toBe(9);
 });
 
+test("Vite can bundle its CommonJS browser shim for a Node builtin", () => {
+  const app = appWith({
+    "main.ts": 'import fs from "node:fs"; console.log(typeof fs.readFile);',
+    "vite.config.mjs": "export default {};",
+  });
+  const out = join(app, "out");
+  const result = run("build", app, "--out", out, "--payload-only");
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  expect(existsSync(join(out, ".sk", "app.skpk"))).toBe(true);
+});
+
 test.each([true, false])("CommonJS application sources report an ESM diagnostic (Vite %p)", (vite) => {
   const app = appWith({
     "main.ts": 'import answer from "./legacy.cjs"; console.log(answer);',

@@ -17,7 +17,7 @@ import {
   tailwindProblem,
 } from "../tailwind";
 import { htmlPreludeModule, liftIndexHtml, readPackageJson, type CssPiece } from "../vitecompat";
-import { nativeVitePlugins } from "./plugin";
+import { nativeVitePlugins, sourceFile } from "./plugin";
 
 export interface NativeViteBuildOptions {
   appRoot: string;
@@ -45,11 +45,6 @@ function atomicWrite(file: string, data: string | Uint8Array): void {
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(temp, data);
   renameSync(temp, file);
-}
-
-function sourceFile(id: string): string | null {
-  const file = id.split("?", 1)[0]!;
-  return isAbsolute(file) && existsSync(file) ? resolve(file) : null;
 }
 
 function nativeBuildOptions(

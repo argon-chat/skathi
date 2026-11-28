@@ -1,7 +1,7 @@
 import { appModuleError } from "../esm";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Api as VuePluginApi } from "@vitejs/plugin-vue";
 import {
   build as viteBuild,
@@ -45,6 +45,11 @@ const WORKLET = "\0skathi:worklet:";
 const SVELTE_CSS = "?skathi-svelte.css";
 const DEFAULT_VUE = Symbol.for("@skathi-native/cli/default-vue-plugin");
 const OWN_PLUGINS = new Set(["skathi:modules", "skathi:svelte", "skathi:template-assets"]);
+
+export function sourceFile(id: string): string | null {
+  const file = id.split("?", 1)[0]!;
+  return isAbsolute(file) && existsSync(file) ? resolve(file) : null;
+}
 
 async function defaultVuePlugin(): Promise<Plugin> {
   const shipped = new URL("../dist/vue-adapter.mjs", import.meta.url);
@@ -218,7 +223,7 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
     },
     moduleParsed(info) {
       const error = appModuleError(info.id, info.inputFormat);
-      if (error) this.error({ id: info.id, message: error });
+      if (error && sourceFile(info.id)) this.error({ id: info.id, message: error });
     },
     async resolveId(id, importer) {
       if (id.startsWith(NATIVE)) return id;
