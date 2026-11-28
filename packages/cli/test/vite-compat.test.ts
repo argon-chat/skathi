@@ -29,7 +29,8 @@ import {
 } from "../vitecompat";
 import { collectAssets } from "../cli/assets";
 import { buildApp } from "../cli/build-app";
-import { KIND, readSkpk } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { KIND } from "../cli/skpk";
 import { createRuntime } from "../../runtime/test/runtime-harness";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -289,7 +290,7 @@ describe("packaged CSS fonts", () => {
     const out = mkdtempSync(join(tmpdir(), "sk-css-font-payload-"));
     tmpDirs.push(out);
     const result = await buildApp({ target, out, payloadOnly: true, log: () => {} });
-    const payload = readSkpk(readFileSync(result.skpk));
+    const payload = readPayload(readFileSync(result.skpk));
     for (const name of ["src/fonts/PressStart2P-Regular.ttf", "src/fonts/AlcarinTengwarVF.woff2"]) {
       const entry = payload.find(KIND.ASSET, name);
       expect(entry).toBeDefined();
@@ -680,7 +681,7 @@ describe("audio worklet modules", () => {
     });
     const out = join(target, "dist");
     const result = await buildApp({ target, out, payloadOnly: true, aotInputs: true, log: () => {} });
-    const payload = readSkpk(readFileSync(result.skpk));
+    const payload = readPayload(readFileSync(result.skpk));
     const levels: Record<string, number> = {};
     for (const entry of payload.entries) {
       if (entry.kind === KIND.ASSET) Object.assign(levels, register(new TextDecoder().decode(payload.bytes(entry))));

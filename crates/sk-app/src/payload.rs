@@ -1,7 +1,7 @@
 //! The app inside a packaged exe.
 //!
 //! A `--features prod` build is a bare host: the engine and no app. `sk build` copies it and stamps
-//! one SKPK blob (bundle, window config, identity, assets) into the copy as the `RT_RCDATA` resource
+//! the application payload (bundle, window config, identity, assets) into the copy as the `RT_RCDATA` resource
 //! `SKPAYLOAD` (Linux: appended to the ELF, [`sk_payload::appended`]), so an app author ships their
 //! own exe without a Rust toolchain.
 //!
@@ -734,7 +734,10 @@ pub fn host_info_json() -> String {
         ("devtools", Json::Bool(cfg!(sk_devtools))),
         ("features", Json::arr(features)),
         ("jscPin", Json::s(env!("SK_JSC_PIN"))),
-        ("payloadFormat", Json::n(f64::from(sk_payload::FORMAT))),
+        (
+            "payloadFormat",
+            Json::n(f64::from(sk_payload::bank::FORMAT)),
+        ),
         // `root`: `sk build` ships the rest as [`ICU_PACK`], cut from `<package>.dat`.
         (
             "icu",
@@ -906,6 +909,42 @@ mod tests {
     }
 
     #[test]
+    fn replacing_a_bank_with_same_length_assets_changes_its_pack_id() {
+        let mut files = crate::mapped_file::tests::Files::new();
+        let make = |data: &[u8]| {
+            sk_payload::Payload::write_bank(
+                &[sk_payload::Entry {
+                    name: "fonts/UI.ttf",
+                    kind: sk_payload::kind::ASSET,
+                    data,
+                }],
+                0,
+            )
+            .unwrap()
+        };
+        let first = make(b"font A");
+        let path = files.write("fonts.skpk", &first);
+        let dir = path.parent();
+        let pack = super::AppPayload::parse(super::PayloadBytes::Owned(first)).unwrap();
+        let meta = super::Meta {
+            packs: vec![super::PackRef {
+                name: "fonts".into(),
+                file: "fonts.skpk".into(),
+                id: super::pack_id(&pack),
+            }],
+            ..Default::default()
+        };
+        let loaded = super::open_packs(&meta, dir).unwrap();
+        assert_eq!(
+            loaded[0].payload.asset("fonts/UI.ttf"),
+            Some(b"font A".as_slice())
+        );
+        drop(loaded);
+        std::fs::write(path.as_path(), make(b"font B")).unwrap();
+        assert!(super::open_packs(&meta, dir).is_err());
+    }
+
+    #[test]
     fn meta_is_read_from_the_payload_json() {
         let m = super::parse_meta(
             r#"{"format":1,"name":"hello","productName":"Hello","version":"0.1.0","skathi":"0.0.1","host":{"version":"0.0.1","variant":"no-devtools"},"entry":"src/main.ts","assets":3}"#,
@@ -972,7 +1011,7 @@ mod tests {
         }
         assert_eq!(
             v.get("payloadFormat").and_then(crate::json::Json::as_f64),
-            Some(1.0)
+            Some(3.0)
         );
     }
 

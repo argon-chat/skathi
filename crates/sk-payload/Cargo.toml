@@ -5,7 +5,13 @@ edition = "2021"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SKPK v1 — the app payload a packaged Skathi exe carries — and the one URL→asset-key normaliser"
+description = "SkBank data banks, Skathi application payloads, and asset URL resolution"
 
-# No dependencies on purpose: keeps `cargo test -p sk-payload` free of gpui and JavaScriptCore.
 [dependencies]
+brotli-decompressor = "6.3"
+sha2 = "0.10"
+zstd = { version = "0.13.3", default-features = false }
+
+[[bench]]
+name = "bank"
+harness = false

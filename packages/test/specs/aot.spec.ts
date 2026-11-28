@@ -10,7 +10,8 @@ import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { bareHost, expect, launch, refuseStaleBareHost, REPO, WORK_DIR, type SkApp } from "../src/index";
-import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
+import { readPayload } from "../../cli/cli/payload";
+import { KIND, NAMES } from "../../cli/cli/skpk";
 import { hostInfo } from "../../cli/cli/host";
 import type { BuildResult } from "../../cli/cli/build-app";
 
@@ -80,7 +81,7 @@ describe.skipIf("skip" in ready)("sk build --aot", () => {
       bunExpect(build.native).not.toBeNull();
       bunExpect(basename(build.native!.compiler)).toBe("sk-aot.exe");
       const native = build.native!;
-      const payload = readSkpk(new Uint8Array(readFileSync(build.skpk)));
+      const payload = readPayload(new Uint8Array(readFileSync(build.skpk)));
       const kinds = payload.entries.map((e) => [e.kind, e.name]);
       bunExpect(kinds).toContainEqual([KIND.NATIVE_MANIFEST, NAMES.NATIVE_MANIFEST]);
       bunExpect(kinds).not.toContainEqual([KIND.NATIVE_IMAGE, NAMES.NATIVE_IMAGE]);

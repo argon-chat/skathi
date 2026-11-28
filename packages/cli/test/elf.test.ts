@@ -2,6 +2,7 @@
 // crates/sk-payload `appended` finds it. Runs on any OS: the host is a fake ELF header.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,9 +17,11 @@ import {
   trailer,
   TRAILER_SIZE,
 } from "../cli/elf";
-import { cachedHost, isStamped, resolveHost } from "../cli/host";
+import { cachedHost, crossHostInfo, isStamped, resolveHost } from "../cli/host";
 import { currentPlatform, hostsFor, parsePlatform, repoHostExe } from "../cli/platform";
-import { KIND, NAMES, PAGE, readSkpk, writeSkpk, type SkpkInput } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { isSkBank, readSkBank, SKBANK_FORMAT, writeSkBank } from "../cli/skbank";
+import { KIND, NAMES, PAGE, writeSkpk, type SkpkInput } from "../cli/skpk";
 
 const dir = mkdtempSync(join(tmpdir(), "sk-elf-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -98,8 +101,8 @@ describe("stamping", () => {
     expect(at).toEqual({ offset: 8192, length: r.payloadBytes });
     const payload = file.subarray(at.offset, at.offset + at.length);
     expect(Buffer.from(payload).equals(r.payload)).toBe(true);
-    const skpk = readSkpk(payload);
-    expect((at.offset + skpk.header.dataOff) % PAGE).toBe(0);
+    const skpk = readPayload(payload);
+    expect((at.offset + skpk.dataOffset) % PAGE).toBe(0);
     expect(r.dataAligned).toBe(true);
     expect(new TextDecoder().decode(skpk.bytes(skpk.find(KIND.SCRIPT, NAMES.SCRIPT)!))).toBe('console.log("hello")');
     if (process.platform !== "win32") expect(statSync(out).mode & 0o111).toBe(0o111);
@@ -116,6 +119,23 @@ describe("stamping", () => {
     expect(() => stampElf({ host: r.out, out: join(d, "b"), payload: () => r.payload })).toThrow();
     writeFileSync(join(d, "pe.exe"), new Uint8Array([0x4d, 0x5a, 0, 0, 0, 0, 0, 0]));
     expect(() => stampElf({ host: join(d, "pe.exe"), out: join(d, "c"), payload: () => r.payload })).toThrow();
+  });
+
+  test("the file offset of the appended SkBank aligns its ICU data to 64 KiB", () => {
+    const d = fresh("bank");
+    const host = process.platform === "linux" ? "/bin/true" : fakeElf(join(d, "sk-app"));
+    const out = join(d, "Bank");
+    const icu = { kind: KIND.ICU_DATA, name: "sk/icu/test.dat", alignLog2: 16, data: Uint8Array.of(8, 9, 10) };
+    const files = [...inputs("bank"), icu];
+    stampElf({ host, out, payload: (_, baseOffset) => writeSkBank(files, { baseOffset }) });
+    const file = readFileSync(out);
+    const at = appendedPayloadOf(out)!;
+    const bank = readSkBank(file.subarray(at.offset, at.offset + at.length));
+    const entry = bank.find(icu.kind, icu.name)!;
+    expect((at.offset + bank.dataOffset) % PAGE).toBe(0);
+    expect((at.offset + entry.start) % 2 ** icu.alignLog2).toBe(0);
+    expect(file.subarray(at.offset + entry.start, at.offset + entry.start + entry.len).equals(icu.data)).toBe(true);
+    if (process.platform === "linux") expect(Bun.spawnSync([out]).exitCode).toBe(0);
   });
 });
 
@@ -158,46 +178,63 @@ describe("Linux hosts", () => {
       expect(trusted.unverified).toBeDefined();
     });
 
-    test("sk build --platform linux --host <fake>: the exe carries the build's payload, packs beside it", async () => {
-      const root = fresh("e2e");
-      mkdirSync(join(root, "src"));
-      mkdirSync(join(root, "assets"));
-      writeFileSync(join(root, "src", "main.ts"), "export const x = 1;\n");
-      writeFileSync(join(root, "assets", "a.txt"), "hello");
-      writeFileSync(join(root, "assets", "b.bin"), "bytes");
-      writeFileSync(
-        join(root, "sk.config.json"),
-        JSON.stringify({
+    test.each([false, true])(
+      "cross-build selects the executable and pack formats with a v3 host.json present = %p",
+      async (hasManifest) => {
+        const root = fresh("e2e");
+        mkdirSync(join(root, "src"));
+        mkdirSync(join(root, "assets"));
+        writeFileSync(join(root, "src", "main.ts"), "export const x = 1;\n");
+        writeFileSync(join(root, "assets", "a.txt"), "hello");
+        writeFileSync(join(root, "assets", "b.bin"), "bytes");
+        writeFileSync(
+          join(root, "sk.config.json"),
+          JSON.stringify({
+            name: "e2e",
+            productName: "E2E Linux",
+            version: "2.3.4",
+            packs: [{ name: "text", match: ["**/*.txt"] }],
+          }),
+        );
+        const hostDir = fresh("e2e-host");
+        const host = fakeElf(join(hostDir, "sk-app"));
+        if (hasManifest) {
+          const { info } = crossHostInfo(host, "standard", "linux");
+          writeFileSync(join(hostDir, "host.json"), JSON.stringify({ ...info, payloadFormat: SKBANK_FORMAT }));
+        }
+        const out = join(root, "dist");
+        const r = await buildApp({ target: root, out, host, platform: "linux", log: () => {} });
+
+        expect(r.platform).toBe("linux");
+        expect(r.stamp).toBeNull();
+        expect(r.bundle).toBeNull();
+        expect(r.exe).toBe(join(out, "E2E Linux"));
+        expect(r.elf!.dataAligned).toBe(true);
+        expect(r.warnings.join("\n")).toMatch(hasManifest ? /described by/ : /cannot be run/);
+        expect(r.warnings.join("\n")).not.toMatch(/icon/);
+
+        const exe = new Uint8Array(readFileSync(r.exe!));
+        const at = appendedPayloadOf(r.exe!)!;
+        expect(Buffer.from(exe.subarray(at.offset, at.offset + at.length)).equals(readFileSync(r.skpk))).toBe(true);
+        const embedded = exe.subarray(at.offset, at.offset + at.length);
+        expect(isSkBank(embedded)).toBe(hasManifest);
+        const payload = readPayload(embedded);
+        const meta = JSON.parse(new TextDecoder().decode(payload.bytes(payload.find(KIND.META, NAMES.META)!)));
+        const external = readFileSync(join(out, "text.skpk"));
+        expect(isSkBank(external)).toBe(hasManifest);
+        const pack = readPayload(external);
+        expect(meta).toMatchObject({
+          format: hasManifest ? SKBANK_FORMAT : 1,
           name: "e2e",
-          productName: "E2E Linux",
           version: "2.3.4",
-          packs: [{ name: "text", match: ["**/*.txt"] }],
-        }),
-      );
-      const host = fakeElf(join(fresh("e2e-host"), "sk-app"));
-      const out = join(root, "dist");
-      const r = await buildApp({ target: root, out, host, platform: "linux", log: () => {} });
-
-      expect(r.platform).toBe("linux");
-      expect(r.stamp).toBeNull();
-      expect(r.bundle).toBeNull();
-      expect(r.exe).toBe(join(out, "E2E Linux"));
-      expect(r.elf!.dataAligned).toBe(true);
-      expect(r.warnings.join("\n")).toMatch(/cannot be run/);
-      expect(r.warnings.join("\n")).not.toMatch(/icon/);
-
-      const exe = new Uint8Array(readFileSync(r.exe!));
-      const at = appendedPayloadOf(r.exe!)!;
-      expect(Buffer.from(exe.subarray(at.offset, at.offset + at.length)).equals(readFileSync(r.skpk))).toBe(true);
-      const payload = readSkpk(exe.subarray(at.offset, at.offset + at.length));
-      const meta = JSON.parse(new TextDecoder().decode(payload.bytes(payload.find(KIND.META, NAMES.META)!)));
-      expect(meta).toMatchObject({ name: "e2e", version: "2.3.4", packs: [{ name: "text", file: "text.skpk" }] });
-      expect(payload.find(KIND.ASSET, "assets/b.bin")).toBeDefined();
-      expect(payload.find(KIND.ASSET, "assets/a.txt")).toBeUndefined();
-      expect(
-        readSkpk(new Uint8Array(readFileSync(join(out, "text.skpk")))).find(KIND.ASSET, "assets/a.txt"),
-      ).toBeDefined();
-      expect(summary(r)).toMatch(/~\/\.local\/share\/e2e\/storage/);
-    }, 120_000);
+          packs: [{ name: "text", file: "text.skpk", id: createHash("sha256").update(pack.index).digest("hex") }],
+        });
+        expect(payload.find(KIND.ASSET, "assets/b.bin")).toBeDefined();
+        expect(payload.find(KIND.ASSET, "assets/a.txt")).toBeUndefined();
+        expect(pack.find(KIND.ASSET, "assets/a.txt")).toBeDefined();
+        expect(summary(r)).toMatch(/~\/\.local\/share\/e2e\/storage/);
+      },
+      120_000,
+    );
   });
 });

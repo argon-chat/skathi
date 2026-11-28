@@ -219,7 +219,7 @@ export function cli(run: Run): Command {
       .addOption(hidden("--no-aot"))
       .option("--json", "Print the result as JSON")
       .optionsGroup("Advanced")
-      .option("--workload <exe>", "Stamp this workload, or use it to target an embedder with --aot --payload-only")
+      .option("--workload <exe>", "Target this workload when stamping an executable or building a standalone payload")
       .option("--payload-only", "Write app.skpk and any sidecars to dist/<mode>/.sk without stamping an executable")
       .option("--aot-inputs", "Keep the typed sources for a later AOT compile")
       .option("--aot-compiler <exe>", "Compile native images with this sk-aot binary (or SK_AOT_COMPILER)")

@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadAppConfig } from "../cli/config";
-import { readSkpk, NAMES } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { NAMES } from "../cli/skpk";
 
 const root = mkdtempSync(join(tmpdir(), "sk-external-config-"));
 const app = join(root, "client");
@@ -55,7 +56,7 @@ test("sk build propagates external window and define settings into the actual pa
   expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
   const summary = JSON.parse(new TextDecoder().decode(result.stdout).trim().split("\n").pop()!);
   expect(summary.name).toBe("external-config");
-  const payload = readSkpk(new Uint8Array(readFileSync(summary.skpk)));
+  const payload = readPayload(new Uint8Array(readFileSync(summary.skpk)));
   const text = (name: string) =>
     new TextDecoder().decode(payload.bytes(payload.entries.find((entry) => entry.name === name)!));
   expect(JSON.parse(text(NAMES.WINDOW)).title).toBe("external-title");

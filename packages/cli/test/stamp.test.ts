@@ -21,6 +21,7 @@ import {
 } from "../cli/pe";
 import { PAYLOAD_NAME, stamp } from "../cli/stamp";
 import { buildVersionInfo } from "../cli/versioninfo";
+import { readSkBank, writeSkBank } from "../cli/skbank";
 import { KIND, NAMES, PAGE, readSkpk, writeSkpk, type SkpkInput } from "../cli/skpk";
 
 const WHOAMI = "C:\\Windows\\System32\\whoami.exe";
@@ -132,6 +133,27 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     expect(pe.resources.filter((r) => r.type === RT.VERSION)).toHaveLength(1);
     expect(pe.resources.filter((r) => r.type === RT.GROUP_ICON)).toHaveLength(1);
     expect(pe.resources.filter((r) => r.type === RT.ICON)).toHaveLength(5);
+  });
+
+  test("FindResourceW returns the SkBank and its entries align to the measured resource RVA", () => {
+    const path = join(dir, "Bank.exe");
+    const inputs = [
+      ...payloadInputs("bank"),
+      { kind: KIND.BYTECODE, name: NAMES.BYTECODE, alignLog2: 15, data: Uint8Array.of(5, 4) },
+      { kind: KIND.ICU_DATA, name: "sk/icu/example.dat", alignLog2: 16, data: Uint8Array.of(1, 2, 3) },
+    ];
+    const result = stamp({ host: WHOAMI, out: path, payload: (_, baseOffset) => writeSkBank(inputs, { baseOffset }) });
+    const resource = readPe(path).resources.find((r) => r.type === RT.RCDATA && r.name === PAYLOAD_NAME)!;
+    const mapped = loadResourceCopy(path, RT.RCDATA, PAYLOAD_NAME)!;
+    expect(Buffer.from(mapped).equals(result.payload)).toBe(true);
+    expect(result.payloadRva).toBe(resource.rva);
+    const bank = readSkBank(mapped);
+    expect((resource.rva + bank.dataOffset) % PAGE).toBe(0);
+    for (const input of inputs.filter((i) => i.alignLog2 !== undefined)) {
+      const entry = bank.find(input.kind, input.name)!;
+      expect((entry.start + resource.rva) % 2 ** input.alignLog2!).toBe(0);
+      expect(Buffer.from(bank.bytes(entry)).equals(input.data)).toBe(true);
+    }
   });
 
   test("the host's manifest is left byte-identical", () => {

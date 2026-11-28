@@ -1,7 +1,7 @@
 // Stamping: a copy of a host exe becomes ONE app's exe. Copy host -> <out>.partial, strip any
 // certificate table (the author signs the stamped exe later), write icons, VERSIONINFO and the
-// SKPAYLOAD resource (pass 1 with skew 0, pass 2 with the skew that page-aligns the SKPK data
-// region in the mapped image), set the subsystem to GUI unless asked to keep the console, verify
+// SKPAYLOAD resource (a second pass aligns payload entries for the measured resource RVA),
+// set the subsystem to GUI unless asked to keep the console, verify
 // by mapping it as an image resource, rename over <out>. The file is freshly written, which is
 // when Windows Defender likes to scan it, so the resource transactions and the rename retry on a
 // sharing violation.
@@ -34,6 +34,7 @@ import {
   type PeInfo,
   type ResourceEntry,
 } from "./pe";
+import { isSkBank, readSkBank } from "./skbank";
 import { HEADER_SIZE, PAGE, readHeader, skewFor } from "./skpk";
 
 export const PAYLOAD_NAME = "SKPAYLOAD";
@@ -43,7 +44,8 @@ export const PAYLOAD_LANG = 0;
 export interface StampOptions {
   host: string;
   out: string;
-  payload: (skew: number) => Uint8Array;
+  /** Legacy SKPK uses skew. SkBank aligns entries relative to baseOffset in the mapped image. */
+  payload: (skew: number, baseOffset: number) => Uint8Array;
   icons?: IconImage[] | undefined;
   versionInfo?: Uint8Array;
   subsystem?: "gui" | "console" | "keep";
@@ -121,7 +123,8 @@ export function stamp(options: StampOptions): StampResult {
 
     const before = readPe(partial);
     let skew = 0;
-    let blob = options.payload(skew);
+    let baseOffset = 0;
+    let blob = options.payload(skew, baseOffset);
     let passes = 1;
 
     retrying(
@@ -151,17 +154,17 @@ export function stamp(options: StampOptions): StampResult {
       log,
     );
 
-    // Passes 2..3: the skew. The RVA is decided by what sorts ahead of RT_RCDATA (the RT_ICONs).
+    // Earlier resources (e.g. icons) decide the payload RVA.
     let pe = readPe(partial);
     let entry = payloadEntry(pe);
     if (!entry) throw new Error(`${partial}: the payload resource is missing after EndUpdateResourceW`);
-    const header0 = readHeader(blob);
-    for (;;) {
-      const want = skewFor(entry.rva, header0);
-      const dataOff = header0.namesOff + header0.namesLen + skew;
-      if ((entry.rva + dataOff) % PAGE === 0 || passes >= 3) break;
+    const legacy = isSkBank(blob) ? null : readHeader(blob);
+    while (passes < 3) {
+      const want = legacy ? skewFor(entry.rva, legacy) : 0;
+      if (legacy ? skew === want : baseOffset === entry.rva) break;
       skew = want;
-      blob = options.payload(skew);
+      baseOffset = entry.rva;
+      blob = options.payload(skew, baseOffset);
       passes++;
       retrying(
         "re-stamping the payload",
@@ -181,12 +184,14 @@ export function stamp(options: StampOptions): StampResult {
       entry = payloadEntry(pe);
       if (!entry) throw new Error(`${partial}: the payload resource vanished in pass ${passes}`);
     }
-    const header = readHeader(blob);
-    const dataAligned = (entry.rva + header.dataOff) % PAGE === 0;
+    if (!legacy && baseOffset !== entry.rva) throw new Error("the payload resource RVA changed after alignment");
+    const bank = legacy ? null : readSkBank(blob);
+    const dataOff = bank ? bank.dataOffset : readHeader(blob).dataOff;
+    const dataAligned = bank?.entries.length === 0 || (entry.rva + dataOff) % PAGE === 0;
     if (!dataAligned) {
       log(
         `warning: the payload's data region did not land on a page boundary (rva 0x${entry.rva.toString(16)}, ` +
-          `data_off ${header.dataOff}) — the app runs exactly the same; only a future bytecode cache cares`,
+          `data_off ${dataOff})`,
       );
     }
 

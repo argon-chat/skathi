@@ -19,7 +19,8 @@ import {
 } from "../src/index";
 import { readPe, RT, shellIconCount, SUBSYSTEM, versionString } from "../../cli/cli/pe";
 import { PAYLOAD_NAME, stamp } from "../../cli/cli/stamp";
-import { readSkpk, writeSkpk, type SkpkInput } from "../../cli/cli/skpk";
+import { readPayload } from "../../cli/cli/payload";
+import { writeSkpk, type SkpkInput } from "../../cli/cli/skpk";
 import { buildApp } from "../../cli/cli/build-app";
 
 const T = 60_000;
@@ -312,12 +313,12 @@ describe("re-stamping", () => {
       const fixture = join(REPO, "packages", "test", "fixtures", "devtools-on");
       const work = join(OUT, "restamp");
       const r = await buildApp({ target: fixture, out: work, payloadOnly: true, log: () => {} });
-      const v = readSkpk(new Uint8Array(readFileSync(r.skpk)));
+      const v = readPayload(new Uint8Array(readFileSync(r.skpk)));
       const inputs: SkpkInput[] = v.entries.map((e) => ({
         name: e.name,
         kind: e.kind,
         data: v.bytes(e),
-        alignLog2: e.alignLog2,
+        ...(e.alignLog2 === undefined ? {} : { alignLog2: e.alignLog2 }),
       }));
       const out = join(work, "Hello-restamped.exe");
       const s = stamp({ host: built.hello!.exe, out, payload: (skew) => writeSkpk(inputs, { skew }) });

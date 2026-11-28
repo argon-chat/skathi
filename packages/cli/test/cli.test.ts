@@ -39,7 +39,9 @@ describe("help", () => {
       "A debug build in <app>/dist/debug: devtools (F12) on, the bundle not minified.",
     ]);
     expect(flag.stdout).toMatch(/\nOptions\n {2}--platform <os> +windows, macos or linux/);
-    expect(flag.stdout).toMatch(/\nAdvanced\n {2}--workload <exe> +Stamp this workload/);
+    expect(flag.stdout).toMatch(
+      /\nAdvanced\n {2}--workload <exe> +Target this workload when stamping an executable or building a standalone payload/,
+    );
     for (const hiddenFlag of ["--host", "--variant", "--no-aot", "--without", "--allow-"])
       expect(flag.stdout).not.toMatch(new RegExp(`^ {2}${hiddenFlag}`, "m"));
     expect(sk(["workload", "prune", "--help"]).stdout).toContain("Usage  sk workload prune [options]");

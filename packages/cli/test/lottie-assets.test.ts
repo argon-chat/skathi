@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp } from "../cli/build-app";
-import { KIND, readSkpk } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { KIND } from "../cli/skpk";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const tmpDirs: string[] = [];
@@ -42,7 +43,7 @@ test("sk build packs .tgs, .lottie and lottie .json files referenced by URL", as
   }
 
   const result = await buildApp({ target: app, out, payloadOnly: true, log: () => {} });
-  const payload = readSkpk(readFileSync(result.skpk));
+  const payload = readPayload(readFileSync(result.skpk));
   for (const name of ["dance.lottie", "jump.json", "wave.tgs", "duck.tgs", "spin.json"]) {
     const key = `src/stickers/${name}`;
     const entry = payload.find(KIND.ASSET, key);

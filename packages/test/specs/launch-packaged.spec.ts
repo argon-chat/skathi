@@ -5,7 +5,8 @@ import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, launch, packagedExe, REPO, WINDOWS, WORK_DIR } from "../src/index";
-import { KIND, NAMES, readSkpk } from "../../cli/cli/skpk";
+import { readPayload } from "../../cli/cli/payload";
+import { KIND, NAMES } from "../../cli/cli/skpk";
 
 const T = 30_000;
 
@@ -98,7 +99,7 @@ describe("the packaged exe", () => {
     async () => {
       // The payload that was stamped, read back: META's `launch` is what the host enforces before
       // anything else exists.
-      const v = readSkpk(new Uint8Array(readFileSync(p.result.skpk)));
+      const v = readPayload(new Uint8Array(readFileSync(p.result.skpk)));
       const meta = v.find(KIND.META, NAMES.META);
       bunExpect(meta).toBeDefined();
       const launchMeta = JSON.parse(new TextDecoder().decode(v.bytes(meta!))).launch;

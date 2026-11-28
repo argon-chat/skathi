@@ -156,19 +156,19 @@ Create a debug build with devtools, in `dist/debug`:
 bun run build
 ```
 
-Produce the release build, one executable to ship, in `dist/release`:
+Produce the release build in `dist/release`:
 
 ```bash
 bun run publish
 ```
 
-The release build has no devtools unless `"publishDevtools": true` is set in `sk.config.json`. Files such as `icu.skpk` ship beside the exe; `"publishSingleFile": true` puts them inside it. Run `bunx sk build --help` or `bunx sk publish --help` for packaging options.
+Ship the release folder or the macOS `.app` bundle as a unit. It includes any `.skpk` files the app needs. Set `"publishDevtools": true` in `sk.config.json` to include devtools. See [application payloads and asset packs](/guides/packaging/#application-payloads-and-asset-packs) for file placement and single-file builds.
 
 ### Vite+ and plugins in packaged builds
 
 Starting with 0.7, `sk create` includes Vite+ and a `vite.config.ts`. Skathi uses the Vite+ version declared by the application. Existing projects can also use a regular Vite config with the Vite engine included in the CLI. Place the config beside `sk.config.json` to enable the builder. Skathi recognizes the standard JS and TS config extensions. Projects without a config keep the previous builder.
 
-`sk build`, `sk run`, `sk publish` and `sk check` load that config from the application root. Add your module transforms, aliases and CSS plugins there. Skathi configures the native renderer automatically and reuses the application's Vue or Svelte plugin. It selects the application entry and packages one script, styles and assets into SKPK. The web build keeps its own output directory.
+`sk build`, `sk run`, `sk publish` and `sk check` load that config from the application root. Add your module transforms, aliases and CSS plugins there. Skathi configures the native renderer and uses the application's Vue or Svelte plugin to build the application entry. The web build keeps its own output directory.
 
 For a custom Vite integration, import `nativeVitePlugins` from `@skathi-native/cli/vite`. Pass the application root and the existing plugin list to `await nativeVitePlugins({ appRoot }, plugins)`. The returned plugins resolve the native runtime, compile components and handle `native:` imports. The `sk` commands already install them.
 

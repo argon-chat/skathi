@@ -1,10 +1,10 @@
 // The Linux side of `sk build`: a copy of the host ELF with the payload appended.
 //
-//   <exeName> = host | zero pad to a page | SKPK | u64 offset | u64 length | "SKPKTAIL"
+//   <exeName> = host | zero pad to a page | payload | u64 offset | u64 length | "SKPKTAIL"
 //
 // The host maps /proc/self/exe and finds the payload by that trailer (`sk_payload::appended`). The
-// offset is page-aligned and the SKPK skewed for offset 0, so its data region lands on a page
-// boundary of the mapping. The file is written as `<out>.partial`, made executable and renamed.
+// writer uses the payload's file offset to align entries in the mapping. The file is written as
+// `<out>.partial`, made executable and renamed.
 
 import {
   chmodSync,
@@ -17,6 +17,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { isSkBank, readSkBank } from "./skbank";
 import { PAGE, readHeader, skewFor } from "./skpk";
 
 export const TRAILER_MAGIC = "SKPKTAIL";
@@ -85,7 +86,8 @@ export function appendedPayloadOf(path: string): { offset: number; length: numbe
 export interface ElfStampOptions {
   host: string;
   out: string;
-  payload: (skew: number) => Uint8Array;
+  /** Legacy SKPK uses skew. SkBank aligns entries relative to baseOffset in the mapped file. */
+  payload: (skew: number, baseOffset: number) => Uint8Array;
 }
 
 export interface ElfStampResult {
@@ -110,10 +112,11 @@ export function stampElf(options: ElfStampOptions): ElfStampResult {
     throw new Error(`${options.host} is a packaged app, not a bare workload (it already carries a payload)`);
   }
   const offset = Math.ceil(host.length / PAGE) * PAGE;
-  const unskewed = options.payload(0);
-  const skew = skewFor(0, readHeader(unskewed));
-  const payload = skew ? options.payload(skew) : unskewed;
-  const header = readHeader(payload);
+  const unskewed = options.payload(0, offset);
+  const bank = isSkBank(unskewed) ? readSkBank(unskewed) : null;
+  const skew = bank ? 0 : skewFor(offset, readHeader(unskewed));
+  const payload = skew ? options.payload(skew, offset) : unskewed;
+  const dataOffset = bank ? bank.dataOffset : readHeader(payload).dataOff;
   const file = new Uint8Array(offset + payload.length + TRAILER_SIZE);
   file.set(host);
   file.set(payload, offset);
@@ -135,7 +138,7 @@ export function stampElf(options: ElfStampOptions): ElfStampResult {
     payloadBytes: payload.length,
     payloadOffset: offset,
     skew,
-    dataAligned: (offset + header.dataOff) % PAGE === 0,
+    dataAligned: bank?.entries.length === 0 || (offset + dataOffset) % PAGE === 0,
     machine,
     ms: { total: Math.round(performance.now() - t0) },
     payload,

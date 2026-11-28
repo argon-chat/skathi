@@ -1,20 +1,21 @@
 // `sk build`: an app directory in, one exe out, no Rust toolchain.
 //
-//   sk.config.json + prod.ts (app.prod.js, window.json) + "assets" -> SKPK -> stamp(copy of the bare host)
+//   sk.config.json + prod.ts (app.prod.js, window.json) + "assets" -> app.skpk -> stamp(copy of the bare host)
 //   -> <appRoot>/dist/<exeName>.exe
 //
 // Intermediates go to `dist/.sk/` (`app.prod.js`, `window.json`, `assets.json`, `app.skpk`). The
-// `.skpk` is the exact blob that was stamped, so `SK_PAYLOAD=dist/.sk/app.skpk <host>` runs it
-// without a re-stamp. On macOS (or `--platform macos` with `--host <mac sk-app>`) the last step is
-// macos-bundle.ts: the host is copied into `<exeName>.app`, the SKPK goes in Contents/Resources,
-// and the bundle is signed (ad hoc unless an identity is given). On Linux the SKPK is appended to a
+// payload uses SkBank v3 for current workloads and SKPK v1 for older ones. By default the .skpk matches
+// the stamped bytes. Embedders can request standalone alignment for their separate file mapping.
+// On macOS (or `--platform macos` with `--host <mac sk-app>`) the last step is macos-bundle.ts:
+// the host is copied into `<exeName>.app`, app.skpk goes in Contents/Resources, and the bundle
+// is signed (ad hoc unless an identity is given). On Linux the payload is appended to a
 // copy of the host ELF (elf.ts). `PACKAGERS` holds the three. With `--aot` (Windows x64), aot-build.ts compiles
-// the app's native image: its manifest goes in the SKPK, the image into `app.image.dll` beside the payload (a copy
+// the app's native image: its manifest goes in the payload, the image into `app.image.dll` beside the payload (a copy
 // of the workload's empty skimage.dll, image-sections.ts); a workload whose inspector is a container of its own
 // puts `inspector.image.dll` there too. The app's shaders/*.slang go in as `sk/effects/*` (effects.ts), every
 // renderer's target whatever the OS. A host that links only the root ICU locale gets the rest as `icu.skpk`
 // beside the payload, unless sk.config.json says "intl": "invariant". `sk publish` with "publishSingleFile"
-// writes nothing beside the exe: the ICU data and every asset go in the SKPK, the images into its own sections.
+// writes nothing beside the exe: the ICU data and every asset go in the payload, the images into its own sections.
 
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -79,10 +80,12 @@ import {
   type AppBundleResult,
 } from "./macos-bundle";
 import { currentPlatform, type Platform } from "./platform";
+import { readPayload } from "./payload";
 import { stamp, type StampResult } from "./stamp";
 import { lineProgress, logTo, paint, progressFor, seconds, type Progress } from "./term";
 import { buildVersionInfo, numericVersion } from "./versioninfo";
-import { FORMAT, KIND, NAMES, readHeader, skewFor, writeSkpk, type SkpkInput } from "./skpk";
+import { SKBANK_FORMAT, writeSkBank } from "./skbank";
+import { FORMAT, KIND, NAMES, PAGE, readHeader, skewFor, writeSkpk, type SkpkInput } from "./skpk";
 
 export const PROD_TS = join(PKG_DIR, "prod.ts");
 
@@ -99,6 +102,8 @@ export interface BuildOptions {
   variant?: Variant | undefined;
   console?: boolean;
   payloadOnly?: boolean;
+  /** Align dist/.sk/app.skpk for a standalone mapping even when the stamped copy uses a different RVA. */
+  standaloneWorkPayload?: boolean;
   allowHostMismatch?: boolean;
   defines?: string[] | undefined;
   aotInputs?: boolean;
@@ -200,6 +205,23 @@ export interface BuildResult {
 
 const enc = new TextEncoder();
 
+function payloadFormat(host: ResolvedHost | null): number {
+  return !host || host.info.payloadFormat >= SKBANK_FORMAT ? SKBANK_FORMAT : FORMAT;
+}
+
+function standalonePayload(inputs: SkpkInput[], format: number): Uint8Array {
+  if (format >= SKBANK_FORMAT) return writeSkBank(inputs);
+  const blob = writeSkpk(inputs);
+  const skew = skewFor(0, readHeader(blob));
+  return skew ? writeSkpk(inputs, { skew }) : blob;
+}
+
+function stampedPayload(inputs: SkpkInput[], host: ResolvedHost) {
+  return payloadFormat(host) >= SKBANK_FORMAT
+    ? (_skew: number, baseOffset: number) => writeSkBank(inputs, { baseOffset })
+    : (skew: number) => writeSkpk(inputs, { skew });
+}
+
 /** The META entry. No timestamps — two builds of one tree are byte-identical. */
 export function appMeta(
   config: AppConfig,
@@ -210,7 +232,7 @@ export function appMeta(
 ): string {
   const entry = relative(config.appRoot, config.entry).split(sep).join("/");
   return JSON.stringify({
-    format: FORMAT,
+    format: payloadFormat(host),
     name: config.name,
     productName: config.productName,
     version: config.version,
@@ -253,19 +275,14 @@ export function splitPacks(
 }
 
 /** An asset pack's blob: assets only, data page-aligned in the file (the host maps it from offset 0), and its id. */
-export function writePack(name: string, files: AssetFile[]): BuiltPack {
+export function writePack(name: string, files: AssetFile[], format: number = SKBANK_FORMAT): BuiltPack {
   const inputs: SkpkInput[] = files.map((f) => ({
     name: f.key,
     kind: KIND.ASSET,
     data: new Uint8Array(readFileSync(f.path)),
   }));
-  const unskewed = writeSkpk(inputs);
-  const header = readHeader(unskewed);
-  const skew = skewFor(0, header);
-  const blob = skew ? writeSkpk(inputs, { skew }) : unskewed;
-  const id = createHash("sha256")
-    .update(blob.subarray(0, header.namesOff + header.namesLen))
-    .digest("hex");
+  const blob = standalonePayload(inputs, format);
+  const id = createHash("sha256").update(readPayload(blob).index).digest("hex");
   return { name, file: `${name}.skpk`, id, blob, assets: files };
 }
 
@@ -273,7 +290,7 @@ export function writePack(name: string, files: AssetFile[]): BuiltPack {
 export const ICU_PACK = "icu.skpk";
 
 /** The ICU pack: the full common data `datPath` as one entry, page-aligned in the file. */
-export function writeIcuPack(datPath: string): Uint8Array {
+export function writeIcuPack(datPath: string, format: number = SKBANK_FORMAT): Uint8Array {
   const inputs: SkpkInput[] = [
     {
       name: `${NAMES.ICU_DIR}${basename(datPath)}`,
@@ -282,9 +299,7 @@ export function writeIcuPack(datPath: string): Uint8Array {
       alignLog2: 12,
     },
   ];
-  const unskewed = writeSkpk(inputs);
-  const skew = skewFor(0, readHeader(unskewed));
-  return skew ? writeSkpk(inputs, { skew }) : unskewed;
+  return standalonePayload(inputs, format);
 }
 
 /** What `sk build` writes beside the payload. A container this build has none of is null, and goes, like a stale ICU pack. */
@@ -347,7 +362,7 @@ function stampExe({ config, host, inputs, sidecars, images, outDir, options, log
   const stamped = stamp({
     host: host.exe,
     out: exe,
-    payload: (skew) => writeSkpk(inputs, { skew }),
+    payload: stampedPayload(inputs, host),
     icons: config.iconPath ? iconImagesFrom(config.iconPath) : undefined,
     versionInfo: buildVersionInfo({
       fileVersion: [fv[0], fv[1], fv[2], 0],
@@ -398,10 +413,7 @@ function macBundle({ config, host, inputs, sidecars, outDir, work, options, warn
         'to a reverse-DNS id such as "com.example.app"; signing and notarisation expect one',
     );
   }
-  // The host maps app.skpk from offset 0, so the data region must be page-aligned in the FILE.
-  const unskewed = writeSkpk(inputs);
-  const skew = skewFor(0, readHeader(unskewed));
-  const payload = skew ? writeSkpk(inputs, { skew }) : unskewed;
+  const payload = standalonePayload(inputs, payloadFormat(host));
 
   const icon = m.iconPath ? icnsFrom(m.iconPath) : null;
   if (icon && !icon.verbatim && Math.max(...icon.sizes) < 512) {
@@ -487,7 +499,7 @@ function linuxExe({ config, host, inputs, sidecars, outDir }: PackageInput): Pac
   const elf = stampElf({
     host: host.exe,
     out: join(outDir, config.exeName),
-    payload: (skew) => writeSkpk(inputs, { skew }),
+    payload: stampedPayload(inputs, host),
   });
   return { exe: elf.out, payload: elf.payload, stamp: null, bundle: null, elf };
 }
@@ -550,11 +562,11 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   mkdirSync(work, { recursive: true });
 
   // The host first: a missing or mismatched host should fail before a bundle is spent on it.
-  if (!options.payloadOnly || aot) progress.step("workload");
+  if (!options.payloadOnly || options.host) progress.step("workload");
   const host =
     aot && options.payloadOnly && options.host
       ? resolveEmbedderHost(options.host, options.allowHostMismatch)
-      : options.payloadOnly
+      : options.payloadOnly && !options.host
         ? null
         : await resolveOrFetchHost({
             host: options.host,
@@ -569,6 +581,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
     progress.detail(`${host.info.variant} · Skathi ${host.info.skathi} ${host.info.profile} · ${host.source}`);
     if (host.unverified) warnings.push(host.unverified);
   }
+  const format = payloadFormat(host);
   const hostNative = aot && host ? hostAot(host) : null;
   const noJit = host?.info.features.includes("no-jit") ?? false;
   if (noJit && config.publishDevtools) {
@@ -690,7 +703,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       warnings.push(`sk.config.json "packs": ${JSON.stringify(p.name)} takes no asset — no ${p.name}.skpk is written`);
       continue;
     }
-    packs.push(writePack(p.name, p.files));
+    packs.push(writePack(p.name, p.files, format));
   }
   const inputs: SkpkInput[] = [
     {
@@ -724,7 +737,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
         data: new Uint8Array(readFileSync(icuData)),
         alignLog2: 12,
       });
-    } else icu = writeIcuPack(icuData);
+    } else icu = writeIcuPack(icuData, format);
   } else if (config.intl === "invariant" && host && !icuData) {
     warnings.push(
       host.info.icu?.linked === "system"
@@ -793,19 +806,26 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
   }
 
   let packaged: Packaged | null = null;
+  let workPayload: Uint8Array;
   const ts = performance.now();
   progress.step(options.payloadOnly || !host ? "payload" : platform === "macos" ? "app bundle" : "exe");
   if (options.payloadOnly || !host) {
-    // An app split into packs ships app.skpk as a file mapped from offset 0: page-align its data.
-    const unskewed = writeSkpk(inputs);
-    const skew = packs.length || aot ? skewFor(0, readHeader(unskewed)) : 0;
-    writeFileSync(skpk, skew ? writeSkpk(inputs, { skew }) : unskewed);
+    workPayload = standalonePayload(inputs, format);
   } else {
     packaged = PACKAGERS[platform]({ config, host, inputs, sidecars, images, outDir, work, options, warnings, log });
-    writeFileSync(skpk, packaged.payload);
+    workPayload = packaged.payload;
+    if (options.standaloneWorkPayload) {
+      const base = packaged.stamp?.payloadRva ?? packaged.elf?.payloadOffset ?? 0;
+      const alignment =
+        format >= SKBANK_FORMAT
+          ? inputs.reduce((max, entry) => Math.max(max, 2 ** (entry.alignLog2 ?? 0)), PAGE)
+          : PAGE;
+      if (base % alignment !== 0) workPayload = standalonePayload(inputs, format);
+    }
   }
+  writeFileSync(skpk, workPayload);
   const msStamp = performance.now() - ts;
-  progress.detail(mib(packaged?.payload.length ?? readFileSync(skpk).length));
+  progress.detail(mib(workPayload.length));
   if (packaged?.bundle) progress.detail(mib(packaged.bundle.bytes));
   else if (packaged?.stamp) progress.detail(mib(packaged.stamp.bytes));
   else if (packaged?.elf) progress.detail(mib(packaged.elf.bytes));
@@ -843,7 +863,7 @@ async function build(options: BuildOptions, progress: Progress): Promise<BuildRe
       compiler: native.compiler.path,
       ms: Math.round(msNative),
     },
-    payloadBytes: packaged?.payload.length ?? readFileSync(skpk).length,
+    payloadBytes: workPayload.length,
     packs: packs.map((p) => ({
       name: p.name,
       path: join(work, p.file),

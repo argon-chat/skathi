@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 import { AotInputs, aotEngineIdentity } from "../aot-inputs";
-import { NAMES, readSkpk } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { NAMES } from "../cli/skpk";
 import { packageDir } from "../runtime-path";
 
 const scratch = mkdtempSync(join(tmpdir(), "sk-aot-inputs-"));
@@ -361,7 +362,7 @@ test("real sk build emits typed Vue modules while SKPK keeps the same JavaScript
   expect(readFileSync(join(dirname(prepared.aotInputs), vue.blob), "utf8")).toMatch(/count:\s*number/);
   expect(manifest.aliases.vue).toMatch(/^@sdk\/src\/runtime\.ts$/);
   const script = (path: string) => {
-    const payload = readSkpk(readFileSync(path));
+    const payload = readPayload(readFileSync(path));
     return payload.bytes(payload.entries.find((input) => input.name === NAMES.SCRIPT)!);
   };
   const bytes = script(prepared.skpk);

@@ -27,6 +27,20 @@ It runs `sk publish`, then writes every format listed for the system it runs on 
 
 Before it builds anything, `sk package` reads the whole `"package"` section and stops with every mistake it finds, each with the key it is about. `sk check` reports the same mistakes as SK8001 (errors) and SK8002 (warnings), and each format's own codes, for the systems in `"platforms"`. A format that can be written only on its own system, such as a DMG, is refused on another one before anything is built, with `--platform` naming where to run it; an MSIX can be written on any system.
 
+## Application payloads and asset packs
+
+`sk build` puts the script, window configuration and bundled assets into an application payload. Its location depends on the target.
+
+| Target  | Application payload                    | Additional `.skpk` files |
+| ------- | -------------------------------------- | ------------------------ |
+| Windows | `SKPAYLOAD` resource in the executable | Beside the executable    |
+| Linux   | Appended to the executable             | Beside the executable    |
+| macOS   | `Contents/Resources/app.skpk`          | In `Contents/Resources/` |
+
+Ship the asset packs from the same build as the application. Its metadata records each pack's filename and index hash, and the host checks the hash before exposing its assets. On Windows and Linux, `"publishSingleFile": true` puts the assets and any required ICU data into the executable for a release build.
+
+For a Rust host that loads a standalone payload, run `sk build --payload-only` and take `app.skpk` and its companion files from the build's `.sk/` directory. The default standalone format is SkBank. Pass `--workload <exe>` to target a particular host. The CLI writes SkBank for a host that advertises `payloadFormat` 3 or higher and SKPK v1 for older hosts. Both formats use the `.skpk` extension.
+
 ## The package section
 
 ```json

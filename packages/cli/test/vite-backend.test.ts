@@ -12,7 +12,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { KIND, NAMES, readSkpk } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { KIND, NAMES } from "../cli/skpk";
 import type { CheckReport } from "../check/schema";
 import cliPackage from "../package.json";
 import { packageDir } from "../runtime-path";
@@ -105,7 +106,7 @@ test("sk build uses the target app's Vite config, Vue plugin and assets in the n
   const out = join(scratch, "native");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   expect(script).toContain("user-vite-alias");
   expect(script).toContain("plugin-ran-build-production-1");
@@ -118,7 +119,7 @@ test("sk build uses the target app's Vite config, Vue plugin and assets in the n
   expect(asset).toBeDefined();
   expect(new TextDecoder().decode(payload.bytes(asset!))).toBe("binary asset from Vite");
   expect(script).toContain("/" + asset!.name);
-  const pack = readSkpk(readFileSync(join(out, ".sk", "media.skpk")));
+  const pack = readPayload(readFileSync(join(out, ".sk", "media.skpk")));
   const sticker = pack.find(KIND.ASSET, "assets/media/sticker.tgs");
   expect(sticker).toBeDefined();
   expect(new TextDecoder().decode(pack.bytes(sticker!))).toBe("sticker pack bytes");
@@ -138,7 +139,7 @@ test("new URL resolves an emitted Vite asset on the native page origin", () => {
   const out = join(scratch, "native-url");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   const globals = {} as { result: [string, string] };
   new Function("globalThis", script)(globals);
@@ -173,7 +174,7 @@ test("a Svelte-only install builds the native payload without bringing in Vue", 
   const out = join(scratch, "svelte-only");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   expect(script).toContain("svelte-only-fixture");
 }, 120_000);
@@ -199,7 +200,7 @@ test("serve-only Vue and Svelte plugins leave their native build compilers activ
   const out = join(scratch, "serve-only-frameworks");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   expect(script).toContain("native-fallback-vue");
   expect(script).toContain("native-fallback-svelte");
@@ -230,7 +231,7 @@ test("sk uses the Vite+ build API from the target app and checks CSS generated b
   const out = join(scratch, "vite-plus-api");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   expect(script).toContain("app-local-toolchain");
   const checked = run("check", app, "--format", "json", "--no-deps");
@@ -266,7 +267,7 @@ test("the native output uses the IIFE hooks and asset names from a multi-output 
   const out = join(scratch, "output-hooks");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const read = (kind: number, name: string) => new TextDecoder().decode(payload.bytes(payload.find(kind, name)!));
   const script = read(KIND.SCRIPT, NAMES.SCRIPT);
   expect(script).toContain("nativeBanner");
@@ -379,7 +380,7 @@ test.each([false, true])(
     const out = join(scratch, "unicode-aot-" + vite);
     const result = run("build", app, "--out", out, "--payload-only", "--aot-inputs");
     expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-    const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+    const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
     const bytes = payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!);
     expect(bytes.every((b) => b < 0x80)).toBe(true);
     const script = new TextDecoder().decode(bytes);
@@ -433,7 +434,7 @@ test("sk check and --aot-inputs see a typed source imported only by a Vite plugi
   expect(source).toBeDefined();
   expect(readFileSync(join(archive, source!.blob), "utf8")).toBe(readFileSync(join(app, "src/reachable.ts"), "utf8"));
   expect(manifest.files.some((f) => f.path === "src/unreachable.ts")).toBe(false);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const bytes = payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!);
   expect(manifest.script.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
 }, 120_000);
@@ -455,7 +456,7 @@ test("audio worklet modules are built into classic scripts and packed under the 
   const out = join(scratch, "native-worklets");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   const urls: string[] = [];
   const globals = { urls, ctx: { audioWorklet: { addModule: (url: string) => urls.push(String(url)) } } };
@@ -482,7 +483,7 @@ test("a .toml import in a Vite build is TOML.parse of its text, and invalid TOML
   const out = join(scratch, "native-toml");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode, result.stdout.toString() + result.stderr.toString()).toBe(0);
-  const payload = readSkpk(readFileSync(join(out, ".sk", "app.skpk")));
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
   const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
   const globals: Record<string, unknown> = {};
   new Function("globalThis", "__sk_std", script)(globals, { TOML: { parse: (text: string) => ({ parsed: text }) } });

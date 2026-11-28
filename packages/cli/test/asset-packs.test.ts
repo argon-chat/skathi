@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { splitPacks, writeIcuPack } from "../cli/build-app";
 import { ConfigError, loadAppConfig } from "../cli/config";
-import { KIND, NAMES, PAGE, readSkpk } from "../cli/skpk";
+import { readPayload } from "../cli/payload";
+import { KIND, NAMES, PAGE } from "../cli/skpk";
 
 const root = mkdtempSync(join(tmpdir(), "sk-asset-packs-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -137,7 +138,7 @@ test('"intl" is "full" unless the config says "invariant", and nothing else is a
 test("the ICU pack holds the data file alone, page-aligned for the host to map", () => {
   const dat = join(root, "icudt79l.dat");
   writeFileSync(dat, "pretend ICU data");
-  const pack = readSkpk(writeIcuPack(dat));
+  const pack = readPayload(writeIcuPack(dat));
   expect(pack.entries.map((e) => [e.kind, e.name])).toEqual([[KIND.ICU_DATA, "sk/icu/icudt79l.dat"]]);
   expect(pack.entries[0]!.start % PAGE).toBe(0);
   expect(new TextDecoder().decode(pack.bytes(pack.entries[0]!))).toBe("pretend ICU data");
@@ -186,7 +187,7 @@ test("sk build writes the packs beside the payload and names them, with their id
     ["assets", 1],
   ]);
 
-  const payload = readSkpk(new Uint8Array(readFileSync(summary.skpk)));
+  const payload = readPayload(new Uint8Array(readFileSync(summary.skpk)));
   const assets = payload.entries.filter((e) => e.kind === KIND.ASSET).map((e) => e.name);
   expect(assets).toEqual(["assets/logo.png"]);
   const meta = JSON.parse(new TextDecoder().decode(payload.bytes(payload.find(KIND.META, NAMES.META)!)));
@@ -198,14 +199,14 @@ test("sk build writes the packs beside the payload and names them, with their id
 
   for (const ref of meta.packs as { name: string; file: string; id: string }[]) {
     const blob = new Uint8Array(readFileSync(join(out, ".sk", ref.file)));
-    const pack = readSkpk(blob);
+    const pack = readPayload(blob);
     expect(pack.entries.every((e) => e.kind === KIND.ASSET)).toBe(true);
     // The data is page-aligned in the file, which the host maps from 0.
-    expect(pack.header.dataOff % PAGE).toBe(0);
-    const index = blob.subarray(0, pack.header.namesOff + pack.header.namesLen);
+    expect(pack.dataOffset % PAGE).toBe(0);
+    const index = pack.index;
     expect(ref.id).toBe(createHash("sha256").update(index).digest("hex"));
   }
-  const fonts = readSkpk(new Uint8Array(readFileSync(join(out, ".sk", "fonts.skpk"))));
+  const fonts = readPayload(new Uint8Array(readFileSync(join(out, ".sk", "fonts.skpk"))));
   expect(fonts.entries.map((e) => e.name)).toEqual(["assets/fonts/a.woff2", "assets/fonts/b.ttf"]);
   expect(new TextDecoder().decode(fonts.bytes(fonts.entries[0]!))).toBe("font a");
 }, 120_000);

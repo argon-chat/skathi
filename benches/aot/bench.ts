@@ -15,7 +15,8 @@ import { deflateRawSync } from "node:zlib";
 import { resolveAotCompiler } from "../../packages/cli/cli/aot-build";
 import { buildApp } from "../../packages/cli/cli/build-app";
 import { resolveHost } from "../../packages/cli/cli/host";
-import { KIND, NAMES, readSkpk, writeSkpk, type SkpkInput } from "../../packages/cli/cli/skpk";
+import { readPayload } from "../../packages/cli/cli/payload";
+import { KIND, NAMES, writeSkpk, type SkpkInput } from "../../packages/cli/cli/skpk";
 import { stamp } from "../../packages/cli/cli/stamp";
 import { nativeManifest, type NativeImage } from "../../packages/cli/aot/native";
 import { opaqueHost } from "../../packages/cli/aot/transform";
@@ -192,7 +193,7 @@ if (splitFlavors.length) {
     payloadOnly: true,
     log,
   });
-  const payload = readSkpk(new Uint8Array(readFileSync(result.skpk)));
+  const payload = readPayload(new Uint8Array(readFileSync(result.skpk)));
   const scriptEntry = payload.find(KIND.SCRIPT, NAMES.SCRIPT);
   if (!scriptEntry) throw Error("the split payload has no script");
   const script = new TextDecoder().decode(payload.bytes(scriptEntry));
@@ -201,7 +202,7 @@ if (splitFlavors.length) {
     name: e.name,
     kind: e.kind,
     data: payload.bytes(e).slice(),
-    alignLog2: e.alignLog2,
+    ...(e.alignLog2 === undefined ? {} : { alignLog2: e.alignLog2 }),
   }));
   for (const flavor of splitFlavors) {
     const native = await compileSplit(script, flavor, join(split, flavor));

@@ -36,7 +36,8 @@ import {
   type PlistValue,
 } from "../cli/macos-bundle";
 import { currentPlatform, hostsFor, parsePlatform, repoHostExe } from "../cli/platform";
-import { KIND, NAMES, readSkpk } from "../cli/skpk";
+import { readSkBank, SKBANK_FORMAT } from "../cli/skbank";
+import { KIND, NAMES, PAGE } from "../cli/skpk";
 
 const dir = mkdtempSync(join(tmpdir(), "sk-macos-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -588,6 +589,7 @@ describe("hosts per platform", () => {
       mkdirSync(join(root, "assets"));
       writeFileSync(join(root, "src", "main.ts"), "export const x = 1;\n");
       writeFileSync(join(root, "assets", "a.txt"), "hello");
+      writeFileSync(join(root, "assets", "extra.bin"), "external");
       writeFileSync(join(root, "icon.png"), encodePng(solid(64)));
       writeFileSync(
         join(root, "sk.config.json"),
@@ -595,6 +597,7 @@ describe("hosts per platform", () => {
           name: "e2e",
           productName: "E2E & Co",
           version: "2.3.4-beta.1",
+          packs: [{ name: "extra", match: ["**/*.bin"] }],
           singleInstance: true,
           protocols: ["e2e"],
           windows: { icon: "icon.png" },
@@ -608,7 +611,18 @@ describe("hosts per platform", () => {
           },
         }),
       );
-      const host = fakeMachO(join(fresh("e2e-host"), "sk-app"));
+      const hostDir = fresh("e2e-host");
+      const host = fakeMachO(join(hostDir, "sk-app"));
+      const hostInfo = crossHostInfo(host, "standard", "macos").info;
+      writeFileSync(
+        join(hostDir, "host.json"),
+        JSON.stringify({
+          ...hostInfo,
+          payloadFormat: SKBANK_FORMAT,
+          icu: { linked: "root", package: "icudt79l" },
+        }),
+      );
+      writeFileSync(join(hostDir, "icudt79l.dat"), "locale data");
       const out = join(root, "dist");
       const r = await buildApp({ target: root, out, host, platform: "macos", log: () => {} });
 
@@ -619,13 +633,25 @@ describe("hosts per platform", () => {
       expect(r.exe).toBe(join(app, "Contents", "MacOS", "E2E & Co"));
       expect(r.bundle!.signed).toBeNull();
 
-      const shipped = readFileSync(join(app, "Contents", "Resources", "app.skpk"));
+      const resources = join(app, "Contents", "Resources");
+      const shipped = readFileSync(join(resources, "app.skpk"));
       expect(shipped.equals(readFileSync(r.skpk))).toBe(true);
-      const payload = readSkpk(new Uint8Array(shipped));
-      expect(payload.header.dataOff % 4096).toBe(0);
+      const payload = readSkBank(shipped);
+      expect(payload.dataOffset % PAGE).toBe(0);
       const meta = JSON.parse(new TextDecoder().decode(payload.bytes(payload.find(KIND.META, NAMES.META)!)));
-      expect(meta).toMatchObject({ name: "e2e", productName: "E2E & Co", version: "2.3.4-beta.1" });
+      expect(meta).toMatchObject({
+        format: SKBANK_FORMAT,
+        name: "e2e",
+        productName: "E2E & Co",
+        version: "2.3.4-beta.1",
+      });
       expect(payload.find(KIND.ASSET, "assets/a.txt")).toBeDefined();
+      const extra = readSkBank(readFileSync(join(resources, "extra.skpk")));
+      expect(new TextDecoder().decode(extra.bytes(extra.find(KIND.ASSET, "assets/extra.bin")!))).toBe("external");
+      const icu = readSkBank(readFileSync(join(resources, "icu.skpk")));
+      const entry = icu.find(KIND.ICU_DATA, "sk/icu/icudt79l.dat")!;
+      expect(entry.start % PAGE).toBe(0);
+      expect(new TextDecoder().decode(icu.bytes(entry))).toBe("locale data");
 
       const info = readPlist(readFileSync(join(app, "Contents", "Info.plist"), "utf8")) as Record<string, PlistValue>;
       expect(info).toMatchObject({
