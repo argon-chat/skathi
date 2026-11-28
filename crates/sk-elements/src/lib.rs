@@ -27,7 +27,7 @@ pub use text_input::{
     configuration, text_input, CaretMirror, CaretUtf16, ClipboardCommand, CompositionPhase,
     ControlledValue, InputAttributes, InputIntent, InputType, MappedConfiguration, OnBeforeInput,
     OnChange, OnClipboard, OnComposition, OnKeyDown, OnKeyUp, TextInputHandlers, TextInputOptions,
-    TextInputState, DEFAULT_ROWS, KEY_CONTEXT, TEXTAREA_KEY_CONTEXT,
+    TextInputState, DEFAULT_COLUMNS, DEFAULT_ROWS, KEY_CONTEXT, TEXTAREA_KEY_CONTEXT,
 };
 
 /// One-time setup (key bindings, actions, `Tab`/`Shift-Tab` focus traversal); call before opening a window.

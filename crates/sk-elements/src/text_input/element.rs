@@ -12,10 +12,10 @@
 use std::ops::Range;
 
 use gpui::{
-    fill, point, px, relative, size, App, AvailableSpace, Bounds, ContentMask, DispatchPhase,
-    Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hsla, InspectorElementId,
-    LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString,
-    Style, TextAlign, TextRun, TextStyle, UnderlineStyle, Window,
+    fill, point, px, size, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Element,
+    ElementId, ElementInputHandler, Entity, GlobalElementId, Hsla, InspectorElementId, LayoutId,
+    MouseButton, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style,
+    TextAlign, TextRun, TextStyle, UnderlineStyle, Window,
 };
 
 use super::state::{LineBox, TextInputState, CARET_WIDTH};
@@ -174,14 +174,28 @@ impl Element for TextElement {
                 });
             return (layout, ());
         }
-        style.size.width = relative(1.0).into();
-        if self.options.multiline {
+        // Fills the field; on its own, `size`/`cols` average characters wide, as a browser sizes
+        // an unstyled field.
+        style.flex_grow = 1.0;
+        style.min_size.width = px(0.0).into();
+        let height = if self.options.multiline {
             // `rows` is only the intrinsic height, so CSS `height`/`min-height` still win.
-            style.min_size.height = (line_height * self.options.rows.max(1) as f32).into();
+            let rows = line_height * self.options.rows.max(1) as f32;
+            style.min_size.height = rows.into();
+            rows
         } else {
             style.size.height = line_height.into();
-        }
-        (window.request_layout(style, [], cx), ())
+            line_height
+        };
+        let intrinsic = (self.options.font_size * (self.options.columns as f32 * 0.55)).round();
+        let layout = window.request_measured_layout(style, move |known, available, _, _| {
+            let width = known.width.unwrap_or(match available.width {
+                AvailableSpace::Definite(width) => width.min(intrinsic),
+                _ => intrinsic,
+            });
+            size(width, known.height.unwrap_or(height))
+        });
+        (layout, ())
     }
 
     fn prepaint(

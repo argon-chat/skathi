@@ -82,6 +82,8 @@ pub const TEXTAREA_KEY_CONTEXT: &str = "SkTextArea";
 const BOTH_KEY_CONTEXTS: &str = "SkTextInput SkTextArea";
 
 pub const DEFAULT_ROWS: usize = 2;
+/// HTML's default `size` and `cols`.
+pub const DEFAULT_COLUMNS: usize = 20;
 
 /// What a user edit does: the DOM's `InputEvent.inputType`. The discriminant is the code carried to
 /// JS, where `EDIT_TYPES` in `packages/runtime/src/runtime/event-names.ts` names it (`test/protocol-codes.test.ts`
@@ -251,6 +253,8 @@ pub struct TextInputOptions {
     /// CSS `text-align`, applied as a content offset (`TextInputState::align_offset`).
     pub text_align: gpui::TextAlign,
     pub rows: usize,
+    /// The intrinsic width in average characters: `size`, or a textarea's `cols`.
+    pub columns: usize,
     pub input_config: TextInputConfiguration,
     /// CSS `pointer-events: none` is in force: no press, no automatic focus transfer. Dropping the
     /// tracked focus handle costs the tab stop but keeps hidden overlaid panels from swallowing input.
@@ -277,6 +281,7 @@ impl Default for TextInputOptions {
             size_to_content: false,
             text_align: gpui::TextAlign::Left,
             rows: DEFAULT_ROWS,
+            columns: DEFAULT_COLUMNS,
             inherit_color: false,
             input_config: TextInputConfiguration::default(),
             inert: false,

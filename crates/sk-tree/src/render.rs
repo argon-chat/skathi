@@ -1520,10 +1520,26 @@ fn tab_index_of(t: &Tree, id: u32) -> Option<isize> {
     }
 }
 
+/// The label of an `<input type=button|submit|reset>`: its `value`, else HTML's default.
+fn input_button_label(t: &Tree, id: u32) -> Option<String> {
+    let n = t.node(id)?;
+    if t.name(n.tag) != "input" {
+        return None;
+    }
+    let default = match t.prop(id, "type")?.trim().to_ascii_lowercase().as_str() {
+        "submit" => "Submit",
+        "reset" => "Reset",
+        "button" => "",
+        _ => return None,
+    };
+    Some(t.prop(id, "value").unwrap_or(default).to_string())
+}
+
 fn default_tab_index(t: &Tree, id: u32) -> Option<isize> {
     let n = t.node(id)?;
     let focusable = match t.name(n.tag) {
         "button" | "select" | "iframe" | crate::editor::TAG => true,
+        "input" => input_button_label(t, id).is_some(),
         "a" | "area" => t.prop(id, "href").is_some(),
         "summary" => summarizes_details(t, id),
         _ => false,
@@ -2448,12 +2464,14 @@ fn build_node<V: 'static>(
                         .is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
                 let toggle = crate::toggle::kind(t, id);
                 let is_editor = t.name(node.tag) == crate::editor::TAG;
+                let button_label = input_button_label(t, id);
                 let is_input =
                     matches!(t.name(node.tag), "input" | "textarea" | crate::editor::TAG)
                         && !is_file_input
                         && !is_range
                         && !is_color
-                        && toggle.is_none();
+                        && toggle.is_none()
+                        && button_label.is_none();
                 // Both are tabbable by default in HTML; a plain <div> is not. A disabled file input is
                 // not focusable at all.
                 let file_tab =
@@ -2683,6 +2701,11 @@ fn build_node<V: 'static>(
                                 crate::select::popup_child(t, id, node, case, window, cx)
                             {
                                 kids.push(popup);
+                            }
+                        } else if let Some(label) = button_label.as_deref() {
+                            if !label.is_empty() {
+                                crate::fonts::want_for_text(t, id, label);
+                                kids.push(transformed_text(label, case).into_any_element());
                             }
                         } else if !node.text.is_empty() {
                             // Inline text from `setElementText` (an element whose only child is text).
@@ -6181,6 +6204,11 @@ fn build_input<V: 'static>(
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(sk_elements::DEFAULT_ROWS),
+        columns: t
+            .prop(id, if multiline { "cols" } else { "size" })
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(sk_elements::DEFAULT_COLUMNS),
         input_config: {
             let mut config = input_configuration(t, id, multiline);
             // A browser offers no corrections or suggestions for a password: they would learn it.
