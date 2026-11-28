@@ -742,6 +742,8 @@ pub struct UpWave {
     click: Option<(u32, MousePt)>,
     aux: Option<(u32, MousePt)>,
     menu: Option<(u32, MousePt)>,
+    /// A lifted primary finger leaves the window between `mouseup` and `click`.
+    touch_leave: Option<(Vec<f64>, Point<gpui::Pixels>)>,
     scheduled: bool,
     cancelled: bool,
 }
@@ -782,11 +784,18 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
     let button = button_code(ev.button);
     windows::here(window, |w| {
         let press = Press::take_for_release(&mut w.press, button);
-        let cancelled = press.as_ref().is_some_and(|p| p.cancelled);
+        let release = w.touch.take_release();
+        let cancelled = press.as_ref().is_some_and(|p| p.cancelled)
+            || matches!(release, Some(crate::touch::Release::Cancel));
+        let touch_leave = match release {
+            Some(crate::touch::Release::Up { packet, position }) => Some((packet, position)),
+            _ => None,
+        };
         w.up_waves.retain(|wave| wave.scheduled);
         w.up_waves.push(UpWave {
             press,
             cancelled,
+            touch_leave,
             ..Default::default()
         });
     });
@@ -886,13 +895,20 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
         }) else {
             return;
         };
+        let leave = |window: &mut Window, cx: &mut App| {
+            if let Some((packet, position)) = &wave.touch_leave {
+                crate::pointer::hover_now(window, cx, *position, false, packet);
+            }
+        };
         if wave.cancelled {
+            leave(window, cx);
             continue;
         }
         if let Some((id, p)) = wave.mouseup {
             js_dispatch_app(id, tree::EV_MOUSEUP, &p.payload(), window, cx);
             windows::here(window, |w| w.pointer_capture = None);
         }
+        leave(window, cx);
         if let Some((id, p)) = wave.click {
             js_dispatch_app(id, tree::EV_CLICK, &p.payload(), window, cx);
         }
@@ -924,6 +940,40 @@ pub(crate) fn cancel_press(window: &mut Window, cx: &mut App) {
         }
     }
     windows::here(window, |w| w.pointer_capture = None);
+}
+
+/// Cancels the primary finger: its `pointercancel` goes out even when no listener armed a press.
+pub(crate) fn cancel_touch(window: &mut Window, cx: &mut App, position: Point<gpui::Pixels>) {
+    if windows::here(window, |w| w.press.as_ref().is_some_and(Press::is_active)) {
+        cancel_press(window, cx);
+        return;
+    }
+    let target = crate::pointer::captured_target(window)
+        .unwrap_or_else(|| crate::pointer::target_at(window, position));
+    crate::live_state::set_active(window, None);
+    windows::here(window, |w| w.pointer_capture = None);
+    if tree::read_tree(|t| t.node(target).is_some()) {
+        let payload = mouse_payload(position, -1.0, &gpui::Modifiers::default());
+        js_dispatch_app(target, tree::EV_POINTERCANCEL, &payload, window, cx);
+    }
+}
+
+/// Whether the up wave the primary finger's release opened will leave the window for it; when
+/// not, it is taken back, for the caller to leave now.
+pub(crate) fn touch_leave_scheduled(window: &Window) -> bool {
+    windows::here(window, |w| {
+        if w.touch.take_release().is_some() {
+            return false;
+        }
+        match w.up_waves.last_mut() {
+            Some(wave) if wave.scheduled => wave.touch_leave.is_some(),
+            Some(wave) => {
+                wave.touch_leave = None;
+                false
+            }
+            None => false,
+        }
+    })
 }
 
 fn watch_activation<V: 'static>(window: &mut Window, cx: &mut Context<V>) {

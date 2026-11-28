@@ -1,14 +1,8 @@
-//! Touch contacts as `pointerType: "touch"` pointers (`Window::set_vn_touch_handler`).
-//!
-//! The primary contact (the first of a touch sequence) drives gpui's mouse: its press, moves and
-//! release are dispatched as gpui mouse events, so it gets everything a mouse press gets (focus,
-//! a text field's caret, native widgets, `click`), and the runtime builds its pointer events and
-//! the compatibility mouse events from them with this contact's packet. Every other contact is a
-//! pointer of its own: hit-tested, captured and delivered here, with no mouse events. Contacts
-//! are kept in a list per window, as many as the device reports.
+//! Touch contacts as `pointerType: "touch"` pointers. The primary contact drives gpui's mouse,
+//! carrying its own packet; every other contact is hit-tested, captured and delivered here.
 
 use std::cell::Cell;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PenSample,
@@ -47,7 +41,20 @@ struct Contact {
     /// Where it is over, target first: the boundary events' last state.
     over: Vec<u32>,
     capture: Option<u32>,
+    taps: usize,
 }
+
+/// How the primary contact's release reaches the up wave its `MouseUp` opens.
+pub(crate) enum Release {
+    /// Lifted: the wave leaves the window after `mouseup`, before `click`.
+    Up {
+        packet: Vec<f64>,
+        position: Point<Pixels>,
+    },
+    Cancel,
+}
+
+type Tap = (Instant, Point<Pixels>, usize);
 
 #[derive(Default)]
 pub(crate) struct TouchState {
@@ -55,9 +62,17 @@ pub(crate) struct TouchState {
     /// The primary contact gpui's mouse events currently stand for, and its latest reading.
     mouse: Option<(u32, PenSample)>,
     synthesizing: bool,
+    release: Option<Release>,
+    /// The script released the primary contact's capture during its press.
+    released: bool,
+    last_tap: Option<Tap>,
 }
 
 impl TouchState {
+    pub(crate) fn take_release(&mut self) -> Option<Release> {
+        self.release.take()
+    }
+
     /// A new contact: primary when no other is down.
     fn begin(&mut self, id: TouchId, sample: PenSample) -> (u32, bool) {
         let primary = self.contacts.is_empty();
@@ -71,6 +86,7 @@ impl TouchState {
             pending: false,
             over: Vec::new(),
             capture: None,
+            taps: 1,
         });
         (pointer_id, primary)
     }
@@ -105,13 +121,75 @@ pub(crate) fn mouse_packet(window: &Window) -> Option<Vec<f64>> {
     Some(crate::pen::touch_packet(pointer_id, true, &sample))
 }
 
-/// A mouse or pen event of the platform's own: gpui's mouse is no longer the finger's.
-pub(crate) fn note_mouse_event(window: &Window) {
-    windows::here(window, |w| {
-        if !w.touch.synthesizing {
-            w.touch.mouse = None;
+/// A mouse or pen event of the platform's own: gpui's mouse is no longer the finger's. A primary
+/// finger still down is cancelled first, under its own packet, so the runtime ends its contact.
+pub(crate) fn note_mouse_event(window: &mut Window, cx: &mut App) {
+    let interrupted = windows::here(window, |w| {
+        if w.touch.synthesizing {
+            return None;
         }
+        w.touch.mouse = None;
+        let c = w.touch.contacts.iter().find(|c| c.primary)?;
+        w.touch.mouse = Some((c.pointer_id, c.sample));
+        Some((c.id, c.pointer_id, c.sample))
     });
+    let Some((id, pointer_id, sample)) = interrupted else {
+        return;
+    };
+    let packet = crate::pen::touch_packet(pointer_id, true, &sample);
+    crate::render::cancel_touch(window, cx, sample.position);
+    pointer::hover_now(window, cx, sample.position, false, &packet);
+    windows::here(window, |w| {
+        w.touch.finish(id);
+        w.touch.mouse = None;
+    });
+}
+
+/// The count a tap at `at` starts, after the tap `last`, as a click count: taps close enough in
+/// time and place make a double tap.
+fn next_tap_count(
+    last: Option<Tap>,
+    now: Instant,
+    at: Point<Pixels>,
+    interval: Duration,
+    slop: (f32, f32),
+) -> usize {
+    match last {
+        Some((t, p, n))
+            if now.duration_since(t) < interval
+                && f32::from(at.x - p.x).abs() <= slop.0
+                && f32::from(at.y - p.y).abs() <= slop.1 =>
+        {
+            n + 1
+        }
+        _ => 1,
+    }
+}
+
+/// The system's double-click time and distance, the distance in window pixels.
+#[cfg(windows)]
+fn double_tap(scale: f32) -> (Duration, (f32, f32)) {
+    use ::windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+    use ::windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
+    };
+    // SAFETY: plain queries.
+    let (ms, cx, cy) = unsafe {
+        (
+            GetDoubleClickTime(),
+            GetSystemMetrics(SM_CXDOUBLECLK),
+            GetSystemMetrics(SM_CYDOUBLECLK),
+        )
+    };
+    (
+        Duration::from_millis(u64::from(ms)),
+        (cx as f32 / scale, cy as f32 / scale),
+    )
+}
+
+#[cfg(not(windows))]
+fn double_tap(_scale: f32) -> (Duration, (f32, f32)) {
+    (Duration::from_millis(500), (4.0, 4.0))
 }
 
 pub(crate) fn handle(ev: &TouchEvent, window: &mut Window, cx: &mut App) -> bool {
@@ -123,17 +201,7 @@ pub(crate) fn handle(ev: &TouchEvent, window: &mut Window, cx: &mut App) -> bool
             let sample = sample_of(ev);
             let (pointer_id, primary) = windows::here(window, |w| w.touch.begin(ev.id, sample));
             if primary {
-                windows::here(window, |w| w.touch.mouse = Some((pointer_id, sample)));
-                pointer::hover_now(window, cx, sample.position);
-                synthesize(window, cx, |modifiers| {
-                    PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: sample.position,
-                        modifiers,
-                        click_count: 1,
-                        first_mouse: false,
-                    })
-                });
+                primary_down(ev.id, pointer_id, sample, window, cx);
             } else {
                 secondary_down(ev.id, window, cx);
             }
@@ -192,35 +260,92 @@ pub(crate) fn handle(ev: &TouchEvent, window: &mut Window, cx: &mut App) -> bool
 pub(crate) fn end(id: TouchId, cancelled: bool, window: &mut Window, cx: &mut App) {
     let primary = windows::here(window, |w| w.touch.get(id).map(|c| c.primary));
     match primary {
-        Some(true) => {
-            let Some(contact) = windows::here(window, |w| w.touch.finish(id)) else {
-                return;
-            };
-            let position = contact.sample.position;
-            windows::here(window, |w| {
-                w.touch.mouse = Some((contact.pointer_id, contact.sample));
-            });
-            if cancelled {
-                crate::render::cancel_press(window, cx);
-            }
-            synthesize(window, cx, |modifiers| {
-                PlatformInput::MouseUp(MouseUpEvent {
-                    button: MouseButton::Left,
-                    position,
-                    modifiers,
-                    click_count: 1,
-                })
-            });
-            synthesize(window, cx, |modifiers| {
-                PlatformInput::MouseExited(MouseExitEvent {
-                    position,
-                    pressed_button: None,
-                    modifiers,
-                })
-            });
-        }
+        Some(true) => primary_end(id, cancelled, window, cx),
         Some(false) => secondary_end(id, cancelled, window, cx),
         None => {}
+    }
+}
+
+fn primary_down(
+    id: TouchId,
+    pointer_id: u32,
+    sample: PenSample,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let position = sample.position;
+    let (interval, slop) = double_tap(window.scale_factor());
+    let taps = windows::here(window, |w| {
+        let taps = next_tap_count(w.touch.last_tap, Instant::now(), position, interval, slop);
+        w.touch.last_tap = Some((Instant::now(), position, taps));
+        if let Some(c) = w.touch.get(id) {
+            c.taps = taps;
+        }
+        w.touch.mouse = Some((pointer_id, sample));
+        w.touch.released = false;
+        taps
+    });
+    let packet = crate::pen::touch_packet(pointer_id, true, &sample);
+    pointer::hover_now(window, cx, position, true, &packet);
+    let target = pointer::target_at(window, position);
+    synthesize(window, cx, |modifiers| {
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers,
+            click_count: taps,
+            first_mouse: false,
+        })
+    });
+    // Implicit capture, as on the web, even when no listener armed a press: the finger's
+    // `pointerup` goes to where it went down unless the script released it.
+    let capturable = pointer::capturable_in(windows::key(window), target);
+    windows::here(window, |w| {
+        let down = w.touch.get(id).is_some();
+        if down && capturable && !w.touch.released && w.pointer_capture.is_none() {
+            w.pointer_capture = Some(target);
+        }
+    });
+}
+
+fn primary_end(id: TouchId, cancelled: bool, window: &mut Window, cx: &mut App) {
+    let Some(contact) = windows::here(window, |w| w.touch.finish(id)) else {
+        return;
+    };
+    let position = contact.sample.position;
+    let packet = crate::pen::touch_packet(contact.pointer_id, true, &contact.sample);
+    windows::here(window, |w| {
+        w.touch.mouse = Some((contact.pointer_id, contact.sample));
+        w.touch.release = Some(if cancelled {
+            Release::Cancel
+        } else {
+            Release::Up {
+                packet: packet.clone(),
+                position,
+            }
+        });
+    });
+    if cancelled {
+        crate::render::cancel_touch(window, cx, position);
+    }
+    // Sent even when cancelled, so gpui ends its press; the wave it opens fires nothing then.
+    synthesize(window, cx, |modifiers| {
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers,
+            click_count: contact.taps,
+        })
+    });
+    synthesize(window, cx, |modifiers| {
+        PlatformInput::MouseExited(MouseExitEvent {
+            position,
+            pressed_button: None,
+            modifiers,
+        })
+    });
+    if !crate::render::touch_leave_scheduled(window) {
+        pointer::hover_now(window, cx, position, false, &packet);
     }
 }
 
@@ -366,7 +491,10 @@ pub(crate) fn capture(node: u32, pointer_id: u32, capture: bool) -> bool {
     if !capture {
         let mut mouse = false;
         windows::each(|_, w| {
-            mouse |= w.touch.mouse.is_some_and(|(p, _)| p == pointer_id);
+            if w.touch.mouse.is_some_and(|(p, _)| p == pointer_id) {
+                mouse = true;
+                w.touch.released = true;
+            }
             for c in &mut w.touch.contacts {
                 if c.pointer_id == pointer_id && c.capture == Some(node) {
                     c.capture = None;
@@ -450,6 +578,20 @@ mod tests {
         s.finish(TouchId(3));
         let (_, next) = s.begin(TouchId(4), at(3.0));
         assert!(next, "a new touch sequence");
+    }
+
+    #[test]
+    fn taps_close_in_time_and_place_count_up() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let p = |x: f32, y: f32| gpui::point(gpui::px(x), gpui::px(y));
+        let count = |last, dt: u64, at| next_tap_count(last, t0 + ms(dt), at, ms(500), (4.0, 4.0));
+        assert_eq!(count(None, 0, p(0.0, 0.0)), 1);
+        let first = Some((t0, p(10.0, 10.0), 1));
+        assert_eq!(count(first, 200, p(13.0, 6.0)), 2);
+        assert_eq!(count(Some((t0, p(10.0, 10.0), 2)), 200, p(10.0, 10.0)), 3);
+        assert_eq!(count(first, 600, p(10.0, 10.0)), 1, "too late");
+        assert_eq!(count(first, 200, p(15.0, 10.0)), 1, "too far");
     }
 
     #[test]

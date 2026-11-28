@@ -45,10 +45,13 @@ pub struct PenState {
 }
 
 /// A touch contact's packet: [`TOUCH`], [`PRIMARY`] for the primary contact, its `pointerId`
-/// times [`ID_SHIFT`].
+/// times [`ID_SHIFT`]. [`POINTER_ONLY`] and [`COMPAT_ONLY`] split a mouse event into its pointer
+/// events and its compatibility mouse event, which a touch fires apart.
 pub const TOUCH: f64 = 32.0;
 pub const PRIMARY: f64 = 64.0;
-pub const ID_SHIFT: f64 = 256.0;
+pub const POINTER_ONLY: f64 = 128.0;
+pub const COMPAT_ONLY: f64 = 256.0;
+pub const ID_SHIFT: f64 = 512.0;
 
 thread_local! {
     static NEXT: RefCell<Option<Vec<f64>>> = const { RefCell::new(None) };

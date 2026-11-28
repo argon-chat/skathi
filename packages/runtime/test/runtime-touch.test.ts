@@ -46,16 +46,19 @@ const listen = (node: MirrorElement, type: string, fn: (e: Ev) => void) =>
 
 const TOUCH = 32;
 const PRIMARY = 64;
+const POINTER_ONLY = 128;
+const COMPAT_ONLY = 256;
 interface Contact {
   id: number;
   primary: boolean;
+  part?: number;
   x?: number;
   pressure?: number;
   width?: number;
   height?: number;
 }
 const packet = (c: Contact) => [
-  TOUCH + (c.primary ? PRIMARY : 0) + c.id * 256,
+  TOUCH + (c.primary ? PRIMARY : 0) + (c.part ?? 0) + c.id * 512,
   1,
   c.x ?? 0,
   0,
@@ -196,6 +199,34 @@ describe("touch pointers", () => {
     fire(rt, a, "pointercancel", c, -1);
     expect(seen).toEqual(["pointercancel", "lostpointercapture"]);
     expect(a.hasPointerCapture(9)).toBe(false);
+  });
+
+  test("a lifted primary leaves in two parts: its pointer events, then its mouse events", () => {
+    const { rt, a } = world();
+    const seen: string[] = [];
+    for (const type of ["pointerout", "pointerleave", "mouseout", "mouseleave"])
+      listen(a, type, (e) => seen.push(e.type));
+    const c = { id: 3, primary: true };
+    for (const part of [POINTER_ONLY, COMPAT_ONLY]) {
+      fire(rt, a, "mouseout", { ...c, part }, -1);
+      fire(rt, a, "mouseleave", { ...c, part }, -1);
+    }
+    expect(seen).toEqual(["pointerout", "pointerleave", "mouseout", "mouseleave"]);
+  });
+
+  test("a primary cancelled with no press seen still ends, and the mouse after it is a pointer of its own", () => {
+    const { rt, a, b } = world();
+    const seen: string[] = [];
+    for (const node of [a, b])
+      for (const type of ["pointercancel", "pointerup", "pointermove"])
+        listen(node, type, (e) => seen.push(`${e.type}:${e.pointerType}:${e.pointerId}`));
+    const c = { id: 3, primary: true };
+    fire(rt, a, "mousemove", c, 0);
+    fire(rt, a, "pointercancel", c, -1);
+    rt.host.dispatcher(b.__skId, rt.EV_CODES.mousemove, 0, 0, -1, 0, undefined, undefined, 0, 0, undefined);
+    expect(seen).toEqual(["pointermove:touch:3", "pointercancel:touch:3", "pointermove:mouse:1"]);
+    expect(a.hasPointerCapture(3)).toBe(false);
+    expect(() => a.setPointerCapture(3)).toThrow();
   });
 
   test("a finger leaves the mouse's capture alone", () => {

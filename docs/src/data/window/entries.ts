@@ -3409,6 +3409,7 @@ paint();`,
     notes: [
       "It hands the press to the platform's window move, which ends when the user releases the button.",
       "On Windows the move starts after the handler returns, and the page keeps running while the window moves: timers, `requestAnimationFrame`, animations and `<sk-surface>` content. It needs the left button still held then; after a release it does nothing.",
+      "On Windows a finger on a touch screen can start it too: the window follows the finger until it lifts, and the finger's contact ends with `pointercancel` when the move begins. Snap layouts are not offered then, and a maximized window stays put.",
       "An `app-region: drag` area does the same without code, and also maximizes on double-click.",
       "Like Tauri's `startDragging()`.",
     ],
@@ -3453,6 +3454,7 @@ function grab(e: MouseEvent) {
     notes: [
       "It hands the press to the platform's window resize, which follows the mouse and ends when the user releases the button. The minimum and maximum size and the aspect ratio apply during it.",
       "On Windows the resize starts after the handler returns, and the page keeps running while the window resizes. It needs the left button still held then; after a release it does nothing.",
+      "On Windows a finger on a touch screen can start it too: the edge follows the finger until it lifts, within the same size limits, and the finger's contact ends with `pointercancel` when the resize begins.",
       'It is for resize strips the app draws inside its own edges, under `titleBarStyle: "hidden"`. See [Custom title bar](/guides/custom-title-bar/#resize-strips).',
       "Like Tauri's `startResizeDragging()`.",
     ],

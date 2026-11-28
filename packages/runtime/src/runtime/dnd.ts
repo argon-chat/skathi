@@ -453,7 +453,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   // `preventDefault()` on a derived pointer event cancels its source.
   const derived = DERIVED_OF[name];
   let proceed = true;
-  if (derived) {
+  if (derived && src.part !== "compat") {
     for (const dn of derived) {
       if (!DERIVED[dn as DerivedEventName].pre) continue;
       if (!hasListener(target, dn)) continue;
@@ -469,7 +469,7 @@ const dispatchHostEvent: SkDispatcher = (nodeId, evCode, a, b, c, d, key, data, 
   // A touch contact other than the primary fires no mouse events at all; the primary's boundary mouse events are not
   // suppressed by a cancelled `pointerdown` (Pointer Events §11).
   const suppressed = touch
-    ? MOUSE_EVENTS.has(name) && (!src.primary || (compat && !!contact?.compatSuppressed))
+    ? MOUSE_EVENTS.has(name) && (!src.primary || src.part === "pointer" || (compat && !!contact?.compatSuppressed))
     : compat && src.type === "pen" && pointer.compatSuppressed;
   if (!touch && (name === "mouseup" || name === "pointercancel")) pointer.compatSuppressed = false;
   // Skipping the source event when nothing listens is safe: the only `preventDefault()` that could set the flag

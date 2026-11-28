@@ -46,6 +46,7 @@ describe("touch input", () => {
       await touch("end", 1, 60, 60);
       expect(await log()).toEqual([
         "pointerover@left:A",
+        "mouseover@left",
         "pointerdown@left:touch:A:primary:b1:p0.40:20x24",
         "mousedown@left",
         "got@left:A",
@@ -56,11 +57,15 @@ describe("touch input", () => {
         "pointerup@right:touch:B:other:b0:p0.00:1x1",
         "lost@right:B",
         "pointerout@right:B",
+        "pointerleave@right:B",
         "pointerup@left:touch:A:primary:b0:p0.00:20x24",
         "mouseup@left",
         "lost@left:A",
-        "click@left",
         "pointerout@left:A",
+        "pointerleave@left:A",
+        "mouseout@left",
+        "mouseleave@left",
+        "click@left",
       ]);
     },
     T,

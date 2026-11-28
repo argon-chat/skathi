@@ -169,9 +169,9 @@ pub(crate) fn routed_target(window: &Window) -> Option<u32> {
 /// must collect moves beyond the captured box and beyond the client area as well. Every move's
 /// motion adds up here until a `mousemove` reports it.
 pub(crate) fn capture_listeners(window: &mut Window) {
-    window.on_mouse_event(|ev: &gpui::MouseDownEvent, phase, window, _| {
+    window.on_mouse_event(|ev: &gpui::MouseDownEvent, phase, window, cx| {
         if phase == DispatchPhase::Capture {
-            crate::touch::note_mouse_event(window);
+            crate::touch::note_mouse_event(window, cx);
             if ev.button == gpui::MouseButton::Left {
                 crate::pen::mouse_button(window, window.vn_pen().is_none());
             }
@@ -179,9 +179,9 @@ pub(crate) fn capture_listeners(window: &mut Window) {
             crate::pen::end_stroke(window);
         }
     });
-    window.on_mouse_event(|ev: &gpui::MouseUpEvent, phase, window, _| {
+    window.on_mouse_event(|ev: &gpui::MouseUpEvent, phase, window, cx| {
         if phase == DispatchPhase::Capture {
-            crate::touch::note_mouse_event(window);
+            crate::touch::note_mouse_event(window, cx);
             if ev.button == gpui::MouseButton::Left {
                 crate::pen::mouse_button(window, false);
             }
@@ -212,11 +212,11 @@ pub(crate) fn capture_listeners(window: &mut Window) {
         sk_runtime::frames::wake();
         window.refresh();
     });
-    window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {
+    window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, cx| {
         if phase != DispatchPhase::Capture {
             return;
         }
-        crate::touch::note_mouse_event(window);
+        crate::touch::note_mouse_event(window, cx);
         let moved = window.vn_mouse_movement();
         windows::here(window, |w| w.mouse_movement = w.mouse_movement + moved);
         crate::pen::note_move(window, ev.pressed_button);
@@ -601,18 +601,53 @@ pub(crate) fn path_of(window: &Window, id: u32) -> Vec<u32> {
     tree::read_tree(|t| capture_path(t, id, window_root(t, window))).unwrap_or_default()
 }
 
-/// The hover moves to `pos` now, not at the next frame: a pointer that cannot hover (a finger)
-/// gets its over and enter events before its press.
-pub(crate) fn hover_now(window: &mut Window, cx: &mut App, pos: Point<Pixels>) {
-    let path = path_at(window, pos);
+/// The primary finger's hover moves now, not at the next frame: to `pos` before its press, or
+/// out of the window (`None`) at its release, as a pointer that cannot hover does. `packet` is
+/// the finger's.
+pub(crate) fn hover_now(
+    window: &mut Window,
+    cx: &mut App,
+    pos: Point<Pixels>,
+    inside: bool,
+    packet: &[f64],
+) {
+    let path = if inside {
+        path_at(window, pos)
+    } else {
+        Vec::new()
+    };
     let built = crate::render::layout_count();
     let old = windows::here(window, |w| {
-        w.hover.from = Some((pos, true, built));
+        w.hover.from = Some((pos, inside, built));
         w.hover.when = Some(std::time::Instant::now());
         (w.hover.path != path).then(|| std::mem::replace(&mut w.hover.path, path.clone()))
     });
     if let Some(old) = old {
-        hover_moved(&old, &path, pos, -1.0, true, window, cx);
+        touch_boundary(&old, &path, pos, -1.0, packet, window, cx);
+    }
+}
+
+/// A touch's boundary events: its pointer events first, then the compatibility mouse events.
+fn touch_boundary(
+    old: &[u32],
+    new: &[u32],
+    pos: Point<Pixels>,
+    button: f64,
+    packet: &[f64],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    for (part, styles) in [
+        (crate::pen::POINTER_ONLY, true),
+        (crate::pen::COMPAT_ONLY, false),
+    ] {
+        let mut packet = packet.to_vec();
+        if let Some(flags) = packet.first_mut() {
+            *flags += part;
+        }
+        crate::pen::with_packet(packet, || {
+            hover_moved(old, new, pos, button, styles, window, cx)
+        });
     }
 }
 

@@ -34,6 +34,8 @@ export interface PointerSource {
   type: "mouse" | "pen" | "touch";
   /** The first contact of a touch sequence; the mouse and a pen always are. */
   primary: boolean;
+  /** A touch's boundary event fired in two parts: only its pointer events, or only its mouse event. */
+  part?: "pointer" | "compat";
   eraser: boolean;
   barrel: boolean;
   mousePressure?: boolean;
@@ -58,7 +60,9 @@ const PEN_MOUSE = 8;
 const MOUSE_PRESSURE = 16;
 const TOUCH = 32;
 const TOUCH_PRIMARY = 64;
-const ID_SHIFT = 256;
+const POINTER_ONLY = 128;
+const COMPAT_ONLY = 256;
+const ID_SHIFT = 512;
 const READING_LEN = 10;
 const PREDICTED_LEN = 3;
 
@@ -91,6 +95,7 @@ export function pointerSource(raw: unknown): PointerSource {
       id: Math.floor(flags / ID_SHIFT),
       type: "touch",
       primary: !!(flags & TOUCH_PRIMARY),
+      ...(flags & POINTER_ONLY ? { part: "pointer" as const } : flags & COMPAT_ONLY ? { part: "compat" as const } : {}),
       eraser: false,
       barrel: false,
       readings,

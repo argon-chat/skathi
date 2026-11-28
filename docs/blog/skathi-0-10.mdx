@@ -132,7 +132,7 @@ Buttons are named by position (`south`, `left-trigger`, `dpad-up`), so Xbox and 
 
 ## Touch
 
-A touch screen on Windows used to be a mouse with one very wide finger. Now every finger is a pointer of its own: `pointerType: "touch"`, its own `pointerId`, `isPrimary` on the first one, contact size and pressure where the screen reports them, and ten and more at once.
+A touch screen on Windows used to be a mouse with one very wide finger. Now every finger is a pointer of its own: `pointerType: "touch"`, its own `pointerId`, `isPrimary` on the first one, contact size and pressure where the screen reports them, and as many fingers at once as the screen tracks (we tried ten).
 
 ```ts
 const fingers = new Map<number, { x: number; y: number }>();
@@ -146,7 +146,7 @@ canvas.addEventListener("pointerup", (e) => fingers.delete(e.pointerId));
 canvas.addEventListener("pointercancel", (e) => fingers.delete(e.pointerId));
 ```
 
-Each finger stays captured to where it landed, a rejected palm never presses anything, and only the first finger clicks, so a mouse-only app still works with one hand. `navigator.maxTouchPoints` says what the screen can do. The devtools `touch` command sends contacts without any hardware.
+Each finger stays captured to where it landed, a palm Windows rejects ends in `pointercancel` instead of a click, and only the first finger clicks (double taps included), so a mouse-only app still works with one hand. A finger can drag a borderless window by its `startDragging()` grip, too. `navigator.maxTouchPoints` says what the screen can do. The devtools `touch` command sends contacts without any hardware.
 
 ## Notifications
 
