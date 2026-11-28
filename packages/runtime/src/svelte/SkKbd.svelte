@@ -7,6 +7,7 @@
     keys,
     map,
     platform,
+    controller,
     gamepadLayout,
     mousePrimary,
     variant = "keycaps",
@@ -17,7 +18,7 @@
   const trackLayout = createSubscriber(onKeyLayoutChange);
   const model = $derived.by(() => {
     trackLayout();
-    return kbdPresentation({ keys, map, platform, labels, gamepadLayout, mousePrimary });
+    return kbdPresentation({ keys, map, platform, labels, controller, gamepadLayout, mousePrimary });
   });
 </script>
 

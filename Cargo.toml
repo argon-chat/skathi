@@ -21,6 +21,7 @@ members = [
     "crates/sk-payload",    # SKPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/sk-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
     "crates/sk-hotkeys",    # system-wide hotkeys: Windows low-level hooks, macOS event tap, chord engine
+    "crates/sk-gamepad",    # desktop controller discovery, input and rumble
     "crates/sk-audio",      # spatial audio output: Windows ISpatialAudioClient objects behind redjs's Web Audio
     "crates/sk-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     "crates/sk-ffi",        # skathi:ffi: calling C functions by signature, build-time invoke stubs

@@ -81,6 +81,8 @@ declare global {
   }
   interface WindowEventMap extends GlobalEventHandlersEventMap {
     beforeunload: Event;
+    gamepadconnected: GamepadConnectionEvent;
+    gamepaddisconnected: GamepadConnectionEvent;
     offline: Event;
     online: Event;
     pagehide: Event;

@@ -2,6 +2,8 @@ import type { HotkeyButton, HotkeyChord } from "./hotkeys";
 import type { SkKeyMap } from "./keymap";
 import { capturedPosition, keyboardLegend } from "./keyboard-layout";
 import {
+  controllerLayout,
+  type ControllerIdentity,
   deviceKeycap,
   deviceKeyId,
   type KbdKeycap,
@@ -31,6 +33,8 @@ export interface SkKbdProps {
   keys?: SkKbdKeys | null | undefined;
   map?: SkKeyMap | null | undefined;
   platform?: SkKbdPlatform | undefined;
+  /** Select legends from a skathi:gamepad controller. An explicit gamepadLayout overrides it. */
+  controller?: ControllerIdentity | undefined;
   gamepadLayout?: SkKbdGamepadLayout | undefined;
   mousePrimary?: "left" | "right" | undefined;
   variant?: "keycaps" | "plain";
@@ -289,7 +293,8 @@ export function kbdPresentation({
   map,
   platform,
   labels,
-  gamepadLayout = "generic",
+  controller,
+  gamepadLayout = controllerLayout(controller),
   mousePrimary = map?.mousePrimary ?? "left",
 }: SkKbdProps) {
   keys = map ? map.keys : keys;
@@ -303,7 +308,7 @@ export function kbdPresentation({
     return index < 0 ? modifiers.length : index;
   }
   function keycap(name: string, position?: string): KbdKeycap {
-    const device = deviceKeycap(name, gamepadLayout, mousePrimary);
+    const device = deviceKeycap(name, gamepadLayout, mousePrimary, controller);
     if (!device) return keyboardLabel(name, os, labels, position);
     const override = own(labels?.keys, name);
     return override === undefined

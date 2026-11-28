@@ -55,6 +55,8 @@ mod effect_quality;
 mod effects_prewarm;
 pub mod embed;
 mod fault;
+#[cfg(feature = "gamepad")]
+mod gamepad;
 /// Audio processors written in Rust: DSP that runs in the audio callback, behind a node the
 /// app makes with `audioContext.loadNativeAudioWorklet(name)`.
 #[cfg(feature = "audio")]
@@ -580,7 +582,8 @@ pub(crate) enum Wave {
 
 /// One JS wave inside one `Phase::Commit` publication.
 pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
-    let focused = window::app_focused(cx) || quiet::never_focus();
+    let app_focused = window::app_focused(cx);
+    let focused = app_focused || quiet::never_focus();
     with_published(window, cx, Phase::Commit, || {
         // HMR before the pump, so what Vue schedules while patching drains this frame.
         if wave == Wave::Frame {
@@ -600,6 +603,8 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
         };
         JsRuntime::with(|rt| {
+            #[cfg(feature = "gamepad")]
+            gamepad::pump(rt, app_focused, !window::page_hidden());
             pressure_observer::deliver(rt, focused && !window::page_hidden());
             let pumped = std::time::Instant::now();
             let stats = rt.pump(flags);
@@ -1344,6 +1349,8 @@ fn run_app() {
             haptics::install(rt);
             power::install(rt);
             stdlib::install(rt);
+            #[cfg(feature = "gamepad")]
+            gamepad::install(rt)?;
             // Embedding plugins initialize against the installed storage and cookie jar.
             if !devtools_mode {
                 tray::install(rt)?;

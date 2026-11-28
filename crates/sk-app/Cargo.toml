@@ -57,7 +57,7 @@ devtools = []
 
 # Web Audio (`AudioContext` & co) via sk-runtime. `--no-default-features` builds a host with no
 # audio, about 40 fewer crates.
-default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "webview", "ffi", "process"]
+default = ["audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types", "lottie", "video", "hotkeys", "gamepad", "webview", "ffi", "process"]
 audio = ["sk-runtime/audio", "sk-permissions/audio", "sk-tree/audio"]
 # `panningModel: "spatial"` and `AudioContext.spatialAudio`: Windows spatial audio objects.
 spatial-audio = ["audio", "dep:sk-audio"]
@@ -80,6 +80,7 @@ lottie = ["sk-tree/lottie", "dep:sk-sticker"]
 video = ["sk-tree/video", "sk-sticker?/video"]
 # `appHotkeys`. Off, it reports `available: false`, as on a platform without global hotkeys.
 hotkeys = ["dep:sk-hotkeys"]
+gamepad = ["dep:sk-gamepad"]
 # `<iframe>` (WebView2 on Windows). Off, an `<iframe>` fires `error` and stays empty.
 webview = ["dep:sk-webview"]
 
@@ -123,6 +124,7 @@ self_cell = "1"
 sk-desktop = { path = "../sk-desktop", version = "0.9.0" }
 sk-ffi = { path = "../sk-ffi", version = "0.9.0" }
 sk-hotkeys = { path = "../sk-hotkeys", version = "0.9.0", optional = true }
+sk-gamepad = { path = "../sk-gamepad", version = "0.9.0", optional = true }
 sk-audio = { path = "../sk-audio", version = "0.9.0", optional = true }
 sk-permissions = { path = "../sk-permissions", version = "0.9.0" }
 sk-locale = { path = "../sk-locale", version = "0.9.0" }

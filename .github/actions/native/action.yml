@@ -54,14 +54,14 @@ runs:
         . /etc/os-release
         echo "$PRETTY_NAME, glibc $(ldd --version | head -n1 | awk '{print $NF}')"
         packages=(pkg-config build-essential cmake binutils libasound2-dev libfontconfig-dev libfreetype-dev
-          libglib2.0-dev libssl-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev
+          libglib2.0-dev libssl-dev libudev-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-dev
           libxkbcommon-x11-dev libzstd-dev)
         check() {
           missing=()
           for tool in clang-20 clang++-20 pkg-config cmake; do
             command -v "$tool" >/dev/null || missing+=("$tool")
           done
-          for lib in alsa fontconfig freetype2 glib-2.0 openssl wayland-client x11 x11-xcb xcb xkbcommon xkbcommon-x11 libzstd; do
+          for lib in alsa fontconfig freetype2 glib-2.0 openssl libudev wayland-client x11 x11-xcb xcb xkbcommon xkbcommon-x11 libzstd; do
             pkg-config --exists "$lib" 2>/dev/null || missing+=("$lib")
           done
         }

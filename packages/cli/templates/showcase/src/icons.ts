@@ -4,6 +4,7 @@ export const icons = {
   window: "M3 5h18v14H3z M3 9h18 M6 7h.01",
   menu: "M3 4h18v16H3z M7 8h10 M7 12h6 M7 16h8",
   haptics: "M3 10v4 M7 7v10 M12 3v18 M17 7v10 M21 10v4",
+  gamepad: "M7 6h10c2 0 3 1.6 3.5 4l1.2 6c.5 2.6-1.9 4-3.6 2.4L15 15H9l-3.1 3.4c-1.7 1.6-4.1.2-3.6-2.4l1.2-6C4 7.6 5 6 7 6z M5.5 10.5h5 M8 8v5 M15 11h.1 M18 9h.1",
   tray: "M6 17V10a6 6 0 0 1 12 0v7 M4 17h16 M10 21h4",
   files: "M6 2h8l5 5v15H6z M14 2v5h5 M9 13h6 M9 17h6",
   storage:

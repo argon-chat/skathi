@@ -1,5 +1,7 @@
 import { buttonName, canonical, chordTokens, platformOf, type SkKbdChord, type SkKbdKeys } from "./kbd";
 import { capturedPosition, keyScan, onKeyLayoutChange } from "./keyboard-layout";
+import { deviceKeyId } from "./kbd-devices";
+import { gamepadHost, isGamepadInput, watchGamepadButtons } from "./keymap-gamepads";
 import { windowInputLoss, windowRoots } from "./skwindow";
 import type { AppHotkeys, HotkeyBinding, HotkeyButton } from "./hotkeys";
 import {
@@ -85,11 +87,55 @@ function localStep(chord: SkKbdChord, primary: SkKeyMapOptions["mousePrimary"]):
         : key,
   );
 }
-type Choice = { alternative: number; steps: string[][]; index: number; last: number };
-type Local = { choices: Choice[]; active: Set<Choice>; gestures: KeymapGestures; suppress: boolean; edit: boolean };
+type Choice = { alternative: number; steps: string[][]; index: number; last: number; pad?: number };
+type Local = {
+  choices: Choice[];
+  padChoices: Choice[];
+  active: Set<Choice>;
+  gestures: KeymapGestures;
+  suppress: boolean;
+  edit: boolean;
+};
 const locals = new Set<Local>();
 const held = new Map<string, readonly string[]>();
 let inputWindow: object | undefined;
+const pads = new Set<number>();
+let stopGamepads: (() => void) | undefined;
+const padKey = (id: number, key: string) => `pad:${id}/${key}`;
+const isPadKey = (key: string) => key.startsWith("Gamepad:") || /^GamepadButton\d+$/.test(key);
+
+function addPadChoices(local: Local, id: number) {
+  for (const choice of local.padChoices) {
+    local.choices.push({
+      ...choice,
+      pad: id,
+      steps: choice.steps.map((step) => step.map((key) => (isPadKey(key) ? padKey(id, key) : key))),
+    });
+  }
+}
+
+function padConnected(id: number) {
+  if (pads.has(id)) return;
+  pads.add(id);
+  for (const local of locals) addPadChoices(local, id);
+}
+
+function padDisconnected(id: number) {
+  pads.delete(id);
+  for (const key of held.keys()) if (key.startsWith(padKey(id, ""))) held.delete(key);
+  for (const local of locals) {
+    local.choices = local.choices.filter((choice) => choice.pad !== id);
+    const released: number[] = [];
+    for (const choice of [...local.active]) {
+      if (choice.pad !== id) continue;
+      local.active.delete(choice);
+      if (![...local.active].some((c) => c.alternative === choice.alternative)) {
+        released.push(choice.alternative);
+      }
+    }
+    local.gestures.disconnectPad(id, released);
+  }
+}
 
 function resetLocal(local: Local) {
   local.active.clear();
@@ -107,9 +153,11 @@ function windowLost(root?: object) {
 const mainBlur = () => windowLost();
 function localEvent(event: Event) {
   const e = event as KeyboardEvent & MouseEvent & WheelEvent;
+  const button = isGamepadInput(event) ? event.detail : undefined;
+  const pad = button?.gamepad.id;
   const isKey = e.type.startsWith("key");
   const wheel = e.type === "wheel";
-  const id = isKey ? e.code || e.key : "mouse:" + e.button;
+  const id = button ? padKey(button.gamepad.id, String(button.index)) : isKey ? e.code || e.key : "mouse:" + e.button;
   const owner = windowRoots.size
     ? e.composedPath().find((n): n is EventTarget => !!n && typeof n === "object" && windowRoots.has(n))
     : undefined;
@@ -117,12 +165,16 @@ function localEvent(event: Event) {
     resetInput();
     inputWindow = owner;
   }
-  const up = e.type === "keyup" || e.type === "mouseup";
+  const up = releaseEvent(e.type);
   if (!up && (e.defaultPrevented || (isKey && (e.repeat || e.isComposing || e.key === "Process" || e.key === "Dead"))))
     return;
   if (!up && !wheel && held.has(id)) return;
   let names: readonly string[];
-  if (isKey) {
+  if (button) {
+    const raw = deviceKeyId({ gamepad: button.index });
+    const mapped = deviceKeyId({ gamepad: button.index, mapping: button.gamepad.mapping });
+    names = [...new Set([raw, mapped])].map((key) => padKey(button.gamepad.id, key));
+  } else if (isKey) {
     const key = canonical(e.key, apple());
     names = [e.code, literal(key), ...(e.location === 3 ? ["Numpad" + key] : [])].filter(Boolean);
   } else if (wheel) {
@@ -137,9 +189,13 @@ function localEvent(event: Event) {
           : "WheelUp",
     ];
   } else names = mouseIds[e.button] ?? ["Mouse" + (e.button + 1)];
-  const flags = [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"].filter(
-    (s): s is string => !!s,
-  );
+  const flags = button
+    ? Array.from(held.values())
+        .flat()
+        .filter((key) => Object.hasOwn(modifiers, key))
+    : [e.ctrlKey && "Control", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Meta"].filter(
+        (s): s is string => !!s,
+      );
   if (up) {
     names = held.get(id) ?? names;
     held.delete(id);
@@ -150,7 +206,8 @@ function localEvent(event: Event) {
         if (!choice.steps.at(-1)!.some((key) => names.includes(key) && !remaining.has(key))) continue;
         local.active.delete(choice);
         if (local.suppress) e.preventDefault();
-        local.gestures.up(choice.alternative, e, cancelled);
+        if (![...local.active].some((c) => c.alternative === choice.alternative))
+          local.gestures.up(choice.alternative, e, cancelled);
       }
     }
     return;
@@ -170,17 +227,21 @@ function localEvent(event: Event) {
   }
   const now = Date.now();
   for (const local of [...locals]) {
-    if (!locals.has(local)) continue;
+    if (!locals.has(local) || (pad !== undefined && !local.padChoices.length)) continue;
     if (
-      (editing && !local.edit && ((!e.ctrlKey && !e.metaKey && !e.altKey) || e.getModifierState?.("AltGraph"))) ||
+      (editing &&
+        !local.edit &&
+        ((!flags.includes("Control") && !flags.includes("Meta") && !flags.includes("Alt")) ||
+          e.getModifierState?.("AltGraph"))) ||
       !local.gestures.allows(e)
     ) {
       resetLocal(local);
       continue;
     }
     if (!locals.has(local)) continue;
-    let completed: Choice | undefined;
+    let completed: Choice[] | undefined;
     for (const choice of local.choices) {
+      if (pad !== undefined && choice.pad !== pad) continue;
       if (local.active.has(choice)) continue;
       if (now - choice.last > 1000) choice.index = 0;
       if (!matches(choice.steps[choice.index]!)) {
@@ -192,45 +253,64 @@ function localEvent(event: Event) {
       if (local.suppress) e.preventDefault();
       if (++choice.index === choice.steps.length) {
         choice.index = 0;
-        completed ??= choice;
+        if (!completed || choice.alternative < completed[0]!.alternative) completed = [choice];
+        else if (choice.alternative === completed[0]!.alternative) completed.push(choice);
       }
     }
     if (completed) {
-      for (const choice of local.choices) choice.index = 0;
-      local.active.add(completed);
-      local.gestures.down(completed.alternative, e);
-      if (wheel && local.active.delete(completed)) {
-        local.gestures.up(completed.alternative, e);
+      for (const choice of local.choices) {
+        if (pad === undefined || choice.pad === pad) choice.index = 0;
+      }
+      // A shared keyboard key can finish the same alternative on two held controllers.
+      for (const choice of completed) local.active.add(choice);
+      const { alternative, pad: controller } = completed[0]!;
+      local.gestures.down(alternative, e, controller);
+      if (wheel) {
+        for (const choice of completed) local.active.delete(choice);
+        if (![...local.active].some((c) => c.alternative === alternative)) local.gestures.up(alternative, e);
       }
     }
   }
 }
-const events = ["keydown", "keyup", "mousedown", "mouseup", "wheel"] as const;
-const releaseEvent = (type: string) => type === "keyup" || type === "mouseup";
+const events = [
+  "keydown",
+  "keyup",
+  "mousedown",
+  "mouseup",
+  "wheel",
+  "skgamepadbuttondown",
+  "skgamepadbuttonup",
+] as const;
+const releaseEvent = (type: string) => type === "keyup" || type === "mouseup" || type === "skgamepadbuttonup";
 const appWindow = globalThis as typeof globalThis & EventTarget;
 function bindLocal(options: SkKeyMapOptions, gestures: KeymapGestures) {
   const source = stepsOf(options.keys);
-  const compile = () =>
-    source.map((steps, alternative) => ({
+  const compile = () => {
+    const choices = source.map((steps, alternative) => ({
       alternative,
       steps: steps.map((step) => localStep(step, options.mousePrimary)),
       index: 0,
       last: 0,
     }));
-  const choices = compile();
-  if (!choices.length || choices.some((c) => !c.steps.length || c.steps.some((s) => !s.length || s.includes(""))))
-    throw new TypeError("An app keymap needs a nonempty shortcut.");
-  const canBind = (c: Choice) => !c.steps.some((s) => s.some((k) => /^Gamepad[:B]/.test(k)));
-  const supported = choices.filter(canBind);
-  if (!supported.length)
-    throw new Error("Gamepad input is unavailable. Supply a keyboard or mouse alternative to activate this map.");
+    if (!choices.length || choices.some((c) => !c.steps.length || c.steps.some((s) => !s.length || s.includes(""))))
+      throw new TypeError("An app keymap needs a nonempty shortcut.");
+    const needsPad = (c: Choice) => c.steps.some((s) => s.some(isPadKey));
+    return { choices: choices.filter((c) => !needsPad(c)), padChoices: choices.filter(needsPad) };
+  };
   const local: Local = {
-    choices: supported,
+    ...compile(),
     active: new Set(),
     gestures,
     suppress: options.suppress ?? false,
     edit: options.allowInEditable ?? false,
   };
+  if (local.padChoices.length && !stopGamepads) {
+    const host = gamepadHost();
+    if (host) stopGamepads = watchGamepadButtons(host, padConnected, padDisconnected);
+    else if (!local.choices.length)
+      throw new Error("Gamepad input is unavailable. Supply a keyboard or mouse alternative to activate this map.");
+  }
+  for (const id of pads) addPadChoices(local, id);
   if (!locals.size) {
     for (const type of events)
       document.addEventListener(type, localEvent, type === "wheel" ? { passive: false } : releaseEvent(type));
@@ -241,13 +321,20 @@ function bindLocal(options: SkKeyMapOptions, gestures: KeymapGestures) {
   locals.add(local);
   const offLayout = source.some((steps) => steps.some((step) => typeof step === "object" && "buttons" in step))
     ? onKeyLayoutChange(() => {
-        local.choices = compile().filter(canBind);
+        Object.assign(local, compile());
+        for (const id of pads) addPadChoices(local, id);
         resetInput();
       })
     : undefined;
   return () => {
     offLayout?.();
-    if (!locals.delete(local) || locals.size) return;
+    if (!locals.delete(local)) return;
+    if (stopGamepads && ![...locals].some((l) => l.padChoices.length)) {
+      stopGamepads();
+      stopGamepads = undefined;
+      for (const id of pads) padDisconnected(id);
+    }
+    if (locals.size) return;
     for (const type of events) document.removeEventListener(type, localEvent, releaseEvent(type));
     appWindow.removeEventListener("blur", mainBlur);
     document.removeEventListener("pointercancel", resetInput);

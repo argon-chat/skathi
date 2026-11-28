@@ -1,14 +1,34 @@
 <script setup lang="ts">
 import { defineKeymap, SkKbd, type SkKbdGamepadLayout, type SkKbdKeys, type SkKbdPlatform } from "@skathi-native/runtime";
-import { onScopeDispose, ref, useTemplateRef } from "vue";
+import { gamepads, type Controller } from "skathi:gamepad";
+import { onScopeDispose, ref, shallowRef, useTemplateRef, watch } from "vue";
 import Card from "./Card.vue";
+import { gamepadLayouts } from "../gamepadLayouts";
 import { appCommand, useDesktop } from "../stores/desktop";
 
 const devices = ["Keyboard", "Mouse", "Gamepad"] as const;
 type Device = (typeof devices)[number];
 const device = ref<Device>("Keyboard");
 const platform = ref<SkKbdPlatform>("auto");
-const gamepad = ref<SkKbdGamepadLayout>("generic");
+const gamepad = ref<SkKbdGamepadLayout | "auto">("auto");
+const current = shallowRef<Controller>();
+const lastButton = ref<SkKbdKeys | null>(null);
+watch(device, (view, _, onCleanup) => {
+  if (view !== "Gamepad") return;
+  current.value = gamepads.list()[0];
+  lastButton.value = null;
+  onCleanup(gamepads.subscribe((event) => {
+    if (event.type === "button" && event.edge === "down") {
+      current.value = event.gamepad;
+      lastButton.value = { gamepad: event.index, mapping: event.gamepad.mapping };
+    } else if (event.type === "disconnected" && event.gamepad.id === current.value?.id) {
+      current.value = gamepads.list()[0];
+      lastButton.value = null;
+    } else if (event.type === "connected" && !current.value) {
+      current.value = event.gamepad;
+    }
+  }));
+});
 const primary = ref<"left" | "right">("left");
 const lastMouse = ref<SkKbdKeys | null>(null);
 const area = useTemplateRef<HTMLElement>("gesture-area");
@@ -99,10 +119,7 @@ function showWheel(event: WheelEvent) {
       <label v-else class="row muted">
         Controller
         <select v-model="gamepad" class="input" aria-label="Controller layout">
-          <option value="generic">Generic</option>
-          <option value="xbox">Xbox</option>
-          <option value="playstation">PlayStation · DualSense</option>
-          <option value="nintendo">Nintendo · Switch Pro</option>
+          <option v-for="[value, label] in gamepadLayouts" :key="value" :value="value">{{ label }}</option>
         </select>
       </label>
     </div>
@@ -137,9 +154,13 @@ function showWheel(event: WheelEvent) {
       <output aria-label="Recognized gesture" aria-live="polite">{{ gesture }}</output>
       <output aria-live="polite"><SkKbd :keys="lastMouse" :mouse-primary="primary" tabindex="0" /></output>
     </div>
+    <output v-if="device === 'Gamepad'" aria-live="polite">
+      <SkKbd v-if="lastButton" :keys="lastButton" :controller="current" :gamepad-layout="gamepad === 'auto' ? undefined : gamepad" />
+      <template v-else>Press a controller button.</template>
+    </output>
     <div v-for="[name, keys] in examples[device]" :key="name" class="row shortcut">
       <span>{{ name }}</span>
-      <SkKbd :keys="keys" :platform="platform" :gamepad-layout="gamepad" :mouse-primary="primary" />
+      <SkKbd :keys="keys" :platform="platform" :controller="current" :gamepad-layout="gamepad === 'auto' ? undefined : gamepad" :mouse-primary="primary" />
     </div>
   </Card>
 </template>

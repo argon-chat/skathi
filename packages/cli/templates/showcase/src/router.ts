@@ -6,6 +6,7 @@ import AudioPage from "./pages/AudioPage.vue";
 import ContextMenuPage from "./pages/ContextMenuPage.vue";
 import FilesPage from "./pages/FilesPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
+import GamepadPage from "./pages/GamepadPage.vue";
 import GraphicsPage from "./pages/GraphicsPage.vue";
 import HapticsPage from "./pages/HapticsPage.vue";
 import HomePage from "./pages/HomePage.vue";
@@ -56,6 +57,14 @@ export const pages: PageEntry[] = [
     section: "Desktop",
     blurb: "Try device waveforms and choose the feedback for each gesture",
     component: HapticsPage,
+  },
+  {
+    path: "/gamepad",
+    title: "Gamepad",
+    icon: "gamepad",
+    section: "Desktop",
+    blurb: "Inspect live controller input, try button bindings and test both rumble motors",
+    component: GamepadPage,
   },
   {
     path: "/tray",

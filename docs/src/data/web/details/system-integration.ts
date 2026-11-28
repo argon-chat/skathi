@@ -428,7 +428,13 @@ const res = await fetch(AUTH + "/passkeys/login/finish", {
     ],
   },
   gamepad: {
-    edgeCases: ["`navigator.getGamepads` is `undefined`."],
+    syntax: `const pads = navigator.getGamepads?.() ?? [];
+window.addEventListener("gamepadconnected", event => console.log(event.gamepad?.id));`,
+    edgeCases: [
+      "The default host includes the `gamepad` Cargo feature. A focused app exposes controllers after a deliberate controller input. Poll in a frame callback and skip null slots after disconnection.",
+      "Mapped gamepads expose the standard button and axis order. An unmapped device reports an empty mapping. Haptic effects depend on the controller and OS backend. The current backend exposes no touch contacts or trigger-rumble effects.",
+      "For physical button names, connection IDs, input events and SkKbd legends, use [skathi:gamepad](/std/gamepads/).",
+    ],
   },
   geolocation: {
     edgeCases: [

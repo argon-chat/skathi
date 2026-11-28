@@ -1,6 +1,7 @@
 import type { SkKbdLabel } from "./kbd";
+import type { Controller } from "./std/gamepad";
 
-// Row indices are the W3C standard mapping. Each row gives its position, generic legend and name, then the three family legends.
+// Row indices follow the W3C standard mapping.
 const gamepadButtons = [
   ["south", "South", "South face button", "A", "×", "B"],
   ["east", "East", "East face button", "B", "○", "A"],
@@ -21,7 +22,21 @@ const gamepadButtons = [
   ["home", "Home", "Home button", "Xbox", "PS", "Home"],
 ] as const;
 export type SkKbdGamepadButton = (typeof gamepadButtons)[number][0];
-export type SkKbdGamepadLayout = "generic" | "xbox" | "playstation" | "nintendo";
+export type SkKbdGamepadLayout = "generic" | "xbox" | "playstation" | "dualshock4" | "nintendo" | "steam";
+
+export type ControllerIdentity = Pick<Controller, "family" | "vendorId" | "productId" | "name"> &
+  Partial<Pick<Controller, "mapping">>;
+
+export function controllerLayout(pad?: ControllerIdentity): SkKbdGamepadLayout {
+  if (!pad) return "generic";
+  if (
+    pad.family === "playstation" &&
+    ((pad.vendorId === 0x054c && [0x05c4, 0x09cc, 0x0ba0].includes(pad.productId)) || /dualshock\s*4/i.test(pad.name))
+  ) {
+    return "dualshock4";
+  }
+  return pad.family;
+}
 
 const mouseNames = {
   primary: "MousePrimary",
@@ -113,7 +128,20 @@ function mouseKey(name: string, primary: "left" | "right"): KbdKeycap | undefine
   return { text, label, device: "mouse", glyph };
 }
 
-const legendColumn = { generic: 1, xbox: 3, playstation: 4, nintendo: 5 } as const;
+const legendColumn = { generic: 1, xbox: 3, playstation: 4, dualshock4: 4, nintendo: 5, steam: 3 } as const;
+const steamLegends: Readonly<Record<string, string>> = { select: "Back", start: "Start", home: "Steam" };
+// The Steam Controller Puck transport appends these controls after the 17 standard buttons.
+const steamPuckButtons = [
+  ["Quick Access", "Quick Access button"],
+  ["R4", "R4, right grip button"],
+  ["L4", "L4, left grip button"],
+  ["R5", "R5, right grip button"],
+  ["L5", "L5, left grip button"],
+  ["Right Pad Click", "Right trackpad click"],
+  ["Left Pad Click", "Left trackpad click"],
+  ["Left Trigger Click", "Left trigger click"],
+  ["Right Trigger Click", "Right trigger click"],
+] as const;
 const playstationShapes = ["Cross", "Circle", "Square", "Triangle"] as const;
 const diamond = ["M12 15.5", "M18 9.5", "M6 9.5", "M12 3.5"].map(
   (point) => point + "a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z",
@@ -128,10 +156,16 @@ function gamepadKey(position: string, layout: SkKbdGamepadLayout): KbdKeycap | u
   if (!row) return undefined;
   const generic = row[1],
     name = row[2];
-  const text = row[legendColumn[layout]] ?? generic;
+  const legend =
+    layout === "steam"
+      ? steamLegends[position]
+      : layout === "dualshock4" && position === "select"
+        ? "Share"
+        : undefined;
+  const text = legend ?? row[legendColumn[layout]] ?? generic;
   const device = "gamepad";
   if (i < 4) {
-    const printed = layout === "playstation" ? playstationShapes[i] : text;
+    const printed = layout === "playstation" || layout === "dualshock4" ? playstationShapes[i] : text;
     return {
       device,
       text,
@@ -154,9 +188,21 @@ export function deviceKeycap(
   name: string,
   layout: SkKbdGamepadLayout,
   primary: "left" | "right",
+  controller?: ControllerIdentity,
 ): KbdKeycap | undefined {
   if (name.startsWith("Mouse") || name.startsWith("Wheel")) return mouseKey(name, primary);
   if (name.startsWith("Gamepad:")) return gamepadKey(name.slice(8), layout);
   const raw = /^GamepadButton(\d+)$/.exec(name);
-  return raw ? { text: "Pad " + raw[1], label: "Gamepad button " + raw[1], device: "gamepad" } : undefined;
+  if (!raw) return undefined;
+  if (
+    layout === "steam" &&
+    controller?.family === "steam" &&
+    controller.vendorId === 0x28de &&
+    controller.productId === 0x1304 &&
+    controller.mapping === "standard"
+  ) {
+    const legend = steamPuckButtons[Number(raw[1]) - gamepadButtons.length];
+    if (legend) return { text: legend[0], label: legend[1], device: "gamepad" };
+  }
+  return { text: "Pad " + raw[1], label: "Gamepad button " + raw[1], device: "gamepad" };
 }

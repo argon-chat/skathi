@@ -68,8 +68,10 @@ controls modifier conventions independently of the active keyboard layout.
 Choose `scope: "global"` to activate a physical keyboard or mouse chord even when another app has focus
 on Windows or macOS. Global maps share the native hotkey service with `appHotkeys.setBindings()` and have
 independent lifetimes. They accept simultaneous chords, alternatives and recorded `HotkeyChord` values.
-Use app scope for successive chords and wheel gestures. An app map can present a gamepad alternative alongside
-a keyboard or mouse binding. Controller input availability follows the native [Gamepad API support](/web-platform/gamepad/).
+Use app scope for successive chords, wheel gestures and controller buttons. For example,
+`defineKeymap({ keys: { alternatives: ["Enter", { gamepad: "south" }] } })` runs the same action
+on Enter or the lower face button. Buttons in one gamepad chord or sequence belong to the same controller.
+Unplugging the controller cancels a held command.
 Set `mousePrimary: "right"` on the map when the right button acts as primary. Its handler and hints then use the same convention.
 
 In a chord, an array lists simultaneous keys literally, including `+`, a space, or a character from another alphabet.
@@ -122,17 +124,18 @@ on the right in the diagram. Physical left and right and captured `HotkeyChord` 
 A DOM middle click has `button === 1`. Its `appHotkeys` mouse code is `3`. Pass each API's value in its own shape.
 
 For a controller, use a physical position such as `{ gamepad: "south" }`, `"left-trigger"`, `"left-stick"` (a press),
-or `"dpad-up"`. The default `gamepadLayout="generic"` marks the position. The `xbox`, `playstation` (DualSense) and
-`nintendo` (Switch Pro) layouts add the button's printed legend. Choose the layout for the controller independently
-of the operating system. Override a model-specific legend with, for example, `labels.keys["Gamepad:select"] = "Share"`.
+or `"dpad-up"`. The default generic layout marks the position. Pass a `skathi:gamepad` controller
+as `<SkKbd :controller="pad" :keys="keys" />` in Vue or `<SkKbd controller={pad} {keys} />` in
+Svelte to display its Xbox, PlayStation, Nintendo or Steam legends. An identified DualShock 4 shows
+Share and a DualSense shows Create. Set `gamepadLayout` to preview a layout explicitly, or override
+individual legends through `labels.keys`.
 
-The numeric form accepts a zero-based button index and its mapping, for example
-`{ gamepad: index, mapping: pad.mapping }` when iterating `pad.buttons`. With `"standard"`, indices 0–16 select
+The numeric form accepts a zero-based button index and its mapping. Use `{ gamepad: index, mapping: pad.mapping }`
+when iterating a native controller's `buttonValues` or a web `Gamepad`'s `buttons`. With `"standard"`, indices 0–16 select
 the standard positions. An omitted or unrecognized mapping, or an extra button, gives a raw label such as `Pad 17`.
 Customize that label with `labels.keys.GamepadButton17`. These prompts can be rendered from saved bindings.
 The position numbers follow the [W3C standard gamepad mapping](https://www.w3.org/TR/gamepad/#remapping).
-Controller polling through `navigator.getGamepads()` is currently unavailable in the native runtime.
-See [Gamepad API support](/web-platform/gamepad/).
+Read controller state with [`navigator.getGamepads()`](/web-platform/gamepad/).
 
 ### Customize shortcut styles, symbols, and fonts
 

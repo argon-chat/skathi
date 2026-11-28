@@ -5,6 +5,7 @@ export type Kind = "class" | "namespace" | "object" | "function" | "type";
 
 export const categories = [
   "skathi:app",
+  "skathi:gamepad",
   "skathi:runtime",
   "skathi:os",
   "skathi:network",

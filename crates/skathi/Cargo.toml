@@ -17,7 +17,7 @@ links = "skathi"
 [features]
 default = [
     "prod", "audio", "spatial-audio", "storages", "clipboard", "indexeddb", "webgpu", "native-dx12", "types",
-    "lottie", "video", "hotkeys", "webview",
+    "lottie", "video", "hotkeys", "gamepad", "webview",
 ]
 # Native module types: `skathi::Type` (derived by `#[skathi::data]`) and `--sk-host-types` (specta).
 types = ["sk-app/types", "skathi-macros/types"]
@@ -50,6 +50,7 @@ lottie = ["sk-app/lottie"]
 video = ["sk-app/video"]
 # `appHotkeys` and `skathi::hotkeys`.
 hotkeys = ["sk-app/hotkeys"]
+gamepad = ["sk-app/gamepad"]
 ffi = ["sk-app/ffi"]
 # `skathi:process`: starting the programs sk.config.json or `Builder::allow_process` lists.
 process = ["sk-app/process"]

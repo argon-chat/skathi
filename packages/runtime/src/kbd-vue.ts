@@ -36,6 +36,7 @@ export const SkKbd = /*@__PURE__*/ defineComponent({
     keys: [String, Array, Object] as PropType<SkKbdKeys | null | undefined>,
     map: Object as PropType<SkKeyMap | null | undefined>,
     platform: String as PropType<SkKbdPlatform>,
+    controller: Object as PropType<SkKbdProps["controller"]>,
     gamepadLayout: String as PropType<SkKbdProps["gamepadLayout"]>,
     mousePrimary: String as PropType<SkKbdProps["mousePrimary"]>,
     variant: { type: String as PropType<SkKbdProps["variant"]>, default: "keycaps" },

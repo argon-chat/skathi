@@ -26,6 +26,7 @@ const FEATURES: &[(&str, bool)] = &[
     ("lottie", cfg!(feature = "lottie")),
     ("video", cfg!(feature = "video")),
     ("hotkeys", cfg!(feature = "hotkeys")),
+    ("gamepad", cfg!(feature = "gamepad")),
     ("webview", cfg!(feature = "webview")),
     ("battery", cfg!(feature = "battery")),
     ("process", cfg!(feature = "process")),

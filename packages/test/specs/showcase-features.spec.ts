@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { create } from "../../cli/cli/create";
 import { expect as ui, launch, readPng, REPO, SCREENSHOTS, WINDOWS, WORK_DIR } from "../src/index";
@@ -19,14 +19,14 @@ afterAll(async () => {
 });
 
 const page = (name: string) => app.locator(`nav a[href="/${name}"]`).click();
-const choose = (label: string, value: string) =>
-  app.eval(`{
+const choose = (label: string, value: string, instance = app) =>
+  instance.eval(`{
   const el = document.querySelector(${JSON.stringify('select[aria-label="' + label + '"]')});
   el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("change", { bubbles: true }));
 }`);
-async function waitFor(js: string) {
+async function waitFor(js: string, instance = app) {
   const deadline = Date.now() + 5000;
-  while (!(await app.eval(js))) {
+  while (!(await instance.eval(js))) {
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${js}`);
     await Bun.sleep(50);
   }
@@ -40,6 +40,181 @@ async function recordHaptics() {
     __sk_appHaptics.stop = id => { cues.push(["stop", id]); return true; };`);
 }
 const cues = async () => JSON.parse(String(await app.eval("JSON.stringify(cues)")));
+
+test("Gamepad opens from the sidebar and shows both APIs before a controller gesture", async () => {
+  await page("gamepad");
+  await app.locator("#gamepad-page").waitFor();
+  await app.locator('nav a[href="/gamepad"].router-link-exact-active').waitFor();
+
+  for (const [api, devices, label, hint] of [
+    ["native", "__sk_std.gamepads.list()", "skathi:gamepad", "No controller connected"],
+    ["web", "navigator.getGamepads()", "navigator.getGamepads()", "press a controller button"],
+  ] as const) {
+    await ui(app.locator(`#gamepad-${api} .api`)).toHaveText(label);
+    const count = await app.eval(`${devices}.filter(Boolean).length`);
+    if (count === 0) {
+      await ui(app.locator(`#gamepad-${api}-empty`)).toContainText(hint);
+      expect(await app.eval(`document.querySelector("#gamepad-${api}-rumble").disabled`)).toBe(true);
+    }
+  }
+
+  const actions = app.locator("#gamepad-confirm-count");
+  await ui(actions).toHaveText("0");
+  await app.press("Enter");
+  await ui(actions).toHaveText("1");
+}, 30_000);
+
+async function launchGamepadFixture(label: string) {
+  const fixture = join(dir, label);
+  create(fixture, { name: "Gamepad", template: "showcase" });
+  copyFileSync(
+    join(import.meta.dir, "../fixtures/showcase-gamepads/src/controllers.ts"),
+    join(fixture, "src/controllers.ts"),
+  );
+  // Built-in modules are registered before the entry runs. Substitute the controller provider in the disposable app.
+  for (const name of ["pages/GamepadPage.vue", "components/GamepadDeadZone.vue"]) {
+    const component = join(fixture, "src", name);
+    writeFileSync(component, readFileSync(component, "utf8").replace('from "skathi:gamepad"', 'from "../controllers"'));
+  }
+  return launch({
+    app: relative(REPO, join(fixture, "src/main.ts")).replaceAll("\\", "/"),
+    label,
+    window: [1040, 760],
+    env: { SK_APP_ROOT: fixture },
+  });
+}
+
+test("Gamepad renders live inputs and routes the motors to the selected controller", async () => {
+  const probe = await launchGamepadFixture("showcase-gamepad-input");
+  try {
+    await probe.locator('nav a[href="/gamepad"]').click();
+    await ui(probe.locator("#gamepad-native .facts")).toContainText("Connection 41");
+    await ui(probe.locator("#gamepad-web .axis output").first()).toHaveText("0.25");
+    await choose("Native controller", "92", probe);
+    await choose("Web gamepad slot", "2", probe);
+    await ui(probe.locator("#gamepad-native .facts")).toContainText("054C:09CC");
+    await probe.locator("#gamepad-native-rumble").focus();
+    await waitFor('document.activeElement?.id === "gamepad-native-rumble"', probe);
+    await probe.eval("showcaseGamepadInput()");
+    await ui(probe.locator("#gamepad-confirm-count")).toHaveText("1");
+    await ui(probe.locator("#gamepad-native .history")).toContainText("Slot 2 · south down");
+    for (const api of ["native", "web"]) {
+      const card = "#gamepad-" + api;
+      await ui(probe.locator(card + " .axis output").first()).toHaveText("-0.75");
+      await ui(probe.locator(card + " .button-value.pressed output")).toHaveText("1.00");
+      const track = await probe
+        .locator(card + " .track")
+        .first()
+        .boundingBox();
+      const level = await probe
+        .locator(card + " .level")
+        .first()
+        .boundingBox();
+      expect(track.w).toBeGreaterThan(20);
+      expect(Math.abs(level.w - track.w * 0.375)).toBeLessThan(2);
+      expect(Math.abs(level.x - track.x - track.w * 0.125)).toBeLessThan(2);
+    }
+    await probe.locator('#gamepad-native .pressed kbd[aria-label="Cross button"]').waitFor();
+    await choose("Rumble motors", "weak", probe);
+    await probe.locator("#gamepad-native-rumble").click();
+    await ui(probe.locator("#gamepad-native .outputs output")).toHaveText("Sent an 800 ms pulse");
+    await probe.locator("#gamepad-native .outputs button").nth(1).click();
+    await ui(probe.locator("#gamepad-native .outputs output")).toHaveText("Stopped");
+    await probe.locator("#gamepad-web-rumble").click();
+    await ui(probe.locator("#gamepad-web .outputs output")).toHaveText("complete");
+    await probe.locator("#gamepad-web .outputs button").nth(1).click();
+    expect(JSON.parse(String(await probe.eval("JSON.stringify(showcaseGamepadCommands)")))).toEqual([
+      ["native", 92, { strong: 0, weak: 0.65, durationMs: 800 }],
+      ["native", 92, { strong: 0, weak: 0.65, durationMs: 0 }],
+      ["web", 2, "dual-rumble", { duration: 250, strongMagnitude: 0.45, weakMagnitude: 0.2 }],
+      ["web", 2, "reset"],
+    ]);
+    await probe.eval("showcaseGamepadInput(false); showcaseGamepadInput(); showcaseGamepadInput(false)");
+    await ui(probe.locator("#gamepad-confirm-count")).toHaveText("2");
+    await ui(probe.locator("#gamepad-native .history .mono").first()).toHaveText("Slot 2 · south up");
+    await ui(probe.locator("#gamepad-native .history .mono").nth(1)).toHaveText("Slot 2 · south down");
+    await probe.eval("showcaseGamepadAxis(0.284)");
+    for (const api of ["native", "web"]) {
+      await ui(probe.locator("#gamepad-" + api + " .axis output").first()).toHaveText("0.28");
+      expect(await probe.eval(`document.querySelector("#gamepad-${api} .level").style.width`)).toBe("14%");
+    }
+    await choose("Native controller", "41", probe);
+    await choose("Web gamepad slot", "0", probe);
+    for (const api of ["native", "web"]) {
+      await ui(probe.locator("#gamepad-" + api + " .axis output").first()).toHaveText("0.25");
+      expect(await probe.locator("#gamepad-" + api + " .button-value.pressed").count()).toBe(0);
+    }
+    await probe.eval('window.dispatchEvent(new Event("blur"))');
+    await probe.locator("#gamepad-web-empty").waitFor();
+    const pausedPolls = await probe.eval("showcaseGamepadStats().polls");
+    await Bun.sleep(150);
+    expect(await probe.eval("showcaseGamepadStats().polls")).toBe(pausedPolls);
+    await probe.eval('window.dispatchEvent(new Event("focus"))');
+    await ui(probe.locator("#gamepad-web .axis output").first()).toHaveText("0.25");
+    await probe.locator('nav a[href="/window"]').click();
+    await waitFor('!document.querySelector("#gamepad-page") && showcaseGamepadStats().listeners === 0', probe);
+    const polls = await probe.eval("showcaseGamepadStats().polls");
+    await Bun.sleep(150);
+    expect(await probe.eval("showcaseGamepadStats().polls")).toBe(polls);
+  } finally {
+    await probe.close();
+  }
+}, 60_000);
+
+test("Gamepad dead zones follow the selected controller and inherit across device, model and global settings", async () => {
+  const probe = await launchGamepadFixture("showcase-gamepad-dead-zones");
+  try {
+    await probe.locator('nav a[href="/gamepad"]').click();
+    const group = '[role="group"][aria-label="Stick dead zone"]';
+    const status = ui(probe.locator(group + " output"));
+    const reset = probe.locator(group + " button");
+    const scope = (name: string) => choose("Dead zone scope", name, probe);
+    const radius = (percent: number) =>
+      probe.eval(`{
+      const input = document.querySelector('input[aria-label="Dead zone radius (%)"]');
+      input.value = "${percent}"; input.dispatchEvent(new Event("change", { bubbles: true }));
+    }`);
+
+    await status.toHaveText("Inherited · Effective 5%");
+    await scope("global");
+    await radius(16);
+    await status.toHaveText("Override 16% · Effective 16%");
+    await scope("model");
+    await status.toHaveText("Inherited · Effective 16%");
+    await radius(12);
+    await status.toHaveText("Override 12% · Effective 12%");
+    await choose("Native controller", "92", probe);
+    await status.toHaveText("Inherited · Effective 16%");
+    await scope("device");
+    await radius(0);
+    await status.toHaveText("Override 0% · Effective 0%");
+    const counts = "JSON.stringify([showcaseGamepadStats().lists, showcaseGamepadStats().deadZoneReads])";
+    const before = await probe.eval(counts);
+    await probe.eval("for (let i = 0; i < 40; i++) showcaseGamepadAxis(i / 100)");
+    await ui(probe.locator("#gamepad-native .axis output").first()).toHaveText("0.39");
+    expect(await probe.eval(counts)).toBe(before);
+    await scope("global");
+    await radius(25);
+    await status.toHaveText("Override 25% · Effective 0%");
+    await scope("device");
+    await reset.click();
+    await status.toHaveText("Inherited · Effective 25%");
+    await choose("Native controller", "41", probe);
+    await status.toHaveText("Inherited · Effective 12%");
+    await radius(7);
+    await status.toHaveText("Override 7% · Effective 7%");
+    await reset.click();
+    await scope("model");
+    await reset.click();
+    await status.toHaveText("Inherited · Effective 25%");
+    await scope("global");
+    await reset.click();
+    await status.toHaveText("Inherited · Effective 5%");
+    expect(await probe.eval(`document.querySelector('${group} button').disabled`)).toBe(true);
+  } finally {
+    await probe.close();
+  }
+}, 60_000);
 
 test("shortcut previews distinguish sequences, alternatives and recorded mouse buttons", async () => {
   await page("tray");

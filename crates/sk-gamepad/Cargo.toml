@@ -1,0 +1,27 @@
+[package]
+name = "sk-gamepad"
+description = "Native gamepad input and rumble for Skathi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+gilrs = { version = "0.11.2", default-features = false, features = ["wgi"] }
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFSet", "CFString"] }
+objc2-io-kit = { version = "0.3.2", default-features = false, features = ["std", "hid"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Gaming_Input", "Foundation_Collections"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_UI_Input",
+] }

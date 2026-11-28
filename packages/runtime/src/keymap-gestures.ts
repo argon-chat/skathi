@@ -1,8 +1,9 @@
 import type { SkKeyMap, SkKeyMapOptions } from "./keymap";
 import { reportException } from "./runtime/report-exception";
+import { isGamepadInput, type KeymapGamepadInput } from "./keymap-gamepads";
 
 export type SkKeyMapEventType = "down" | "up" | "press" | "click" | "doubleClick" | "hold";
-export type KeymapInput = KeyboardEvent | MouseEvent | null;
+export type KeymapInput = KeyboardEvent | MouseEvent | KeymapGamepadInput | null;
 export interface SkKeyMapEvent {
   readonly type: SkKeyMapEventType;
   readonly map: SkKeyMap;
@@ -25,8 +26,8 @@ export type KeymapListener = Pick<SkKeyMapListenerOptions, "when"> & {
 
 type Input = { alternative: number; event: KeymapInput };
 type Timer = ReturnType<typeof setTimeout>;
-type Hold = Input & { start: number; long: boolean; timer?: Timer };
-type Click = Input & { origin: KeymapInput; time: number; timer: Timer };
+type Hold = Input & { pad: number | undefined; disconnected?: boolean; start: number; long: boolean; timer?: Timer };
+type Click = Input & { pad: number | undefined; origin: KeymapInput; time: number; timer: Timer };
 const now = () => (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
 
 function passes<T>(predicate: ((value: T) => boolean) | undefined, value: T) {
@@ -39,6 +40,9 @@ function passes<T>(predicate: ((value: T) => boolean) | undefined, value: T) {
 }
 
 function sameClickTarget(first: KeymapInput, second: KeymapInput) {
+  if (first && second && isGamepadInput(first) && isGamepadInput(second)) {
+    return first.detail.gamepad.id === second.detail.gamepad.id;
+  }
   if (!first || !second || !("button" in first) || !("button" in second)) return true;
   return (
     first.target === second.target &&
@@ -106,11 +110,11 @@ export class KeymapGestures {
     return delivered;
   }
 
-  down(alternative: number, event: KeymapInput) {
+  down(alternative: number, event: KeymapInput, pad?: number) {
     if (!this.map.enabled) return;
     this.pressed.add(alternative);
     if (this.active) return;
-    const hold: Hold = { alternative, event, start: now(), long: false };
+    const hold: Hold = { alternative, event, pad, start: now(), long: false };
     this.active = hold;
     if (this.has("hold") && event?.type !== "wheel") {
       hold.timer = setTimeout(() => this.fireHold(hold), this.holdMs);
@@ -143,11 +147,17 @@ export class KeymapGestures {
     this.emit("up", input);
     if (revision !== this.revision || !this.allows(event)) return;
     this.emit("press", input);
-    if (revision === this.revision && !hold.long && sameClickTarget(hold.event, event) && this.allows(event))
-      this.click(input, hold.event);
+    if (
+      revision === this.revision &&
+      !hold.long &&
+      !hold.disconnected &&
+      sameClickTarget(hold.event, event) &&
+      this.allows(event)
+    )
+      this.click(input, hold);
   }
 
-  private click(input: Input, origin: KeymapInput) {
+  private click(input: Input, hold: Hold) {
     const time = now();
     const revision = this.revision;
     const first = this.pending;
@@ -156,7 +166,8 @@ export class KeymapGestures {
       this.pending = undefined;
       if (
         first.alternative === input.alternative &&
-        sameClickTarget(first.origin, origin) &&
+        first.pad === hold.pad &&
+        sameClickTarget(first.origin, hold.event) &&
         time - first.time <= this.doubleClickMs &&
         this.emit("doubleClick", input)
       ) {
@@ -177,7 +188,18 @@ export class KeymapGestures {
       this.pending = undefined;
       if (this.allows(input.event)) this.emit("click", input);
     }, this.doubleClickMs);
-    this.pending = { ...input, origin, time, timer };
+    this.pending = { ...input, pad: hold.pad, origin: hold.event, time, timer };
+  }
+
+  disconnectPad(id: number, released: readonly number[]) {
+    if (this.active?.pad === id) this.active.disconnected = true;
+    const pending = this.pending;
+    if (pending?.pad === id) {
+      clearTimeout(pending.timer);
+      this.pending = undefined;
+    }
+    for (const alternative of released) this.pressed.delete(alternative);
+    if (this.active && !this.pressed.size) this.reset();
   }
 
   reset(event: KeymapInput = null) {

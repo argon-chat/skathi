@@ -1331,9 +1331,16 @@ const systemIntegration = section("System integration", [
   iface("Notification", GONE, "Shows a system notification.", {
     aliases: ["Notifications API", "Notification.requestPermission"],
   }),
-  api("gamepad", "Gamepad", NO, "Reads the state of connected game controllers.", {
-    aliases: ["navigator.getGamepads", "getGamepads", "Gamepad API"],
-  }),
+  api(
+    "gamepad",
+    "Gamepad",
+    PART,
+    "Reads controller buttons and axes, reports connections and plays supported rumble effects.",
+    {
+      since: "Unreleased",
+      aliases: ["navigator.getGamepads", "getGamepads", "Gamepad API"],
+    },
+  ),
   api("geolocation", "Geolocation", NO, "Reports the device's location.", {
     aliases: ["navigator.geolocation", "getCurrentPosition", "watchPosition"],
   }),

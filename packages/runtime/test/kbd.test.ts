@@ -141,7 +141,9 @@ describe("mouse and controller prompts", () => {
       generic: ["South", "East", "West", "North"],
       xbox: ["A", "B", "X", "Y"],
       playstation: ["×", "○", "□", "△"],
+      dualshock4: ["×", "○", "□", "△"],
       nintendo: ["B", "A", "Y", "X"],
+      steam: ["A", "B", "X", "Y"],
     } as const;
     for (const layout of Object.keys(families) as SkKbdGamepadLayout[]) {
       const props = { gamepadLayout: layout };
@@ -155,6 +157,17 @@ describe("mouse and controller prompts", () => {
       expect(new Set(caps.slice(12, 16).map((key) => key.glyph!.fill)).size).toBe(4);
     }
     expect(cap({ gamepad: "west" }, { gamepadLayout: "playstation" })?.label).toBe("Square button");
+    expect(cap({ gamepad: "select" }, { gamepadLayout: "dualshock4" })?.label).toBe("Share button");
+    const controller = {
+      family: "playstation",
+      vendorId: 0x054c,
+      productId: 0x09cc,
+      name: "Wireless Controller",
+    } as const;
+    expect(cap({ gamepad: "select" }, { controller })?.text).toBe("Share");
+    expect(cap({ gamepad: "select" }, { controller: { ...controller, productId: 0x0ce6 } })?.text).toBe("Create");
+    expect(cap({ gamepad: "select" }, { controller, gamepadLayout: "xbox" })?.text).toBe("View");
+    expect(cap({ gamepad: "home" }, { gamepadLayout: "steam" })?.label).toBe("Steam button");
     expect(cap({ gamepad: "start" }, { gamepadLayout: "nintendo" })?.label).toBe("Plus button");
     expect(cap({ gamepad: "left-stick" }, { gamepadLayout: "playstation" })?.label).toBe("L3, left stick press");
   });
@@ -193,5 +206,40 @@ describe("mouse and controller prompts", () => {
         gamepadLayout: "xbox",
       }).label,
     ).toBe("Shift plus Back mouse button, or A button, then B button");
+  });
+
+  test("only the Steam Controller Puck layout names its nine additional buttons", () => {
+    const controller = {
+      family: "steam",
+      vendorId: 0x28de,
+      productId: 0x1304,
+      name: "Steam Controller",
+      mapping: "standard",
+    } as const;
+    const keys = (index: number) => ({ gamepad: index, mapping: "standard" });
+    expect(Array.from({ length: 9 }, (_, i) => cap(keys(17 + i), { controller })?.text)).toEqual([
+      "Quick Access",
+      "R4",
+      "L4",
+      "R5",
+      "L5",
+      "Right Pad Click",
+      "Left Pad Click",
+      "Left Trigger Click",
+      "Right Trigger Click",
+    ]);
+    expect(cap(keys(22), { controller })?.label).toBe("Right trackpad click");
+    expect(cap(keys(16), { controller })?.text).toBe("Steam");
+    expect(cap(keys(26), { controller })?.text).toBe("Pad 26");
+    for (const other of [
+      { ...controller, productId: 0x1142 },
+      { ...controller, productId: 0x11ff },
+      { ...controller, vendorId: 0x045e },
+      { ...controller, mapping: "" as const },
+    ]) {
+      expect(cap(keys(17), { controller: other })?.text).toBe("Pad 17");
+    }
+    expect(cap(keys(17), { gamepadLayout: "steam" })?.text).toBe("Pad 17");
+    expect(cap(keys(17), { controller, labels: { keys: { GamepadButton17: "Menu" } } })?.text).toBe("Menu");
   });
 });

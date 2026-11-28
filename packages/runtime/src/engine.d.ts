@@ -382,7 +382,55 @@ interface NetworkInformation extends EventTarget {
 }
 declare var NetworkInformation: Function & { readonly prototype: NetworkInformation };
 
+interface GamepadButton {
+  readonly value: number;
+  readonly pressed: boolean;
+  readonly touched: boolean;
+}
+declare var GamepadButton: Function & { readonly prototype: GamepadButton };
+type GamepadHapticEffectType = "dual-rumble" | "trigger-rumble";
+type GamepadHapticsResult = "complete" | "preempted";
+interface GamepadEffectParameters {
+  duration?: number;
+  startDelay?: number;
+  strongMagnitude?: number;
+  weakMagnitude?: number;
+  leftTrigger?: number;
+  rightTrigger?: number;
+}
+interface GamepadHapticActuator {
+  readonly type: "dual-rumble";
+  readonly effects: readonly GamepadHapticEffectType[];
+  playEffect(type: GamepadHapticEffectType, parameters?: GamepadEffectParameters): Promise<GamepadHapticsResult>;
+  reset(): Promise<GamepadHapticsResult>;
+}
+declare var GamepadHapticActuator: Function & { readonly prototype: GamepadHapticActuator };
+interface Gamepad {
+  readonly id: string;
+  readonly index: number;
+  readonly connected: boolean;
+  readonly timestamp: number;
+  readonly mapping: "" | "standard";
+  readonly axes: readonly number[];
+  readonly buttons: readonly GamepadButton[];
+  readonly touches: readonly never[];
+  readonly vibrationActuator: GamepadHapticActuator;
+}
+declare var Gamepad: Function & { readonly prototype: Gamepad };
+interface GamepadEventInit extends EventInit {
+  gamepad?: Gamepad | null;
+}
+interface GamepadEvent extends Event {
+  readonly gamepad: Gamepad | null;
+}
+declare var GamepadEvent: { new (type: string, init?: GamepadEventInit): GamepadEvent; prototype: GamepadEvent };
+type GamepadConnectionEvent = GamepadEvent & { readonly gamepad: Gamepad };
+declare var ongamepadconnected: ((event: GamepadConnectionEvent) => unknown) | null;
+declare var ongamepaddisconnected: ((event: GamepadConnectionEvent) => unknown) | null;
+
 interface Navigator {
+  /** Available in hosts built with the gamepad feature. */
+  getGamepads?(): (Gamepad | null)[];
   readonly platform: string;
   readonly connection: NetworkInformation;
   readonly language: string;

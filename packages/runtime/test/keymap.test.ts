@@ -106,6 +106,23 @@ function localInput() {
   };
 }
 
+type TestPad = { id: number; mapping: string };
+type PadChange = { type: string; gamepad: TestPad; index?: number; edge?: "down" | "up" | null };
+function localGamepads(...pads: TestPad[]) {
+  const listeners = new Set<(e: PadChange) => void>();
+  const restore = override("__sk_std", {
+    gamepads: {
+      available: true,
+      list: () => pads,
+      subscribe(fn: (e: PadChange) => void) {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    },
+  });
+  return { restore, listeners, send: (e: PadChange) => listeners.forEach((fn) => fn(e)) };
+}
+
 test("presses, exclusive clicks, double clicks and holds share one map with keyboard and mouse alternatives", () => {
   jest.useFakeTimers();
   const input = localInput();
@@ -146,6 +163,160 @@ test("presses, exclusive clicks, double clicks and holds share one map with keyb
     expect(events).toEqual(["down1", "hold1", "up1", "press1"]);
   } finally {
     off.forEach((stop) => stop());
+    input.restore();
+    jest.useRealTimers();
+  }
+});
+
+test("app gamepad chords use one physical pad, share a single subscription and cancel on removal", () => {
+  const input = localInput();
+  const pad = (id: number, mapping = "standard") => ({ id, mapping, buttonValues: [0, 0] });
+  const first = pad(1),
+    second = pad(2),
+    raw = pad(3, "");
+  const { listeners, send, restore } = localGamepads(first, second, raw);
+  const edge = (gamepad: typeof first, index: number, pressed: boolean) =>
+    send({ type: "button", gamepad, index, edge: pressed ? "down" : "up" });
+  const seen: string[] = [];
+  const map = defineKeymap({ keys: [{ gamepad: "south" }, { gamepad: "east" }] });
+  const stops: (() => void)[] = [];
+  try {
+    stops.push(
+      map.bind(() => seen.push("down")),
+      map.on("up", (e) => seen.push(e.cancelled ? "cancel" : "up")),
+    );
+    stops.push(defineKeymap({ keys: { gamepad: 0 } }).bind(() => seen.push("raw0")));
+    expect(listeners.size).toBe(1);
+    edge(first, 0, true);
+    edge(second, 1, true);
+    edge(first, 0, true);
+    expect(seen.splice(0)).toEqual(["raw0"]);
+    edge(first, 1, true);
+    edge(second, 0, true);
+    edge(first, 0, false);
+    expect(seen.splice(0)).toEqual(["down"]);
+    send({ type: "disconnected", gamepad: second });
+    expect(seen.splice(0)).toEqual(["cancel"]);
+    edge(raw, 0, true);
+    edge(raw, 1, true);
+    expect(seen.splice(0)).toEqual(["raw0"]);
+    send({ type: "connected", gamepad: second });
+    edge(second, 1, true);
+    edge(second, 0, true);
+    edge(second, 1, false);
+    expect(seen).toEqual(["down", "up"]);
+    const sequence = defineKeymap({ keys: { sequence: [{ gamepad: "dpad-up" }, { gamepad: "dpad-down" }] } });
+    let sequences = 0;
+    stops.push(sequence.bind(() => sequences++));
+    edge(first, 12, true);
+    edge(first, 12, false);
+    edge(second, 13, true);
+    edge(second, 13, false);
+    expect(sequences).toBe(0);
+    edge(first, 13, true);
+    expect(sequences).toBe(1);
+  } finally {
+    stops.forEach((off) => off());
+    expect(listeners.size).toBe(0);
+    restore();
+    input.restore();
+  }
+});
+
+test("a keyboard modifier can complete a gamepad chord, and blur cancels it", () => {
+  const input = localInput();
+  const gamepad = { id: 1, mapping: "standard", buttonValues: [1] };
+  const { send, restore } = localGamepads(gamepad);
+  const edge = (value: "down" | "up" | null) => send({ type: "button", gamepad, index: 0, edge: value });
+  const seen: string[] = [];
+  const map = defineKeymap({ keys: ["Shift", { gamepad: "south" }] });
+  const stops = [map.bind(() => seen.push("down")), map.on("up", (e) => seen.push(e.cancelled ? "cancel" : "up"))];
+  try {
+    input.send("keydown", { key: "Shift", code: "ShiftLeft", shiftKey: true });
+    edge(null);
+    expect(seen).toEqual([]); // Already held when the command subscribed.
+    edge("up");
+    edge("down");
+    expect(seen.splice(0)).toEqual(["down"]);
+    input.blur();
+    edge("up");
+    edge("down");
+    expect(seen.splice(0)).toEqual(["cancel"]);
+    input.send("keydown", { key: "Shift", code: "ShiftRight", shiftKey: true });
+    expect(seen).toEqual(["down"]);
+  } finally {
+    stops.forEach((off) => off());
+    restore();
+    input.restore();
+  }
+});
+
+test("without a gamepad service a mixed map still uses its keyboard alternative", () => {
+  const input = localInput();
+  const restore = override("__sk_std", { gamepads: { available: false } });
+  const stopped: (() => void)[] = [];
+  try {
+    const hits: number[] = [];
+    stopped.push(
+      defineKeymap({ keys: { alternatives: [{ gamepad: "south" }, "Enter"] } }).bind((e) => hits.push(e.alternative)),
+    );
+    input.send("keydown", { key: "Enter", code: "Enter" });
+    expect(hits).toEqual([1]);
+    expect(() => defineKeymap({ keys: { gamepad: "south" } }).bind(() => {})).toThrow("Gamepad input is unavailable");
+  } finally {
+    stopped.forEach((off) => off());
+    restore();
+    input.restore();
+  }
+});
+
+test("mixed chord clicks belong to their controller even when Enter completes and releases the chord", () => {
+  jest.useFakeTimers();
+  const input = localInput();
+  const first = { id: 1, mapping: "standard" };
+  const second = { id: 2, mapping: "standard" };
+  const { send, restore } = localGamepads(first, second);
+  const enter = () => {
+    input.send("keydown", { key: "Enter", code: "Enter" });
+    input.send("keyup", { key: "Enter", code: "Enter" });
+  };
+  const click = (gamepad: typeof first) => {
+    send({ type: "button", gamepad, index: 0, edge: "down" });
+    enter();
+    send({ type: "button", gamepad, index: 0, edge: "up" });
+  };
+  const seen: string[] = [];
+  const map = defineKeymap({ keys: [{ gamepad: "south" }, "Enter"], doubleClickMs: 40 });
+  const stops = (["press", "click", "doubleClick"] as const).map((kind) => map.on(kind, (e) => seen.push(e.type)));
+  try {
+    send({ type: "button", gamepad: first, index: 0, edge: "down" });
+    enter();
+    send({ type: "disconnected", gamepad: first });
+    jest.advanceTimersByTime(40);
+    expect(seen.splice(0)).toEqual(["press"]);
+
+    send({ type: "connected", gamepad: first });
+    click(first);
+    click(second);
+    jest.advanceTimersByTime(40);
+    expect(seen.splice(0)).toEqual(["press", "press", "click", "click"]);
+
+    click(second);
+    send({ type: "disconnected", gamepad: first });
+    click(second);
+    expect(seen.splice(0)).toEqual(["press", "press", "doubleClick"]);
+
+    send({ type: "connected", gamepad: first });
+    send({ type: "button", gamepad: second, index: 0, edge: "down" });
+    send({ type: "button", gamepad: first, index: 0, edge: "down" });
+    input.send("keydown", { key: "Enter", code: "Enter" });
+    send({ type: "disconnected", gamepad: second });
+    input.send("keyup", { key: "Enter", code: "Enter" });
+    jest.advanceTimersByTime(40);
+    expect(seen).toEqual(["press"]);
+  } finally {
+    stops.forEach((off) => off());
+    restore();
     input.restore();
     jest.useRealTimers();
   }

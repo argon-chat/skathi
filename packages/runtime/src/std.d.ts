@@ -24,6 +24,10 @@ declare module "skathi:gpu" {
   export * from "@skathi-native/runtime/std/gpu";
 }
 
+declare module "skathi:gamepad" {
+  export * from "@skathi-native/runtime/std/gamepad";
+}
+
 declare module "skathi:image" {
   export * from "@skathi-native/runtime/std/image";
 }

@@ -34,6 +34,7 @@ import { Runtime, runtime } from "skathi:runtime";
 | [`skathi:memory`](#skathimemory)           | `NativeBuffer`, `Arena`, `MemoryView`: native memory without a copy, freed on demand               |
 | [`skathi:image`](#skathiimage)             | `ImageDecoder`, `ImageEncoder`, `Image` for metadata, frame decoding and encoding off-thread       |
 | [`skathi:gpu`](#skathigpu)                 | `wgsl` types, `struct()`, `GpuTimer`, `readTexture()`, `readBuffer()` for WebGPU                   |
+| [`skathi:gamepad`](#skathigamepad)         | `gamepads` for controller snapshots, button and axis events, and rumble                            |
 | [`skathi:text`](#skathitext)               | `StringBuilder`, `StringReader`, `StringWriter`, `TextDiff`, `TextSearch`, `FuzzyMatcher`, `Glob`  |
 | [`skathi:time`](#skathitime)               | `TimeSpan`, `Stopwatch`, `Deadline`, `Backoff`, `RetryPolicy`, `RateLimiter`, `TaskQueue`, `Timer` |
 | [`skathi:units`](#skathiunits)             | `DataSize`, `Frequency`, `Angle`                                                                   |

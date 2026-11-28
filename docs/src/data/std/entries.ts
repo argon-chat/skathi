@@ -4,6 +4,7 @@ import { collections } from "./collections";
 import { encoding } from "./encoding";
 import { ffi } from "./ffi";
 import { gpu } from "./gpu";
+import { gamepad } from "./gamepad";
 import { image } from "./image";
 import { memory } from "./memory";
 import { network } from "./network";
@@ -58,6 +59,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
 
 export const entries: readonly StdEntry[] = [
   ...app,
+  ...gamepad,
   ...runtime,
   ...os,
   ...network,

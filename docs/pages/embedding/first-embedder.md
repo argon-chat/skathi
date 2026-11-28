@@ -23,7 +23,7 @@ notes/
 | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | Windows x64 | Rust (MSVC toolchain), the MSVC build tools and Windows SDK, `clang-cl` from LLVM on `PATH`, [bun](https://bun.sh) |
 | macOS arm64 | Rust, Xcode with its Metal toolchain, `MACOSX_DEPLOYMENT_TARGET=13.0` or later, bun                                |
-| Linux x64   | Rust, clang, the development packages of Wayland, X11 (xcb, xkbcommon), fontconfig and ALSA, bun                   |
+| Linux x64   | Rust, clang, the development packages of Wayland, X11 (xcb, xkbcommon), fontconfig, ALSA and libudev, bun          |
 
 bun builds the app; the Rust side does not need it.
 

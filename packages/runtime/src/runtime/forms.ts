@@ -48,6 +48,8 @@ export const RUNTIME_FIRED_EVENTS = new Set<string>([
   "fullscreenchange",
   "gotpointercapture",
   "lostpointercapture",
+  "skgamepadbuttondown",
+  "skgamepadbuttonup",
   "select",
   "dragstart",
   "drag",
