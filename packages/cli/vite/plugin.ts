@@ -1,3 +1,4 @@
+import { appModuleError } from "../esm";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -210,6 +211,14 @@ function nativeModules(options: NativeVitePluginOptions): Plugin {
           for (const plugin of config.plugins) if (plugin.name === "vite:vue") configureVue(plugin, options.appRoot);
         }
       },
+    },
+    generateBundle(output) {
+      if (output.format !== "es")
+        this.error("Skathi supports only ES modules (ESM). Set the Vite output format to es.");
+    },
+    moduleParsed(info) {
+      const error = appModuleError(info.id, info.inputFormat);
+      if (error) this.error({ id: info.id, message: error });
     },
     async resolveId(id, importer) {
       if (id.startsWith(NATIVE)) return id;

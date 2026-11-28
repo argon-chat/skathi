@@ -314,6 +314,21 @@ describe("the opaque-host transform", () => {
     ).toEqual([...preludes, app]);
     expect(nativeInput(app, undefined, true).code).toBe(opaqueHost(app));
   });
+  test("prelude variables keep their own scope beside a module with top-level await", async () => {
+    const { SourceTextModule, createContext } = await import("node:vm");
+    const host: Record<string, unknown> = {};
+    const preludes = ["var value = 1; globalThis.first = () => value;", "var value = 2;"] as const;
+    const { code } = nativeInput(
+      "var value = await Promise.resolve(40); globalThis.sum = globalThis.first() + value;",
+      preludes,
+    );
+    const entry = new SourceTextModule(code, { context: createContext({ __SK_AOT_HOST__: host }) });
+    await entry.link(() => {
+      throw Error("unexpected import");
+    });
+    await entry.evaluate();
+    expect(host.sum).toBe(41);
+  });
   test("its host globals come from the pinned table", () => {
     expect(TABLE_ID).toBe(pin.table.id);
     const names = opaqueGlobals();

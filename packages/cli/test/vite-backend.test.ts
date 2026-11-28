@@ -240,14 +240,14 @@ test("sk uses the Vite+ build API from the target app and checks CSS generated b
   expect(diagnostics).toContainEqual(expect.objectContaining({ code: "SK4001", file: "main.ts" }));
 }, 60_000);
 
-test("the native output uses the IIFE hooks and asset names from a multi-output Vite config", () => {
+test("the native output uses the ESM hooks and asset names from a multi-output Vite config", () => {
   const app = appWith({
     "main.ts": 'import sample from "./file.dat?url&no-inline"; console.log(sample);',
     "file.dat": "sample",
     "web/keep.txt": "existing",
     "vite.config.mjs": `
       const nativeOutput = {
-        format: "iife", dir: "web", entryFileNames: "browser-only.js", assetFileNames: "media/[name][extname]",
+        format: "es", dir: "web", entryFileNames: "browser-only.js", assetFileNames: "media/[name][extname]",
         banner: 'globalThis.nativeBanner = true;', footer: 'globalThis.nativeFooter = true;',
         plugins: [{
           name: "output-hook",
@@ -258,7 +258,7 @@ test("the native output uses the IIFE hooks and asset names from a multi-output 
       };
       export default {
         build: {outDir: "web", emptyOutDir: true, write: true, rolldownOptions: {
-          output: [{format: "es", banner:"globalThis.browserOutput = true;"}, nativeOutput]
+          output: [{format: "iife", banner:"globalThis.browserOutput = true;"}, nativeOutput]
         }},
         plugins: [{name:"web-output", configEnvironment() {return {build:{outDir:"web", write:true, emptyOutDir:true}}}}]
       };
@@ -275,20 +275,68 @@ test("the native output uses the IIFE hooks and asset names from a multi-output 
   expect(script).not.toContain("browserOutput");
   expect(script).toContain("/media/file.dat");
   expect(read(KIND.ASSET, "media/file.dat")).toBe("sample");
-  expect(read(KIND.ASSET, "styles.json")).toBe("output hook iife");
+  expect(read(KIND.ASSET, "styles.json")).toBe("output hook es");
   expect(JSON.parse(readFileSync(join(out, ".sk", "styles.json"), "utf8")).compiledCss).toBe("");
   expect(readdirSync(join(app, "web"))).toEqual(["keep.txt"]);
 });
 
-test("an output plugin cannot switch the native payload to an ESM build", () => {
+test.each([true, false])("the packaged entry awaits its imported module (Vite %p)", async (vite) => {
+  const app = appWith({
+    "src/dep.ts": "export let n = await Promise.resolve(40); export function inc() { n++; }",
+    "src/main.ts":
+      'import {n, inc} from "./dep"; inc(); const ns = await import("./dep"); globalThis.esmResult = n + (ns.n === n ? 1 : 0); globalThis.caption = "готово"; globalThis.moduleThis = (() => this)(); globalThis.bound = ({ fn() { return this.value; }, value: 9 }).fn();',
+    ...(vite ? { "vite.config.mjs": "export default {};" } : {}),
+  });
+  const out = join(app, "out");
+  const result = run("build", app, "--out", out, "--payload-only");
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  const payload = readPayload(readFileSync(join(out, ".sk", "app.skpk")));
+  const script = new TextDecoder().decode(payload.bytes(payload.find(KIND.SCRIPT, NAMES.SCRIPT)!));
+  const { SourceTextModule, createContext } = await import("node:vm");
+  const context = createContext({});
+  const module = new SourceTextModule(script, { context });
+  await module.link(() => {
+    throw Error("unexpected external import");
+  });
+  await module.evaluate();
+  expect(context.esmResult).toBe(42);
+  expect(context.caption).toBe("готово");
+  expect(context.moduleThis).toBeUndefined();
+  expect(context.bound).toBe(9);
+});
+
+test.each([true, false])("CommonJS application sources report an ESM diagnostic (Vite %p)", (vite) => {
+  const app = appWith({
+    "main.ts": 'import answer from "./legacy.cjs"; console.log(answer);',
+    "legacy.cjs": "module.exports = 42;",
+    ...(vite ? { "vite.config.mjs": "export default {};" } : {}),
+  });
+  const result = run("build", app, "--out", join(app, "out"), "--payload-only");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString() + result.stderr.toString()).toContain("only ES modules");
+});
+
+test("a CJS-only Vite output config fails before writing the payload", () => {
+  const app = appWith({
+    "main.ts": "console.log(42);",
+    "vite.config.mjs": 'export default {build:{rolldownOptions:{output:{format:"cjs"}}}};',
+  });
+  const out = join(app, "out");
+  const result = run("build", app, "--out", out, "--payload-only");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString() + result.stderr.toString()).toContain("only ES modules");
+  expect(existsSync(join(out, ".sk", "app.skpk"))).toBe(false);
+});
+
+test("an output plugin cannot switch the native payload to CommonJS", () => {
   const app = appWith({
     "main.ts": "console.log(123);",
-    "vite.config.mjs": `export default { plugins: [{name:"browser-format",outputOptions(o){return {...o,format:"es"};}}] };`,
+    "vite.config.mjs": `export default { plugins: [{name:"browser-format",outputOptions(o){return {...o,format:"cjs"};}}] };`,
   });
   const out = join(scratch, "browser-format");
   const result = run("build", app, "--out", out, "--payload-only");
   expect(result.exitCode).not.toBe(0);
-  expect(result.stdout.toString() + result.stderr.toString()).toContain("required Skathi output format");
+  expect(result.stdout.toString() + result.stderr.toString()).toContain("only ES modules");
   expect(existsSync(join(out, ".sk", "app.skpk"))).toBe(false);
 });
 

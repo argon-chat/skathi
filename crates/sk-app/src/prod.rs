@@ -119,10 +119,6 @@ pub fn reboot(rt: &JsRuntime) {
             "[native-aot] reload: running app.prod.js; the native entry runs once per process"
         );
         crate::stdlib::set_app_native(false);
-        if let Err(e) = rt.eval(script, "sk://app.prod.js") {
-            eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
-        }
-        return;
     }
     if let Err(e) = crate::bytecode::eval(rt, script) {
         eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);

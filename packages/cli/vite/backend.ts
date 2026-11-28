@@ -59,10 +59,17 @@ function nativeBuildOptions(
   options: NativeViteBuildOptions,
 ): BuildOptions {
   const bundler = user.rolldownOptions ?? user.rollupOptions ?? {};
-  // There is one native output. Prefer the app's IIFE policy, then its first output policy.
-  const output = Array.isArray(bundler.output)
-    ? (bundler.output.find((o) => o.format === "iife") ?? bundler.output[0])
-    : bundler.output;
+  const outputs = Array.isArray(bundler.output) ? bundler.output : [bundler.output];
+  const formats = user.lib && user.lib.formats;
+  if (formats && formats.length && !formats.includes("es") && !bundler.output) {
+    throw new Error('Skathi supports only ES modules (ESM). Include "es" in build.lib.formats.');
+  }
+  const output = outputs.find((item) => !item?.format || ["es", "esm", "module"].includes(item.format));
+  if (!output && outputs.some((item) => item?.format)) {
+    throw new Error(
+      `Skathi supports only ES modules (ESM). Set build.rolldownOptions.output.format to "es" (received: ${outputs.map((item) => item?.format).join(", ")}).`,
+    );
+  }
   return {
     ...user,
     outDir,
@@ -75,6 +82,7 @@ function nativeBuildOptions(
     manifest: false,
     ssrManifest: false,
     modulePreload: false,
+    target: user.target ?? "esnext",
     cssCodeSplit: false,
     cssMinify: false,
     minify: options.minify ? (user.minify ?? true) : false,
@@ -96,7 +104,7 @@ function nativeBuildOptions(
         ...(output?.charset && { charset: output.charset }),
         ...(output?.hashCharacters && { hashCharacters: output.hashCharacters }),
         ...(output?.comments !== undefined && { comments: output.comments }),
-        format: "iife",
+        format: "es",
         entryFileNames: "app.js",
         codeSplitting: false,
       },
@@ -164,7 +172,7 @@ export async function buildWithVite(options: NativeViteBuildOptions): Promise<vo
   const defines = { ...options.defines };
   // Vite expands globs, asset URLs, and the env object itself. Bun needs extra replacements for those.
   for (const key of ["import.meta", "import.meta.glob", "import.meta.env", "import.meta.hot"]) delete defines[key];
-  // Vite keeps import.meta.url as the base of asset URLs. The classic script runs on Skathi's page origin.
+  // Vite keeps import.meta.url as the base of asset URLs. The bundled module uses Skathi's page origin.
   defines["import.meta.url"] = JSON.stringify("app://redjs/app.prod.js");
   const target: Plugin = {
     name: "skathi:application",
@@ -213,9 +221,7 @@ export async function buildWithVite(options: NativeViteBuildOptions): Promise<vo
       if (id === "\0" + PRELUDE && page) return htmlPreludeModule(page, appRoot);
       return htmlSheets.get(id)?.text ?? null;
     },
-    generateBundle(output) {
-      if (output.format !== "iife")
-        throw new Error(`A Vite plugin changed the required Skathi output format to ${output.format}.`);
+    generateBundle() {
       for (const id of this.getModuleIds()) {
         const file = sourceFile(id);
         if (file && (STYLE.test(file) || COMPONENT.test(file))) styles.add(file);
@@ -319,7 +325,6 @@ export async function buildWithVite(options: NativeViteBuildOptions): Promise<vo
   const code = options.finishScript(
     (css ? `(globalThis.__SK_CSS__ ??= []).push(${JSON.stringify(css)});\n` : "") + chunk.code,
   );
-  new Function(code); // A Skathi workload evaluates one classic script.
   const packed = new Map<string, string>();
   if (publicDir) {
     const root = dirname(publicDir);

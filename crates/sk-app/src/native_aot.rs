@@ -674,6 +674,10 @@ pub(crate) fn boot(rt: &JsRuntime, kind: Kind) -> Result<bool, String> {
             );
             Ok(true)
         }
+        Ok(aot::ModuleEvaluation::Pending(promise)) if kind == Kind::Application => {
+            crate::observe_entry(rt, promise).map_err(|error| error.to_string())?;
+            Ok(true)
+        }
         Ok(aot::ModuleEvaluation::Pending(_)) => Err(format!(
             "the {} native entry is awaiting host work; boot is not complete",
             kind.name()

@@ -498,6 +498,35 @@ pub(crate) fn notify_shell(cx: &mut App) {
     });
 }
 
+host_fn!(fn sk_entry_rejected(_g, args) {
+    JsRuntime::with(|rt| {
+        let error = rt.describe(args.arg(0));
+        let message = format!("{}\n{}", error.header, error.stack);
+        crash_window::entry_threw(&message);
+        #[cfg(feature = "prod")]
+        if sk_tree::devtools::document_is_empty() {
+            crash_window::entry_failed(message);
+        }
+    });
+    sk_runtime::redjs::api::Value::undefined().0
+});
+
+fn observe_entry(
+    rt: &JsRuntime,
+    promise: sk_runtime::redjs::api::Value,
+) -> sk_runtime::redjs::api::Result<()> {
+    let ctx = rt.ctx();
+    let reject = ctx.global_get("__sk_entry_rejected")?;
+    let then = ctx.get(promise, &ctx.atom("then"))?;
+    ctx.call(
+        then,
+        promise,
+        &[sk_runtime::redjs::api::Value::undefined(), reject],
+    )?;
+    ctx.drain_microtasks();
+    Ok(())
+}
+
 host_fn!(fn sk_set_status(g, args) {
     let text = unsafe { sk_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
@@ -1288,8 +1317,11 @@ fn run_app() {
         consent_window::install(cx);
         let setup_result = JsRuntime::with(|rt| -> Result<(), String> {
             rt.register("__sk_set_status", 1, sk_set_status as *const _);
+            rt.register("__sk_entry_rejected", 1, sk_entry_rejected as *const _);
             rt.register("__sk_log", 1, sk_log as *const _);
             rt.register("__sk_perf_mark", 1, sk_perf_mark as *const _);
+            #[cfg(not(feature = "prod"))]
+            dev::install_module_loader(rt.ctx()).expect("install dev ES module loader");
             reload::install(rt);
             sk_tree::install(rt);
             window::install(rt);

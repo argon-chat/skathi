@@ -1,4 +1,4 @@
-//! Trusted, per-user cache of packaged classic-script bytecode. Source remains
+//! Trusted, per-user cache of packaged ES module bytecode. Source remains
 //! authoritative; a cache miss never prevents the application from starting.
 
 use std::fs::{self, File, OpenOptions};
@@ -15,10 +15,10 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 pub fn eval(rt: &JsRuntime, source: &str) -> Result<(), JsError> {
     let Some(folder) = cache_folder() else {
-        return crate::perf::boot_eval("app.prod.js (+mount)", || rt.eval(source, SCRIPT_URL));
+        return crate::perf::boot_eval("app.prod.js (+mount)", || evaluate(rt, source, None));
     };
     let (key, cached) = crate::perf::boot_eval("bytecode lookup", || {
-        let key = rt.ctx().bytecode_cache_key(source, SCRIPT_URL);
+        let key = rt.ctx().module_bytecode_cache_key(source, SCRIPT_URL);
         let file = folder.join(cache_name(&key));
         let cached = read_bounded(&file).ok().flatten().and_then(|bytes| {
             // This directory is local to the same trusted OS user who can
@@ -32,9 +32,7 @@ pub fn eval(rt: &JsRuntime, source: &str) -> Result<(), JsError> {
         Some(cache) => Some(cache),
         None => {
             let generated = crate::perf::boot_eval("bytecode generate", || {
-                // Production bundles have an outer IIFE: include its body,
-                // while keeping deeper functions lazy for a bounded cold cost.
-                rt.ctx().compile_bytecode_with_depth(source, SCRIPT_URL, 1)
+                rt.ctx().compile_module_bytecode(source, SCRIPT_URL)
             });
             match generated {
                 Ok(cache) => {
@@ -60,21 +58,22 @@ pub fn eval(rt: &JsRuntime, source: &str) -> Result<(), JsError> {
         }
     };
     crate::perf::boot_eval("app.prod.js (+mount)", || {
-        match rt
-            .ctx()
-            .eval_named_with_bytecode(source, SCRIPT_URL, cache.as_ref())
-        {
-            Ok((_, used)) => {
-                eprintln!(
-                    "[bytecode] {}",
-                    if used { "JSC accepted cache" } else { "source" }
-                );
-                Ok(())
-            }
-            // An exception may follow observable JS side effects. Never retry.
-            Err(error) => Err(describe(rt, error)),
-        }
+        evaluate(rt, source, cache.as_ref())
     })
+}
+
+fn evaluate(rt: &JsRuntime, source: &str, cache: Option<&Bytecode>) -> Result<(), JsError> {
+    let (promise, used) = rt
+        .ctx()
+        .eval_module(source, SCRIPT_URL, cache)
+        .map_err(|error| describe(rt, error))?;
+    if cache.is_some() {
+        eprintln!(
+            "[bytecode] {}",
+            if used { "JSC accepted cache" } else { "source" }
+        );
+    }
+    crate::observe_entry(rt, promise).map_err(|error| describe(rt, error))
 }
 
 fn describe(rt: &JsRuntime, error: Error) -> JsError {

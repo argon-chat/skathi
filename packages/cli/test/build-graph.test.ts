@@ -1,3 +1,4 @@
+import { registration } from "./registration";
 // build.ts: the dependency graph it records and the transport shape the Rust host reads. Runs the real
 // builder against test/fixtures/* into a temp dist.
 
@@ -138,8 +139,8 @@ describe("manifest", () => {
       expect(list).not.toContain("vue");
       expect(list).not.toContain("@skathi-native/runtime");
     }
-    expect(out.script(ENTRY)).toContain('require("@skathi-native/runtime")');
-    expect(out.script(COUNTER)).toContain('require("vue")');
+    expect(out.script(ENTRY)).toContain('"spec":"@skathi-native/runtime"');
+    expect(out.script(COUNTER)).toContain('"spec":"vue"');
   });
 
   test("builds cleanly — no unresolved-import advisories", () => {
@@ -148,6 +149,24 @@ describe("manifest", () => {
 });
 
 describe("app-owned framework versions", () => {
+  test("dev resolves the browser ESM exports of Vue Router", async () => {
+    const app = mkdtempSync(join(FIXTURES, "router-exports-"));
+    const dist = mkdtempSync(join(tmpdir(), "sk-router-"));
+    tmpDirs.push(app, dist);
+    mkdirSync(join(app, "src"));
+    writeFileSync(
+      join(app, "src/main.ts"),
+      'import { createRouter } from "vue-router"; export const ready = typeof createRouter === "function";',
+    );
+    const out = Bun.spawnSync([process.execPath, "build.ts", join(app, "src/main.ts"), dist], { cwd: PKG_DIR });
+    expect(out.exitCode, out.stderr.toString()).toBe(0);
+    const manifest: Manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
+    const { SK } = createLoader();
+    for (const id of manifest.modules)
+      new Function("__SK__", readFileSync(join(dist, "modules", id.replaceAll("/", "__") + ".js"), "utf8"))(SK);
+    expect((await SK.importModule(manifest.entry)).ready).toBe(true);
+  });
+
   test("dev vendor and prod use the declared app package instead of a different runtime major", () => {
     const dir = mkdtempSync(join(FIXTURES, "framework-app-"));
     const dist = mkdtempSync(join(tmpdir(), "sk-framework-"));
@@ -238,7 +257,7 @@ describe("import.meta in a prod bundle", () => {
     const rel = "packages/cli/test/fixtures/" + dir.split(/[\\/]/).pop() + "/src/main.ts";
     const script = readFileSync(join(dist, "modules", rel.split("/").join("__") + ".js"), "utf8");
     expect(script).not.toContain("({MODE:");
-    expect(script).toMatch(/MODE:\s*"development"/);
+    expect(registration(script)[1]).toMatch(/MODE:\s*"development"/);
   });
 });
 
@@ -258,7 +277,7 @@ describe("module scripts", () => {
 
   test("close define() with a body hash", () => {
     for (const module of [APP, COUNTER, UTIL]) {
-      expect(out.script(module)).toMatch(/\n}, "[0-9a-f]+"\);\n?$/);
+      expect(registration(out.script(module))[3]).toMatch(/^[0-9a-f]+$/);
     }
   });
 
@@ -273,7 +292,7 @@ describe("style-only edits", () => {
   const file = join(FIXTURES, "style-app/src/App.vue");
   const original = readFileSync(file, "utf8");
   const APP = id("style-app", "App.vue");
-  const hashOf = (script: string) => /\n}, "([0-9a-f]+)"\);/.exec(script)![1];
+  const hashOf = (script: string) => registration(script)[3];
   const cssOf = (script: string) => /__SK__\.setCss\([^,]+, (".*")\);/.exec(script)![1];
 
   test("change the css but not the body hash", () => {
@@ -313,7 +332,7 @@ describe("css entry modules", () => {
     const script = b.script(CSS_ID);
     expect(script).toContain("__SK__.setCss");
     expect(script).toContain("--fixture-fg");
-    expect(script).toMatch(/__SK__\.define\([^,]+, function \(require, module, exports\) \{\s*\}/);
+    expect(registration(script)[1]).toBe("");
   });
 
   test("it is a graph edge of the module that imported it, not an npm package", () => {
@@ -355,16 +374,16 @@ describe('a "type": "module" app, in dev', () => {
     return w;
   };
 
-  test("a default import is the module's default export, as in Vite", () => {
+  test("a default import is the module's default export, as in Vite", async () => {
     expect(out.script(MAIN)).not.toMatch(/__toESM\(require\([^)]*\),\s*1\)/);
-    const main = world().SK.require(MAIN) as unknown as EsmMain;
+    const main = (await world().SK.importModule(MAIN)) as unknown as EsmMain;
     expect(main.app.name).toBe("EsmApp");
     expect(main.ns.default("x")).toBe("hello x");
     expect(main.ns.answer).toBe(42);
   });
 
   test("import.meta.glob expands as in prod, in a module and in an SFC, and stays in the graph", async () => {
-    const main = world().SK.require(MAIN) as unknown as EsmMain;
+    const main = (await world().SK.importModule(MAIN)) as unknown as EsmMain;
     expect(main.eagerNames).toEqual({ "./kinds/a.ts": "a", "./kinds/b.ts": "b" });
     expect(Object.keys(main.lazyKinds)).toEqual(["./kinds/a.ts"]);
     expect((await main.lazyKinds["./kinds/a.ts"]!()).name).toBe("a");
@@ -374,9 +393,9 @@ describe('a "type": "module" app, in dev', () => {
   });
 
   test("import() resolves through the registry, and defineAsyncComponent unwraps it", async () => {
-    expect(out.script(MAIN)).not.toMatch(/(?<![\w$.])import\(/);
+    expect(out.script(MAIN)).toContain('"dynamic":true');
     expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "Lazy.vue"));
-    const ns = await (world().SK.require(MAIN) as unknown as EsmMain).lazy();
+    const ns = await ((await world().SK.importModule(MAIN)) as unknown as EsmMain).lazy();
     expect(!!(ns && (ns.__esModule || ns[Symbol.toStringTag] === "Module"))).toBe(true);
     expect(ns.default.name).toBe("LazyPane");
   });
@@ -384,16 +403,16 @@ describe('a "type": "module" app, in dev', () => {
   const ALIAS = id("esm-app", "alias.ts");
   const UTIL = id("esm-app", "util.ts");
 
-  test("a tsconfig paths alias is the module's relative path: a graph edge and one instance", () => {
-    expect(out.script(ALIAS)).toContain('require("./util.ts")');
+  test("a tsconfig paths alias is the module's relative path: a graph edge and one instance", async () => {
+    expect(out.script(ALIAS)).toContain('"spec":"./util.ts"');
     expect(out.script(ALIAS)).not.toContain("@/");
     expect(out.manifest.deps[ALIAS]).toEqual([UTIL]);
     expect(out.manifest.modules.some((m: string) => m.startsWith("@/"))).toBe(false);
-    expect(world().SK.require(MAIN)["sameInstance"]).toBe(true);
+    expect((await world().SK.importModule(MAIN))["sameInstance"]).toBe(true);
   });
 
-  test("JSON in src/, outside it and through an alias, as Vite gives it", () => {
-    const { json } = world().SK.require(MAIN) as unknown as EsmMain;
+  test("JSON in src/, outside it and through an alias, as Vite gives it", async () => {
+    const { json } = (await world().SK.importModule(MAIN)) as unknown as EsmMain;
     expect(json.config).toEqual({ title: "esm", list: [1, 2] });
     expect(json.title).toBe("esm");
     expect(json.meta).toEqual({ outside: "src" });
@@ -402,7 +421,7 @@ describe('a "type": "module" app, in dev', () => {
   });
 
   test("?raw and a query glob give the text; ?worker is the stub prod gives", async () => {
-    const main = world().SK.require(MAIN) as unknown as EsmMain;
+    const main = (await world().SK.importModule(MAIN)) as unknown as EsmMain;
     expect(main.raw).toBe("a note, read with ?raw\n");
     expect(main.texts).toEqual({ "./data/note.txt": "a note, read with ?raw\n" });
     expect(() => new main.worker()).toThrow();
@@ -505,17 +524,17 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
       const npm = manifest.modules.filter((m: string) => !m.startsWith(rel));
       expect(npm.filter((m: string) => m === "ctx-core")).toEqual(["ctx-core"]);
       expect(npm.filter((m: string) => m.startsWith("ctx-core~"))).toHaveLength(1); // old-user's nested 1.0.0
-      expect(script("ctx-provider")).toContain('require("ctx-core")');
+      expect(script("ctx-provider")).toContain('"spec":"ctx-core"');
       expect(script("ctx-provider")).not.toContain('Symbol("ctx")');
 
       const w = world(manifest);
-      const main = w.SK.require(MAIN) as unknown as NpmMain;
+      const main = (await w.SK.importModule(MAIN)) as unknown as NpmMain;
       expect(main.injected).toBe("ctx-value"); // provided in one package, injected in another
       expect(main.registered).toBe("fmt"); // registered by a package, read by the app
       expect(main.keys.old).not.toBe(main.keys.app);
       expect(main.keys.old.description).toBe("old");
       expect(main.env).toBe("browser");
-      const core = w.SK.require("ctx-core");
+      const core = await w.SK.importModule("ctx-core");
 
       const coreScript = script("ctx-core");
       await Bun.sleep(300);
@@ -532,8 +551,8 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
       expect(script("ctx-core")).toBe(coreScript);
       new Function("__SK__", "__VUE_HMR_RUNTIME__", script("ctx-core"))(w.SK, w.sandbox.__VUE_HMR_RUNTIME__);
       new Function("__SK__", "__VUE_HMR_RUNTIME__", script(MAIN))(w.SK, w.sandbox.__VUE_HMR_RUNTIME__);
-      expect(w.SK.require("ctx-core")).toBe(core);
-      const again = w.SK.require(MAIN) as unknown as NpmMain;
+      expect(await w.SK.importModule("ctx-core")).toBe(core);
+      const again = (await w.SK.importModule(MAIN)) as unknown as NpmMain;
       expect(again.edited).toBe(1);
       expect(again.injected).toBe("ctx-value");
     } finally {
@@ -615,14 +634,14 @@ describe("build.ts (dev): two entries of one package share its modules", () => {
       const group = manifest.modules.filter((m) => m.startsWith("multi~pkg~"));
       expect(group).toHaveLength(1);
       expect(script(group[0]!).match(/new Map\b/g)).toHaveLength(1);
-      expect(script("multi")).toContain(`require(${JSON.stringify(group[0])})`);
-      expect(script("uses-runtime")).toContain('require("@skathi-native/runtime")');
+      expect(script("multi")).toContain(JSON.stringify(group[0]));
+      expect(script("uses-runtime")).toContain('"spec":"@skathi-native/runtime"');
 
       const w = createLoader();
       for (const mod of manifest.modules) {
         new Function("__SK__", "__VUE_HMR_RUNTIME__", script(mod))(w.SK, w.sandbox.__VUE_HMR_RUNTIME__);
       }
-      const main = w.SK.require(MAIN) as unknown as { found: string; cjs: string };
+      const main = (await w.SK.importModule(MAIN)) as unknown as { found: string; cjs: string };
       expect(main.found).toBe("shared");
       expect(main.cjs).toBe("cjs");
 
@@ -711,7 +730,7 @@ describe("module namespaces in a prod bundle", () => {
   });
 });
 
-test("an app outside the checkout gets ids relative to its own root", () => {
+test("an app outside the checkout gets ids relative to its own root", async () => {
   const app = mkdtempSync(join(tmpdir(), "sk-outside-"));
   tmpDirs.push(app);
   mkdirSync(join(app, "src"));

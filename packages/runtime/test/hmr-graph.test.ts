@@ -18,29 +18,30 @@ import {
 const changed = (id: string, kind?: HmrChange["kind"]): HmrChange[] => [{ id, kind: kind || "reload" }];
 
 describe("external app module ids", () => {
-  test("retains parents outside the SDK while resolving sibling modules", () => {
+  test("retains parents outside the SDK while resolving sibling modules", async () => {
     const w = createLoader();
     const entry = "../../client/packages/editor/main.ts";
     const helper = "../../client/packages/editor/gpu/draw.ts";
     const shared = "../../client/packages/shared.ts";
-    w.SK.define(helper, (_require, module) => {
+    w.SK.define(helper, ["draw"], (_require, module) => {
       module.exports = { draw: 42 };
     });
-    w.SK.define(shared, (_require, module) => {
+    w.SK.define(shared, ["shared"], (_require, module) => {
       module.exports = { shared: 17 };
     });
-    w.SK.define(entry, (require, module) => {
+    w.SK.setDeps(entry, [helper, shared]);
+    w.SK.define(entry, ["value"], (require, module) => {
       module.exports = { value: (require("./gpu/draw").draw as number) + (require("../shared").shared as number) };
     });
     expect(w.SK.resolve("./gpu/draw", entry)).toBe(helper);
     expect(w.SK.resolve("../shared", entry)).toBe(shared);
-    expect(w.SK.require(entry).value).toBe(59);
+    expect((await w.SK.importModule(entry)).value).toBe(59);
   });
 });
 
 describe("boot", () => {
-  test("requires every reachable module exactly once", () => {
-    const w = bootStandardFixture();
+  test("requires every reachable module exactly once", async () => {
+    const w = await bootStandardFixture();
     expect(w.runs(ENTRY)).toBe(1);
     expect(w.runs(APP)).toBe(1);
     expect(w.runs(COUNTER)).toBe(1);
@@ -49,8 +50,8 @@ describe("boot", () => {
     expect(w.hardRestarted()).toBe(false);
   });
 
-  test("records both directions of the graph", () => {
-    const w = bootStandardFixture();
+  test("records both directions of the graph", async () => {
+    const w = await bootStandardFixture();
     expect(w.SK.depsOf(APP)).toEqual([UTIL, COUNTER]);
     expect(w.SK.importersOf(UTIL).sort()).toEqual([APP, COUNTER].sort());
     expect(w.SK.importersOf(APP)).toEqual([ENTRY]);
@@ -59,10 +60,10 @@ describe("boot", () => {
 });
 
 describe("shared plain module changed", () => {
-  test("reloads exactly the components that import it, entry untouched", () => {
-    const w = bootStandardFixture();
+  test("reloads exactly the components that import it, entry untouched", async () => {
+    const w = await bootStandardFixture();
     definePlain(w, UTIL, [], 2); // host re-evals the changed script
-    applyChanges(w, changed(UTIL));
+    await applyChanges(w, changed(UTIL));
 
     expect(w.runs(UTIL)).toBe(2);
     expect(w.runs(APP)).toBe(2);
@@ -74,12 +75,12 @@ describe("shared plain module changed", () => {
     expect(w.hardRestarted()).toBe(false);
   });
 
-  test("the reloaded components see the NEW exports", () => {
-    const w = bootStandardFixture();
+  test("the reloaded components see the NEW exports", async () => {
+    const w = await bootStandardFixture();
     const oldApp = w.hmr.records.get(APP)!;
     expect(oldApp.imported["./util.js"]!.version).toBe(1);
     definePlain(w, UTIL, [], 2);
-    applyChanges(w, changed(UTIL));
+    await applyChanges(w, changed(UTIL));
 
     const newApp = w.hmr.records.get(APP)!;
     expect(newApp).not.toBe(oldApp); // a fresh def object from a fresh factory run
@@ -89,15 +90,15 @@ describe("shared plain module changed", () => {
     expect(newApp.imported["./util.js"]!).toBe(w.hmr.records.get(COUNTER)!.imported["../util.js"]!);
   });
 
-  test("createRecord stays idempotent across the reload", () => {
-    const w = bootStandardFixture();
+  test("createRecord stays idempotent across the reload", async () => {
+    const w = await bootStandardFixture();
     definePlain(w, UTIL, [], 2);
-    applyChanges(w, changed(UTIL));
+    await applyChanges(w, changed(UTIL));
     expect(w.hmr.createRecord).toEqual([COUNTER, APP, COUNTER, APP]);
   });
 
-  test("a leaf module only one component imports reloads only that component", () => {
-    const w = bootStandardFixture();
+  test("a leaf module only one component imports reloads only that component", async () => {
+    const w = await bootStandardFixture();
     const FMT = "app/src/format.js";
     definePlain(w, FMT, [], 1);
     defineComponent(
@@ -109,35 +110,35 @@ describe("shared plain module changed", () => {
       ],
       2,
     );
-    applyChanges(w, changed(COUNTER));
+    await applyChanges(w, changed(COUNTER));
     expect(w.hmr.reload).toEqual([COUNTER]);
 
     definePlain(w, FMT, [], 2);
-    applyChanges(w, changed(FMT));
+    await applyChanges(w, changed(FMT));
     expect(w.hmr.reload).toEqual([COUNTER, COUNTER]);
     expect(w.runs(APP)).toBe(1);
   });
 });
 
 describe("walk boundaries", () => {
-  test("stops at the nearest component (does not climb past it)", () => {
+  test("stops at the nearest component (does not climb past it)", async () => {
     const w = createLoader();
     const HELPER = "app/src/helper.js";
     definePlain(w, HELPER, [], 1);
     defineComponent(w, COUNTER, [{ spec: "../helper.js", id: HELPER }], 1);
     defineComponent(w, APP, [{ spec: "./components/Counter.vue", id: COUNTER }], 1);
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 1);
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     definePlain(w, HELPER, [], 2);
-    applyChanges(w, changed(HELPER));
+    await applyChanges(w, changed(HELPER));
     expect(w.hmr.reload).toEqual([COUNTER]);
     expect(w.runs(COUNTER)).toBe(2);
     expect(w.runs(APP)).toBe(1);
     expect(w.runs(ENTRY)).toBe(1);
   });
 
-  test("an intermediate plain module is walked THROUGH and re-run once", () => {
+  test("an intermediate plain module is walked THROUGH and re-run once", async () => {
     const w = createLoader();
     const BASE = "app/src/base.js";
     const MID = "app/src/mid.js";
@@ -153,10 +154,10 @@ describe("walk boundaries", () => {
       1,
     );
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 1);
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     definePlain(w, BASE, [], 2);
-    applyChanges(w, changed(BASE));
+    await applyChanges(w, changed(BASE));
     expect(w.runs(BASE)).toBe(2); // once, despite two paths reaching it
     expect(w.runs(MID)).toBe(2);
     expect(w.runs(APP)).toBe(2);
@@ -164,7 +165,7 @@ describe("walk boundaries", () => {
     expect(w.hmr.records.get(APP)!.imported["./mid.js"]!.imported["./base.js"]!.version).toBe(2);
   });
 
-  test("a cycle between plain modules terminates", () => {
+  test("a cycle between plain modules terminates", async () => {
     const w = createLoader();
     const A = "app/src/a.js";
     const B = "app/src/b.js";
@@ -172,17 +173,17 @@ describe("walk boundaries", () => {
     definePlain(w, B, [{ spec: "./a.js", id: A }], 1);
     defineComponent(w, APP, [{ spec: "./a.js", id: A }], 1);
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 1);
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     definePlain(w, A, [{ spec: "./b.js", id: B }], 2);
-    applyChanges(w, changed(A));
+    await applyChanges(w, changed(A));
     expect(w.hmr.reload).toEqual([APP]);
     expect(w.runs(A)).toBe(2);
     expect(w.runs(B)).toBe(2);
     expect(w.hardRestarted()).toBe(false);
   });
 
-  test("a self-import edge is dropped rather than looping", () => {
+  test("a self-import edge is dropped rather than looping", async () => {
     const w = createLoader();
     const SELF = "app/src/self.js";
     w.SK.setDeps(SELF, [SELF, "app/src/other.js"]);
@@ -192,7 +193,7 @@ describe("walk boundaries", () => {
 });
 
 describe("fallbacks", () => {
-  test("reaching the entry hard-restarts", () => {
+  test("reaching the entry hard-restarts", async () => {
     const w = createLoader();
     const CONFIG = "app/src/config.js";
     definePlain(w, CONFIG, [], 1);
@@ -206,54 +207,56 @@ describe("fallbacks", () => {
       ],
       1,
     );
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     definePlain(w, CONFIG, [], 2);
-    applyChanges(w, changed(CONFIG));
+    await applyChanges(w, changed(CONFIG));
     expect(w.hardRestarted()).toBe(true);
     expect(w.runs(ENTRY)).toBe(2);
     expect(w.runs(CONFIG)).toBe(2);
     expect(w.hmr.reload).toEqual([]);
   });
 
-  test("the entry module itself still hard-restarts", () => {
-    const w = bootStandardFixture();
+  test("the entry module itself still hard-restarts", async () => {
+    const w = await bootStandardFixture();
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 2);
-    applyChanges(w, changed(ENTRY));
+    await applyChanges(w, changed(ENTRY));
     expect(w.hardRestarted()).toBe(true);
     expect(w.runs(ENTRY)).toBe(2);
   });
 
-  test("a module the running app never required is a no-op", () => {
-    const w = bootStandardFixture();
+  test("a module the running app never required is a no-op", async () => {
+    const w = await bootStandardFixture();
     const ORPHAN = "app/src/orphan.js";
     definePlain(w, ORPHAN, [], 1);
-    applyChanges(w, changed(ORPHAN));
+    await applyChanges(w, changed(ORPHAN));
     expect(w.runs(ORPHAN)).toBe(0); // not executed: nothing needs it yet
     expect(w.hmr.reload).toEqual([]);
     expect(w.hardRestarted()).toBe(false);
   });
 
-  test("a component with no HMR-able export hard-restarts", () => {
-    const w = bootStandardFixture();
+  test("a component with no HMR-able export hard-restarts", async () => {
+    const w = await bootStandardFixture();
     w.SK.setDeps(APP, [UTIL, COUNTER]);
     w.SK.define(
       APP,
+      ["default"],
       function (require, _module, exports) {
         require("./util.js");
         exports.default = { notAComponent: true };
       },
       APP + "@broken",
     );
-    applyChanges(w, changed(APP));
+    await applyChanges(w, changed(APP));
     expect(w.hardRestarted()).toBe(true);
   });
 
-  test("a factory that throws hard-restarts instead of leaving a half-state", () => {
-    const w = bootStandardFixture();
+  test("a factory that throws hard-restarts instead of leaving a half-state", async () => {
+    const w = await bootStandardFixture();
     w.SK.setDeps(UTIL, []);
     w.SK.define(
       UTIL,
+      [],
       function () {
         throw new Error("boom");
       },
@@ -261,7 +264,7 @@ describe("fallbacks", () => {
     );
     let threw = null;
     try {
-      applyChanges(w, changed(UTIL));
+      await applyChanges(w, changed(UTIL));
     } catch (e) {
       threw = e; // hardRestart re-runs the entry, which hits the same throw
     }
@@ -269,28 +272,28 @@ describe("fallbacks", () => {
     expect(w.hardRestarted()).toBe(true);
   });
 
-  test("recovers by hard restart when a previous boot left the app down", () => {
+  test("recovers by hard restart when a previous boot left the app down", async () => {
     const w = createLoader();
     const MISSING = "app/src/missing.js";
     defineComponent(w, APP, [{ spec: "./missing.js", id: MISSING }], 1);
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 1);
-    expect(() => w.SK.boot(ENTRY)).toThrow(); // missing.js is not defined yet
-    expect(w.runs(APP)).toBe(1);
+    await expect(w.SK.boot(ENTRY)).rejects.toThrow(); // missing.js is not defined yet
+    expect(w.runs(APP)).toBe(0); // ESM links every dependency before executing this module.
 
     definePlain(w, MISSING, [], 1); // the file finally shows up
-    applyChanges(w, changed(MISSING));
+    await applyChanges(w, changed(MISSING));
     expect(w.hardRestarted()).toBe(true);
-    expect(w.runs(ENTRY)).toBe(2);
-    expect(w.runs(APP)).toBe(2);
+    expect(w.runs(ENTRY)).toBe(1);
+    expect(w.runs(APP)).toBe(1);
     expect(w.runs(MISSING)).toBe(1);
   });
 });
 
 describe("component changes keep their existing behaviour", () => {
-  test("rerender swaps only the render fn", () => {
-    const w = bootStandardFixture();
+  test("rerender swaps only the render fn", async () => {
+    const w = await bootStandardFixture();
     defineComponent(w, COUNTER, [{ spec: "../util.js", id: UTIL }], 2);
-    applyChanges(w, changed(COUNTER, "rerender"));
+    await applyChanges(w, changed(COUNTER, "rerender"));
     expect(w.hmr.rerender).toEqual([COUNTER]);
     expect(w.hmr.reload).toEqual([]);
     expect(w.runs(COUNTER)).toBe(2);
@@ -298,10 +301,10 @@ describe("component changes keep their existing behaviour", () => {
     expect(w.runs(UTIL)).toBe(1);
   });
 
-  test("reload of a .vue does not disturb its importers", () => {
-    const w = bootStandardFixture();
+  test("reload of a .vue does not disturb its importers", async () => {
+    const w = await bootStandardFixture();
     defineComponent(w, COUNTER, [{ spec: "../util.js", id: UTIL }], 2);
-    applyChanges(w, changed(COUNTER));
+    await applyChanges(w, changed(COUNTER));
     expect(w.hmr.reload).toEqual([COUNTER]);
     expect(w.runs(APP)).toBe(1);
     expect(w.runs(ENTRY)).toBe(1);
@@ -309,8 +312,8 @@ describe("component changes keep their existing behaviour", () => {
 });
 
 describe("batched changes", () => {
-  test("a component changed alongside its dependency runs once, reloads once", () => {
-    const w = bootStandardFixture();
+  test("a component changed alongside its dependency runs once, reloads once", async () => {
+    const w = await bootStandardFixture();
     definePlain(w, UTIL, [], 2);
     defineComponent(
       w,
@@ -321,7 +324,7 @@ describe("batched changes", () => {
       ],
       2,
     );
-    applyChanges(w, [
+    await applyChanges(w, [
       { id: APP, kind: "reload" }, // listed first on purpose
       { id: UTIL, kind: "reload" },
     ]);
@@ -334,7 +337,7 @@ describe("batched changes", () => {
     expect(w.hmr.records.get(APP)!.imported["./util.js"]!.version).toBe(2);
   });
 
-  test("a chain changed end to end runs each module once", () => {
+  test("a chain changed end to end runs each module once", async () => {
     const w = createLoader();
     const BASE = "app/src/base.js";
     const MID = "app/src/mid.js";
@@ -342,13 +345,13 @@ describe("batched changes", () => {
     definePlain(w, MID, [{ spec: "./base.js", id: BASE }], 1);
     defineComponent(w, APP, [{ spec: "./mid.js", id: MID }], 1);
     definePlain(w, ENTRY, [{ spec: "./App.vue", id: APP }], 1);
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     // MID listed BEFORE BASE — the walk from MID already refreshes BASE, so
     // BASE's own entry must not start a second round.
     definePlain(w, MID, [{ spec: "./base.js", id: BASE }], 2);
     definePlain(w, BASE, [], 2);
-    applyChanges(w, [
+    await applyChanges(w, [
       { id: MID, kind: "reload" },
       { id: BASE, kind: "reload" },
     ]);
@@ -358,7 +361,7 @@ describe("batched changes", () => {
     expect(w.hmr.reload).toEqual([APP]);
   });
 
-  test("two independent plain modules both apply", () => {
+  test("two independent plain modules both apply", async () => {
     const w = createLoader();
     const A = "app/src/a.js";
     const B = "app/src/b.js";
@@ -375,11 +378,11 @@ describe("batched changes", () => {
       ],
       1,
     );
-    w.SK.boot(ENTRY);
+    await w.SK.boot(ENTRY);
 
     definePlain(w, A, [], 2);
     definePlain(w, B, [], 2);
-    applyChanges(w, [
+    await applyChanges(w, [
       { id: A, kind: "reload" },
       { id: B, kind: "reload" },
     ]);
@@ -389,9 +392,9 @@ describe("batched changes", () => {
 });
 
 describe("style-only edits", () => {
-  test("do not invalidate the require cache", () => {
-    const w = bootStandardFixture();
-    const before = w.SK.require(APP).default;
+  test("do not invalidate the require cache", async () => {
+    const w = await bootStandardFixture();
+    const before = (await w.SK.importModule(APP)).default;
     redefineCssOnly(
       w,
       APP,
@@ -402,46 +405,46 @@ describe("style-only edits", () => {
       1,
       ".app { color: green }",
     );
-    applyChanges(w, changed(APP, "css-only"));
+    await applyChanges(w, changed(APP, "css-only"));
 
     expect(w.runs(APP)).toBe(1); // never re-executed
-    expect(w.SK.require(APP).default).toBe(before); // same live component object
+    expect((await w.SK.importModule(APP)).default).toBe(before); // same live component object
     expect(w.hmr.reload).toEqual([]);
     expect(w.hmr.rerender).toEqual([]);
     expect(w.stylesheets[w.stylesheets.length - 1]).toContain("color: green");
     expect(w.hardRestarted()).toBe(false);
   });
 
-  test("a define() with no hash still invalidates (older builders)", () => {
-    const w = bootStandardFixture();
-    const before = w.SK.require(APP).default;
+  test("a define() with no hash still invalidates (older builders)", async () => {
+    const w = await bootStandardFixture();
+    const before = (await w.SK.importModule(APP)).default;
     w.SK.setDeps(APP, [UTIL, COUNTER]);
-    w.SK.define(APP, function (require, _module, exports) {
+    w.SK.define(APP, ["default"], function (require, _module, exports) {
       require("./util.js");
       require("./components/Counter.vue");
       exports.default = { __hmrId: APP, render: function () {} };
     });
     expect(w.SK.loaded(APP)).toBe(false);
-    expect(w.SK.require(APP).default).not.toBe(before);
+    expect((await w.SK.importModule(APP)).default).not.toBe(before);
   });
 });
 
 describe("graph maintenance", () => {
-  test("removing an import drops the reverse edge", () => {
-    const w = bootStandardFixture();
+  test("removing an import drops the reverse edge", async () => {
+    const w = await bootStandardFixture();
     expect(w.SK.importersOf(UTIL).sort()).toEqual([APP, COUNTER].sort());
     defineComponent(w, COUNTER, [], 2); // Counter no longer imports util
-    applyChanges(w, changed(COUNTER));
+    await applyChanges(w, changed(COUNTER));
     expect(w.SK.importersOf(UTIL)).toEqual([APP]);
 
     definePlain(w, UTIL, [], 2);
-    applyChanges(w, changed(UTIL));
+    await applyChanges(w, changed(UTIL));
     expect(w.hmr.reload).toEqual([COUNTER, APP]); // Counter from its own change only
     expect(w.runs(COUNTER)).toBe(2);
   });
 
-  test("adding an import creates the reverse edge", () => {
-    const w = bootStandardFixture();
+  test("adding an import creates the reverse edge", async () => {
+    const w = await bootStandardFixture();
     const NEW = "app/src/new.js";
     definePlain(w, NEW, [], 1);
     defineComponent(
@@ -454,12 +457,12 @@ describe("graph maintenance", () => {
       ],
       2,
     );
-    applyChanges(w, changed(APP));
+    await applyChanges(w, changed(APP));
     expect(w.SK.importersOf(NEW)).toEqual([APP]);
     expect(w.runs(NEW)).toBe(1);
 
     definePlain(w, NEW, [], 2);
-    applyChanges(w, changed(NEW));
+    await applyChanges(w, changed(NEW));
     expect(w.hmr.reload).toEqual([APP, APP]);
     expect(w.runs(NEW)).toBe(2);
   });

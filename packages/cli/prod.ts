@@ -14,6 +14,7 @@
 //
 // DEBT: compileVue() and the style pipeline are a ~100-line copy of build.ts; merge into a shared sfc.ts.
 
+import { browserImportEntry, checkAppModules } from "./esm";
 import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
@@ -231,8 +232,7 @@ const DEFINES: Record<string, string> = {
   __SSR__: "false",
   __TEST__: "false",
   __VERSION__: '"3.5"',
-  // `import.meta` is a SyntaxError in a classic script and Bun leaves it verbatim in iife output,
-  // so substitute the production values Vite would inline; the tripwire in `build()` catches survivors.
+  // Expose Vite-compatible metadata in the packaged module.
   "import.meta.env.MODE": '"production"',
   "import.meta.env.DEV": "false",
   "import.meta.env.PROD": "true",
@@ -433,12 +433,13 @@ let appOwnsUtilities = false;
 
 const ASSETS = new Map<string, string>();
 
-const FRAMEWORK = new Map(
-  FRAMEWORK_LIBS.flatMap((name) => {
-    const dep = packageDir(name, APP_ROOT) && frameworkDep(name, (s) => appRequire.resolve(s));
-    return dep ? [[name, dep] as const] : [];
-  }),
-);
+const FRAMEWORK = new Map<string, NonNullable<ReturnType<typeof frameworkDep>>>();
+for (const name of FRAMEWORK_LIBS) {
+  if (!packageDir(name, APP_ROOT)) continue;
+  const entry = await browserImportEntry(name, APP_ROOT);
+  const dependency = frameworkDep(name, (spec) => entry ?? appRequire.resolve(spec));
+  if (dependency) FRAMEWORK.set(name, dependency);
+}
 
 /**
  * sk.config.json `"aliases"`: a bare module name and the app file standing in for it, relative to
@@ -645,8 +646,8 @@ function asciiBundle(code: string): string {
 
 async function writeGraph(out: string) {
   const result = await Bun.build({
-    entrypoints: [HTML_PRELUDE ? ENTRY_ID : ENTRY_ABS],
-    format: "iife",
+    entrypoints: [ENTRY_ID],
+    format: "esm",
     target: "browser",
     define: DEFINES,
     plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
@@ -731,8 +732,9 @@ async function build() {
   appOwnsUtilities = false;
 
   const result = await Bun.build({
-    entrypoints: [HTML_PRELUDE ? ENTRY_ID : ENTRY_ABS],
-    format: "iife",
+    entrypoints: [ENTRY_ID],
+    format: "esm",
+    metafile: true,
     target: "browser",
     define: DEFINES,
     plugins: [numericPlugin, viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
@@ -744,6 +746,7 @@ async function build() {
     for (const log of result.logs) console.error(log);
     throw new Error("prod build failed");
   }
+  checkAppModules(result.metafile!.inputs);
   await bundleWorklets(SHAPES);
   const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
 
@@ -756,20 +759,6 @@ async function build() {
       `an import.meta.glob(...) survived the build and would throw at startup: …${body.slice(Math.max(0, glob.index - 80), glob.index + 80)}…`,
     );
   }
-  // The bundle must also PARSE as a classic script (a surviving `import.meta` is a SyntaxError at
-  // eval): parse rather than grep, since a string literal may mention it.
-  try {
-    new Function(body);
-  } catch (e) {
-    if (!(e instanceof SyntaxError)) throw e;
-    const meta = /\bimport\s*\.\s*meta\b/.exec(body);
-    const near = meta ? `: …${body.slice(Math.max(0, meta.index - 60), meta.index + 60)}…` : "";
-    throw new Error(
-      `the bundle is not a valid classic script (${e.message})${near}` +
-        (meta ? " — prod.ts defines import.meta.env/url/hot; anything else needs a define of its own" : ""),
-    );
-  }
-
   const htmlCss = async (pieces: CssPiece[]) => {
     const out: string[] = [];
     for (const p of pieces) {

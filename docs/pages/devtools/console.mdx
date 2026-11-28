@@ -40,7 +40,7 @@ localStorage.getItem("note");
 
 The result comes back with its type; an error comes back with its stack. Up and Down walk the history, and Tab completes global names. The prompt has no `$0` or other console helpers: select elements with `document.querySelector`.
 
-Under `sk dev` the prompt can also reach your modules: `__SK__.require("<module id>")` returns a module's exports, where the id is the path of the source file from the project root, such as `src/stores/counter.ts`.
+Under `sk dev` the prompt can also reach your modules: `__SK__.importModule("<module id>")` returns a promise for the module namespace, where the id is the path of the source file from the project root, such as `src/stores/counter.ts`.
 
 ## Cut through the noise
 

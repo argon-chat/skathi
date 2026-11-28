@@ -1,34 +1,16 @@
-// Skathi module registry + HMR client. The JS engine (JSC via redjs) runs classic scripts only
-// (no ESM, import(), import.meta or WebSocket), so:
-//
-//   tier 1  dist/vendor.js      IIFE: runtime.ts (dom.ts in an app without vue) + this file; installs globalThis.__SK__.
-//   tier 2  dist/modules/*.js   one script per app source file: setCss(id, css),
-//                               setDeps(id, [ids]), define(id, factory, bodyHash).
-//   transport  dist/manifest.json + dist/changes.json, polled by the Rust host, which re-evals
-//              changed scripts and then calls __SK__.hmrApply(changes).
-//
-// `define` only registers a factory; `require` runs it. Redefining a .vue module invalidates only
-// its own cache entry: Vue's HMR record swaps the component def in place, so importers' stale
-// references stay valid.
-//
-// A plain .js module has no record and importers captured its exports by value, so
-// `reloadDependents` walks the importer graph (setDeps) up to the nearest .vue modules and lets
-// Vue reload them. Reaching the entry, or no component, falls back to a state-losing hard restart.
-//
-// `import.meta.hot` is `module.hot` (Vite's client API, per module evaluation): a module that accepts
-// itself is re-run and handed to its accept callbacks, and is a boundary the importer walk stops at;
-// `accept(deps, cb)` stops the walk at the importer and hands `cb` the dependency's new exports.
-
+// Dev files register ES module sources and dependency edges. JavaScriptCore links and
+// evaluates the graph, including cycles and top-level await. HMR assigns a new
+// module key to each invalidated source and keeps unaffected module instances.
 import * as nativeNs from "./native-modules";
 import * as runtimeNs from "./runtime";
 import * as stdNs from "./std/index";
 
+declare const __SK_DEV_ENV__: Record<string, unknown>;
 type ModuleId = string;
 
 interface ModuleRecord {
   id: ModuleId;
   exports: Record<string, unknown>;
-  hot?: HotContext;
 }
 
 type HotData = Record<string, unknown>;
@@ -62,12 +44,19 @@ interface HotContext {
   send(event: string, data?: unknown): void;
 }
 
-type ModuleFactory = (
-  require: (spec: string) => unknown,
-  module: ModuleRecord,
-  exports: Record<string, unknown>,
-) => void;
-
+interface Reference {
+  start: number;
+  end: number;
+  spec: string;
+  names: string[];
+  dynamic: boolean;
+}
+type Namespace = Record<string, unknown>;
+interface Definition {
+  body: string;
+  refs: Reference[];
+  hash: string;
+}
 type VueDevContext = { reload?: () => void };
 
 interface ComponentLike {
@@ -92,36 +81,44 @@ interface HmrBatch {
 
 declare global {
   var __SK__: SkRegistry;
+  var __skModuleGeneration: number | undefined;
+  var __sk_provide_module: (key: string, source: string) => void;
+  var __sk_forget_module: (key: string) => void;
+  var __sk_import_module: (key: string) => Promise<Namespace>;
 }
 
 interface SkRegistry {
-  define(id: ModuleId, factory: ModuleFactory, hash?: string): void;
+  defineModule(id: ModuleId, body: string, refs: Reference[], hash: string): void;
+  begin(id: ModuleId, namespace: Namespace, meta: Record<string, unknown>): void;
+  vendor(id: ModuleId): Namespace;
+  importFrom(id: ModuleId, spec: string): Promise<Namespace>;
   setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void;
-  require(id: ModuleId): Record<string, unknown>;
+  importModule(id: ModuleId): Promise<Namespace>;
   resolve(spec: string, fromId: ModuleId | null | undefined): ModuleId;
   setCss(id: ModuleId, css: string): void;
   flushCss(force?: boolean): void;
-  boot(entry: ModuleId): void;
-  hmrApply(changes: HmrChanges | null | undefined): void;
-  rootReload(): void;
-  hardRestart(reason: string): void;
+  boot(entry: ModuleId): Promise<void>;
+  hmrApply(changes: HmrChanges | null | undefined): Promise<void>;
+  rootReload(): Promise<void>;
+  hardRestart(reason: string): Promise<void>;
   has(id: ModuleId): boolean;
   ids(): ModuleId[];
   loaded(id: ModuleId): boolean;
   depsOf(id: ModuleId): ModuleId[];
   importersOf(id: ModuleId): ModuleId[];
   mountCount(): number;
+  dispose(): void;
 }
 
-const factories = new Map<ModuleId, ModuleFactory>(); // id -> function (require, module, exports)
-const cache = new Map<ModuleId, ModuleRecord>(); // id -> { id, exports }
-const bodyHash = new Map<ModuleId, string | undefined>(); // id -> hash of the factory body (3rd arg of define)
+const definitions = new Map<ModuleId, Definition>();
+const keys = new Map<ModuleId, string>();
+const cache = new Map<ModuleId, ModuleRecord>();
+const nativeNames = new Map<ModuleId, Set<string>>();
 const deps = new Map<ModuleId, ModuleId[]>(); // id -> [imported id, ...]        (forward edges)
 const importers = new Map<ModuleId, Set<ModuleId>>(); // id -> Set<importing id>    (reverse edges)
 const cssText = new Map<ModuleId, string>(); // id -> css
 const cssOrder: ModuleId[] = []; // stable aggregation order
 let cssDirty = false;
-let requireDepth = 0;
 let execLog: Set<ModuleId> | null = null; // Set collecting ids executed during one hmrApply
 let entryId: ModuleId | null = null;
 let mountCount = 0;
@@ -174,12 +171,12 @@ function resolveId(spec: string, fromId: ModuleId | null | undefined): ModuleId 
   if (spec.charCodeAt(0) !== 46 /* . */) return spec; // bare
   const base = normalize((fromId ? dirOf(fromId) + "/" : "") + spec);
   for (const ext of CANDIDATE_EXTS) {
-    if (factories.has(base + ext) || cache.has(base + ext)) return base + ext;
+    if (definitions.has(base + ext) || cache.has(base + ext)) return base + ext;
   }
   // TypeScript's ESM spelling: `./x.js` names `x.ts`.
   if (/\.js$/.test(base)) {
     const ts = base.slice(0, -3) + ".ts";
-    if (factories.has(ts) || cache.has(ts)) return ts;
+    if (definitions.has(ts) || cache.has(ts)) return ts;
   }
   return base;
 }
@@ -251,12 +248,12 @@ function disposeHot(id: ModuleId): void {
  * Re-runs a module that accepts itself and hands its old accept callbacks the new exports. "importers": an export
  * outside its `acceptExports` list changed, so the importers' copies are stale.
  */
-function hotUpdate(id: ModuleId): "updated" | "invalidated" | "importers" {
+async function hotUpdate(id: ModuleId): Promise<"updated" | "invalidated" | "importers"> {
   const old = hotStates.get(id)!;
   const before = old.record.exports;
   disposeHot(id);
-  cache.delete(id);
-  const exports = requireId(id, null);
+  invalidateModule(id);
+  const exports = await importModule(id);
   for (const accept of old.accepts ?? []) accept?.(exports);
   log("hot update " + id);
   if (old.invalidated) return "invalidated";
@@ -281,15 +278,27 @@ function depUpdate(id: ModuleId, dep: ModuleId, exports: Record<string, unknown>
   log("hot update " + dep + " (accepted by " + id + ")");
 }
 
-function define(id: ModuleId, factory: ModuleFactory, hash?: string): void {
-  const known = factories.has(id);
-  const prevHash = bodyHash.get(id);
-  factories.set(id, factory);
-  bodyHash.set(id, hash);
-  // Byte-identical factory body (a <style>-only edit re-evals the script): keep the live exports,
-  // or the next require builds a second component def whose createRecord is a no-op.
-  if (known && hash !== undefined && hash === prevHash) return;
-  cache.delete(id); // redefinition invalidates exactly one module
+function invalidateModule(id: ModuleId): void {
+  const key = keys.get(id);
+  if (key) globalThis.__sk_forget_module(key);
+  keys.delete(id);
+  cache.delete(id);
+}
+
+function defineModule(id: ModuleId, body: string, refs: Reference[], hash: string): void {
+  if (definitions.get(id)?.hash === hash) return;
+  for (const ref of refs) {
+    if (!ref.spec.startsWith("native:")) continue;
+    let names = nativeNames.get(ref.spec);
+    if (!names) nativeNames.set(ref.spec, (names = new Set()));
+    for (const name of ref.names)
+      if (!names.has(name)) {
+        names.add(name);
+        invalidateModule(ref.spec);
+      }
+  }
+  definitions.set(id, { body, refs, hash });
+  invalidateModule(id);
 }
 
 function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
@@ -318,46 +327,97 @@ function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
   }
 }
 
-function makeRequire(fromId: ModuleId) {
-  return (spec: string) => requireId(resolveId(spec, fromId), fromId);
+function vendor(id: ModuleId): Namespace {
+  if (id.startsWith("native:")) return nativeNs.nativeModule(id.slice(7));
+  if (id.startsWith("skathi:")) {
+    const exports = stdNs.stdModules[id.slice(7)];
+    if (exports) return exports;
+    throw new Error("[sk] unknown standard module " + id);
+  }
+  return vueExports;
 }
 
-function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknown> {
-  const hit = cache.get(id);
-  if (hit) return hit.exports;
-  if (id.startsWith("native:")) {
-    const exports = nativeNs.nativeModule(id.slice("native:".length));
-    cache.set(id, { id, exports });
-    return exports;
+function vendorSource(id: ModuleId): string {
+  const exports = vendor(id);
+  const names = new Set([...Object.keys(exports), ...(nativeNames.get(id) ?? [])]);
+  if (id.startsWith("native:")) names.add("default");
+  const lines = ["const ns = globalThis.__SK__.vendor(" + JSON.stringify(id) + ");"];
+  for (const name of names) {
+    const local = "e" + lines.length;
+    const value = name === "default" && id.startsWith("native:") ? "ns" : "ns[" + JSON.stringify(name) + "]";
+    lines.push("const " + local + " = " + value + "; export {" + local + " as " + JSON.stringify(name) + "};");
   }
-  if (id.startsWith("skathi:")) {
-    const exports = stdNs.stdModules[id.slice("skathi:".length)];
-    if (!exports) {
-      const known = Object.keys(stdNs.stdModules).map((name) => `"skathi:${name}"`);
-      throw new Error(`[sk] "${id}" is not a Skathi module; there are ${known.join(", ")}`);
-    }
-    cache.set(id, { id, exports });
-    return exports;
+  return lines.join("\n");
+}
+
+// Import the registry through a module binding so application declarations can shadow host globals.
+let bridgeKey: string | undefined;
+function moduleKey(id: string): string {
+  const version = (globalThis.__skModuleGeneration = (globalThis.__skModuleGeneration ?? 0) + 1);
+  return "sk://dev/" + version + "/" + id;
+}
+function bridge(): string {
+  if (!bridgeKey) {
+    bridgeKey = moduleKey("loader");
+    globalThis.__sk_provide_module(bridgeKey, "export default globalThis.__SK__;");
   }
-  const factory = factories.get(id);
-  if (!factory) {
-    throw new Error("[sk] module not found: " + id + (fromId ? " (required from " + fromId + ")" : ""));
+  return bridgeKey;
+}
+
+function prepare(id: ModuleId, added: ModuleId[]): string {
+  const existing = keys.get(id);
+  if (existing) return existing;
+  const definition = definitions.get(id);
+  if (!definition && !id.startsWith("native:") && !id.startsWith("skathi:") && !aliases.includes(id))
+    throw new Error("[sk] module not found: " + id);
+  const key = moduleKey(id);
+  keys.set(id, key); // Reserve before traversing an import cycle.
+  added.push(id);
+  const body = definition?.body ?? vendorSource(id);
+  let local = "__skBinding";
+  while (body.includes(local)) local += "_";
+  const self = local + "Self";
+  const parts: string[] = [];
+  let offset = 0;
+  for (const ref of definition?.refs ?? []) {
+    const replacement = ref.dynamic
+      ? "((specifier) => " + local + ".importFrom(" + JSON.stringify(id) + ", specifier))"
+      : JSON.stringify(prepare(resolveId(ref.spec, id), added));
+    parts.push(body.slice(offset, ref.start), replacement);
+    offset = ref.end;
   }
-  const mod: ModuleRecord = { id, exports: {} };
-  mod.hot = hotContext(id, mod);
-  cache.set(id, mod);
-  requireDepth++;
+  // A self-import supplies the live namespace without demanding any binding before initialization.
+  const header = [
+    `import ${local} from ${JSON.stringify(bridge())};`,
+    `import * as ${self} from ${JSON.stringify(key)};`,
+    `${local}.begin(${JSON.stringify(id)}, ${self}, import.meta);`,
+    "",
+  ].join("\n");
+  parts.push(body.slice(offset));
+  globalThis.__sk_provide_module(key, header + parts.join(""));
+  return key;
+}
+
+function begin(id: ModuleId, namespace: Namespace, meta: Record<string, unknown>): void {
+  const record = { id, exports: namespace };
+  cache.set(id, record);
+  execLog?.add(id);
+  meta.hot = hotContext(id, record);
+  meta.url = "sk://module/" + id;
+  meta.env = __SK_DEV_ENV__;
+}
+
+async function importModule(id: ModuleId): Promise<Namespace> {
+  const added: ModuleId[] = [];
+  let key: string;
   try {
-    factory(makeRequire(id), mod, mod.exports);
-    if (execLog) execLog.add(id); // hmrApply watches what actually re-ran
-  } catch (e) {
-    cache.delete(id);
-    throw e;
-  } finally {
-    requireDepth--;
-    if (requireDepth === 0) flushCss();
+    key = prepare(id, added);
+  } catch (error) {
+    // A prepared dependency in a cycle may already reference the failed root's key.
+    for (const created of added) invalidateModule(created);
+    throw error;
   }
-  return mod.exports;
+  return globalThis.__sk_import_module(key);
 }
 
 function setCss(id: ModuleId, css: string): void {
@@ -413,22 +473,19 @@ vueExports.mountDocument = function (...args: Parameters<typeof origMountDocumen
   return root;
 };
 
-for (const alias of origCreateApp ? ["vue", "@skathi-native/runtime"] : ["@skathi-native/runtime"]) {
-  factories.set(alias, () => {});
-  cache.set(alias, { id: alias, exports: vueExports });
-}
+const aliases = origCreateApp ? ["vue", "@skathi-native/runtime"] : ["@skathi-native/runtime"];
 
 // Skipped by invalidation: live library instances (route state, active pinia) a hard restart must not duplicate.
 // vue-router and pinia are npm modules the dev builder makes when the app imports them.
 const VENDOR_IDS = new Set(["vue", "@skathi-native/runtime", "vue-router", "pinia"]);
 
-function boot(entry: ModuleId): void {
+async function boot(entry: ModuleId): Promise<void> {
   entryId = entry;
   degraded = true; // cleared once the entry actually ran
   flushCss(true); // module scripts already registered their CSS
-  requireId(entry, null);
+  await importModule(entry);
   degraded = false;
-  log("booted from " + entry + " (" + factories.size + " modules registered)");
+  log("booted from " + entry + " (" + definitions.size + " modules registered)");
 }
 
 function teardown() {
@@ -442,24 +499,24 @@ function teardown() {
   return true;
 }
 
-function rootReload(): void {
+async function rootReload(): Promise<void> {
   log("root reload");
   teardown();
-  cache.delete(entryId!);
-  requireId(entryId!, null);
+  invalidateModule(entryId!);
+  await importModule(entryId!);
   flushCss(true);
 }
 
 /// Fallback for changes Vue's HMR record cannot take (the entry, importers reaching the entry, a
-/// module with no component export): drop the require cache and re-run the app, losing state.
-function hardRestart(reason: string): void {
+/// module with no component export): drop the module cache and re-run the app, losing state.
+async function hardRestart(reason: string): Promise<void> {
   log("hard restart (" + reason + ")");
   teardown();
-  for (const id of Array.from(cache.keys())) {
-    if (!VENDOR_IDS.has(id)) cache.delete(id);
+  for (const id of Array.from(keys.keys())) {
+    if (!VENDOR_IDS.has(id) && !id.startsWith("native:") && !id.startsWith("skathi:")) invalidateModule(id);
   }
   degraded = true; // cleared once the entry actually ran again
-  requireId(entryId!, null);
+  await importModule(entryId!);
   degraded = false;
   flushCss(true);
 }
@@ -475,10 +532,15 @@ function isComponentId(id: ModuleId): boolean {
   return id.length > 4 && id.slice(-4) === ".vue";
 }
 
-/// A changed non-component module: reload the components that transitively import it (the only way their captured
+/// A changed non-component module: reload the components that transitively import it (so their captured
 /// copies of its exports refresh), stopping at each .vue module and giving up at the entry. Every module on the walked
 /// paths is invalidated before any re-require so each re-executes once. Returns false when it bailed out to hardRestart.
-function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch, updated = false): boolean {
+async function reloadDependents(
+  id: ModuleId,
+  hmr: SkVueHmrRuntime | undefined,
+  batch: HmrBatch,
+  updated = false,
+): Promise<boolean> {
   const visited = new Set<ModuleId>([id]);
   // `updated`: `id` already re-ran (a hot update whose other exports changed); only its importers are stale.
   const invalidate: ModuleId[] = updated ? [] : [id];
@@ -499,11 +561,11 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
       visited.add(imp);
       if (imp === entryId) {
         // Re-running the entry means a fresh createApp(): state is gone anyway.
-        hardRestart("change in " + id + " reached the entry module");
+        await hardRestart("change in " + id + " reached the entry module");
         return false;
       }
       if (batch.fresh.has(imp)) continue;
-      // Not live: never required (picks up the new factory later), or invalidated by its own define() this batch, whose change entry covers it.
+      // Not live: never required (picks up the new version later), or invalidated by its own define() this batch, whose change entry covers it.
       if (!cache.has(imp)) continue;
       invalidate.push(imp);
       if (isComponentId(imp)) targets.push(imp);
@@ -516,8 +578,8 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
   const handed = accepted.filter(([imp]) => !invalidate.includes(imp));
   if (!targets.length && !boundaries.length && !handed.length) {
     if (cache.has(id) && !batch.fresh.has(id)) {
-      cache.delete(id);
-      requireId(id, null); // keep the cache truthful; nobody to notify
+      invalidateModule(id);
+      await importModule(id); // keep the cache truthful; nobody to notify
       log("reload " + id + " (no live component importers)");
     } else if (batch.fresh.has(id)) {
       log("skip " + id + " (already refreshed by another change in this batch)");
@@ -528,19 +590,19 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
   }
 
   if (targets.length && !hmr) {
-    hardRestart("__VUE_HMR_RUNTIME__ missing (is __DEV__ true?)");
+    await hardRestart("__VUE_HMR_RUNTIME__ missing (is __DEV__ true?)");
     return false;
   }
   for (let i = 0; i < invalidate.length; i++) {
     disposeHot(invalidate[i]!);
-    cache.delete(invalidate[i]!);
+    invalidateModule(invalidate[i]!);
   }
   for (let i = 0; i < targets.length; i++) {
     const target = targets[i]!;
     if (batch.reloaded.has(target)) continue;
-    const comp = componentOf(requireId(target, null)); // re-runs the factory chain
+    const comp = componentOf(await importModule(target)); // evaluates the updated dependencies
     if (!comp) {
-      hardRestart("no HMR-able component export in " + target);
+      await hardRestart("no HMR-able component export in " + target);
       return false;
     }
     batch.reloaded.add(target);
@@ -549,9 +611,9 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
   for (const boundary of boundaries) {
     if (batch.reloaded.has(boundary)) continue;
     batch.reloaded.add(boundary);
-    if (!selfUpdate(boundary, hmr, batch)) return false;
+    if (!(await selfUpdate(boundary, hmr, batch))) return false;
   }
-  for (const [imp, dep] of handed) depUpdate(imp, dep, requireId(dep, null));
+  for (const [imp, dep] of handed) depUpdate(imp, dep, await importModule(dep));
   const reached = targets.concat(
     boundaries,
     handed.map(([imp]) => imp),
@@ -561,16 +623,16 @@ function reloadDependents(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch:
 }
 
 /** A hot update of a module that accepts itself; false when it bailed out to hardRestart. */
-function selfUpdate(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch): boolean {
-  const result = hotUpdate(id);
+async function selfUpdate(id: ModuleId, hmr: SkVueHmrRuntime | undefined, batch: HmrBatch): Promise<boolean> {
+  const result = await hotUpdate(id);
   if (result === "invalidated") {
-    hardRestart("import.meta.hot.invalidate() in " + id);
+    await hardRestart("import.meta.hot.invalidate() in " + id);
     return false;
   }
-  return result === "updated" || reloadDependents(id, hmr, batch, true);
+  return result === "updated" || (await reloadDependents(id, hmr, batch, true));
 }
 
-function hmrApply(changes: HmrChanges | null | undefined): void {
+async function hmrApply(changes: HmrChanges | null | undefined): Promise<void> {
   const list = (changes && changes.changed) || [];
   if (!list.length) {
     flushCss();
@@ -578,7 +640,7 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
   }
   const hmr = globalThis.__VUE_HMR_RUNTIME__;
   if (degraded) {
-    hardRestart("app is not running; retrying after " + list.length + " change(s)");
+    await hardRestart("app is not running; retrying after " + list.length + " change(s)");
     return;
   }
 
@@ -595,17 +657,17 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
       continue;
     }
     if (kind === "restart") {
-      hardRestart(id + " was rebuilt into a new package bundle");
+      await hardRestart(id + " was rebuilt into a new package bundle");
       return;
     }
     if (id === entryId) {
-      hardRestart("entry module changed: " + id);
+      await hardRestart("entry module changed: " + id);
       return;
     }
     (isComponentId(id) ? components : plain).push({ id: id, kind: kind });
   }
   if (components.length && !hmr) {
-    hardRestart("__VUE_HMR_RUNTIME__ missing (is __DEV__ true?)");
+    await hardRestart("__VUE_HMR_RUNTIME__ missing (is __DEV__ true?)");
     return;
   }
 
@@ -622,22 +684,22 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
       if (selfAccepting(at)) {
         if (batch.reloaded.has(at)) continue;
         batch.reloaded.add(at);
-        if (selfUpdate(at, hmr, batch)) continue;
+        if (await selfUpdate(at, hmr, batch)) continue;
         return;
       }
-      if (!reloadDependents(at, hmr, batch)) return;
+      if (!(await reloadDependents(at, hmr, batch))) return;
     }
     for (let i = 0; i < components.length; i++) {
       const change = components[i]!;
       at = change.id;
       if (batch.reloaded.has(at)) {
-        // A dependency change already re-ran this factory and reloaded it; another pass would re-mount again.
+        // A dependency change already evaluated this module and reloaded it; another pass would re-mount again.
         log("skip " + at + " (already reloaded via a dependency)");
         continue;
       }
-      const comp = componentOf(requireId(at, null)); // re-executes: define() invalidated it
+      const comp = componentOf(await importModule(at)); // re-executes: define() invalidated it
       if (!comp) {
-        hardRestart("no HMR-able component export in " + at);
+        await hardRestart("no HMR-able component export in " + at);
         return;
       }
       batch.reloaded.add(at);
@@ -651,7 +713,7 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
     }
   } catch (e) {
     log("apply failed for " + at + ": " + (e && (e as Error).stack ? (e as Error).stack : e));
-    hardRestart("exception while applying " + at);
+    await hardRestart("exception while applying " + at);
     return;
   } finally {
     execLog = null; // every return above passes through here
@@ -659,23 +721,38 @@ function hmrApply(changes: HmrChanges | null | undefined): void {
   flushCss();
 }
 
+let pending = Promise.resolve();
+function enqueue(action: () => Promise<void>): Promise<void> {
+  const result = pending.then(action);
+  pending = result.catch(() => {});
+  return result;
+}
+
+globalThis.__SK__?.dispose?.();
 globalThis.__SK__ = {
-  define,
+  defineModule,
+  begin,
+  vendor,
+  importFrom: (from, spec) => importModule(resolveId(String(spec), from)),
   setDeps,
-  require: (id: ModuleId) => requireId(id, null),
+  importModule,
   resolve: resolveId,
   setCss,
   flushCss,
-  boot,
-  hmrApply,
+  boot: (id) => enqueue(() => boot(id)),
+  hmrApply: (changes) => enqueue(() => hmrApply(changes)),
   rootReload,
   hardRestart,
-  has: (id: ModuleId) => factories.has(id),
-  ids: () => Array.from(factories.keys()),
+  has: (id: ModuleId) => definitions.has(id) || aliases.includes(id),
+  ids: () => [...aliases, ...definitions.keys()],
   loaded: (id: ModuleId) => cache.has(id),
   depsOf: (id: ModuleId) => (deps.get(id) || []).slice(),
   importersOf: (id: ModuleId) => Array.from(importers.get(id) || []),
   mountCount: () => mountCount,
+  dispose: () => {
+    for (const id of keys.keys()) invalidateModule(id);
+    if (bridgeKey) globalThis.__sk_forget_module(bridgeKey);
+  },
 };
 
 log("loader ready (vendor.js evaluated)");

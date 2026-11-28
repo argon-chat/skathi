@@ -1,3 +1,4 @@
+import { registration } from "./registration";
 // vitecompat.ts (the Vite behaviours the builders reproduce) and prod.ts over test/fixtures/vite-app, which uses every
 // one of them.
 
@@ -13,7 +14,6 @@ import {
   SFC_FS,
   appDefines,
   assetKey,
-  devEsmInterop,
   expandGlobs,
   frameworkDep,
   inlineCssImports,
@@ -193,24 +193,6 @@ describe("module namespaces", () => {
     const changed = MINIFIED.replace("for(var e in t)", "for(const e of Object.keys(t))");
     expect(() => tagModuleNamespaces(changed)).toThrow();
     expect(tagModuleNamespaces("console.log(1)")).toEqual({ code: "console.log(1)", count: 0 });
-  });
-
-  test("dev: Node's interop flag is dropped, and import() goes through require", () => {
-    const body =
-      'var import_App = __toESM(require("./App.vue"), 1);\n' +
-      "var lazy = () => import(\"./Lazy.vue\");\nvar other = x.import('y');\nvar dyn = (p) => import(p);\n";
-    const r = devEsmInterop(body);
-    expect(r.code).toContain('__toESM(require("./App.vue"));');
-    expect(r.code).toContain('Promise.resolve().then(() => __skImportNs(require("./Lazy.vue")))');
-    expect(r.code).toContain("x.import('y')");
-    expect(r.code).toContain("function __skImportNs(m)");
-    expect(r.unresolved).toBe(1);
-    const helper = r.code.slice(r.code.indexOf("function __skImportNs"));
-    const ns = new Function(`${helper}\nreturn __skImportNs;`)()({ a: 1 });
-    expect(ns[Symbol.toStringTag]).toBe("Module");
-    expect(ns.default).toEqual({ a: 1 });
-    expect(ns.a).toBe(1);
-    expect(devEsmInterop("var a = 1;")).toEqual({ code: "var a = 1;", unresolved: 0 });
   });
 });
 
@@ -540,7 +522,7 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
     proc.exitCode === 0
       ? readFileSync(join(dist, "modules", "packages__cli__test__fixtures__vite-app__src__main.ts.js"), "utf8")
       : "";
-  const has = (s: string) => main.includes(s);
+  const has = (s: string) => !!main && registration(main)[1].includes(s);
 
   test("builds, with every import resolved", () => {
     if (proc.exitCode !== 0) throw new Error(log);
@@ -574,7 +556,7 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
     if (p.exitCode !== 0) throw new Error(p.stdout.toString() + p.stderr.toString());
     const name = "packages/cli/test/fixtures/" + root.split(/[\\/]/).pop() + "/src/App.vue";
     const app = readFileSync(join(out, "modules", name.split("/").join("__") + ".js"), "utf8");
-    expect(app).toContain('d: "M0 0h1"');
+    expect(registration(app)[1]).toContain('d: "M0 0h1"');
     expect(/__SK__\.setCss\([^)]*\.mark \{/.test(app)).toBe(true);
   });
 

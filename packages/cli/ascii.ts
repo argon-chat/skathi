@@ -372,14 +372,15 @@ export function asciiOnly(src: string): AsciiResult {
  * after both prints go through [`asciiOnly`].
  */
 export function checkAscii(before: string, after: string): string | null {
-  try {
-    new Function(after);
-  } catch (e) {
-    return `the escaped bundle does not parse (${e instanceof Error ? e.message : String(e)})`;
-  }
   const t = new Bun.Transpiler({ loader: "js" });
-  const a = t.transformSync(before);
-  const b = t.transformSync(after);
+  let a: string;
+  let b: string;
+  try {
+    a = t.transformSync(before);
+    b = t.transformSync(after);
+  } catch (e) {
+    return "the bundle does not parse (" + (e instanceof Error ? e.message : String(e)) + ")";
+  }
   if (a === b) return null;
   const na = asciiOnly(a);
   const nb = asciiOnly(b);

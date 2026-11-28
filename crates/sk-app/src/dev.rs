@@ -3,7 +3,7 @@
 //!
 //! changes.json is written last by the watcher and is the only file polled: once its mtime moves,
 //! every module script and the manifest are on disk. Each changed module script is re-evaluated
-//! (redefining its factory and re-registering its CSS), then the raw changes JSON goes to
+//! (registering its new ES module source and CSS), then the raw changes JSON goes to
 //! `__SK__.hmrApply`, which decides rerender / reload / css-only per entry.
 //!
 //! `sk dev` writes [`EFFECTS_CHANGED`] after it recompiled the app's shaders; the new `--shading`
@@ -272,6 +272,39 @@ fn cwd_advisory(raw: &str) {
     );
 }
 
+pub(crate) fn install_module_loader(ctx: &crate::js::Context) -> crate::js::Result<()> {
+    use crate::js::{function, Value};
+    let provide = function(ctx, "__sk_provide_module", 2, |ctx, args| {
+        let key = ctx.read_string(args.arg(0))?;
+        let source = ctx.read_string(args.arg(1))?;
+        ctx.provide_module(&key, &source)?;
+        Ok(Value::undefined())
+    })?;
+    ctx.global_set("__sk_provide_module", provide)?;
+    let forget = function(ctx, "__sk_forget_module", 1, |ctx, args| {
+        ctx.forget_module(&ctx.read_string(args.arg(0))?);
+        Ok(Value::undefined())
+    })?;
+    ctx.global_set("__sk_forget_module", forget)?;
+    let import = function(ctx, "__sk_import_module", 1, |ctx, args| {
+        ctx.import_module(&ctx.read_string(args.arg(0))?)
+    })?;
+    ctx.global_set("__sk_import_module", import)
+}
+
+fn eval_update(rt: &JsRuntime, script: &str, url: &str) -> Result<(), String> {
+    rt.ctx()
+        .eval_named(script, url)
+        .and_then(|promise| crate::observe_entry(rt, promise))
+        .map_err(|error| match error {
+            crate::js::Error::Exception(value) => {
+                let info = rt.describe(value);
+                format!("{}\n{}", info.header, info.stack)
+            }
+            other => other.to_string(),
+        })
+}
+
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else {
         return;
@@ -292,8 +325,10 @@ pub fn boot(rt: &JsRuntime) {
         eval_logged(rt, &module_path(id), &format!("sk://{id}"), "modules");
     }
     let js = format!("__SK__.boot({});", json::quote(&manifest.entry));
-    if let Err(e) = crate::perf::boot_eval("boot.js (mount)", || rt.eval(&js, "sk://boot.js")) {
-        crate::crash_window::entry_threw(&format!("{}\n{}", e.header, e.stack));
+    if let Err(e) =
+        crate::perf::boot_eval("boot.js (mount)", || eval_update(rt, &js, "sk://boot.js"))
+    {
+        crate::crash_window::entry_threw(&e);
     }
     VENDOR_REV.with(|v| v.set(manifest.vendor_rev));
     CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
@@ -410,8 +445,8 @@ pub fn poll_frame(frame_no: u32) {
             // label is never charged.
             eval_logged(rt, &module_path(id), &format!("sk://{id}"), "hmr");
         }
-        if let Err(e) = rt.eval(&format!("__SK__.hmrApply({text});"), "sk://hmr.js") {
-            eprintln!("[dev] hmrApply: {}\n{}", e.header, e.stack);
+        if let Err(e) = eval_update(rt, &format!("__SK__.hmrApply({text});"), "sk://hmr.js") {
+            eprintln!("[dev] hmrApply: {e}");
         }
     });
 }

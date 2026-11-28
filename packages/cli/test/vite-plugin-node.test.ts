@@ -47,7 +47,7 @@ test("a Node Vite config imports the published plugin and builds native Vue, Sve
     import {nativeVitePlugins} from "@skathi-native/cli/vite";
     export default {
       plugins: await nativeVitePlugins({ appRoot: process.cwd(), nativeSvelte: true }),
-      build: { write: false, minify: false, rolldownOptions: { input: "main.js", output: { format: "iife" } } },
+      build: { write: false, minify: false, rolldownOptions: { input: "main.js", output: { format: "es" } } },
     };
   `,
   );

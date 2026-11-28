@@ -1,3 +1,4 @@
+import { createLoader } from "../../runtime/test/loader-harness";
 import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -46,26 +47,19 @@ test("sk build: a .toml import is TOML.parse of the file's text at run time", ()
   expect(globals.__settings).toEqual({ parsed: SETTINGS });
 });
 
-test("sk dev: a .toml import is built into its importer and parsed by skathi:toml", () => {
+test("sk dev: a .toml import is built into its importer and parsed by skathi:toml", async () => {
   const dir = app("dev", SETTINGS);
   const dist = join(dir, "dev");
   const result = run("build.ts", join(dir, "src", "main.ts"), dist);
   expect(result.exitCode, output(result)).toBe(0);
   const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { modules: unknown };
   expect(JSON.stringify(manifest.modules)).not.toContain("settings.toml");
-  const factories: ((require: (spec: string) => unknown, module: object, exports: object) => void)[] = [];
-  const sk = { define: (_id: string, f: (typeof factories)[number]) => factories.push(f), setDeps: () => {} };
+  const { SK, sandbox } = createLoader({ toml: { TOML: { parse } } });
   const main = readdirSync(join(dist, "modules")).find((name) => name.endsWith("main.ts.js"))!;
-  new Function("__SK__", readFileSync(join(dist, "modules", main), "utf8"))(sk);
-  const globals = globalThis as Record<string, unknown>;
-  const required: string[] = [];
-  try {
-    factories[0]!((spec) => (required.push(spec), { TOML: { parse } }), {}, {});
-    expect(globals.__settings).toEqual({ parsed: SETTINGS });
-    expect(required).toEqual(["skathi:toml"]);
-  } finally {
-    delete globals.__settings;
-  }
+  new Function("__SK__", readFileSync(join(dist, "modules", main), "utf8"))(SK);
+  await SK.boot(JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")).entry);
+  expect((sandbox as Record<string, unknown>).__settings).toEqual({ parsed: SETTINGS });
+  expect(SK.loaded("skathi:toml")).toBe(true);
 });
 
 test.each([

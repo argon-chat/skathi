@@ -4,6 +4,7 @@
 // throwing a named NotSupportedError), ?worklet (the URL of the module bundled into one classic script),
 // .wasm (a stub with an advisory), .toml (`TOML.parse` of the text). Unsupported shapes fail by name.
 
+import { normalizeModuleThis } from "./esm";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
 import type { SFCTemplateBlock } from "vue/compiler-sfc";
@@ -767,7 +768,9 @@ export function transformSource(
   file: string,
   o: Pick<ShapesOptions, "docRoot" | "wsRoot" | "notes" | "dev"> & { assets?: Map<string, string> | undefined },
 ): string | null {
-  let changed = false;
+  const esm = normalizeModuleThis(code, file);
+  let changed = esm !== null;
+  if (esm !== null) code = esm;
   const add = (what: string, n: number) => o.notes.set(what, (o.notes.get(what) ?? 0) + n);
   const g = expandGlobs(code, { file, docRoot: o.docRoot, relativeSpecs: o.dev });
   if (g) {
@@ -903,7 +906,9 @@ export function viteShapesPlugin(o: ShapesOptions) {
         if (/\.svelte\.[jt]s$/.test(args.path)) return undefined;
         const src = await Bun.file(args.path).text();
         const code =
-          src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
+          src.includes("import.meta.glob") || src.includes("new URL") || src.includes("this")
+            ? transformSource(src, args.path, o)
+            : null;
         o.sourceLoaded?.(args.path, src, code ?? src);
         return code === null ? undefined : { contents: code, loader: loaderOf(args.path) };
       });
@@ -989,34 +994,6 @@ export function tagModuleNamespaces(bundle: string): { code: string; count: numb
     );
   }
   return { code, count };
-}
-
-const DYNAMIC_IMPORT = /(?<![\w$.])import\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
-const DYNAMIC_IMPORT_ANY = /(?<![\w$.])import\(\s*(?!["'])/g;
-const NODE_MODE_TO_ESM = /\b__toESM\((require\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\))\s*,\s*1\s*\)/g;
-
-/**
- * The dev builder's per-module CJS, corrected to bundler ESM semantics: `__toESM(require(x), 1)`
- * makes `default` the whole `module.exports`, so the `1` is dropped; `import("./X.vue")` becomes a
- * promise of the exports through the registry `require`. Returns the body and the count of
- * `import(...)` with a non-literal specifier (these still reject at runtime).
- */
-export function devEsmInterop(body: string): { code: string; unresolved: number } {
-  let code = body.replace(NODE_MODE_TO_ESM, "__toESM($1)");
-  let dynamic = false;
-  code = code.replace(DYNAMIC_IMPORT, (_m, spec: string) => {
-    dynamic = true;
-    return `Promise.resolve().then(() => __skImportNs(require(${spec})))`;
-  });
-  if (dynamic) {
-    code +=
-      "\nfunction __skImportNs(m) {\n" +
-      '  return m && (m.__esModule || m[Symbol.toStringTag] === "Module") ? m : ' +
-      'Object.defineProperty(Object.assign(Object.create(null), m, { default: m }), Symbol.toStringTag, { value: "Module" });\n' +
-      "}\n";
-  }
-  const unresolved = (code.match(DYNAMIC_IMPORT_ANY) ?? []).length;
-  return { code, unresolved };
 }
 
 const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/g;

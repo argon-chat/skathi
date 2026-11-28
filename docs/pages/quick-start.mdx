@@ -101,6 +101,17 @@ import App from "./App.svelte";
 mount(App);
 ```
 
+## Application modules
+
+Write application code as ECMAScript modules (ESM). Both `sk dev` and packaged apps support static imports and top-level `await`. Importers wait for their dependencies to finish initializing.
+
+```js
+// settings.js
+export const settings = await fetch("/settings.json").then((response) => response.json());
+```
+
+Include `settings.json` in the app's assets. Use `import { settings } from "./settings.js"` wherever the settings are needed. Skathi reports CommonJS application sources at build time. Existing npm dependencies may use CommonJS when the bundler can include them in the ES module. For Vite builds with an explicit output format, select `es`.
+
 ## Open a native window
 
 Start the development host:

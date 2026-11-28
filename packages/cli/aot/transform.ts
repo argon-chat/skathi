@@ -82,14 +82,15 @@ function openHostGlobals(names: readonly string[]): string {
   return `if (__SK_AOT_HOST__ === undefined) {\n${opened.map((name) => `globalThis.${name} = undefined;`).join("\n")}\n}\n`;
 }
 
-function hostPrefix(names: readonly string[]): string {
-  return `// ${TRANSFORM}: stable host API references are opaque inputs.\n${openHostGlobals(names)}(function(__sk_host) {\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n`;
+function hostScope(names: readonly string[], classic = false): [string, string] {
+  const start = classic ? "(function(__sk_host) {" : "{\nconst __sk_host = __SK_AOT_HOST__;";
+  const prefix = `// ${TRANSFORM}: stable host API references are opaque inputs.\n${openHostGlobals(names)}${start}\nconst globalThis = __sk_host;\nconst {${names.join(",")}} = __sk_host;\n{\n`;
+  return [prefix, classic ? "\n}\n})(__SK_AOT_HOST__);\n" : "\n}\n}\n"];
 }
 
-const hostSuffix = "\n})(__SK_AOT_HOST__);\n";
-
 export function opaqueHost(source: string, names: readonly string[] = opaqueGlobals()): string {
-  return hostPrefix(names) + source + hostSuffix;
+  const [prefix, suffix] = hostScope(names);
+  return prefix + source + suffix;
 }
 
 /** The host binds globals before the entry that the preludes probe with `typeof`. An open image admits them only
@@ -106,13 +107,15 @@ export function nativeInput(source: string, preludes?: PreludeScripts, closed = 
       ]
     : [];
   scripts.push({ file: "app.prod.js", source });
-  const prefix = hostPrefix(opaqueGlobals());
+  const names = opaqueGlobals();
   let code = closed ? "" : admitHostCode;
-  let byteOffset = Buffer.byteLength(code) + Buffer.byteLength(prefix);
+  let byteOffset = Buffer.byteLength(code);
   const sections = scripts.map((script) => {
+    const [prefix, suffix] = hostScope(names, script.file !== "app.prod.js");
+    byteOffset += Buffer.byteLength(prefix);
     const section = { ...script, byteOffset };
-    code += prefix + script.source + hostSuffix;
-    byteOffset += Buffer.byteLength(script.source) + Buffer.byteLength(hostSuffix) + Buffer.byteLength(prefix);
+    code += prefix + script.source + suffix;
+    byteOffset += Buffer.byteLength(script.source) + Buffer.byteLength(suffix);
     return section;
   });
   return { code, sections };

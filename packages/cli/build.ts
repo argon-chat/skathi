@@ -2,7 +2,7 @@
 // Usage: bun build.ts [app-entry.js] [dist-dir] [--watch]
 //
 //   dist/vendor.js           IIFE: src/runtime.ts (src/dom.ts for an app without vue) + src/loader.ts.
-//   dist/modules/<enc>.js    one classic script per app module; <enc> is the id with "/" -> "__".
+//   dist/modules/<enc>.js    registration for one ES module; <enc> is the id with "/" -> "__".
 //   dist/manifest.json       { rev, vendorRev, entry, appRoot, modules, deps }
 //   dist/changes.json        { rev, vendorRev, changed: [{ id, kind }] }
 //
@@ -18,7 +18,7 @@
 
 import type { BindingMetadata, SFCBlock, SFCDescriptor } from "vue/compiler-sfc";
 import { createRequire } from "module";
-import { resolve, dirname, isAbsolute, join, relative, sep } from "path";
+import { basename, resolve, dirname, isAbsolute, join, relative, sep } from "path";
 import {
   existsSync,
   mkdirSync,
@@ -53,7 +53,6 @@ import {
   SFC_FS,
   appDefines,
   bundleWorklets,
-  devEsmInterop,
   devImportsPlugin,
   frameworkDep,
   importerDir,
@@ -67,6 +66,7 @@ import {
   transformSource,
   viteShapesPlugin,
 } from "./vitecompat";
+import { browserImportEntry, checkAppModules, defineModule, moduleReferences } from "./esm";
 import { colorEnabled, paint } from "./cli/term";
 import { parseCheckConfig } from "./check/config";
 import { CssWarnings } from "./check/css";
@@ -272,17 +272,10 @@ function resolveFromApp(spec: string): string {
   }
 }
 
-/**
- * Entry files to try for an npm package, best first: what a bundler picks for a browser build
- * (`require` before `import`: reka-ui's ESM entry breaks under Bun's CJS output), then Node's CJS
- * entry, then Bun's. A candidate whose build fails falls through.
- */
+/** Prefer the browser import condition. Keep installed package fallbacks for legacy exports maps. */
 async function entryCandidates(spec: string, from = APP_ROOT): Promise<string[]> {
-  const out: string[] = [];
-  for (const kind of ["require", "import"] as const) {
-    const hit = await bundlerResolve(spec, from, kind);
-    if (hit && !out.includes(hit)) out.push(hit);
-  }
+  const hit = await browserImportEntry(spec, from, SVELTE_CONDITIONS);
+  const out: string[] = hit ? [hit] : [];
   try {
     const req = from === APP_ROOT ? appRequire : createRequire(join(from, "package.json"));
     const cjs = req.resolve(spec);
@@ -293,33 +286,6 @@ async function entryCandidates(spec: string, from = APP_ROOT): Promise<string[]>
     if (isAbsolute(esm) && !out.includes(esm)) out.push(esm);
   } catch {}
   return out;
-}
-
-async function bundlerResolve(spec: string, from: string, kind: "require" | "import"): Promise<string | null> {
-  const probe = join(from, "__sk_resolve_probe__.js"); // never written: onLoad answers for it
-  let hit: string | null = null;
-  await Bun.build({
-    entrypoints: [probe],
-    target: "browser",
-    conditions: SVELTE_CONDITIONS,
-    format: "cjs",
-    plugins: [
-      {
-        name: "sk-resolve-probe",
-        setup(b: Bun.PluginBuilder) {
-          b.onResolve({ filter: /__sk_resolve_probe__\.js$/ }, () => ({ path: probe }));
-          b.onLoad({ filter: /.*/ }, (args: Bun.OnLoadArgs) => {
-            if (args.path === probe) {
-              return { contents: kind === "require" ? `require(${J(spec)});` : `import ${J(spec)};`, loader: "js" };
-            }
-            hit ??= args.path;
-            return { contents: "", loader: "js" };
-          });
-        },
-      },
-    ],
-  }).catch(() => null);
-  return hit && isAbsolute(hit) ? hit : null;
 }
 
 // compileScript needs `fs` (Bun is not detected as Node) and `registerTS` (cross-package type
@@ -387,7 +353,7 @@ const DEFINES: Record<string, string> = {
   __SSR__: "false",
   __TEST__: "false",
   __VERSION__: '"3.5"',
-  // `import.meta` is a SyntaxError in a classic script, so substitute what Vite would inline.
+  // Provide the same build-time metadata as Vite.
   // Dotted forms first (Bun matches the longest key). Object values are JSON.stringify'd: Bun
   // parses a define value as JSON or an identifier and inserts anything else as a string.
   "import.meta.env.MODE": '"development"',
@@ -410,7 +376,8 @@ const DEFINES: Record<string, string> = {
 };
 
 // An app module's `import.meta.hot` is the loader's per-module HMR context.
-const MODULE_DEFINES: Record<string, string> = { ...DEFINES, "import.meta.hot": "module.hot" };
+const MODULE_DEFINES: Record<string, string> = { ...DEFINES };
+for (const key of ["import.meta", "import.meta.hot", "import.meta.url"]) delete MODULE_DEFINES[key];
 
 function writeAtomic(path: string, text: string) {
   const tmp = path + ".tmp";
@@ -427,7 +394,7 @@ async function buildVendor() {
     entrypoints: [LOADER_ENTRY],
     format: "iife",
     target: "browser",
-    define: DEFINES,
+    define: { ...DEFINES, __SK_DEV_ENV__: JSON.stringify(VITE_ENV_DEV) },
     plugins: [
       {
         // "vue" is our runtime, built on the app's @vue/runtime-core; without vue the loader gets dom.ts. Exact-match
@@ -666,11 +633,7 @@ const appModulePlugin = {
   },
 };
 
-// Every module is built with external:"*", so each import survives as a literal require("<spec>")
-// and deps are read from the emitted body. Pre-seeded bare specifiers and npm packages stay out
-// of the graph.
-
-const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
+// External imports become edges in the dev module graph.
 
 const CANDIDATE_EXTS = [
   "",
@@ -701,24 +664,12 @@ function normalizeId(path: string): string {
   return out.join("/");
 }
 
-function unquote(raw: string): string | null {
-  try {
-    if (raw.charCodeAt(0) === 34 /* " */) return JSON.parse(raw);
-    const inner = raw.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"');
-    return JSON.parse('"' + inner + '"');
-  } catch {
-    return null;
-  }
-}
-
-function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): string[] {
+function depsOf(id: string, specs: string[], ids: Set<string>, skip: Set<string>): string[] {
   const slash = id.lastIndexOf("/");
   const dir = slash < 0 ? "" : id.slice(0, slash);
   const found: string[] = [];
-  REQUIRE_RE.lastIndex = 0;
-  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]!);
-    if (spec === null || spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
+  for (const spec of specs) {
+    if (spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
     if (skip.has(spec)) continue; // a stylesheet: its own synthetic module
     const base = normalizeId((dir ? dir + "/" : "") + spec);
     // TypeScript's ESM spelling: `./x.js` names `x.ts`.
@@ -734,12 +685,9 @@ function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): 
   return found;
 }
 
-function bareOf(body: string, skip: Set<string>): string[] {
+function bareOf(specs: string[], skip: Set<string>): string[] {
   const found: string[] = [];
-  REQUIRE_RE.lastIndex = 0;
-  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]!);
-    if (spec === null) continue;
+  for (const spec of specs) {
     const c = spec.charCodeAt(0);
     if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
     if ((isPreseeded(spec) && !FRAMEWORK_LIBS.includes(spec)) || found.includes(spec) || skip.has(spec)) continue;
@@ -756,13 +704,10 @@ const moduleBare = new Map<string, string[]>(); // app module id -> npm module i
 const cssModules = new Map<string, string>();
 const cssEmitted = new Map<string, string>();
 
-function cssImportsOf(absPath: string, body: string, cssSpecs: Set<string>): string[] {
+function cssImportsOf(absPath: string, specs: string[], cssSpecs: Set<string>): string[] {
   const dir = dirname(absPath);
   const found: string[] = [];
-  REQUIRE_RE.lastIndex = 0;
-  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
-    const spec = unquote(m[1]!);
-    if (spec === null) continue;
+  for (const spec of specs) {
     const relative_ = spec.charCodeAt(0) === 46; /* . */
     let abs: string;
     if (relative_) {
@@ -820,9 +765,8 @@ async function buildCssModule(id: string): Promise<boolean> {
       `// source: ${toId(abs)}; do not edit`,
       `__SK__.setCss(${J(id)}, ${J(css)});`,
       `__SK__.setDeps && __SK__.setDeps(${J(id)}, []);`,
-      // Empty factory: the import is a side effect; the constant body hash keeps a CSS edit inert.
-      `__SK__.define(${J(id)}, function (require, module, exports) {`,
-      `}, ${J(TW_HASH)});`,
+      // The empty ES module preserves imports and keeps the body hash stable across CSS edits.
+      defineModule(id, ""),
     ].join("\n"),
   );
   return true;
@@ -865,8 +809,9 @@ async function buildModule(absPath: string, ids: Set<string>) {
   try {
     result = await Bun.build({
       entrypoints: [absPath],
-      format: "cjs",
-      target: "node",
+      metafile: true,
+      format: "esm",
+      target: "browser",
       external: ["*"],
       plugins: [devShapesPlugin, devImports, appModulePlugin],
       define: MODULE_DEFINES,
@@ -879,17 +824,12 @@ async function buildModule(absPath: string, ids: Set<string>) {
     for (const log of result.logs) console.error(log);
     throw new Error(`module build failed: ${id}`);
   }
+  checkAppModules(result.metafile!.inputs);
   moduleInlined.set(absPath, new Map(Array.from(inlined, (f) => [f, mtimeOf(f)])));
-  // Bundler ESM semantics rather than Node's (vitecompat.ts devEsmInterop).
-  const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0]!.text()).code);
-  const body = interop.code;
-  if (!APP_VUE && /\brequire\(\s*["']vue["']\s*\)/.test(body)) throw new Error(`${id}: ${VUE_MISSING}`);
-  if (interop.unresolved) {
-    warn(
-      `${stamp()} ${id}: ${interop.unresolved} import(…) with a computed specifier — the dev loader resolves ` +
-        `only a string literal, so that promise rejects (prod.ts bundles it)`,
-    );
-  }
+  const body = tagModuleNamespaces(await result.outputs[0]!.text()).code;
+  const refs = moduleReferences(body);
+  const specs = refs.map((ref) => ref.spec).filter(Boolean);
+  if (!APP_VUE && specs.includes("vue")) throw new Error(id + ": " + VUE_MISSING);
   if (/\bcreateStaticVNode\b/.test(body)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }
@@ -901,17 +841,15 @@ async function buildModule(absPath: string, ids: Set<string>) {
   }
 
   const cssSpecs = new Set<string>();
-  const css = cssImportsOf(absPath, body, cssSpecs);
-  const deps = depsOf(id, body, ids, cssSpecs).concat(css);
+  const css = cssImportsOf(absPath, specs, cssSpecs);
+  const deps = depsOf(id, specs, ids, cssSpecs).concat(css);
   moduleDeps.set(id, deps);
-  moduleBare.set(id, bareOf(body, cssSpecs));
+  moduleBare.set(id, bareOf(specs, cssSpecs));
 
   const out: string[] = [`// Skathi module: ${id}`];
   if (capturedCss !== null) out.push(`__SK__.setCss(${J(id)}, ${J(capturedCss)});`);
   out.push(`__SK__.setDeps && __SK__.setDeps(${J(id)}, ${J(deps)});`);
-  out.push(`__SK__.define(${J(id)}, function (require, module, exports) {`);
-  out.push(body);
-  out.push(`}, ${J(Bun.hash(body).toString(16))});`);
+  out.push(defineModule(id, body, refs));
   writeAtomic(join(MODULES_DIR, encId(id)), out.join("\n"));
 }
 
@@ -927,7 +865,7 @@ const npmFailed = new Set<string>();
 const npmEntries = new Map<string, { spec: string; from: string; root: string | null }>();
 const npmBare = new Map<string, string[]>();
 /** Package root -> its group module's id and members. */
-const npmGroups = new Map<string, { id: string; members: string[] }>();
+const npmGroups = new Map<string, string[]>();
 /** npm id -> the group module it was last built as a member of, "" when built alone. */
 const npmShape = new Map<string, string>();
 
@@ -1020,7 +958,7 @@ function noteUnresolved(id: string, spec: string, from: string): void {
   const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
   warn(
     `${stamp()} cannot resolve ${J(spec)} from ${toId(from)} — ` +
-      `require(${J(id)}) will throw at runtime ` +
+      `importing ${J(id)} will fail at runtime ` +
       (alias
         ? "(an import alias resolves through tsconfig.json compilerOptions.paths, as in sk build; " +
           "a vite.config resolve.alias is not read)"
@@ -1040,9 +978,7 @@ function writeNpmModule(id: string, what: string, body: string): boolean {
     [
       `// Skathi module: ${id} (${what})`,
       `__SK__.setDeps && __SK__.setDeps(${J(id)}, []);`,
-      `__SK__.define(${J(id)}, function (require, module, exports) {`,
-      body,
-      `}, ${J(hash)});`,
+      defineModule(id, body),
     ].join("\n"),
   );
   npmBuilt.set(id, body.length);
@@ -1056,7 +992,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
   // vue-router and pinia: the app's own install, one copy for the app and every library, as in the production bundle.
   const framework = FRAMEWORK.get(id);
   if (framework) say(`${stamp()} ${id} ${framework.version ?? "unknown"}: the app's copy`);
-  const candidates = framework ? [framework.path] : await entryCandidates(spec, from);
+  const candidates = await entryCandidates(spec, from);
   if (!candidates.length) {
     noteUnresolved(id, spec, from);
     return false;
@@ -1072,7 +1008,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     requires.clear();
     result = await Bun.build({
       entrypoints: [candidate],
-      format: "cjs",
+      format: "esm",
       target: "browser", // picks the browser/ESM conditions, not node builtins
       conditions: SVELTE_CONDITIONS,
       // Pre-seeded ids plus every other package entry stay external. A dependency can ship raw .vue
@@ -1106,8 +1042,6 @@ function reportBuildFailure(result: Awaited<ReturnType<typeof Bun.build>> | null
   else if (failure) console.error(failure);
 }
 
-const GROUP_ENTRY = "__sk_npm_group__.js";
-
 /** Bundles the entries `members` of the package at `root` into one module: the members it built, and whether that module changed. */
 async function buildNpmGroup(root: string, members: string[]): Promise<{ built: string[]; changed: boolean }> {
   const lists: string[][] = [];
@@ -1123,59 +1057,56 @@ async function buildNpmGroup(root: string, members: string[]): Promise<{ built: 
     built.push(id);
   }
   if (!built.length) return { built, changed: false };
-  const gid = `${pkgNameAt.get(root) ?? toId(root)}~pkg~${Bun.hash(toId(root)).toString(16).slice(0, 8)}`;
-  const probe = join(root, GROUP_ENTRY); // never written: the plugin answers for it
+  const gid = (pkgNameAt.get(root) ?? toId(root)) + "~pkg~" + Bun.hash(toId(root)).toString(16).slice(0, 8);
   const requires = new Set<string>();
-  let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
-  let failure: unknown = null;
-  const attempts = Math.max(...lists.map((l) => l.length));
-  for (let i = 0; i < attempts; i++) {
-    const source = lists.map((l, k) => `export * as e${k} from ${J(l[Math.min(i, l.length - 1)])};`).join("\n");
-    requires.clear();
-    result = await Bun.build({
-      entrypoints: [probe],
-      format: "cjs",
-      target: "browser",
-      conditions: SVELTE_CONDITIONS,
-      plugins: [
-        {
-          name: "sk-npm-group-entry",
-          setup(b: Bun.PluginBuilder) {
-            b.onResolve({ filter: /__sk_npm_group__\.js$/ }, () => ({ path: probe }));
-            b.onLoad({ filter: /__sk_npm_group__\.js$/ }, () => ({ contents: source, loader: "js" }));
-          },
-        },
-        npmShapesPlugin,
-        npmSharePlugin("", root, requires),
-        vuePlugin,
-      ],
-      define: DEFINES,
-    }).catch((e: unknown) => ((failure = e), null));
-    if (result?.success) break;
+  const entries = lists.map((list) => list[0]!);
+  const result = await Bun.build({
+    entrypoints: [...new Set(entries)],
+    splitting: true,
+    metafile: true,
+    format: "esm",
+    target: "browser",
+    conditions: SVELTE_CONDITIONS,
+    naming: { entry: "entry-[hash].js", chunk: "chunk-[hash].js" },
+    plugins: [npmShapesPlugin, npmSharePlugin("", root, requires), vuePlugin],
+    define: DEFINES,
+  });
+  if (!result.success) throw new AggregateError(result.logs, "Could not bundle " + root);
+  const names = new Map<string, string>();
+  for (const [name, output] of Object.entries(result.metafile!.outputs)) {
+    const index = output.entryPoint ? entries.indexOf(resolve(output.entryPoint)) : -1;
+    names.set("./" + basename(name), index < 0 ? gid + "/" + basename(name) : built[index]!);
   }
-  if (!result?.success) {
-    reportBuildFailure(result, failure);
-    throw new Error(`npm module build failed: ${built.join(", ")} (bundled together as ${gid})`);
-  }
-  npmBare.set(gid, Array.from(requires).sort());
-  const changed = writeNpmModule(
-    gid,
-    `npm dependency, the entries ${built.join(", ")} of ${toId(root)}`,
-    tagModuleNamespaces(await result.outputs[0]!.text()).code,
-  );
-  for (const [k, id] of built.entries()) {
-    // An ES module's namespace is the module; a CommonJS entry's is its `module.exports`, as when built alone.
-    writeNpmModule(
-      id,
-      `npm dependency, entry of ${gid}`,
-      `var ns = require(${J(gid)}).e${k};\n` +
-        'module.exports = ns && ns[Symbol.toStringTag] === "Module" ? ' +
-        'Object.defineProperty(ns, "__esModule", { value: true }) : ns && ns.default;',
-    );
-    npmBare.set(id, [gid]);
+  let changed = false;
+  for (const asset of result.outputs) {
+    const id = names.get("./" + asset.path.split(/[\\/]/).pop()!)!;
+    let body = tagModuleNamespaces(await asset.text()).code;
+    const imports = moduleReferences(body);
+    const deps = new Set(requires);
+    for (const ref of imports.reverse()) {
+      const target = names.get(ref.spec);
+      if (!target) continue;
+      deps.add(target);
+      const range = ref.dynamic ? ref.argument : ref;
+      if (range) body = body.slice(0, range.start) + J(target) + body.slice(range.end);
+    }
+    npmBare.set(id, [...deps]);
+    changed = writeNpmModule(id, "npm dependency from " + toId(root), body) || changed;
     npmShape.set(id, gid);
   }
-  npmGroups.set(root, { id: gid, members: built });
+  for (const [index, file] of entries.entries()) {
+    const first = entries.indexOf(file);
+    if (first === index) continue;
+    const id = built[index]!;
+    const from = built[first]!;
+    const asset = result.outputs.find((a) => names.get("./" + basename(a.path)) === from)!;
+    const hasDefault = new Bun.Transpiler().scan(await asset.text()).exports.includes("default");
+    const body = "export * from " + J(from) + ";" + (hasDefault ? "export {default} from " + J(from) + ";" : "");
+    npmBare.set(id, [from]);
+    npmShape.set(id, gid);
+    changed = writeNpmModule(id, "alias of " + from, body) || changed;
+  }
+  npmGroups.set(root, built);
   return { built, changed };
 }
 
@@ -1195,20 +1126,19 @@ function wantedNpm(): Set<string> {
 
 /** `added`: npm modules new to the build; `regrouped`: ones already built that now belong to a new group module (a running app holds the old copy). */
 async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] }> {
-  const added: string[] = [];
+  const previous = new Set(npmBuilt.keys());
   const regrouped: string[] = [];
   const tried = new Set<string>();
   for (let progress = true; progress;) {
     progress = false;
     const wanted = wantedNpm();
-    const groupIds = new Set(Array.from(npmGroups.values(), (g) => g.id));
     const byRoot = new Map<string, string[]>();
     for (const id of wanted) {
-      const root = groupIds.has(id) ? null : npmEntries.get(id)?.root;
+      const root = npmEntries.get(id)?.root;
       if (root) byRoot.set(root, [...(byRoot.get(root) ?? []), id]);
     }
     for (const [root, ids] of byRoot) {
-      const known = npmGroups.get(root)?.members ?? [];
+      const known = npmGroups.get(root) ?? [];
       // A member that went away leaves the group as it is; a new one rebuilds it.
       if (ids.length < 2 && !known.length) continue;
       if (ids.every((id) => known.includes(id) && npmBuilt.has(id))) continue;
@@ -1222,8 +1152,7 @@ async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] 
       const t0 = Date.now();
       const { built, changed } = await buildNpmGroup(root, members);
       for (const id of built) {
-        if (!before.has(id)) added.push(id);
-        else if (changed || shapeBefore.get(id) !== npmShape.get(id)) regrouped.push(id);
+        if (before.has(id) && (changed || shapeBefore.get(id) !== npmShape.get(id))) regrouped.push(id);
       }
       if (built.length) say(`${stamp()} npm ${built.join(", ")}: bundled together in ${Date.now() - t0} ms`);
     }
@@ -1232,14 +1161,13 @@ async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] 
       return !!root && npmGroups.has(root);
     };
     const todo = Array.from(wanted)
-      .filter((id) => !npmBuilt.has(id) && !tried.has(id) && !groupIds.has(id) && !grouped(id))
+      .filter((id) => !npmBuilt.has(id) && !tried.has(id) && !grouped(id))
       .sort();
     for (const id of todo) {
       tried.add(id);
       progress = true;
       const t0 = Date.now();
       if (!(await buildNpmModule(id))) continue;
-      added.push(id);
       say(`${stamp()} npm ${id}: ${((npmBuilt.get(id) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`);
     }
   }
@@ -1256,13 +1184,15 @@ async function syncNpmModules(): Promise<{ added: string[]; regrouped: string[] 
       rmSync(join(MODULES_DIR, encId(id)));
     } catch {}
   }
-  for (const [root, group] of npmGroups) if (!npmBuilt.has(group.id)) npmGroups.delete(root);
-  return { added: added.filter((id) => npmBuilt.has(id)), regrouped: regrouped.filter((id) => npmBuilt.has(id)) };
+  for (const [root, members] of npmGroups) if (!members.some((id) => npmBuilt.has(id))) npmGroups.delete(root);
+  return {
+    added: [...npmBuilt.keys()].filter((id) => !previous.has(id)),
+    regrouped: regrouped.filter((id) => npmBuilt.has(id)),
+  };
 }
 
 const TW_CONFIG = findConfig(appRootArg ? APP_ROOT : APP_SRC_DIR, ID_ROOT);
 let twCss: string | null = null;
-const TW_HASH = Bun.hash("").toString(16);
 
 async function buildTailwind(): Promise<boolean> {
   if (!TW_CONFIG) return false;
@@ -1278,8 +1208,7 @@ async function buildTailwind(): Promise<boolean> {
       `// source: ${toId(TW_CONFIG)}; do not edit`,
       `__SK__.setCss(${J(TW_ID)}, ${J(css)});`,
       `__SK__.setDeps && __SK__.setDeps(${J(TW_ID)}, []);`,
-      `__SK__.define(${J(TW_ID)}, function (require, module, exports) {`,
-      `}, ${J(TW_HASH)});`,
+      defineModule(TW_ID, ""),
     ].join("\n"),
   );
   say(`${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`);
