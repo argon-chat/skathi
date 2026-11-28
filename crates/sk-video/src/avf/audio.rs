@@ -24,7 +24,7 @@ impl Capture {
         );
     }
     pub fn install(self: &Arc<Self>, item: &AVPlayerItem) -> Result<(), MediaError> {
-        extern "C" {
+        unsafe extern "C" {
             fn sk_install_audio_tap(
                 item: *const AVPlayerItem,
                 context: *const c_void,

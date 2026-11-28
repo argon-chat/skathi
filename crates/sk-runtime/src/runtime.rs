@@ -261,27 +261,29 @@ unsafe extern "C" fn content_read(
     sink: ContentSinkFn,
     sink_ctx: *mut c_void,
 ) -> i32 {
-    const MISS: i32 = 1;
-    let Some(provider) = PROVIDER.get() else {
-        return MISS;
-    };
-    if path_ptr.is_null() {
-        return MISS;
-    }
-    let bytes = core::slice::from_raw_parts(path_ptr, path_len);
-    let Ok(key) = std::str::from_utf8(bytes) else {
-        return MISS;
-    };
-    let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(key)));
-    match found {
-        Ok(Some(data)) => {
-            sink(sink_ctx, data.as_ptr(), data.len());
-            0
+    unsafe {
+        const MISS: i32 = 1;
+        let Some(provider) = PROVIDER.get() else {
+            return MISS;
+        };
+        if path_ptr.is_null() {
+            return MISS;
         }
-        Ok(None) => MISS,
-        Err(_) => {
-            eprintln!("[sk-runtime] content provider panicked for {key:?} — treated as a miss");
-            MISS
+        let bytes = core::slice::from_raw_parts(path_ptr, path_len);
+        let Ok(key) = std::str::from_utf8(bytes) else {
+            return MISS;
+        };
+        let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(key)));
+        match found {
+            Ok(Some(data)) => {
+                sink(sink_ctx, data.as_ptr(), data.len());
+                0
+            }
+            Ok(None) => MISS,
+            Err(_) => {
+                eprintln!("[sk-runtime] content provider panicked for {key:?} — treated as a miss");
+                MISS
+            }
         }
     }
 }

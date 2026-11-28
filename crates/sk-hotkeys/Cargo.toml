@@ -2,7 +2,7 @@
 name = "sk-hotkeys"
 description = "System-wide hotkeys for Skathi: Windows low-level hooks, the macOS event tap and a chord engine"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

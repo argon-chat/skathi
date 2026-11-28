@@ -27,29 +27,31 @@ fn class() -> JSClassRef {
 }
 
 unsafe fn sentinel<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Sentinel> {
-    host_data::<Sentinel>(g, class(), v)
+    unsafe { host_data::<Sentinel>(g, class(), v) }
 }
 
 unsafe fn page_hidden(g: *mut c_void) -> bool {
-    get(g, state(g).document, "hidden") == TRUE
+    unsafe { get(g, state(g).document, "hidden") == TRUE }
 }
 
 unsafe fn release(g: *mut c_void, obj: u64) {
-    let Some(s) = sentinel(g, obj) else { return };
-    if s.released {
-        return;
+    unsafe {
+        let Some(s) = sentinel(g, obj) else { return };
+        if s.released {
+            return;
+        }
+        s.released = true;
+        let empty = ACTIVE.with(|a| {
+            let mut a = a.borrow_mut();
+            a.retain(|&o| o != obj);
+            a.is_empty()
+        });
+        if empty {
+            crate::power::hold_screen(false);
+        }
+        events::dispatch(g, obj, events::new_trusted_event(g, "release"));
+        redjs_unprotect(g, obj);
     }
-    s.released = true;
-    let empty = ACTIVE.with(|a| {
-        let mut a = a.borrow_mut();
-        a.retain(|&o| o != obj);
-        a.is_empty()
-    });
-    if empty {
-        crate::power::hold_screen(false);
-    }
-    events::dispatch(g, obj, events::new_trusted_event(g, "release"));
-    redjs_unprotect(g, obj);
 }
 
 host_fn!(fn request(g, args) {
@@ -127,47 +129,49 @@ host_fn!(fn navigator_wake_lock(_g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, nav: u64, event_target: u64) {
-    CLASS.with(|c| c.set(make_host_class::<Sentinel>("WakeLockSentinel") as usize));
-    let sentinel = define_class(
-        g,
-        &ClassSpec {
-            name: "WakeLockSentinel",
-            arity: 0,
-            construct: None,
-            parent_proto: event_target,
-            methods: &[("release", 0, sentinel_release)],
-            getters: &[("released", sentinel_released), ("type", sentinel_type)],
-            accessors: &[("onrelease", get_onrelease, set_onrelease)],
-        },
-    );
-    PROTO.with(|p| p.set(sentinel.proto));
-    let wake_lock = define_class(
-        g,
-        &ClassSpec {
-            name: "WakeLock",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[("request", 0, request)],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let instance = new_object(g, wake_lock.proto);
-    redjs_protect(g, instance);
-    WAKE_LOCK.with(|w| w.set(instance));
-    super::define_getter(g, nav, "wakeLock", navigator_wake_lock);
-    let document = state(g).document;
-    let add = get(g, document, "addEventListener");
-    let _ = call(
-        g,
-        add,
-        document,
-        &[
-            js_string(g, "visibilitychange"),
-            make_fn(g, "", 0, on_visibility),
-        ],
-    );
+    unsafe {
+        CLASS.with(|c| c.set(make_host_class::<Sentinel>("WakeLockSentinel") as usize));
+        let sentinel = define_class(
+            g,
+            &ClassSpec {
+                name: "WakeLockSentinel",
+                arity: 0,
+                construct: None,
+                parent_proto: event_target,
+                methods: &[("release", 0, sentinel_release)],
+                getters: &[("released", sentinel_released), ("type", sentinel_type)],
+                accessors: &[("onrelease", get_onrelease, set_onrelease)],
+            },
+        );
+        PROTO.with(|p| p.set(sentinel.proto));
+        let wake_lock = define_class(
+            g,
+            &ClassSpec {
+                name: "WakeLock",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[("request", 0, request)],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        let instance = new_object(g, wake_lock.proto);
+        redjs_protect(g, instance);
+        WAKE_LOCK.with(|w| w.set(instance));
+        super::define_getter(g, nav, "wakeLock", navigator_wake_lock);
+        let document = state(g).document;
+        let add = get(g, document, "addEventListener");
+        let _ = call(
+            g,
+            add,
+            document,
+            &[
+                js_string(g, "visibilitychange"),
+                make_fn(g, "", 0, on_visibility),
+            ],
+        );
+    }
 }
 
 #[cfg(test)]

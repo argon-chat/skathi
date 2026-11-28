@@ -131,17 +131,21 @@ fn range_text(
 
 /// WebIDL `unsigned long`.
 unsafe fn uint32(g: *mut c_void, v: u64) -> Result<usize, ()> {
-    let n = to_number(g, v)?;
-    if !n.is_finite() {
-        return Ok(0);
+    unsafe {
+        let n = to_number(g, v)?;
+        if !n.is_finite() {
+            return Ok(0);
+        }
+        Ok(n.trunc().rem_euclid(4_294_967_296.0) as usize)
     }
-    Ok(n.trunc().rem_euclid(4_294_967_296.0) as usize)
 }
 
 /// The selectable field `this` mirrors; `None` for any other receiver.
 unsafe fn field_of(g: *mut c_void, this: u64) -> Option<u32> {
-    let id = node_id(g, this)?;
-    tree::read_tree(|t| selectable(t, id)).then_some(id)
+    unsafe {
+        let id = node_id(g, this)?;
+        tree::read_tree(|t| selectable(t, id)).then_some(id)
+    }
 }
 
 fn caret(id: u32) -> (usize, usize, bool) {
@@ -158,12 +162,14 @@ fn direction(backward: bool) -> &'static str {
 
 /// `this.setSelectionRange(start, end, direction)`, so its checks and its `select` event apply.
 unsafe fn select_range(g: *mut c_void, this: u64, start: usize, end: usize, dir: u64) -> u64 {
-    let f = get(g, this, "setSelectionRange");
-    let args = [enc_f64(start as f64), enc_f64(end as f64), dir];
-    if let Err(e) = call(g, f, this, &args) {
-        glue::rjs_throw(g, e);
+    unsafe {
+        let f = get(g, this, "setSelectionRange");
+        let args = [enc_f64(start as f64), enc_f64(end as f64), dir];
+        if let Err(e) = call(g, f, this, &args) {
+            glue::rjs_throw(g, e);
+        }
+        UNDEF
     }
-    UNDEF
 }
 
 host_fn!(fn selection_start_get(g, args) {

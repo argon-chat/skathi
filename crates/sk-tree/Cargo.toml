@@ -2,7 +2,7 @@
 name = "sk-tree"
 description = "Skathi's retained node tree and the renderer's host functions"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

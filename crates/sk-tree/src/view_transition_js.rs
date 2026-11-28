@@ -50,53 +50,59 @@ fn api() -> Api {
 }
 
 unsafe fn is_function(g: *mut c_void, v: u64) -> bool {
-    u::is_cell(v) && glue::rjs_kind(g, v) == KIND_FUNCTION
+    unsafe { u::is_cell(v) && glue::rjs_kind(g, v) == KIND_FUNCTION }
 }
 
 unsafe fn is_object(g: *mut c_void, v: u64) -> bool {
-    u::is_cell(v) && glue::rjs_kind(g, v) >= KIND_OBJECT
+    unsafe { u::is_cell(v) && glue::rjs_kind(g, v) >= KIND_OBJECT }
 }
 
 unsafe fn bag_of(g: *mut c_void, obj: u64) -> Option<u64> {
-    if !u::is_cell(obj) {
-        return None;
+    unsafe {
+        if !u::is_cell(obj) {
+            return None;
+        }
+        let mut out = u::UNDEF;
+        (glue::rjs_get_own_data(g, obj, api().bag as *mut c_void, &mut out) == 1 && u::is_cell(out))
+            .then_some(out)
     }
-    let mut out = u::UNDEF;
-    (glue::rjs_get_own_data(g, obj, api().bag as *mut c_void, &mut out) == 1 && u::is_cell(out))
-        .then_some(out)
 }
 
 unsafe fn seq_of(g: *mut c_void, obj: u64) -> Option<u32> {
-    bag_of(g, obj).and_then(|b| u::dec_f64(u::get(g, b, "seq")).map(|s| s as u32))
+    unsafe { bag_of(g, obj).and_then(|b| u::dec_f64(u::get(g, b, "seq")).map(|s| s as u32)) }
 }
 
 /// `types` as strings, or the exception reading them threw.
 unsafe fn read_types(g: *mut c_void, list: u64) -> Result<Vec<String>, ()> {
-    if list == u::UNDEF || list == u::NULL {
-        return Ok(Vec::new());
-    }
-    let a = api();
-    let array = match u::call(g, a.array_from, u::UNDEF, &[list]) {
-        Ok(v) => v,
-        Err(e) => {
-            glue::rjs_throw(g, e);
-            return Err(());
+    unsafe {
+        if list == u::UNDEF || list == u::NULL {
+            return Ok(Vec::new());
         }
-    };
-    let mut out = Vec::new();
-    for i in 0..u::array_len(g, array) {
-        let s = u::to_js_string(g, u::get_i(g, array, i))?;
-        out.push(u::read_string(g, s).unwrap_or_default());
+        let a = api();
+        let array = match u::call(g, a.array_from, u::UNDEF, &[list]) {
+            Ok(v) => v,
+            Err(e) => {
+                glue::rjs_throw(g, e);
+                return Err(());
+            }
+        };
+        let mut out = Vec::new();
+        for i in 0..u::array_len(g, array) {
+            let s = u::to_js_string(g, u::get_i(g, array, i))?;
+            out.push(u::read_string(g, s).unwrap_or_default());
+        }
+        Ok(out)
     }
-    Ok(out)
 }
 
 unsafe fn construct(g: *mut c_void, ctor: u64, args: &[u64]) -> u64 {
-    let mut out = u::UNDEF;
-    if glue::rjs_construct(g, ctor, args.as_ptr(), args.len() as u32, &mut out) == 0 {
-        out
-    } else {
-        u::UNDEF
+    unsafe {
+        let mut out = u::UNDEF;
+        if glue::rjs_construct(g, ctor, args.as_ptr(), args.len() as u32, &mut out) == 0 {
+            out
+        } else {
+            u::UNDEF
+        }
     }
 }
 
@@ -232,127 +238,138 @@ host_fn!(fn attach(g, args) {
 });
 
 unsafe fn on_update(g: *mut c_void, seq: u32, outcome: Result<(), u64>) {
-    let settler = PENDING.with(|p| {
-        let mut p = p.borrow_mut();
-        let r = p.get_mut(&seq)?;
-        if let Err(reason) = outcome {
-            redjs_protect(g, reason);
+    unsafe {
+        let settler = PENDING.with(|p| {
+            let mut p = p.borrow_mut();
+            let r = p.get_mut(&seq)?;
+            if let Err(reason) = outcome {
+                redjs_protect(g, reason);
+            }
+            r.outcome = Some(outcome);
+            r.update_done.take()
+        });
+        if let Some(s) = settler {
+            match outcome {
+                Ok(()) => s.resolve(g, u::UNDEF),
+                Err(reason) => s.reject(g, reason),
+            }
         }
-        r.outcome = Some(outcome);
-        r.update_done.take()
-    });
-    if let Some(s) = settler {
-        match outcome {
-            Ok(()) => s.resolve(g, u::UNDEF),
-            Err(reason) => s.reject(g, reason),
-        }
+        vt::update_done(seq, outcome.is_ok());
+        handle_all(g);
+        try_finish(g, seq);
     }
-    vt::update_done(seq, outcome.is_ok());
-    handle_all(g);
-    try_finish(g, seq);
 }
 
 unsafe fn try_finish(g: *mut c_void, seq: u32) {
-    let done = PENDING.with(|p| {
-        let mut p = p.borrow_mut();
-        let r = p.get(&seq)?;
-        if !r.ended || r.outcome.is_none() {
-            return None;
+    unsafe {
+        let done = PENDING.with(|p| {
+            let mut p = p.borrow_mut();
+            let r = p.get(&seq)?;
+            if !r.ended || r.outcome.is_none() {
+                return None;
+            }
+            p.remove(&seq)
+        });
+        let Some(mut r) = done else { return };
+        if let Some(s) = r.finished.take() {
+            match r.outcome {
+                Some(Err(reason)) => s.reject(g, reason),
+                _ => s.resolve(g, u::UNDEF),
+            }
         }
-        p.remove(&seq)
-    });
-    let Some(mut r) = done else { return };
-    if let Some(s) = r.finished.take() {
-        match r.outcome {
-            Some(Err(reason)) => s.reject(g, reason),
-            _ => s.resolve(g, u::UNDEF),
+        for s in [r.update_done.take(), r.ready.take()].into_iter().flatten() {
+            s.resolve(g, u::UNDEF);
         }
+        if let Some(Err(reason)) = r.outcome {
+            redjs_unprotect(g, reason);
+        }
+        if r.update != u::UNDEF {
+            redjs_unprotect(g, r.update);
+        }
+        redjs_unprotect(g, r.obj);
     }
-    for s in [r.update_done.take(), r.ready.take()].into_iter().flatten() {
-        s.resolve(g, u::UNDEF);
-    }
-    if let Some(Err(reason)) = r.outcome {
-        redjs_unprotect(g, reason);
-    }
-    if r.update != u::UNDEF {
-        redjs_unprotect(g, r.update);
-    }
-    redjs_unprotect(g, r.obj);
 }
 
 unsafe fn call_update(g: *mut c_void, seq: u32) {
-    let Some(update) = PENDING.with(|p| p.borrow().get(&seq).map(|r| r.update)) else {
-        return;
-    };
-    if update == u::UNDEF {
-        on_update(g, seq, Ok(()));
-        return;
-    }
-    let a = api();
-    let promise = u::call(g, update, u::UNDEF, &[])
-        .and_then(|v| u::call(g, a.promise_resolve, a.promise, &[v]));
-    match promise {
-        Ok(p) => {
-            let id = u::enc_f64(seq as f64);
-            let bind =
-                |f: u64| u::call(g, u::get(g, f, "bind"), f, &[u::UNDEF, id]).unwrap_or(u::UNDEF);
-            let (ok, err) = (bind(a.fulfilled), bind(a.rejected));
-            if u::call(g, u::get(g, p, "then"), p, &[ok, err]).is_err() {
-                on_update(g, seq, Ok(()));
-            }
+    unsafe {
+        let Some(update) = PENDING.with(|p| p.borrow().get(&seq).map(|r| r.update)) else {
+            return;
+        };
+        if update == u::UNDEF {
+            on_update(g, seq, Ok(()));
+            return;
         }
-        Err(e) => on_update(g, seq, Err(e)),
+        let a = api();
+        let promise = u::call(g, update, u::UNDEF, &[])
+            .and_then(|v| u::call(g, a.promise_resolve, a.promise, &[v]));
+        match promise {
+            Ok(p) => {
+                let id = u::enc_f64(seq as f64);
+                let bind = |f: u64| {
+                    u::call(g, u::get(g, f, "bind"), f, &[u::UNDEF, id]).unwrap_or(u::UNDEF)
+                };
+                let (ok, err) = (bind(a.fulfilled), bind(a.rejected));
+                if u::call(g, u::get(g, p, "then"), p, &[ok, err]).is_err() {
+                    on_update(g, seq, Ok(()));
+                }
+            }
+            Err(e) => on_update(g, seq, Err(e)),
+        }
     }
 }
 
 unsafe fn handle(g: *mut c_void, note: Note) {
-    match note {
-        Note::Update(seq) => call_update(g, seq),
-        Note::Ready(seq) => {
-            if let Some(s) =
-                PENDING.with(|p| p.borrow_mut().get_mut(&seq).and_then(|r| r.ready.take()))
-            {
-                s.resolve(g, u::UNDEF);
-            }
-        }
-        Note::Skipped(seq, reason) => {
-            let taken = PENDING.with(|p| {
-                let mut p = p.borrow_mut();
-                let r = p.get_mut(&seq)?;
-                r.ended = true;
-                Some((r.ready.take(), r.outcome))
-            });
-            if let Some((Some(s), outcome)) = taken {
-                let value = match (&reason, outcome) {
-                    (Reason::Rejected, Some(Err(cause))) => cause,
-                    _ => {
-                        let (name, message) = reason.error();
-                        error(g, name, &message)
-                    }
-                };
-                s.reject(g, value);
-            }
-            try_finish(g, seq);
-        }
-        Note::Finished(seq) => {
-            PENDING.with(|p| {
-                if let Some(r) = p.borrow_mut().get_mut(&seq) {
-                    r.ended = true;
+    unsafe {
+        match note {
+            Note::Update(seq) => call_update(g, seq),
+            Note::Ready(seq) => {
+                if let Some(s) =
+                    PENDING.with(|p| p.borrow_mut().get_mut(&seq).and_then(|r| r.ready.take()))
+                {
+                    s.resolve(g, u::UNDEF);
                 }
-            });
-            try_finish(g, seq);
+            }
+            Note::Skipped(seq, reason) => {
+                let taken = PENDING.with(|p| {
+                    let mut p = p.borrow_mut();
+                    let r = p.get_mut(&seq)?;
+                    r.ended = true;
+                    Some((r.ready.take(), r.outcome))
+                });
+                if let Some((Some(s), outcome)) = taken {
+                    let value = match (&reason, outcome) {
+                        (Reason::Rejected, Some(Err(cause))) => cause,
+                        _ => {
+                            let (name, message) = reason.error();
+                            error(g, name, &message)
+                        }
+                    };
+                    s.reject(g, value);
+                }
+                try_finish(g, seq);
+            }
+            Note::Finished(seq) => {
+                PENDING.with(|p| {
+                    if let Some(r) = p.borrow_mut().get_mut(&seq) {
+                        r.ended = true;
+                    }
+                });
+                try_finish(g, seq);
+            }
         }
     }
 }
 
 unsafe fn handle_all(g: *mut c_void) {
-    loop {
-        let notes = vt::take_notes();
-        if notes.is_empty() {
-            break;
-        }
-        for n in notes {
-            handle(g, n);
+    unsafe {
+        loop {
+            let notes = vt::take_notes();
+            if notes.is_empty() {
+                break;
+            }
+            for n in notes {
+                handle(g, n);
+            }
         }
     }
 }

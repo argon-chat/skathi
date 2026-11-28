@@ -21,87 +21,93 @@ struct Checked {
 }
 
 unsafe fn text(g: *mut c_void, v: u64) -> Option<Option<String>> {
-    if v == UNDEF {
-        return Some(None);
+    unsafe {
+        if v == UNDEF {
+            return Some(None);
+        }
+        Some(Some(
+            read_string(g, to_js_string(g, v).ok()?).unwrap_or_default(),
+        ))
     }
-    Some(Some(
-        read_string(g, to_js_string(g, v).ok()?).unwrap_or_default(),
-    ))
 }
 
 /// The share data, or the TypeError's message. `None`: a conversion threw.
 unsafe fn check(g: *mut c_void, data: u64) -> Option<Result<Checked, String>> {
-    if data != UNDEF && data != NULL && !is_cell(data) {
-        return Some(Err("The provided value is not of type 'ShareData'.".into()));
-    }
-    let member = |k: &str| {
-        if is_cell(data) {
-            try_get(g, data, k).ok()
-        } else {
-            Some(UNDEF)
+    unsafe {
+        if data != UNDEF && data != NULL && !is_cell(data) {
+            return Some(Err("The provided value is not of type 'ShareData'.".into()));
         }
-    };
-    let title = text(g, member("title")?)?;
-    let body = text(g, member("text")?)?;
-    let url = match text(g, member("url")?)? {
-        None => None,
-        Some(raw) => {
-            let reflect = get(g, global(g), "Reflect");
-            let args = new_array(g);
-            set_i(g, args, 0, js_string(g, &raw));
-            let location = get(g, global(g), "location");
-            if is_cell(location) {
-                set_i(g, args, 1, get(g, location, "href"));
+        let member = |k: &str| {
+            if is_cell(data) {
+                try_get(g, data, k).ok()
+            } else {
+                Some(UNDEF)
             }
-            match call(
-                g,
-                get(g, reflect, "construct"),
-                reflect,
-                &[get(g, global(g), "URL"), args],
-            ) {
-                Ok(u) => Some(read_string(g, get(g, u, "href")).unwrap_or_default()),
-                Err(_) => return Some(Err("Invalid URL".into())),
-            }
-        }
-    };
-    let mut files = Vec::new();
-    let list = member("files")?;
-    if list != UNDEF {
-        let Ok(arr) = call(
-            g,
-            get(g, get(g, global(g), "Array"), "from"),
-            UNDEF,
-            &[list],
-        ) else {
-            return Some(Err(
-                "The provided value cannot be converted to a sequence.".into()
-            ));
         };
-        let file_proto = get(g, get(g, global(g), "File"), "prototype");
-        for i in 0..array_len(g, arr) {
-            let f = get_i(g, arr, i);
-            if !is_cell(f) || !proto_chain_has(g, f, file_proto) {
-                return Some(Err("Failed to convert value to 'File'.".into()));
+        let title = text(g, member("title")?)?;
+        let body = text(g, member("text")?)?;
+        let url = match text(g, member("url")?)? {
+            None => None,
+            Some(raw) => {
+                let reflect = get(g, global(g), "Reflect");
+                let args = new_array(g);
+                set_i(g, args, 0, js_string(g, &raw));
+                let location = get(g, global(g), "location");
+                if is_cell(location) {
+                    set_i(g, args, 1, get(g, location, "href"));
+                }
+                match call(
+                    g,
+                    get(g, reflect, "construct"),
+                    reflect,
+                    &[get(g, global(g), "URL"), args],
+                ) {
+                    Ok(u) => Some(read_string(g, get(g, u, "href")).unwrap_or_default()),
+                    Err(_) => return Some(Err("Invalid URL".into())),
+                }
             }
-            files.push(f);
+        };
+        let mut files = Vec::new();
+        let list = member("files")?;
+        if list != UNDEF {
+            let Ok(arr) = call(
+                g,
+                get(g, get(g, global(g), "Array"), "from"),
+                UNDEF,
+                &[list],
+            ) else {
+                return Some(Err(
+                    "The provided value cannot be converted to a sequence.".into()
+                ));
+            };
+            let file_proto = get(g, get(g, global(g), "File"), "prototype");
+            for i in 0..array_len(g, arr) {
+                let f = get_i(g, arr, i);
+                if !is_cell(f) || !proto_chain_has(g, f, file_proto) {
+                    return Some(Err("Failed to convert value to 'File'.".into()));
+                }
+                files.push(f);
+            }
         }
-    }
-    if title.is_none() && body.is_none() && url.is_none() && files.is_empty() {
-        return Some(Err(
+        if title.is_none() && body.is_none() && url.is_none() && files.is_empty() {
+            return Some(Err(
             "No known share data fields supplied. If using only new fields (other than title, text and url), you must feature-detect them first.".into(),
         ));
+        }
+        Some(Ok(Checked {
+            title,
+            text: body,
+            url,
+            files,
+        }))
     }
-    Some(Ok(Checked {
-        title,
-        text: body,
-        url,
-        files,
-    }))
 }
 
 unsafe fn user_active(g: *mut c_void) -> bool {
-    let ua = get(g, get(g, global(g), "navigator"), "userActivation");
-    is_cell(ua) && get(g, ua, "isActive") == TRUE
+    unsafe {
+        let ua = get(g, get(g, global(g), "navigator"), "userActivation");
+        is_cell(ua) && get(g, ua, "isActive") == TRUE
+    }
 }
 
 unsafe fn shared(
@@ -153,8 +159,10 @@ host_fn!(fn can_share(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, nav: u64) {
-    define(g, nav, "share", make_fn(g, "share", 0, share), 2);
-    define(g, nav, "canShare", make_fn(g, "canShare", 0, can_share), 2);
+    unsafe {
+        define(g, nav, "share", make_fn(g, "share", 0, share), 2);
+        define(g, nav, "canShare", make_fn(g, "canShare", 0, can_share), 2);
+    }
 }
 
 #[cfg(test)]

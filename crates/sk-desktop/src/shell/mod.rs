@@ -344,7 +344,7 @@ fn submit(op: Op) -> u32 {
             .spawn(move || {
                 imp::thread_init();
                 for job in rx {
-                    let result = run(&job.op);
+                    let result = run(&job.op, recording());
                     crate::settle(job.token, result.map(|()| "{}".to_string()));
                 }
             })
@@ -370,7 +370,7 @@ fn submit(op: Op) -> u32 {
     token
 }
 
-fn run(op: &Op) -> Result<(), Fail> {
+fn run(op: &Op, record: bool) -> Result<(), Fail> {
     match op {
         Op::OpenExternal(_) => {}
         Op::OpenPath { path: p, .. } | Op::ShowItem(p) | Op::Trash(p) => {
@@ -389,7 +389,7 @@ fn run(op: &Op) -> Result<(), Fail> {
             return Err(refused_executable(path));
         }
     }
-    if recording() {
+    if record {
         crate::log_later(
             "shell",
             format!(
@@ -594,10 +594,13 @@ mod tests {
         let tool = dir.join("tool");
         std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let f = run(&Op::OpenPath {
-            path: tool,
-            allow_executable: false,
-        })
+        let f = run(
+            &Op::OpenPath {
+                path: tool,
+                allow_executable: false,
+            },
+            true,
+        )
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!((f.name, f.code), ("NotAllowedError", Some("EEXECUTABLE")));
@@ -605,8 +608,6 @@ mod tests {
 
     #[test]
     fn recording_reaches_no_os_call_but_still_stats() {
-        std::env::set_var("SK_SHELL", "record");
-        assert!(recording(), "nothing below may run unrecorded");
         let dir =
             std::env::temp_dir().join(format!("sk-desktop-shell-record-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -621,8 +622,8 @@ mod tests {
             Op::ShowItem(file.clone()),
             Op::Trash(file.clone()),
         ];
-        let results: Vec<_> = ops.iter().map(run).collect();
-        let missing = run(&Op::ShowItem(dir.join("missing.txt")));
+        let results: Vec<_> = ops.iter().map(|op| run(op, true)).collect();
+        let missing = run(&Op::ShowItem(dir.join("missing.txt")), true);
         let kept = file.exists();
         let _ = std::fs::remove_dir_all(&dir);
         for r in results {

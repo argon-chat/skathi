@@ -34,7 +34,7 @@ use crate::json::Json;
 const _: () = assert!(size_of::<vm_region_submap_info_64>() == 76);
 const _: () = assert!(size_of::<task_vm_info>() == 372);
 
-extern "C" {
+unsafe extern "C" {
     fn mi_option_get(option: c_int) -> c_long;
     /// libdyld (macOS 10.15+): where the dyld shared cache is mapped.
     fn _dyld_get_shared_cache_range(length: *mut usize) -> *const c_void;

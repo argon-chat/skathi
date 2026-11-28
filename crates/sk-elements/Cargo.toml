@@ -2,7 +2,7 @@
 name = "sk-elements"
 description = "Skathi's native widgets on gpui, such as the text input"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

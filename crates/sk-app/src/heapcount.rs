@@ -35,7 +35,7 @@ const DEFAULT_ON: bool = !cfg!(feature = "prod");
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     fn GetEnvironmentVariableW(name: *const u16, buffer: *mut u16, size: u32) -> u32;
 }
 
@@ -62,7 +62,7 @@ fn memstats_env() -> Option<bool> {
 
 #[cfg(not(windows))]
 fn memstats_env() -> Option<bool> {
-    extern "C" {
+    unsafe extern "C" {
         fn getenv(name: *const core::ffi::c_char) -> *const core::ffi::c_char;
     }
     // `getenv` returns the environment's own storage: no copy, no allocation.

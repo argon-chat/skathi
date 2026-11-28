@@ -49,27 +49,29 @@ std_fn!(fn exec_off(g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let module = new_object(g, UNDEF);
-    #[cfg(feature = "process")]
-    let ctor = live::class(g);
-    #[cfg(not(feature = "process"))]
-    let ctor = {
-        let class = support::class(
-            g,
-            &ClassSpec {
-                name: "Process",
-                arity: 0,
-                construct: None,
-                parent_proto: 0,
-                methods: &[],
-                getters: &[],
-                accessors: &[],
-            },
-        );
-        static_fn(g, class.ctor, "spawn", 3, spawn_off);
-        static_fn(g, class.ctor, "exec", 3, exec_off);
-        class.ctor
-    };
-    define(g, module, "Process", ctor, 0);
-    define(g, std, "process", module, 0);
+    unsafe {
+        let module = new_object(g, UNDEF);
+        #[cfg(feature = "process")]
+        let ctor = live::class(g);
+        #[cfg(not(feature = "process"))]
+        let ctor = {
+            let class = support::class(
+                g,
+                &ClassSpec {
+                    name: "Process",
+                    arity: 0,
+                    construct: None,
+                    parent_proto: 0,
+                    methods: &[],
+                    getters: &[],
+                    accessors: &[],
+                },
+            );
+            static_fn(g, class.ctor, "spawn", 3, spawn_off);
+            static_fn(g, class.ctor, "exec", 3, exec_off);
+            class.ctor
+        };
+        define(g, module, "Process", ctor, 0);
+        define(g, std, "process", module, 0);
+    }
 }

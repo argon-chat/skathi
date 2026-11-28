@@ -196,16 +196,20 @@ host_fn!(fn toggle_end(_g, args) {
 
 /// The input `this` mirrors, or `None` for any other receiver.
 unsafe fn input_of(g: *mut c_void, this: u64) -> Option<u32> {
-    let id = node_id(g, this)?;
-    tree::read_tree(|t| is_input(t, id)).then_some(id)
+    unsafe {
+        let id = node_id(g, this)?;
+        tree::read_tree(|t| is_input(t, id)).then_some(id)
+    }
 }
 
 /// On anything but an input the property is a plain expando, as in a browser.
 unsafe fn expando(g: *mut c_void, this: u64, name: &str, v: u64) -> u64 {
-    if is_cell(this) {
-        define(g, this, name, v, 0);
+    unsafe {
+        if is_cell(this) {
+            define(g, this, name, v, 0);
+        }
+        UNDEF
     }
-    UNDEF
 }
 
 host_fn!(fn checked_get(g, args) {

@@ -5,7 +5,7 @@ use super::{Button, Hotkeys, RAW};
 use std::{
     ffi::c_void,
     ptr,
-    sync::{Weak, atomic::Ordering, mpsc::SyncSender},
+    sync::{atomic::Ordering, mpsc::SyncSender, Weak},
     time::{Duration, Instant},
 };
 

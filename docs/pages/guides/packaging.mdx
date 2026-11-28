@@ -8,6 +8,12 @@ order: 8
 
 `sk build` and `sk publish` end at a folder with the program in it, or at a `.app` bundle on macOS. People install apps from a package: an MSIX on Windows, a disk image on macOS, an AppImage on Linux. `sk package` writes them from the `"package"` section of sk.config.json.
 
+## CPU requirements
+
+Apps packaged with the official Windows or Linux x64 host require **x86-64-v3** on the machine that runs them. Intel Core first reached this level with Haswell (2013), and AMD with Excavator (2015). Examples include the Core i5-4570, FX-8800P and first-generation Ryzen. A VM must expose the complete v3 instruction set to the guest, including AVX2, BMI2 and FMA. [Processor compatibility](https://developers.redhat.com/articles/2024/01/02/exploring-x86-64-v3-red-hat-enterprise-linux-10)
+
+Skathi supports processor generations in prebuilt hosts for up to ten years from their introduction. Older processors can continue running releases whose instruction set they support. From 2030 onward, we plan to move Windows and Linux x64 prebuilds to **x86-64-v4**, which adds AVX-512 F, BW, CD, DQ and VL. AMD Zen 4 implements v4. Intel Alder Lake client processors, including the Core i5-12600K, lack official AVX-512 support, so they also fall outside the planned baseline. [x86-64 microarchitecture levels](https://gitlab.com/x86-psABIs/x86-64-ABI/-/blob/master/x86-64-ABI/low-level-sys-info.tex) · [Intel's Alder Lake AVX-512 guidance](https://www.intel.com/content/www/us/en/support/articles/000089918/processors.html)
+
 ## The command
 
 ```sh

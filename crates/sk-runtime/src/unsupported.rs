@@ -40,14 +40,16 @@ crate::host_fn!(fn js_prompt(g, _args) {
 });
 
 unsafe fn option_string(g: *mut c_void, options: u64, name: &str) -> u64 {
-    let v = if is_cell(options) {
-        get(g, options, name)
-    } else {
-        UNDEF
-    };
-    match v {
-        UNDEF => js_string(g, ""),
-        v => to_js_string(g, v).unwrap_or_else(|_| js_string(g, "")),
+    unsafe {
+        let v = if is_cell(options) {
+            get(g, options, name)
+        } else {
+            UNDEF
+        };
+        match v {
+            UNDEF => js_string(g, ""),
+            v => to_js_string(g, v).unwrap_or_else(|_| js_string(g, "")),
+        }
     }
 }
 
@@ -115,73 +117,75 @@ crate::host_fn!(fn elements_when_defined(g, _args) {
 /// Replaces redjs's own `alert`, `confirm` and `prompt`, which throw without a host dialog handler, and
 /// defines `customElements`.
 pub(crate) unsafe fn install(g: *mut c_void) {
-    let registry = define_class(
-        g,
-        &ClassSpec {
-            name: "CustomElementRegistry",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("define", 2, elements_define),
-                ("get", 1, elements_get),
-                ("getName", 1, elements_get_name),
-                ("upgrade", 1, noop),
-                ("whenDefined", 1, elements_when_defined),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let elements = new_object(g, registry.proto);
-    define(g, global(g), "customElements", elements, 2);
-
-    let global = global(g);
-    define(g, global, "alert", make_fn(g, "alert", 0, js_alert), 2);
-    define(
-        g,
-        global,
-        "confirm",
-        make_fn(g, "confirm", 0, js_confirm),
-        2,
-    );
-    define(g, global, "prompt", make_fn(g, "prompt", 0, js_prompt), 2);
-
-    let event_target = get(g, get(g, global, "EventTarget"), "prototype");
-    let class = define_class(
-        g,
-        &ClassSpec {
-            name: "Notification",
-            arity: 1,
-            construct: Some(notification_construct),
-            parent_proto: if is_cell(event_target) {
-                event_target
-            } else {
-                0
+    unsafe {
+        let registry = define_class(
+            g,
+            &ClassSpec {
+                name: "CustomElementRegistry",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("define", 2, elements_define),
+                    ("get", 1, elements_get),
+                    ("getName", 1, elements_get_name),
+                    ("upgrade", 1, noop),
+                    ("whenDefined", 1, elements_when_defined),
+                ],
+                getters: &[],
+                accessors: &[],
             },
-            methods: &[("close", 0, noop)],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    NOTIFICATION_PROTO.with(|p| p.set(class.proto));
-    let permission = atom(g, "permission");
-    redjs::glue::rjs_define_accessor(
-        g,
-        class.ctor,
-        permission,
-        make_fn(g, "get permission", 0, notification_permission),
-        UNDEF,
-        2,
-    );
-    redjs::glue::rjs_atom_free(g, permission);
-    define(
-        g,
-        class.ctor,
-        "requestPermission",
-        make_fn(g, "requestPermission", 0, notification_request_permission),
-        2,
-    );
+        );
+        let elements = new_object(g, registry.proto);
+        define(g, global(g), "customElements", elements, 2);
+
+        let global = global(g);
+        define(g, global, "alert", make_fn(g, "alert", 0, js_alert), 2);
+        define(
+            g,
+            global,
+            "confirm",
+            make_fn(g, "confirm", 0, js_confirm),
+            2,
+        );
+        define(g, global, "prompt", make_fn(g, "prompt", 0, js_prompt), 2);
+
+        let event_target = get(g, get(g, global, "EventTarget"), "prototype");
+        let class = define_class(
+            g,
+            &ClassSpec {
+                name: "Notification",
+                arity: 1,
+                construct: Some(notification_construct),
+                parent_proto: if is_cell(event_target) {
+                    event_target
+                } else {
+                    0
+                },
+                methods: &[("close", 0, noop)],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        NOTIFICATION_PROTO.with(|p| p.set(class.proto));
+        let permission = atom(g, "permission");
+        redjs::glue::rjs_define_accessor(
+            g,
+            class.ctor,
+            permission,
+            make_fn(g, "get permission", 0, notification_permission),
+            UNDEF,
+            2,
+        );
+        redjs::glue::rjs_atom_free(g, permission);
+        define(
+            g,
+            class.ctor,
+            "requestPermission",
+            make_fn(g, "requestPermission", 0, notification_request_permission),
+            2,
+        );
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 name = "sk-video"
 description = "<video> playback for Skathi: Media Foundation, AVFoundation and GStreamer backends"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

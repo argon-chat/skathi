@@ -3136,7 +3136,7 @@ mod tests {
                 install(context).unwrap();
                 let mut m = Vec::new();
                 macro_rules! check {
-                    ($($v:expr),* $(,)?) => {
+                    ($($v:expr_2021),* $(,)?) => {
                         $({
                             let value = $v;
                             let pick = Pick::of(&value);

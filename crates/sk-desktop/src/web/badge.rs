@@ -37,20 +37,22 @@ host_fn!(fn clear_app_badge(g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, nav: u64) {
-    define(
-        g,
-        nav,
-        "setAppBadge",
-        make_fn(g, "setAppBadge", 0, set_app_badge),
-        2,
-    );
-    define(
-        g,
-        nav,
-        "clearAppBadge",
-        make_fn(g, "clearAppBadge", 0, clear_app_badge),
-        2,
-    );
+    unsafe {
+        define(
+            g,
+            nav,
+            "setAppBadge",
+            make_fn(g, "setAppBadge", 0, set_app_badge),
+            2,
+        );
+        define(
+            g,
+            nav,
+            "clearAppBadge",
+            make_fn(g, "clearAppBadge", 0, clear_app_badge),
+            2,
+        );
+    }
 }
 
 #[cfg(test)]

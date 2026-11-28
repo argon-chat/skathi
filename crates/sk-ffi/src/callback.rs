@@ -87,77 +87,89 @@ struct Saved {
 /// The inverse of `abi::lay_out`.
 #[cfg(all(windows, target_arch = "x86_64"))]
 unsafe fn read(signature: &Signature, saved: &Saved) -> Vec<u64> {
-    signature
-        .args
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| {
-            let bits = if ty.is_float() && index < 4 {
-                *saved.fpr.add(index)
-            } else {
-                *saved.gpr.add(index)
-            };
-            ty.normalize(bits)
-        })
-        .collect()
+    unsafe {
+        signature
+            .args
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                let bits = if ty.is_float() && index < 4 {
+                    *saved.fpr.add(index)
+                } else {
+                    *saved.gpr.add(index)
+                };
+                ty.normalize(bits)
+            })
+            .collect()
+    }
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 unsafe fn read(signature: &Signature, saved: &Saved) -> Vec<u64> {
-    let int_registers = if cfg!(target_arch = "x86_64") { 6 } else { 8 };
-    let packed = cfg!(all(target_arch = "aarch64", target_vendor = "apple"));
-    let (mut ints, mut floats, mut offset) = (0, 0, 0usize);
-    signature
-        .args
-        .iter()
-        .map(|ty| {
-            let bits = if ty.is_float() && floats < 8 {
-                floats += 1;
-                *saved.fpr.add(floats - 1)
-            } else if !ty.is_float() && ints < int_registers {
-                ints += 1;
-                *saved.gpr.add(ints - 1)
-            } else {
-                let size = if packed { ty.size() } else { 8 };
-                offset = offset.next_multiple_of(size);
-                let mut bytes = [0u8; 8];
-                std::ptr::copy_nonoverlapping(saved.stack.add(offset), bytes.as_mut_ptr(), size);
-                offset += size;
-                u64::from_le_bytes(bytes)
-            };
-            ty.normalize(bits)
-        })
-        .collect()
+    unsafe {
+        let int_registers = if cfg!(target_arch = "x86_64") { 6 } else { 8 };
+        let packed = cfg!(all(target_arch = "aarch64", target_vendor = "apple"));
+        let (mut ints, mut floats, mut offset) = (0, 0, 0usize);
+        signature
+            .args
+            .iter()
+            .map(|ty| {
+                let bits = if ty.is_float() && floats < 8 {
+                    floats += 1;
+                    *saved.fpr.add(floats - 1)
+                } else if !ty.is_float() && ints < int_registers {
+                    ints += 1;
+                    *saved.gpr.add(ints - 1)
+                } else {
+                    let size = if packed { ty.size() } else { 8 };
+                    offset = offset.next_multiple_of(size);
+                    let mut bytes = [0u8; 8];
+                    std::ptr::copy_nonoverlapping(
+                        saved.stack.add(offset),
+                        bytes.as_mut_ptr(),
+                        size,
+                    );
+                    offset += size;
+                    u64::from_le_bytes(bytes)
+                };
+                ty.normalize(bits)
+            })
+            .collect()
+    }
 }
 
 unsafe fn run(index: usize, saved: Saved, ret: *mut u64) {
-    let entry = with_pool(|pool| {
-        pool.entries
-            .get(index)
-            .and_then(Option::as_ref)
-            .map(|entry| (entry.signature.clone(), entry.handler.clone()))
-    });
-    let value = match entry {
-        Some((signature, handler)) => {
-            let args = read(&signature, &saved);
-            // A panic must not unwind into the library's frames.
-            let value = catch_unwind(AssertUnwindSafe(|| handler(&args))).unwrap_or(0);
-            signature.returns.normalize(value)
-        }
-        None => 0,
-    };
-    *ret = value;
-    *ret.add(1) = value;
+    unsafe {
+        let entry = with_pool(|pool| {
+            pool.entries
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(|entry| (entry.signature.clone(), entry.handler.clone()))
+        });
+        let value = match entry {
+            Some((signature, handler)) => {
+                let args = read(&signature, &saved);
+                // A panic must not unwind into the library's frames.
+                let value = catch_unwind(AssertUnwindSafe(|| handler(&args))).unwrap_or(0);
+                signature.returns.normalize(value)
+            }
+            None => 0,
+        };
+        *ret = value;
+        *ret.add(1) = value;
+    }
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 unsafe extern "C" fn dispatch(index: usize, slots: *const u64, fpr: *const u64, ret: *mut u64) {
-    let saved = Saved {
-        gpr: slots,
-        fpr,
-        stack: std::ptr::null(),
-    };
-    run(index, saved, ret);
+    unsafe {
+        let saved = Saved {
+            gpr: slots,
+            fpr,
+            stack: std::ptr::null(),
+        };
+        run(index, saved, ret);
+    }
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
@@ -168,7 +180,9 @@ unsafe extern "C" fn dispatch(
     stack: *const u8,
     ret: *mut u64,
 ) {
-    run(index, Saved { gpr, fpr, stack }, ret);
+    unsafe {
+        run(index, Saved { gpr, fpr, stack }, ret);
+    }
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]

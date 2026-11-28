@@ -158,29 +158,33 @@ struct Classes {
 }
 thread_local! { static C: Cell<Classes> = Cell::new(Classes::default()); }
 unsafe fn raw_entry(g: *mut c_void, value: u64) -> Option<&'static mut Entry> {
-    host_data::<Entry>(g, C.get().entry as JSClassRef, value)
+    unsafe { host_data::<Entry>(g, C.get().entry as JSClassRef, value) }
 }
 pub(super) unsafe fn path_of(g: *mut c_void, value: u64) -> Option<PathBuf> {
-    raw_entry(g, value)?.path()
+    unsafe { raw_entry(g, value)?.path() }
 }
 unsafe fn make_entry(g: *mut c_void, e: Entry) -> u64 {
-    let c = C.get();
-    host_create(
-        g,
-        c.entry as JSClassRef,
-        if e.kind == Kind::Directory {
-            c.dir_proto
-        } else {
-            c.file_proto
-        },
-        e,
-    )
+    unsafe {
+        let c = C.get();
+        host_create(
+            g,
+            c.entry as JSClassRef,
+            if e.kind == Kind::Directory {
+                c.dir_proto
+            } else {
+                c.file_proto
+            },
+            e,
+        )
+    }
 }
 unsafe fn attach(g: *mut c_void, obj: u64, slot: usize, value: u64) {
-    glue::rjs_define(g, obj, slot as *mut c_void, value, 0);
+    unsafe {
+        glue::rjs_define(g, obj, slot as *mut c_void, value, 0);
+    }
 }
 unsafe fn filesystem_of(g: *mut c_void, obj: u64) -> u64 {
-    get_a(g, obj, C.get().fs_slot as *mut c_void)
+    unsafe { get_a(g, obj, C.get().fs_slot as *mut c_void) }
 }
 
 host_fn!(fn from_item(g, args) {
@@ -219,7 +223,7 @@ host_fn!(fn root(g, args) { unsafe { get_a(g, args.this().0, C.get().root_slot a
 host_fn!(fn fs_name(g, _args) { unsafe { js_string(g, "Dropped files") } });
 
 unsafe fn callback(g: *mut c_void, v: u64) -> bool {
-    is_cell(v) && glue::rjs_kind(g, v) == 9
+    unsafe { is_cell(v) && glue::rjs_kind(g, v) == 9 }
 }
 host_fn!(fn ignore(_g, _args) { UNDEF });
 host_fn!(fn deliver(g, args) { unsafe {
@@ -247,29 +251,32 @@ unsafe fn complete(
     entries: bool,
     job: impl FnOnce() -> Result<Done, Fail> + Send + 'static,
 ) -> u64 {
-    if (ok != UNDEF && ok != NULL && !callback(g, ok))
-        || (err != UNDEF && err != NULL && !callback(g, err))
-    {
-        return throw_type_error(g, "Entry callback must be a function");
+    unsafe {
+        if (ok != UNDEF && ok != NULL && !callback(g, ok))
+            || (err != UNDEF && err != NULL && !callback(g, err))
+        {
+            return throw_type_error(g, "Entry callback must be a function");
+        }
+        let token = crate::next_token();
+        let promise = awaiting(g, Ok(token), fsa::to_made);
+        let context = new_object(g, UNDEF);
+        attach(g, context, C.get().fs_slot, filesystem_of(g, owner));
+        define(g, context, "callback", ok, 0);
+        define(g, context, "entries", enc_bool(entries), 0);
+        let on_success = make_fn(g, "", 1, deliver);
+        let on_success =
+            call(g, get(g, on_success, "bind"), on_success, &[context]).unwrap_or(UNDEF);
+        let on_error = if callback(g, err) {
+            err
+        } else {
+            make_fn(g, "", 0, ignore)
+        };
+        if let Err(e) = call(g, get(g, promise, "then"), promise, &[on_success, on_error]) {
+            glue::rjs_throw(g, e);
+        }
+        pool::submit(token, job);
+        UNDEF
     }
-    let token = crate::next_token();
-    let promise = awaiting(g, Ok(token), fsa::to_made);
-    let context = new_object(g, UNDEF);
-    attach(g, context, C.get().fs_slot, filesystem_of(g, owner));
-    define(g, context, "callback", ok, 0);
-    define(g, context, "entries", enc_bool(entries), 0);
-    let on_success = make_fn(g, "", 1, deliver);
-    let on_success = call(g, get(g, on_success, "bind"), on_success, &[context]).unwrap_or(UNDEF);
-    let on_error = if callback(g, err) {
-        err
-    } else {
-        make_fn(g, "", 0, ignore)
-    };
-    if let Err(e) = call(g, get(g, promise, "then"), promise, &[on_success, on_error]) {
-        glue::rjs_throw(g, e);
-    }
-    pool::submit(token, job);
-    UNDEF
 }
 fn one(e: Entry) -> Done {
     Done::with_value("null".into(), move |g| unsafe { make_entry(g, e) })
@@ -296,23 +303,25 @@ unsafe fn child(
     err: u64,
     kind: Kind,
 ) -> u64 {
-    let Some(e) = raw_entry(g, this)
-        .cloned()
-        .filter(|e| e.kind == Kind::Directory)
-    else {
-        return throw_type_error(g, "Illegal invocation");
-    };
-    let path = host::string_arg(g, path).unwrap_or_default();
-    let create = is_cell(options) && get(g, options, "create") == TRUE;
-    complete(g, this, ok, err, false, move || {
-        if create {
-            return Err(Fail::new(
-                "NoModificationAllowedError",
-                "Dropped entries are read-only.",
-            ));
-        }
-        Ok(one(e.child(&path, kind)?))
-    })
+    unsafe {
+        let Some(e) = raw_entry(g, this)
+            .cloned()
+            .filter(|e| e.kind == Kind::Directory)
+        else {
+            return throw_type_error(g, "Illegal invocation");
+        };
+        let path = host::string_arg(g, path).unwrap_or_default();
+        let create = is_cell(options) && get(g, options, "create") == TRUE;
+        complete(g, this, ok, err, false, move || {
+            if create {
+                return Err(Fail::new(
+                    "NoModificationAllowedError",
+                    "Dropped entries are read-only.",
+                ));
+            }
+            Ok(one(e.child(&path, kind)?))
+        })
+    }
 }
 host_fn!(fn get_file(g, args) { unsafe { child(g, args.this().0, args.arg(0).0, args.arg(1).0, args.arg(2).0, args.arg(3).0, Kind::File) } });
 host_fn!(fn get_directory(g, args) { unsafe { child(g, args.this().0, args.arg(0).0, args.arg(1).0, args.arg(2).0, args.arg(3).0, Kind::Directory) } });
@@ -398,69 +407,71 @@ host_fn!(fn read_entries(g, args) { unsafe {
 } });
 
 pub(super) unsafe fn install(g: *mut c_void) {
-    let class = |name: &'static str,
-                 parent: u64,
-                 methods: &[(&'static str, u32, HostFn)],
-                 getters: &[(&'static str, HostFn)]| {
-        define_class(
-            g,
-            &ClassSpec {
-                name,
-                arity: 0,
-                construct: None,
-                parent_proto: parent,
-                methods,
-                getters,
-                accessors: &[],
-            },
-        )
-    };
-    let base = class(
-        "FileSystemEntry",
-        0,
-        &[("getParent", 1, parent)],
-        &[
-            ("name", name),
-            ("fullPath", full_path),
-            ("filesystem", filesystem),
-            ("isFile", is_file),
-            ("isDirectory", is_directory),
-        ],
-    );
-    let f = class(
-        "FileSystemFileEntry",
-        base.proto,
-        &[("file", 1, entry_file)],
-        &[],
-    );
-    let d = class(
-        "FileSystemDirectoryEntry",
-        base.proto,
-        &[
-            ("createReader", 0, create_reader),
-            ("getFile", 1, get_file),
-            ("getDirectory", 1, get_directory),
-        ],
-        &[],
-    );
-    let r = class(
-        "FileSystemDirectoryReader",
-        0,
-        &[("readEntries", 1, read_entries)],
-        &[],
-    );
-    let fs = class("FileSystem", 0, &[], &[("name", fs_name), ("root", root)]);
-    C.set(Classes {
-        entry: make_host_class::<Entry>("FileSystemEntry") as usize,
-        reader: make_host_class::<Reader>("FileSystemDirectoryReader") as usize,
-        fs: make_host_class::<Roots>("FileSystem") as usize,
-        file_proto: f.proto,
-        dir_proto: d.proto,
-        reader_proto: r.proto,
-        fs_proto: fs.proto,
-        fs_slot: atom_priv(g, "skathi#dropFilesystem") as usize,
-        root_slot: atom_priv(g, "skathi#dropRoot") as usize,
-    });
-    let proto = get(g, get(g, global(g), "DataTransferItem"), "prototype");
-    host::method(g, proto, "webkitGetAsEntry", 0, from_item);
+    unsafe {
+        let class = |name: &'static str,
+                     parent: u64,
+                     methods: &[(&'static str, u32, HostFn)],
+                     getters: &[(&'static str, HostFn)]| {
+            define_class(
+                g,
+                &ClassSpec {
+                    name,
+                    arity: 0,
+                    construct: None,
+                    parent_proto: parent,
+                    methods,
+                    getters,
+                    accessors: &[],
+                },
+            )
+        };
+        let base = class(
+            "FileSystemEntry",
+            0,
+            &[("getParent", 1, parent)],
+            &[
+                ("name", name),
+                ("fullPath", full_path),
+                ("filesystem", filesystem),
+                ("isFile", is_file),
+                ("isDirectory", is_directory),
+            ],
+        );
+        let f = class(
+            "FileSystemFileEntry",
+            base.proto,
+            &[("file", 1, entry_file)],
+            &[],
+        );
+        let d = class(
+            "FileSystemDirectoryEntry",
+            base.proto,
+            &[
+                ("createReader", 0, create_reader),
+                ("getFile", 1, get_file),
+                ("getDirectory", 1, get_directory),
+            ],
+            &[],
+        );
+        let r = class(
+            "FileSystemDirectoryReader",
+            0,
+            &[("readEntries", 1, read_entries)],
+            &[],
+        );
+        let fs = class("FileSystem", 0, &[], &[("name", fs_name), ("root", root)]);
+        C.set(Classes {
+            entry: make_host_class::<Entry>("FileSystemEntry") as usize,
+            reader: make_host_class::<Reader>("FileSystemDirectoryReader") as usize,
+            fs: make_host_class::<Roots>("FileSystem") as usize,
+            file_proto: f.proto,
+            dir_proto: d.proto,
+            reader_proto: r.proto,
+            fs_proto: fs.proto,
+            fs_slot: atom_priv(g, "skathi#dropFilesystem") as usize,
+            root_slot: atom_priv(g, "skathi#dropRoot") as usize,
+        });
+        let proto = get(g, get(g, global(g), "DataTransferItem"), "prototype");
+        host::method(g, proto, "webkitGetAsEntry", 0, from_item);
+    }
 }

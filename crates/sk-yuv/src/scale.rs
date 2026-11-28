@@ -487,27 +487,29 @@ mod avx2 {
 
     #[target_feature(enable = "avx2")]
     pub unsafe fn accumulate_premultiplied(acc: &mut [f32], weight: f32, bytes: &[u8]) -> usize {
-        let n = bytes.len().min(acc.len()) / 4;
-        let colour = _mm256_castsi256_ps(_mm256_set_epi32(0, -1, -1, -1, 0, -1, -1, -1));
-        let one_w = _mm256_set_ps(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
-        let w = _mm256_set1_ps(weight);
-        let mut i = 0;
-        while i + 2 <= n {
-            let f = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(
-                bytes.as_ptr().add(4 * i).cast(),
-            )));
-            let m = _mm256_or_ps(
-                _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
-                one_w,
-            );
-            let dst = acc.as_mut_ptr().add(4 * i);
-            _mm256_storeu_ps(
-                dst,
-                _mm256_add_ps(_mm256_loadu_ps(dst), _mm256_mul_ps(w, _mm256_mul_ps(f, m))),
-            );
-            i += 2;
+        unsafe {
+            let n = bytes.len().min(acc.len()) / 4;
+            let colour = _mm256_castsi256_ps(_mm256_set_epi32(0, -1, -1, -1, 0, -1, -1, -1));
+            let one_w = _mm256_set_ps(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
+            let w = _mm256_set1_ps(weight);
+            let mut i = 0;
+            while i + 2 <= n {
+                let f = _mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(
+                    bytes.as_ptr().add(4 * i).cast(),
+                )));
+                let m = _mm256_or_ps(
+                    _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
+                    one_w,
+                );
+                let dst = acc.as_mut_ptr().add(4 * i);
+                _mm256_storeu_ps(
+                    dst,
+                    _mm256_add_ps(_mm256_loadu_ps(dst), _mm256_mul_ps(w, _mm256_mul_ps(f, m))),
+                );
+                i += 2;
+            }
+            4 * i
         }
-        4 * i
     }
 
     #[target_feature(enable = "avx2")]
@@ -520,29 +522,31 @@ mod avx2 {
 
     #[target_feature(enable = "avx2")]
     pub unsafe fn premultiply(bgra: &[u8], out: &mut [f32]) -> usize {
-        let n = bgra.len() / 4;
-        let colour = _mm256_castsi256_ps(_mm256_set_epi32(0, -1, -1, -1, 0, -1, -1, -1));
-        let one_w = _mm256_set_ps(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
-        let mut i = 0;
-        while i + 4 <= n {
-            let v = _mm_loadu_si128(bgra.as_ptr().add(4 * i).cast());
-            for (k, p) in [
-                _mm256_cvtepu8_epi32(v),
-                _mm256_cvtepu8_epi32(_mm_unpackhi_epi64(v, v)),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let f = _mm256_cvtepi32_ps(p);
-                let m = _mm256_or_ps(
-                    _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
-                    one_w,
-                );
-                _mm256_storeu_ps(out.as_mut_ptr().add(4 * (i + 2 * k)), _mm256_mul_ps(f, m));
+        unsafe {
+            let n = bgra.len() / 4;
+            let colour = _mm256_castsi256_ps(_mm256_set_epi32(0, -1, -1, -1, 0, -1, -1, -1));
+            let one_w = _mm256_set_ps(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
+            let mut i = 0;
+            while i + 4 <= n {
+                let v = _mm_loadu_si128(bgra.as_ptr().add(4 * i).cast());
+                for (k, p) in [
+                    _mm256_cvtepu8_epi32(v),
+                    _mm256_cvtepu8_epi32(_mm_unpackhi_epi64(v, v)),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let f = _mm256_cvtepi32_ps(p);
+                    let m = _mm256_or_ps(
+                        _mm256_and_ps(_mm256_shuffle_ps::<0xFF>(f, f), colour),
+                        one_w,
+                    );
+                    _mm256_storeu_ps(out.as_mut_ptr().add(4 * (i + 2 * k)), _mm256_mul_ps(f, m));
+                }
+                i += 4;
             }
-            i += 4;
+            i
         }
-        i
     }
 }
 

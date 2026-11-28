@@ -29,29 +29,32 @@ fn round(v: f32) -> f64 {
 
 /// The frame site that read the size, so the advisory names the line to move into `requestAnimationFrame`.
 unsafe fn read_site(g: *mut c_void) -> String {
-    let error = call(g, get(g, global(g), "Error"), UNDEF, &[]).unwrap_or(UNDEF);
-    let stack = if is_cell(error) {
-        read_string(g, get(g, error, "stack"))
-    } else {
-        None
-    };
-    stack
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.contains("[native code]"))
-        .unwrap_or("")
-        .to_string()
+    unsafe {
+        let error = call(g, get(g, global(g), "Error"), UNDEF, &[]).unwrap_or(UNDEF);
+        let stack = if is_cell(error) {
+            read_string(g, get(g, error, "stack"))
+        } else {
+            None
+        };
+        stack
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.contains("[native code]"))
+            .unwrap_or("")
+            .to_string()
+    }
 }
 
 unsafe fn advise_unlaid(g: *mut c_void, kind: &str) {
-    let site = read_site(g);
-    let at = if site.is_empty() {
-        String::new()
-    } else {
-        format!(" ({site})")
-    };
-    warn_compat(
+    unsafe {
+        let site = read_site(g);
+        let at = if site.is_empty() {
+            String::new()
+        } else {
+            format!(" ({site})")
+        };
+        warn_compat(
         g,
         &format!("layout-stale:{kind}:{site}"),
         &format!(
@@ -60,10 +63,12 @@ unsafe fn advise_unlaid(g: *mut c_void, kind: &str) {
              browser would lay out and answer it. Measure from requestAnimationFrame() or a ResizeObserver callback"
         ),
     );
+    }
 }
 
 unsafe fn note_stale(g: *mut c_void) {
-    warn_compat(
+    unsafe {
+        warn_compat(
         g,
         "scroll-layout",
         "scrollWidth/scrollHeight (and the clamp on a scroll) answered from the LAST PAINTED frame: the DOM changed \
@@ -73,35 +78,40 @@ unsafe fn note_stale(g: *mut c_void) {
          handler therefore stops one item short — do it inside requestAnimationFrame(), which runs after the frame \
          that laid the new content out",
     );
+    }
 }
 
 /// The layout box, or the drawn one with `painted`; `None` when never painted.
 unsafe fn rect(g: *mut c_void, this: u64, kind: &str, painted: bool) -> Option<Rect> {
-    let id = node_id(g, this)?;
-    perf::note_read(Read::Layout);
-    match crate::dom::current_bounds(id) {
-        (Some(r), _) => Some(if painted {
-            crate::dom::transformed(id).unwrap_or(r)
-        } else {
-            r
-        }),
-        (None, stale) => {
-            if stale {
-                advise_unlaid(g, kind);
+    unsafe {
+        let id = node_id(g, this)?;
+        perf::note_read(Read::Layout);
+        match crate::dom::current_bounds(id) {
+            (Some(r), _) => Some(if painted {
+                crate::dom::transformed(id).unwrap_or(r)
+            } else {
+                r
+            }),
+            (None, stale) => {
+                if stale {
+                    advise_unlaid(g, kind);
+                }
+                None
             }
-            None
         }
     }
 }
 
 unsafe fn dom_rect(g: *mut c_void, (x, y, w, h): Rect) -> u64 {
-    let args = [x, y, w, h].map(|v| enc_f64(f64::from(v)));
-    let mut out = UNDEF;
-    let ctor = get(g, global(g), "DOMRect");
-    if glue::rjs_construct(g, ctor, args.as_ptr(), 4, &mut out) != 0 {
-        return UNDEF;
+    unsafe {
+        let args = [x, y, w, h].map(|v| enc_f64(f64::from(v)));
+        let mut out = UNDEF;
+        let ctor = get(g, global(g), "DOMRect");
+        if glue::rjs_construct(g, ctor, args.as_ptr(), 4, &mut out) != 0 {
+            return UNDEF;
+        }
+        out
     }
-    out
 }
 
 host_fn!(fn bounding_client_rect(g, args) {
@@ -126,10 +136,12 @@ host_fn!(fn client_rects(g, args) {
 });
 
 unsafe fn list_length(g: *mut c_void, this: u64) -> Option<f64> {
-    if !is_cell(this) || !proto_chain_has(g, this, RECT_LIST.get()) {
-        return None;
+    unsafe {
+        if !is_cell(this) || !proto_chain_has(g, this, RECT_LIST.get()) {
+            return None;
+        }
+        dec_f64(get_a(g, this, LIST_LENGTH.get() as *mut c_void))
     }
-    dec_f64(get_a(g, this, LIST_LENGTH.get() as *mut c_void))
 }
 
 host_fn!(fn list_item(g, args) {
@@ -154,7 +166,7 @@ host_fn!(fn list_len(g, args) {
 });
 
 macro_rules! layout_size {
-    ($name:ident, $kind:literal, $pick:expr) => {
+    ($name:ident, $kind:literal, $pick:expr_2021) => {
         host_fn!(fn $name(g, args) {
             let r = unsafe { rect(g, args.this().0, $kind, false) }.unwrap_or_default();
             enc_f64(round($pick(r)))
@@ -166,7 +178,7 @@ layout_size!(offset_height, "offsetHeight", |r: Rect| r.3);
 
 /// The padding box (`clientWidth`/`Height`) or a border width (`clientTop`/`Left`); 0 when never painted.
 macro_rules! client_size {
-    ($name:ident, $kind:literal, $pick:expr) => {
+    ($name:ident, $kind:literal, $pick:expr_2021) => {
         host_fn!(fn $name(g, args) {
             let this = args.this().0;
             let Some(r) = (unsafe { rect(g, this, $kind, false) }) else {
@@ -191,7 +203,7 @@ client_size!(client_top, "clientTop", |_: Rect, b: [f32; 4]| b[0]);
 client_size!(client_left, "clientLeft", |_: Rect, b: [f32; 4]| b[3]);
 
 macro_rules! window_offset {
-    ($name:ident, $kind:literal, $pick:expr) => {
+    ($name:ident, $kind:literal, $pick:expr_2021) => {
         host_fn!(fn $name(g, args) {
             unsafe {
                 warn_compat(
@@ -220,17 +232,19 @@ unsafe fn scrolled(
     op: impl FnOnce(u32) -> Option<Info>,
     size_matters: bool,
 ) -> Option<Info> {
-    let id = node_id(g, this)?;
-    perf::note_read(Read::Scroll);
-    let info = op(id)?;
-    if info.stale && size_matters {
-        note_stale(g);
+    unsafe {
+        let id = node_id(g, this)?;
+        perf::note_read(Read::Scroll);
+        let info = op(id)?;
+        if info.stale && size_matters {
+            note_stale(g);
+        }
+        Some(info)
     }
-    Some(info)
 }
 
 macro_rules! content_size {
-    ($name:ident, $kind:literal, $content:expr, $layout:expr) => {
+    ($name:ident, $kind:literal, $content:expr_2021, $layout:expr_2021) => {
         host_fn!(fn $name(g, args) {
             unsafe {
                 let this = args.this().0;
@@ -267,7 +281,7 @@ host_fn!(fn scroll_top_get(g, args) {
 });
 
 unsafe fn number(g: *mut c_void, v: u64) -> Option<f64> {
-    to_number(g, v).ok()
+    unsafe { to_number(g, v).ok() }
 }
 
 host_fn!(fn scroll_left_set(g, args) {
@@ -290,39 +304,45 @@ host_fn!(fn scroll_top_set(g, args) {
 
 /// `"auto"` (and anything else) leaves it to the scrolled box's CSS `scroll-behavior`.
 unsafe fn behavior(g: *mut c_void, v: u64) -> Behavior {
-    if !host::is_string(g, v) {
-        return Behavior::Auto;
-    }
-    match read_string(g, v).as_deref() {
-        Some("smooth") => Behavior::Smooth,
-        Some("instant") => Behavior::Instant,
-        _ => Behavior::Auto,
+    unsafe {
+        if !host::is_string(g, v) {
+            return Behavior::Auto;
+        }
+        match read_string(g, v).as_deref() {
+            Some("smooth") => Behavior::Smooth,
+            Some("instant") => Behavior::Instant,
+            _ => Behavior::Auto,
+        }
     }
 }
 
 /// `scrollTo(x, y)` or `scrollTo({ left, top, behavior })`; an absent or non-numeric axis is NaN.
 unsafe fn scroll_args(g: *mut c_void, a: u64, b: u64) -> Option<(f64, f64, Behavior)> {
-    let axis = |v: u64| -> Option<f64> {
-        if v == UNDEF {
-            Some(f64::NAN)
-        } else {
-            number(g, v)
+    unsafe {
+        let axis = |v: u64| -> Option<f64> {
+            if v == UNDEF {
+                Some(f64::NAN)
+            } else {
+                number(g, v)
+            }
+        };
+        if is_object(g, a) {
+            let left = axis(get(g, a, "left"))?;
+            let top = axis(get(g, a, "top"))?;
+            return Some((left, top, behavior(g, get(g, a, "behavior"))));
         }
-    };
-    if is_object(g, a) {
-        let left = axis(get(g, a, "left"))?;
-        let top = axis(get(g, a, "top"))?;
-        return Some((left, top, behavior(g, get(g, a, "behavior"))));
+        Some((axis(a)?, axis(b)?, Behavior::Auto))
     }
-    Some((axis(a)?, axis(b)?, Behavior::Auto))
 }
 
 /// `typeof v === "object"` and not null.
 unsafe fn is_object(g: *mut c_void, v: u64) -> bool {
-    const OBJECT: u32 = 8;
-    const FUNCTION: u32 = 9;
-    let kind = glue::rjs_kind(g, v);
-    kind >= OBJECT && kind != FUNCTION
+    unsafe {
+        const OBJECT: u32 = 8;
+        const FUNCTION: u32 = 9;
+        let kind = glue::rjs_kind(g, v);
+        kind >= OBJECT && kind != FUNCTION
+    }
 }
 
 host_fn!(fn scroll_to(g, args) {
@@ -346,15 +366,17 @@ host_fn!(fn scroll_by(g, args) {
 });
 
 unsafe fn align(g: *mut c_void, v: u64, default: Align) -> Align {
-    if v == UNDEF {
-        return default;
-    }
-    match host::string_arg(g, v).as_deref() {
-        Some("start") => Align::Start,
-        Some("center") => Align::Center,
-        Some("end") => Align::End,
-        Some("nearest") => Align::Nearest,
-        _ => Align::Start,
+    unsafe {
+        if v == UNDEF {
+            return default;
+        }
+        match host::string_arg(g, v).as_deref() {
+            Some("start") => Align::Start,
+            Some("center") => Align::Center,
+            Some("end") => Align::End,
+            Some("nearest") => Align::Nearest,
+            _ => Align::Start,
+        }
     }
 }
 

@@ -24,7 +24,7 @@ struct ThreadEntry32 {
 }
 
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     fn CreateToolhelp32Snapshot(flags: u32, process: u32) -> isize;
     fn Thread32First(snapshot: isize, entry: *mut ThreadEntry32) -> i32;
     fn Thread32Next(snapshot: isize, entry: *mut ThreadEntry32) -> i32;
@@ -36,7 +36,7 @@ extern "system" {
 }
 
 #[link(name = "ntdll")]
-extern "system" {
+unsafe extern "system" {
     fn NtQueryInformationThread(
         thread: isize,
         class: u32,

@@ -25,41 +25,43 @@ thread_local! {
 }
 
 unsafe fn checked(g: *mut c_void, this: u64) -> bool {
-    is_cell(this) && proto_chain_has(g, this, PROTO.get())
+    unsafe { is_cell(this) && proto_chain_has(g, this, PROTO.get()) }
 }
 
 unsafe fn keep(g: *mut c_void, args: &redjs::api::HostArgs, push: bool) -> u64 {
-    if !checked(g, args.this().0) {
-        return throw_type_error(g, "Illegal invocation");
-    }
-    let data = args.arg(0).0;
-    let clone = get(g, global(g), "structuredClone");
-    let stored = if is_cell(clone) {
-        match call(g, clone, UNDEF, &[data]) {
-            Ok(v) => v,
-            Err(e) => {
-                redjs::glue::rjs_throw(g, e);
-                return UNDEF;
-            }
+    unsafe {
+        if !checked(g, args.this().0) {
+            return throw_type_error(g, "Illegal invocation");
         }
-    } else {
-        data
-    };
-    let url = args.arg(2).0;
-    if url != UNDEF && url != NULL {
-        warn_compat(g, "history-url", URL_ADVICE);
+        let data = args.arg(0).0;
+        let clone = get(g, global(g), "structuredClone");
+        let stored = if is_cell(clone) {
+            match call(g, clone, UNDEF, &[data]) {
+                Ok(v) => v,
+                Err(e) => {
+                    redjs::glue::rjs_throw(g, e);
+                    return UNDEF;
+                }
+            }
+        } else {
+            data
+        };
+        let url = args.arg(2).0;
+        if url != UNDEF && url != NULL {
+            warn_compat(g, "history-url", URL_ADVICE);
+        }
+        if is_cell(stored) {
+            redjs_protect(g, stored);
+        }
+        let old = STATE.replace(stored);
+        if is_cell(old) {
+            redjs_unprotect(g, old);
+        }
+        if push {
+            LENGTH.set(LENGTH.get().saturating_add(1));
+        }
+        UNDEF
     }
-    if is_cell(stored) {
-        redjs_protect(g, stored);
-    }
-    let old = STATE.replace(stored);
-    if is_cell(old) {
-        redjs_unprotect(g, old);
-    }
-    if push {
-        LENGTH.set(LENGTH.get().saturating_add(1));
-    }
-    UNDEF
 }
 
 crate::host_fn!(fn push_state(g, args) {
@@ -122,33 +124,35 @@ crate::host_fn!(fn scroll_restoration_set(g, args) {
 });
 
 pub(crate) unsafe fn install(g: *mut c_void) {
-    let class = define_class(
-        g,
-        &ClassSpec {
-            name: "History",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("pushState", 2, push_state),
-                ("replaceState", 2, replace_state),
-                ("back", 0, traverse),
-                ("forward", 0, traverse),
-                ("go", 0, traverse),
-            ],
-            getters: &[("state", state_get), ("length", length_get)],
-            accessors: &[(
-                "scrollRestoration",
-                scroll_restoration_get,
-                scroll_restoration_set,
-            )],
-        },
-    );
-    redjs_protect(g, class.proto);
-    PROTO.set(class.proto);
-    let history = new_object(g, class.proto);
-    redjs_protect(g, history);
-    define(g, global(g), "history", history, 2);
+    unsafe {
+        let class = define_class(
+            g,
+            &ClassSpec {
+                name: "History",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("pushState", 2, push_state),
+                    ("replaceState", 2, replace_state),
+                    ("back", 0, traverse),
+                    ("forward", 0, traverse),
+                    ("go", 0, traverse),
+                ],
+                getters: &[("state", state_get), ("length", length_get)],
+                accessors: &[(
+                    "scrollRestoration",
+                    scroll_restoration_get,
+                    scroll_restoration_set,
+                )],
+            },
+        );
+        redjs_protect(g, class.proto);
+        PROTO.set(class.proto);
+        let history = new_object(g, class.proto);
+        redjs_protect(g, history);
+        define(g, global(g), "history", history, 2);
+    }
 }
 
 #[cfg(test)]

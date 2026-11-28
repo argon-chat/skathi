@@ -2,7 +2,7 @@
 name = "sk-sticker"
 description = "Skathi's <sk-sticker>: Lottie and VP9-alpha stickers with shared decoders and a loop cache"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

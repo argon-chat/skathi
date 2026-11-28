@@ -13,7 +13,7 @@ use objc2_foundation::NSString;
 use super::Theme;
 
 #[link(name = "AppKit", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     static NSAppearanceNameAqua: &'static NSString;
     static NSAppearanceNameDarkAqua: &'static NSString;
 }

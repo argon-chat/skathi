@@ -818,19 +818,21 @@ fn finish(paths: Vec<PathBuf>, then: Then) -> Result<Done, Fail> {
 
 /// The picked Files and their FileList, on the JS thread; each File is protected until the list holds it.
 unsafe fn make_file_list(g: *mut std::ffi::c_void, picked: &[Picked]) -> u64 {
-    use sk_runtime::redjs::ffi::{redjs_protect, redjs_unprotect};
-    use sk_runtime::redjs::webapi::file;
-    let mut files = Vec::with_capacity(picked.len());
-    for p in picked {
-        let f = file::create_file(g, &p.path, &p.name, None, p.size, p.mtime, &p.rel);
-        redjs_protect(g, f);
-        files.push(f);
+    unsafe {
+        use sk_runtime::redjs::ffi::{redjs_protect, redjs_unprotect};
+        use sk_runtime::redjs::webapi::file;
+        let mut files = Vec::with_capacity(picked.len());
+        for p in picked {
+            let f = file::create_file(g, &p.path, &p.name, None, p.size, p.mtime, &p.rel);
+            redjs_protect(g, f);
+            files.push(f);
+        }
+        let list = file::create_file_list(g, &files);
+        for f in files {
+            redjs_unprotect(g, f);
+        }
+        list
     }
-    let list = file::create_file_list(g, &files);
-    for f in files {
-        redjs_unprotect(g, f);
-    }
-    list
 }
 
 pub fn describe(n: &Native) -> Json {

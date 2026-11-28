@@ -37,10 +37,12 @@ pub(crate) fn escape(s: &str) -> String {
 }
 
 unsafe fn string_of(g: *mut c_void, v: u64) -> String {
-    to_js_string(g, v)
-        .ok()
-        .and_then(|s| read_string(g, s))
-        .unwrap_or_default()
+    unsafe {
+        to_js_string(g, v)
+            .ok()
+            .and_then(|s| read_string(g, s))
+            .unwrap_or_default()
+    }
 }
 
 host_fn!(fn css_escape(g, args) {

@@ -1,4 +1,4 @@
-use super::{Binding, Button, Chord, EITHER, Fired, POSITION};
+use super::{Binding, Button, Chord, Fired, EITHER, POSITION};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
@@ -376,11 +376,10 @@ mod tests {
         let mut e = Engine::default();
         let now = Instant::now();
         e.begin_capture(now, vec![key(0xa2)]);
-        assert!(
-            e.input(Button { device: 1, code: 1 }, true, now)
-                .capture
-                .is_none()
-        );
+        assert!(e
+            .input(Button { device: 1, code: 1 }, true, now)
+            .capture
+            .is_none());
         e.input(Button { device: 1, code: 1 }, false, now);
         e.input(key(0x4b), true, now);
         e.input(key(0x4b), false, now);
@@ -425,11 +424,10 @@ mod tests {
         e.set_bindings(vec![b]);
         assert_eq!(e.input(key(0x70), true, now).events, [Fired::down("hold")]);
         assert_eq!(e.input(key(0x70), false, now).events, [Fired::up("hold")]);
-        assert!(
-            e.input(key(0x70), true, now + Duration::from_millis(50))
-                .events
-                .is_empty()
-        );
+        assert!(e
+            .input(key(0x70), true, now + Duration::from_millis(50))
+            .events
+            .is_empty());
         e.input(key(0x70), false, now);
         assert_eq!(
             e.input(key(0x70), true, now + Duration::from_millis(100))

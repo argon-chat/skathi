@@ -2,7 +2,7 @@
 name = "sk-locale"
 description = "Skathi's own UI text in the user's language, and appLocale for an app's"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

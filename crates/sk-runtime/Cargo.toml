@@ -2,7 +2,7 @@
 name = "sk-runtime"
 description = "Skathi's JavaScriptCore runtime: context boot, the pump, the bridge and host functions over redjs"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

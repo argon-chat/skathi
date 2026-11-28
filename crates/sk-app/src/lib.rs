@@ -1019,11 +1019,16 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 
 /// The host exe's `main`: this process IS the app.
 pub fn run_exe() {
-    #[cfg(target_os = "macos")]
-    responsible::claim();
-    fault::install();
-    // First, so a host whose runner is already gone never opens a window.
-    owner::watch();
+    run_host(false);
+}
+
+/// Entry point for the SDK binary, which may replace its own process image during startup.
+#[doc(hidden)]
+pub fn run_standalone_exe() {
+    run_host(true);
+}
+
+fn run_host(standalone: bool) {
     // The one parse of the command line; consumers never read `std::env::args()`.
     let args = sk_desktop::args::process();
     // `sk build`'s host check: a bare host prints one JSON line and exits. A packaged exe's argv belongs to its app.
@@ -1039,11 +1044,12 @@ pub fn run_exe() {
     {
         return;
     }
-    // `--sk-dist` is `SK_DIST` for a process started for a protocol link (no inherited environment).
-    if let Some(dist) = args.host.sk_dist.as_deref().filter(|d| !d.is_empty()) {
-        std::env::set_var("SK_DIST", dist);
-    }
-    memory::apply();
+    slot::init(&args.host);
+    memory::apply(standalone);
+    #[cfg(target_os = "macos")]
+    responsible::claim();
+    fault::install();
+    owner::watch();
     // Single instance, before the inspector, logger and gpui: a second launch forwards its
     // argv/url/cwd and exits without a window. The inspector (`--devtools`) is never an instance.
     {
@@ -1075,9 +1081,6 @@ pub fn run_exe() {
             sk_desktop::launch::register_declared();
         }
     }
-    // `--devtools` rewrites the dist slot and instance env vars: before anything reads them.
-    #[cfg(sk_devtools)]
-    inspector::init();
     #[cfg(feature = "prod")]
     {
         #[cfg(sk_devtools)]

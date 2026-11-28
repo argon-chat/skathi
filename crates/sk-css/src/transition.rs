@@ -695,7 +695,7 @@ fn parse_shorthand_entry<'i>(
         (None, None, None, None, None);
     while !input.is_exhausted() {
         macro_rules! take {
-            ($slot:ident, $parse:expr) => {
+            ($slot:ident, $parse:expr_2021) => {
                 if $slot.is_none() {
                     if let Ok(value) = input.try_parse($parse) {
                         $slot = Some(value);

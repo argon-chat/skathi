@@ -2,7 +2,7 @@
 name = "sk-ffi"
 description = "Calling C functions by signature for Skathi's skathi:ffi: build-time invoke stubs, library loading"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

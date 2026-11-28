@@ -13,9 +13,12 @@ use crate::permissions::{Permissions, ProcessArg, ProcessArgs, ProcessEntry};
 /// before libtest's `main` and exits.
 mod probe {
     #[used]
-    #[cfg_attr(windows, link_section = ".CRT$XCU")]
-    #[cfg_attr(target_os = "linux", link_section = ".init_array")]
-    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__mod_init_func")]
+    #[cfg_attr(windows, unsafe(link_section = ".CRT$XCU"))]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
+    #[cfg_attr(
+        target_vendor = "apple",
+        unsafe(link_section = "__DATA,__mod_init_func")
+    )]
     static PROBE: extern "C" fn() = run;
 
     fn args() -> Vec<String> {

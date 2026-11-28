@@ -33,6 +33,7 @@ members = [
 exclude = ["vendor", "crates/sk-image", "crates/sk-thorvg-sys/tools/regen-bindings"]
 
 [workspace.package]
+edition = "2024"
 version = "0.9.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/argon-chat/skathi"
@@ -106,10 +107,8 @@ strip = "none"
 debug = true
 
 # Dependencies are optimised in dev: unoptimised taffy layout and cascade dominated frame time.
-# Line tables only: their full debug info was nearly half of the PDB every relink rewrites.
 [profile.dev.package."*"]
 opt-level = 2
-debug = "line-tables-only"
 
 # Pixel kernel: generic `image::imageops::resize` compiles at the calling crate's opt-level.
 [profile.dev.package.sk-resample]

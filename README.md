@@ -6,7 +6,8 @@
 
 Desktop apps from Vue 3 and Svelte 5 components, without a browser. GPU-rendered UI with shader
 effects from CSS, JavaScriptCore for the script, or the script compiled ahead of time to machine code.
-Windows, macOS (arm64) and Linux (x64).
+Windows and Linux x64 prebuilt hosts require **x86-64-v3**. The macOS host runs on Apple silicon.
+[CPU requirements](https://skathi.land/guides/packaging/#cpu-requirements)
 
 Documentation: [skathi.land](https://skathi.land)
 

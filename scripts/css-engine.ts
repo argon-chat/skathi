@@ -1,7 +1,7 @@
 // Builds packages/cli/check/sk-css.wasm.br, the CSS checker `sk check` runs: sk-css's css-check example for
 // wasm32-unknown-unknown, brotli-compressed. A --release build (the npm package) is first trimmed with Binaryen (the
-// root `binaryen` devDependency), which takes about a minute; a dev build (tests, `sk check` from a checkout) is an
-// incremental cargo build, used as is. A custom section stamps the module with a hash of every input and the kind of build, so
+// root `binaryen` devDependency), which takes about a minute. Dev builds use Cargo's WASM output directly.
+// A custom section stamps the module with a hash of every input and the kind of build, so
 // --ensure rebuilds only a missing or stale module, and a dev module never passes for a release one.
 //
 //   bun scripts/css-engine.ts [--release]            build
@@ -176,13 +176,13 @@ function run(command: string, args: string[], quiet: boolean, failure: string) {
 }
 
 function build(sources: Buffer, release: boolean, quiet: boolean) {
-  // Release code generation without LTO, incremental, in many units: an sk-css edit rebuilds in seconds, not a minute.
+  // Parallel code generation keeps the local Wasm build quick.
   const profile = release
     ? ["--release"]
     : [
         "--profile",
         "css-dev",
-        ...['inherits="release"', "lto=false", "codegen-units=256", "incremental=true"].flatMap((s) => [
+        ...['inherits="release"', "lto=false", "codegen-units=256"].flatMap((s) => [
           "--config",
           "profile.css-dev." + s,
         ]),

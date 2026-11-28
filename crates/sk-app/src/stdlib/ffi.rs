@@ -126,71 +126,83 @@ fn pointer_class() -> JSClassRef {
 }
 
 unsafe fn library<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativeLibrary> {
-    match host_data::<NativeLibrary>(g, library_class(), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a NativeLibrary"),
+    unsafe {
+        match host_data::<NativeLibrary>(g, library_class(), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a NativeLibrary"),
+        }
     }
 }
 
 unsafe fn pointer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativePointer> {
-    match host_data::<NativePointer>(g, pointer_class(), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a NativePointer"),
+    unsafe {
+        match host_data::<NativePointer>(g, pointer_class(), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a NativePointer"),
+        }
     }
 }
 
 unsafe fn pointer_new(g: *mut c_void, address: u64) -> u64 {
-    pointer_kept(g, address, None)
+    unsafe { pointer_kept(g, address, None) }
 }
 
 unsafe fn pointer_kept(g: *mut c_void, address: u64, keep: Option<Region>) -> u64 {
-    host_create(
-        g,
-        pointer_class(),
-        prototype(g, "NativePointer"),
-        NativePointer { address, keep },
-    )
+    unsafe {
+        host_create(
+            g,
+            pointer_class(),
+            prototype(g, "NativePointer"),
+            NativePointer { address, keep },
+        )
+    }
 }
 
 unsafe fn dom<T>(g: *mut c_void, name: &str, message: &str) -> Js<T> {
-    host::throw(g, name, message);
-    Err(Thrown)
+    unsafe {
+        host::throw(g, name, message);
+        Err(Thrown)
+    }
 }
 
 unsafe fn length(g: *mut c_void, array: u64) -> usize {
-    to_number(g, get(g, array, "length")).unwrap_or(0.0) as usize
+    unsafe { to_number(g, get(g, array, "length")).unwrap_or(0.0) as usize }
 }
 
 unsafe fn parse_type(g: *mut c_void, v: u64, what: &str) -> Js<(Kind, Option<Arc<StructDef>>)> {
-    if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
-        return Ok((Kind::Struct, Some(of.def.clone())));
+    unsafe {
+        if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
+            return Ok((Kind::Struct, Some(of.def.clone())));
+        }
+        Ok((parse_kind(g, v, what)?, None))
     }
-    Ok((parse_kind(g, v, what)?, None))
 }
 
 unsafe fn parse_kind(g: *mut c_void, v: u64, what: &str) -> Js<Kind> {
-    if host_data::<StructType>(g, struct_class(), v).is_some() {
-        return type_error(g, &format!("{what}: a callback takes and returns no struct by value; a struct arrives as a \"pointer\""));
+    unsafe {
+        if host_data::<StructType>(g, struct_class(), v).is_some() {
+            return type_error(g, &format!("{what}: a callback takes and returns no struct by value; a struct arrives as a \"pointer\""));
+        }
+        let name = if kind(g, v) == KIND_STRING {
+            read_string(g, v).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if let Some((_, found)) = KINDS.iter().find(|(n, _)| *n == name) {
+            return Ok(*found);
+        }
+        if name == "callback" {
+            return type_error(g, &format!("{what}: \"callback\" is not a type; make a NativeCallback and pass its pointer to a \"pointer\" parameter"));
+        }
+        let known: Vec<&str> = KINDS.iter().map(|(n, _)| *n).collect();
+        type_error(
+            g,
+            &format!(
+                "{what}: \"{name}\" is not a type; use one of {}",
+                known.join(", ")
+            ),
+        )
     }
-    let name = if kind(g, v) == KIND_STRING {
-        read_string(g, v).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    if let Some((_, found)) = KINDS.iter().find(|(n, _)| *n == name) {
-        return Ok(*found);
-    }
-    if name == "callback" {
-        return type_error(g, &format!("{what}: \"callback\" is not a type; make a NativeCallback and pass its pointer to a \"pointer\" parameter"));
-    }
-    let known: Vec<&str> = KINDS.iter().map(|(n, _)| *n).collect();
-    type_error(
-        g,
-        &format!(
-            "{what}: \"{name}\" is not a type; use one of {}",
-            known.join(", ")
-        ),
-    )
 }
 
 /// `[symbol, argument types, return type, errno, optional, named parameters of a variadic function]`.
@@ -200,80 +212,82 @@ unsafe fn parse_function(
     library: &str,
     loaded: &sk_ffi::Library,
 ) -> Js<Option<Function>> {
-    let name = string(g, get_i(g, def, 0), "dlopen: a symbol's name")?;
-    let what = format!("dlopen: {library}.{name}");
-    let types = get_i(g, def, 1);
-    let mut args = Vec::new();
-    let mut structs = Vec::new();
-    for i in 0..length(g, types) {
-        let (kind, of) = parse_type(g, get_i(g, types, i as u32), &what)?;
-        structs.push(of);
-        if kind == Kind::Plain(Type::Void) {
-            return type_error(g, &format!("{what}: \"void\" is not an argument type"));
+    unsafe {
+        let name = string(g, get_i(g, def, 0), "dlopen: a symbol's name")?;
+        let what = format!("dlopen: {library}.{name}");
+        let types = get_i(g, def, 1);
+        let mut args = Vec::new();
+        let mut structs = Vec::new();
+        for i in 0..length(g, types) {
+            let (kind, of) = parse_type(g, get_i(g, types, i as u32), &what)?;
+            structs.push(of);
+            if kind == Kind::Plain(Type::Void) {
+                return type_error(g, &format!("{what}: \"void\" is not an argument type"));
+            }
+            args.push(kind);
         }
-        args.push(kind);
-    }
-    let (returns, returned) = parse_type(g, get_i(g, def, 2), &what)?;
-    let by_value = returned.is_some() || structs.iter().any(Option::is_some);
-    if returns == Kind::Buffer {
-        return type_error(
-            g,
-            &format!(
-                "{what}: a \"buffer\" cannot be returned; return a \"pointer\" and read from it"
-            ),
-        );
-    }
-    let errno = to_bool(g, get_i(g, def, 3));
-    let optional = to_bool(g, get_i(g, def, 4));
-    let variadic = get_i(g, def, 5);
-    let nonblocking = to_bool(g, get_i(g, def, 6));
-    let buffers = args.contains(&Kind::Buffer);
-    let fixed = if variadic == UNDEF {
-        None
-    } else if by_value {
-        return type_error(g, &format!("{what}: a variadic function takes and returns no struct by value; pass a \"pointer\" to the struct"));
-    } else {
-        let named = count(g, variadic, &format!("{what}: variadic"))?;
-        if named > args.len() {
-            return range_error(
+        let (returns, returned) = parse_type(g, get_i(g, def, 2), &what)?;
+        let by_value = returned.is_some() || structs.iter().any(Option::is_some);
+        if returns == Kind::Buffer {
+            return type_error(
                 g,
                 &format!(
-                    "{what}: variadic is the number of named parameters, at most {}",
-                    args.len()
-                ),
+                "{what}: a \"buffer\" cannot be returned; return a \"pointer\" and read from it"
+            ),
             );
         }
-        Some(named)
-    };
-    let Some(address) = loaded.symbol(&name) else {
-        if optional {
-            return Ok(None);
-        }
-        return dom(
-            g,
-            "NotFoundError",
-            &format!("{what}: the library has no symbol \"{name}\""),
-        );
-    };
-    let label = CString::new(format!("{library}!{name}")).unwrap_or_default();
-    Ok(Some(Function {
-        signature: Signature {
-            args: args.iter().map(|k| k.c()).collect(),
-            returns: returns.c(),
-            fixed,
-        },
-        name,
-        address: address as usize,
-        args,
-        returns,
-        structs,
-        returned,
-        by_value,
-        errno,
-        nonblocking,
-        buffers,
-        label: Box::leak(label.into_boxed_c_str()),
-    }))
+        let errno = to_bool(g, get_i(g, def, 3));
+        let optional = to_bool(g, get_i(g, def, 4));
+        let variadic = get_i(g, def, 5);
+        let nonblocking = to_bool(g, get_i(g, def, 6));
+        let buffers = args.contains(&Kind::Buffer);
+        let fixed = if variadic == UNDEF {
+            None
+        } else if by_value {
+            return type_error(g, &format!("{what}: a variadic function takes and returns no struct by value; pass a \"pointer\" to the struct"));
+        } else {
+            let named = count(g, variadic, &format!("{what}: variadic"))?;
+            if named > args.len() {
+                return range_error(
+                    g,
+                    &format!(
+                        "{what}: variadic is the number of named parameters, at most {}",
+                        args.len()
+                    ),
+                );
+            }
+            Some(named)
+        };
+        let Some(address) = loaded.symbol(&name) else {
+            if optional {
+                return Ok(None);
+            }
+            return dom(
+                g,
+                "NotFoundError",
+                &format!("{what}: the library has no symbol \"{name}\""),
+            );
+        };
+        let label = CString::new(format!("{library}!{name}")).unwrap_or_default();
+        Ok(Some(Function {
+            signature: Signature {
+                args: args.iter().map(|k| k.c()).collect(),
+                returns: returns.c(),
+                fixed,
+            },
+            name,
+            address: address as usize,
+            args,
+            returns,
+            structs,
+            returned,
+            by_value,
+            errno,
+            nonblocking,
+            buffers,
+            label: Box::leak(label.into_boxed_c_str()),
+        }))
+    }
 }
 
 std_fn!(fn ffi_open(g, args) {
@@ -314,50 +328,54 @@ fn range(ty: Type) -> (i128, i128) {
 
 /// An integer of `ty` from a number or a bigint, by one rule whichever the engine holds it as.
 unsafe fn integer(g: *mut c_void, v: u64, ty: Type, what: &dyn Display) -> Js<u64> {
-    if let Some(n) = dec_f64(v) {
-        let whole = n as i64;
-        let (min, max) = range(ty);
-        if whole as f64 == n
-            && n.abs() <= 9_007_199_254_740_991.0
-            && (min..=max).contains(&(whole as i128))
-        {
-            return Ok(whole as u64);
-        }
-    }
-    let name = Kind::Plain(ty).name();
-    let value: i128 = match kind(g, v) {
-        KIND_BIGINT => {
-            let text = call(g, get(g, v, "toString"), v, &[]).map_err(|_| Thrown)?;
-            match read_string(g, text).and_then(|t| t.parse().ok()) {
-                Some(value) => value,
-                None => return range_error(g, &format!("{what} does not fit {name}")),
+    unsafe {
+        if let Some(n) = dec_f64(v) {
+            let whole = n as i64;
+            let (min, max) = range(ty);
+            if whole as f64 == n
+                && n.abs() <= 9_007_199_254_740_991.0
+                && (min..=max).contains(&(whole as i128))
+            {
+                return Ok(whole as u64);
             }
         }
-        KIND_INT32 | KIND_DOUBLE => {
-            let n = number(g, v)?;
-            if n.fract() != 0.0 || !n.is_finite() {
-                return type_error(g, &format!("{what} must be an integer, as it is {name}"));
+        let name = Kind::Plain(ty).name();
+        let value: i128 = match kind(g, v) {
+            KIND_BIGINT => {
+                let text = call(g, get(g, v, "toString"), v, &[]).map_err(|_| Thrown)?;
+                match read_string(g, text).and_then(|t| t.parse().ok()) {
+                    Some(value) => value,
+                    None => return range_error(g, &format!("{what} does not fit {name}")),
+                }
             }
-            if n.abs() > 9_007_199_254_740_991.0 {
-                return range_error(
+            KIND_INT32 | KIND_DOUBLE => {
+                let n = number(g, v)?;
+                if n.fract() != 0.0 || !n.is_finite() {
+                    return type_error(g, &format!("{what} must be an integer, as it is {name}"));
+                }
+                if n.abs() > 9_007_199_254_740_991.0 {
+                    return range_error(
+                        g,
+                        &format!(
+                            "{what} is beyond the integers a number holds exactly; pass a bigint"
+                        ),
+                    );
+                }
+                n as i128
+            }
+            _ => {
+                return type_error(
                     g,
-                    &format!("{what} is beyond the integers a number holds exactly; pass a bigint"),
-                );
+                    &format!("{what} must be a number or a bigint, as it is {name}"),
+                )
             }
-            n as i128
+        };
+        let (min, max) = range(ty);
+        if value < min || value > max {
+            return range_error(g, &format!("{what}: {value} does not fit {name}"));
         }
-        _ => {
-            return type_error(
-                g,
-                &format!("{what} must be a number or a bigint, as it is {name}"),
-            )
-        }
-    };
-    let (min, max) = range(ty);
-    if value < min || value > max {
-        return range_error(g, &format!("{what}: {value} does not fit {name}"));
+        Ok(value as u64)
     }
-    Ok(value as u64)
 }
 
 /// Strings encoded for one call.
@@ -376,8 +394,9 @@ unsafe fn to_slot(
     arena: &mut Arena,
     what: &dyn Display,
 ) -> Js<u64> {
-    let nothing = v == NULL || v == UNDEF;
-    match kind_of {
+    unsafe {
+        let nothing = v == NULL || v == UNDEF;
+        match kind_of {
         Kind::Buffer | Kind::Struct => Ok(0),
         Kind::CString if nothing => Ok(0),
         Kind::CString => {
@@ -425,6 +444,7 @@ unsafe fn to_slot(
         Kind::Plain(Type::Void) => Ok(0),
         Kind::Plain(ty) => integer(g, v, ty, what),
     }
+    }
 }
 
 /// The address of a buffer argument. The memory of a `NativeBuffer`, given itself or under a view,
@@ -436,10 +456,11 @@ unsafe fn buffer_address(
     what: &dyn Display,
     held: &mut Vec<Region>,
 ) -> Js<u64> {
-    if v == NULL || v == UNDEF {
-        return Ok(0);
-    }
-    let (len, address) = match buffer_source(g, v) {
+    unsafe {
+        if v == NULL || v == UNDEF {
+            return Ok(0);
+        }
+        let (len, address) = match buffer_source(g, v) {
         Some(view) => {
             held.extend(memory::holder_of(view.data));
             (view.len, view.data as u64)
@@ -458,51 +479,58 @@ unsafe fn buffer_address(
             }
         },
     };
-    if len == 0 {
-        return type_error(
-            g,
-            &format!("{what} is empty or detached; pass null for no buffer"),
-        );
+        if len == 0 {
+            return type_error(
+                g,
+                &format!("{what} is empty or detached; pass null for no buffer"),
+            );
+        }
+        Ok(address)
     }
-    Ok(address)
 }
 
 unsafe fn c_string(g: *mut c_void, address: u64, limit: Option<usize>) -> u64 {
-    let start = address as *const u8;
-    let mut len = 0;
-    while limit.is_none_or(|l| len < l) && *start.add(len) != 0 {
-        len += 1;
+    unsafe {
+        let start = address as *const u8;
+        let mut len = 0;
+        while limit.is_none_or(|l| len < l) && *start.add(len) != 0 {
+            len += 1;
+        }
+        let bytes = std::slice::from_raw_parts(start, len);
+        js_string(g, &String::from_utf8_lossy(bytes))
     }
-    let bytes = std::slice::from_raw_parts(start, len);
-    js_string(g, &String::from_utf8_lossy(bytes))
 }
 
 unsafe fn w_string(g: *mut c_void, address: u64, limit: Option<usize>) -> u64 {
-    let start = address as *const u16;
-    let mut len = 0;
-    while limit.is_none_or(|l| len < l) && start.add(len).read_unaligned() != 0 {
-        len += 1;
+    unsafe {
+        let start = address as *const u16;
+        let mut len = 0;
+        while limit.is_none_or(|l| len < l) && start.add(len).read_unaligned() != 0 {
+            len += 1;
+        }
+        let units: Vec<u16> = (0..len).map(|i| start.add(i).read_unaligned()).collect();
+        js_string16(g, &units)
     }
-    let units: Vec<u16> = (0..len).map(|i| start.add(i).read_unaligned()).collect();
-    js_string16(g, &units)
 }
 
 unsafe fn from_slot(g: *mut c_void, value: u64, kind_of: Kind) -> Js<u64> {
-    Ok(match kind_of {
-        Kind::Buffer | Kind::Struct | Kind::Plain(Type::Void) => UNDEF,
-        Kind::CString if value == 0 => NULL,
-        Kind::CString => c_string(g, value, None),
-        Kind::WString if value == 0 => NULL,
-        Kind::WString => w_string(g, value, None),
-        Kind::Plain(Type::Bool) => enc_bool(value != 0),
-        Kind::Plain(Type::F32) => enc_f64(f32::from_bits(value as u32) as f64),
-        Kind::Plain(Type::F64) => enc_f64(f64::from_bits(value)),
-        Kind::Plain(Type::Pointer) => pointer_new(g, value),
-        Kind::Plain(Type::I64 | Type::Isize) => big_int(g, value as i64)?,
-        Kind::Plain(Type::U64 | Type::Usize) => big_uint(g, value)?,
-        Kind::Plain(Type::I8 | Type::I16 | Type::I32) => enc_f64(value as i64 as f64),
-        Kind::Plain(_) => enc_f64(value as f64),
-    })
+    unsafe {
+        Ok(match kind_of {
+            Kind::Buffer | Kind::Struct | Kind::Plain(Type::Void) => UNDEF,
+            Kind::CString if value == 0 => NULL,
+            Kind::CString => c_string(g, value, None),
+            Kind::WString if value == 0 => NULL,
+            Kind::WString => w_string(g, value, None),
+            Kind::Plain(Type::Bool) => enc_bool(value != 0),
+            Kind::Plain(Type::F32) => enc_f64(f32::from_bits(value as u32) as f64),
+            Kind::Plain(Type::F64) => enc_f64(f64::from_bits(value)),
+            Kind::Plain(Type::Pointer) => pointer_new(g, value),
+            Kind::Plain(Type::I64 | Type::Isize) => big_int(g, value as i64)?,
+            Kind::Plain(Type::U64 | Type::Usize) => big_uint(g, value)?,
+            Kind::Plain(Type::I8 | Type::I16 | Type::I32) => enc_f64(value as i64 as f64),
+            Kind::Plain(_) => enc_f64(value as f64),
+        })
+    }
 }
 
 /// A call handed to a worker thread. It owns everything the library is given: the strings and a
@@ -607,12 +635,14 @@ fn submit(job: Job) {
 
 /// A resizable buffer can shrink under the copy that is written back.
 unsafe fn resizable(g: *mut c_void, v: u64) -> bool {
-    let buffer = if typed_view(g, v).is_some() {
-        get(g, v, "buffer")
-    } else {
-        v
-    };
-    to_bool(g, get(g, buffer, "resizable")) || to_bool(g, get(g, buffer, "growable"))
+    unsafe {
+        let buffer = if typed_view(g, v).is_some() {
+            get(g, v, "buffer")
+        } else {
+            v
+        };
+        to_bool(g, get(g, buffer, "resizable")) || to_bool(g, get(g, buffer, "growable"))
+    }
 }
 
 unsafe fn call_on_worker(
@@ -624,114 +654,120 @@ unsafe fn call_on_worker(
     arena: Arena,
     what: &str,
 ) -> Js<u64> {
-    let mut buffers = Vec::new();
-    let mut natives = Vec::new();
-    for (i, kind_of) in function.args.iter().enumerate() {
-        let v = values[i];
-        if *kind_of != Kind::Buffer || v == NULL || v == UNDEF {
-            continue;
+    unsafe {
+        let mut buffers = Vec::new();
+        let mut natives = Vec::new();
+        for (i, kind_of) in function.args.iter().enumerate() {
+            let v = values[i];
+            if *kind_of != Kind::Buffer || v == NULL || v == UNDEF {
+                continue;
+            }
+            let what = format!("{what}: argument {} (buffer)", i + 1);
+            let mut held = Vec::new();
+            buffer_address(g, v, &what, &mut held)?;
+            if !held.is_empty() {
+                natives.push((i, v, what));
+                continue;
+            }
+            if resizable(g, v) {
+                return type_error(g, &format!("{what} is resizable, which a call on another thread cannot take; pass a buffer of a fixed length"));
+            }
+            let copy = bytes_arg(g, v, &what)?.to_vec();
+            buffers.push((i, v, copy));
         }
-        let what = format!("{what}: argument {} (buffer)", i + 1);
-        let mut held = Vec::new();
-        buffer_address(g, v, &what, &mut held)?;
-        if !held.is_empty() {
-            natives.push((i, v, what));
-            continue;
-        }
-        if resizable(g, v) {
-            return type_error(g, &format!("{what} is resizable, which a call on another thread cannot take; pass a buffer of a fixed length"));
-        }
-        let copy = bytes_arg(g, v, &what)?.to_vec();
-        buffers.push((i, v, copy));
-    }
-    if IN_FLIGHT.load(Ordering::Acquire) >= IN_FLIGHT_LIMIT {
-        return dom(
-            g,
-            "QuotaExceededError",
-            &format!(
+        if IN_FLIGHT.load(Ordering::Acquire) >= IN_FLIGHT_LIMIT {
+            return dom(
+                g,
+                "QuotaExceededError",
+                &format!(
                 "{what}: {IN_FLIGHT_LIMIT} calls on other threads are already waiting or running"
             ),
-        );
-    }
-    let mut lent: Vec<(u64, Region)> = Vec::new();
-    for (i, v, what) in &natives {
-        let region = match lent.iter().find(|(given, _)| given == v) {
-            Some((_, region)) => region.clone(),
-            None => match memory::send_away(g, *v, what) {
-                Ok(region) => {
-                    capi::JSValueProtect(g as _, *v as usize as _);
-                    lent.push((*v, region.clone()));
-                    region
-                }
-                Err(Thrown) => {
-                    for (v, _) in &lent {
-                        memory::come_back(g, *v);
-                        capi::JSValueUnprotect(g as _, *v as usize as _);
+            );
+        }
+        let mut lent: Vec<(u64, Region)> = Vec::new();
+        for (i, v, what) in &natives {
+            let region = match lent.iter().find(|(given, _)| given == v) {
+                Some((_, region)) => region.clone(),
+                None => match memory::send_away(g, *v, what) {
+                    Ok(region) => {
+                        capi::JSValueProtect(g as _, *v as usize as _);
+                        lent.push((*v, region.clone()));
+                        region
                     }
-                    return Err(Thrown);
-                }
+                    Err(Thrown) => {
+                        for (v, _) in &lent {
+                            memory::come_back(g, *v);
+                            capi::JSValueUnprotect(g as _, *v as usize as _);
+                        }
+                        return Err(Thrown);
+                    }
+                },
+            };
+            slots[*i] = region.ptr() as u64;
+        }
+        IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+        for (i, v, copy) in &mut buffers {
+            slots[*i] = copy.as_mut_ptr() as u64;
+            capi::JSValueProtect(g as _, *v as usize as _);
+        }
+        let (promise, settler) = host::deferred(g);
+        submit(Job {
+            address: function.address,
+            signature: function.signature.clone(),
+            slots,
+            structs,
+            label: function.label,
+            done: Done {
+                g: g as usize,
+                settler,
+                returns: function.returns,
+                returned: function
+                    .returned
+                    .as_ref()
+                    .map(|def| (def.clone(), def.room())),
+                errno: function.errno,
+                buffers: buffers.into_iter().map(|(_, v, copy)| (v, copy)).collect(),
+                lent,
             },
-        };
-        slots[*i] = region.ptr() as u64;
+            _arena: arena,
+        });
+        Ok(promise)
     }
-    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
-    for (i, v, copy) in &mut buffers {
-        slots[*i] = copy.as_mut_ptr() as u64;
-        capi::JSValueProtect(g as _, *v as usize as _);
-    }
-    let (promise, settler) = host::deferred(g);
-    submit(Job {
-        address: function.address,
-        signature: function.signature.clone(),
-        slots,
-        structs,
-        label: function.label,
-        done: Done {
-            g: g as usize,
-            settler,
-            returns: function.returns,
-            returned: function
-                .returned
-                .as_ref()
-                .map(|def| (def.clone(), def.room())),
-            errno: function.errno,
-            buffers: buffers.into_iter().map(|(_, v, copy)| (v, copy)).collect(),
-            lent,
-        },
-        _arena: arena,
-    });
-    Ok(promise)
 }
 
 unsafe fn finish(done: Done, outcome: sk_ffi::Outcome) {
-    let g = done.g as *mut c_void;
-    for (v, copy) in &done.buffers {
-        if let Some(view) = buffer_source(g, *v).filter(|view| view.len == copy.len()) {
-            view.bytes_mut().copy_from_slice(copy);
+    unsafe {
+        let g = done.g as *mut c_void;
+        for (v, copy) in &done.buffers {
+            if let Some(view) = buffer_source(g, *v).filter(|view| view.len == copy.len()) {
+                view.bytes_mut().copy_from_slice(copy);
+            }
+            capi::JSValueUnprotect(g as _, *v as usize as _);
         }
-        capi::JSValueUnprotect(g as _, *v as usize as _);
-    }
-    for (v, _) in &done.lent {
-        memory::come_back(g, *v);
-        capi::JSValueUnprotect(g as _, *v as usize as _);
-    }
-    let value = match returned_value(g, outcome.value, done.returns, &done.returned) {
-        Ok(value) if done.errno => with_errno(g, value, outcome.os_error),
-        Ok(value) => value,
-        Err(Thrown) => {
-            let mut error = UNDEF;
-            glue::rjs_exception_pending(g, &mut error);
-            return done.settler.reject(g, error);
+        for (v, _) in &done.lent {
+            memory::come_back(g, *v);
+            capi::JSValueUnprotect(g as _, *v as usize as _);
         }
-    };
-    done.settler.resolve(g, value);
+        let value = match returned_value(g, outcome.value, done.returns, &done.returned) {
+            Ok(value) if done.errno => with_errno(g, value, outcome.os_error),
+            Ok(value) => value,
+            Err(Thrown) => {
+                let mut error = UNDEF;
+                glue::rjs_exception_pending(g, &mut error);
+                return done.settler.reject(g, error);
+            }
+        };
+        done.settler.resolve(g, value);
+    }
 }
 
 unsafe fn with_errno(g: *mut c_void, value: u64, os_error: i32) -> u64 {
-    let result = new_object(g, UNDEF);
-    define(g, result, "value", value, 0);
-    define(g, result, "errno", enc_f64(os_error as f64), 0);
-    result
+    unsafe {
+        let result = new_object(g, UNDEF);
+        define(g, result, "value", value, 0);
+        define(g, result, "errno", enc_f64(os_error as f64), 0);
+        result
+    }
 }
 
 /// Arguments converted on the stack; a call with more takes a `Vec`.
@@ -918,18 +954,22 @@ std_fn!(fn pointer_equals(g, args) {
 });
 
 unsafe fn readable(g: *mut c_void, this: u64, what: &str) -> Js<u64> {
-    let address = pointer(g, this)?.address;
-    if address == 0 {
-        return type_error(g, &format!("{what}: the pointer is null"));
+    unsafe {
+        let address = pointer(g, this)?.address;
+        if address == 0 {
+            return type_error(g, &format!("{what}: the pointer is null"));
+        }
+        Ok(address)
     }
-    Ok(address)
 }
 
 unsafe fn limit(g: *mut c_void, v: u64, what: &str) -> Js<Option<usize>> {
-    if v == UNDEF {
-        Ok(None)
-    } else {
-        count(g, v, what).map(Some)
+    unsafe {
+        if v == UNDEF {
+            Ok(None)
+        } else {
+            count(g, v, what).map(Some)
+        }
     }
 }
 
@@ -997,112 +1037,124 @@ thread_local! {
 }
 
 unsafe fn describe(g: *mut c_void, error: u64) -> String {
-    let string = get(g, host::global(g), "String");
-    call(g, string, UNDEF, &[error])
-        .ok()
-        .and_then(|text| read_string(g, text))
-        .unwrap_or_else(|| "an exception".into())
+    unsafe {
+        let string = get(g, host::global(g), "String");
+        call(g, string, UNDEF, &[error])
+            .ok()
+            .and_then(|text| read_string(g, text))
+            .unwrap_or_else(|| "an exception".into())
+    }
 }
 
 /// With a call into a library below us, the exception is thrown from that call once it returns.
 /// Without one there is no JS to throw it to.
 unsafe fn raise(g: *mut c_void, target: &Target, error: u64) {
-    if DEPTH.get() > 0 {
-        glue::rjs_throw(g, error);
-    } else {
-        eprintln!("[ffi] {}: {}", target.what, describe(g, error));
+    unsafe {
+        if DEPTH.get() > 0 {
+            glue::rjs_throw(g, error);
+        } else {
+            eprintln!("[ffi] {}: {}", target.what, describe(g, error));
+        }
     }
 }
 
 unsafe fn invoke(target: &Target, slots: &[u64]) -> u64 {
-    let g = target.g as *mut c_void;
-    ENTERED.set(ENTERED.get().wrapping_add(1));
-    let mut pending = UNDEF;
-    if glue::rjs_exception_pending(g, &mut pending) != 0 {
-        glue::rjs_throw(g, pending);
-        return 0;
-    }
-    // In an array, so that the collector sees the values made so far while the next is made.
-    let list = new_array(g);
-    for (i, (slot, kind_of)) in slots.iter().zip(&target.args).enumerate() {
-        match from_slot(g, *slot, *kind_of) {
-            Ok(value) => set_i(g, list, i as u32, value),
-            Err(Thrown) => return settle(g, target),
-        }
-    }
-    let args: Vec<u64> = (0..slots.len()).map(|i| get_i(g, list, i as u32)).collect();
-    let value = match call(g, target.function, UNDEF, &args) {
-        Ok(value) => value,
-        Err(error) => {
-            raise(g, target, error);
+    unsafe {
+        let g = target.g as *mut c_void;
+        ENTERED.set(ENTERED.get().wrapping_add(1));
+        let mut pending = UNDEF;
+        if glue::rjs_exception_pending(g, &mut pending) != 0 {
+            glue::rjs_throw(g, pending);
             return 0;
         }
-    };
-    let what = format!("{}: the value it returns", target.what);
-    match to_slot(g, value, target.returns, &mut Arena::default(), &what) {
-        Ok(slot) => slot,
-        Err(Thrown) => settle(g, target),
+        // In an array, so that the collector sees the values made so far while the next is made.
+        let list = new_array(g);
+        for (i, (slot, kind_of)) in slots.iter().zip(&target.args).enumerate() {
+            match from_slot(g, *slot, *kind_of) {
+                Ok(value) => set_i(g, list, i as u32, value),
+                Err(Thrown) => return settle(g, target),
+            }
+        }
+        let args: Vec<u64> = (0..slots.len()).map(|i| get_i(g, list, i as u32)).collect();
+        let value = match call(g, target.function, UNDEF, &args) {
+            Ok(value) => value,
+            Err(error) => {
+                raise(g, target, error);
+                return 0;
+            }
+        };
+        let what = format!("{}: the value it returns", target.what);
+        match to_slot(g, value, target.returns, &mut Arena::default(), &what) {
+            Ok(slot) => slot,
+            Err(Thrown) => settle(g, target),
+        }
     }
 }
 
 /// A conversion left its exception pending in the VM.
 unsafe fn settle(g: *mut c_void, target: &Target) -> u64 {
-    let mut pending = UNDEF;
-    if glue::rjs_exception_pending(g, &mut pending) != 0 {
-        raise(g, target, pending);
+    unsafe {
+        let mut pending = UNDEF;
+        if glue::rjs_exception_pending(g, &mut pending) != 0 {
+            raise(g, target, pending);
+        }
+        0
     }
-    0
 }
 
 unsafe fn carry(slot: u64, kind_of: Kind) -> Carried {
-    match kind_of {
-        Kind::CString if slot != 0 => Carried::Narrow(
-            CStr::from_ptr(slot as *const _)
-                .to_bytes_with_nul()
-                .to_vec(),
-        ),
-        Kind::WString if slot != 0 => {
-            let start = slot as *const u16;
-            let mut units = Vec::new();
-            loop {
-                let unit = start.add(units.len()).read_unaligned();
-                units.push(unit);
-                if unit == 0 {
-                    break;
+    unsafe {
+        match kind_of {
+            Kind::CString if slot != 0 => Carried::Narrow(
+                CStr::from_ptr(slot as *const _)
+                    .to_bytes_with_nul()
+                    .to_vec(),
+            ),
+            Kind::WString if slot != 0 => {
+                let start = slot as *const u16;
+                let mut units = Vec::new();
+                loop {
+                    let unit = start.add(units.len()).read_unaligned();
+                    units.push(unit);
+                    if unit == 0 {
+                        break;
+                    }
                 }
+                Carried::Wide(units)
             }
-            Carried::Wide(units)
+            _ => Carried::Slot(slot),
         }
-        _ => Carried::Slot(slot),
     }
 }
 
 /// On a thread that is not the JS thread: nothing of the engine is touched here.
 unsafe fn from_another_thread(target: &Arc<Target>, slots: &[u64]) -> u64 {
-    let refuse = |reason: &str| {
-        if !target.warned.swap(true, Ordering::Relaxed) {
-            eprintln!("[ffi] {}: {reason}", target.what);
+    unsafe {
+        let refuse = |reason: &str| {
+            if !target.warned.swap(true, Ordering::Relaxed) {
+                eprintln!("[ffi] {}: {reason}", target.what);
+            }
+            0
+        };
+        if target.returns != Kind::Plain(Type::Void) {
+            return refuse("called from another thread, where only a callback that returns \"void\" can run; 0 was returned");
         }
-        0
-    };
-    if target.returns != Kind::Plain(Type::Void) {
-        return refuse("called from another thread, where only a callback that returns \"void\" can run; 0 was returned");
-    }
-    let carried = slots
-        .iter()
-        .zip(&target.args)
-        .map(|(slot, kind_of)| carry(*slot, *kind_of))
-        .collect();
-    let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
-    if queue.len() >= QUEUE_LIMIT {
+        let carried = slots
+            .iter()
+            .zip(&target.args)
+            .map(|(slot, kind_of)| carry(*slot, *kind_of))
+            .collect();
+        let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+        if queue.len() >= QUEUE_LIMIT {
+            drop(queue);
+            return refuse("more calls from another thread are waiting than the JS thread takes; calls are being dropped");
+        }
+        queue.push((target.clone(), carried));
         drop(queue);
-        return refuse("more calls from another thread are waiting than the JS thread takes; calls are being dropped");
+        sk_runtime::frames::wake();
+        crate::background::prompt();
+        0
     }
-    queue.push((target.clone(), carried));
-    drop(queue);
-    sk_runtime::frames::wake();
-    crate::background::prompt();
-    0
 }
 
 /// Runs the calls other threads made since the last frame.
@@ -1144,9 +1196,11 @@ fn callback_class() -> JSClassRef {
 }
 
 unsafe fn callback<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativeCallback> {
-    match host_data::<NativeCallback>(g, callback_class(), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a NativeCallback"),
+    unsafe {
+        match host_data::<NativeCallback>(g, callback_class(), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a NativeCallback"),
+        }
     }
 }
 
@@ -1310,44 +1364,48 @@ fn struct_class() -> JSClassRef {
 }
 
 unsafe fn struct_of<'a>(g: *mut c_void, this: u64) -> Js<&'a StructDef> {
-    match host_data::<StructType>(g, struct_class(), this) {
-        Some(state) => Ok(&state.def),
-        None => type_error(g, "this is not a struct type"),
+    unsafe {
+        match host_data::<StructType>(g, struct_class(), this) {
+            Some(state) => Ok(&state.def),
+            None => type_error(g, "this is not a struct type"),
+        }
     }
 }
 
 unsafe fn is_object(g: *mut c_void, v: u64) -> bool {
-    is_cell(v) && kind(g, v) != KIND_STRING
+    unsafe { is_cell(v) && kind(g, v) != KIND_STRING }
 }
 
 unsafe fn parse_shape(g: *mut c_void, v: u64, what: &str) -> Js<Shape> {
-    if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
-        return Ok(Shape::Struct(of.def.clone()));
-    }
-    if kind(g, v) == KIND_STRING {
-        let name = read_string(g, v).unwrap_or_default();
-        return match KINDS.iter().find(|(n, _)| *n == name) {
+    unsafe {
+        if let Some(of) = host_data::<StructType>(g, struct_class(), v) {
+            return Ok(Shape::Struct(of.def.clone()));
+        }
+        if kind(g, v) == KIND_STRING {
+            let name = read_string(g, v).unwrap_or_default();
+            return match KINDS.iter().find(|(n, _)| *n == name) {
             Some((_, Kind::Plain(ty))) if *ty != Type::Void => Ok(Shape::Scalar(*ty)),
             _ => type_error(g, &format!("{what}: \"{name}\" is not a type of a field; a field is \"bool\", a number type, \"pointer\", a struct or [type, count]")),
         };
-    }
-    if is_object(g, v) && length(g, v) == 2 {
-        let of = parse_shape(g, get_i(g, v, 0), what)?;
-        let count = count(g, get_i(g, v, 1), &format!("{what}: the count of an array"))?;
-        if count == 0 || count > STRUCT_LIMIT {
-            return range_error(
-                g,
-                &format!("{what}: an array has from 1 to {STRUCT_LIMIT} elements"),
-            );
         }
-        return Ok(Shape::Array(Box::new(of), count));
-    }
-    type_error(
-        g,
-        &format!(
+        if is_object(g, v) && length(g, v) == 2 {
+            let of = parse_shape(g, get_i(g, v, 0), what)?;
+            let count = count(g, get_i(g, v, 1), &format!("{what}: the count of an array"))?;
+            if count == 0 || count > STRUCT_LIMIT {
+                return range_error(
+                    g,
+                    &format!("{what}: an array has from 1 to {STRUCT_LIMIT} elements"),
+                );
+            }
+            return Ok(Shape::Array(Box::new(of), count));
+        }
+        type_error(
+            g,
+            &format!(
             "{what}: a field is \"bool\", a number type, \"pointer\", a struct or [type, count]"
         ),
-    )
+        )
+    }
 }
 
 // `struct(entries, fields)`: the fields as `[name, type]` in order, and the object they came from.
@@ -1396,23 +1454,25 @@ impl Display for Within<'_> {
 
 /// Writes the fields `v` has; one it leaves out stays zero.
 unsafe fn pack(g: *mut c_void, def: &StructDef, v: u64, to: *mut u8, what: &dyn Display) -> Js<()> {
-    if !is_object(g, v) {
-        return type_error(
-            g,
-            &format!("{what} must be an object of the struct's fields"),
-        );
-    }
-    for field in &def.fields {
-        let given = get(g, v, &field.name);
-        if given != UNDEF {
-            let what = Within {
-                outer: what,
-                field: &field.name,
-            };
-            write_field(g, &field.shape, given, to.add(field.offset), &what)?;
+    unsafe {
+        if !is_object(g, v) {
+            return type_error(
+                g,
+                &format!("{what} must be an object of the struct's fields"),
+            );
         }
+        for field in &def.fields {
+            let given = get(g, v, &field.name);
+            if given != UNDEF {
+                let what = Within {
+                    outer: what,
+                    field: &field.name,
+                };
+                write_field(g, &field.shape, given, to.add(field.offset), &what)?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 unsafe fn write_field(
@@ -1422,79 +1482,90 @@ unsafe fn write_field(
     to: *mut u8,
     what: &dyn Display,
 ) -> Js<()> {
-    match shape {
-        Shape::Scalar(ty) => {
-            let bits = to_slot(g, v, Kind::Plain(*ty), &mut Arena::default(), what)?;
-            std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to, ty.size());
-        }
-        Shape::Struct(def) => pack(g, def, v, to, what)?,
-        Shape::Array(of, count) => {
-            if !is_object(g, v) || length(g, v) != *count {
-                return type_error(g, &format!("{what} must be an array of {count} elements"));
+    unsafe {
+        match shape {
+            Shape::Scalar(ty) => {
+                let bits = to_slot(g, v, Kind::Plain(*ty), &mut Arena::default(), what)?;
+                std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to, ty.size());
             }
-            for i in 0..*count {
-                write_field(g, of, get_i(g, v, i as u32), to.add(i * of.size()), what)?;
+            Shape::Struct(def) => pack(g, def, v, to, what)?,
+            Shape::Array(of, count) => {
+                if !is_object(g, v) || length(g, v) != *count {
+                    return type_error(g, &format!("{what} must be an array of {count} elements"));
+                }
+                for i in 0..*count {
+                    write_field(g, of, get_i(g, v, i as u32), to.add(i * of.size()), what)?;
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 /// A struct argument: an object of its fields, or bytes that already hold it.
 unsafe fn fill(g: *mut c_void, def: &StructDef, v: u64, what: &dyn Display) -> Js<Room> {
-    let mut room = def.room();
-    match buffer_source(g, v) {
-        Some(view) if view.len == def.layout.size => {
-            std::ptr::copy_nonoverlapping(
-                view.data as *const u8,
-                room.as_mut_ptr().cast(),
-                view.len,
-            );
+    unsafe {
+        let mut room = def.room();
+        match buffer_source(g, v) {
+            Some(view) if view.len == def.layout.size => {
+                std::ptr::copy_nonoverlapping(
+                    view.data as *const u8,
+                    room.as_mut_ptr().cast(),
+                    view.len,
+                );
+            }
+            Some(view) => {
+                return type_error(
+                    g,
+                    &format!(
+                        "{what} is {} bytes, and the struct is {}",
+                        view.len, def.layout.size
+                    ),
+                );
+            }
+            None => pack(g, def, v, room.as_mut_ptr().cast(), what)?,
         }
-        Some(view) => {
-            return type_error(
-                g,
-                &format!(
-                    "{what} is {} bytes, and the struct is {}",
-                    view.len, def.layout.size
-                ),
-            );
-        }
-        None => pack(g, def, v, room.as_mut_ptr().cast(), what)?,
+        Ok(room)
     }
-    Ok(room)
 }
 
 /// `trusted` bytes came from a native call; a pointer out of any others is one made from an address.
 unsafe fn unpack(g: *mut c_void, def: &StructDef, from: *const u8, trusted: bool) -> Js<u64> {
-    let object = new_object(g, UNDEF);
-    for field in &def.fields {
-        let value = read_field(g, &field.shape, from.add(field.offset), trusted)?;
-        define(g, object, &field.name, value, 0);
+    unsafe {
+        let object = new_object(g, UNDEF);
+        for field in &def.fields {
+            let value = read_field(g, &field.shape, from.add(field.offset), trusted)?;
+            define(g, object, &field.name, value, 0);
+        }
+        Ok(object)
     }
-    Ok(object)
 }
 
 unsafe fn read_field(g: *mut c_void, shape: &Shape, from: *const u8, trusted: bool) -> Js<u64> {
-    match shape {
-        Shape::Scalar(ty) => {
-            let mut raw = [0u8; 8];
-            std::ptr::copy_nonoverlapping(from, raw.as_mut_ptr(), ty.size());
-            let bits = ty.normalize(u64::from_le_bytes(raw));
-            if *ty == Type::Pointer && bits != 0 && !trusted && !permissions::current().ffi_address
-            {
-                return dom(g, "NotAllowedError", "unpack: a pointer read from bytes needs \"permissions\": { \"ffiAddress\": true } in sk.config.json");
+    unsafe {
+        match shape {
+            Shape::Scalar(ty) => {
+                let mut raw = [0u8; 8];
+                std::ptr::copy_nonoverlapping(from, raw.as_mut_ptr(), ty.size());
+                let bits = ty.normalize(u64::from_le_bytes(raw));
+                if *ty == Type::Pointer
+                    && bits != 0
+                    && !trusted
+                    && !permissions::current().ffi_address
+                {
+                    return dom(g, "NotAllowedError", "unpack: a pointer read from bytes needs \"permissions\": { \"ffiAddress\": true } in sk.config.json");
+                }
+                from_slot(g, bits, Kind::Plain(*ty))
             }
-            from_slot(g, bits, Kind::Plain(*ty))
-        }
-        Shape::Struct(def) => unpack(g, def, from, trusted),
-        Shape::Array(of, count) => {
-            let array = new_array(g);
-            for i in 0..*count {
-                let value = read_field(g, of, from.add(i * of.size()), trusted)?;
-                set_i(g, array, i as u32, value);
+            Shape::Struct(def) => unpack(g, def, from, trusted),
+            Shape::Array(of, count) => {
+                let array = new_array(g);
+                for i in 0..*count {
+                    let value = read_field(g, of, from.add(i * of.size()), trusted)?;
+                    set_i(g, array, i as u32, value);
+                }
+                Ok(array)
             }
-            Ok(array)
         }
     }
 }
@@ -1533,106 +1604,112 @@ unsafe fn perform(
     structs: &[Packed],
     returned: &mut Packed,
 ) -> sk_ffi::Outcome {
-    let args: Vec<Argument<'_>> = signature
-        .args
-        .iter()
-        .zip(slots)
-        .enumerate()
-        .map(
-            |(i, (ty, bits))| match structs.get(i).and_then(Option::as_ref) {
-                Some((def, room)) => Argument::Struct(&def.layout, room.as_ptr().cast()),
-                None => Argument::Scalar(*ty, *bits),
-            },
-        )
-        .collect();
-    let returning = match returned {
-        Some((def, room)) => Returning::Struct(&def.layout, room.as_mut_ptr().cast()),
-        None => Returning::Scalar(signature.returns),
-    };
-    sk_ffi::call_with(address as *const (), &args, returning, signature.fixed)
+    unsafe {
+        let args: Vec<Argument<'_>> = signature
+            .args
+            .iter()
+            .zip(slots)
+            .enumerate()
+            .map(
+                |(i, (ty, bits))| match structs.get(i).and_then(Option::as_ref) {
+                    Some((def, room)) => Argument::Struct(&def.layout, room.as_ptr().cast()),
+                    None => Argument::Scalar(*ty, *bits),
+                },
+            )
+            .collect();
+        let returning = match returned {
+            Some((def, room)) => Returning::Struct(&def.layout, room.as_mut_ptr().cast()),
+            None => Returning::Scalar(signature.returns),
+        };
+        sk_ffi::call_with(address as *const (), &args, returning, signature.fixed)
+    }
 }
 
 unsafe fn returned_value(g: *mut c_void, value: u64, kind_of: Kind, returned: &Packed) -> Js<u64> {
-    match returned {
-        Some((def, room)) => unpack(g, def, room.as_ptr().cast(), true),
-        None => from_slot(g, value, kind_of),
+    unsafe {
+        match returned {
+            Some((def, room)) => unpack(g, def, room.as_ptr().cast(), true),
+            None => from_slot(g, value, kind_of),
+        }
     }
 }
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let module = new_object(g, UNDEF);
-    static_fn(g, module, "open", 2, ffi_open);
-    static_fn(g, module, "struct", 2, struct_new);
+    unsafe {
+        let module = new_object(g, UNDEF);
+        static_fn(g, module, "open", 2, ffi_open);
+        static_fn(g, module, "struct", 2, struct_new);
 
-    support::class(
-        g,
-        &ClassSpec {
-            name: "StructType",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[("pack", 1, struct_pack), ("unpack", 1, struct_unpack)],
-            getters: &[("size", struct_size), ("align", struct_align)],
-            accessors: &[],
-        },
-    );
+        support::class(
+            g,
+            &ClassSpec {
+                name: "StructType",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[("pack", 1, struct_pack), ("unpack", 1, struct_unpack)],
+                getters: &[("size", struct_size), ("align", struct_align)],
+                accessors: &[],
+            },
+        );
 
-    support::class(
-        g,
-        &ClassSpec {
-            name: "NativeLibrary",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("call", 1, library_call),
-                ("has", 1, library_has),
-                ("close", 0, library_close),
-            ],
-            getters: &[("path", library_path), ("closed", library_closed)],
-            accessors: &[],
-        },
-    );
+        support::class(
+            g,
+            &ClassSpec {
+                name: "NativeLibrary",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("call", 1, library_call),
+                    ("has", 1, library_has),
+                    ("close", 0, library_close),
+                ],
+                getters: &[("path", library_path), ("closed", library_closed)],
+                accessors: &[],
+            },
+        );
 
-    let pointer = support::class(
-        g,
-        &ClassSpec {
-            name: "NativePointer",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("isNull", 0, pointer_is_null),
-                ("offset", 1, pointer_offset),
-                ("equals", 1, pointer_equals),
-                ("readCString", 0, pointer_read_c_string),
-                ("readWString", 0, pointer_read_w_string),
-                ("read", 1, pointer_read),
-                ("write", 1, pointer_write),
-            ],
-            getters: &[("address", pointer_address)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, pointer.ctor, "of", 1, pointer_of);
-    static_fn(g, pointer.ctor, "fromAddress", 1, pointer_from_address);
-    define(g, pointer.ctor, "NULL", pointer_new(g, 0), 0);
-    define(g, module, "NativePointer", pointer.ctor, 0);
+        let pointer = support::class(
+            g,
+            &ClassSpec {
+                name: "NativePointer",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("isNull", 0, pointer_is_null),
+                    ("offset", 1, pointer_offset),
+                    ("equals", 1, pointer_equals),
+                    ("readCString", 0, pointer_read_c_string),
+                    ("readWString", 0, pointer_read_w_string),
+                    ("read", 1, pointer_read),
+                    ("write", 1, pointer_write),
+                ],
+                getters: &[("address", pointer_address)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, pointer.ctor, "of", 1, pointer_of);
+        static_fn(g, pointer.ctor, "fromAddress", 1, pointer_from_address);
+        define(g, pointer.ctor, "NULL", pointer_new(g, 0), 0);
+        define(g, module, "NativePointer", pointer.ctor, 0);
 
-    let callback = support::class(
-        g,
-        &ClassSpec {
-            name: "NativeCallback",
-            arity: 2,
-            construct: Some(callback_construct),
-            parent_proto: 0,
-            methods: &[("close", 0, callback_close)],
-            getters: &[("pointer", callback_pointer), ("closed", callback_closed)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, callback.ctor, "live", 0, callback_live);
-    define(g, module, "NativeCallback", callback.ctor, 0);
+        let callback = support::class(
+            g,
+            &ClassSpec {
+                name: "NativeCallback",
+                arity: 2,
+                construct: Some(callback_construct),
+                parent_proto: 0,
+                methods: &[("close", 0, callback_close)],
+                getters: &[("pointer", callback_pointer), ("closed", callback_closed)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, callback.ctor, "live", 0, callback_live);
+        define(g, module, "NativeCallback", callback.ctor, 0);
 
-    define(g, std, "ffi", module, 0);
+        define(g, std, "ffi", module, 0);
+    }
 }

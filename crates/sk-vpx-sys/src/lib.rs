@@ -124,7 +124,7 @@ pub mod ffi {
 
     // libvpx's symbols are all `vnvpx_`-prefixed (config/prefix/, VENDOR.md
     // "Symbol prefix"): another libvpx, libwebrtc's, is in the same link.
-    extern "C" {
+    unsafe extern "C" {
         #[link_name = "vnvpx_vpx_codec_vp9_dx"]
         pub fn vpx_codec_vp9_dx() -> *const vpx_codec_iface_t;
         #[link_name = "vnvpx_vpx_codec_dec_init_ver"]

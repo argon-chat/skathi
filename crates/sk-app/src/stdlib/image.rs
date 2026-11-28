@@ -524,48 +524,60 @@ pub(crate) fn pump() {
 }
 
 unsafe fn failure(g: *mut c_void, f: &Failure) -> u64 {
-    match f {
-        Failure::Encoding(m) => host::error(g, "EncodingError", m),
-        Failure::Range(m) => host::error(g, "RangeError", m),
+    unsafe {
+        match f {
+            Failure::Encoding(m) => host::error(g, "EncodingError", m),
+            Failure::Range(m) => host::error(g, "RangeError", m),
+        }
     }
 }
 
 unsafe fn pending_exception(g: *mut c_void) -> u64 {
-    let mut error = UNDEF;
-    glue::rjs_exception_pending(g, &mut error);
-    error
+    unsafe {
+        let mut error = UNDEF;
+        glue::rjs_exception_pending(g, &mut error);
+        error
+    }
 }
 
 /// The promise `run` returns, or one rejected with what it threw.
 unsafe fn promise_of(g: *mut c_void, run: impl FnOnce() -> Js<u64>) -> u64 {
-    match run() {
-        Ok(promise) => promise,
-        Err(Thrown) => host::rejected_with(g, pending_exception(g)),
+    unsafe {
+        match run() {
+            Ok(promise) => promise,
+            Err(Thrown) => host::rejected_with(g, pending_exception(g)),
+        }
     }
 }
 
 unsafe fn dom<T>(g: *mut c_void, name: &str, message: &str) -> Js<T> {
-    host::throw(g, name, message);
-    Err(Thrown)
+    unsafe {
+        host::throw(g, name, message);
+        Err(Thrown)
+    }
 }
 
 unsafe fn detached(g: *mut c_void, buffer: u64) -> bool {
-    let mut info = RjsAbInfo::default();
-    glue::rjs_arraybuffer_info(g, buffer, &mut info) != 0 || info.detached != 0
+    unsafe {
+        let mut info = RjsAbInfo::default();
+        glue::rjs_arraybuffer_info(g, buffer, &mut info) != 0 || info.detached != 0
+    }
 }
 
 unsafe fn uint8_array(g: *mut c_void, buffer: u64) -> Js<u64> {
-    construct(g, get(g, glue::rjs_global(g), "Uint8Array"), &[buffer])
+    unsafe { construct(g, get(g, glue::rjs_global(g), "Uint8Array"), &[buffer]) }
 }
 
 /// A `Uint8Array` over `region`, without a copy.
 unsafe fn bytes_out(g: *mut c_void, region: &Region, fresh: bool) -> Js<u64> {
-    match memory::array_buffer(g, region, fresh) {
-        Some(buffer) => uint8_array(g, buffer),
-        None => range_error(
-            g,
-            &format!("{} bytes are more than an ArrayBuffer holds", region.len()),
-        ),
+    unsafe {
+        match memory::array_buffer(g, region, fresh) {
+            Some(buffer) => uint8_array(g, buffer),
+            None => range_error(
+                g,
+                &format!("{} bytes are more than an ArrayBuffer holds", region.len()),
+            ),
+        }
     }
 }
 
@@ -581,72 +593,80 @@ struct ImageState {
 host_state!(image_state, image_create, ImageState, IMAGE, "Image");
 
 unsafe fn make_image(g: *mut c_void, pixels: Pixels) -> Js<u64> {
-    let region = Region::from_vec(pixels.rgba);
-    let Some(buffer) = memory::array_buffer(g, &region, true) else {
-        return range_error(g, "the decoded pixels are more than an ArrayBuffer holds");
-    };
-    let view = uint8_array(g, buffer)?;
-    let object = image_create(
-        g,
-        ImageState {
-            width: pixels.width,
-            height: pixels.height,
-            region: Some(region),
-            busy: 0,
-        },
-    );
-    slot_set(g, object, BUFFER, buffer);
-    slot_set(g, object, VIEW, view);
-    Ok(object)
+    unsafe {
+        let region = Region::from_vec(pixels.rgba);
+        let Some(buffer) = memory::array_buffer(g, &region, true) else {
+            return range_error(g, "the decoded pixels are more than an ArrayBuffer holds");
+        };
+        let view = uint8_array(g, buffer)?;
+        let object = image_create(
+            g,
+            ImageState {
+                width: pixels.width,
+                height: pixels.height,
+                region: Some(region),
+                busy: 0,
+            },
+        );
+        slot_set(g, object, BUFFER, buffer);
+        slot_set(g, object, VIEW, view);
+        Ok(object)
+    }
 }
 
 /// The image's state, closed if JS transferred the `ArrayBuffer` of its pixels away.
 unsafe fn current<'a>(g: *mut c_void, this: u64) -> Js<&'a mut ImageState> {
-    let state = image_state(g, this)?;
-    if state.region.is_some() && state.busy == 0 && detached(g, slot_get(g, this, BUFFER)) {
-        state.region = None;
+    unsafe {
+        let state = image_state(g, this)?;
+        if state.region.is_some() && state.busy == 0 && detached(g, slot_get(g, this, BUFFER)) {
+            state.region = None;
+        }
+        Ok(state)
     }
-    Ok(state)
 }
 
 /// The pixels for a worker to read; `pixels` is detached until the last such reader gives them back.
 unsafe fn lend(g: *mut c_void, this: u64, what: &str) -> Js<(Region, u32, u32)> {
-    let state = current(g, this)?;
-    let Some(region) = state.region.clone() else {
-        return dom(
-            g,
-            "InvalidStateError",
-            &format!("{what}: the image is closed"),
-        );
-    };
-    if state.busy == 0 {
-        glue::rjs_arraybuffer_detach(g, slot_get(g, this, BUFFER));
+    unsafe {
+        let state = current(g, this)?;
+        let Some(region) = state.region.clone() else {
+            return dom(
+                g,
+                "InvalidStateError",
+                &format!("{what}: the image is closed"),
+            );
+        };
+        if state.busy == 0 {
+            glue::rjs_arraybuffer_detach(g, slot_get(g, this, BUFFER));
+        }
+        state.busy += 1;
+        Ok((region, state.width, state.height))
     }
-    state.busy += 1;
-    Ok((region, state.width, state.height))
 }
 
 unsafe fn give_back(g: *mut c_void, this: u64) {
-    let Ok(state) = image_state(g, this) else {
-        return;
-    };
-    state.busy -= 1;
-    if state.busy != 0 {
-        return;
-    }
-    let Some(region) = state.region.clone() else {
-        return;
-    };
-    let fresh = memory::array_buffer(g, &region, false)
-        .and_then(|buffer| Some((buffer, uint8_array(g, buffer).ok()?)));
-    match fresh {
-        Some((buffer, view)) => {
-            slot_set(g, this, BUFFER, buffer);
-            slot_set(g, this, VIEW, view);
+    unsafe {
+        let Ok(state) = image_state(g, this) else {
+            return;
+        };
+        state.busy -= 1;
+        if state.busy != 0 {
+            return;
         }
-        None => {
-            if let Ok(state) = image_state(g, this) {
-                state.region = None;
+        let Some(region) = state.region.clone() else {
+            return;
+        };
+        let fresh = memory::array_buffer(g, &region, false)
+            .and_then(|buffer| Some((buffer, uint8_array(g, buffer).ok()?)));
+        match fresh {
+            Some((buffer, view)) => {
+                slot_set(g, this, BUFFER, buffer);
+                slot_set(g, this, VIEW, view);
+            }
+            None => {
+                if let Ok(state) = image_state(g, this) {
+                    state.region = None;
+                }
             }
         }
     }
@@ -698,14 +718,16 @@ std_fn!(fn image_to_bitmap(g, args) {
 
 /// A side of a resize: an integer from 1 to the image's own.
 unsafe fn side(g: *mut c_void, v: u64, most: u32, what: &str) -> Js<u32> {
-    let n = count(g, v, what)?;
-    if n == 0 || n > most as usize {
-        return range_error(
-            g,
-            &format!("{what} must be from 1 to {most}; an image is only made smaller"),
-        );
+    unsafe {
+        let n = count(g, v, what)?;
+        if n == 0 || n > most as usize {
+            return range_error(
+                g,
+                &format!("{what} must be from 1 to {most}; an image is only made smaller"),
+            );
+        }
+        Ok(n as u32)
     }
-    Ok(n as u32)
 }
 
 std_fn!(fn image_resize(g, args) {
@@ -786,22 +808,24 @@ unsafe fn complete_request<R>(
     result: Result<R, Failure>,
     value: impl FnOnce(R) -> Js<u64>,
 ) {
-    match result {
-        _ if decoder_state(g, this).map_or(true, |s| closed(s)) => settler.reject(
-            g,
-            host::error(
+    unsafe {
+        match result {
+            _ if decoder_state(g, this).map_or(true, |s| closed(s)) => settler.reject(
                 g,
-                "AbortError",
-                &format!("ImageDecoder.{method}: the decoder was closed"),
+                host::error(
+                    g,
+                    "AbortError",
+                    &format!("ImageDecoder.{method}: the decoder was closed"),
+                ),
             ),
-        ),
-        Err(f) => settler.reject(g, failure(g, &f)),
-        Ok(result) => match value(result) {
-            Ok(out) => settler.resolve(g, out),
-            Err(Thrown) => settler.reject(g, pending_exception(g)),
-        },
+            Err(f) => settler.reject(g, failure(g, &f)),
+            Ok(result) => match value(result) {
+                Ok(out) => settler.resolve(g, out),
+                Err(Thrown) => settler.reject(g, pending_exception(g)),
+            },
+        }
+        redjs_unprotect(g, this);
     }
-    redjs_unprotect(g, this);
 }
 
 unsafe fn submit(
@@ -812,7 +836,7 @@ unsafe fn submit(
     want: Want,
     settler: host::Settler,
 ) {
-    redjs_protect(g, this);
+    unsafe { redjs_protect(g, this) };
     match want {
         Want::Frame { index, max_side } => on_worker(
             g,
@@ -857,57 +881,65 @@ unsafe fn submit(
 
 /// Starts `want` now if the data is all there, later if the stream is still arriving.
 unsafe fn ask(g: *mut c_void, this: u64, want: Want, settler: host::Settler) -> Js<()> {
-    let state = decoder_state(g, this)?;
-    match &state.data {
-        Data::Ready(data) => submit(g, this, data.clone(), state.format, want, settler),
-        Data::Streaming(_) => state.waiting.push((want, settler)),
-        Data::Failed(error) => settler.reject(g, *error),
-        Data::Closed => settler.reject(
-            g,
-            host::error(
+    unsafe {
+        let state = decoder_state(g, this)?;
+        match &state.data {
+            Data::Ready(data) => submit(g, this, data.clone(), state.format, want, settler),
+            Data::Streaming(_) => state.waiting.push((want, settler)),
+            Data::Failed(error) => settler.reject(g, *error),
+            Data::Closed => settler.reject(
                 g,
-                "InvalidStateError",
-                "ImageDecoder: the decoder is closed",
+                host::error(
+                    g,
+                    "InvalidStateError",
+                    "ImageDecoder: the decoder is closed",
+                ),
             ),
-        ),
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 unsafe fn stream_failed(g: *mut c_void, this: u64, error: u64) {
-    let Ok(state) = decoder_state(g, this) else {
-        return;
-    };
-    if !matches!(state.data, Data::Streaming(_)) {
-        return;
-    }
-    redjs_protect(g, error);
-    state.data = Data::Failed(error);
-    for (_, settler) in std::mem::take(&mut state.waiting) {
-        settler.reject(g, error);
+    unsafe {
+        let Ok(state) = decoder_state(g, this) else {
+            return;
+        };
+        if !matches!(state.data, Data::Streaming(_)) {
+            return;
+        }
+        redjs_protect(g, error);
+        state.data = Data::Failed(error);
+        for (_, settler) in std::mem::take(&mut state.waiting) {
+            settler.reject(g, error);
+        }
     }
 }
 
 unsafe fn cancel_stream(g: *mut c_void, this: u64) {
-    let reader = slot_get(g, this, READER);
-    if is_cell(reader) {
-        let _ = call(g, get(g, reader, "cancel"), reader, &[]);
-        slot_set(g, this, READER, UNDEF);
+    unsafe {
+        let reader = slot_get(g, this, READER);
+        if is_cell(reader) {
+            let _ = call(g, get(g, reader, "cancel"), reader, &[]);
+            slot_set(g, this, READER, UNDEF);
+        }
     }
 }
 
 unsafe fn pull(g: *mut c_void, this: u64) -> Js<()> {
-    let reader = slot_get(g, this, READER);
-    let read = call(g, get(g, reader, "read"), reader, &[]).map_err(|_| Thrown)?;
-    let then = get(g, read, "then");
-    call(
-        g,
-        then,
-        read,
-        &[slot_get(g, this, ON_CHUNK), slot_get(g, this, ON_FAIL)],
-    )
-    .map_err(|_| Thrown)?;
-    Ok(())
+    unsafe {
+        let reader = slot_get(g, this, READER);
+        let read = call(g, get(g, reader, "read"), reader, &[]).map_err(|_| Thrown)?;
+        let then = get(g, read, "then");
+        call(
+            g,
+            then,
+            read,
+            &[slot_get(g, this, ON_CHUNK), slot_get(g, this, ON_FAIL)],
+        )
+        .map_err(|_| Thrown)?;
+        Ok(())
+    }
 }
 
 // `this` is the decoder, bound when the stream was taken.
@@ -968,8 +1000,10 @@ std_fn!(fn stream_fail(g, args) {
 });
 
 unsafe fn bound(g: *mut c_void, name: &str, f: HostFn, this: u64) -> Js<u64> {
-    let function = make_fn(g, name, 1, f);
-    call(g, get(g, function, "bind"), function, &[this]).map_err(|_| Thrown)
+    unsafe {
+        let function = make_fn(g, name, 1, f);
+        call(g, get(g, function, "bind"), function, &[this]).map_err(|_| Thrown)
+    }
 }
 
 std_fn!(fn decoder_new(g, args) {
@@ -1150,93 +1184,97 @@ std_fn!(fn encoder_encode(g, args) {
 });
 
 unsafe fn settle_bytes(g: *mut c_void, settler: host::Settler, result: Result<Vec<u8>, Failure>) {
-    match result.map(|bytes| bytes_out(g, &Region::from_vec(bytes), true)) {
-        Ok(Ok(array)) => settler.resolve(g, array),
-        Ok(Err(Thrown)) => settler.reject(g, pending_exception(g)),
-        Err(f) => settler.reject(g, failure(g, &f)),
+    unsafe {
+        match result.map(|bytes| bytes_out(g, &Region::from_vec(bytes), true)) {
+            Ok(Ok(array)) => settler.resolve(g, array),
+            Ok(Err(Thrown)) => settler.reject(g, pending_exception(g)),
+            Err(f) => settler.reject(g, failure(g, &f)),
+        }
     }
 }
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let global = host::global(g);
-    // `support::class` takes its name off the global object, where `Image` is the HTML one.
-    let html_image = get(g, global, "Image");
-    let image = support::class(
-        g,
-        &ClassSpec {
-            name: "Image",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("resize", 2, image_resize),
-                ("toImageBitmap", 0, image_to_bitmap),
-                ("close", 0, image_close),
-            ],
-            getters: &[
-                ("width", image_width),
-                ("height", image_height),
-                ("pixels", image_pixels),
-            ],
-            accessors: &[],
-        },
-    );
-    if html_image != UNDEF {
-        define(g, global, "Image", html_image, 2);
-    }
-    let decoder = support::class(
-        g,
-        &ClassSpec {
-            name: "ImageDecoder",
-            arity: 1,
-            construct: Some(decoder_new),
-            parent_proto: 0,
-            methods: &[
-                ("info", 0, decoder_info),
-                ("decode", 0, decoder_decode),
-                ("close", 0, decoder_close),
-            ],
-            getters: &[
-                ("type", decoder_type),
-                ("complete", decoder_complete),
-                ("tracks", decoder_tracks),
-            ],
-            accessors: &[],
-        },
-    );
-    static_fn(
-        g,
-        decoder.ctor,
-        "isTypeSupported",
-        1,
-        decoder_is_type_supported,
-    );
-    let encoder = support::class(
-        g,
-        &ClassSpec {
-            name: "ImageEncoder",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    static_fn(g, encoder.ctor, "encode", 2, encoder_encode);
-    static_fn(
-        g,
-        encoder.ctor,
-        "isTypeSupported",
-        1,
-        encoder_is_type_supported,
-    );
+    unsafe {
+        let global = host::global(g);
+        // `support::class` takes its name off the global object, where `Image` is the HTML one.
+        let html_image = get(g, global, "Image");
+        let image = support::class(
+            g,
+            &ClassSpec {
+                name: "Image",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("resize", 2, image_resize),
+                    ("toImageBitmap", 0, image_to_bitmap),
+                    ("close", 0, image_close),
+                ],
+                getters: &[
+                    ("width", image_width),
+                    ("height", image_height),
+                    ("pixels", image_pixels),
+                ],
+                accessors: &[],
+            },
+        );
+        if html_image != UNDEF {
+            define(g, global, "Image", html_image, 2);
+        }
+        let decoder = support::class(
+            g,
+            &ClassSpec {
+                name: "ImageDecoder",
+                arity: 1,
+                construct: Some(decoder_new),
+                parent_proto: 0,
+                methods: &[
+                    ("info", 0, decoder_info),
+                    ("decode", 0, decoder_decode),
+                    ("close", 0, decoder_close),
+                ],
+                getters: &[
+                    ("type", decoder_type),
+                    ("complete", decoder_complete),
+                    ("tracks", decoder_tracks),
+                ],
+                accessors: &[],
+            },
+        );
+        static_fn(
+            g,
+            decoder.ctor,
+            "isTypeSupported",
+            1,
+            decoder_is_type_supported,
+        );
+        let encoder = support::class(
+            g,
+            &ClassSpec {
+                name: "ImageEncoder",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        static_fn(g, encoder.ctor, "encode", 2, encoder_encode);
+        static_fn(
+            g,
+            encoder.ctor,
+            "isTypeSupported",
+            1,
+            encoder_is_type_supported,
+        );
 
-    let module = new_object(g, UNDEF);
-    define(g, module, "Image", image.ctor, 0);
-    define(g, module, "ImageDecoder", decoder.ctor, 0);
-    define(g, module, "ImageEncoder", encoder.ctor, 0);
-    define(g, std, "image", module, 0);
+        let module = new_object(g, UNDEF);
+        define(g, module, "Image", image.ctor, 0);
+        define(g, module, "ImageDecoder", decoder.ctor, 0);
+        define(g, module, "ImageEncoder", encoder.ctor, 0);
+        define(g, std, "image", module, 0);
+    }
 }
 
 #[cfg(test)]

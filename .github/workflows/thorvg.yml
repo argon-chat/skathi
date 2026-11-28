@@ -13,7 +13,7 @@ on:
       tag:
         description: Release tag, thorvg-v<ThorVG version>-<build number>
         required: true
-        default: thorvg-v1.1.2-2
+        default: thorvg-v1.1.2-3
       only:
         description: Build only these keys, comma-separated (empty builds every key)
         required: false
@@ -38,16 +38,19 @@ jobs:
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             key: x86_64-pc-windows-msvc-mt
-            rustflags: -C target-feature=+crt-static
+            rustflags: -C target-cpu=x86-64-v3 -C target-feature=+crt-static
+            cxxflags: /arch:AVX2
           - os: windows-2025
             target: x86_64-pc-windows-msvc
             key: x86_64-pc-windows-msvc-md
-            rustflags: ""
+            rustflags: -C target-cpu=x86-64-v3
+            cxxflags: /arch:AVX2
           # The oldest hosted image: its libstdc++ is the floor for every binary that links the archive.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             key: x86_64-unknown-linux-gnu
-            rustflags: ""
+            rustflags: -C target-cpu=x86-64-v3
+            cxxflags: -march=x86-64-v3
           - os: macos-15
             target: aarch64-apple-darwin
             key: aarch64-apple-darwin
@@ -84,9 +87,10 @@ jobs:
         if: env.SELECTED == 'true' && runner.os == 'Windows'
         with:
           arch: x64
-      - name: Rust
-        if: env.SELECTED == 'true'
-        run: rustup toolchain install 1.100.0 --profile minimal --target ${{ matrix.target }}
+      - if: env.SELECTED == 'true'
+        uses: ./.github/actions/rust
+        with:
+          targets: ${{ matrix.target }}
 
       # Outside the repository, so cargo does not load the workspace (and its other submodules);
       # .cargo/config.toml does not apply there, hence RUSTFLAGS and MACOSX_DEPLOYMENT_TARGET.
@@ -98,12 +102,18 @@ jobs:
         env:
           SK_THORVG_FROM_SOURCE: "1"
           RUSTFLAGS: ${{ matrix.rustflags }}
+          CXXFLAGS: ${{ matrix.cxxflags }}
           MACOSX_DEPLOYMENT_TARGET: "13.0"
           CARGO_PROFILE_RELEASE_DEBUG: "true"
         run: |
           $work = Join-Path $env:RUNNER_TEMP 'sk-thorvg-sys'
           Copy-Item -Recurse -Force crates/sk-thorvg-sys $work
           Copy-Item Cargo.lock, rust-toolchain.toml $work
+          # Keep the standalone crate's inherited package metadata.
+          Get-Content Cargo.toml | ForEach-Object {
+            if ($_ -match '^\[') { $inPackage = $_ -eq '[workspace.package]' }
+            if ($inPackage) { $_ }
+          } | Add-Content (Join-Path $work 'Cargo.toml')
           Set-Location $work
           $start = Get-Date
           cargo build --release --target ${{ matrix.target }}

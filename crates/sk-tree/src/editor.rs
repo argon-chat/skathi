@@ -258,35 +258,39 @@ pub(crate) fn atom_children(
 /// Fires a DOM event the runtime builds (`change`, `selectionchange`, `viewportchange`) on the
 /// editor's mirror, with `extra` as a property of the event.
 unsafe fn fire(g: *mut c_void, id: u32, name: &str, bubbles: bool, extra: Option<(&str, u64)>) {
-    let el = node_by_id(g, id);
-    let ctor = get(g, global(g), "Event");
-    if !is_cell(el) || !is_cell(ctor) {
-        return;
+    unsafe {
+        let el = node_by_id(g, id);
+        let ctor = get(g, global(g), "Event");
+        if !is_cell(el) || !is_cell(ctor) {
+            return;
+        }
+        let init = parse_json(g, if bubbles { r#"{"bubbles":true}"# } else { "{}" });
+        let args = [js_string(g, name), init];
+        let mut ev = UNDEF;
+        if glue::rjs_construct(g, ctor, args.as_ptr(), 2, &mut ev) != 0 || !is_cell(ev) {
+            return;
+        }
+        redjs_protect(g, ev);
+        if let Some((name, v)) = extra {
+            glue::rjs_set(g, ev, key(g, name), v);
+        }
+        let dispatch = get(g, el, "dispatchEvent");
+        let _ = call(g, dispatch, el, &[ev]);
+        redjs_unprotect(g, ev);
     }
-    let init = parse_json(g, if bubbles { r#"{"bubbles":true}"# } else { "{}" });
-    let args = [js_string(g, name), init];
-    let mut ev = UNDEF;
-    if glue::rjs_construct(g, ctor, args.as_ptr(), 2, &mut ev) != 0 || !is_cell(ev) {
-        return;
-    }
-    redjs_protect(g, ev);
-    if let Some((name, v)) = extra {
-        glue::rjs_set(g, ev, key(g, name), v);
-    }
-    let dispatch = get(g, el, "dispatchEvent");
-    let _ = call(g, dispatch, el, &[ev]);
-    redjs_unprotect(g, ev);
 }
 
 unsafe fn parse_json(g: *mut c_void, s: &str) -> u64 {
-    call(g, state(g).json_parse, UNDEF, &[js_string(g, s)]).unwrap_or(UNDEF)
+    unsafe { call(g, state(g).json_parse, UNDEF, &[js_string(g, s)]).unwrap_or(UNDEF) }
 }
 
 unsafe fn stringify(g: *mut c_void, v: u64) -> Option<String> {
-    let json = get(g, global(g), "JSON");
-    let f = get(g, json, "stringify");
-    let s = call(g, f, json, &[v]).ok()?;
-    read_string(g, s)
+    unsafe {
+        let json = get(g, global(g), "JSON");
+        let f = get(g, json, "stringify");
+        let s = call(g, f, json, &[v]).ok()?;
+        read_string(g, s)
+    }
 }
 
 fn fire_change(id: u32, changes: &[sk_editor::ChangeDesc]) {
@@ -550,12 +554,15 @@ pub(crate) fn build<V: 'static>(
 
 /// The editor `this` mirrors.
 unsafe fn editor_of(g: *mut c_void, this: u64) -> Option<(u32, Rc<EditorShared>)> {
-    let id = node_id(g, this)?;
-    tree::read_tree(|t| t.node(id).is_some_and(|n| t.name(n.tag) == TAG)).then(|| (id, model(id)))
+    unsafe {
+        let id = node_id(g, this)?;
+        tree::read_tree(|t| t.node(id).is_some_and(|n| t.name(n.tag) == TAG))
+            .then(|| (id, model(id)))
+    }
 }
 
 macro_rules! editor_or_throw {
-    ($g:expr, $this:expr) => {
+    ($g:expr_2021, $this:expr_2021) => {
         match editor_of($g, $this) {
             Some(e) => e,
             None => return throw($g, "TypeError", "Illegal invocation"),
@@ -564,26 +571,30 @@ macro_rules! editor_or_throw {
 }
 
 unsafe fn position(g: *mut c_void, v: u64) -> Result<usize, ()> {
-    let n = to_number(g, v)?;
-    Ok(if n.is_finite() && n > 0.0 {
-        n as usize
-    } else {
-        0
-    })
+    unsafe {
+        let n = to_number(g, v)?;
+        Ok(if n.is_finite() && n > 0.0 {
+            n as usize
+        } else {
+            0
+        })
+    }
 }
 
 /// After a change from JS: repaint, and `change` / `selectionchange` now, as a browser fires
 /// `selectionchange` for a script's selection move.
 unsafe fn after_js(g: *mut c_void, id: u32, outcome: sk_editor::Outcome) {
-    repaint(id);
-    if outcome.doc_changed {
-        let v = parse_json(g, &json::changes_to_json(&outcome.changes));
-        redjs_protect(g, v);
-        fire(g, id, "change", true, Some(("changes", v)));
-        redjs_unprotect(g, v);
-    }
-    if outcome.selection_changed {
-        fire(g, id, "selectionchange", false, None);
+    unsafe {
+        repaint(id);
+        if outcome.doc_changed {
+            let v = parse_json(g, &json::changes_to_json(&outcome.changes));
+            redjs_protect(g, v);
+            fire(g, id, "change", true, Some(("changes", v)));
+            redjs_unprotect(g, v);
+        }
+        if outcome.selection_changed {
+            fire(g, id, "selectionchange", false, None);
+        }
     }
 }
 
@@ -791,8 +802,10 @@ host_fn!(fn marks_at(g, args) {
 });
 
 unsafe fn layer_arg(g: *mut c_void, v: u64) -> Option<String> {
-    let s = to_js_string(g, v).ok()?;
-    read_string(g, s)
+    unsafe {
+        let s = to_js_string(g, v).ok()?;
+        read_string(g, s)
+    }
 }
 
 host_fn!(fn set_decorations(g, args) {
@@ -828,22 +841,23 @@ host_fn!(fn set_line_decorations(g, args) {
 });
 
 unsafe fn dom_rect(g: *mut c_void, b: gpui::Bounds<gpui::Pixels>) -> u64 {
-    let nums = [
-        f32::from(b.origin.x),
-        f32::from(b.origin.y),
-        f32::from(b.size.width),
-        f32::from(b.size.height),
-    ];
-    let ctor = get(g, global(g), "DOMRect");
-    if is_cell(ctor) {
-        let args = nums.map(|n| enc_f64(f64::from(n)));
-        let mut out = UNDEF;
-        if glue::rjs_construct(g, ctor, args.as_ptr(), 4, &mut out) == 0 && is_cell(out) {
-            return out;
+    unsafe {
+        let nums = [
+            f32::from(b.origin.x),
+            f32::from(b.origin.y),
+            f32::from(b.size.width),
+            f32::from(b.size.height),
+        ];
+        let ctor = get(g, global(g), "DOMRect");
+        if is_cell(ctor) {
+            let args = nums.map(|n| enc_f64(f64::from(n)));
+            let mut out = UNDEF;
+            if glue::rjs_construct(g, ctor, args.as_ptr(), 4, &mut out) == 0 && is_cell(out) {
+                return out;
+            }
         }
-    }
-    let [x, y, w, h] = nums;
-    parse_json(
+        let [x, y, w, h] = nums;
+        parse_json(
         g,
         &format!(
             "{{\"x\":{x},\"y\":{y},\"width\":{w},\"height\":{h},\"left\":{x},\"top\":{y},\"right\":{},\"bottom\":{}}}",
@@ -851,6 +865,7 @@ unsafe fn dom_rect(g: *mut c_void, b: gpui::Bounds<gpui::Pixels>) -> u64 {
             y + h
         ),
     )
+    }
 }
 
 /// Lines past this many are answered from their estimated boxes rather than laid out for a read.
@@ -964,17 +979,19 @@ host_fn!(fn scroll_left_get(g, args) {
 });
 
 unsafe fn set_scroll(g: *mut c_void, this: u64, v: u64, top: bool) -> u64 {
-    let (id, shared) = editor_or_throw!(g, this);
-    let Ok(n) = to_number(g, v) else { return UNDEF };
-    let n = gpui::px(if n.is_finite() { n as f32 } else { 0.0 });
-    let (t, l) = if top {
-        (Some(n), None)
-    } else {
-        (None, Some(n))
-    };
-    shared.geometry.borrow_mut().set_scroll(t, l);
-    repaint(id);
-    UNDEF
+    unsafe {
+        let (id, shared) = editor_or_throw!(g, this);
+        let Ok(n) = to_number(g, v) else { return UNDEF };
+        let n = gpui::px(if n.is_finite() { n as f32 } else { 0.0 });
+        let (t, l) = if top {
+            (Some(n), None)
+        } else {
+            (None, Some(n))
+        };
+        shared.geometry.borrow_mut().set_scroll(t, l);
+        repaint(id);
+        UNDEF
+    }
 }
 
 host_fn!(fn scroll_top_set(g, args) {

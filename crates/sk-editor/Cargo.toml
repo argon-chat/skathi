@@ -2,7 +2,7 @@
 name = "sk-editor"
 description = "The document model behind Skathi's <sk-editor>: text, marks, atoms, line blocks, transactions and history"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

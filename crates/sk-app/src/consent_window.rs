@@ -260,7 +260,7 @@ impl Prompt {
         alt: bool,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         card::button(
             ("sk-consent-button", i),
             &self.labels[i],
@@ -287,7 +287,7 @@ impl Prompt {
         )
     }
 
-    fn body(&self, t: &Theme, f: &Fonts) -> impl IntoElement {
+    fn body(&self, t: &Theme, f: &Fonts) -> impl IntoElement + use<> {
         card::body(
             "sk-consent-body",
             &self.spec.app,

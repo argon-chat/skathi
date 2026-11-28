@@ -10,6 +10,16 @@
 # (`--target aarch64-apple-darwin`); a project config wins over the user's.
 [build]
 target = "x86_64-pc-windows-msvc"
+incremental = false
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = "none"
+
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "windows", target_os = "linux")))']
+rustflags = "-C target-cpu=x86-64-v3"
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]

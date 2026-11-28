@@ -7,15 +7,19 @@ use sk_runtime::{host, host_fn};
 
 /// `appWindow.close()`: `pagehide`, then the close every other quit takes.
 unsafe fn close(g: *mut c_void) {
-    let window = get(g, get(g, host::global(g), "__SK_WINDOW__"), "appWindow");
-    let _ = call(g, get(g, window, "close"), window, &[]);
+    unsafe {
+        let window = get(g, get(g, host::global(g), "__SK_WINDOW__"), "appWindow");
+        let _ = call(g, get(g, window, "close"), window, &[]);
+    }
 }
 
 unsafe fn option(g: *mut c_void, options: u64, name: &str) -> u64 {
-    if is_cell(options) {
-        get(g, options, name)
-    } else {
-        UNDEF
+    unsafe {
+        if is_cell(options) {
+            get(g, options, name)
+        } else {
+            UNDEF
+        }
     }
 }
 
@@ -34,19 +38,21 @@ host_fn!(fn quit(g, args) {
 });
 
 unsafe fn strings(g: *mut c_void, list: u64) -> Option<Vec<OsString>> {
-    let is_array = get(g, get(g, host::global(g), "Array"), "isArray");
-    if call(g, is_array, UNDEF, &[list]) != Ok(TRUE) {
-        return None;
+    unsafe {
+        let is_array = get(g, get(g, host::global(g), "Array"), "isArray");
+        if call(g, is_array, UNDEF, &[list]) != Ok(TRUE) {
+            return None;
+        }
+        (0..array_len(g, list))
+            .map(|i| {
+                let item = get_i(g, list, i);
+                host::is_string(g, item)
+                    .then(|| read_string(g, item))
+                    .flatten()
+                    .map(OsString::from)
+            })
+            .collect()
     }
-    (0..array_len(g, list))
-        .map(|i| {
-            let item = get_i(g, list, i);
-            host::is_string(g, item)
-                .then(|| read_string(g, item))
-                .flatten()
-                .map(OsString::from)
-        })
-        .collect()
 }
 
 host_fn!(fn restart(g, args) {
@@ -104,25 +110,27 @@ host_fn!(fn set_wheel_scroll_scale(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let class = super::support::class(
-        g,
-        &ClassSpec {
-            name: "App",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("quit", 0, quit),
-                ("restart", 0, restart),
-                ("getVersion", 0, get_version),
-            ],
-            getters: &[],
-            accessors: &[(
-                "wheelScrollScale",
-                get_wheel_scroll_scale,
-                set_wheel_scroll_scale,
-            )],
-        },
-    );
-    define(g, std, "app", new_object(g, class.proto), 0);
+    unsafe {
+        let class = super::support::class(
+            g,
+            &ClassSpec {
+                name: "App",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("quit", 0, quit),
+                    ("restart", 0, restart),
+                    ("getVersion", 0, get_version),
+                ],
+                getters: &[],
+                accessors: &[(
+                    "wheelScrollScale",
+                    get_wheel_scroll_scale,
+                    set_wheel_scroll_scale,
+                )],
+            },
+        );
+        define(g, std, "app", new_object(g, class.proto), 0);
+    }
 }

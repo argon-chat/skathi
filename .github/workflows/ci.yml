@@ -160,17 +160,16 @@ jobs:
           for f in crates/sk-effects/generated/*.metal; do
             xcrun -sdk macosx metal -c "$f" -o /dev/null
           done
-      # The workspace's `profile.dev.package."*"` debug setting outranks CARGO_PROFILE_DEV_DEBUG.
       - name: Tests
-        run: cargo test --locked --workspace --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
+        run: cargo test --locked --workspace --target ${{ matrix.target }}
       - if: runner.os == 'Linux'
         name: CSS reference covers native property support
         shell: bash
         run: |
-          cargo run --locked --quiet --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0" -p sk-css --example css-catalog |
+          cargo run --locked --quiet --target ${{ matrix.target }} -p sk-css --example css-catalog |
             bun scripts/check-css-reference.ts
       - name: sk-tree without video
-        run: cargo test --locked -p sk-tree --lib --no-default-features --features webgpu,lottie --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0"
+        run: cargo test --locked -p sk-tree --lib --no-default-features --features webgpu,lottie --target ${{ matrix.target }}
       - name: Release host builds
         run: cargo check --locked -p sk-app --features prod --target ${{ matrix.target }}
       - if: runner.os == 'macOS'
@@ -179,7 +178,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
-          cargo test --locked -p skathi-gpui-apple --lib --target ${{ matrix.target }} --config "profile.dev.package.'*'.debug=0" \
+          cargo test --locked -p skathi-gpui-apple --lib --target ${{ matrix.target }} \
             metal_renderer::tests::hdr_output_preserves_signed_surfaces -- --exact --nocapture
 
   e2e:
@@ -232,7 +231,6 @@ jobs:
           id=$(displayplacer list | awk '/^Persistent screen id:/ { print $4; exit }')
           displayplacer "id:$id res:1920x1080 hz:60 color_depth:7 scaling:off origin:(0,0) degree:0"
           displayplacer list | grep -m1 '^Resolution:'
-      # A partial restore of the CSS checker's Rust cache cleans target/, including a built host.
       - uses: ./.github/actions/css-checker
       - name: Host
         run: cargo build --locked -p sk-app --target ${{ matrix.target }}

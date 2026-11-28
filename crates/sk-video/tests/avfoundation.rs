@@ -26,7 +26,7 @@ mod mac {
     };
 
     #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         static kCFRunLoopDefaultMode: *const c_void;
         fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, after_source: u8) -> i32;
     }

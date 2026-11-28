@@ -180,13 +180,13 @@ impl Region {
     /// # Safety
     /// The bytes outlive the borrow only while some region of the chunk is held.
     pub unsafe fn bytes<'a>(&self) -> &'a [u8] {
-        std::slice::from_raw_parts(self.ptr(), self.len)
+        unsafe { std::slice::from_raw_parts(self.ptr(), self.len) }
     }
 
     /// # Safety
     /// As [`Region::bytes`], and nothing else reads or writes them meanwhile.
     pub(crate) unsafe fn bytes_mut<'a>(&self) -> &'a mut [u8] {
-        std::slice::from_raw_parts_mut(self.ptr(), self.len)
+        unsafe { std::slice::from_raw_parts_mut(self.ptr(), self.len) }
     }
 }
 
@@ -258,88 +258,106 @@ static NATIVE_BUFFER: OnceLock<usize> = OnceLock::new();
 static ARENA: OnceLock<usize> = OnceLock::new();
 
 unsafe fn state<'a>(g: *mut c_void, v: u64) -> Option<&'a mut NativeBuffer> {
-    host_data::<NativeBuffer>(
-        g,
-        support::host_class::<NativeBuffer>(&NATIVE_BUFFER, "NativeBuffer"),
-        v,
-    )
+    unsafe {
+        host_data::<NativeBuffer>(
+            g,
+            support::host_class::<NativeBuffer>(&NATIVE_BUFFER, "NativeBuffer"),
+            v,
+        )
+    }
 }
 
 unsafe fn this_buffer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut NativeBuffer> {
-    let Some(native) = state(g, this) else {
-        return type_error(g, "this is not a NativeBuffer");
-    };
-    sync(g, this, native);
-    Ok(native)
+    unsafe {
+        let Some(native) = state(g, this) else {
+            return type_error(g, "this is not a NativeBuffer");
+        };
+        sync(g, this, native);
+        Ok(native)
+    }
 }
 
 unsafe fn detached(g: *mut c_void, buffer: u64) -> bool {
-    let mut info = RjsAbInfo::default();
-    glue::rjs_arraybuffer_info(g, buffer, &mut info) != 0 || info.detached != 0
+    unsafe {
+        let mut info = RjsAbInfo::default();
+        glue::rjs_arraybuffer_info(g, buffer, &mut info) != 0 || info.detached != 0
+    }
 }
 
 /// A buffer whose `ArrayBuffer` JS detached itself, with `transfer()`, is freed as far as it is
 /// concerned: the bytes now belong to the new `ArrayBuffer`.
 unsafe fn sync(g: *mut c_void, this: u64, native: &mut NativeBuffer) {
-    if native.region.is_some() && !native.away && detached(g, slot_get(g, this, BUFFER)) {
-        native.region = None;
+    unsafe {
+        if native.region.is_some() && !native.away && detached(g, slot_get(g, this, BUFFER)) {
+            native.region = None;
+        }
     }
 }
 
 unsafe extern "C" fn release(_bytes: *mut c_void, chunk: *mut c_void) {
-    drop(Arc::from_raw(chunk as *const Chunk));
+    unsafe {
+        drop(Arc::from_raw(chunk as *const Chunk));
+    }
 }
 
 /// An `ArrayBuffer` over `region` that holds a count of its chunk until it is collected or detached.
 unsafe fn external(g: *mut c_void, region: &Region) -> Option<u64> {
-    let held = Arc::into_raw(region.chunk.clone()) as *mut c_void;
-    let mut out = UNDEF;
-    let release: unsafe extern "C" fn(*mut c_void, *mut c_void) = release;
-    let status = sk_runtime::redjs::ffi::redjs_arraybuffer_external(
-        g,
-        region.ptr().cast(),
-        region.len,
-        release as *const c_void,
-        held,
-        &mut out,
-    );
-    if status != 0 {
-        drop(Arc::from_raw(held as *const Chunk));
-        return None;
+    unsafe {
+        let held = Arc::into_raw(region.chunk.clone()) as *mut c_void;
+        let mut out = UNDEF;
+        let release: unsafe extern "C" fn(*mut c_void, *mut c_void) = release;
+        let status = sk_runtime::redjs::ffi::redjs_arraybuffer_external(
+            g,
+            region.ptr().cast(),
+            region.len,
+            release as *const c_void,
+            held,
+            &mut out,
+        );
+        if status != 0 {
+            drop(Arc::from_raw(held as *const Chunk));
+            return None;
+        }
+        known(&region.chunk);
+        Some(out)
     }
-    known(&region.chunk);
-    Some(out)
 }
 
 unsafe fn wrap(g: *mut c_void, region: Region) -> Option<u64> {
-    let buffer = external(g, &region)?;
-    let object = host_create(
-        g,
-        support::host_class::<NativeBuffer>(&NATIVE_BUFFER, "NativeBuffer"),
-        prototype(g, "NativeBuffer"),
-        NativeBuffer {
-            region: Some(region),
-            away: false,
-        },
-    );
-    slot_set(g, object, BUFFER, buffer);
-    Some(object)
+    unsafe {
+        let buffer = external(g, &region)?;
+        let object = host_create(
+            g,
+            support::host_class::<NativeBuffer>(&NATIVE_BUFFER, "NativeBuffer"),
+            prototype(g, "NativeBuffer"),
+            NativeBuffer {
+                region: Some(region),
+                away: false,
+            },
+        );
+        slot_set(g, object, BUFFER, buffer);
+        Some(object)
+    }
 }
 
 unsafe fn issue(g: *mut c_void, region: Region, what: &str) -> Js<u64> {
-    let len = region.len;
-    match wrap(g, region) {
-        Some(object) => Ok(object),
-        None => range_error(
-            g,
-            &format!("{what}: {len} bytes are more than an ArrayBuffer holds"),
-        ),
+    unsafe {
+        let len = region.len;
+        match wrap(g, region) {
+            Some(object) => Ok(object),
+            None => range_error(
+                g,
+                &format!("{what}: {len} bytes are more than an ArrayBuffer holds"),
+            ),
+        }
     }
 }
 
 unsafe fn invalid<T>(g: *mut c_void, message: &str) -> Js<T> {
-    host::throw(g, "InvalidStateError", message);
-    Err(Thrown)
+    unsafe {
+        host::throw(g, "InvalidStateError", message);
+        Err(Thrown)
+    }
 }
 
 /// Why the memory of a `NativeBuffer` cannot be used now, for an `InvalidStateError`.
@@ -358,25 +376,27 @@ unsafe fn usable<'a>(
     v: u64,
     what: &dyn Display,
 ) -> Js<Option<&'a mut NativeBuffer>> {
-    let Some(native) = state(g, v) else {
-        return Ok(None);
-    };
-    sync(g, v, native);
-    match refusal(native) {
-        Some(problem) => invalid(g, &format!("{what}: {problem}")),
-        None => Ok(Some(native)),
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return Ok(None);
+        };
+        sync(g, v, native);
+        match refusal(native) {
+            Some(problem) => invalid(g, &format!("{what}: {problem}")),
+            None => Ok(Some(native)),
+        }
     }
 }
 
 /// The memory of `v` when it is a `NativeBuffer`, `None` for any other value. A freed buffer, or
 /// one a call on another thread has, throws `InvalidStateError`.
 pub(super) unsafe fn region_of(g: *mut c_void, v: u64, what: &dyn Display) -> Js<Option<Region>> {
-    Ok(usable(g, v, what)?.and_then(|native| native.region.clone()))
+    unsafe { Ok(usable(g, v, what)?.and_then(|native| native.region.clone())) }
 }
 
 /// The `ArrayBuffer` of `v` when it is a `NativeBuffer`, with the same errors as [`region_of`].
 pub(super) unsafe fn buffer_of(g: *mut c_void, v: u64, what: &dyn Display) -> Js<Option<u64>> {
-    Ok(usable(g, v, what)?.map(|_| slot_get(g, v, BUFFER)))
+    unsafe { Ok(usable(g, v, what)?.map(|_| slot_get(g, v, BUFFER))) }
 }
 
 /// Throws `InvalidStateError` unless the `NativeBuffer` `v` is usable and `buffer` is still its
@@ -387,135 +407,157 @@ pub(super) unsafe fn check_current(
     buffer: u64,
     what: &dyn Display,
 ) -> Js<()> {
-    if usable(g, v, what)?.is_some() && slot_get(g, v, BUFFER) != buffer {
-        return invalid(
+    unsafe {
+        if usable(g, v, what)?.is_some() && slot_get(g, v, BUFFER) != buffer {
+            return invalid(
             g,
             &format!("{what}: the NativeBuffer went to a call on another thread since; make a new one over it"),
         );
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Hands the memory of a `NativeBuffer` to a call on another thread. Its `ArrayBuffer` is
 /// detached, as a transfer would, until [`come_back`].
 pub(super) unsafe fn send_away(g: *mut c_void, v: u64, what: &dyn Display) -> Js<Region> {
-    match send(g, v) {
-        Ok(Some(region)) => Ok(region),
-        Ok(None) => type_error(g, &format!("{what} must be a NativeBuffer")),
-        Err(problem) => invalid(g, &format!("{what}: {problem}")),
+    unsafe {
+        match send(g, v) {
+            Ok(Some(region)) => Ok(region),
+            Ok(None) => type_error(g, &format!("{what} must be a NativeBuffer")),
+            Err(problem) => invalid(g, &format!("{what}: {problem}")),
+        }
     }
 }
 
 /// [`send_away`] for a native module's task: `Ok(None)` for a value that is not a `NativeBuffer`,
 /// `Err` with what an `InvalidStateError` says.
 pub(crate) unsafe fn send(g: *mut c_void, v: u64) -> Result<Option<Region>, &'static str> {
-    let Some(native) = state(g, v) else {
-        return Ok(None);
-    };
-    sync(g, v, native);
-    if let Some(problem) = refusal(native) {
-        return Err(problem);
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return Ok(None);
+        };
+        sync(g, v, native);
+        if let Some(problem) = refusal(native) {
+            return Err(problem);
+        }
+        let Some(region) = native.region.clone() else {
+            return Ok(None);
+        };
+        if glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER)) != 0 {
+            return Err("the NativeBuffer's ArrayBuffer cannot be detached");
+        }
+        native.away = true;
+        Ok(Some(region))
     }
-    let Some(region) = native.region.clone() else {
-        return Ok(None);
-    };
-    if glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER)) != 0 {
-        return Err("the NativeBuffer's ArrayBuffer cannot be detached");
-    }
-    native.away = true;
-    Ok(Some(region))
 }
 
 /// The memory of `v` for the length of a native module's function call, as [`send`] answers.
 pub(crate) unsafe fn lend(g: *mut c_void, v: u64) -> Result<Option<Region>, &'static str> {
-    let Some(native) = state(g, v) else {
-        return Ok(None);
-    };
-    sync(g, v, native);
-    match refusal(native) {
-        Some(problem) => Err(problem),
-        None => Ok(native.region.clone()),
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return Ok(None);
+        };
+        sync(g, v, native);
+        match refusal(native) {
+            Some(problem) => Err(problem),
+            None => Ok(native.region.clone()),
+        }
     }
 }
 
 /// A new `NativeBuffer` over `region`; `None` when it is more than an `ArrayBuffer` holds.
 pub(crate) unsafe fn make(g: *mut c_void, region: Region) -> Option<u64> {
-    report(g, region.len);
-    wrap(g, region)
+    unsafe {
+        report(g, region.len);
+        wrap(g, region)
+    }
 }
 
 /// An `ArrayBuffer` over `region` with no `NativeBuffer` around it, detached to let go of it early.
 /// `fresh` tells the collector about memory it has not been told of yet.
 pub(super) unsafe fn array_buffer(g: *mut c_void, region: &Region, fresh: bool) -> Option<u64> {
-    if fresh {
-        report(g, region.len);
+    unsafe {
+        if fresh {
+            report(g, region.len);
+        }
+        external(g, region)
     }
-    external(g, region)
 }
 
 /// Rust code kept the memory it was lent: the `NativeBuffer` is freed as far as JS is concerned.
 pub(crate) unsafe fn keep(g: *mut c_void, v: u64) {
-    let Some(native) = state(g, v) else {
-        return;
-    };
-    if native.region.is_some() && !native.away {
-        glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER));
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return;
+        };
+        if native.region.is_some() && !native.away {
+            glue::rjs_arraybuffer_detach(g, slot_get(g, v, BUFFER));
+        }
+        native.region = None;
+        native.away = false;
     }
-    native.region = None;
-    native.away = false;
 }
 
 /// Rust code still holds the memory of a `NativeBuffer` made for JS a moment ago: JS gets a copy.
 pub(crate) unsafe fn rehome(g: *mut c_void, v: u64) {
-    let Some(native) = state(g, v) else {
-        return;
-    };
-    let Some(region) = &native.region else {
-        return;
-    };
-    let copy = Region::copy_of(region.bytes());
-    let old = slot_get(g, v, BUFFER);
-    match external(g, &copy) {
-        Some(buffer) => {
-            slot_set(g, v, BUFFER, buffer);
-            native.region = Some(copy);
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return;
+        };
+        let Some(region) = &native.region else {
+            return;
+        };
+        let copy = Region::copy_of(region.bytes());
+        let old = slot_get(g, v, BUFFER);
+        match external(g, &copy) {
+            Some(buffer) => {
+                slot_set(g, v, BUFFER, buffer);
+                native.region = Some(copy);
+            }
+            None => native.region = None,
         }
-        None => native.region = None,
+        glue::rjs_arraybuffer_detach(g, old);
     }
-    glue::rjs_arraybuffer_detach(g, old);
 }
 
 /// The call on another thread returned: a buffer not freed meanwhile gets a new `ArrayBuffer`.
 pub(crate) unsafe fn come_back(g: *mut c_void, v: u64) {
-    let Some(native) = state(g, v) else {
-        return;
-    };
-    native.away = false;
-    let Some(region) = native.region.clone() else {
-        return;
-    };
-    match external(g, &region) {
-        Some(buffer) => slot_set(g, v, BUFFER, buffer),
-        None => native.region = None,
+    unsafe {
+        let Some(native) = state(g, v) else {
+            return;
+        };
+        native.away = false;
+        let Some(region) = native.region.clone() else {
+            return;
+        };
+        match external(g, &region) {
+            Some(buffer) => slot_set(g, v, BUFFER, buffer),
+            None => native.region = None,
+        }
     }
 }
 
 unsafe fn alignment(g: *mut c_void, v: u64, what: &str) -> Js<usize> {
-    if v == UNDEF {
-        return Ok(DEFAULT_ALIGNMENT);
+    unsafe {
+        if v == UNDEF {
+            return Ok(DEFAULT_ALIGNMENT);
+        }
+        let align = count(g, v, what)?;
+        if !align.is_power_of_two() || align > MAX_ALIGNMENT {
+            return range_error(
+                g,
+                &format!("{what} must be a power of two from 1 to {MAX_ALIGNMENT}"),
+            );
+        }
+        Ok(align)
     }
-    let align = count(g, v, what)?;
-    if !align.is_power_of_two() || align > MAX_ALIGNMENT {
-        return range_error(
-            g,
-            &format!("{what} must be a power of two from 1 to {MAX_ALIGNMENT}"),
-        );
-    }
-    Ok(align)
 }
 
 unsafe fn report(g: *mut c_void, bytes: usize) {
-    glue::rjs_report_extra_memory(g, bytes as u64);
+    unsafe {
+        glue::rjs_report_extra_memory(g, bytes as u64);
+    }
 }
 
 std_fn!(fn native_alloc(g, args) {
@@ -623,9 +665,11 @@ impl ArenaState {
 }
 
 unsafe fn arena<'a>(g: *mut c_void, this: u64) -> Js<&'a mut ArenaState> {
-    match host_data::<ArenaState>(g, support::host_class::<ArenaState>(&ARENA, "Arena"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not an Arena"),
+    unsafe {
+        match host_data::<ArenaState>(g, support::host_class::<ArenaState>(&ARENA, "Arena"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not an Arena"),
+        }
     }
 }
 
@@ -773,41 +817,43 @@ std_fn!(fn copy_into(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let native = support::class(
-        g,
-        &ClassSpec {
-            name: "NativeBuffer",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[("free", 0, native_free)],
-            getters: &[
-                ("byteLength", native_byte_length),
-                ("buffer", native_buffer),
-                ("freed", native_freed),
-            ],
-            accessors: &[],
-        },
-    );
-    static_fn(g, native.ctor, "alloc", 1, native_alloc);
-    let arena = support::class(
-        g,
-        &ClassSpec {
-            name: "Arena",
-            arity: 0,
-            construct: Some(arena_new),
-            parent_proto: 0,
-            methods: &[("alloc", 1, arena_alloc), ("reset", 0, arena_reset)],
-            getters: &[("used", arena_used)],
-            accessors: &[],
-        },
-    );
+    unsafe {
+        let native = support::class(
+            g,
+            &ClassSpec {
+                name: "NativeBuffer",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[("free", 0, native_free)],
+                getters: &[
+                    ("byteLength", native_byte_length),
+                    ("buffer", native_buffer),
+                    ("freed", native_freed),
+                ],
+                accessors: &[],
+            },
+        );
+        static_fn(g, native.ctor, "alloc", 1, native_alloc);
+        let arena = support::class(
+            g,
+            &ClassSpec {
+                name: "Arena",
+                arity: 0,
+                construct: Some(arena_new),
+                parent_proto: 0,
+                methods: &[("alloc", 1, arena_alloc), ("reset", 0, arena_reset)],
+                getters: &[("used", arena_used)],
+                accessors: &[],
+            },
+        );
 
-    let module = new_object(g, UNDEF);
-    define(g, module, "NativeBuffer", native.ctor, 0);
-    define(g, module, "Arena", arena.ctor, 0);
-    static_fn(g, module, "copyInto", 6, copy_into);
-    define(g, std, "memory", module, 0);
+        let module = new_object(g, UNDEF);
+        define(g, module, "NativeBuffer", native.ctor, 0);
+        define(g, module, "Arena", arena.ctor, 0);
+        static_fn(g, module, "copyInto", 6, copy_into);
+        define(g, std, "memory", module, 0);
+    }
 }
 
 #[cfg(test)]

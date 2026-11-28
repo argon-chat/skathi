@@ -53,20 +53,6 @@ pub fn is_devtools_host() -> bool {
     mode().is_some()
 }
 
-/// Resets inherited `SK_DIST` and `SK_DEVTOOLS_TARGET`. `SK_DIST` must not be the target's, or the
-/// inspector would overwrite the `devtools.json` it reads.
-pub fn init() {
-    let Some(mode) = mode() else { return };
-    if std::env::var_os("SK_DIST").is_none_or(|v| v.is_empty()) {
-        let dir = default_child_slot(std::process::id());
-        let _ = std::fs::create_dir_all(&dir);
-        std::env::set_var("SK_DIST", &dir);
-    }
-    if let Some(target) = &mode.target {
-        std::env::set_var("SK_DEVTOOLS_TARGET", target);
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EnginePolicy {
     Auto,
@@ -154,13 +140,6 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
 
 pub fn window_config() -> Option<String> {
     Some(INSPECTOR_WINDOW_JSON.to_string())
-}
-
-fn default_child_slot(key: u32) -> PathBuf {
-    std::env::temp_dir()
-        .join("skathi")
-        .join("devtools")
-        .join(key.to_string())
 }
 
 fn child_slot(parent_pid: u32, window: Option<u64>) -> PathBuf {

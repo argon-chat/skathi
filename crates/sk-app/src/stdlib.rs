@@ -41,9 +41,11 @@ pub(crate) fn end_processes() {
 }
 
 unsafe fn frozen(g: *mut c_void, object: u64) -> u64 {
-    let freeze = get(g, get(g, host::global(g), "Object"), "freeze");
-    let _ = call(g, freeze, UNDEF, &[object]);
-    object
+    unsafe {
+        let freeze = get(g, get(g, host::global(g), "Object"), "freeze");
+        let _ = call(g, freeze, UNDEF, &[object]);
+        object
+    }
 }
 
 pub(crate) fn install(rt: &JsRuntime) {

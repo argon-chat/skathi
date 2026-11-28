@@ -3,7 +3,7 @@ use std::ptr::{null, null_mut};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    sync::{Weak, atomic::Ordering, mpsc::SyncSender},
+    sync::{atomic::Ordering, mpsc::SyncSender, Weak},
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -533,9 +533,9 @@ mod tests {
     #[ignore = "injects only suppressed F24 into an isolated hook service; run explicitly on an interactive Windows desktop"]
     fn real_f24_input_reaches_handler_with_balanced_suppressed_hold() {
         use super::super::{Binding, Chord};
-        use std::sync::{Arc, mpsc};
+        use std::sync::{mpsc, Arc};
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_F24,
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_F24,
         };
         fn send_f24(up: bool) -> u32 {
             let input = INPUT {

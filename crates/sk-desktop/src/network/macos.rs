@@ -11,7 +11,7 @@ use dispatch2::DispatchQueue;
 use super::Details;
 
 #[link(name = "Network", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn nw_path_monitor_create() -> *mut c_void;
     fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: &DispatchQueue);
     fn nw_path_monitor_set_update_handler(
@@ -40,15 +40,15 @@ pub(super) fn connection_type() -> &'static str {
 
 /// SAFETY: `path` is the path an update handler was called with.
 unsafe fn read(path: *mut c_void) -> (bool, &'static str, Details) {
-    let online = nw_path_get_status(path) == STATUS_SATISFIED;
+    let online = unsafe { nw_path_get_status(path) } == STATUS_SATISFIED;
     // A VPN's interface rides on a physical one, which is the answer.
     let kind = if !online {
         "none"
-    } else if nw_path_uses_interface_type(path, INTERFACE_WIRED) {
+    } else if unsafe { nw_path_uses_interface_type(path, INTERFACE_WIRED) } {
         "ethernet"
-    } else if nw_path_uses_interface_type(path, INTERFACE_WIFI) {
+    } else if unsafe { nw_path_uses_interface_type(path, INTERFACE_WIFI) } {
         "wifi"
-    } else if nw_path_uses_interface_type(path, INTERFACE_CELLULAR) {
+    } else if unsafe { nw_path_uses_interface_type(path, INTERFACE_CELLULAR) } {
         "cellular"
     } else {
         "other"
@@ -56,7 +56,7 @@ unsafe fn read(path: *mut c_void) -> (bool, &'static str, Details) {
     let details = Details {
         // A satisfied path is a route, not a check that the internet answers.
         internet: if online { "unknown" } else { "none" },
-        metered: online.then(|| nw_path_is_expensive(path)),
+        metered: online.then(|| unsafe { nw_path_is_expensive(path) }),
         roaming: None,
         over_data_limit: None,
     };

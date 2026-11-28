@@ -1333,9 +1333,9 @@ impl Tree {
         if self.dirty_all || id == 0 {
             return;
         }
-        let gen = self.restyle_gen;
+        let generation = self.restyle_gen;
         match self.node_mut(id) {
-            Some(n) if n.mark_gen != gen => n.mark_gen = gen,
+            Some(n) if n.mark_gen != generation => n.mark_gen = generation,
             _ => return,
         }
         self.flag_path(id);
@@ -1368,16 +1368,16 @@ impl Tree {
     /// Lays this generation's trail from `id` up, stopping at the first node that has it: every
     /// trail is laid all the way up ([`Tree::insert`] re-lays it on a move).
     fn flag_path(&mut self, id: u32) {
-        let gen = self.restyle_gen;
+        let generation = self.restyle_gen;
         let root = self.root;
         let mut cur = id;
         // A cycle cannot happen (`insert` detaches first), but a corrupt id must not hang the pump.
         for _ in 0..4096 {
             let Some(n) = self.node_mut(cur) else { return };
-            if n.desc_gen == gen {
+            if n.desc_gen == generation {
                 return;
             }
-            n.desc_gen = gen;
+            n.desc_gen = generation;
             match n.parent {
                 0 => {
                     if cur != root {
@@ -1484,7 +1484,7 @@ impl Tree {
     /// computed map is current. A marked node is a root; an element never cascaded, or a
     /// text/anchor node, promotes the root to itself.
     fn restyle_roots(&mut self) -> Vec<u32> {
-        let gen = self.restyle_gen;
+        let generation = self.restyle_gen;
         self.restyle_gen = self.restyle_gen.wrapping_add(1).max(1);
         let detached = std::mem::take(&mut self.detached_marks);
         if std::mem::take(&mut self.dirty_all) {
@@ -1506,29 +1506,36 @@ impl Tree {
         let mut tops: Vec<u32> = Vec::new();
         for top in std::iter::once(self.root).chain(detached) {
             let Some(n) = self.node(top) else { continue };
-            if n.desc_gen != gen || (top != self.root && n.parent != 0) || tops.contains(&top) {
+            if n.desc_gen != generation
+                || (top != self.root && n.parent != 0)
+                || tops.contains(&top)
+            {
                 continue;
             }
             tops.push(top);
         }
         for top in tops {
-            if self.collect_roots(top, gen, &mut roots, 0) {
+            if self.collect_roots(top, generation, &mut roots, 0) {
                 roots.push(top);
             }
         }
         roots
     }
 
-    fn collect_roots(&self, id: u32, gen: u32, roots: &mut Vec<u32>, depth: u32) -> bool {
+    fn collect_roots(&self, id: u32, generation: u32, roots: &mut Vec<u32>, depth: u32) -> bool {
         let Some(n) = self.node(id) else { return false };
-        if n.mark_gen == gen || (n.kind == Kind::Element && n.computed.is_none()) || depth > 1024 {
+        if n.mark_gen == generation
+            || (n.kind == Kind::Element && n.computed.is_none())
+            || depth > 1024
+        {
             return true;
         }
         let start = roots.len();
         let element = n.kind == Kind::Element;
         for &c in &n.children {
             let Some(child) = self.node(c) else { continue };
-            let whole = child.desc_gen == gen && self.collect_roots(c, gen, roots, depth + 1);
+            let whole =
+                child.desc_gen == generation && self.collect_roots(c, generation, roots, depth + 1);
             if !whole {
                 continue;
             }

@@ -30,9 +30,11 @@ struct Image {
 }
 
 unsafe fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D> {
-    let mut target = None;
-    device.CreateTexture2D(desc, None, Some(&mut target))?;
-    target.ok_or_else(|| E_FAIL.into())
+    unsafe {
+        let mut target = None;
+        device.CreateTexture2D(desc, None, Some(&mut target))?;
+        target.ok_or_else(|| E_FAIL.into())
+    }
 }
 
 pub(super) fn capture(
@@ -100,129 +102,136 @@ impl Image {
         resource: ID3D12Resource,
         usage: wgpu::TextureUsages,
     ) -> wgpu::Texture {
-        let desc = self.descriptor(usage);
-        let hal = wgpu::hal::dx12::Device::texture_from_raw(
-            resource,
-            desc.format,
-            desc.dimension,
-            desc.size,
-            1,
-            1,
-        );
-        // In D3D12 PRESENT is COMMON. The decoder has already initialized all texels.
-        device.create_texture_from_hal::<wgpu::hal::api::Dx12>(
-            hal,
-            &desc,
-            wgpu::TextureUses::PRESENT,
-        )
+        unsafe {
+            let desc = self.descriptor(usage);
+            let hal = wgpu::hal::dx12::Device::texture_from_raw(
+                resource,
+                desc.format,
+                desc.dimension,
+                desc.size,
+                1,
+                1,
+            );
+            // In D3D12 PRESENT is COMMON. The decoder has already initialized all texels.
+            device.create_texture_from_hal::<wgpu::hal::api::Dx12>(
+                hal,
+                &desc,
+                wgpu::TextureUses::PRESENT,
+            )
+        }
     }
 
     unsafe fn native(&self, context: &Context, checked_out: &mut bool) -> Result<wgpu::Texture> {
-        let (device, queue) = {
-            let dx = context
-                .device
-                .as_hal::<wgpu::hal::api::Dx12>()
-                .ok_or(E_FAIL)?;
-            (dx.raw_device().clone(), dx.raw_queue().clone())
-        };
-        let immediate = self.device.GetImmediateContext()?;
-        if let Ok(on12) = self.device.cast::<ID3D11On12Device2>() {
-            let producer: ID3D12Device = on12.GetD3D12Device()?;
-            if producer.cast::<IUnknown>()? != device.cast::<IUnknown>()? {
-                return Err(E_FAIL.into());
-            }
-            let done: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
-            let result =
-                context.device.create_texture(&self.descriptor(
+        unsafe {
+            let (device, queue) = {
+                let dx = context
+                    .device
+                    .as_hal::<wgpu::hal::api::Dx12>()
+                    .ok_or(E_FAIL)?;
+                (dx.raw_device().clone(), dx.raw_queue().clone())
+            };
+            let immediate = self.device.GetImmediateContext()?;
+            if let Ok(on12) = self.device.cast::<ID3D11On12Device2>() {
+                let producer: ID3D12Device = on12.GetD3D12Device()?;
+                if producer.cast::<IUnknown>()? != device.cast::<IUnknown>()? {
+                    return Err(E_FAIL.into());
+                }
+                let done: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
+                let result = context.device.create_texture(&self.descriptor(
                     wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 ));
-            let mut encoder = context.device.create_command_encoder(&Default::default());
-            let raw: ID3D12Resource = on12.UnwrapUnderlyingResource(&self.frame, &queue)?;
-            *checked_out = true;
-            immediate.Flush();
-            let source = self.wrap(&context.device, raw, wgpu::TextureUsages::COPY_SRC);
-            encoder.copy_texture_to_texture(
-                source.as_image_copy(),
-                result.as_image_copy(),
-                result.size(),
-            );
-            encoder.transition_resources(
-                std::iter::empty(),
-                std::iter::once(wgpu::TextureTransition {
-                    texture: &source,
-                    selector: None,
-                    state: wgpu::TextureUses::PRESENT,
-                }),
-            );
-            context.queue.submit([encoder.finish()]);
-            // Return ownership with a GPU fence before the decoder or another logical device can use it.
-            queue.Signal(&done, 1)?;
-            on12.ReturnUnderlyingResource(&self.frame, 1, &1, [Some(done)].as_ptr())?;
-            *checked_out = false;
-            crate::trace(format_args!("WebGPU video copied on the D3D12 queue"));
-            return Ok(result);
-        }
+                let mut encoder = context.device.create_command_encoder(&Default::default());
+                let raw: ID3D12Resource = on12.UnwrapUnderlyingResource(&self.frame, &queue)?;
+                *checked_out = true;
+                immediate.Flush();
+                let source = self.wrap(&context.device, raw, wgpu::TextureUsages::COPY_SRC);
+                encoder.copy_texture_to_texture(
+                    source.as_image_copy(),
+                    result.as_image_copy(),
+                    result.size(),
+                );
+                encoder.transition_resources(
+                    std::iter::empty(),
+                    std::iter::once(wgpu::TextureTransition {
+                        texture: &source,
+                        selector: None,
+                        state: wgpu::TextureUses::PRESENT,
+                    }),
+                );
+                context.queue.submit([encoder.finish()]);
+                // Return ownership with a GPU fence before the decoder or another logical device can use it.
+                queue.Signal(&done, 1)?;
+                on12.ReturnUnderlyingResource(&self.frame, 1, &1, [Some(done)].as_ptr())?;
+                *checked_out = false;
+                crate::trace(format_args!("WebGPU video copied on the D3D12 queue"));
+                return Ok(result);
+            }
 
-        // Native D3D11 produces into its own queue. Export a private copy and its completion fence.
-        let shared = texture(
-            &self.device,
-            &D3D11_TEXTURE2D_DESC {
-                MiscFlags: (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE).0
-                    as u32,
-                ..self.desc
-            },
-        )?;
-        let resource = shared.cast::<IDXGIResource1>()?;
-        let handle = Owned::new(resource.CreateSharedHandle(
-            None,
-            (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0,
-            None,
-        )?);
-        let mut dst = None;
-        device.OpenSharedHandle(*handle, &mut dst)?;
-        let mut done: Option<ID3D11Fence> = None;
-        self.device
-            .cast::<ID3D11Device5>()?
-            .CreateFence(0, D3D11_FENCE_FLAG_SHARED, &mut done)?;
-        let done = done.ok_or(E_FAIL)?;
-        let handle = Owned::new(done.CreateSharedHandle(None, GENERIC_ALL.0, None)?);
-        let mut ready: Option<ID3D12Fence> = None;
-        device.OpenSharedHandle(*handle, &mut ready)?;
-        immediate.CopyResource(&shared, &self.frame);
-        immediate.cast::<ID3D11DeviceContext4>()?.Signal(&done, 1)?;
-        immediate.Flush();
-        queue.Wait(&ready.ok_or(E_FAIL)?, 1)?;
-        crate::trace(format_args!("WebGPU video imported through DXGI"));
-        Ok(self.wrap(
-            &context.device,
-            dst.ok_or(E_FAIL)?,
-            wgpu::TextureUsages::TEXTURE_BINDING,
-        ))
+            // Native D3D11 produces into its own queue. Export a private copy and its completion fence.
+            let shared = texture(
+                &self.device,
+                &D3D11_TEXTURE2D_DESC {
+                    MiscFlags: (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE).0
+                        as u32,
+                    ..self.desc
+                },
+            )?;
+            let resource = shared.cast::<IDXGIResource1>()?;
+            let handle = Owned::new(resource.CreateSharedHandle(
+                None,
+                (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0,
+                None,
+            )?);
+            let mut dst = None;
+            device.OpenSharedHandle(*handle, &mut dst)?;
+            let mut done: Option<ID3D11Fence> = None;
+            self.device.cast::<ID3D11Device5>()?.CreateFence(
+                0,
+                D3D11_FENCE_FLAG_SHARED,
+                &mut done,
+            )?;
+            let done = done.ok_or(E_FAIL)?;
+            let handle = Owned::new(done.CreateSharedHandle(None, GENERIC_ALL.0, None)?);
+            let mut ready: Option<ID3D12Fence> = None;
+            device.OpenSharedHandle(*handle, &mut ready)?;
+            immediate.CopyResource(&shared, &self.frame);
+            immediate.cast::<ID3D11DeviceContext4>()?.Signal(&done, 1)?;
+            immediate.Flush();
+            queue.Wait(&ready.ok_or(E_FAIL)?, 1)?;
+            crate::trace(format_args!("WebGPU video imported through DXGI"));
+            Ok(self.wrap(
+                &context.device,
+                dst.ok_or(E_FAIL)?,
+                wgpu::TextureUsages::TEXTURE_BINDING,
+            ))
+        }
     }
 
     unsafe fn readback(&self) -> Result<Vec<u8>> {
-        let staging = texture(
-            &self.device,
-            &D3D11_TEXTURE2D_DESC {
-                Usage: D3D11_USAGE_STAGING,
-                BindFlags: 0,
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                ..self.desc
-            },
-        )?;
-        let row = self.desc.Width as usize * 4;
-        let height = self.desc.Height as usize;
-        let mut data = Vec::with_capacity(row * height);
-        let immediate = self.device.GetImmediateContext()?;
-        immediate.CopyResource(&staging, &self.frame);
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        immediate.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-        for y in 0..height {
-            let ptr = mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize);
-            data.extend_from_slice(std::slice::from_raw_parts(ptr, row));
+        unsafe {
+            let staging = texture(
+                &self.device,
+                &D3D11_TEXTURE2D_DESC {
+                    Usage: D3D11_USAGE_STAGING,
+                    BindFlags: 0,
+                    CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                    ..self.desc
+                },
+            )?;
+            let row = self.desc.Width as usize * 4;
+            let height = self.desc.Height as usize;
+            let mut data = Vec::with_capacity(row * height);
+            let immediate = self.device.GetImmediateContext()?;
+            immediate.CopyResource(&staging, &self.frame);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            immediate.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
+            for y in 0..height {
+                let ptr = mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize);
+                data.extend_from_slice(std::slice::from_raw_parts(ptr, row));
+            }
+            immediate.Unmap(&staging, 0);
+            Ok(data)
         }
-        immediate.Unmap(&staging, 0);
-        Ok(data)
     }
 }
 impl NativeFrame for Image {

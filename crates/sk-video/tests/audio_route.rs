@@ -51,7 +51,7 @@ fn tick(state: &mut VideoState) {
     {
         use std::ffi::c_void;
         #[link(name = "CoreFoundation", kind = "framework")]
-        extern "C" {
+        unsafe extern "C" {
             static kCFRunLoopDefaultMode: *const c_void;
             fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, after_source: u8) -> i32;
         }
@@ -63,7 +63,10 @@ fn tick(state: &mut VideoState) {
 
 fn main() {
     #[cfg(target_os = "linux")]
-    std::env::set_var("SK_VIDEO_GST_AUDIO_SINK", "fakesink sync=true");
+    // SAFETY: this standalone test has no libtest harness and has not started GStreamer or any threads.
+    unsafe {
+        std::env::set_var("SK_VIDEO_GST_AUDIO_SINK", "fakesink sync=true")
+    };
     let backend = match sk_video::backend_for_this_platform() {
         Ok(backend) => backend,
         Err(error) => {

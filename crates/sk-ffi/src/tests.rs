@@ -9,7 +9,7 @@ trait Arg: Copy {
 }
 
 macro_rules! int_arg {
-    ($($ty:ty => $variant:ident, $seed:expr;)*) => {$(
+    ($($ty:ty => $variant:ident, $seed:expr_2021;)*) => {$(
         impl Arg for $ty {
             const TYPE: Type = Type::$variant;
             fn sample(position: usize) -> Self {
@@ -641,7 +641,7 @@ trait Layouted: Copy + PartialEq + std::fmt::Debug {
 }
 
 macro_rules! layouts {
-    ($($name:ident { $($field:ident: $ty:ident = $value:expr),* })*) => {$(
+    ($($name:ident { $($field:ident: $ty:ident = $value:expr_2021),* })*) => {$(
         impl Layouted for $name {
             fn layout() -> StructLayout {
                 StructLayout {
@@ -675,7 +675,7 @@ fn fold(state: &mut u64, bits: u64) {
 }
 
 macro_rules! digest {
-    ($state:ident, $($value:expr),*) => {$( fold(&mut $state, ($value) as u64); )*};
+    ($state:ident, $($value:expr_2021),*) => {$( fold(&mut $state, ($value) as u64); )*};
 }
 
 #[allow(clippy::too_many_arguments)]

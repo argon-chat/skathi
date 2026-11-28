@@ -30,43 +30,49 @@ const NEWLINE: u16 = b'\n' as u16;
 const RETURN: u16 = b'\r' as u16;
 
 unsafe fn length(g: *mut c_void, array: u64) -> usize {
-    to_number(g, get(g, array, "length")).unwrap_or(0.0) as usize
+    unsafe { to_number(g, get(g, array, "length")).unwrap_or(0.0) as usize }
 }
 
 unsafe fn units(g: *mut c_void, v: u64, what: &str) -> Js<Vec<u16>> {
-    if kind(g, v) != KIND_STRING {
-        return type_error(g, &format!("{what} must be a string"));
+    unsafe {
+        if kind(g, v) != KIND_STRING {
+            return type_error(g, &format!("{what} must be a string"));
+        }
+        read_string16(g, v).ok_or(Thrown)
     }
-    read_string16(g, v).ok_or(Thrown)
 }
 
 /// `String(v)`: what `+` would append.
 unsafe fn shown(g: *mut c_void, v: u64) -> Js<Vec<u16>> {
-    if kind(g, v) == KIND_STRING {
-        return read_string16(g, v).ok_or(Thrown);
+    unsafe {
+        if kind(g, v) == KIND_STRING {
+            return read_string16(g, v).ok_or(Thrown);
+        }
+        let text = call(g, get(g, host::global(g), "String"), UNDEF, &[v]).map_err(|_| Thrown)?;
+        read_string16(g, text).ok_or(Thrown)
     }
-    let text = call(g, get(g, host::global(g), "String"), UNDEF, &[v]).map_err(|_| Thrown)?;
-    read_string16(g, text).ok_or(Thrown)
 }
 
 unsafe fn list(g: *mut c_void, v: u64, what: &str) -> Js<usize> {
-    if !to_bool(
-        g,
-        call(
+    unsafe {
+        if !to_bool(
             g,
-            get(g, get(g, host::global(g), "Array"), "isArray"),
-            UNDEF,
-            &[v],
-        )
-        .map_err(|_| Thrown)?,
-    ) {
-        return type_error(g, &format!("{what} must be an array"));
+            call(
+                g,
+                get(g, get(g, host::global(g), "Array"), "isArray"),
+                UNDEF,
+                &[v],
+            )
+            .map_err(|_| Thrown)?,
+        ) {
+            return type_error(g, &format!("{what} must be an array"));
+        }
+        Ok(length(g, v))
     }
-    Ok(length(g, v))
 }
 
 unsafe fn flag(g: *mut c_void, bag: u64, name: &str) -> bool {
-    to_bool(g, option(g, bag, name))
+    unsafe { to_bool(g, option(g, bag, name)) }
 }
 
 struct Buffer {
@@ -86,51 +92,59 @@ fn writer_class() -> JSClassRef {
 
 /// A `StringBuilder` or a `StringWriter`: one buffer under two sets of names.
 unsafe fn buffer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Buffer> {
-    if let Some(state) = host_data::<Buffer>(g, builder_class(), this) {
-        return Ok(state);
-    }
-    match host_data::<Buffer>(g, writer_class(), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a StringBuilder or a StringWriter"),
+    unsafe {
+        if let Some(state) = host_data::<Buffer>(g, builder_class(), this) {
+            return Ok(state);
+        }
+        match host_data::<Buffer>(g, writer_class(), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a StringBuilder or a StringWriter"),
+        }
     }
 }
 
 unsafe fn grow(g: *mut c_void, state: &Buffer, by: usize) -> Js<()> {
-    if state.units.len() + by > MAX_UNITS {
-        return range_error(
-            g,
-            "the text would be longer than a string can be (2^31 - 1)",
-        );
+    unsafe {
+        if state.units.len() + by > MAX_UNITS {
+            return range_error(
+                g,
+                "the text would be longer than a string can be (2^31 - 1)",
+            );
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 unsafe fn push(g: *mut c_void, this: u64, v: u64) -> Js<()> {
-    let text = shown(g, v)?;
-    let state = buffer(g, this)?;
-    grow(g, state, text.len())?;
-    state.units.extend_from_slice(&text);
-    Ok(())
+    unsafe {
+        let text = shown(g, v)?;
+        let state = buffer(g, this)?;
+        grow(g, state, text.len())?;
+        state.units.extend_from_slice(&text);
+        Ok(())
+    }
 }
 
 unsafe fn push_all(g: *mut c_void, this: u64, parts: u64, separator: u64, what: &str) -> Js<()> {
-    let count = list(g, parts, &format!("{what}: the parts"))?;
-    let separator = if separator == UNDEF {
-        Vec::new()
-    } else {
-        units(g, separator, &format!("{what}: the separator"))?
-    };
-    let mut joined = Vec::new();
-    for i in 0..count {
-        if i > 0 {
-            joined.extend_from_slice(&separator);
+    unsafe {
+        let count = list(g, parts, &format!("{what}: the parts"))?;
+        let separator = if separator == UNDEF {
+            Vec::new()
+        } else {
+            units(g, separator, &format!("{what}: the separator"))?
+        };
+        let mut joined = Vec::new();
+        for i in 0..count {
+            if i > 0 {
+                joined.extend_from_slice(&separator);
+            }
+            joined.extend_from_slice(&shown(g, get_i(g, parts, i as u32))?);
         }
-        joined.extend_from_slice(&shown(g, get_i(g, parts, i as u32))?);
+        let state = buffer(g, this)?;
+        grow(g, state, joined.len())?;
+        state.units.extend_from_slice(&joined);
+        Ok(())
     }
-    let state = buffer(g, this)?;
-    grow(g, state, joined.len())?;
-    state.units.extend_from_slice(&joined);
-    Ok(())
 }
 
 std_fn!(fn builder_construct(g, args) {
@@ -314,127 +328,143 @@ impl Source {
 }
 
 unsafe fn raw_source(g: *mut c_void, v: u64, what: &str) -> Js<Source> {
-    if kind(g, v) == KIND_STRING {
-        return read_string16(g, v).map(Source::Units).ok_or(Thrown);
-    }
-    if let Some(view) = buffer_source(g, v) {
-        return Ok(Source::Bytes(view.bytes().to_vec()));
-    }
-    match super::memory::region_of(g, v, &what)? {
-        Some(region) => Ok(Source::Bytes(region.bytes().to_vec())),
-        None => type_error(
-            g,
-            &format!("{what} must be a string, a Uint8Array or a NativeBuffer"),
-        ),
+    unsafe {
+        if kind(g, v) == KIND_STRING {
+            return read_string16(g, v).map(Source::Units).ok_or(Thrown);
+        }
+        if let Some(view) = buffer_source(g, v) {
+            return Ok(Source::Bytes(view.bytes().to_vec()));
+        }
+        match super::memory::region_of(g, v, &what)? {
+            Some(region) => Ok(Source::Bytes(region.bytes().to_vec())),
+            None => type_error(
+                g,
+                &format!("{what} must be a string, a Uint8Array or a NativeBuffer"),
+            ),
+        }
     }
 }
 
 unsafe fn two_sources(g: *mut c_void, old: u64, new: u64, what: &str) -> Js<(Source, Source)> {
-    Ok((
-        raw_source(g, old, &format!("{what}: the old text"))?,
-        raw_source(g, new, &format!("{what}: the new text"))?,
-    ))
+    unsafe {
+        Ok((
+            raw_source(g, old, &format!("{what}: the old text"))?,
+            raw_source(g, new, &format!("{what}: the new text"))?,
+        ))
+    }
 }
 
 unsafe fn two_texts(g: *mut c_void, old: u64, new: u64, what: &str) -> Js<(Vec<u16>, Vec<u16>)> {
-    Ok((
-        units(g, old, &format!("{what}: the old text"))?,
-        units(g, new, &format!("{what}: the new text"))?,
-    ))
+    unsafe {
+        Ok((
+            units(g, old, &format!("{what}: the old text"))?,
+            units(g, new, &format!("{what}: the new text"))?,
+        ))
+    }
 }
 
 unsafe fn context_of(g: *mut c_void, bag: u64, what: &str) -> Js<usize> {
-    let given = option(g, bag, "context");
-    if given == UNDEF {
-        return Ok(3);
+    unsafe {
+        let given = option(g, bag, "context");
+        if given == UNDEF {
+            return Ok(3);
+        }
+        count(g, given, &format!("{what}: context"))
     }
-    count(g, given, &format!("{what}: context"))
 }
 
 unsafe fn diff_options(g: *mut c_void, bag: u64, what: &str, algorithm: Algorithm) -> Js<Options> {
-    let pick = |name: &str, names: &[&str], default: usize| {
-        choice(
-            g,
-            option(g, bag, name),
-            names,
-            default,
-            &format!("{what}: {name}"),
-        )
-    };
-    let default = match algorithm {
-        Algorithm::Histogram => 0,
-        Algorithm::Myers => 1,
-        Algorithm::Patience => 2,
-    };
-    let algorithm = match pick("algorithm", &["histogram", "myers", "patience"], default)? {
-        1 => Algorithm::Myers,
-        2 => Algorithm::Patience,
-        _ => Algorithm::Histogram,
-    };
-    let whitespace = match pick(
-        "ignoreWhitespace",
-        &["none", "trailing", "amount", "all"],
-        0,
-    )? {
-        1 => Whitespace::Trailing,
-        2 => Whitespace::Amount,
-        3 => Whitespace::All,
-        _ => Whitespace::None,
-    };
-    let inline = match pick("inline", &["none", "words", "chars"], 0)? {
-        1 => Inline::Words,
-        2 => Inline::Chars,
-        _ => Inline::None,
-    };
-    Ok(Options {
-        algorithm,
-        whitespace,
-        ignore_case: flag(g, bag, "ignoreCase"),
-        ignore_line_endings: flag(g, bag, "ignoreLineEndings"),
-        context: context_of(g, bag, what)?,
-        inline,
-    })
+    unsafe {
+        let pick = |name: &str, names: &[&str], default: usize| {
+            choice(
+                g,
+                option(g, bag, name),
+                names,
+                default,
+                &format!("{what}: {name}"),
+            )
+        };
+        let default = match algorithm {
+            Algorithm::Histogram => 0,
+            Algorithm::Myers => 1,
+            Algorithm::Patience => 2,
+        };
+        let algorithm = match pick("algorithm", &["histogram", "myers", "patience"], default)? {
+            1 => Algorithm::Myers,
+            2 => Algorithm::Patience,
+            _ => Algorithm::Histogram,
+        };
+        let whitespace = match pick(
+            "ignoreWhitespace",
+            &["none", "trailing", "amount", "all"],
+            0,
+        )? {
+            1 => Whitespace::Trailing,
+            2 => Whitespace::Amount,
+            3 => Whitespace::All,
+            _ => Whitespace::None,
+        };
+        let inline = match pick("inline", &["none", "words", "chars"], 0)? {
+            1 => Inline::Words,
+            2 => Inline::Chars,
+            _ => Inline::None,
+        };
+        Ok(Options {
+            algorithm,
+            whitespace,
+            ignore_case: flag(g, bag, "ignoreCase"),
+            ignore_line_endings: flag(g, bag, "ignoreLineEndings"),
+            context: context_of(g, bag, what)?,
+            inline,
+        })
+    }
 }
 
 /// `oldName` and `newName`: both or neither.
 unsafe fn names_of(g: *mut c_void, bag: u64, what: &str) -> Js<Option<(Vec<u16>, Vec<u16>)>> {
-    let (old_name, new_name) = (option(g, bag, "oldName"), option(g, bag, "newName"));
-    if old_name == UNDEF && new_name == UNDEF {
-        return Ok(None);
+    unsafe {
+        let (old_name, new_name) = (option(g, bag, "oldName"), option(g, bag, "newName"));
+        if old_name == UNDEF && new_name == UNDEF {
+            return Ok(None);
+        }
+        Ok(Some((
+            units(g, old_name, &format!("{what}: oldName"))?,
+            units(g, new_name, &format!("{what}: newName"))?,
+        )))
     }
-    Ok(Some((
-        units(g, old_name, &format!("{what}: oldName"))?,
-        units(g, new_name, &format!("{what}: newName"))?,
-    )))
 }
 
 unsafe fn number_at(g: *mut c_void, object: u64, name: &str, n: usize) {
-    define(g, object, name, enc_f64(n as f64), 0);
+    unsafe {
+        define(g, object, name, enc_f64(n as f64), 0);
+    }
 }
 
 unsafe fn changes_out(g: *mut c_void, changes: &[diff::LineChange]) -> u64 {
-    let result = new_array(g);
-    for (i, c) in changes.iter().enumerate() {
-        let entry = new_object(g, UNDEF);
-        number_at(g, entry, "oldStart", c.change.old.0);
-        number_at(g, entry, "oldEnd", c.change.old.1);
-        number_at(g, entry, "newStart", c.change.new.0);
-        number_at(g, entry, "newEnd", c.change.new.1);
-        if let Some(inline) = &c.inline {
-            let parts = new_array(g);
-            for (k, [old_from, old_to, new_from, new_to]) in inline.iter().enumerate() {
-                let part = new_object(g, UNDEF);
-                number_at(g, part, "oldFrom", *old_from);
-                number_at(g, part, "oldTo", *old_to);
-                number_at(g, part, "newFrom", *new_from);
-                number_at(g, part, "newTo", *new_to);
-                set_i(g, parts, k as u32, part);
+    unsafe {
+        let result = new_array(g);
+        for (i, c) in changes.iter().enumerate() {
+            let entry = new_object(g, UNDEF);
+            number_at(g, entry, "oldStart", c.change.old.0);
+            number_at(g, entry, "oldEnd", c.change.old.1);
+            number_at(g, entry, "newStart", c.change.new.0);
+            number_at(g, entry, "newEnd", c.change.new.1);
+            if let Some(inline) = &c.inline {
+                let parts = new_array(g);
+                for (k, [old_from, old_to, new_from, new_to]) in inline.iter().enumerate() {
+                    let part = new_object(g, UNDEF);
+                    number_at(g, part, "oldFrom", *old_from);
+                    number_at(g, part, "oldTo", *old_to);
+                    number_at(g, part, "newFrom", *new_from);
+                    number_at(g, part, "newTo", *new_to);
+                    set_i(g, parts, k as u32, part);
+                }
+                define(g, entry, "inline", parts, 0);
             }
-            define(g, entry, "inline", parts, 0);
+            set_i(g, result, i as u32, entry);
         }
-        set_i(g, result, i as u32, entry);
+        result
     }
-    result
 }
 
 std_fn!(fn diff_changes(g, args) {
@@ -478,12 +508,14 @@ pub(crate) fn pump() {
 
 /// The promise `run` returns, or one rejected with what it threw.
 unsafe fn promise_of(g: *mut c_void, run: impl FnOnce() -> Js<u64>) -> u64 {
-    match run() {
-        Ok(promise) => promise,
-        Err(Thrown) => {
-            let mut error = UNDEF;
-            glue::rjs_exception_pending(g, &mut error);
-            host::rejected_with(g, error)
+    unsafe {
+        match run() {
+            Ok(promise) => promise,
+            Err(Thrown) => {
+                let mut error = UNDEF;
+                glue::rjs_exception_pending(g, &mut error);
+                host::rejected_with(g, error)
+            }
         }
     }
 }
@@ -538,43 +570,45 @@ std_fn!(fn diff_lines(g, args) {
 
 /// The runs of `words()` and `chars()`: joining the `equal` and `insert` ones gives the new text.
 unsafe fn runs(g: *mut c_void, args: &HostArgs, what: &str, words: bool) -> Js<u64> {
-    let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, what)?;
-    let default = if words {
-        Algorithm::Histogram
-    } else {
-        Algorithm::Myers
-    };
-    let o = Options {
-        ignore_line_endings: false,
-        ..diff_options(g, args.arg(2).0, what, default)?
-    };
-    let (a, b) = if words {
-        (Pieces::words(&old), Pieces::words(&new))
-    } else {
-        (Pieces::points(&old), Pieces::points(&new))
-    };
-    let (ids, tokens) = diff::intern(&[&a, &b], &o);
-    let script = diff::diff(&ids[0], &ids[1], tokens, o.algorithm);
-    let result = new_array(g);
-    let (mut at_old, mut at_new) = (0, 0);
-    for (i, (edit, count)) in script.0.iter().enumerate() {
-        let text = if *edit == Edit::Insert {
-            b.span(at_new, *count)
+    unsafe {
+        let (old, new) = two_texts(g, args.arg(0).0, args.arg(1).0, what)?;
+        let default = if words {
+            Algorithm::Histogram
         } else {
-            a.span(at_old, *count)
+            Algorithm::Myers
         };
-        let entry = new_object(g, UNDEF);
-        define(g, entry, "op", js_string(g, edit.name()), 0);
-        define(g, entry, "text", js_string16(g, text), 0);
-        set_i(g, result, i as u32, entry);
-        if *edit != Edit::Insert {
-            at_old += count;
+        let o = Options {
+            ignore_line_endings: false,
+            ..diff_options(g, args.arg(2).0, what, default)?
+        };
+        let (a, b) = if words {
+            (Pieces::words(&old), Pieces::words(&new))
+        } else {
+            (Pieces::points(&old), Pieces::points(&new))
+        };
+        let (ids, tokens) = diff::intern(&[&a, &b], &o);
+        let script = diff::diff(&ids[0], &ids[1], tokens, o.algorithm);
+        let result = new_array(g);
+        let (mut at_old, mut at_new) = (0, 0);
+        for (i, (edit, count)) in script.0.iter().enumerate() {
+            let text = if *edit == Edit::Insert {
+                b.span(at_new, *count)
+            } else {
+                a.span(at_old, *count)
+            };
+            let entry = new_object(g, UNDEF);
+            define(g, entry, "op", js_string(g, edit.name()), 0);
+            define(g, entry, "text", js_string16(g, text), 0);
+            set_i(g, result, i as u32, entry);
+            if *edit != Edit::Insert {
+                at_old += count;
+            }
+            if *edit != Edit::Delete {
+                at_new += count;
+            }
         }
-        if *edit != Edit::Delete {
-            at_new += count;
-        }
+        Ok(result)
     }
-    Ok(result)
 }
 
 std_fn!(fn diff_words(g, args) { runs(g, &args, "TextDiff.words", true) });
@@ -591,10 +625,12 @@ std_fn!(fn diff_unified(g, args) {
 });
 
 unsafe fn pair(g: *mut c_void, (from, to): (usize, usize)) -> u64 {
-    let out = new_array(g);
-    set_i(g, out, 0, enc_f64(from as f64));
-    set_i(g, out, 1, enc_f64(to as f64));
-    out
+    unsafe {
+        let out = new_array(g);
+        set_i(g, out, 0, enc_f64(from as f64));
+        set_i(g, out, 1, enc_f64(to as f64));
+        out
+    }
 }
 
 std_fn!(fn diff_merge(g, args) {
@@ -669,50 +705,52 @@ std_fn!(fn patch_from(g, args) {
 });
 
 unsafe fn path_out(g: *mut c_void, path: &Option<String>) -> u64 {
-    path.as_deref().map_or(NULL, |p| js_string(g, p))
+    unsafe { path.as_deref().map_or(NULL, |p| js_string(g, p)) }
 }
 
 unsafe fn files_out(g: *mut c_void, files: &[PatchFile]) -> u64 {
-    let result = new_array(g);
-    for (i, f) in files.iter().enumerate() {
-        let file = new_object(g, UNDEF);
-        define(g, file, "oldPath", path_out(g, &f.old_path), 0);
-        define(g, file, "newPath", path_out(g, &f.new_path), 0);
-        define(g, file, "status", js_string(g, f.status.name()), 0);
-        if let Some(mode) = f.old_mode {
-            number_at(g, file, "oldMode", mode as usize);
-        }
-        if let Some(mode) = f.new_mode {
-            number_at(g, file, "newMode", mode as usize);
-        }
-        define(g, file, "binary", enc_bool(f.binary.is_some()), 0);
-        let hunks = new_array(g);
-        for (h, hunk) in f.hunks.iter().enumerate() {
-            let object = new_object(g, UNDEF);
-            number_at(g, object, "oldStart", hunk.old_start);
-            number_at(g, object, "oldLines", hunk.old_count);
-            number_at(g, object, "newStart", hunk.new_start);
-            number_at(g, object, "newLines", hunk.new_count);
-            if !hunk.section.is_empty() {
-                define(g, object, "section", js_string16(g, &hunk.section), 0);
+    unsafe {
+        let result = new_array(g);
+        for (i, f) in files.iter().enumerate() {
+            let file = new_object(g, UNDEF);
+            define(g, file, "oldPath", path_out(g, &f.old_path), 0);
+            define(g, file, "newPath", path_out(g, &f.new_path), 0);
+            define(g, file, "status", js_string(g, f.status.name()), 0);
+            if let Some(mode) = f.old_mode {
+                number_at(g, file, "oldMode", mode as usize);
             }
-            let lines = new_array(g);
-            for (k, line) in hunk.lines.iter().enumerate() {
-                let entry = new_object(g, UNDEF);
-                define(g, entry, "op", js_string(g, line.edit.name()), 0);
-                define(g, entry, "text", js_string16(g, &line.text), 0);
-                if line.no_newline {
-                    define(g, entry, "noNewline", enc_bool(true), 0);
+            if let Some(mode) = f.new_mode {
+                number_at(g, file, "newMode", mode as usize);
+            }
+            define(g, file, "binary", enc_bool(f.binary.is_some()), 0);
+            let hunks = new_array(g);
+            for (h, hunk) in f.hunks.iter().enumerate() {
+                let object = new_object(g, UNDEF);
+                number_at(g, object, "oldStart", hunk.old_start);
+                number_at(g, object, "oldLines", hunk.old_count);
+                number_at(g, object, "newStart", hunk.new_start);
+                number_at(g, object, "newLines", hunk.new_count);
+                if !hunk.section.is_empty() {
+                    define(g, object, "section", js_string16(g, &hunk.section), 0);
                 }
-                set_i(g, lines, k as u32, entry);
+                let lines = new_array(g);
+                for (k, line) in hunk.lines.iter().enumerate() {
+                    let entry = new_object(g, UNDEF);
+                    define(g, entry, "op", js_string(g, line.edit.name()), 0);
+                    define(g, entry, "text", js_string16(g, &line.text), 0);
+                    if line.no_newline {
+                        define(g, entry, "noNewline", enc_bool(true), 0);
+                    }
+                    set_i(g, lines, k as u32, entry);
+                }
+                define(g, object, "lines", lines, 0);
+                set_i(g, hunks, h as u32, object);
             }
-            define(g, object, "lines", lines, 0);
-            set_i(g, hunks, h as u32, object);
+            define(g, file, "hunks", hunks, 0);
+            set_i(g, result, i as u32, file);
         }
-        define(g, file, "hunks", hunks, 0);
-        set_i(g, result, i as u32, file);
+        result
     }
-    result
 }
 
 std_fn!(fn patch_files(g, args) {
@@ -1285,146 +1323,148 @@ std_fn!(fn glob_filter(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let module = new_object(g, UNDEF);
+    unsafe {
+        let module = new_object(g, UNDEF);
 
-    let builder = support::class(
-        g,
-        &ClassSpec {
-            name: "StringBuilder",
-            arity: 0,
-            construct: Some(builder_construct),
-            parent_proto: 0,
-            methods: &[
-                ("append", 1, buffer_append),
-                ("appendLine", 0, buffer_append_line),
-                ("appendAll", 1, buffer_append_all),
-                ("insert", 2, buffer_insert),
-                ("clear", 0, buffer_clear),
-                ("toString", 0, buffer_to_string),
-            ],
-            getters: &[("length", buffer_length)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "StringBuilder", builder.ctor, 0);
-
-    let writer = support::class(
-        g,
-        &ClassSpec {
-            name: "StringWriter",
-            arity: 0,
-            construct: Some(writer_construct),
-            parent_proto: 0,
-            methods: &[
-                ("write", 1, writer_write),
-                ("writeLine", 0, writer_write_line),
-                ("writeAll", 1, writer_write_all),
-                ("toString", 0, buffer_to_string),
-            ],
-            getters: &[("length", buffer_length)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "StringWriter", writer.ctor, 0);
-
-    let reader = support::class(
-        g,
-        &ClassSpec {
-            name: "StringReader",
-            arity: 1,
-            construct: Some(reader_construct),
-            parent_proto: 0,
-            methods: &[
-                ("read", 0, reader_read),
-                ("peek", 0, reader_peek),
-                ("readLine", 0, reader_read_line),
-                ("readLines", 0, reader_read_lines),
-                ("readToEnd", 0, reader_read_to_end),
-            ],
-            getters: &[("position", reader_position), ("length", reader_length)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "StringReader", reader.ctor, 0);
-
-    define(
-        g,
-        module,
-        "TextDiff",
-        namespace(
+        let builder = support::class(
             g,
+            &ClassSpec {
+                name: "StringBuilder",
+                arity: 0,
+                construct: Some(builder_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("append", 1, buffer_append),
+                    ("appendLine", 0, buffer_append_line),
+                    ("appendAll", 1, buffer_append_all),
+                    ("insert", 2, buffer_insert),
+                    ("clear", 0, buffer_clear),
+                    ("toString", 0, buffer_to_string),
+                ],
+                getters: &[("length", buffer_length)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "StringBuilder", builder.ctor, 0);
+
+        let writer = support::class(
+            g,
+            &ClassSpec {
+                name: "StringWriter",
+                arity: 0,
+                construct: Some(writer_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("write", 1, writer_write),
+                    ("writeLine", 0, writer_write_line),
+                    ("writeAll", 1, writer_write_all),
+                    ("toString", 0, buffer_to_string),
+                ],
+                getters: &[("length", buffer_length)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "StringWriter", writer.ctor, 0);
+
+        let reader = support::class(
+            g,
+            &ClassSpec {
+                name: "StringReader",
+                arity: 1,
+                construct: Some(reader_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("read", 0, reader_read),
+                    ("peek", 0, reader_peek),
+                    ("readLine", 0, reader_read_line),
+                    ("readLines", 0, reader_read_lines),
+                    ("readToEnd", 0, reader_read_to_end),
+                ],
+                getters: &[("position", reader_position), ("length", reader_length)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "StringReader", reader.ctor, 0);
+
+        define(
+            g,
+            module,
             "TextDiff",
-            &[
-                ("changes", 2, diff_changes),
-                ("changesAsync", 2, diff_changes_async),
-                ("lines", 2, diff_lines),
-                ("words", 2, diff_words),
-                ("chars", 2, diff_chars),
-                ("unified", 2, diff_unified),
-                ("merge", 3, diff_merge),
-            ],
-        ),
-        0,
-    );
+            namespace(
+                g,
+                "TextDiff",
+                &[
+                    ("changes", 2, diff_changes),
+                    ("changesAsync", 2, diff_changes_async),
+                    ("lines", 2, diff_lines),
+                    ("words", 2, diff_words),
+                    ("chars", 2, diff_chars),
+                    ("unified", 2, diff_unified),
+                    ("merge", 3, diff_merge),
+                ],
+            ),
+            0,
+        );
 
-    let patch = support::class(
-        g,
-        &ClassSpec {
-            name: "Patch",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("apply", 1, patch_apply),
-                ("select", 1, patch_select),
-                ("reverse", 0, patch_reverse),
-                ("toString", 0, patch_to_string),
-            ],
-            getters: &[("files", patch_files)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, patch.ctor, "parse", 1, patch_parse);
-    static_fn(g, patch.ctor, "from", 2, patch_from);
-    define(g, module, "Patch", patch.ctor, 0);
+        let patch = support::class(
+            g,
+            &ClassSpec {
+                name: "Patch",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("apply", 1, patch_apply),
+                    ("select", 1, patch_select),
+                    ("reverse", 0, patch_reverse),
+                    ("toString", 0, patch_to_string),
+                ],
+                getters: &[("files", patch_files)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, patch.ctor, "parse", 1, patch_parse);
+        static_fn(g, patch.ctor, "from", 2, patch_from);
+        define(g, module, "Patch", patch.ctor, 0);
 
-    let search = support::class(
-        g,
-        &ClassSpec {
-            name: "TextSearch",
-            arity: 1,
-            construct: Some(search_construct),
-            parent_proto: 0,
-            methods: &[("findAll", 1, search_find_all), ("test", 1, search_test)],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    define(g, module, "TextSearch", search.ctor, 0);
+        let search = support::class(
+            g,
+            &ClassSpec {
+                name: "TextSearch",
+                arity: 1,
+                construct: Some(search_construct),
+                parent_proto: 0,
+                methods: &[("findAll", 1, search_find_all), ("test", 1, search_test)],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        define(g, module, "TextSearch", search.ctor, 0);
 
-    define(
-        g,
-        module,
-        "FuzzyMatcher",
-        namespace(g, "FuzzyMatcher", &[("rank", 2, fuzzy_rank)]),
-        0,
-    );
+        define(
+            g,
+            module,
+            "FuzzyMatcher",
+            namespace(g, "FuzzyMatcher", &[("rank", 2, fuzzy_rank)]),
+            0,
+        );
 
-    let glob = support::class(
-        g,
-        &ClassSpec {
-            name: "Glob",
-            arity: 1,
-            construct: Some(glob_construct),
-            parent_proto: 0,
-            methods: &[("match", 1, glob_match), ("filter", 1, glob_filter)],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    define(g, module, "Glob", glob.ctor, 0);
+        let glob = support::class(
+            g,
+            &ClassSpec {
+                name: "Glob",
+                arity: 1,
+                construct: Some(glob_construct),
+                parent_proto: 0,
+                methods: &[("match", 1, glob_match), ("filter", 1, glob_filter)],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        define(g, module, "Glob", glob.ctor, 0);
 
-    define(g, std, "text", module, 0);
+        define(g, std, "text", module, 0);
+    }
 }
 
 #[cfg(test)]

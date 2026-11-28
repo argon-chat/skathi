@@ -32,3 +32,6 @@ cc = "1"
 codegen-units = 16
 debug = "line-tables-only"
 panic = "abort"
+
+[profile.release.package."*"]
+debug = "none"

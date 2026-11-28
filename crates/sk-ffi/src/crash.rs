@@ -28,22 +28,24 @@ fn install() {
     };
 
     unsafe extern "system" fn report(info: *mut EXCEPTION_POINTERS) -> i32 {
-        let code = (*(*info).ExceptionRecord).ExceptionCode;
-        let fatal = [
-            EXCEPTION_ACCESS_VIOLATION,
-            EXCEPTION_ILLEGAL_INSTRUCTION,
-            EXCEPTION_INT_DIVIDE_BY_ZERO,
-            EXCEPTION_IN_PAGE_ERROR,
-            EXCEPTION_PRIV_INSTRUCTION,
-            EXCEPTION_STACK_OVERFLOW,
-        ]
-        .contains(&code);
-        if fatal {
-            if let Ok(Some(label)) = CURRENT.try_with(Cell::get) {
-                write_line(label);
+        unsafe {
+            let code = (*(*info).ExceptionRecord).ExceptionCode;
+            let fatal = [
+                EXCEPTION_ACCESS_VIOLATION,
+                EXCEPTION_ILLEGAL_INSTRUCTION,
+                EXCEPTION_INT_DIVIDE_BY_ZERO,
+                EXCEPTION_IN_PAGE_ERROR,
+                EXCEPTION_PRIV_INSTRUCTION,
+                EXCEPTION_STACK_OVERFLOW,
+            ]
+            .contains(&code);
+            if fatal {
+                if let Ok(Some(label)) = CURRENT.try_with(Cell::get) {
+                    write_line(label);
+                }
             }
+            EXCEPTION_CONTINUE_SEARCH
         }
-        EXCEPTION_CONTINUE_SEARCH
     }
 
     static ONCE: Once = Once::new();
@@ -69,30 +71,32 @@ mod posix {
         info: *mut libc::siginfo_t,
         context: *mut libc::c_void,
     ) {
-        if let Ok(Some(label)) = CURRENT.try_with(Cell::get) {
-            // A handler that returns into the fault comes here again.
-            let _ = CURRENT.try_with(|current| current.set(None));
-            write_line(label);
-        }
-        let Some(index) = SIGNALS.iter().position(|s| *s == signal) else {
-            return;
-        };
-        // SAFETY: written once, before the handler was installed.
-        let previous = (*std::ptr::addr_of!(PREVIOUS))[index].assume_init();
-        let handler = previous.sa_sigaction;
-        if handler == libc::SIG_DFL || handler == libc::SIG_IGN {
-            // Returning runs the faulting instruction again, now with the default action.
-            libc::sigaction(signal, &previous, std::ptr::null_mut());
-        } else if previous.sa_flags & libc::SA_SIGINFO != 0 {
-            let chained: unsafe extern "C" fn(
-                libc::c_int,
-                *mut libc::siginfo_t,
-                *mut libc::c_void,
-            ) = std::mem::transmute(handler);
-            chained(signal, info, context);
-        } else {
-            let chained: unsafe extern "C" fn(libc::c_int) = std::mem::transmute(handler);
-            chained(signal);
+        unsafe {
+            if let Ok(Some(label)) = CURRENT.try_with(Cell::get) {
+                // A handler that returns into the fault comes here again.
+                let _ = CURRENT.try_with(|current| current.set(None));
+                write_line(label);
+            }
+            let Some(index) = SIGNALS.iter().position(|s| *s == signal) else {
+                return;
+            };
+            // SAFETY: written once, before the handler was installed.
+            let previous = (*std::ptr::addr_of!(PREVIOUS))[index].assume_init();
+            let handler = previous.sa_sigaction;
+            if handler == libc::SIG_DFL || handler == libc::SIG_IGN {
+                // Returning runs the faulting instruction again, now with the default action.
+                libc::sigaction(signal, &previous, std::ptr::null_mut());
+            } else if previous.sa_flags & libc::SA_SIGINFO != 0 {
+                let chained: unsafe extern "C" fn(
+                    libc::c_int,
+                    *mut libc::siginfo_t,
+                    *mut libc::c_void,
+                ) = std::mem::transmute(handler);
+                chained(signal, info, context);
+            } else {
+                let chained: unsafe extern "C" fn(libc::c_int) = std::mem::transmute(handler);
+                chained(signal);
+            }
         }
     }
 

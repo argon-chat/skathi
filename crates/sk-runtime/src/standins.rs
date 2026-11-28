@@ -35,7 +35,7 @@ const PERMISSION_NAMES: [&str; 7] = [
 ];
 
 macro_rules! inert {
-    ($name:ident, $key:literal, $why:expr, |$g:ident, $args:ident| $body:block) => {
+    ($name:ident, $key:literal, $why:expr_2021, |$g:ident, $args:ident| $body:block) => {
         crate::host_fn!(fn $name($g, $args) {
             unsafe { warn_compat($g, $key, $why) };
             $body
@@ -44,10 +44,12 @@ macro_rules! inert {
 }
 
 unsafe fn no_desktop(g: *mut c_void, what: &str) -> u64 {
-    let e = host::error(g, "Error", &format!("{what}: no desktop host"));
-    define(g, e, "name", js_string(g, "NotSupportedError"), 2);
-    define(g, e, "code", js_string(g, "ENOSYS"), 2);
-    e
+    unsafe {
+        let e = host::error(g, "Error", &format!("{what}: no desktop host"));
+        define(g, e, "name", js_string(g, "NotSupportedError"), 2);
+        define(g, e, "code", js_string(g, "ENOSYS"), 2);
+        e
+    }
 }
 
 inert!(
@@ -238,91 +240,93 @@ crate::host_fn!(fn haptic_patterns(g, _args) {
 });
 
 unsafe fn absent(g: *mut c_void, name: &str) -> bool {
-    !is_cell(get(g, global(g), name))
+    unsafe { !is_cell(get(g, global(g), name)) }
 }
 
 /// Installs a stand-in for each app API object the host crates did not.
 pub unsafe fn install_missing(g: *mut c_void) {
-    let event_target = get(g, get(g, global(g), "EventTarget"), "prototype");
-    if absent(g, "__SK_PERMISSIONS__") {
-        let o = host::install_object(g, "__SK_PERMISSIONS__", event_target);
-        host::getter(g, o, "platform", permissions_platform);
-        host::getter(g, o, "names", permissions_names);
-        host::method(g, o, "query", 1, permissions_query);
-        host::method(g, o, "list", 0, permissions_list);
-        host::method(g, o, "request", 1, permissions_request);
-    }
-    if absent(g, "__SK_STORAGE__") {
-        let o = host::install_object(g, "__SK_STORAGE__", UNDEF);
-        host::getter(g, o, "kinds", storage_kinds);
-        host::getter(g, o, "folder", storage_folder);
-        host::getter(g, o, "encrypted", storage_encrypted);
-        host::method(g, o, "getUserFolder", 1, storage_get_user_folder);
-        host::method(g, o, "setStorageFolder", 1, storage_set_folder);
-        host::method(g, o, "info", 0, storage_info);
-        host::method(g, o, "flush", 0, storage_flush);
-    }
-    if absent(g, "__SK_SHELL__") {
-        let o = host::install_object(g, "__SK_SHELL__", UNDEF);
-        host::method(g, o, "openExternal", 1, shell_open_external);
-        host::method(g, o, "openPath", 1, shell_open_path);
-        host::method(g, o, "showItemInFolder", 1, shell_show_item);
-        host::method(g, o, "trashItem", 1, shell_trash_item);
-        host::method(g, o, "openContent", 1, shell_open_content);
-    }
-    if absent(g, "__SK_CAPTURE__") {
-        let o = host::install_object(g, "__SK_CAPTURE__", UNDEF);
-        host::method(g, o, "permission", 1, capture_permission);
-        host::method(g, o, "requestPermission", 1, capture_request);
-        host::method(g, o, "permissionHint", 1, capture_hint);
-        host::method(g, o, "getSources", 0, capture_sources);
-        host::method(g, o, "setPendingSource", 1, capture_pending);
-    }
-    if absent(g, "__SK_LAUNCH__") {
-        let o = host::install_object(g, "__SK_LAUNCH__", event_target);
-        host::getter(g, o, "argv", launch_list);
-        host::getter(g, o, "cwd", launch_cwd);
-        host::getter(g, o, "url", launch_url);
-        host::getter(g, o, "paths", launch_list);
-        host::getter(g, o, "singleInstance", launch_false);
-        host::method(g, o, "registerProtocol", 1, launch_register);
-        host::method(g, o, "unregisterProtocol", 1, launch_false);
-        host::method(g, o, "isProtocolRegistered", 1, launch_false);
-    }
-    if absent(g, "__sk_appHaptics") {
-        let o = host::install_object(g, "__sk_appHaptics", UNDEF);
-        define(g, o, "supported", FALSE, 1);
-        host::method(g, o, "supportsPointer", 1, answer_false);
-        host::method(g, o, "getSupportedPatterns", 0, haptic_patterns);
-        host::method(g, o, "trigger", 2, answer_false);
-        host::method(g, o, "perform", 1, answer_false);
-        host::method(g, o, "stop", 1, answer_false);
-    }
-    if absent(g, "__sk_appHotkeys") {
-        let o = host::install_object(g, "__sk_appHotkeys", UNDEF);
-        define(g, o, "available", FALSE, 0);
-        host::method(g, o, "setBindings", 1, hotkeys_set_bindings);
-        host::method(g, o, "status", 0, hotkeys_status);
-        host::method(g, o, "requestAccessibility", 0, answer_false);
-        host::method(g, o, "restart", 0, hotkeys_restart);
-        host::method(g, o, "captureOnce", 0, hotkeys_capture);
-        host::method(g, o, "cancelCapture", 0, nothing);
-        host::method(g, o, "onFired", 1, hotkeys_on_fired);
-    }
-    if absent(g, "__sk_appTray") {
-        let o = host::install_object(g, "__sk_appTray", UNDEF);
-        define(g, o, "available", FALSE, 0);
-        host::method(g, o, "set", 1, tray_set);
-    }
-    if absent(g, "__sk_appNotifications") {
-        let o = host::install_object(g, "__sk_appNotifications", UNDEF);
-        host::method(g, o, "capabilities", 0, notification_capabilities);
-        host::method(g, o, "show", 1, notification_unavailable);
-        host::method(g, o, "close", 1, notification_unavailable);
-        host::method(g, o, "setActivationHandler", 1, nothing);
-    }
-    if absent(g, "__sk_appDevtools") {
-        crate::app_devtools::install(g, None);
+    unsafe {
+        let event_target = get(g, get(g, global(g), "EventTarget"), "prototype");
+        if absent(g, "__SK_PERMISSIONS__") {
+            let o = host::install_object(g, "__SK_PERMISSIONS__", event_target);
+            host::getter(g, o, "platform", permissions_platform);
+            host::getter(g, o, "names", permissions_names);
+            host::method(g, o, "query", 1, permissions_query);
+            host::method(g, o, "list", 0, permissions_list);
+            host::method(g, o, "request", 1, permissions_request);
+        }
+        if absent(g, "__SK_STORAGE__") {
+            let o = host::install_object(g, "__SK_STORAGE__", UNDEF);
+            host::getter(g, o, "kinds", storage_kinds);
+            host::getter(g, o, "folder", storage_folder);
+            host::getter(g, o, "encrypted", storage_encrypted);
+            host::method(g, o, "getUserFolder", 1, storage_get_user_folder);
+            host::method(g, o, "setStorageFolder", 1, storage_set_folder);
+            host::method(g, o, "info", 0, storage_info);
+            host::method(g, o, "flush", 0, storage_flush);
+        }
+        if absent(g, "__SK_SHELL__") {
+            let o = host::install_object(g, "__SK_SHELL__", UNDEF);
+            host::method(g, o, "openExternal", 1, shell_open_external);
+            host::method(g, o, "openPath", 1, shell_open_path);
+            host::method(g, o, "showItemInFolder", 1, shell_show_item);
+            host::method(g, o, "trashItem", 1, shell_trash_item);
+            host::method(g, o, "openContent", 1, shell_open_content);
+        }
+        if absent(g, "__SK_CAPTURE__") {
+            let o = host::install_object(g, "__SK_CAPTURE__", UNDEF);
+            host::method(g, o, "permission", 1, capture_permission);
+            host::method(g, o, "requestPermission", 1, capture_request);
+            host::method(g, o, "permissionHint", 1, capture_hint);
+            host::method(g, o, "getSources", 0, capture_sources);
+            host::method(g, o, "setPendingSource", 1, capture_pending);
+        }
+        if absent(g, "__SK_LAUNCH__") {
+            let o = host::install_object(g, "__SK_LAUNCH__", event_target);
+            host::getter(g, o, "argv", launch_list);
+            host::getter(g, o, "cwd", launch_cwd);
+            host::getter(g, o, "url", launch_url);
+            host::getter(g, o, "paths", launch_list);
+            host::getter(g, o, "singleInstance", launch_false);
+            host::method(g, o, "registerProtocol", 1, launch_register);
+            host::method(g, o, "unregisterProtocol", 1, launch_false);
+            host::method(g, o, "isProtocolRegistered", 1, launch_false);
+        }
+        if absent(g, "__sk_appHaptics") {
+            let o = host::install_object(g, "__sk_appHaptics", UNDEF);
+            define(g, o, "supported", FALSE, 1);
+            host::method(g, o, "supportsPointer", 1, answer_false);
+            host::method(g, o, "getSupportedPatterns", 0, haptic_patterns);
+            host::method(g, o, "trigger", 2, answer_false);
+            host::method(g, o, "perform", 1, answer_false);
+            host::method(g, o, "stop", 1, answer_false);
+        }
+        if absent(g, "__sk_appHotkeys") {
+            let o = host::install_object(g, "__sk_appHotkeys", UNDEF);
+            define(g, o, "available", FALSE, 0);
+            host::method(g, o, "setBindings", 1, hotkeys_set_bindings);
+            host::method(g, o, "status", 0, hotkeys_status);
+            host::method(g, o, "requestAccessibility", 0, answer_false);
+            host::method(g, o, "restart", 0, hotkeys_restart);
+            host::method(g, o, "captureOnce", 0, hotkeys_capture);
+            host::method(g, o, "cancelCapture", 0, nothing);
+            host::method(g, o, "onFired", 1, hotkeys_on_fired);
+        }
+        if absent(g, "__sk_appTray") {
+            let o = host::install_object(g, "__sk_appTray", UNDEF);
+            define(g, o, "available", FALSE, 0);
+            host::method(g, o, "set", 1, tray_set);
+        }
+        if absent(g, "__sk_appNotifications") {
+            let o = host::install_object(g, "__sk_appNotifications", UNDEF);
+            host::method(g, o, "capabilities", 0, notification_capabilities);
+            host::method(g, o, "show", 1, notification_unavailable);
+            host::method(g, o, "close", 1, notification_unavailable);
+            host::method(g, o, "setActivationHandler", 1, nothing);
+        }
+        if absent(g, "__sk_appDevtools") {
+            crate::app_devtools::install(g, None);
+        }
     }
 }
 

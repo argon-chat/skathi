@@ -99,21 +99,23 @@ fn draw(text: &str, size: usize) -> Vec<u8> {
 }
 
 unsafe fn dib(dc: Option<HDC>, size: usize) -> Option<(HBITMAP, *mut u8)> {
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: size as i32,
-            biHeight: -(size as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+    unsafe {
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size as i32,
+                biHeight: -(size as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bits: *mut c_void = std::ptr::null_mut();
-    let bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
-    (!bits.is_null()).then_some((bmp, bits.cast()))
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+        (!bits.is_null()).then_some((bmp, bits.cast()))
+    }
 }
 
 /// The text's grayscale coverage: GDI draws white on black with no alpha of its own.

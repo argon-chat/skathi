@@ -63,27 +63,29 @@ host_fn!(fn navigator_connection(_g, _args) {
 
 /// `online` and `offline` are also a `change`. `navigator.connection` hears only a change of `type`.
 pub(super) unsafe fn on_event(g: *mut c_void, payload: &serde_json::Value) {
-    let object = OBJECT.with(Cell::get);
-    let Some(event) = payload["event"].as_str().filter(|_| object != 0) else {
-        return;
-    };
-    // Read before any listener runs: one could change the state, which is the next event's to announce.
-    let moved = CONNECTION_TYPE.with(|t| {
-        let Some(last) = t.get() else { return false };
-        let now = network::connection_type();
-        t.set(Some(now));
-        now != last
-    });
-    if event != "change" {
-        events::dispatch(g, object, events::new_trusted_event(g, event));
-    }
-    events::dispatch(g, object, events::new_trusted_event(g, "change"));
-    if moved {
-        events::dispatch(
-            g,
-            CONNECTION.with(Cell::get),
-            events::new_trusted_event(g, "change"),
-        );
+    unsafe {
+        let object = OBJECT.with(Cell::get);
+        let Some(event) = payload["event"].as_str().filter(|_| object != 0) else {
+            return;
+        };
+        // Read before any listener runs: one could change the state, which is the next event's to announce.
+        let moved = CONNECTION_TYPE.with(|t| {
+            let Some(last) = t.get() else { return false };
+            let now = network::connection_type();
+            t.set(Some(now));
+            now != last
+        });
+        if event != "change" {
+            events::dispatch(g, object, events::new_trusted_event(g, event));
+        }
+        events::dispatch(g, object, events::new_trusted_event(g, "change"));
+        if moved {
+            events::dispatch(
+                g,
+                CONNECTION.with(Cell::get),
+                events::new_trusted_event(g, "change"),
+            );
+        }
     }
 }
 
@@ -158,59 +160,61 @@ host_fn!(fn fake(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
-    let class = define_class(
-        g,
-        &ClassSpec {
-            name: "Network",
-            arity: 0,
-            construct: None,
-            parent_proto: event_target,
-            methods: &[],
-            getters: &[
-                ("online", online),
-                ("internet", internet),
-                ("type", connection_type),
-                ("metered", metered),
-                ("roaming", roaming),
-                ("overDataLimit", over_data_limit),
-            ],
-            accessors: &[],
-        },
-    );
-    let object = host::install_object(g, "__SK_NETWORK__", class.proto);
-    OBJECT.with(|o| o.set(object));
-
-    let information = define_class(
-        g,
-        &ClassSpec {
-            name: "NetworkInformation",
-            arity: 0,
-            construct: None,
-            parent_proto: event_target,
-            methods: &[],
-            getters: &[("type", information_type)],
-            accessors: &[("onchange", get_onchange, set_onchange)],
-        },
-    );
-    let connection = new_object(g, information.proto);
-    redjs_protect(g, connection);
-    CONNECTION.with(|c| c.set(connection));
-    CONNECTION_TYPE.with(|t| t.set(None));
-    super::define_getter(
-        g,
-        super::navigator_proto(g),
-        "connection",
-        navigator_connection,
-    );
-
-    if network::faked() {
-        define(
+    unsafe {
+        let class = define_class(
             g,
-            host::global(g),
-            "__SK_TEST_NETWORK__",
-            make_fn(g, "__SK_TEST_NETWORK__", 1, fake),
-            0,
+            &ClassSpec {
+                name: "Network",
+                arity: 0,
+                construct: None,
+                parent_proto: event_target,
+                methods: &[],
+                getters: &[
+                    ("online", online),
+                    ("internet", internet),
+                    ("type", connection_type),
+                    ("metered", metered),
+                    ("roaming", roaming),
+                    ("overDataLimit", over_data_limit),
+                ],
+                accessors: &[],
+            },
         );
+        let object = host::install_object(g, "__SK_NETWORK__", class.proto);
+        OBJECT.with(|o| o.set(object));
+
+        let information = define_class(
+            g,
+            &ClassSpec {
+                name: "NetworkInformation",
+                arity: 0,
+                construct: None,
+                parent_proto: event_target,
+                methods: &[],
+                getters: &[("type", information_type)],
+                accessors: &[("onchange", get_onchange, set_onchange)],
+            },
+        );
+        let connection = new_object(g, information.proto);
+        redjs_protect(g, connection);
+        CONNECTION.with(|c| c.set(connection));
+        CONNECTION_TYPE.with(|t| t.set(None));
+        super::define_getter(
+            g,
+            super::navigator_proto(g),
+            "connection",
+            navigator_connection,
+        );
+
+        if network::faked() {
+            define(
+                g,
+                host::global(g),
+                "__SK_TEST_NETWORK__",
+                make_fn(g, "__SK_TEST_NETWORK__", 1, fake),
+                0,
+            );
+        }
     }
 }
 

@@ -78,22 +78,28 @@ static FREQUENCY: OnceLock<usize> = OnceLock::new();
 static ANGLE: OnceLock<usize> = OnceLock::new();
 
 unsafe fn finite(g: *mut c_void, v: u64, what: &str) -> Js<f64> {
-    let n = number(g, v)?;
-    if !n.is_finite() {
-        return range_error(g, &format!("{what} must be a finite number"));
+    unsafe {
+        let n = number(g, v)?;
+        if !n.is_finite() {
+            return range_error(g, &format!("{what} must be a finite number"));
+        }
+        Ok(n)
     }
-    Ok(n)
 }
 
 unsafe fn size_new(g: *mut c_void, bytes: f64) -> u64 {
-    let class = host_class::<DataSize>(&DATA_SIZE, "DataSize");
-    host_create(g, class, prototype(g, "DataSize"), DataSize(bytes))
+    unsafe {
+        let class = host_class::<DataSize>(&DATA_SIZE, "DataSize");
+        host_create(g, class, prototype(g, "DataSize"), DataSize(bytes))
+    }
 }
 
 unsafe fn this_size(g: *mut c_void, this: u64) -> Js<f64> {
-    match host_data::<DataSize>(g, host_class::<DataSize>(&DATA_SIZE, "DataSize"), this) {
-        Some(size) => Ok(size.0),
-        None => type_error(g, "this is not a DataSize"),
+    unsafe {
+        match host_data::<DataSize>(g, host_class::<DataSize>(&DATA_SIZE, "DataSize"), this) {
+            Some(size) => Ok(size.0),
+            None => type_error(g, "this is not a DataSize"),
+        }
     }
 }
 
@@ -146,14 +152,18 @@ std_fn!(fn size_format(g, args) {
 });
 
 unsafe fn frequency_new(g: *mut c_void, hz: f64) -> u64 {
-    let class = host_class::<Frequency>(&FREQUENCY, "Frequency");
-    host_create(g, class, prototype(g, "Frequency"), Frequency(hz))
+    unsafe {
+        let class = host_class::<Frequency>(&FREQUENCY, "Frequency");
+        host_create(g, class, prototype(g, "Frequency"), Frequency(hz))
+    }
 }
 
 unsafe fn this_frequency(g: *mut c_void, this: u64) -> Js<f64> {
-    match host_data::<Frequency>(g, host_class::<Frequency>(&FREQUENCY, "Frequency"), this) {
-        Some(frequency) => Ok(frequency.0),
-        None => type_error(g, "this is not a Frequency"),
+    unsafe {
+        match host_data::<Frequency>(g, host_class::<Frequency>(&FREQUENCY, "Frequency"), this) {
+            Some(frequency) => Ok(frequency.0),
+            None => type_error(g, "this is not a Frequency"),
+        }
     }
 }
 
@@ -196,14 +206,18 @@ std_fn!(fn frequency_to_string(g, args) {
 });
 
 unsafe fn angle_new(g: *mut c_void, degrees: f64) -> u64 {
-    let class = host_class::<Angle>(&ANGLE, "Angle");
-    host_create(g, class, prototype(g, "Angle"), Angle(degrees))
+    unsafe {
+        let class = host_class::<Angle>(&ANGLE, "Angle");
+        host_create(g, class, prototype(g, "Angle"), Angle(degrees))
+    }
 }
 
 unsafe fn this_angle(g: *mut c_void, this: u64) -> Js<f64> {
-    match host_data::<Angle>(g, host_class::<Angle>(&ANGLE, "Angle"), this) {
-        Some(angle) => Ok(angle.0),
-        None => type_error(g, "this is not an Angle"),
+    unsafe {
+        match host_data::<Angle>(g, host_class::<Angle>(&ANGLE, "Angle"), this) {
+            Some(angle) => Ok(angle.0),
+            None => type_error(g, "this is not an Angle"),
+        }
     }
 }
 
@@ -222,67 +236,69 @@ std_fn!(fn angle_to_string(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let size = support::class(
-        g,
-        &ClassSpec {
-            name: "DataSize",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("to", 1, size_to),
-                ("format", 0, size_format),
-                ("toString", 0, size_format),
-                ("valueOf", 0, size_bytes),
-            ],
-            getters: &[("bytes", size_bytes)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, size.ctor, "bytes", 1, size_bytes_of);
-    static_fn(g, size.ctor, "parse", 1, size_parse);
+    unsafe {
+        let size = support::class(
+            g,
+            &ClassSpec {
+                name: "DataSize",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("to", 1, size_to),
+                    ("format", 0, size_format),
+                    ("toString", 0, size_format),
+                    ("valueOf", 0, size_bytes),
+                ],
+                getters: &[("bytes", size_bytes)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, size.ctor, "bytes", 1, size_bytes_of);
+        static_fn(g, size.ctor, "parse", 1, size_parse);
 
-    let frequency = support::class(
-        g,
-        &ClassSpec {
-            name: "Frequency",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("toString", 0, frequency_to_string),
-                ("valueOf", 0, frequency_hz),
-            ],
-            getters: &[("hz", frequency_hz), ("period", frequency_period)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, frequency.ctor, "hz", 1, frequency_hz_of);
-    static_fn(g, frequency.ctor, "fromPeriod", 1, frequency_from_period);
+        let frequency = support::class(
+            g,
+            &ClassSpec {
+                name: "Frequency",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("toString", 0, frequency_to_string),
+                    ("valueOf", 0, frequency_hz),
+                ],
+                getters: &[("hz", frequency_hz), ("period", frequency_period)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, frequency.ctor, "hz", 1, frequency_hz_of);
+        static_fn(g, frequency.ctor, "fromPeriod", 1, frequency_from_period);
 
-    let angle = support::class(
-        g,
-        &ClassSpec {
-            name: "Angle",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("normalize", 0, angle_normalize),
-                ("toString", 0, angle_to_string),
-            ],
-            getters: &[("degrees", angle_degrees), ("radians", angle_radians)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, angle.ctor, "deg", 1, angle_deg);
-    static_fn(g, angle.ctor, "rad", 1, angle_rad);
+        let angle = support::class(
+            g,
+            &ClassSpec {
+                name: "Angle",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("normalize", 0, angle_normalize),
+                    ("toString", 0, angle_to_string),
+                ],
+                getters: &[("degrees", angle_degrees), ("radians", angle_radians)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, angle.ctor, "deg", 1, angle_deg);
+        static_fn(g, angle.ctor, "rad", 1, angle_rad);
 
-    let module = new_object(g, UNDEF);
-    define(g, module, "DataSize", size.ctor, 0);
-    define(g, module, "Frequency", frequency.ctor, 0);
-    define(g, module, "Angle", angle.ctor, 0);
-    define(g, std, "units", module, 0);
+        let module = new_object(g, UNDEF);
+        define(g, module, "DataSize", size.ctor, 0);
+        define(g, module, "Frequency", frequency.ctor, 0);
+        define(g, module, "Angle", angle.ctor, 0);
+        define(g, std, "units", module, 0);
+    }
 }
 
 #[cfg(test)]

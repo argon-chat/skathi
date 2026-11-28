@@ -12,7 +12,7 @@ use sk_video::{FrameRequest, MediaSource, VideoState};
 #[cfg(target_os = "macos")]
 fn wait(duration: Duration) {
     #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         static kCFRunLoopDefaultMode: *const std::ffi::c_void;
         fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, after: u8) -> i32;
     }

@@ -76,16 +76,18 @@ impl Layout {
 
     /// SAFETY: `from` is valid for `size` bytes.
     unsafe fn push_bytes(&mut self, from: *const u8, size: usize, align: usize) {
-        let at = self.len.next_multiple_of(align);
-        self.reserve(at + size);
-        let area: &mut [u64] = if self.spill.is_empty() {
-            &mut self.inline
-        } else {
-            &mut self.spill
-        };
-        // `reserve` made the area hold `at + size` bytes.
-        let to = area.as_mut_ptr().cast::<u8>().add(at);
-        std::ptr::copy_nonoverlapping(from, to, size);
+        unsafe {
+            let at = self.len.next_multiple_of(align);
+            self.reserve(at + size);
+            let area: &mut [u64] = if self.spill.is_empty() {
+                &mut self.inline
+            } else {
+                &mut self.spill
+            };
+            // `reserve` made the area hold `at + size` bytes.
+            let to = area.as_mut_ptr().cast::<u8>().add(at);
+            std::ptr::copy_nonoverlapping(from, to, size);
+        }
     }
 
     fn push(&mut self, bits: u64, size: usize, align: usize) {
@@ -100,18 +102,22 @@ impl Layout {
     /// A struct on the stack in whole eight-byte slots.
     #[cfg_attr(windows, allow(dead_code))]
     unsafe fn slots(&mut self, layout: &StructLayout, from: *const u8) {
-        self.push_bytes(from, layout.size, layout.align.max(8));
-        self.reserve(self.len.next_multiple_of(8));
+        unsafe {
+            self.push_bytes(from, layout.size, layout.align.max(8));
+            self.reserve(self.len.next_multiple_of(8));
+        }
     }
 
     /// A private copy of a struct the callee gets a pointer to.
     #[cfg_attr(all(unix, target_arch = "x86_64"), allow(dead_code))]
     unsafe fn copy(&mut self, layout: &StructLayout, from: *const u8) -> u64 {
-        let mut copy = vec![0u64; layout.size.div_ceil(8).max(1)];
-        std::ptr::copy_nonoverlapping(from, copy.as_mut_ptr().cast::<u8>(), layout.size);
-        let at = copy.as_ptr() as u64;
-        self.copies.push(copy);
-        at
+        unsafe {
+            let mut copy = vec![0u64; layout.size.div_ceil(8).max(1)];
+            std::ptr::copy_nonoverlapping(from, copy.as_mut_ptr().cast::<u8>(), layout.size);
+            let at = copy.as_ptr() as u64;
+            self.copies.push(copy);
+            at
+        }
     }
 
     fn finish(mut self) -> Frame {
@@ -134,15 +140,19 @@ impl Layout {
 
 /// Up to eight bytes of a struct from `at`, zero-extended.
 unsafe fn word(from: *const u8, at: usize, size: usize) -> u64 {
-    let mut bytes = [0u8; 8];
-    let len = (size - at).min(8);
-    std::ptr::copy_nonoverlapping(from.add(at), bytes.as_mut_ptr(), len);
-    u64::from_le_bytes(bytes)
+    unsafe {
+        let mut bytes = [0u8; 8];
+        let len = (size - at).min(8);
+        std::ptr::copy_nonoverlapping(from.add(at), bytes.as_mut_ptr(), len);
+        u64::from_le_bytes(bytes)
+    }
 }
 
 unsafe fn store(to: *mut u8, at: usize, size: usize, bits: u64) {
-    let len = (size - at).min(8);
-    std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to.add(at), len);
+    unsafe {
+        let len = (size - at).min(8);
+        std::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), to.add(at), len);
+    }
 }
 
 /// SAFETY: every struct value points at `size` bytes of its layout, and a struct return at room for them.
@@ -151,17 +161,19 @@ pub(crate) unsafe fn lay_out<'a>(
     returns: Returns<'a>,
     fixed: Option<usize>,
 ) -> Frame {
-    let mut layout = Layout {
-        gpr: [0; 8],
-        fpr: [0; 8],
-        indirect: 0,
-        inline: [0; INLINE],
-        spill: Vec::new(),
-        copies: Vec::new(),
-        len: 0,
-    };
-    place(&mut layout, fixed, returns, values);
-    layout.finish()
+    unsafe {
+        let mut layout = Layout {
+            gpr: [0; 8],
+            fpr: [0; 8],
+            indirect: 0,
+            inline: [0; INLINE],
+            spill: Vec::new(),
+            copies: Vec::new(),
+            len: 0,
+        };
+        place(&mut layout, fixed, returns, values);
+        layout.finish()
+    }
 }
 
 /// Win64 passes a struct of 1, 2, 4 or 8 bytes as an integer of that size, and any other by pointer.
@@ -179,30 +191,36 @@ unsafe fn place<'a>(
     returns: Returns<'a>,
     values: impl Iterator<Item = Value<'a>>,
 ) {
-    layout.reserve(32);
-    let hidden = match returns {
-        Returns::Struct(of, to) if !as_integer(of) => Some(Value::Scalar(Type::Pointer, to as u64)),
-        _ => None,
-    };
-    for (index, value) in hidden.into_iter().chain(values).enumerate() {
-        let bits = match value {
-            Value::Scalar(_, bits) => bits,
-            Value::Struct(of, from) if as_integer(of) => word(from, 0, of.size),
-            Value::Struct(of, from) => layout.copy(of, from),
+    unsafe {
+        layout.reserve(32);
+        let hidden = match returns {
+            Returns::Struct(of, to) if !as_integer(of) => {
+                Some(Value::Scalar(Type::Pointer, to as u64))
+            }
+            _ => None,
         };
-        if index < 4 {
-            layout.gpr[index] = bits;
-            layout.fpr[index] = bits;
-        } else {
-            layout.slot(bits);
+        for (index, value) in hidden.into_iter().chain(values).enumerate() {
+            let bits = match value {
+                Value::Scalar(_, bits) => bits,
+                Value::Struct(of, from) if as_integer(of) => word(from, 0, of.size),
+                Value::Struct(of, from) => layout.copy(of, from),
+            };
+            if index < 4 {
+                layout.gpr[index] = bits;
+                layout.fpr[index] = bits;
+            } else {
+                layout.slot(bits);
+            }
         }
     }
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub(crate) unsafe fn collect(frame: &Frame, of: &StructLayout, to: *mut u8) {
-    if as_integer(of) {
-        store(to, 0, of.size, frame.ret_gpr[0]);
+    unsafe {
+        if as_integer(of) {
+            store(to, 0, of.size, frame.ret_gpr[0]);
+        }
     }
 }
 
@@ -231,43 +249,45 @@ unsafe fn place<'a>(
     returns: Returns<'a>,
     values: impl Iterator<Item = Value<'a>>,
 ) {
-    let (mut ints, mut floats) = (0, 0);
-    if let Returns::Struct(of, to) = returns {
-        if eightbytes(of).is_none() {
-            layout.gpr[0] = to as u64;
-            ints = 1;
-        }
-    }
-    for value in values {
-        match value {
-            Value::Scalar(ty, bits) => {
-                if ty.is_float() && floats < 8 {
-                    layout.fpr[floats] = bits;
-                    floats += 1;
-                } else if !ty.is_float() && ints < 6 {
-                    layout.gpr[ints] = bits;
-                    ints += 1;
-                } else {
-                    layout.slot(bits);
-                }
+    unsafe {
+        let (mut ints, mut floats) = (0, 0);
+        if let Returns::Struct(of, to) = returns {
+            if eightbytes(of).is_none() {
+                layout.gpr[0] = to as u64;
+                ints = 1;
             }
-            Value::Struct(of, from) => {
-                let classes = eightbytes(of).filter(|classes| {
-                    let vectors = classes.iter().filter(|float| **float).count();
-                    floats + vectors <= 8 && ints + classes.len() - vectors <= 6
-                });
-                let Some(classes) = classes else {
-                    layout.slots(of, from);
-                    continue;
-                };
-                for (index, float) in classes.into_iter().enumerate() {
-                    let bits = word(from, index * 8, of.size);
-                    if float {
+        }
+        for value in values {
+            match value {
+                Value::Scalar(ty, bits) => {
+                    if ty.is_float() && floats < 8 {
                         layout.fpr[floats] = bits;
                         floats += 1;
-                    } else {
+                    } else if !ty.is_float() && ints < 6 {
                         layout.gpr[ints] = bits;
                         ints += 1;
+                    } else {
+                        layout.slot(bits);
+                    }
+                }
+                Value::Struct(of, from) => {
+                    let classes = eightbytes(of).filter(|classes| {
+                        let vectors = classes.iter().filter(|float| **float).count();
+                        floats + vectors <= 8 && ints + classes.len() - vectors <= 6
+                    });
+                    let Some(classes) = classes else {
+                        layout.slots(of, from);
+                        continue;
+                    };
+                    for (index, float) in classes.into_iter().enumerate() {
+                        let bits = word(from, index * 8, of.size);
+                        if float {
+                            layout.fpr[floats] = bits;
+                            floats += 1;
+                        } else {
+                            layout.gpr[ints] = bits;
+                            ints += 1;
+                        }
                     }
                 }
             }
@@ -277,19 +297,21 @@ unsafe fn place<'a>(
 
 #[cfg(all(unix, target_arch = "x86_64"))]
 pub(crate) unsafe fn collect(frame: &Frame, of: &StructLayout, to: *mut u8) {
-    let Some(classes) = eightbytes(of) else {
-        return;
-    };
-    let (mut ints, mut floats) = (0, 0);
-    for (index, float) in classes.into_iter().enumerate() {
-        let bits = if float {
-            floats += 1;
-            frame.ret_fpr[floats - 1]
-        } else {
-            ints += 1;
-            frame.ret_gpr[ints - 1]
+    unsafe {
+        let Some(classes) = eightbytes(of) else {
+            return;
         };
-        store(to, index * 8, of.size, bits);
+        let (mut ints, mut floats) = (0, 0);
+        for (index, float) in classes.into_iter().enumerate() {
+            let bits = if float {
+                floats += 1;
+                frame.ret_fpr[floats - 1]
+            } else {
+                ints += 1;
+                frame.ret_gpr[ints - 1]
+            };
+            store(to, index * 8, of.size, bits);
+        }
     }
 }
 
@@ -312,88 +334,94 @@ unsafe fn place<'a>(
     returns: Returns<'a>,
     values: impl Iterator<Item = Value<'a>>,
 ) {
-    let apple = cfg!(target_vendor = "apple");
-    let fixed = fixed.unwrap_or(usize::MAX);
-    if let Returns::Struct(of, to) = returns {
-        if homogeneous(of).is_none() && of.size > 16 {
-            layout.indirect = to as u64;
-        }
-    }
-    let (mut ints, mut floats) = (0, 0);
-    for (index, value) in values.enumerate() {
-        let unnamed = index >= fixed;
-        let (ty, bits) = match value {
-            Value::Scalar(ty, bits) => (ty, bits),
-            Value::Struct(of, from) => {
-                if let Some(member) = homogeneous(of) {
-                    if floats + of.fields.len() <= 8 {
-                        for (_, offset) in &of.fields {
-                            layout.fpr[floats] =
-                                word(from, *offset, (offset + member.size()).min(of.size));
-                            floats += 1;
-                        }
-                    } else {
-                        floats = 8;
-                        stacked(layout, of, from, apple);
-                    }
-                    continue;
-                }
-                if of.size > 16 {
-                    (Type::Pointer, layout.copy(of, from))
-                } else {
-                    let words = of.size.div_ceil(8);
-                    if ints + words <= 8 {
-                        for word_index in 0..words {
-                            layout.gpr[ints] = word(from, word_index * 8, of.size);
-                            ints += 1;
-                        }
-                    } else {
-                        ints = 8;
-                        stacked(layout, of, from, apple);
-                    }
-                    continue;
-                }
+    unsafe {
+        let apple = cfg!(target_vendor = "apple");
+        let fixed = fixed.unwrap_or(usize::MAX);
+        if let Returns::Struct(of, to) = returns {
+            if homogeneous(of).is_none() && of.size > 16 {
+                layout.indirect = to as u64;
             }
-        };
-        if apple && unnamed {
-            layout.slot(bits);
-        } else if ty.is_float() && floats < 8 {
-            layout.fpr[floats] = bits;
-            floats += 1;
-        } else if !ty.is_float() && ints < 8 {
-            layout.gpr[ints] = bits;
-            ints += 1;
-        } else if apple {
-            layout.push(bits, ty.size(), ty.size());
-        } else {
-            layout.slot(bits);
+        }
+        let (mut ints, mut floats) = (0, 0);
+        for (index, value) in values.enumerate() {
+            let unnamed = index >= fixed;
+            let (ty, bits) = match value {
+                Value::Scalar(ty, bits) => (ty, bits),
+                Value::Struct(of, from) => {
+                    if let Some(member) = homogeneous(of) {
+                        if floats + of.fields.len() <= 8 {
+                            for (_, offset) in &of.fields {
+                                layout.fpr[floats] =
+                                    word(from, *offset, (offset + member.size()).min(of.size));
+                                floats += 1;
+                            }
+                        } else {
+                            floats = 8;
+                            stacked(layout, of, from, apple);
+                        }
+                        continue;
+                    }
+                    if of.size > 16 {
+                        (Type::Pointer, layout.copy(of, from))
+                    } else {
+                        let words = of.size.div_ceil(8);
+                        if ints + words <= 8 {
+                            for word_index in 0..words {
+                                layout.gpr[ints] = word(from, word_index * 8, of.size);
+                                ints += 1;
+                            }
+                        } else {
+                            ints = 8;
+                            stacked(layout, of, from, apple);
+                        }
+                        continue;
+                    }
+                }
+            };
+            if apple && unnamed {
+                layout.slot(bits);
+            } else if ty.is_float() && floats < 8 {
+                layout.fpr[floats] = bits;
+                floats += 1;
+            } else if !ty.is_float() && ints < 8 {
+                layout.gpr[ints] = bits;
+                ints += 1;
+            } else if apple {
+                layout.push(bits, ty.size(), ty.size());
+            } else {
+                layout.slot(bits);
+            }
         }
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn stacked(layout: &mut Layout, of: &StructLayout, from: *const u8, apple: bool) {
-    if apple {
-        layout.push_bytes(from, of.size, of.align);
-    } else {
-        layout.slots(of, from);
+    unsafe {
+        if apple {
+            layout.push_bytes(from, of.size, of.align);
+        } else {
+            layout.slots(of, from);
+        }
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 pub(crate) unsafe fn collect(frame: &Frame, of: &StructLayout, to: *mut u8) {
-    if let Some(member) = homogeneous(of) {
-        for (index, (_, offset)) in of.fields.iter().enumerate() {
-            store(
-                to,
-                *offset,
-                (offset + member.size()).min(of.size),
-                frame.ret_fpr[index],
-            );
-        }
-    } else if of.size <= 16 {
-        for index in 0..of.size.div_ceil(8) {
-            store(to, index * 8, of.size, frame.ret_gpr[index]);
+    unsafe {
+        if let Some(member) = homogeneous(of) {
+            for (index, (_, offset)) in of.fields.iter().enumerate() {
+                store(
+                    to,
+                    *offset,
+                    (offset + member.size()).min(of.size),
+                    frame.ret_fpr[index],
+                );
+            }
+        } else if of.size <= 16 {
+            for index in 0..of.size.div_ceil(8) {
+                store(to, index * 8, of.size, frame.ret_gpr[index]);
+            }
         }
     }
 }

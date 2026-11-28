@@ -89,86 +89,98 @@ fn failed(method: &str, iface: &str, message: &str) -> String {
 }
 
 unsafe fn handle<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Handle> {
-    host_data::<Handle>(g, classes(|c| c.handle) as JSClassRef, v)
+    unsafe { host_data::<Handle>(g, classes(|c| c.handle) as JSClassRef, v) }
 }
 
 unsafe fn sink<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Sink> {
-    host_data::<Sink>(g, classes(|c| c.sink) as JSClassRef, v)
+    unsafe { host_data::<Sink>(g, classes(|c| c.sink) as JSClassRef, v) }
 }
 
 unsafe fn dir_iter<'a>(g: *mut c_void, v: u64) -> Option<&'a mut DirIter> {
-    host_data::<DirIter>(g, classes(|c| c.iter) as JSClassRef, v)
+    unsafe { host_data::<DirIter>(g, classes(|c| c.iter) as JSClassRef, v) }
 }
 
 unsafe fn illegal(g: *mut c_void, method: &str, iface: &str) -> u64 {
-    rejected(g, "TypeError", &failed(method, iface, "Illegal invocation"))
+    unsafe { rejected(g, "TypeError", &failed(method, iface, "Illegal invocation")) }
 }
 
 /// A handle object for `{ h, name, kind }`.
 pub(crate) unsafe fn from_wire(g: *mut c_void, w: &Json) -> u64 {
-    let kind = if w["kind"] == "directory" {
-        Kind::Directory
-    } else {
-        Kind::File
-    };
-    let (cls, proto) = classes(|c| {
-        (
-            c.handle,
-            if kind == Kind::Directory {
-                c.dir_proto
-            } else {
-                c.file_proto
+    unsafe {
+        let kind = if w["kind"] == "directory" {
+            Kind::Directory
+        } else {
+            Kind::File
+        };
+        let (cls, proto) = classes(|c| {
+            (
+                c.handle,
+                if kind == Kind::Directory {
+                    c.dir_proto
+                } else {
+                    c.file_proto
+                },
+            )
+        });
+        host_create(
+            g,
+            cls as JSClassRef,
+            proto,
+            Handle {
+                id: w["h"].as_u64().unwrap_or(0),
+                name: w["name"].as_str().unwrap_or("").to_string(),
+                kind,
             },
         )
-    });
-    host_create(
-        g,
-        cls as JSClassRef,
-        proto,
-        Handle {
-            id: w["h"].as_u64().unwrap_or(0),
-            name: w["name"].as_str().unwrap_or("").to_string(),
-            kind,
-        },
-    )
+    }
 }
 
 unsafe fn activation(g: *mut c_void, method: &str) -> bool {
-    let a = get(g, global(g), "__SK_ACTIVATION__");
-    is_cell(a) && call(g, get(g, a, method), a, &[]) == Ok(TRUE)
+    unsafe {
+        let a = get(g, global(g), "__SK_ACTIVATION__");
+        is_cell(a) && call(g, get(g, a, method), a, &[]) == Ok(TRUE)
+    }
 }
 
 unsafe fn grant_on_gesture(g: *mut c_void, id: u64) {
-    fs::permission(id, true);
-    if !ADVISED_GRANT.with(|a| a.replace(true)) {
-        host::warn_compat(
+    unsafe {
+        fs::permission(id, true);
+        if !ADVISED_GRANT.with(|a| a.replace(true)) {
+            host::warn_compat(
             g,
             "fsa:grant",
             "FileSystemHandle: a handle restored from storage was granted on a user activation with no prompt. Chromium asks the user first (\"Allow this site to view/edit …?\"); this host has no such prompt yet.",
         );
+        }
     }
 }
 
 /// As Chromium: a "prompt" handle is granted on a user activation before a write; otherwise the host refuses.
 unsafe fn write_access(g: *mut c_void, id: u64) {
-    if fs::permission(id, false) == Some("prompt") && activation(g, "isActive") {
-        grant_on_gesture(g, id);
+    unsafe {
+        if fs::permission(id, false) == Some("prompt") && activation(g, "isActive") {
+            grant_on_gesture(g, id);
+        }
     }
 }
 
 unsafe fn member(g: *mut c_void, obj: u64, k: &str) -> u64 {
-    if is_cell(obj) {
-        get(g, obj, k)
-    } else {
-        UNDEF
+    unsafe {
+        if is_cell(obj) {
+            get(g, obj, k)
+        } else {
+            UNDEF
+        }
     }
 }
 
 unsafe fn result(g: *mut c_void, value: u64, done: bool) -> u64 {
-    let o = new_object(g, UNDEF);
-    define(g, o, "value", value, 0);
-    define(g, o, "done", enc_bool(done), 0);
-    o
+    unsafe {
+        let o = new_object(g, UNDEF);
+        define(g, o, "value", value, 0);
+        define(g, o, "done", enc_bool(done), 0);
+        o
+    }
 }
 
 unsafe fn to_undefined(_g: *mut c_void, _t: u32, _v: &Json, _m: u64) -> Result<u64, u64> {
@@ -180,7 +192,7 @@ pub(super) unsafe fn to_made(_g: *mut c_void, _t: u32, _v: &Json, made: u64) -> 
 }
 
 unsafe fn to_handle(g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    Ok(from_wire(g, v))
+    unsafe { Ok(from_wire(g, v)) }
 }
 
 unsafe fn to_same(_g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
@@ -188,11 +200,13 @@ unsafe fn to_same(_g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u6
 }
 
 unsafe fn to_path(g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    Ok(if v["path"].is_array() {
-        host::to_js(g, &v["path"])
-    } else {
-        NULL
-    })
+    unsafe {
+        Ok(if v["path"].is_array() {
+            host::to_js(g, &v["path"])
+        } else {
+            NULL
+        })
+    }
 }
 
 // FileSystemHandle
@@ -229,31 +243,33 @@ host_fn!(fn is_same_entry(g, args) {
 });
 
 unsafe fn permission(g: *mut c_void, this: u64, d: u64, method: &str, request: bool) -> u64 {
-    let Some(h) = handle(g, this) else {
-        return illegal(g, method, "FileSystemHandle");
-    };
-    let id = h.id;
-    let mode = host::string_arg(g, member(g, d, "mode")).unwrap_or_else(|| "read".into());
-    if mode != "read" && mode != "readwrite" {
-        return rejected(g, "TypeError", &failed(method, "FileSystemHandle", &format!("The provided value '{mode}' is not a valid enum value of type FileSystemPermissionMode.")));
-    }
-    let state = fs::permission(id, false).unwrap_or("prompt");
-    if !request || state == "granted" {
-        return host::resolved(g, js_string(g, state));
-    }
-    // Chromium's browser-side words: no "Failed to execute" prefix.
-    if !activation(g, "isActive") {
-        return rejected(
+    unsafe {
+        let Some(h) = handle(g, this) else {
+            return illegal(g, method, "FileSystemHandle");
+        };
+        let id = h.id;
+        let mode = host::string_arg(g, member(g, d, "mode")).unwrap_or_else(|| "read".into());
+        if mode != "read" && mode != "readwrite" {
+            return rejected(g, "TypeError", &failed(method, "FileSystemHandle", &format!("The provided value '{mode}' is not a valid enum value of type FileSystemPermissionMode.")));
+        }
+        let state = fs::permission(id, false).unwrap_or("prompt");
+        if !request || state == "granted" {
+            return host::resolved(g, js_string(g, state));
+        }
+        // Chromium's browser-side words: no "Failed to execute" prefix.
+        if !activation(g, "isActive") {
+            return rejected(
+                g,
+                "SecurityError",
+                "User activation is required to request permissions.",
+            );
+        }
+        grant_on_gesture(g, id);
+        host::resolved(
             g,
-            "SecurityError",
-            "User activation is required to request permissions.",
-        );
+            js_string(g, fs::permission(id, false).unwrap_or("prompt")),
+        )
     }
-    grant_on_gesture(g, id);
-    host::resolved(
-        g,
-        js_string(g, fs::permission(id, false).unwrap_or("prompt")),
-    )
 }
 
 host_fn!(fn query_permission(g, args) {
@@ -267,11 +283,11 @@ host_fn!(fn request_permission(g, args) {
 // FileSystemFileHandle
 
 unsafe fn file_handle<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Handle> {
-    handle(g, v).filter(|h| h.kind == Kind::File)
+    unsafe { handle(g, v).filter(|h| h.kind == Kind::File) }
 }
 
 unsafe fn dir_handle<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Handle> {
-    handle(g, v).filter(|h| h.kind == Kind::Directory)
+    unsafe { handle(g, v).filter(|h| h.kind == Kind::Directory) }
 }
 
 host_fn!(fn get_file(g, args) {
@@ -282,23 +298,25 @@ host_fn!(fn get_file(g, args) {
 });
 
 unsafe fn to_writable(g: *mut c_void, _t: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    let w = v["w"].as_u64().unwrap_or(0);
-    let (sink_cls, sink_proto, writable) = classes(|c| (c.sink, c.sink_proto, c.writable));
-    let s = host_create(
-        g,
-        sink_cls as JSClassRef,
-        sink_proto,
-        Sink { w, done: false },
-    );
-    let reflect = get(g, global(g), "Reflect");
-    let args = new_array(g);
-    set_i(g, args, 0, s);
-    call(
-        g,
-        get(g, reflect, "construct"),
-        reflect,
-        &[get(g, global(g), "WritableStream"), args, writable],
-    )
+    unsafe {
+        let w = v["w"].as_u64().unwrap_or(0);
+        let (sink_cls, sink_proto, writable) = classes(|c| (c.sink, c.sink_proto, c.writable));
+        let s = host_create(
+            g,
+            sink_cls as JSClassRef,
+            sink_proto,
+            Sink { w, done: false },
+        );
+        let reflect = get(g, global(g), "Reflect");
+        let args = new_array(g);
+        set_i(g, args, 0, s);
+        call(
+            g,
+            get(g, reflect, "construct"),
+            reflect,
+            &[get(g, global(g), "WritableStream"), args, writable],
+        )
+    }
 }
 
 host_fn!(fn create_writable(g, args) {
@@ -321,16 +339,18 @@ unsafe fn child(
     method: &str,
     kind: Kind,
 ) -> u64 {
-    let Some(h) = dir_handle(g, this) else {
-        return illegal(g, method, "FileSystemDirectoryHandle");
-    };
-    let id = h.id;
-    let create = member(g, options, "create") == TRUE;
-    if create {
-        write_access(g, id);
+    unsafe {
+        let Some(h) = dir_handle(g, this) else {
+            return illegal(g, method, "FileSystemDirectoryHandle");
+        };
+        let id = h.id;
+        let create = member(g, options, "create") == TRUE;
+        if create {
+            write_access(g, id);
+        }
+        let name = host::string_arg(g, name).unwrap_or_else(|| "undefined".into());
+        awaiting(g, fs::start_child(id, &name, kind, create), to_handle)
     }
-    let name = host::string_arg(g, name).unwrap_or_else(|| "undefined".into());
-    awaiting(g, fs::start_child(id, &name, kind, create), to_handle)
 }
 
 host_fn!(fn get_file_handle(g, args) {
@@ -365,26 +385,28 @@ host_fn!(fn resolve(g, args) {
 // Directory iteration: an async iterator over batches the host reads on the pool.
 
 unsafe fn iterate(g: *mut c_void, this: u64, mode: Mode, method: &str) -> u64 {
-    let Some(h) = dir_handle(g, this) else {
-        return throw_type_error(
+    unsafe {
+        let Some(h) = dir_handle(g, this) else {
+            return throw_type_error(
+                g,
+                &failed(method, "FileSystemDirectoryHandle", "Illegal invocation"),
+            );
+        };
+        let (cls, proto) = classes(|c| (c.iter, c.iter_proto));
+        host_create(
             g,
-            &failed(method, "FileSystemDirectoryHandle", "Illegal invocation"),
-        );
-    };
-    let (cls, proto) = classes(|c| (c.iter, c.iter_proto));
-    host_create(
-        g,
-        cls as JSClassRef,
-        proto,
-        DirIter {
-            dir: h.id,
-            cursor: 0,
-            buffer: VecDeque::new(),
-            done: false,
-            mode,
-            busy: 0,
-        },
-    )
+            cls as JSClassRef,
+            proto,
+            DirIter {
+                dir: h.id,
+                cursor: 0,
+                buffer: VecDeque::new(),
+                done: false,
+                mode,
+                busy: 0,
+            },
+        )
+    }
 }
 
 host_fn!(fn entries(g, args) {
@@ -400,76 +422,88 @@ host_fn!(fn values(g, args) {
 });
 
 unsafe fn item(g: *mut c_void, mode: Mode, w: &Json) -> u64 {
-    let name = js_string(g, w["name"].as_str().unwrap_or(""));
-    match mode {
-        Mode::Keys => name,
-        Mode::Values => from_wire(g, w),
-        Mode::Entries => {
-            let pair = new_array(g);
-            set_i(g, pair, 0, name);
-            set_i(g, pair, 1, from_wire(g, w));
-            pair
+    unsafe {
+        let name = js_string(g, w["name"].as_str().unwrap_or(""));
+        match mode {
+            Mode::Keys => name,
+            Mode::Values => from_wire(g, w),
+            Mode::Entries => {
+                let pair = new_array(g);
+                set_i(g, pair, 0, name);
+                set_i(g, pair, 1, from_wire(g, w));
+                pair
+            }
         }
     }
 }
 
 /// The next result from what is buffered, or `None` when the host has to be asked.
 unsafe fn take(g: *mut c_void, it: &mut DirIter) -> Option<u64> {
-    if let Some(w) = it.buffer.pop_front() {
-        return Some(result(g, item(g, it.mode, &w), false));
+    unsafe {
+        if let Some(w) = it.buffer.pop_front() {
+            return Some(result(g, item(g, it.mode, &w), false));
+        }
+        it.done.then(|| result(g, UNDEF, true))
     }
-    it.done.then(|| result(g, UNDEF, true))
 }
 
 unsafe fn fetch(g: *mut c_void, obj: u64) -> u64 {
-    let Some(it) = dir_iter(g, obj) else {
-        return UNDEF;
-    };
-    let (started, convert): (Result<u32, Fail>, super::Convert) = if it.cursor == 0 {
-        (fs::start_dir_open(it.dir), opened)
-    } else {
-        (fs::start_dir_next(it.cursor), batch)
-    };
-    if let Ok(t) = started {
-        redjs_protect(g, obj);
-        ITERS.with(|m| m.borrow_mut().insert(t, obj));
+    unsafe {
+        let Some(it) = dir_iter(g, obj) else {
+            return UNDEF;
+        };
+        let (started, convert): (Result<u32, Fail>, super::Convert) = if it.cursor == 0 {
+            (fs::start_dir_open(it.dir), opened)
+        } else {
+            (fs::start_dir_next(it.cursor), batch)
+        };
+        if let Ok(t) = started {
+            redjs_protect(g, obj);
+            ITERS.with(|m| m.borrow_mut().insert(t, obj));
+        }
+        awaiting(g, started, convert)
     }
-    awaiting(g, started, convert)
 }
 
 unsafe fn iter_of(g: *mut c_void, token: u32) -> u64 {
-    let obj = ITERS
-        .with(|m| m.borrow_mut().remove(&token))
-        .unwrap_or(UNDEF);
-    if obj != UNDEF {
-        redjs_unprotect(g, obj);
+    unsafe {
+        let obj = ITERS
+            .with(|m| m.borrow_mut().remove(&token))
+            .unwrap_or(UNDEF);
+        if obj != UNDEF {
+            redjs_unprotect(g, obj);
+        }
+        obj
     }
-    obj
 }
 
 unsafe fn opened(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    let obj = iter_of(g, token);
-    let Some(it) = dir_iter(g, obj) else {
-        return Ok(result(g, UNDEF, true));
-    };
-    it.cursor = v["cursor"].as_u64().unwrap_or(0);
-    Ok(fetch(g, obj))
+    unsafe {
+        let obj = iter_of(g, token);
+        let Some(it) = dir_iter(g, obj) else {
+            return Ok(result(g, UNDEF, true));
+        };
+        it.cursor = v["cursor"].as_u64().unwrap_or(0);
+        Ok(fetch(g, obj))
+    }
 }
 
 unsafe fn batch(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    let obj = iter_of(g, token);
-    let Some(it) = dir_iter(g, obj) else {
-        return Ok(result(g, UNDEF, true));
-    };
-    it.buffer
-        .extend(v["entries"].as_array().into_iter().flatten().cloned());
-    if v["done"] == true {
-        it.done = true;
-        it.cursor = 0;
-    }
-    match take(g, it) {
-        Some(r) => Ok(r),
-        None => Ok(fetch(g, obj)),
+    unsafe {
+        let obj = iter_of(g, token);
+        let Some(it) = dir_iter(g, obj) else {
+            return Ok(result(g, UNDEF, true));
+        };
+        it.buffer
+            .extend(v["entries"].as_array().into_iter().flatten().cloned());
+        if v["done"] == true {
+            it.done = true;
+            it.cursor = 0;
+        }
+        match take(g, it) {
+            Some(r) => Ok(r),
+            None => Ok(fetch(g, obj)),
+        }
     }
 }
 
@@ -510,8 +544,10 @@ host_fn!(fn iter_failed(g, args) {
 });
 
 unsafe fn bound(g: *mut c_void, f: HostFn, arity: u32, first: u64) -> u64 {
-    let fun = make_fn(g, "", arity, f);
-    call(g, get(g, fun, "bind"), fun, &[UNDEF, first]).unwrap_or(UNDEF)
+    unsafe {
+        let fun = make_fn(g, "", arity, f);
+        call(g, get(g, fun, "bind"), fun, &[UNDEF, first]).unwrap_or(UNDEF)
+    }
 }
 
 host_fn!(fn iter_next(g, args) {
@@ -560,15 +596,17 @@ host_fn!(fn iter_self(_g, args) {
 // FileSystemWritableFileStream
 
 unsafe fn data_of(g: *mut c_void, v: u64) -> Option<Data> {
-    if host::is_string(g, v) {
-        return Some(Data::Bytes(
-            read_string(g, v).unwrap_or_default().into_bytes(),
-        ));
+    unsafe {
+        if host::is_string(g, v) {
+            return Some(Data::Bytes(
+                read_string(g, v).unwrap_or_default().into_bytes(),
+            ));
+        }
+        if let Some(range) = blob::range_of(g, v) {
+            return Some(Data::Blob(range));
+        }
+        bufferish(g, v).map(|b| Data::Bytes(b.to_vec()))
     }
-    if let Some(range) = blob::range_of(g, v) {
-        return Some(Data::Blob(range));
-    }
-    bufferish(g, v).map(|b| Data::Bytes(b.to_vec()))
 }
 
 fn not_data() -> String {
@@ -576,17 +614,19 @@ fn not_data() -> String {
 }
 
 unsafe fn number(g: *mut c_void, v: u64) -> Option<f64> {
-    dec_f64(v).or_else(|| (glue::rjs_kind(g, v) == 3).then(|| read_number(g, v)))
+    unsafe { dec_f64(v).or_else(|| (glue::rjs_kind(g, v) == 3).then(|| read_number(g, v))) }
 }
 
 unsafe fn offset(g: *mut c_void, v: u64) -> Option<u64> {
-    if v == UNDEF || v == NULL {
-        return None;
+    unsafe {
+        if v == UNDEF || v == NULL {
+            return None;
+        }
+        let n = call(g, get(g, global(g), "Number"), UNDEF, &[v])
+            .ok()
+            .and_then(|n| number(g, n))?;
+        (n.is_finite() && n >= 0.0).then_some(n as u64)
     }
-    let n = call(g, get(g, global(g), "Number"), UNDEF, &[v])
-        .ok()
-        .and_then(|n| number(g, n))?;
-    (n.is_finite() && n >= 0.0).then_some(n as u64)
 }
 
 host_fn!(fn sink_write(g, args) {
@@ -628,16 +668,18 @@ host_fn!(fn sink_write(g, args) {
 });
 
 unsafe fn finish(g: *mut c_void, this: u64, close: bool) -> u64 {
-    let Some(s) = sink(g, this) else {
-        return rejected(g, "TypeError", "Illegal invocation");
-    };
-    s.done = true;
-    let started = if close {
-        fs::writable::start_close(s.w)
-    } else {
-        fs::writable::start_abort(s.w)
-    };
-    awaiting(g, started, to_undefined)
+    unsafe {
+        let Some(s) = sink(g, this) else {
+            return rejected(g, "TypeError", "Illegal invocation");
+        };
+        s.done = true;
+        let started = if close {
+            fs::writable::start_close(s.w)
+        } else {
+            fs::writable::start_abort(s.w)
+        };
+        awaiting(g, started, to_undefined)
+    }
 }
 
 host_fn!(fn sink_close(g, args) {
@@ -649,13 +691,15 @@ host_fn!(fn sink_abort(g, args) {
 });
 
 unsafe fn through_writer(g: *mut c_void, stream: u64, chunk: u64) -> u64 {
-    let writer = match call(g, get(g, stream, "getWriter"), stream, &[]) {
-        Ok(w) => w,
-        Err(e) => return rejected_with(g, e),
-    };
-    let p = call(g, get(g, writer, "write"), writer, &[chunk]);
-    let _ = call(g, get(g, writer, "releaseLock"), writer, &[]);
-    p.unwrap_or_else(|e| rejected_with(g, e))
+    unsafe {
+        let writer = match call(g, get(g, stream, "getWriter"), stream, &[]) {
+            Ok(w) => w,
+            Err(e) => return rejected_with(g, e),
+        };
+        let p = call(g, get(g, writer, "write"), writer, &[chunk]);
+        let _ = call(g, get(g, writer, "releaseLock"), writer, &[]);
+        p.unwrap_or_else(|e| rejected_with(g, e))
+    }
 }
 
 host_fn!(fn writable_write(g, args) {
@@ -663,10 +707,12 @@ host_fn!(fn writable_write(g, args) {
 });
 
 unsafe fn command(g: *mut c_void, stream: u64, ty: &str, key: &str, v: u64) -> u64 {
-    let c = new_object(g, UNDEF);
-    define(g, c, "type", js_string(g, ty), 0);
-    define(g, c, key, v, 0);
-    through_writer(g, stream, c)
+    unsafe {
+        let c = new_object(g, UNDEF);
+        define(g, c, "type", js_string(g, ty), 0);
+        define(g, c, key, v, 0);
+        through_writer(g, stream, c)
+    }
 }
 
 host_fn!(fn writable_seek(g, args) {
@@ -701,181 +747,191 @@ unsafe fn validate(
     method: &str,
     o: u64,
 ) -> Result<serde_json::Map<String, Json>, String> {
-    let fail = |m: String| failed(method, "Window", &m);
-    let mut req = serde_json::Map::new();
-    let id = member(g, o, "id");
-    if id != UNDEF {
-        let id = host::string_arg(g, id).unwrap_or_default();
-        if id.chars().count() > 32 {
-            return Err(fail("ID too long".into()));
-        }
-        if !id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(fail("ID contains invalid characters".into()));
-        }
-        req.insert("id".into(), id.into());
-    }
-    let start = member(g, o, "startIn");
-    if start != UNDEF {
-        if let Some(h) = handle(g, start) {
-            req.insert("startIn".into(), json!({ "h": h.id }));
-        } else {
-            let s = host::string_arg(g, start).unwrap_or_default();
-            if !WELL_KNOWN.contains(&s.as_str()) {
-                return Err(fail(format!("The provided value '{s}' is not a valid enum value of type WellKnownDirectory.")));
+    unsafe {
+        let fail = |m: String| failed(method, "Window", &m);
+        let mut req = serde_json::Map::new();
+        let id = member(g, o, "id");
+        if id != UNDEF {
+            let id = host::string_arg(g, id).unwrap_or_default();
+            if id.chars().count() > 32 {
+                return Err(fail("ID too long".into()));
             }
-            req.insert("startIn".into(), s.into());
+            if !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err(fail("ID contains invalid characters".into()));
+            }
+            req.insert("id".into(), id.into());
         }
-    }
-    let exclude = host::truthy(g, member(g, o, "excludeAcceptAllOption"));
-    let types_v = member(g, o, "types");
-    let mut types = Vec::new();
-    if types_v != UNDEF {
-        let arr = call(
-            g,
-            get(g, get(g, global(g), "Array"), "from"),
-            UNDEF,
-            &[types_v],
-        )
-        .map_err(|_| fail("types is not iterable".into()))?;
-        for i in 0..array_len(g, arr) {
-            let t = get_i(g, arr, i);
-            let mut accept = serde_json::Map::new();
-            let acc = member(g, t, "accept");
-            if is_cell(acc) {
-                let object = get(g, global(g), "Object");
-                let pairs = call(g, get(g, object, "entries"), object, &[acc]).unwrap_or(UNDEF);
-                for j in 0..array_len(g, pairs) {
-                    let pair = get_i(g, pairs, j);
-                    let mime = read_string(g, get_i(g, pair, 0)).unwrap_or_default();
-                    let raw = get_i(g, pair, 1);
-                    let mut parts = mime.trim().split('/');
-                    let (ty, sub, rest) = (
-                        parts.next().unwrap_or(""),
-                        parts.next().unwrap_or(""),
-                        parts.next(),
-                    );
-                    if rest.is_some() || !is_token(ty) || !is_token(sub) {
-                        return Err(fail(format!("Invalid type: {mime}")));
-                    }
-                    let exts: Vec<String> = if host::is_string(g, raw) {
-                        vec![read_string(g, raw).unwrap_or_default()]
-                    } else if raw == UNDEF || raw == NULL {
-                        Vec::new()
-                    } else {
-                        let a = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[raw])
-                            .unwrap_or(UNDEF);
-                        (0..array_len(g, a))
-                            .map(|k| host::string_arg(g, get_i(g, a, k)).unwrap_or_default())
-                            .collect()
-                    };
-                    for e in &exts {
-                        if !e.starts_with('.') {
-                            return Err(fail(format!("Extension '{e}' must start with '.'.")));
-                        }
-                        if e.len() < 2
-                            || !e[1..]
-                                .bytes()
-                                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.')
-                        {
-                            return Err(fail(format!(
-                                "Extension '{e}' contains invalid characters."
-                            )));
-                        }
-                        if e.ends_with('.') {
-                            return Err(fail(format!("Extension '{e}' must not end with '.'.")));
-                        }
-                        if e.chars().count() > 16 {
-                            return Err(fail(format!(
-                                "Extension '{e}' cannot be longer than 16 characters."
-                            )));
-                        }
-                    }
-                    accept.insert(mime.trim().to_lowercase(), exts.into());
+        let start = member(g, o, "startIn");
+        if start != UNDEF {
+            if let Some(h) = handle(g, start) {
+                req.insert("startIn".into(), json!({ "h": h.id }));
+            } else {
+                let s = host::string_arg(g, start).unwrap_or_default();
+                if !WELL_KNOWN.contains(&s.as_str()) {
+                    return Err(fail(format!("The provided value '{s}' is not a valid enum value of type WellKnownDirectory.")));
                 }
+                req.insert("startIn".into(), s.into());
             }
-            let description = host::string_arg(g, member(g, t, "description")).unwrap_or_default();
-            types.push(json!({ "description": description, "accept": accept }));
         }
-    }
-    if types.is_empty() && exclude {
-        return Err(fail("Need at least one accepted type".into()));
-    }
-    req.insert("types".into(), types.into());
-    req.insert("excludeAcceptAllOption".into(), exclude.into());
-    let mode = member(g, o, "mode");
-    if mode != UNDEF {
-        let m = host::string_arg(g, mode).unwrap_or_default();
-        if m != "read" && m != "readwrite" {
-            return Err(fail(format!("The provided value '{m}' is not a valid enum value of type FileSystemPermissionMode.")));
+        let exclude = host::truthy(g, member(g, o, "excludeAcceptAllOption"));
+        let types_v = member(g, o, "types");
+        let mut types = Vec::new();
+        if types_v != UNDEF {
+            let arr = call(
+                g,
+                get(g, get(g, global(g), "Array"), "from"),
+                UNDEF,
+                &[types_v],
+            )
+            .map_err(|_| fail("types is not iterable".into()))?;
+            for i in 0..array_len(g, arr) {
+                let t = get_i(g, arr, i);
+                let mut accept = serde_json::Map::new();
+                let acc = member(g, t, "accept");
+                if is_cell(acc) {
+                    let object = get(g, global(g), "Object");
+                    let pairs = call(g, get(g, object, "entries"), object, &[acc]).unwrap_or(UNDEF);
+                    for j in 0..array_len(g, pairs) {
+                        let pair = get_i(g, pairs, j);
+                        let mime = read_string(g, get_i(g, pair, 0)).unwrap_or_default();
+                        let raw = get_i(g, pair, 1);
+                        let mut parts = mime.trim().split('/');
+                        let (ty, sub, rest) = (
+                            parts.next().unwrap_or(""),
+                            parts.next().unwrap_or(""),
+                            parts.next(),
+                        );
+                        if rest.is_some() || !is_token(ty) || !is_token(sub) {
+                            return Err(fail(format!("Invalid type: {mime}")));
+                        }
+                        let exts: Vec<String> = if host::is_string(g, raw) {
+                            vec![read_string(g, raw).unwrap_or_default()]
+                        } else if raw == UNDEF || raw == NULL {
+                            Vec::new()
+                        } else {
+                            let a =
+                                call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[raw])
+                                    .unwrap_or(UNDEF);
+                            (0..array_len(g, a))
+                                .map(|k| host::string_arg(g, get_i(g, a, k)).unwrap_or_default())
+                                .collect()
+                        };
+                        for e in &exts {
+                            if !e.starts_with('.') {
+                                return Err(fail(format!("Extension '{e}' must start with '.'.")));
+                            }
+                            if e.len() < 2
+                                || !e[1..]
+                                    .bytes()
+                                    .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.')
+                            {
+                                return Err(fail(format!(
+                                    "Extension '{e}' contains invalid characters."
+                                )));
+                            }
+                            if e.ends_with('.') {
+                                return Err(fail(format!(
+                                    "Extension '{e}' must not end with '.'."
+                                )));
+                            }
+                            if e.chars().count() > 16 {
+                                return Err(fail(format!(
+                                    "Extension '{e}' cannot be longer than 16 characters."
+                                )));
+                            }
+                        }
+                        accept.insert(mime.trim().to_lowercase(), exts.into());
+                    }
+                }
+                let description =
+                    host::string_arg(g, member(g, t, "description")).unwrap_or_default();
+                types.push(json!({ "description": description, "accept": accept }));
+            }
         }
+        if types.is_empty() && exclude {
+            return Err(fail("Need at least one accepted type".into()));
+        }
+        req.insert("types".into(), types.into());
+        req.insert("excludeAcceptAllOption".into(), exclude.into());
+        let mode = member(g, o, "mode");
+        if mode != UNDEF {
+            let m = host::string_arg(g, mode).unwrap_or_default();
+            if m != "read" && m != "readwrite" {
+                return Err(fail(format!("The provided value '{m}' is not a valid enum value of type FileSystemPermissionMode.")));
+            }
+        }
+        Ok(req)
     }
-    Ok(req)
 }
 
 unsafe fn picked(g: *mut c_void, token: u32, v: &Json, _m: u64) -> Result<u64, u64> {
-    let method = PICKS
-        .with(|m| m.borrow_mut().remove(&token))
-        .unwrap_or("showOpenFilePicker");
-    if v["cancelled"] == true {
-        return Err(error(g, "AbortError", "The user aborted a request."));
+    unsafe {
+        let method = PICKS
+            .with(|m| m.borrow_mut().remove(&token))
+            .unwrap_or("showOpenFilePicker");
+        if v["cancelled"] == true {
+            return Err(error(g, "AbortError", "The user aborted a request."));
+        }
+        let wires = v["handles"].as_array().cloned().unwrap_or_default();
+        if method != "showOpenFilePicker" {
+            return Ok(wires.first().map_or(UNDEF, |w| from_wire(g, w)));
+        }
+        let arr = new_array(g);
+        for (i, w) in wires.iter().enumerate() {
+            set_i(g, arr, i as u32, from_wire(g, w));
+        }
+        Ok(arr)
     }
-    let wires = v["handles"].as_array().cloned().unwrap_or_default();
-    if method != "showOpenFilePicker" {
-        return Ok(wires.first().map_or(UNDEF, |w| from_wire(g, w)));
-    }
-    let arr = new_array(g);
-    for (i, w) in wires.iter().enumerate() {
-        set_i(g, arr, i as u32, from_wire(g, w));
-    }
-    Ok(arr)
 }
 
 unsafe fn pick(g: *mut c_void, method: &'static str, kind: &str, o: u64) -> u64 {
-    let mut req = match validate(g, method, o) {
-        Ok(r) => r,
-        Err(m) => return rejected(g, "TypeError", &m),
-    };
-    req.insert("kind".into(), kind.into());
-    req.insert("result".into(), "handles".into());
-    if kind == "open" {
-        req.insert(
-            "multiple".into(),
-            host::truthy(g, member(g, o, "multiple")).into(),
-        );
-    }
-    let suggested = member(g, o, "suggestedName");
-    if kind == "save" && suggested != UNDEF {
-        req.insert(
-            "suggestedName".into(),
-            host::string_arg(g, suggested).unwrap_or_default().into(),
-        );
-    }
-    if !activation(g, "isActive") {
-        return rejected(
-            g,
-            "SecurityError",
-            &failed(
-                method,
-                "Window",
-                "Must be handling a user gesture to show a file picker.",
-            ),
-        );
-    }
-    activation(g, "consume");
-    match dialog::start_open(&Json::Object(req).to_string(), Vec::new()) {
-        Ok(t) => {
-            PICKS.with(|m| m.borrow_mut().insert(t, method));
-            awaiting(g, Ok(t), picked)
+    unsafe {
+        let mut req = match validate(g, method, o) {
+            Ok(r) => r,
+            Err(m) => return rejected(g, "TypeError", &m),
+        };
+        req.insert("kind".into(), kind.into());
+        req.insert("result".into(), "handles".into());
+        if kind == "open" {
+            req.insert(
+                "multiple".into(),
+                host::truthy(g, member(g, o, "multiple")).into(),
+            );
         }
-        Err(f) if f.name == "NotAllowedError" && f.code == Some("EBUSY") => rejected(
-            g,
-            "NotAllowedError",
-            &failed(method, "Window", "File picker already active."),
-        ),
-        Err(f) => awaiting(g, Err(f), picked),
+        let suggested = member(g, o, "suggestedName");
+        if kind == "save" && suggested != UNDEF {
+            req.insert(
+                "suggestedName".into(),
+                host::string_arg(g, suggested).unwrap_or_default().into(),
+            );
+        }
+        if !activation(g, "isActive") {
+            return rejected(
+                g,
+                "SecurityError",
+                &failed(
+                    method,
+                    "Window",
+                    "Must be handling a user gesture to show a file picker.",
+                ),
+            );
+        }
+        activation(g, "consume");
+        match dialog::start_open(&Json::Object(req).to_string(), Vec::new()) {
+            Ok(t) => {
+                PICKS.with(|m| m.borrow_mut().insert(t, method));
+                awaiting(g, Ok(t), picked)
+            }
+            Err(f) if f.name == "NotAllowedError" && f.code == Some("EBUSY") => rejected(
+                g,
+                "NotAllowedError",
+                &failed(method, "Window", "File picker already active."),
+            ),
+            Err(f) => awaiting(g, Err(f), picked),
+        }
     }
 }
 
@@ -895,11 +951,13 @@ host_fn!(fn show_directory_picker(g, args) {
 
 /// `accept`: trimmed, lowercased tokens; others are advised and dropped. A `type/*` is kept, as Chromium does.
 unsafe fn accept_tokens(g: *mut c_void, accept: &str) -> Vec<String> {
-    let (kept, dropped) = split_accept(accept);
-    for t in dropped {
-        host::warn_compat(g, &format!("accept:{t}"), &format!("<input accept>: the token \"{t}\" is not an extension or MIME type and was ignored"));
+    unsafe {
+        let (kept, dropped) = split_accept(accept);
+        for t in dropped {
+            host::warn_compat(g, &format!("accept:{t}"), &format!("<input accept>: the token \"{t}\" is not an extension or MIME type and was ignored"));
+        }
+        kept
     }
-    kept
 }
 
 fn split_accept(accept: &str) -> (Vec<String>, Vec<String>) {
@@ -919,14 +977,16 @@ fn split_accept(accept: &str) -> (Vec<String>, Vec<String>) {
 }
 
 unsafe fn input_result(g: *mut c_void, _t: u32, v: &Json, made: u64) -> Result<u64, u64> {
-    if v["cancelled"] == true {
-        return Ok(NULL);
+    unsafe {
+        if v["cancelled"] == true {
+            return Ok(NULL);
+        }
+        Ok(if v["color"].is_string() {
+            js_string(g, v["color"].as_str().unwrap_or(""))
+        } else {
+            made
+        })
     }
-    Ok(if v["color"].is_string() {
-        js_string(g, v["color"].as_str().unwrap_or(""))
-    } else {
-        made
-    })
 }
 
 host_fn!(fn input_failed(g, args) {
@@ -944,15 +1004,18 @@ host_fn!(fn input_failed(g, args) {
 });
 
 unsafe fn quietly(g: *mut c_void, label: &str, started: Result<u32, Fail>) -> u64 {
-    if let Err(f) = &started {
-        if f.code == Some("EBUSY") {
-            return host::resolved(g, UNDEF);
+    unsafe {
+        if let Err(f) = &started {
+            if f.code == Some("EBUSY") {
+                return host::resolved(g, UNDEF);
+            }
         }
+        let p = super::awaiting_with(g, started, input_result, super::Errors::Desktop);
+        let fun = make_fn(g, "", 2, input_failed);
+        let on_err =
+            call(g, get(g, fun, "bind"), fun, &[UNDEF, js_string(g, label)]).unwrap_or(UNDEF);
+        call(g, get(g, p, "catch"), p, &[on_err]).unwrap_or(p)
     }
-    let p = super::awaiting_with(g, started, input_result, super::Errors::Desktop);
-    let fun = make_fn(g, "", 2, input_failed);
-    let on_err = call(g, get(g, fun, "bind"), fun, &[UNDEF, js_string(g, label)]).unwrap_or(UNDEF);
-    call(g, get(g, p, "catch"), p, &[on_err]).unwrap_or(p)
 }
 
 host_fn!(fn pick_for_input(g, args) {
@@ -975,11 +1038,13 @@ host_fn!(fn pick_color(g, args) {
 });
 
 unsafe fn download_failed(g: *mut c_void, name: &str, msg: &str) {
-    host::warn_compat(
-        g,
-        &format!("download:{name}"),
-        &format!("<a download>: nothing was saved — {msg}"),
-    );
+    unsafe {
+        host::warn_compat(
+            g,
+            &format!("download:{name}"),
+            &format!("<a download>: nothing was saved — {msg}"),
+        );
+    }
 }
 
 host_fn!(fn download_failed_fn(g, args) {
@@ -1050,180 +1115,190 @@ host_fn!(fn get_native_path(g, args) {
 // Drops and structured clone
 
 unsafe fn drop_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool) -> Result<u64, u64> {
-    let kind = if is_dir { Kind::Directory } else { Kind::File };
-    Ok(from_wire(
-        g,
-        &fs::granted_handle_json(path.to_path_buf(), kind),
-    ))
+    unsafe {
+        let kind = if is_dir { Kind::Directory } else { Kind::File };
+        Ok(from_wire(
+            g,
+            &fs::granted_handle_json(path.to_path_buf(), kind),
+        ))
+    }
 }
 
 const NOT_CLONED: &str = "FileSystemHandle object could not be cloned.";
 const NOT_DESERIALIZED: &str = "Unable to deserialize cloned data.";
 
 unsafe fn encode(g: *mut c_void, v: u64) -> Result<Vec<u8>, String> {
-    let id = handle(g, v)
-        .map(|h| h.id)
-        .ok_or_else(|| NOT_CLONED.to_string())?;
-    fs::to_wire(id).ok_or_else(|| NOT_CLONED.to_string())
+    unsafe {
+        let id = handle(g, v)
+            .map(|h| h.id)
+            .ok_or_else(|| NOT_CLONED.to_string())?;
+        fs::to_wire(id).ok_or_else(|| NOT_CLONED.to_string())
+    }
 }
 
 unsafe fn decode(g: *mut c_void, bytes: &[u8]) -> Result<u64, String> {
-    let (path, kind) = fs::from_wire(bytes).ok_or_else(|| NOT_DESERIALIZED.to_string())?;
-    Ok(from_wire(g, &fs::handle_json(path, kind)))
+    unsafe {
+        let (path, kind) = fs::from_wire(bytes).ok_or_else(|| NOT_DESERIALIZED.to_string())?;
+        Ok(from_wire(g, &fs::handle_json(path, kind)))
+    }
 }
 
 unsafe fn define_symbol_method(g: *mut c_void, proto: u64, symbol: &str, f: u64) {
-    let sym = get(g, get(g, global(g), "Symbol"), symbol);
-    let object = get(g, global(g), "Object");
-    let desc = new_object(g, UNDEF);
-    define(g, desc, "value", f, 0);
-    define(g, desc, "writable", TRUE, 0);
-    define(g, desc, "configurable", TRUE, 0);
-    let _ = call(
-        g,
-        get(g, object, "defineProperty"),
-        object,
-        &[proto, sym, desc],
-    );
+    unsafe {
+        let sym = get(g, get(g, global(g), "Symbol"), symbol);
+        let object = get(g, global(g), "Object");
+        let desc = new_object(g, UNDEF);
+        define(g, desc, "value", f, 0);
+        define(g, desc, "writable", TRUE, 0);
+        define(g, desc, "configurable", TRUE, 0);
+        let _ = call(
+            g,
+            get(g, object, "defineProperty"),
+            object,
+            &[proto, sym, desc],
+        );
+    }
 }
 
 pub(super) unsafe fn install(g: *mut c_void) {
-    let handle_cls = make_host_class::<Handle>("FileSystemHandle");
-    let base = define_class(
-        g,
-        &ClassSpec {
-            name: "FileSystemHandle",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("isSameEntry", 1, is_same_entry),
-                ("queryPermission", 0, query_permission),
-                ("requestPermission", 0, request_permission),
-            ],
-            getters: &[("kind", handle_kind), ("name", handle_name)],
-            accessors: &[],
-        },
-    );
-    let file_cls = define_class(
-        g,
-        &ClassSpec {
-            name: "FileSystemFileHandle",
-            arity: 0,
-            construct: None,
-            parent_proto: base.proto,
-            methods: &[
-                ("getFile", 0, get_file),
-                ("createWritable", 0, create_writable),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let dir_cls = define_class(
-        g,
-        &ClassSpec {
-            name: "FileSystemDirectoryHandle",
-            arity: 0,
-            construct: None,
-            parent_proto: base.proto,
-            methods: &[
-                ("getFileHandle", 1, get_file_handle),
-                ("getDirectoryHandle", 1, get_directory_handle),
-                ("removeEntry", 1, remove_entry),
-                ("resolve", 1, resolve),
-                ("entries", 0, entries),
-                ("keys", 0, keys),
-                ("values", 0, values),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    define_symbol_method(
-        g,
-        dir_cls.proto,
-        "asyncIterator",
-        get(g, dir_cls.proto, "entries"),
-    );
+    unsafe {
+        let handle_cls = make_host_class::<Handle>("FileSystemHandle");
+        let base = define_class(
+            g,
+            &ClassSpec {
+                name: "FileSystemHandle",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("isSameEntry", 1, is_same_entry),
+                    ("queryPermission", 0, query_permission),
+                    ("requestPermission", 0, request_permission),
+                ],
+                getters: &[("kind", handle_kind), ("name", handle_name)],
+                accessors: &[],
+            },
+        );
+        let file_cls = define_class(
+            g,
+            &ClassSpec {
+                name: "FileSystemFileHandle",
+                arity: 0,
+                construct: None,
+                parent_proto: base.proto,
+                methods: &[
+                    ("getFile", 0, get_file),
+                    ("createWritable", 0, create_writable),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        let dir_cls = define_class(
+            g,
+            &ClassSpec {
+                name: "FileSystemDirectoryHandle",
+                arity: 0,
+                construct: None,
+                parent_proto: base.proto,
+                methods: &[
+                    ("getFileHandle", 1, get_file_handle),
+                    ("getDirectoryHandle", 1, get_directory_handle),
+                    ("removeEntry", 1, remove_entry),
+                    ("resolve", 1, resolve),
+                    ("entries", 0, entries),
+                    ("keys", 0, keys),
+                    ("values", 0, values),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        define_symbol_method(
+            g,
+            dir_cls.proto,
+            "asyncIterator",
+            get(g, dir_cls.proto, "entries"),
+        );
 
-    let stream_proto = get(g, get(g, global(g), "WritableStream"), "prototype");
-    let writable = define_class(
-        g,
-        &ClassSpec {
-            name: "FileSystemWritableFileStream",
-            arity: 0,
-            construct: None,
-            parent_proto: stream_proto,
-            methods: &[
-                ("write", 1, writable_write),
-                ("seek", 1, writable_seek),
-                ("truncate", 1, writable_truncate),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    redjs_protect(g, writable.ctor);
+        let stream_proto = get(g, get(g, global(g), "WritableStream"), "prototype");
+        let writable = define_class(
+            g,
+            &ClassSpec {
+                name: "FileSystemWritableFileStream",
+                arity: 0,
+                construct: None,
+                parent_proto: stream_proto,
+                methods: &[
+                    ("write", 1, writable_write),
+                    ("seek", 1, writable_seek),
+                    ("truncate", 1, writable_truncate),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        redjs_protect(g, writable.ctor);
 
-    let sink_cls = make_host_class::<Sink>("FileSystemWritableFileStreamSink");
-    let sink_proto = new_object(g, UNDEF);
-    redjs_protect(g, sink_proto);
-    host::method(g, sink_proto, "write", 1, sink_write);
-    host::method(g, sink_proto, "close", 0, sink_close);
-    host::method(g, sink_proto, "abort", 1, sink_abort);
+        let sink_cls = make_host_class::<Sink>("FileSystemWritableFileStreamSink");
+        let sink_proto = new_object(g, UNDEF);
+        redjs_protect(g, sink_proto);
+        host::method(g, sink_proto, "write", 1, sink_write);
+        host::method(g, sink_proto, "close", 0, sink_close);
+        host::method(g, sink_proto, "abort", 1, sink_abort);
 
-    let iter_cls = make_host_class::<DirIter>("FileSystemDirectoryHandleIterator");
-    let iter_proto = new_object(g, UNDEF);
-    redjs_protect(g, iter_proto);
-    host::method(g, iter_proto, "next", 0, iter_next);
-    host::method(g, iter_proto, "return", 1, iter_return);
-    define_symbol_method(
-        g,
-        iter_proto,
-        "asyncIterator",
-        make_fn(g, "[Symbol.asyncIterator]", 0, iter_self),
-    );
-    to_string_tag(g, iter_proto, "FileSystemDirectoryHandle AsyncIterator");
-
-    C.with(|c| {
-        *c.borrow_mut() = Classes {
-            handle: handle_cls as usize,
-            sink: sink_cls as usize,
-            iter: iter_cls as usize,
-            file_proto: file_cls.proto,
-            dir_proto: dir_cls.proto,
-            writable: writable.ctor,
-            sink_proto,
+        let iter_cls = make_host_class::<DirIter>("FileSystemDirectoryHandleIterator");
+        let iter_proto = new_object(g, UNDEF);
+        redjs_protect(g, iter_proto);
+        host::method(g, iter_proto, "next", 0, iter_next);
+        host::method(g, iter_proto, "return", 1, iter_return);
+        define_symbol_method(
+            g,
             iter_proto,
+            "asyncIterator",
+            make_fn(g, "[Symbol.asyncIterator]", 0, iter_self),
+        );
+        to_string_tag(g, iter_proto, "FileSystemDirectoryHandle AsyncIterator");
+
+        C.with(|c| {
+            *c.borrow_mut() = Classes {
+                handle: handle_cls as usize,
+                sink: sink_cls as usize,
+                iter: iter_cls as usize,
+                file_proto: file_cls.proto,
+                dir_proto: dir_cls.proto,
+                writable: writable.ctor,
+                sink_proto,
+                iter_proto,
+            }
+        });
+
+        for (name, f) in [
+            ("showOpenFilePicker", show_open_file_picker as HostFn),
+            ("showSaveFilePicker", show_save_file_picker),
+            ("showDirectoryPicker", show_directory_picker),
+        ] {
+            define(g, global(g), name, make_fn(g, name, 0, f), 2);
         }
-    });
 
-    for (name, f) in [
-        ("showOpenFilePicker", show_open_file_picker as HostFn),
-        ("showSaveFilePicker", show_save_file_picker),
-        ("showDirectoryPicker", show_directory_picker),
-    ] {
-        define(g, global(g), name, make_fn(g, name, 0, f), 2);
+        // Both kinds clone through their base; a writable stream does not, as in Chromium.
+        serialize::serialize_platform_prototype(
+            g,
+            base.proto,
+            "FileSystemHandle",
+            serialize::HostCodec { encode, decode },
+        );
+        serialize::refuse_platform_prototype(g, writable.proto, "FileSystemWritableFileStream");
+        uievents::set_file_system_handle_hook(g, Some(drop_hook));
+        super::entries::install(g);
+        let files = host::install_object(g, "__sk_appFiles", UNDEF);
+        host::method(g, files, "getPathForFile", 1, get_native_path);
+
+        let obj = host::install_object(g, "__SK_FS__", UNDEF);
+        host::method(g, obj, "pickForInput", 4, pick_for_input);
+        host::method(g, obj, "pickColor", 1, pick_color);
+        host::method(g, obj, "download", 2, download);
     }
-
-    // Both kinds clone through their base; a writable stream does not, as in Chromium.
-    serialize::serialize_platform_prototype(
-        g,
-        base.proto,
-        "FileSystemHandle",
-        serialize::HostCodec { encode, decode },
-    );
-    serialize::refuse_platform_prototype(g, writable.proto, "FileSystemWritableFileStream");
-    uievents::set_file_system_handle_hook(g, Some(drop_hook));
-    super::entries::install(g);
-    let files = host::install_object(g, "__sk_appFiles", UNDEF);
-    host::method(g, files, "getPathForFile", 1, get_native_path);
-
-    let obj = host::install_object(g, "__SK_FS__", UNDEF);
-    host::method(g, obj, "pickForInput", 4, pick_for_input);
-    host::method(g, obj, "pickColor", 1, pick_color);
-    host::method(g, obj, "download", 2, download);
 }
 
 #[cfg(test)]

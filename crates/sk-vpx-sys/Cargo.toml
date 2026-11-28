@@ -1,7 +1,7 @@
 [package]
 name = "sk-vpx-sys"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 repository.workspace = true
 homepage.workspace = true

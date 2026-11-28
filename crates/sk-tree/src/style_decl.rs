@@ -78,44 +78,49 @@ fn index(name: &str) -> Option<usize> {
 }
 
 unsafe fn decl<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Decl> {
-    host_data::<Decl>(g, C.with(|c| c.borrow().cls) as JSClassRef, v)
+    unsafe { host_data::<Decl>(g, C.with(|c| c.borrow().cls) as JSClassRef, v) }
 }
 
 /// The node's current id: `None` once it is freed (or for a computed style of something that is not a node,
 /// the root's).
 unsafe fn node_id(g: *mut c_void, this: u64, computed: bool) -> Option<u32> {
-    let node = named_slot_get(g, this, C.with(|c| c.borrow().node) as *mut c_void);
-    let id = if is_cell(node) {
-        dec_f64(get(g, node, "__skId"))
-    } else {
-        None
-    };
-    match id {
-        Some(id) if id > 0.0 => Some(id as u32),
-        Some(_) => None,
-        None if computed => Some(tree::read_tree(|t| t.root)).filter(|&r| r != 0),
-        None => None,
+    unsafe {
+        let node = named_slot_get(g, this, C.with(|c| c.borrow().node) as *mut c_void);
+        let id = if is_cell(node) {
+            dec_f64(get(g, node, "__skId"))
+        } else {
+            None
+        };
+        match id {
+            Some(id) if id > 0.0 => Some(id as u32),
+            Some(_) => None,
+            None if computed => Some(tree::read_tree(|t| t.root)).filter(|&r| r != 0),
+            None => None,
+        }
     }
 }
 
 unsafe fn create(g: *mut c_void, node: u64, computed: bool) -> u64 {
-    let (cls, proto, slot) = C.with(|c| {
-        let c = c.borrow();
-        (c.cls, c.proto, c.node)
-    });
-    let obj = host_create(g, cls as JSClassRef, proto, Decl { computed });
-    named_slot_define(g, obj, slot as *mut c_void, node);
-    obj
+    unsafe {
+        let (cls, proto, slot) = C.with(|c| {
+            let c = c.borrow();
+            (c.cls, c.proto, c.node)
+        });
+        let obj = host_create(g, cls as JSClassRef, proto, Decl { computed });
+        named_slot_define(g, obj, slot as *mut c_void, node);
+        obj
+    }
 }
 
 unsafe fn computed_read(g: *mut c_void, id: Option<u32>, css: &str, shown: &str) -> String {
-    let Some(id) = id else { return String::new() };
-    perf::note_read(perf::Read::Style);
-    if let Some(v) = dom::computed_value(id, css) {
-        return v;
-    }
-    if !css.starts_with("--") && tree::read_tree(|t| t.node(id).is_some()) {
-        sk_runtime::host::warn_compat(
+    unsafe {
+        let Some(id) = id else { return String::new() };
+        perf::note_read(perf::Read::Style);
+        if let Some(v) = dom::computed_value(id, css) {
+            return v;
+        }
+        if !css.starts_with("--") && tree::read_tree(|t| t.node(id).is_some()) {
+            sk_runtime::host::warn_compat(
             g,
             &format!("getComputedStyle:{css}"),
             &format!(
@@ -125,8 +130,9 @@ unsafe fn computed_read(g: *mut c_void, id: Option<u32>, css: &str, shown: &str)
                  property, not all 340 longhands"
             ),
         );
+        }
+        String::new()
     }
-    String::new()
 }
 
 fn inline_read(id: Option<u32>, css: &str) -> (String, bool) {
@@ -136,38 +142,41 @@ fn inline_read(id: Option<u32>, css: &str) -> (String, bool) {
 
 /// Runs an inline change and tells the runtime when the attribute appeared, went, or is observed.
 unsafe fn mutate(g: *mut c_void, id: u32, change: impl FnOnce(&mut tree::Tree) -> bool) -> bool {
-    let observing = OBSERVING.get();
-    let (before, was) = tree::read_tree(|t| {
-        (
-            observing.then(|| t.style_attr(id)).flatten(),
-            t.node(id).is_some_and(|n| n.style_present),
-        )
-    });
-    perf::note_dom(perf::DomOp::Style);
-    if !tree::with_tree(change) {
-        return false;
+    unsafe {
+        let observing = OBSERVING.get();
+        let (before, was) = tree::read_tree(|t| {
+            (
+                observing.then(|| t.style_attr(id)).flatten(),
+                t.node(id).is_some_and(|n| n.style_present),
+            )
+        });
+        perf::note_dom(perf::DomOp::Style);
+        if !tree::with_tree(change) {
+            return false;
+        }
+        let now = tree::read_tree(|t| t.node(id).is_some_and(|n| n.style_present));
+        let hook = match HOOK.get() {
+            (ctx, f) if ctx == g as usize => f,
+            _ => UNDEF,
+        };
+        if (observing || now != was) && is_cell(hook) {
+            let old = before.map_or(NULL, |s| js_string(g, &s));
+            let _ = call(g, hook, UNDEF, &[enc_f64(id as f64), old, enc_bool(now)]);
+        }
+        true
     }
-    let now = tree::read_tree(|t| t.node(id).is_some_and(|n| n.style_present));
-    let hook = match HOOK.get() {
-        (ctx, f) if ctx == g as usize => f,
-        _ => UNDEF,
-    };
-    if (observing || now != was) && is_cell(hook) {
-        let old = before.map_or(NULL, |s| js_string(g, &s));
-        let _ = call(g, hook, UNDEF, &[enc_f64(id as f64), old, enc_bool(now)]);
-    }
-    true
 }
 
 /// `style.x = v`: `null` removes; `undefined` and a value carrying `!important` are ignored.
 unsafe fn assign(g: *mut c_void, id: u32, key: &str, v: u64) {
-    if v == UNDEF {
-        return;
-    }
-    let name = css_name(key);
-    let custom = name.starts_with("--");
-    if custom {
-        sk_runtime::host::warn_compat(
+    unsafe {
+        if v == UNDEF {
+            return;
+        }
+        let name = css_name(key);
+        let custom = name.starts_with("--");
+        if custom {
+            sk_runtime::host::warn_compat(
             g,
             "style-custom-assign",
             &format!(
@@ -175,29 +184,33 @@ unsafe fn assign(g: *mut c_void, id: u32, key: &str, v: u64) {
                  declaration object and changes nothing; use el.style.setProperty(\"{name}\", …), which works in both"
             ),
         );
-    }
-    let value = if v == NULL {
-        String::new()
-    } else {
-        string_of(g, v)
-    };
-    if value.is_empty() {
-        mutate(g, id, |t| t.style_remove(id, &name).is_some());
-    } else if custom || strip_important(&value).is_none() {
-        let stored = stored_value(&value, custom);
-        mutate(g, id, |t| t.style_write(id, &name, &stored, false));
+        }
+        let value = if v == NULL {
+            String::new()
+        } else {
+            string_of(g, v)
+        };
+        if value.is_empty() {
+            mutate(g, id, |t| t.style_remove(id, &name).is_some());
+        } else if custom || strip_important(&value).is_none() {
+            let stored = stored_value(&value, custom);
+            mutate(g, id, |t| t.style_write(id, &name, &stored, false));
+        }
     }
 }
 
 unsafe fn string_of(g: *mut c_void, v: u64) -> String {
-    to_js_string(g, v)
-        .ok()
-        .and_then(|s| read_string(g, s))
-        .unwrap_or_default()
+    unsafe {
+        to_js_string(g, v)
+            .ok()
+            .and_then(|s| read_string(g, s))
+            .unwrap_or_default()
+    }
 }
 
 unsafe fn read_only(g: *mut c_void, what: &str) -> u64 {
-    domexception::create(
+    unsafe {
+        domexception::create(
         g,
         "NoModificationAllowedError",
         &format!(
@@ -205,24 +218,27 @@ unsafe fn read_only(g: *mut c_void, what: &str) -> u64 {
              the '{what}' property is read-only."
         ),
     )
+    }
 }
 
 impl NamedProps for Decl {
     unsafe fn get(&mut self, g: *mut c_void, this: u64, name: &str) -> Result<Option<u64>, u64> {
-        let id = node_id(g, this, self.computed);
-        if let Some(i) = index(name) {
-            return Ok(item(id, self.computed, i).map(|n| js_string(g, &n)));
+        unsafe {
+            let id = node_id(g, this, self.computed);
+            if let Some(i) = index(name) {
+                return Ok(item(id, self.computed, i).map(|n| js_string(g, &n)));
+            }
+            if !css_shaped(name) {
+                return Ok(None);
+            }
+            let css = css_name(name);
+            let value = if self.computed {
+                computed_read(g, id, &css, name)
+            } else {
+                inline_read(id, &css).0
+            };
+            Ok(Some(js_string(g, &value)))
         }
-        if !css_shaped(name) {
-            return Ok(None);
-        }
-        let css = css_name(name);
-        let value = if self.computed {
-            computed_read(g, id, &css, name)
-        } else {
-            inline_read(id, &css).0
-        };
-        Ok(Some(js_string(g, &value)))
     }
 
     unsafe fn set(
@@ -232,25 +248,29 @@ impl NamedProps for Decl {
         name: &str,
         value: u64,
     ) -> Result<bool, u64> {
-        if index(name).is_some() {
-            return Ok(true);
+        unsafe {
+            if index(name).is_some() {
+                return Ok(true);
+            }
+            if !css_shaped(name) {
+                return Ok(false);
+            }
+            if self.computed {
+                return Err(read_only(g, name));
+            }
+            if let Some(id) = node_id(g, this, false) {
+                assign(g, id, name, value);
+            }
+            Ok(true)
         }
-        if !css_shaped(name) {
-            return Ok(false);
-        }
-        if self.computed {
-            return Err(read_only(g, name));
-        }
-        if let Some(id) = node_id(g, this, false) {
-            assign(g, id, name, value);
-        }
-        Ok(true)
     }
 
     unsafe fn names(&mut self, g: *mut c_void, this: u64) -> Vec<String> {
-        (0..len(node_id(g, this, self.computed), self.computed))
-            .map(|i| i.to_string())
-            .collect()
+        unsafe {
+            (0..len(node_id(g, this, self.computed), self.computed))
+                .map(|i| i.to_string())
+                .collect()
+        }
     }
 }
 
@@ -419,13 +439,15 @@ host_fn!(fn parent_rule_get(_g, _args) {
 
 /// Said once, at the first read: unlike a browser, serialization keeps values as written.
 pub(crate) unsafe fn note_serialization(g: *mut c_void) {
-    sk_runtime::host::warn_compat(
+    unsafe {
+        sk_runtime::host::warn_compat(
         g,
         "inline-style-serialize",
         "el.style.cssText / getAttribute('style') serialize the inline declarations as they were written: values are \
          not re-spelled (`#f00` stays `#f00`), a shorthand is not expanded into its longhands (after `margin: 0`, \
          `el.style.marginTop` reads \"\"), and a value the engine rejects is still listed",
     );
+    }
 }
 
 fn arg_id(v: u64) -> u32 {
@@ -481,15 +503,16 @@ host_fn!(fn style_assign(g, args) {
 
 /// The last entry the engine accepts; with none, the declaration is left as it was.
 unsafe fn fallback_op(g: *mut c_void, prop: &str, list: &[&str]) -> Option<Op> {
-    let custom = prop.starts_with("--");
-    let (i, v) = list.iter().copied().enumerate().rev().find(|&(_, v)| {
-        let bare = v.strip_suffix("!important").map_or(v, str::trim_end).trim();
-        bare.is_empty() || custom || sk_css::accepts_declaration(prop, bare)
-    })?;
-    if i + 1 < list.len() {
-        let later = list.len() - 1 - i;
-        let shown: Vec<String> = list.iter().map(|x| format!("{x:?}")).collect();
-        sk_runtime::host::warn_compat(
+    unsafe {
+        let custom = prop.starts_with("--");
+        let (i, v) = list.iter().copied().enumerate().rev().find(|&(_, v)| {
+            let bare = v.strip_suffix("!important").map_or(v, str::trim_end).trim();
+            bare.is_empty() || custom || sk_css::accepts_declaration(prop, bare)
+        })?;
+        if i + 1 < list.len() {
+            let later = list.len() - 1 - i;
+            let shown: Vec<String> = list.iter().map(|x| format!("{x:?}")).collect();
+            sk_runtime::host::warn_compat(
             g,
             &format!("style-array:{prop}"),
             &format!(
@@ -499,8 +522,9 @@ unsafe fn fallback_op(g: *mut c_void, prop: &str, list: &[&str]) -> Option<Op> {
                 if later == 1 { "entry" } else { "entries" },
             ),
         );
+        }
+        Some(style_op(prop, v))
     }
-    Some(style_op(prop, v))
 }
 
 // runtime-dom's `setStyle` over a whole record `:style`, in one call and one attribute change. `entries` is

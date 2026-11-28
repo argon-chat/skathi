@@ -36,6 +36,8 @@ fn main() {
     let target = std::env::var("TVG_TARGET").unwrap_or_else(|_| HOST_TARGET.to_string());
 
     let bindings = bindgen::Builder::default()
+        .rust_target("1.85".parse().expect("valid Rust target"))
+        .wrap_unsafe_ops(true)
         .header(header.to_string_lossy())
         // The engine is a static archive, so the header must not decorate declarations with dllimport (as in `build.rs`).
         .clang_arg("-DTVG_STATIC")

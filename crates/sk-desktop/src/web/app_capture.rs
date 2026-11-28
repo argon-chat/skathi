@@ -10,11 +10,13 @@ use sk_runtime::redjs::webapi::util::*;
 use super::{awaiting_with, Errors};
 
 unsafe fn capability(g: *mut c_void, v: u64) -> Result<Cap, u64> {
-    match host::string_arg(g, v).as_deref() {
-        Some("microphone") => Ok(Cap::Microphone),
-        Some("camera") => Ok(Cap::Camera),
-        Some("screen_share") => Ok(Cap::DisplayCapture),
-        _ => Err(host::error(g, "TypeError", "unknown capture source")),
+    unsafe {
+        match host::string_arg(g, v).as_deref() {
+            Some("microphone") => Ok(Cap::Microphone),
+            Some("camera") => Ok(Cap::Camera),
+            Some("screen_share") => Ok(Cap::DisplayCapture),
+            _ => Err(host::error(g, "TypeError", "unknown capture source")),
+        }
     }
 }
 
@@ -63,14 +65,16 @@ unsafe fn sources(
     v: &serde_json::Value,
     _made: u64,
 ) -> Result<u64, u64> {
-    if !v.is_array() {
-        return Err(host::error(
-            g,
-            "TypeError",
-            "the desktop capture host returned an invalid source list",
-        ));
+    unsafe {
+        if !v.is_array() {
+            return Err(host::error(
+                g,
+                "TypeError",
+                "the desktop capture host returned an invalid source list",
+            ));
+        }
+        Ok(host::to_js(g, v))
     }
-    Ok(host::to_js(g, v))
 }
 
 host_fn!(fn get_sources(g, args) {
@@ -106,15 +110,17 @@ host_fn!(fn set_pending_source(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void) {
-    let obj = host::install_object(g, "__SK_CAPTURE__", UNDEF);
-    for (name, arity, f) in [
-        ("permission", 1, permission as HostFn),
-        ("requestPermission", 1, request_permission),
-        ("permissionHint", 1, permission_hint),
-        ("getSources", 0, get_sources),
-        ("setPendingSource", 1, set_pending_source),
-    ] {
-        define(g, obj, name, make_fn(g, name, arity, f), 0);
+    unsafe {
+        let obj = host::install_object(g, "__SK_CAPTURE__", UNDEF);
+        for (name, arity, f) in [
+            ("permission", 1, permission as HostFn),
+            ("requestPermission", 1, request_permission),
+            ("permissionHint", 1, permission_hint),
+            ("getSources", 0, get_sources),
+            ("setPendingSource", 1, set_pending_source),
+        ] {
+            define(g, obj, name, make_fn(g, name, arity, f), 0);
+        }
     }
 }
 

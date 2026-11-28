@@ -2,7 +2,7 @@
 #![no_std]
 
 #[cfg(target_os = "macos")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static skathi_image_anchor: u8 = 0;
 
 #[panic_handler]

@@ -2,7 +2,7 @@
 name = "sk-effects"
 description = "Skathi's `--shading` effect registry: names, arguments, defaults and compiled shaders"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

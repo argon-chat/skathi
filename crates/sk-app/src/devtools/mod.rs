@@ -455,7 +455,10 @@ fn scan_roots() -> Vec<std::path::PathBuf> {
 }
 
 fn collect_targets_json() -> String {
-    let preferred = std::env::var("SK_DEVTOOLS_TARGET").unwrap_or_default();
+    let preferred = crate::inspector::mode()
+        .and_then(|m| m.target.clone())
+        .or_else(|| std::env::var("SK_DEVTOOLS_TARGET").ok())
+        .unwrap_or_default();
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if !preferred.is_empty() {
         dirs.push(std::path::PathBuf::from(&preferred));
@@ -553,7 +556,7 @@ fn targets_json() -> String {
 
 // These controls must not use host_fn!: begin returns an open child span,
 // whose lifetime deliberately extends beyond this native call into JS.
-sk_runtime::raw_host_fn! { fn sk_trace_callback_begin(g, cf) {
+sk_runtime::raw_host_fn! { fn sk_trace_callback_begin(g, cf) { unsafe {
     use sk_runtime::redjs::{api::{HostArgs, Value}, profiling};
     if !profiling::enabled() { return Value::int32(0).0; }
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -563,15 +566,15 @@ sk_runtime::raw_host_fn! { fn sk_trace_callback_begin(g, cf) {
         Ok(value) => value,
         Err(_) => { log::error!("Frame profiler callback begin failed"); Value::int32(0).0 }
     }
-} }
-sk_runtime::raw_host_fn! { fn sk_trace_callback_end(_g, cf) {
+}} }
+sk_runtime::raw_host_fn! { fn sk_trace_callback_end(_g, cf) { unsafe {
     use sk_runtime::redjs::{api::{HostArgs, Value}, profiling};
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let token = HostArgs::new(cf).arg(0).as_number().filter(|value| value.is_finite() && *value > 0. && value.fract() == 0.).unwrap_or(0.) as u64;
         profiling::external_callback_end(token);
     })).is_err() { log::error!("Frame profiler callback end failed"); }
     Value::undefined().0
-} }
+}} }
 
 /// Call before the app bundle boots. Unconditional so `appDevtools` can answer while devtools are
 /// off; the JS tees are not (see [`install_tees_once`]).

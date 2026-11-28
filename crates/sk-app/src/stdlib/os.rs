@@ -272,29 +272,31 @@ host_fn!(fn distro(g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let class = super::support::class(
-        g,
-        &ClassSpec {
-            name: "OS",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[
-                ("platform", platform_name),
-                ("arch", arch),
-                ("machineArch", machine_arch),
-                ("release", release),
-                ("distro", distro),
-                ("hostname", hostname),
-                ("homedir", homedir),
-                ("tmpdir", tmpdir),
-            ],
-            accessors: &[],
-        },
-    );
-    define(g, std, "OS", class.ctor, 0);
-    define(g, std, "os", new_object(g, class.proto), 0);
+    unsafe {
+        let class = super::support::class(
+            g,
+            &ClassSpec {
+                name: "OS",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[
+                    ("platform", platform_name),
+                    ("arch", arch),
+                    ("machineArch", machine_arch),
+                    ("release", release),
+                    ("distro", distro),
+                    ("hostname", hostname),
+                    ("homedir", homedir),
+                    ("tmpdir", tmpdir),
+                ],
+                accessors: &[],
+            },
+        );
+        define(g, std, "OS", class.ctor, 0);
+        define(g, std, "os", new_object(g, class.proto), 0);
+    }
 }
 
 #[cfg(test)]

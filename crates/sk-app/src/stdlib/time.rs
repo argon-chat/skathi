@@ -35,33 +35,39 @@ struct Span(f64);
 static SPAN: OnceLock<usize> = OnceLock::new();
 
 pub(super) unsafe fn span_new(g: *mut c_void, ms: f64) -> u64 {
-    let class = host_class::<Span>(&SPAN, "TimeSpan");
-    host_create(g, class, prototype(g, "TimeSpan"), Span(ms))
+    unsafe {
+        let class = host_class::<Span>(&SPAN, "TimeSpan");
+        host_create(g, class, prototype(g, "TimeSpan"), Span(ms))
+    }
 }
 
 pub(super) unsafe fn span_ms(g: *mut c_void, v: u64) -> Option<f64> {
-    host_data::<Span>(g, host_class::<Span>(&SPAN, "TimeSpan"), v).map(|span| span.0)
+    unsafe { host_data::<Span>(g, host_class::<Span>(&SPAN, "TimeSpan"), v).map(|span| span.0) }
 }
 
 /// Milliseconds given as a number or as a `TimeSpan`.
 pub(super) unsafe fn ms_arg(g: *mut c_void, v: u64, what: &str) -> Js<f64> {
-    let ms = match span_ms(g, v) {
-        Some(ms) => ms,
-        None => number(g, v)?,
-    };
-    if !ms.is_finite() {
-        return range_error(
-            g,
-            &format!("{what} must be a finite number of milliseconds or a TimeSpan"),
-        );
+    unsafe {
+        let ms = match span_ms(g, v) {
+            Some(ms) => ms,
+            None => number(g, v)?,
+        };
+        if !ms.is_finite() {
+            return range_error(
+                g,
+                &format!("{what} must be a finite number of milliseconds or a TimeSpan"),
+            );
+        }
+        Ok(ms)
     }
-    Ok(ms)
 }
 
 unsafe fn this_span(g: *mut c_void, this: u64) -> Js<f64> {
-    match span_ms(g, this) {
-        Some(ms) => Ok(ms),
-        None => type_error(g, "this is not a TimeSpan"),
+    unsafe {
+        match span_ms(g, this) {
+            Some(ms) => Ok(ms),
+            None => type_error(g, "this is not a TimeSpan"),
+        }
     }
 }
 
@@ -159,11 +165,13 @@ fn span_parts(ms: f64) -> [f64; 5] {
 }
 
 unsafe fn span_of(g: *mut c_void, v: u64, scale: f64, what: &str) -> Js<u64> {
-    let n = number(g, v)?;
-    if !n.is_finite() {
-        return range_error(g, &format!("{what}: the value must be a finite number"));
+    unsafe {
+        let n = number(g, v)?;
+        if !n.is_finite() {
+            return range_error(g, &format!("{what}: the value must be a finite number"));
+        }
+        Ok(span_new(g, n * scale))
     }
-    Ok(span_new(g, n * scale))
 }
 
 std_fn!(fn span_from_ms(g, args) { span_of(g, args.arg(0).0, 1.0, "TimeSpan.fromMilliseconds") });
@@ -194,12 +202,14 @@ std_fn!(fn span_subtract(g, args) {
 });
 
 unsafe fn duration_fields(g: *mut c_void, ms: f64) -> u64 {
-    let fields = new_object(g, UNDEF);
-    let names = ["days", "hours", "minutes", "seconds", "milliseconds"];
-    for (name, value) in names.iter().zip(span_parts(ms)) {
-        define(g, fields, name, enc_f64(value), 0);
+    unsafe {
+        let fields = new_object(g, UNDEF);
+        let names = ["days", "hours", "minutes", "seconds", "milliseconds"];
+        for (name, value) in names.iter().zip(span_parts(ms)) {
+            define(g, fields, name, enc_f64(value), 0);
+        }
+        fields
     }
-    fields
 }
 
 std_fn!(fn span_to_duration(g, args) {
@@ -233,19 +243,23 @@ struct Stopwatch {
 static STOPWATCH: OnceLock<usize> = OnceLock::new();
 
 unsafe fn stopwatch<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Stopwatch> {
-    match host_data::<Stopwatch>(g, host_class::<Stopwatch>(&STOPWATCH, "Stopwatch"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a Stopwatch"),
+    unsafe {
+        match host_data::<Stopwatch>(g, host_class::<Stopwatch>(&STOPWATCH, "Stopwatch"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a Stopwatch"),
+        }
     }
 }
 
 unsafe fn stopwatch_new(g: *mut c_void, running: bool) -> u64 {
-    let state = Stopwatch {
-        banked: Duration::ZERO,
-        started: running.then(Instant::now),
-    };
-    let class = host_class::<Stopwatch>(&STOPWATCH, "Stopwatch");
-    host_create(g, class, prototype(g, "Stopwatch"), state)
+    unsafe {
+        let state = Stopwatch {
+            banked: Duration::ZERO,
+            started: running.then(Instant::now),
+        };
+        let class = host_class::<Stopwatch>(&STOPWATCH, "Stopwatch");
+        host_create(g, class, prototype(g, "Stopwatch"), state)
+    }
 }
 
 std_fn!(fn stopwatch_construct(g, _args) { Ok(stopwatch_new(g, false)) });
@@ -300,9 +314,11 @@ struct Backoff {
 static BACKOFF: OnceLock<usize> = OnceLock::new();
 
 unsafe fn backoff<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Backoff> {
-    match host_data::<Backoff>(g, host_class::<Backoff>(&BACKOFF, "Backoff"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a Backoff"),
+    unsafe {
+        match host_data::<Backoff>(g, host_class::<Backoff>(&BACKOFF, "Backoff"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a Backoff"),
+        }
     }
 }
 
@@ -367,26 +383,30 @@ struct Deadline {
 static DEADLINE: OnceLock<usize> = OnceLock::new();
 
 unsafe fn deadline_left(g: *mut c_void, this: u64) -> Js<f64> {
-    match host_data::<Deadline>(g, host_class::<Deadline>(&DEADLINE, "Deadline"), this) {
-        Some(state) => Ok(state
-            .at
-            .saturating_duration_since(Instant::now())
-            .as_secs_f64()
-            * SECOND),
-        None => type_error(g, "this is not a Deadline"),
+    unsafe {
+        match host_data::<Deadline>(g, host_class::<Deadline>(&DEADLINE, "Deadline"), this) {
+            Some(state) => Ok(state
+                .at
+                .saturating_duration_since(Instant::now())
+                .as_secs_f64()
+                * SECOND),
+            None => type_error(g, "this is not a Deadline"),
+        }
     }
 }
 
 unsafe fn timeout_error(g: *mut c_void) -> Js<u64> {
-    let class = get(g, glue::rjs_global(g), "DOMException");
-    construct(
-        g,
-        class,
-        &[
-            js_string(g, "The deadline has passed"),
-            js_string(g, "TimeoutError"),
-        ],
-    )
+    unsafe {
+        let class = get(g, glue::rjs_global(g), "DOMException");
+        construct(
+            g,
+            class,
+            &[
+                js_string(g, "The deadline has passed"),
+                js_string(g, "TimeoutError"),
+            ],
+        )
+    }
 }
 
 std_fn!(fn deadline_after(g, args) {
@@ -428,94 +448,96 @@ std_fn!(fn deadline_throw_if_expired(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let span = support::class(
-        g,
-        &ClassSpec {
-            name: "TimeSpan",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("add", 1, span_add),
-                ("subtract", 1, span_subtract),
-                ("toDuration", 0, span_to_duration),
-                ("toString", 0, span_to_string),
-                ("valueOf", 0, span_total_ms),
-                ("toJSON", 0, span_total_ms),
-            ],
-            getters: &[
-                ("totalMilliseconds", span_total_ms),
-                ("totalSeconds", span_total_seconds),
-            ],
-            accessors: &[],
-        },
-    );
-    static_fn(g, span.ctor, "fromMilliseconds", 1, span_from_ms);
-    static_fn(g, span.ctor, "fromSeconds", 1, span_from_seconds);
-    static_fn(g, span.ctor, "fromMinutes", 1, span_from_minutes);
-    static_fn(g, span.ctor, "fromHours", 1, span_from_hours);
-    static_fn(g, span.ctor, "fromDays", 1, span_from_days);
-    static_fn(g, span.ctor, "parse", 1, span_parse);
+    unsafe {
+        let span = support::class(
+            g,
+            &ClassSpec {
+                name: "TimeSpan",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("add", 1, span_add),
+                    ("subtract", 1, span_subtract),
+                    ("toDuration", 0, span_to_duration),
+                    ("toString", 0, span_to_string),
+                    ("valueOf", 0, span_total_ms),
+                    ("toJSON", 0, span_total_ms),
+                ],
+                getters: &[
+                    ("totalMilliseconds", span_total_ms),
+                    ("totalSeconds", span_total_seconds),
+                ],
+                accessors: &[],
+            },
+        );
+        static_fn(g, span.ctor, "fromMilliseconds", 1, span_from_ms);
+        static_fn(g, span.ctor, "fromSeconds", 1, span_from_seconds);
+        static_fn(g, span.ctor, "fromMinutes", 1, span_from_minutes);
+        static_fn(g, span.ctor, "fromHours", 1, span_from_hours);
+        static_fn(g, span.ctor, "fromDays", 1, span_from_days);
+        static_fn(g, span.ctor, "parse", 1, span_parse);
 
-    let stopwatch = support::class(
-        g,
-        &ClassSpec {
-            name: "Stopwatch",
-            arity: 0,
-            construct: Some(stopwatch_construct),
-            parent_proto: 0,
-            methods: &[
-                ("start", 0, stopwatch_start),
-                ("stop", 0, stopwatch_stop),
-                ("reset", 0, stopwatch_reset),
-                ("restart", 0, stopwatch_restart),
-            ],
-            getters: &[
-                ("elapsed", stopwatch_elapsed),
-                ("running", stopwatch_running),
-            ],
-            accessors: &[],
-        },
-    );
-    static_fn(g, stopwatch.ctor, "startNew", 0, stopwatch_start_new);
+        let stopwatch = support::class(
+            g,
+            &ClassSpec {
+                name: "Stopwatch",
+                arity: 0,
+                construct: Some(stopwatch_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("start", 0, stopwatch_start),
+                    ("stop", 0, stopwatch_stop),
+                    ("reset", 0, stopwatch_reset),
+                    ("restart", 0, stopwatch_restart),
+                ],
+                getters: &[
+                    ("elapsed", stopwatch_elapsed),
+                    ("running", stopwatch_running),
+                ],
+                accessors: &[],
+            },
+        );
+        static_fn(g, stopwatch.ctor, "startNew", 0, stopwatch_start_new);
 
-    let backoff = support::class(
-        g,
-        &ClassSpec {
-            name: "Backoff",
-            arity: 0,
-            construct: Some(backoff_construct),
-            parent_proto: 0,
-            methods: &[("next", 0, backoff_next), ("reset", 0, backoff_reset)],
-            getters: &[("attempt", backoff_attempt)],
-            accessors: &[],
-        },
-    );
+        let backoff = support::class(
+            g,
+            &ClassSpec {
+                name: "Backoff",
+                arity: 0,
+                construct: Some(backoff_construct),
+                parent_proto: 0,
+                methods: &[("next", 0, backoff_next), ("reset", 0, backoff_reset)],
+                getters: &[("attempt", backoff_attempt)],
+                accessors: &[],
+            },
+        );
 
-    let deadline = support::class(
-        g,
-        &ClassSpec {
-            name: "Deadline",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("remaining", 0, deadline_remaining),
-                ("expired", 0, deadline_expired),
-                ("throwIfExpired", 0, deadline_throw_if_expired),
-            ],
-            getters: &[("signal", deadline_signal)],
-            accessors: &[],
-        },
-    );
-    static_fn(g, deadline.ctor, "after", 1, deadline_after);
+        let deadline = support::class(
+            g,
+            &ClassSpec {
+                name: "Deadline",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("remaining", 0, deadline_remaining),
+                    ("expired", 0, deadline_expired),
+                    ("throwIfExpired", 0, deadline_throw_if_expired),
+                ],
+                getters: &[("signal", deadline_signal)],
+                accessors: &[],
+            },
+        );
+        static_fn(g, deadline.ctor, "after", 1, deadline_after);
 
-    let module = new_object(g, UNDEF);
-    define(g, module, "TimeSpan", span.ctor, 0);
-    define(g, module, "Stopwatch", stopwatch.ctor, 0);
-    define(g, module, "Backoff", backoff.ctor, 0);
-    define(g, module, "Deadline", deadline.ctor, 0);
-    define(g, std, "time", module, 0);
+        let module = new_object(g, UNDEF);
+        define(g, module, "TimeSpan", span.ctor, 0);
+        define(g, module, "Stopwatch", stopwatch.ctor, 0);
+        define(g, module, "Backoff", backoff.ctor, 0);
+        define(g, module, "Deadline", deadline.ctor, 0);
+        define(g, std, "time", module, 0);
+    }
 }
 
 #[cfg(test)]

@@ -87,7 +87,7 @@ struct ProcessHeapEntry {
 }
 
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     fn CloseHandle(handle: isize) -> i32;
     fn ReadProcessMemory(
         process: isize,
@@ -104,7 +104,7 @@ extern "system" {
 }
 
 #[link(name = "ntdll")]
-extern "system" {
+unsafe extern "system" {
     fn NtQueryInformationThread(
         thread: isize,
         class: u32,
@@ -123,7 +123,7 @@ extern "system" {
 }
 
 #[link(name = "kernel32")]
-extern "system" {
+unsafe extern "system" {
     fn GetCurrentProcess() -> isize;
     fn K32GetProcessMemoryInfo(
         process: isize,
@@ -147,7 +147,7 @@ extern "system" {
     fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
 }
 
-extern "C" {
+unsafe extern "C" {
     /// Safe for any pointer (a page-map lookup).
     fn mi_is_in_heap_region(p: *const c_void) -> bool;
 }
@@ -237,7 +237,7 @@ type ResidentBytes = [[f64; 2]; 6];
 /// The RAM picture (`QueryWorkingSet`); the breakdown is the commit picture (a stack's
 /// committed-but-untouched pages are only in the latter).
 fn resident(w: &Walk) -> Option<ResidentBytes> {
-    extern "system" {
+    unsafe extern "system" {
         fn K32QueryWorkingSet(process: isize, buf: *mut c_void, size: u32) -> i32;
     }
     let process = unsafe { GetCurrentProcess() };

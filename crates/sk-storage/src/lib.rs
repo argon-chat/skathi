@@ -491,11 +491,11 @@ pub(crate) fn json_escape(s: &str) -> String {
 }
 
 unsafe fn fail(g: *mut c_void, what: &str, e: &str) -> u64 {
-    host::throw(g, "TypeError", &format!("appStorage.{what}: {e}"))
+    unsafe { host::throw(g, "TypeError", &format!("appStorage.{what}: {e}")) }
 }
 
 unsafe fn path_value(g: *mut c_void, p: &Path) -> u64 {
-    js_string(g, &p.display().to_string())
+    unsafe { js_string(g, &p.display().to_string()) }
 }
 
 host_fn!(fn get_user_folder(g, args) {

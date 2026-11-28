@@ -21,11 +21,11 @@ unsafe fn done(
 }
 
 unsafe fn run(g: *mut c_void, started: Result<u32, Fail>) -> u64 {
-    awaiting_with(g, started, done, Errors::Desktop)
+    unsafe { awaiting_with(g, started, done, Errors::Desktop) }
 }
 
 unsafe fn text(g: *mut c_void, v: u64) -> String {
-    host::string_arg(g, v).unwrap_or_else(|| "undefined".into())
+    unsafe { host::string_arg(g, v).unwrap_or_else(|| "undefined".into()) }
 }
 
 host_fn!(fn open_external(g, args) {
@@ -53,16 +53,18 @@ host_fn!(fn trash_item(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void) {
-    let obj = host::install_object(g, "__SK_SHELL__", UNDEF);
-    for (name, arity, f) in [
-        ("openExternal", 1, open_external as HostFn),
-        ("openPath", 1, open_path),
-        ("showItemInFolder", 1, show_item),
-        ("trashItem", 1, trash_item),
-    ] {
-        define(g, obj, name, make_fn(g, name, arity, f), 0);
+    unsafe {
+        let obj = host::install_object(g, "__SK_SHELL__", UNDEF);
+        for (name, arity, f) in [
+            ("openExternal", 1, open_external as HostFn),
+            ("openPath", 1, open_path),
+            ("showItemInFolder", 1, show_item),
+            ("trashItem", 1, trash_item),
+        ] {
+            define(g, obj, name, make_fn(g, name, arity, f), 0);
+        }
+        host::method(g, obj, "openContent", 1, open_content);
     }
-    host::method(g, obj, "openContent", 1, open_content);
 }
 
 #[cfg(test)]

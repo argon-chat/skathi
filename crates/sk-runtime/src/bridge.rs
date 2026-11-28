@@ -189,7 +189,7 @@ pub fn install_panic_hook() {
     }));
 }
 
-fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
+unsafe fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     let utf16: Vec<u16> = msg.encode_utf16().collect();
     let mut err = 0u64;
     unsafe {
@@ -200,7 +200,9 @@ fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
     redjs::api::Value::undefined().0
 }
 
-pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
+/// # Safety
+/// `g` must be the live JS global passed to the current host callback.
+pub unsafe fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
     let (msg, loc) = LAST_PANIC.with(|c| c.take()).unwrap_or_default();
     let text = payload
         .downcast_ref::<&str>()
@@ -208,7 +210,7 @@ pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or(msg);
     poison_with(describe_panic(&text, &loc));
-    throw_error(g, 0, &format!("native panic at {loc}: {text}"))
+    unsafe { throw_error(g, 0, &format!("native panic at {loc}: {text}")) }
 }
 
 #[cfg(test)]

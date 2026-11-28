@@ -116,66 +116,68 @@ impl SecretProvider for Dpapi {
 
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
-    use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-    };
+    unsafe {
+        use std::ptr::{null, null_mut};
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Cryptography::{
+            CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        };
 
-    let inb = CRYPT_INTEGER_BLOB {
-        cbData: input.len() as u32,
-        pbData: input.as_ptr() as *mut u8,
-    };
-    let entb = CRYPT_INTEGER_BLOB {
-        cbData: ENTROPY.len() as u32,
-        pbData: ENTROPY.as_ptr() as *mut u8,
-    };
-    let mut out = CRYPT_INTEGER_BLOB::default();
+        let inb = CRYPT_INTEGER_BLOB {
+            cbData: input.len() as u32,
+            pbData: input.as_ptr() as *mut u8,
+        };
+        let entb = CRYPT_INTEGER_BLOB {
+            cbData: ENTROPY.len() as u32,
+            pbData: ENTROPY.as_ptr() as *mut u8,
+        };
+        let mut out = CRYPT_INTEGER_BLOB::default();
 
-    // CRYPTPROTECT_UI_FORBIDDEN: this runs on the JS/render thread, which a UI prompt would deadlock.
-    let ok = if protect {
-        CryptProtectData(
-            &inb,
-            null(),
-            &entb,
-            null(),
-            null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut out,
-        )
-    } else {
-        CryptUnprotectData(
-            &inb,
-            null_mut(),
-            &entb,
-            null(),
-            null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut out,
-        )
-    };
+        // CRYPTPROTECT_UI_FORBIDDEN: this runs on the JS/render thread, which a UI prompt would deadlock.
+        let ok = if protect {
+            CryptProtectData(
+                &inb,
+                null(),
+                &entb,
+                null(),
+                null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            )
+        } else {
+            CryptUnprotectData(
+                &inb,
+                null_mut(),
+                &entb,
+                null(),
+                null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            )
+        };
 
-    let verb = if protect {
-        "CryptProtectData"
-    } else {
-        "CryptUnprotectData"
-    };
-    if ok == 0 {
-        return Err(format!(
-            "{verb} failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        let verb = if protect {
+            "CryptProtectData"
+        } else {
+            "CryptUnprotectData"
+        };
+        if ok == 0 {
+            return Err(format!(
+                "{verb} failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let bytes = if out.pbData.is_null() {
+            Vec::new()
+        } else {
+            core::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec()
+        };
+        if !out.pbData.is_null() {
+            LocalFree(out.pbData.cast());
+        }
+        Ok(bytes)
     }
-
-    let bytes = if out.pbData.is_null() {
-        Vec::new()
-    } else {
-        core::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec()
-    };
-    if !out.pbData.is_null() {
-        LocalFree(out.pbData.cast());
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]

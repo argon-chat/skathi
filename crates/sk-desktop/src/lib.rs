@@ -263,38 +263,41 @@ unsafe fn src_ready(g: *mut c_void) -> bool {
 }
 
 unsafe fn src_drain(g: *mut c_void) -> usize {
-    if !src_ready(g) {
-        return 0;
-    }
-    let budget = std::time::Duration::from_micros(sk_runtime::redjs::web::pump_budget_us() as u64);
-    let start = std::time::Instant::now();
-    let mut n = 0;
-    loop {
-        let item = {
-            let Ok(mut q) = QUEUE.lock() else { break };
-            let Some(i) = q.iter().position(|it| matches!(it, Item::Settle { .. })) else {
+    unsafe {
+        if !src_ready(g) {
+            return 0;
+        }
+        let budget =
+            std::time::Duration::from_micros(sk_runtime::redjs::web::pump_budget_us() as u64);
+        let start = std::time::Instant::now();
+        let mut n = 0;
+        loop {
+            let item = {
+                let Ok(mut q) = QUEUE.lock() else { break };
+                let Some(i) = q.iter().position(|it| matches!(it, Item::Settle { .. })) else {
+                    break;
+                };
+                SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
+                q.remove(i)
+            };
+            let Some(Item::Settle {
+                token,
+                ok,
+                payload,
+                make,
+            }) = item
+            else {
                 break;
             };
-            SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
-            q.remove(i)
-        };
-        let Some(Item::Settle {
-            token,
-            ok,
-            payload,
-            make,
-        }) = item
-        else {
-            break;
-        };
-        deliver(g, token, ok, &payload, make);
-        sk_runtime::redjs::web::checkpoint(g);
-        n += 1;
-        if budget.is_zero() || start.elapsed() >= budget {
-            break;
+            deliver(g, token, ok, &payload, make);
+            sk_runtime::redjs::web::checkpoint(g);
+            n += 1;
+            if budget.is_zero() || start.elapsed() >= budget {
+                break;
+            }
         }
+        n
     }
-    n
 }
 
 fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<Maker>) {

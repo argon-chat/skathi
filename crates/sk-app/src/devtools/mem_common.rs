@@ -6,7 +6,7 @@ use sk_runtime::JsRuntime;
 
 use crate::json::Json;
 
-extern "C" {
+unsafe extern "C" {
     fn mi_stats_get_json(buf_size: usize, buf: *mut std::ffi::c_char) -> *mut std::ffi::c_char;
 }
 

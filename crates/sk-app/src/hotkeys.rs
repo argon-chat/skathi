@@ -56,7 +56,7 @@ impl Shared {
             }
         }
     }
-    fn gate(self: &Arc<Self>, event: &Fired) -> impl Fn() -> bool + Send + 'static {
+    fn gate(self: &Arc<Self>, event: &Fired) -> impl Fn() -> bool + Send + 'static + use<> {
         let shared = self.clone();
         let realm = self.realm.load(Ordering::Acquire);
         let epoch = self.epoch.load(Ordering::Acquire);

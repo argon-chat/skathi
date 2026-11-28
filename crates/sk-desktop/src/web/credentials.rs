@@ -64,15 +64,15 @@ fn with<R>(f: impl FnOnce(&Classes) -> R) -> R {
 }
 
 unsafe fn credential<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Credential> {
-    host_data::<Credential>(g, with(|c| c.cred), v)
+    unsafe { host_data::<Credential>(g, with(|c| c.cred), v) }
 }
 
 unsafe fn response<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Response> {
-    host_data::<Response>(g, with(|c| c.resp), v)
+    unsafe { host_data::<Response>(g, with(|c| c.resp), v) }
 }
 
 unsafe fn buffer(g: *mut c_void, bytes: &[u8]) -> u64 {
-    get(g, make_u8(g, bytes), "buffer")
+    unsafe { get(g, make_u8(g, bytes), "buffer") }
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -164,55 +164,65 @@ fn timeout(n: Option<f64>) -> u64 {
 }
 
 unsafe fn page_url(g: *mut c_void) -> String {
-    let location = get(g, global(g), "location");
-    if is_cell(location) {
-        read_string(g, get(g, location, "href")).unwrap_or_default()
-    } else {
-        String::new()
+    unsafe {
+        let location = get(g, global(g), "location");
+        if is_cell(location) {
+            read_string(g, get(g, location, "href")).unwrap_or_default()
+        } else {
+            String::new()
+        }
     }
 }
 
 unsafe fn member(g: *mut c_void, obj: u64, k: &str) -> u64 {
-    if is_cell(obj) {
-        get(g, obj, k)
-    } else {
-        UNDEF
+    unsafe {
+        if is_cell(obj) {
+            get(g, obj, k)
+        } else {
+            UNDEF
+        }
     }
 }
 
 unsafe fn string(g: *mut c_void, v: u64) -> Option<String> {
-    if v == UNDEF {
-        return None;
+    unsafe {
+        if v == UNDEF {
+            return None;
+        }
+        to_js_string(g, v).ok().and_then(|s| read_string(g, s))
     }
-    to_js_string(g, v).ok().and_then(|s| read_string(g, s))
 }
 
 unsafe fn list(g: *mut c_void, v: u64) -> Vec<u64> {
-    if !is_cell(v) {
-        return Vec::new();
+    unsafe {
+        if !is_cell(v) {
+            return Vec::new();
+        }
+        let Ok(arr) = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[v]) else {
+            return Vec::new();
+        };
+        (0..array_len(g, arr)).map(|i| get_i(g, arr, i)).collect()
     }
-    let Ok(arr) = call(g, get(g, get(g, global(g), "Array"), "from"), UNDEF, &[v]) else {
-        return Vec::new();
-    };
-    (0..array_len(g, arr)).map(|i| get_i(g, arr, i)).collect()
 }
 
 unsafe fn descriptors(g: *mut c_void, v: u64) -> Result<Json, String> {
-    let mut out = Vec::new();
-    for d in list(g, v) {
-        if string(g, member(g, d, "type")).as_deref() != Some("public-key") {
-            continue;
+    unsafe {
+        let mut out = Vec::new();
+        for d in list(g, v) {
+            if string(g, member(g, d, "type")).as_deref() != Some("public-key") {
+                continue;
+            }
+            let Some(id) = bufferish(g, member(g, d, "id")) else {
+                return Err("A credential descriptor's 'id' is not a BufferSource.".into());
+            };
+            let transports: Vec<String> = list(g, member(g, d, "transports"))
+                .into_iter()
+                .filter_map(|t| string(g, t))
+                .collect();
+            out.push(json!({ "id": b64(id), "transports": transports }));
         }
-        let Some(id) = bufferish(g, member(g, d, "id")) else {
-            return Err("A credential descriptor's 'id' is not a BufferSource.".into());
-        };
-        let transports: Vec<String> = list(g, member(g, d, "transports"))
-            .into_iter()
-            .filter_map(|t| string(g, t))
-            .collect();
-        out.push(json!({ "id": b64(id), "transports": transports }));
+        Ok(Json::Array(out))
     }
-    Ok(Json::Array(out))
 }
 
 #[cfg(not(test))]
@@ -247,21 +257,23 @@ host_fn!(fn on_abort(g, args) {
 });
 
 unsafe fn watch(g: *mut c_void, signal: u64, token: u32) {
-    if !is_cell(signal) {
-        return;
+    unsafe {
+        if !is_cell(signal) {
+            return;
+        }
+        let f = make_fn(g, "", 1, on_abort);
+        let Ok(bound) = call(g, get(g, f, "bind"), f, &[UNDEF, enc_f64(token as f64)]) else {
+            return;
+        };
+        let opts = new_object(g, UNDEF);
+        define(g, opts, "once", TRUE, 0);
+        let _ = call(
+            g,
+            get(g, signal, "addEventListener"),
+            signal,
+            &[js_string(g, "abort"), bound, opts],
+        );
     }
-    let f = make_fn(g, "", 1, on_abort);
-    let Ok(bound) = call(g, get(g, f, "bind"), f, &[UNDEF, enc_f64(token as f64)]) else {
-        return;
-    };
-    let opts = new_object(g, UNDEF);
-    define(g, opts, "once", TRUE, 0);
-    let _ = call(
-        g,
-        get(g, signal, "addEventListener"),
-        signal,
-        &[js_string(g, "abort"), bound, opts],
-    );
 }
 
 unsafe fn make_credential(
@@ -271,30 +283,32 @@ unsafe fn make_credential(
     cred_props: Option<Option<bool>>,
     resp: Response,
 ) -> u64 {
-    let attestation = matches!(resp.kind, Kind::Attestation { .. });
-    let (cred_cls, resp_cls, pkc, att, asr, slot) = with(|c| {
-        (
-            c.cred,
-            c.resp,
-            c.pkc,
-            c.attestation,
-            c.assertion,
-            c.s_response,
-        )
-    });
-    let r = host_create(g, resp_cls, if attestation { att } else { asr }, resp);
-    let obj = host_create(
-        g,
-        cred_cls,
-        pkc,
-        Credential {
-            raw,
-            attachment,
-            cred_props,
-        },
-    );
-    glue::rjs_define(g, obj, slot as *mut c_void, r, 0);
-    obj
+    unsafe {
+        let attestation = matches!(resp.kind, Kind::Attestation { .. });
+        let (cred_cls, resp_cls, pkc, att, asr, slot) = with(|c| {
+            (
+                c.cred,
+                c.resp,
+                c.pkc,
+                c.attestation,
+                c.assertion,
+                c.s_response,
+            )
+        });
+        let r = host_create(g, resp_cls, if attestation { att } else { asr }, resp);
+        let obj = host_create(
+            g,
+            cred_cls,
+            pkc,
+            Credential {
+                raw,
+                attachment,
+                cred_props,
+            },
+        );
+        glue::rjs_define(g, obj, slot as *mut c_void, r, 0);
+        obj
+    }
 }
 
 /// What was signed: the system's own client data when it wrote one, else the one sent with the request.
@@ -303,53 +317,57 @@ fn signed_client_data(v: &Json, sent: Vec<u8>) -> Vec<u8> {
 }
 
 unsafe fn created(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u64, u64> {
-    let (client_data, cred_props) = CONTEXT
-        .with(|c| c.borrow_mut().remove(&token))
-        .unwrap_or_default();
-    let resp = Response {
-        client_data: signed_client_data(v, client_data),
-        kind: Kind::Attestation {
-            object: field(v, "attestationObject"),
-            auth_data: field(v, "authenticatorData"),
-            transports: v["transports"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|t| t.as_str().map(str::to_string))
-                .collect(),
-            public_key: v["publicKey"].as_str().and_then(unb64),
-            alg: v["publicKeyAlgorithm"].as_i64().unwrap_or(0),
-        },
-    };
-    let props = cred_props.then(|| v["residentKey"].as_bool());
-    Ok(make_credential(
-        g,
-        field(v, "id"),
-        v["attachment"].as_str().map(str::to_string),
-        props,
-        resp,
-    ))
+    unsafe {
+        let (client_data, cred_props) = CONTEXT
+            .with(|c| c.borrow_mut().remove(&token))
+            .unwrap_or_default();
+        let resp = Response {
+            client_data: signed_client_data(v, client_data),
+            kind: Kind::Attestation {
+                object: field(v, "attestationObject"),
+                auth_data: field(v, "authenticatorData"),
+                transports: v["transports"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect(),
+                public_key: v["publicKey"].as_str().and_then(unb64),
+                alg: v["publicKeyAlgorithm"].as_i64().unwrap_or(0),
+            },
+        };
+        let props = cred_props.then(|| v["residentKey"].as_bool());
+        Ok(make_credential(
+            g,
+            field(v, "id"),
+            v["attachment"].as_str().map(str::to_string),
+            props,
+            resp,
+        ))
+    }
 }
 
 unsafe fn asserted(g: *mut c_void, token: u32, v: &Json, _made: u64) -> Result<u64, u64> {
-    let (client_data, _) = CONTEXT
-        .with(|c| c.borrow_mut().remove(&token))
-        .unwrap_or_default();
-    let resp = Response {
-        client_data: signed_client_data(v, client_data),
-        kind: Kind::Assertion {
-            auth_data: field(v, "authenticatorData"),
-            signature: field(v, "signature"),
-            user_handle: v["userHandle"].as_str().and_then(unb64),
-        },
-    };
-    Ok(make_credential(
-        g,
-        field(v, "id"),
-        v["attachment"].as_str().map(str::to_string),
-        None,
-        resp,
-    ))
+    unsafe {
+        let (client_data, _) = CONTEXT
+            .with(|c| c.borrow_mut().remove(&token))
+            .unwrap_or_default();
+        let resp = Response {
+            client_data: signed_client_data(v, client_data),
+            kind: Kind::Assertion {
+                auth_data: field(v, "authenticatorData"),
+                signature: field(v, "signature"),
+                user_handle: v["userHandle"].as_str().and_then(unb64),
+            },
+        };
+        Ok(make_credential(
+            g,
+            field(v, "id"),
+            v["attachment"].as_str().map(str::to_string),
+            None,
+            resp,
+        ))
+    }
 }
 
 unsafe fn begin(
@@ -360,25 +378,29 @@ unsafe fn begin(
     cred_props: bool,
     req: Json,
 ) -> u64 {
-    let started = start(create, req);
-    if let Ok(token) = started {
-        CONTEXT.with(|c| {
-            c.borrow_mut()
-                .insert(token, (client_data.into_bytes(), cred_props))
-        });
-        let p = awaiting(g, started, if create { created } else { asserted });
-        watch(g, signal, token);
-        return p;
+    unsafe {
+        let started = start(create, req);
+        if let Ok(token) = started {
+            CONTEXT.with(|c| {
+                c.borrow_mut()
+                    .insert(token, (client_data.into_bytes(), cred_props))
+            });
+            let p = awaiting(g, started, if create { created } else { asserted });
+            watch(g, signal, token);
+            return p;
+        }
+        awaiting(g, started, created)
     }
-    awaiting(g, started, created)
 }
 
 unsafe fn options_signal(g: *mut c_void, options: u64) -> Result<u64, u64> {
-    let signal = member(g, options, "signal");
-    if is_cell(signal) && get(g, signal, "aborted") == TRUE {
-        return Err(rejected_with(g, get(g, signal, "reason")));
+    unsafe {
+        let signal = member(g, options, "signal");
+        if is_cell(signal) && get(g, signal, "aborted") == TRUE {
+            return Err(rejected_with(g, get(g, signal, "reason")));
+        }
+        Ok(signal)
     }
-    Ok(signal)
 }
 
 host_fn!(fn container_create(g, args) {
@@ -485,7 +507,7 @@ host_fn!(fn container_prevent_silent_access(g, _args) {
 });
 
 macro_rules! cred_getter {
-    ($name:ident, |$g:ident, $c:ident, $this:ident| $body:expr) => {
+    ($name:ident, |$g:ident, $c:ident, $this:ident| $body:expr_2021) => {
         host_fn!(fn $name(g, args) {
             unsafe {
                 let $this = args.this().0;
@@ -514,19 +536,23 @@ cred_getter!(cred_response, |g, _c, this| get_a(
 cred_getter!(cred_extensions, |g, c, _this| extensions(g, c));
 
 unsafe fn extensions(g: *mut c_void, c: &Credential) -> u64 {
-    let out = new_object(g, UNDEF);
-    if let Some(rk) = c.cred_props {
-        let props = new_object(g, UNDEF);
-        if let Some(rk) = rk {
-            define(g, props, "rk", enc_bool(rk), 0);
+    unsafe {
+        let out = new_object(g, UNDEF);
+        if let Some(rk) = c.cred_props {
+            let props = new_object(g, UNDEF);
+            if let Some(rk) = rk {
+                define(g, props, "rk", enc_bool(rk), 0);
+            }
+            define(g, out, "credProps", props, 0);
         }
-        define(g, out, "credProps", props, 0);
+        out
     }
-    out
 }
 
 unsafe fn put(g: *mut c_void, obj: u64, k: &str, bytes: &[u8]) {
-    define(g, obj, k, js_string(g, &b64(bytes)), 0);
+    unsafe {
+        define(g, obj, k, js_string(g, &b64(bytes)), 0);
+    }
 }
 
 host_fn!(fn cred_to_json(g, args) {
@@ -568,17 +594,19 @@ host_fn!(fn cred_to_json(g, args) {
 });
 
 unsafe fn sorted_transports(g: *mut c_void, t: &[String]) -> u64 {
-    let mut t = t.to_vec();
-    t.sort();
-    let arr = new_array(g);
-    for (i, s) in t.iter().enumerate() {
-        set_i(g, arr, i as u32, js_string(g, s));
+    unsafe {
+        let mut t = t.to_vec();
+        t.sort();
+        let arr = new_array(g);
+        for (i, s) in t.iter().enumerate() {
+            set_i(g, arr, i as u32, js_string(g, s));
+        }
+        arr
     }
-    arr
 }
 
 macro_rules! resp_getter {
-    ($name:ident, |$g:ident, $r:ident| $body:expr) => {
+    ($name:ident, |$g:ident, $r:ident| $body:expr_2021) => {
         host_fn!(fn $name(g, args) {
             unsafe {
                 let $g = g;
@@ -652,39 +680,43 @@ host_fn!(fn client_capabilities(g, _args) {
 
 /// A shallow copy of `options` with the base64url members `keys` decoded, or a TypeError thrown.
 unsafe fn decode_members(g: *mut c_void, options: u64, keys: &[&str]) -> Result<u64, ()> {
-    let object = get(g, global(g), "Object");
-    let copy = call(
-        g,
-        get(g, object, "assign"),
-        object,
-        &[new_object(g, UNDEF), options],
-    )
-    .map_err(|_| ())?;
-    for k in keys {
-        let v = member(g, copy, k);
-        let Some(bytes) = string(g, v).and_then(|s| unb64(&s)).filter(|_| v != UNDEF) else {
-            throw_type_error(
-                g,
-                &format!("Failed to read the '{k}' property: it is not valid base64url."),
-            );
-            return Err(());
-        };
-        define(g, copy, k, buffer(g, &bytes), 0);
+    unsafe {
+        let object = get(g, global(g), "Object");
+        let copy = call(
+            g,
+            get(g, object, "assign"),
+            object,
+            &[new_object(g, UNDEF), options],
+        )
+        .map_err(|_| ())?;
+        for k in keys {
+            let v = member(g, copy, k);
+            let Some(bytes) = string(g, v).and_then(|s| unb64(&s)).filter(|_| v != UNDEF) else {
+                throw_type_error(
+                    g,
+                    &format!("Failed to read the '{k}' property: it is not valid base64url."),
+                );
+                return Err(());
+            };
+            define(g, copy, k, buffer(g, &bytes), 0);
+        }
+        Ok(copy)
     }
-    Ok(copy)
 }
 
 unsafe fn decode_list(g: *mut c_void, obj: u64, key: &str) -> Result<(), ()> {
-    let v = member(g, obj, key);
-    if !is_cell(v) {
-        return Ok(());
+    unsafe {
+        let v = member(g, obj, key);
+        if !is_cell(v) {
+            return Ok(());
+        }
+        let arr = new_array(g);
+        for (i, d) in list(g, v).into_iter().enumerate() {
+            set_i(g, arr, i as u32, decode_members(g, d, &["id"])?);
+        }
+        define(g, obj, key, arr, 0);
+        Ok(())
     }
-    let arr = new_array(g);
-    for (i, d) in list(g, v).into_iter().enumerate() {
-        set_i(g, arr, i as u32, decode_members(g, d, &["id"])?);
-    }
-    define(g, obj, key, arr, 0);
-    Ok(())
 }
 
 host_fn!(fn parse_creation_options(g, args) {
@@ -715,128 +747,130 @@ host_fn!(fn navigator_credentials(_g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, nav: u64) {
-    let cred = make_host_class::<Credential>("PublicKeyCredential");
-    let resp = make_host_class::<Response>("AuthenticatorResponse");
-    let base = define_class(
-        g,
-        &ClassSpec {
-            name: "Credential",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[("id", cred_id), ("type", cred_type)],
-            accessors: &[],
-        },
-    );
-    let pkc = define_class(
-        g,
-        &ClassSpec {
-            name: "PublicKeyCredential",
-            arity: 0,
-            construct: None,
-            parent_proto: base.proto,
-            methods: &[
-                ("getClientExtensionResults", 0, cred_extensions),
-                ("toJSON", 0, cred_to_json),
-            ],
-            getters: &[
-                ("rawId", cred_raw_id),
-                ("response", cred_response),
-                ("authenticatorAttachment", cred_attachment),
-            ],
-            accessors: &[],
-        },
-    );
-    for (name, arity, f) in [
-        (
-            "isUserVerifyingPlatformAuthenticatorAvailable",
-            0,
-            uvpa_available as HostFn,
-        ),
-        ("isConditionalMediationAvailable", 0, conditional_available),
-        ("getClientCapabilities", 0, client_capabilities),
-        ("parseCreationOptionsFromJSON", 1, parse_creation_options),
-        ("parseRequestOptionsFromJSON", 1, parse_request_options),
-    ] {
-        define(g, pkc.ctor, name, make_fn(g, name, arity, f), 2);
+    unsafe {
+        let cred = make_host_class::<Credential>("PublicKeyCredential");
+        let resp = make_host_class::<Response>("AuthenticatorResponse");
+        let base = define_class(
+            g,
+            &ClassSpec {
+                name: "Credential",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[("id", cred_id), ("type", cred_type)],
+                accessors: &[],
+            },
+        );
+        let pkc = define_class(
+            g,
+            &ClassSpec {
+                name: "PublicKeyCredential",
+                arity: 0,
+                construct: None,
+                parent_proto: base.proto,
+                methods: &[
+                    ("getClientExtensionResults", 0, cred_extensions),
+                    ("toJSON", 0, cred_to_json),
+                ],
+                getters: &[
+                    ("rawId", cred_raw_id),
+                    ("response", cred_response),
+                    ("authenticatorAttachment", cred_attachment),
+                ],
+                accessors: &[],
+            },
+        );
+        for (name, arity, f) in [
+            (
+                "isUserVerifyingPlatformAuthenticatorAvailable",
+                0,
+                uvpa_available as HostFn,
+            ),
+            ("isConditionalMediationAvailable", 0, conditional_available),
+            ("getClientCapabilities", 0, client_capabilities),
+            ("parseCreationOptionsFromJSON", 1, parse_creation_options),
+            ("parseRequestOptionsFromJSON", 1, parse_request_options),
+        ] {
+            define(g, pkc.ctor, name, make_fn(g, name, arity, f), 2);
+        }
+        let response_base = define_class(
+            g,
+            &ClassSpec {
+                name: "AuthenticatorResponse",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[("clientDataJSON", resp_client_data)],
+                accessors: &[],
+            },
+        );
+        let attestation = define_class(
+            g,
+            &ClassSpec {
+                name: "AuthenticatorAttestationResponse",
+                arity: 0,
+                construct: None,
+                parent_proto: response_base.proto,
+                methods: &[
+                    ("getTransports", 0, resp_transports),
+                    ("getAuthenticatorData", 0, resp_authenticator_data),
+                    ("getPublicKey", 0, resp_public_key),
+                    ("getPublicKeyAlgorithm", 0, resp_public_key_algorithm),
+                ],
+                getters: &[("attestationObject", resp_attestation_object)],
+                accessors: &[],
+            },
+        );
+        let assertion = define_class(
+            g,
+            &ClassSpec {
+                name: "AuthenticatorAssertionResponse",
+                arity: 0,
+                construct: None,
+                parent_proto: response_base.proto,
+                methods: &[],
+                getters: &[
+                    ("authenticatorData", resp_authenticator_data),
+                    ("signature", resp_signature),
+                    ("userHandle", resp_user_handle),
+                ],
+                accessors: &[],
+            },
+        );
+        let container = define_class(
+            g,
+            &ClassSpec {
+                name: "CredentialsContainer",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("create", 0, container_create),
+                    ("get", 0, container_get),
+                    ("store", 1, container_store),
+                    ("preventSilentAccess", 0, container_prevent_silent_access),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        let instance = new_object(g, container.proto);
+        sk_runtime::redjs::ffi::redjs_protect(g, instance);
+        CONTAINER.with(|c| c.set(instance));
+        CLASSES.with(|c| {
+            *c.borrow_mut() = Some(Classes {
+                cred,
+                resp,
+                pkc: pkc.proto,
+                attestation: attestation.proto,
+                assertion: assertion.proto,
+                s_response: atom_priv(g, "sk#response") as usize,
+            })
+        });
+        super::define_getter(g, nav, "credentials", navigator_credentials);
     }
-    let response_base = define_class(
-        g,
-        &ClassSpec {
-            name: "AuthenticatorResponse",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[("clientDataJSON", resp_client_data)],
-            accessors: &[],
-        },
-    );
-    let attestation = define_class(
-        g,
-        &ClassSpec {
-            name: "AuthenticatorAttestationResponse",
-            arity: 0,
-            construct: None,
-            parent_proto: response_base.proto,
-            methods: &[
-                ("getTransports", 0, resp_transports),
-                ("getAuthenticatorData", 0, resp_authenticator_data),
-                ("getPublicKey", 0, resp_public_key),
-                ("getPublicKeyAlgorithm", 0, resp_public_key_algorithm),
-            ],
-            getters: &[("attestationObject", resp_attestation_object)],
-            accessors: &[],
-        },
-    );
-    let assertion = define_class(
-        g,
-        &ClassSpec {
-            name: "AuthenticatorAssertionResponse",
-            arity: 0,
-            construct: None,
-            parent_proto: response_base.proto,
-            methods: &[],
-            getters: &[
-                ("authenticatorData", resp_authenticator_data),
-                ("signature", resp_signature),
-                ("userHandle", resp_user_handle),
-            ],
-            accessors: &[],
-        },
-    );
-    let container = define_class(
-        g,
-        &ClassSpec {
-            name: "CredentialsContainer",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("create", 0, container_create),
-                ("get", 0, container_get),
-                ("store", 1, container_store),
-                ("preventSilentAccess", 0, container_prevent_silent_access),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let instance = new_object(g, container.proto);
-    sk_runtime::redjs::ffi::redjs_protect(g, instance);
-    CONTAINER.with(|c| c.set(instance));
-    CLASSES.with(|c| {
-        *c.borrow_mut() = Some(Classes {
-            cred,
-            resp,
-            pkc: pkc.proto,
-            attestation: attestation.proto,
-            assertion: assertion.proto,
-            s_response: atom_priv(g, "sk#response") as usize,
-        })
-    });
-    super::define_getter(g, nav, "credentials", navigator_credentials);
 }
 
 #[cfg(test)]

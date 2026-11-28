@@ -12,7 +12,9 @@ Go from a fresh directory to a native window using Bun and the Skathi CLI. Write
 
 ## Before you begin
 
-Skathi runs on Windows x64, macOS on Apple silicon and Linux x64. Its CLI needs [Bun](https://bun.sh/) 1.4 or later:
+On Windows and Linux x64, the prebuilt host requires an **x86-64-v3** CPU, such as a fourth-generation Intel Core i5 or an AMD Ryzen. The macOS host runs on Apple silicon. [CPU requirements and support policy](/guides/packaging/#cpu-requirements)
+
+Install [Bun](https://bun.sh/) 1.4 or later to run the CLI.
 
 ```powershell title="Windows" os="windows"
 powershell -c "irm bun.sh/install.ps1 | iex"

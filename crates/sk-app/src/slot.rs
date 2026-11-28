@@ -20,10 +20,32 @@ use std::path::{Path, PathBuf};
 #[cfg(not(feature = "prod"))]
 const DEV_DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/cli/dist");
 
-/// This process's slot directory. `SK_DIST` wins everywhere: it points one exe at another app's
-/// build output and keeps every parallel host (the e2e slot pool, the inspector itself) addressable.
+static HOST_SLOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub(crate) fn init(host: &sk_desktop::args::HostFlags) {
+    if let Some(dir) = host.sk_dist.as_deref().filter(|d| !d.is_empty()) {
+        let _ = HOST_SLOT.set(PathBuf::from(dir));
+    }
+    #[cfg(sk_devtools)]
+    if host.devtools
+        && HOST_SLOT.get().is_none()
+        && std::env::var_os("SK_DIST").is_none_or(|v| v.is_empty())
+    {
+        let dir = std::env::temp_dir()
+            .join("skathi")
+            .join("devtools")
+            .join(std::process::id().to_string());
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = HOST_SLOT.set(dir);
+    }
+}
+
+/// The explicit host slot (`--sk-dist`), inherited `SK_DIST` or default build output.
 #[cfg_attr(all(feature = "prod", not(sk_devtools)), allow(dead_code))]
 pub fn dir() -> PathBuf {
+    if let Some(dir) = HOST_SLOT.get() {
+        return dir.clone();
+    }
     if let Some(dir) = std::env::var_os("SK_DIST").filter(|v| !v.is_empty()) {
         return PathBuf::from(dir);
     }

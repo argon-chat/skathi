@@ -3,12 +3,12 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     #[link(wasm_import_module = "sk")]
-    extern "C" {
+    unsafe extern "C" {
         fn read(ptr: *mut u8, len: usize);
         fn write(ptr: *const u8, len: usize);
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     pub extern "C" fn check(len: usize) {
         let mut input = vec![0; len];
         // SAFETY: the synchronous JS imports copy exactly len bytes to/from this live allocation.

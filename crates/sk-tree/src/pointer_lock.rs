@@ -455,15 +455,17 @@ fn deliver(notes: Vec<Note>, window: &mut Window, cx: &mut App) {
 }
 
 unsafe fn settle(g: *mut c_void, note: &Note) {
-    let request = match *note {
-        Note::Change { request } | Note::Error { request, .. } => request,
-    };
-    let Some(settler) = PENDING.with(|p| p.borrow_mut().remove(&request)) else {
-        return;
-    };
-    match *note {
-        Note::Change { .. } => settler.resolve(g, UNDEF),
-        Note::Error { name, message, .. } => settler.reject(g, host::error(g, name, message)),
+    unsafe {
+        let request = match *note {
+            Note::Change { request } | Note::Error { request, .. } => request,
+        };
+        let Some(settler) = PENDING.with(|p| p.borrow_mut().remove(&request)) else {
+            return;
+        };
+        match *note {
+            Note::Change { .. } => settler.resolve(g, UNDEF),
+            Note::Error { name, message, .. } => settler.reject(g, host::error(g, name, message)),
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 name = "sk-thorvg-sys"
 description = "ThorVG 1.1.2 for Skathi's Lottie playback: a pinned prebuilt or a cc build, and its C API"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license = "(MIT OR Apache-2.0) AND MIT AND Apache-2.0"
 repository.workspace = true
 homepage.workspace = true

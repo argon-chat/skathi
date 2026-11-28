@@ -20,28 +20,56 @@ fn low(from_env: Option<&str>, configured: Option<&str>) -> bool {
 }
 
 /// Before the first JS context, so the pages its heap starts on follow the mode too.
-pub(crate) fn apply() {
+pub(crate) fn apply(standalone: bool) {
     let from_env = std::env::var("SK_MEMORY").ok();
     let configured = crate::boot_mode::memory();
     if !low(from_env.as_deref(), configured.as_deref()) {
         return;
     }
-    // GPU drivers ship a mimalloc of their own (NVIDIA's does) that reads its options from the
-    // environment when the driver loads.
-    for (name, value) in [
-        ("MIMALLOC_PAGE_COMMIT_ON_DEMAND", "1"),
-        ("MIMALLOC_PURGE_DELAY", "0"),
-    ] {
-        if std::env::var_os(name).is_none() {
-            std::env::set_var(name, value);
-        }
-    }
-    // SAFETY: mimalloc's options are atomics, set here before any other thread allocates from it.
+    configure_driver(standalone);
+    // SAFETY: mimalloc's options are atomic and the option IDs are checked against its header.
     unsafe {
         // A page is committed as it fills, not whole when it is taken.
         mi_option_set(PAGE_COMMIT_ON_DEMAND, 1);
         // Freed memory goes back to the OS at once, not after the delay that expects it to be reused.
         mi_option_set(PURGE_DELAY, 0);
+    }
+}
+
+/// A GPU driver can load a separate mimalloc that takes its options from the environment.
+fn configure_driver(_standalone: bool) {
+    let defaults = [
+        ("MIMALLOC_PAGE_COMMIT_ON_DEMAND", "1"),
+        ("MIMALLOC_PURGE_DELAY", "0"),
+    ]
+    .into_iter()
+    .filter(|(name, _)| std::env::var_os(name).is_none());
+    #[cfg(windows)]
+    for (name, value) in defaults {
+        // SAFETY: std guarantees process environment writes are thread-safe on Windows.
+        unsafe { std::env::set_var(name, value) };
+    }
+    #[cfg(unix)]
+    if _standalone {
+        use std::os::unix::process::CommandExt;
+        let mut defaults = defaults.peekable();
+        if defaults.peek().is_none() {
+            return;
+        }
+        // Only the SDK executable may replace itself. exec keeps its PID and sets both defaults
+        // before foreign threads can read them, including threads started by native initializers.
+        let error = match std::env::current_exe() {
+            Ok(exe) => {
+                let mut args = std::env::args_os();
+                let mut command = std::process::Command::new(exe);
+                if let Some(name) = args.next() {
+                    command.arg0(name);
+                }
+                command.args(args).envs(defaults).exec()
+            }
+            Err(error) => error,
+        };
+        eprintln!("[memory] could not apply GPU driver allocator defaults: {error}");
     }
 }
 

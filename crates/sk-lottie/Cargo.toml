@@ -2,7 +2,7 @@
 name = "sk-lottie"
 description = "Lottie and .tgs playback behind Skathi's <lottie> element"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

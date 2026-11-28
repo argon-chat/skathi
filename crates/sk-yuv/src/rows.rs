@@ -179,74 +179,83 @@ mod simd {
 
     #[target_feature(enable = "sse2")]
     unsafe fn vblend_sse2(near: &[u8], far: &[u8], tmp: &mut [u16]) -> usize {
-        let zero = _mm_setzero_si128();
-        let mut i = 0;
-        while i + 8 <= near.len() {
-            let n = _mm_unpacklo_epi8(_mm_loadl_epi64(near.as_ptr().add(i).cast()), zero);
-            let f = _mm_unpacklo_epi8(_mm_loadl_epi64(far.as_ptr().add(i).cast()), zero);
-            let r = _mm_add_epi16(_mm_add_epi16(n, _mm_add_epi16(n, n)), f);
-            _mm_storeu_si128(tmp.as_mut_ptr().add(1 + i).cast(), r);
-            i += 8;
+        unsafe {
+            let zero = _mm_setzero_si128();
+            let mut i = 0;
+            while i + 8 <= near.len() {
+                let n = _mm_unpacklo_epi8(_mm_loadl_epi64(near.as_ptr().add(i).cast()), zero);
+                let f = _mm_unpacklo_epi8(_mm_loadl_epi64(far.as_ptr().add(i).cast()), zero);
+                let r = _mm_add_epi16(_mm_add_epi16(n, _mm_add_epi16(n, n)), f);
+                _mm_storeu_si128(tmp.as_mut_ptr().add(1 + i).cast(), r);
+                i += 8;
+            }
+            i
         }
-        i
     }
 
     #[target_feature(enable = "avx2")]
     unsafe fn vblend_avx2(near: &[u8], far: &[u8], tmp: &mut [u16]) -> usize {
-        let mut i = 0;
-        while i + 16 <= near.len() {
-            let n = _mm256_cvtepu8_epi16(_mm_loadu_si128(near.as_ptr().add(i).cast()));
-            let f = _mm256_cvtepu8_epi16(_mm_loadu_si128(far.as_ptr().add(i).cast()));
-            let r = _mm256_add_epi16(_mm256_add_epi16(n, _mm256_add_epi16(n, n)), f);
-            _mm256_storeu_si256(tmp.as_mut_ptr().add(1 + i).cast(), r);
-            i += 16;
+        unsafe {
+            let mut i = 0;
+            while i + 16 <= near.len() {
+                let n = _mm256_cvtepu8_epi16(_mm_loadu_si128(near.as_ptr().add(i).cast()));
+                let f = _mm256_cvtepu8_epi16(_mm_loadu_si128(far.as_ptr().add(i).cast()));
+                let r = _mm256_add_epi16(_mm256_add_epi16(n, _mm256_add_epi16(n, n)), f);
+                _mm256_storeu_si256(tmp.as_mut_ptr().add(1 + i).cast(), r);
+                i += 16;
+            }
+            i
         }
-        i
     }
 
     #[target_feature(enable = "sse2")]
     unsafe fn hblend_sse2(tmp: &[u16], out: &mut [u8]) -> usize {
-        let cw = tmp.len() - 2;
-        let eight = _mm_set1_epi16(8);
-        let mut i = 0;
-        while i + 8 <= cw && 2 * (i + 8) <= out.len() {
-            let l = _mm_loadu_si128(tmp.as_ptr().add(i).cast());
-            let m = _mm_loadu_si128(tmp.as_ptr().add(i + 1).cast());
-            let r = _mm_loadu_si128(tmp.as_ptr().add(i + 2).cast());
-            let m3 = _mm_add_epi16(_mm_add_epi16(m, _mm_add_epi16(m, m)), eight);
-            let e = _mm_srli_epi16(_mm_add_epi16(m3, l), 4);
-            let o = _mm_srli_epi16(_mm_add_epi16(m3, r), 4);
-            let px = _mm_packus_epi16(_mm_unpacklo_epi16(e, o), _mm_unpackhi_epi16(e, o));
-            _mm_storeu_si128(out.as_mut_ptr().add(2 * i).cast(), px);
-            i += 8;
+        unsafe {
+            let cw = tmp.len() - 2;
+            let eight = _mm_set1_epi16(8);
+            let mut i = 0;
+            while i + 8 <= cw && 2 * (i + 8) <= out.len() {
+                let l = _mm_loadu_si128(tmp.as_ptr().add(i).cast());
+                let m = _mm_loadu_si128(tmp.as_ptr().add(i + 1).cast());
+                let r = _mm_loadu_si128(tmp.as_ptr().add(i + 2).cast());
+                let m3 = _mm_add_epi16(_mm_add_epi16(m, _mm_add_epi16(m, m)), eight);
+                let e = _mm_srli_epi16(_mm_add_epi16(m3, l), 4);
+                let o = _mm_srli_epi16(_mm_add_epi16(m3, r), 4);
+                let px = _mm_packus_epi16(_mm_unpacklo_epi16(e, o), _mm_unpackhi_epi16(e, o));
+                _mm_storeu_si128(out.as_mut_ptr().add(2 * i).cast(), px);
+                i += 8;
+            }
+            i
         }
-        i
     }
 
     #[target_feature(enable = "avx2")]
     unsafe fn hblend_avx2(tmp: &[u16], out: &mut [u8]) -> usize {
-        let cw = tmp.len() - 2;
-        let eight = _mm256_set1_epi16(8);
-        let mut i = 0;
-        while i + 16 <= cw && 2 * (i + 16) <= out.len() {
-            let l = _mm256_loadu_si256(tmp.as_ptr().add(i).cast());
-            let m = _mm256_loadu_si256(tmp.as_ptr().add(i + 1).cast());
-            let r = _mm256_loadu_si256(tmp.as_ptr().add(i + 2).cast());
-            let m3 = _mm256_add_epi16(_mm256_add_epi16(m, _mm256_add_epi16(m, m)), eight);
-            let e = _mm256_srli_epi16(_mm256_add_epi16(m3, l), 4);
-            let o = _mm256_srli_epi16(_mm256_add_epi16(m3, r), 4);
-            // Per 128-bit lane, (e, o) interleaved and packed: lane 0 is
-            // chroma 0..8 (luma 0..16), lane 1 chroma 8..16. In order.
-            let px = _mm256_packus_epi16(_mm256_unpacklo_epi16(e, o), _mm256_unpackhi_epi16(e, o));
-            _mm256_storeu_si256(out.as_mut_ptr().add(2 * i).cast(), px);
-            i += 16;
+        unsafe {
+            let cw = tmp.len() - 2;
+            let eight = _mm256_set1_epi16(8);
+            let mut i = 0;
+            while i + 16 <= cw && 2 * (i + 16) <= out.len() {
+                let l = _mm256_loadu_si256(tmp.as_ptr().add(i).cast());
+                let m = _mm256_loadu_si256(tmp.as_ptr().add(i + 1).cast());
+                let r = _mm256_loadu_si256(tmp.as_ptr().add(i + 2).cast());
+                let m3 = _mm256_add_epi16(_mm256_add_epi16(m, _mm256_add_epi16(m, m)), eight);
+                let e = _mm256_srli_epi16(_mm256_add_epi16(m3, l), 4);
+                let o = _mm256_srli_epi16(_mm256_add_epi16(m3, r), 4);
+                // Per 128-bit lane, (e, o) interleaved and packed: lane 0 is
+                // chroma 0..8 (luma 0..16), lane 1 chroma 8..16. In order.
+                let px =
+                    _mm256_packus_epi16(_mm256_unpacklo_epi16(e, o), _mm256_unpackhi_epi16(e, o));
+                _mm256_storeu_si256(out.as_mut_ptr().add(2 * i).cast(), px);
+                i += 16;
+            }
+            i
         }
-        i
     }
 
     macro_rules! yuva_body {
-        ($k:expr, $yy:expr, $uu:expr, $vv:expr, $aa:expr,
-         $zero:expr, $one:expr, $max:expr, $ky:expr, $kr:expr, $kg:expr, $kb:expr,
+        ($k:expr_2021, $yy:expr_2021, $uu:expr_2021, $vv:expr_2021, $aa:expr_2021,
+         $zero:expr_2021, $one:expr_2021, $max:expr_2021, $ky:expr_2021, $kr:expr_2021, $kg:expr_2021, $kb:expr_2021,
          $unpacklo:ident, $unpackhi:ident, $madd:ident, $add32:ident, $srai:ident,
          $packs:ident, $max16:ident, $min16:ident, $or:ident, $slli:ident) => {{
             let yr_lo = $madd($unpacklo($yy, $one), $ky);
@@ -254,7 +263,7 @@ mod simd {
             let uv_lo = $unpacklo($uu, $vv);
             let uv_hi = $unpackhi($uu, $vv);
             macro_rules! channel {
-                ($kc:expr) => {
+                ($kc:expr_2021) => {
                     $min16(
                         $max16(
                             $packs(
@@ -285,59 +294,61 @@ mod simd {
         a: Option<&[u8]>,
         out: &mut [u8],
     ) -> usize {
-        let zero = _mm_setzero_si128();
-        let one = _mm_set1_epi16(1);
-        let max = _mm_set1_epi16(255);
-        let yoff = _mm_set1_epi16(k.yoff);
-        let c128 = _mm_set1_epi16(128);
-        let ky = _mm_set1_epi32(pair(k.ky, RND as i16));
-        let kr = _mm_set1_epi32(pair(0, k.krv));
-        let kg = _mm_set1_epi32(pair(-k.kgu, -k.kgv));
-        let kb = _mm_set1_epi32(pair(k.kbu, 0));
-        macro_rules! load {
-            ($s:expr, $x:expr) => {
-                _mm_unpacklo_epi8(_mm_loadl_epi64($s.as_ptr().add($x).cast()), zero)
-            };
+        unsafe {
+            let zero = _mm_setzero_si128();
+            let one = _mm_set1_epi16(1);
+            let max = _mm_set1_epi16(255);
+            let yoff = _mm_set1_epi16(k.yoff);
+            let c128 = _mm_set1_epi16(128);
+            let ky = _mm_set1_epi32(pair(k.ky, RND as i16));
+            let kr = _mm_set1_epi32(pair(0, k.krv));
+            let kg = _mm_set1_epi32(pair(-k.kgu, -k.kgv));
+            let kb = _mm_set1_epi32(pair(k.kbu, 0));
+            macro_rules! load {
+                ($s:expr_2021, $x:expr_2021) => {
+                    _mm_unpacklo_epi8(_mm_loadl_epi64($s.as_ptr().add($x).cast()), zero)
+                };
+            }
+            let mut x = 0;
+            while x + 8 <= y.len() {
+                let yy = _mm_sub_epi16(load!(y, x), yoff);
+                let uu = _mm_sub_epi16(load!(u, x), c128);
+                let vv = _mm_sub_epi16(load!(v, x), c128);
+                let aa = match a {
+                    Some(a) => load!(a, x),
+                    None => max,
+                };
+                let (lo, hi) = yuva_body!(
+                    k,
+                    yy,
+                    uu,
+                    vv,
+                    aa,
+                    zero,
+                    one,
+                    max,
+                    ky,
+                    kr,
+                    kg,
+                    kb,
+                    _mm_unpacklo_epi16,
+                    _mm_unpackhi_epi16,
+                    _mm_madd_epi16,
+                    _mm_add_epi32,
+                    _mm_srai_epi32,
+                    _mm_packs_epi32,
+                    _mm_max_epi16,
+                    _mm_min_epi16,
+                    _mm_or_si128,
+                    _mm_slli_epi16
+                );
+                let dst = out.as_mut_ptr().add(4 * x);
+                _mm_storeu_si128(dst.cast(), lo);
+                _mm_storeu_si128(dst.add(16).cast(), hi);
+                x += 8;
+            }
+            x
         }
-        let mut x = 0;
-        while x + 8 <= y.len() {
-            let yy = _mm_sub_epi16(load!(y, x), yoff);
-            let uu = _mm_sub_epi16(load!(u, x), c128);
-            let vv = _mm_sub_epi16(load!(v, x), c128);
-            let aa = match a {
-                Some(a) => load!(a, x),
-                None => max,
-            };
-            let (lo, hi) = yuva_body!(
-                k,
-                yy,
-                uu,
-                vv,
-                aa,
-                zero,
-                one,
-                max,
-                ky,
-                kr,
-                kg,
-                kb,
-                _mm_unpacklo_epi16,
-                _mm_unpackhi_epi16,
-                _mm_madd_epi16,
-                _mm_add_epi32,
-                _mm_srai_epi32,
-                _mm_packs_epi32,
-                _mm_max_epi16,
-                _mm_min_epi16,
-                _mm_or_si128,
-                _mm_slli_epi16
-            );
-            let dst = out.as_mut_ptr().add(4 * x);
-            _mm_storeu_si128(dst.cast(), lo);
-            _mm_storeu_si128(dst.add(16).cast(), hi);
-            x += 8;
-        }
-        x
     }
 
     #[target_feature(enable = "avx2")]
@@ -349,63 +360,65 @@ mod simd {
         a: Option<&[u8]>,
         out: &mut [u8],
     ) -> usize {
-        let zero = _mm256_setzero_si256();
-        let one = _mm256_set1_epi16(1);
-        let max = _mm256_set1_epi16(255);
-        let yoff = _mm256_set1_epi16(k.yoff);
-        let c128 = _mm256_set1_epi16(128);
-        let ky = _mm256_set1_epi32(pair(k.ky, RND as i16));
-        let kr = _mm256_set1_epi32(pair(0, k.krv));
-        let kg = _mm256_set1_epi32(pair(-k.kgu, -k.kgv));
-        let kb = _mm256_set1_epi32(pair(k.kbu, 0));
-        macro_rules! load {
-            ($s:expr, $x:expr) => {
-                _mm256_cvtepu8_epi16(_mm_loadu_si128($s.as_ptr().add($x).cast()))
-            };
+        unsafe {
+            let zero = _mm256_setzero_si256();
+            let one = _mm256_set1_epi16(1);
+            let max = _mm256_set1_epi16(255);
+            let yoff = _mm256_set1_epi16(k.yoff);
+            let c128 = _mm256_set1_epi16(128);
+            let ky = _mm256_set1_epi32(pair(k.ky, RND as i16));
+            let kr = _mm256_set1_epi32(pair(0, k.krv));
+            let kg = _mm256_set1_epi32(pair(-k.kgu, -k.kgv));
+            let kb = _mm256_set1_epi32(pair(k.kbu, 0));
+            macro_rules! load {
+                ($s:expr_2021, $x:expr_2021) => {
+                    _mm256_cvtepu8_epi16(_mm_loadu_si128($s.as_ptr().add($x).cast()))
+                };
+            }
+            let mut x = 0;
+            while x + 16 <= y.len() {
+                let yy = _mm256_sub_epi16(load!(y, x), yoff);
+                let uu = _mm256_sub_epi16(load!(u, x), c128);
+                let vv = _mm256_sub_epi16(load!(v, x), c128);
+                let aa = match a {
+                    Some(a) => load!(a, x),
+                    None => max,
+                };
+                // unpacklo/hi work per 128-bit lane, so the packs and the last unpack restore pixel
+                // order from (lo: 0..4, 8..12; hi: 4..8, 12..16).
+                let (lo, hi) = yuva_body!(
+                    k,
+                    yy,
+                    uu,
+                    vv,
+                    aa,
+                    zero,
+                    one,
+                    max,
+                    ky,
+                    kr,
+                    kg,
+                    kb,
+                    _mm256_unpacklo_epi16,
+                    _mm256_unpackhi_epi16,
+                    _mm256_madd_epi16,
+                    _mm256_add_epi32,
+                    _mm256_srai_epi32,
+                    _mm256_packs_epi32,
+                    _mm256_max_epi16,
+                    _mm256_min_epi16,
+                    _mm256_or_si256,
+                    _mm256_slli_epi16
+                );
+                let dst = out.as_mut_ptr().add(4 * x);
+                _mm256_storeu_si256(dst.cast(), _mm256_permute2x128_si256::<0x20>(lo, hi));
+                _mm256_storeu_si256(
+                    dst.add(32).cast(),
+                    _mm256_permute2x128_si256::<0x31>(lo, hi),
+                );
+                x += 16;
+            }
+            x
         }
-        let mut x = 0;
-        while x + 16 <= y.len() {
-            let yy = _mm256_sub_epi16(load!(y, x), yoff);
-            let uu = _mm256_sub_epi16(load!(u, x), c128);
-            let vv = _mm256_sub_epi16(load!(v, x), c128);
-            let aa = match a {
-                Some(a) => load!(a, x),
-                None => max,
-            };
-            // unpacklo/hi work per 128-bit lane, so the packs and the last unpack restore pixel
-            // order from (lo: 0..4, 8..12; hi: 4..8, 12..16).
-            let (lo, hi) = yuva_body!(
-                k,
-                yy,
-                uu,
-                vv,
-                aa,
-                zero,
-                one,
-                max,
-                ky,
-                kr,
-                kg,
-                kb,
-                _mm256_unpacklo_epi16,
-                _mm256_unpackhi_epi16,
-                _mm256_madd_epi16,
-                _mm256_add_epi32,
-                _mm256_srai_epi32,
-                _mm256_packs_epi32,
-                _mm256_max_epi16,
-                _mm256_min_epi16,
-                _mm256_or_si256,
-                _mm256_slli_epi16
-            );
-            let dst = out.as_mut_ptr().add(4 * x);
-            _mm256_storeu_si256(dst.cast(), _mm256_permute2x128_si256::<0x20>(lo, hi));
-            _mm256_storeu_si256(
-                dst.add(32).cast(),
-                _mm256_permute2x128_si256::<0x31>(lo, hi),
-            );
-            x += 16;
-        }
-        x
     }
 }

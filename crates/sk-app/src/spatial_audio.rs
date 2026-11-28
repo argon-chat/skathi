@@ -28,33 +28,35 @@ sk_runtime::host_fn!(fn spatial_audio(g, args) {
 });
 
 unsafe fn status(g: *mut c_void, this: u64) -> u64 {
-    let Some(s) = output_status(g, this) else {
-        return throw_type_error(g, "Illegal invocation");
-    };
-    let o = new_object(g, UNDEF);
-    let active = s.objects.as_ref();
-    define(g, o, "active", enc_bool(active.is_some()), 0);
-    define(g, o, "requested", enc_bool(s.objects_requested), 0);
-    let format = active.map_or(NULL, |a| js_string(g, &a.label));
-    define(g, o, "format", format, 0);
-    define(
-        g,
-        o,
-        "maxObjects",
-        enc_i32(active.map_or(0, |a| a.max_objects) as i32),
-        0,
-    );
-    define(
-        g,
-        o,
-        "objectsInUse",
-        enc_i32(active.map_or(0, |a| a.in_use) as i32),
-        0,
-    );
-    let reason = match (&s.objects, &s.refused) {
-        (None, Some(r)) if s.objects_requested => js_string(g, r),
-        _ => NULL,
-    };
-    define(g, o, "reason", reason, 0);
-    o
+    unsafe {
+        let Some(s) = output_status(g, this) else {
+            return throw_type_error(g, "Illegal invocation");
+        };
+        let o = new_object(g, UNDEF);
+        let active = s.objects.as_ref();
+        define(g, o, "active", enc_bool(active.is_some()), 0);
+        define(g, o, "requested", enc_bool(s.objects_requested), 0);
+        let format = active.map_or(NULL, |a| js_string(g, &a.label));
+        define(g, o, "format", format, 0);
+        define(
+            g,
+            o,
+            "maxObjects",
+            enc_i32(active.map_or(0, |a| a.max_objects) as i32),
+            0,
+        );
+        define(
+            g,
+            o,
+            "objectsInUse",
+            enc_i32(active.map_or(0, |a| a.in_use) as i32),
+            0,
+        );
+        let reason = match (&s.objects, &s.refused) {
+            (None, Some(r)) if s.objects_requested => js_string(g, r),
+            _ => NULL,
+        };
+        define(g, o, "reason", reason, 0);
+        o
+    }
 }

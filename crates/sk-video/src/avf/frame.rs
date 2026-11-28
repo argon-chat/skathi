@@ -29,7 +29,7 @@ use objc2_foundation::{NSDictionary, NSNumber, NSString};
 use super::webgpu;
 use crate::backend::{FrameRequest, VideoFrame};
 
-extern "C" {
+unsafe extern "C" {
     fn mach_absolute_time() -> u64;
 }
 

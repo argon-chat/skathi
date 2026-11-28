@@ -69,37 +69,40 @@ host_fn!(fn is_single_file(_g, _args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let class = super::support::class(
-        g,
-        &ClassSpec {
-            name: "Runtime",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[("version", version)],
-            accessors: &[],
-        },
-    );
-    define(g, class.ctor, "isAot", make_fn(g, "isAot", 0, is_aot), 2);
-    define(
-        g,
-        class.ctor,
-        "isSingleFile",
-        make_fn(g, "isSingleFile", 0, is_single_file),
-        2,
-    );
-    let names = new_array(g);
-    for (i, (name, _)) in FEATURES.iter().filter(|(_, on)| *on).enumerate() {
-        set_i(g, names, i as u32, js_string(g, name));
+    unsafe {
+        let class = super::support::class(
+            g,
+            &ClassSpec {
+                name: "Runtime",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[("version", version)],
+                accessors: &[],
+            },
+        );
+        define(g, class.ctor, "isAot", make_fn(g, "isAot", 0, is_aot), 2);
+        define(
+            g,
+            class.ctor,
+            "isSingleFile",
+            make_fn(g, "isSingleFile", 0, is_single_file),
+            2,
+        );
+        let names = new_array(g);
+        for (i, (name, _)) in FEATURES.iter().filter(|(_, on)| *on).enumerate() {
+            set_i(g, names, i as u32, js_string(g, name));
+        }
+        let global = sk_runtime::host::global(g);
+        let construct = get(g, get(g, global, "Reflect"), "construct");
+        let arguments = new_array(g);
+        set_i(g, arguments, 0, names);
+        let features =
+            call(g, construct, UNDEF, &[get(g, global, "Set"), arguments]).unwrap_or(UNDEF);
+        let instance = new_object(g, class.proto);
+        define(g, instance, "features", features, 1 | 4);
+        define(g, std, "Runtime", class.ctor, 0);
+        define(g, std, "runtime", instance, 0);
     }
-    let global = sk_runtime::host::global(g);
-    let construct = get(g, get(g, global, "Reflect"), "construct");
-    let arguments = new_array(g);
-    set_i(g, arguments, 0, names);
-    let features = call(g, construct, UNDEF, &[get(g, global, "Set"), arguments]).unwrap_or(UNDEF);
-    let instance = new_object(g, class.proto);
-    define(g, instance, "features", features, 1 | 4);
-    define(g, std, "Runtime", class.ctor, 0);
-    define(g, std, "runtime", instance, 0);
 }

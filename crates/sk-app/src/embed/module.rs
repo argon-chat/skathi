@@ -119,7 +119,7 @@ pub trait Task<Args>: Send + Sync + 'static {
 }
 
 macro_rules! function {
-    ($n:expr; $($A:ident $a:ident $i:expr),*) => {
+    ($n:expr_2021; $($A:ident $a:ident $i:expr_2021),*) => {
         impl<F, R, $($A,)*> Function<($($A,)*)> for F
         where
             F: Fn($($A),*) -> R + Send + Sync + 'static,

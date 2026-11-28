@@ -694,7 +694,7 @@ mod view {
             alt: bool,
             window: &Window,
             cx: &mut Context<Self>,
-        ) -> impl IntoElement {
+        ) -> impl IntoElement + use<> {
             let action = self.spec.actions[i];
             let copied = action == Action::Copy && self.copied.is_some();
             let label = if copied {
@@ -736,7 +736,7 @@ mod view {
             f: &Fonts,
             window: &Window,
             cx: &mut Context<Self>,
-        ) -> impl IntoElement {
+        ) -> impl IntoElement + use<> {
             let ring = window.last_input_was_keyboard() && self.expander.is_focused(window);
             let chevron = if self.expanded {
                 '\u{E70E}'

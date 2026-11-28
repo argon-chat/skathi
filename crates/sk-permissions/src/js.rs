@@ -23,7 +23,8 @@ fn platform_name() -> &'static str {
 }
 
 unsafe fn advise_unsupported(g: *mut c_void, name: &str) {
-    host::warn_compat(
+    unsafe {
+        host::warn_compat(
         g,
         &format!("appPermissions:{name}"),
         &format!(
@@ -31,10 +32,11 @@ unsafe fn advise_unsupported(g: *mut c_void, name: &str) {
             platform_name()
         ),
     );
+    }
 }
 
 unsafe fn state_str(g: *mut c_void, cap: Capability) -> u64 {
-    js_string(g, super::state_of(cap).as_str())
+    unsafe { js_string(g, super::state_of(cap).as_str()) }
 }
 
 host_fn!(fn platform(g, _args) {
@@ -66,13 +68,15 @@ host_fn!(fn query(g, args) {
 });
 
 unsafe fn row(g: *mut c_void, cap: Capability) -> u64 {
-    let (state, can_request, by_system) = super::describe(cap);
-    let o = new_object(g, UNDEF);
-    define(g, o, "name", js_string(g, cap.web_name()), 0);
-    define(g, o, "state", js_string(g, state.as_str()), 0);
-    define(g, o, "canRequest", enc_bool(can_request), 0);
-    define(g, o, "deniedBySystem", enc_bool(by_system), 0);
-    o
+    unsafe {
+        let (state, can_request, by_system) = super::describe(cap);
+        let o = new_object(g, UNDEF);
+        define(g, o, "name", js_string(g, cap.web_name()), 0);
+        define(g, o, "state", js_string(g, state.as_str()), 0);
+        define(g, o, "canRequest", enc_bool(can_request), 0);
+        define(g, o, "deniedBySystem", enc_bool(by_system), 0);
+        o
+    }
 }
 
 host_fn!(fn list(g, _args) {
@@ -90,24 +94,26 @@ host_fn!(fn list(g, _args) {
 
 /// Asks for `name` and resolves with a fresh read of the state, never optimistically.
 pub unsafe fn request(g: *mut c_void, name: &str) -> u64 {
-    let Some(cap) = Capability::from_web_name(name) else {
-        return host::rejected(g, "TypeError", &format!("{name} is not a permission name"));
-    };
-    let outcome = match api::host() {
-        None => RequestOutcome::Settled(PermissionState::Unsupported),
-        Some(h) => h.request(cap),
-    };
-    match outcome {
-        RequestOutcome::Settled(state) => {
-            if state == PermissionState::Unsupported {
-                advise_unsupported(g, name);
+    unsafe {
+        let Some(cap) = Capability::from_web_name(name) else {
+            return host::rejected(g, "TypeError", &format!("{name} is not a permission name"));
+        };
+        let outcome = match api::host() {
+            None => RequestOutcome::Settled(PermissionState::Unsupported),
+            Some(h) => h.request(cap),
+        };
+        match outcome {
+            RequestOutcome::Settled(state) => {
+                if state == PermissionState::Unsupported {
+                    advise_unsupported(g, name);
+                }
+                host::resolved(g, js_string(g, state.as_str()))
             }
-            host::resolved(g, js_string(g, state.as_str()))
-        }
-        RequestOutcome::Pending(token) => {
-            let (p, s) = host::deferred(g);
-            PENDING.with(|m| m.borrow_mut().entry(token).or_default().push(s));
-            p
+            RequestOutcome::Pending(token) => {
+                let (p, s) = host::deferred(g);
+                PENDING.with(|m| m.borrow_mut().entry(token).or_default().push(s));
+                p
+            }
         }
     }
 }
@@ -133,17 +139,19 @@ host_fn!(fn on_status_change(g, args) {
 
 /// Resolves the requests that settled; true when any JS ran.
 pub(crate) unsafe fn settle(g: *mut c_void, settled: Vec<(u32, PermissionState)>) -> bool {
-    let mut ran = false;
-    for (token, state) in settled {
-        let Some(waiters) = PENDING.with(|m| m.borrow_mut().remove(&token)) else {
-            continue;
-        };
-        for s in waiters {
-            s.resolve(g, js_string(g, state.as_str()));
-            ran = true;
+    unsafe {
+        let mut ran = false;
+        for (token, state) in settled {
+            let Some(waiters) = PENDING.with(|m| m.borrow_mut().remove(&token)) else {
+                continue;
+            };
+            for s in waiters {
+                s.resolve(g, js_string(g, state.as_str()));
+                ran = true;
+            }
         }
+        ran
     }
-    ran
 }
 
 pub(crate) fn installed() -> bool {
@@ -151,34 +159,36 @@ pub(crate) fn installed() -> bool {
 }
 
 pub(crate) unsafe fn install(g: *mut c_void) {
-    let event_target = get(g, get(g, host::global(g), "EventTarget"), "prototype");
-    let obj = host::install_object(g, "__SK_PERMISSIONS__", event_target);
-    OBJ.with(|o| o.set(obj));
-    host::getter(g, obj, "platform", platform);
-    host::getter(g, obj, "names", names);
-    host::method(g, obj, "query", 1, query);
-    host::method(g, obj, "list", 0, list);
-    host::method(g, obj, "request", 1, request_fn);
-    // One `change` stream from the standard objects: a second native subscription would race for the same queue.
-    let listener = make_fn(g, "", 1, on_status_change);
-    for cap in Capability::ALL.iter().copied() {
-        let Some(status) = api::status_object(g, cap) else {
-            continue;
-        };
-        let Ok(bound) = call(
-            g,
-            get(g, listener, "bind"),
-            listener,
-            &[UNDEF, js_string(g, cap.web_name())],
-        ) else {
-            continue;
-        };
-        let _ = call(
-            g,
-            get(g, status, "addEventListener"),
-            status,
-            &[js_string(g, "change"), bound],
-        );
+    unsafe {
+        let event_target = get(g, get(g, host::global(g), "EventTarget"), "prototype");
+        let obj = host::install_object(g, "__SK_PERMISSIONS__", event_target);
+        OBJ.with(|o| o.set(obj));
+        host::getter(g, obj, "platform", platform);
+        host::getter(g, obj, "names", names);
+        host::method(g, obj, "query", 1, query);
+        host::method(g, obj, "list", 0, list);
+        host::method(g, obj, "request", 1, request_fn);
+        // One `change` stream from the standard objects: a second native subscription would race for the same queue.
+        let listener = make_fn(g, "", 1, on_status_change);
+        for cap in Capability::ALL.iter().copied() {
+            let Some(status) = api::status_object(g, cap) else {
+                continue;
+            };
+            let Ok(bound) = call(
+                g,
+                get(g, listener, "bind"),
+                listener,
+                &[UNDEF, js_string(g, cap.web_name())],
+            ) else {
+                continue;
+            };
+            let _ = call(
+                g,
+                get(g, status, "addEventListener"),
+                status,
+                &[js_string(g, "change"), bound],
+            );
+        }
     }
 }
 

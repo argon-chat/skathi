@@ -19,14 +19,14 @@ type Convolve = unsafe extern "C" fn(
 );
 
 // libvpx's symbols are `vnvpx_`-prefixed (VENDOR.md, "Symbol prefix").
-extern "C" {
+unsafe extern "C" {
     #[link_name = "vnvpx_vp9_filter_kernels"]
     static vp9_filter_kernels: [*const [i16; 8]; 5];
 }
 
 macro_rules! convolves {
     ($($name:ident),* $(,)?) => {
-        extern "C" {
+        unsafe extern "C" {
             $(
                 #[link_name = concat!("vnvpx_", stringify!($name))]
                 fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
@@ -45,7 +45,7 @@ convolves!(
 
 macro_rules! helpers {
     ($($name:ident),* $(,)?) => {
-        extern "C" {
+        unsafe extern "C" {
             $(
                 #[link_name = concat!("vnvpx_", stringify!($name))]
                 fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, h: u32, f: *const i16);
@@ -420,7 +420,7 @@ fn every_simd_convolution_matches_libvpx_c() {
 /// every SIMD one is asm-only, so they are C at every level here.
 macro_rules! dispatch_table {
     (variants: $($variant:ident),* ; table: $($slot:ident: $c:ident, $sse2:ident, $ssse3:ident, $avx2:ident;)*) => {
-        extern "C" {
+        unsafe extern "C" {
             $(
                 #[link_name = concat!("vnvpx_", stringify!($slot))]
                 static mut $slot: *const c_void;
@@ -428,14 +428,14 @@ macro_rules! dispatch_table {
         }
         #[allow(clashing_extern_declarations)] // only their addresses are taken
         mod variants {
-            extern "C" {
+            unsafe extern "C" {
                 $(
                     #[link_name = concat!("vnvpx_", stringify!($variant))]
                     pub fn $variant();
                 )*
             }
         }
-        unsafe fn dispatch(level: &str) {
+        unsafe fn dispatch(level: &str) { unsafe {
             $(
                 let f: unsafe extern "C" fn() = match level {
                     "c" => variants::$c,
@@ -446,7 +446,7 @@ macro_rules! dispatch_table {
                 };
                 *std::ptr::addr_of_mut!($slot) = f as *const c_void;
             )*
-        }
+        }}
     };
 }
 

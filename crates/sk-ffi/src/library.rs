@@ -94,33 +94,39 @@ mod sys {
     };
 
     pub unsafe fn open_system(name: &str) -> Result<usize, String> {
-        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
-        let handle = LoadLibraryExW(
-            wide.as_ptr(),
-            std::ptr::null_mut(),
-            LOAD_LIBRARY_SEARCH_SYSTEM32,
-        );
-        if handle.is_null() {
-            return Err(std::io::Error::last_os_error().to_string());
+        unsafe {
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            let handle = LoadLibraryExW(
+                wide.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_SYSTEM32,
+            );
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            Ok(handle as usize)
         }
-        Ok(handle as usize)
     }
 
     pub unsafe fn open(path: &Path) -> Result<usize, String> {
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-        // The library's own folder first, so the DLLs shipped beside it are found.
-        let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
-        let handle = LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), flags);
-        if handle.is_null() {
-            return Err(std::io::Error::last_os_error().to_string());
+        unsafe {
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+            // The library's own folder first, so the DLLs shipped beside it are found.
+            let flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+            let handle = LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), flags);
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            Ok(handle as usize)
         }
-        Ok(handle as usize)
     }
 
     pub unsafe fn symbol(handle: usize, name: &CStr) -> *const () {
-        match GetProcAddress(handle as _, name.as_ptr().cast()) {
-            Some(function) => function as *const (),
-            None => std::ptr::null(),
+        unsafe {
+            match GetProcAddress(handle as _, name.as_ptr().cast()) {
+                Some(function) => function as *const (),
+                None => std::ptr::null(),
+            }
         }
     }
 }
@@ -132,25 +138,27 @@ mod sys {
     use std::path::Path;
 
     pub unsafe fn open_system(name: &str) -> Result<usize, String> {
-        open(Path::new(name))
+        unsafe { open(Path::new(name)) }
     }
 
     pub unsafe fn open(path: &Path) -> Result<usize, String> {
-        let c_path = CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| "the path has a NUL in it".to_string())?;
-        let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
-        if handle.is_null() {
-            let message = libc::dlerror();
-            return Err(if message.is_null() {
-                "dlopen failed".into()
-            } else {
-                CStr::from_ptr(message).to_string_lossy().into_owned()
-            });
+        unsafe {
+            let c_path = CString::new(path.as_os_str().as_bytes())
+                .map_err(|_| "the path has a NUL in it".to_string())?;
+            let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+            if handle.is_null() {
+                let message = libc::dlerror();
+                return Err(if message.is_null() {
+                    "dlopen failed".into()
+                } else {
+                    CStr::from_ptr(message).to_string_lossy().into_owned()
+                });
+            }
+            Ok(handle as usize)
         }
-        Ok(handle as usize)
     }
 
     pub unsafe fn symbol(handle: usize, name: &CStr) -> *const () {
-        libc::dlsym(handle as *mut _, name.as_ptr()) as *const ()
+        unsafe { libc::dlsym(handle as *mut _, name.as_ptr()) as *const () }
     }
 }

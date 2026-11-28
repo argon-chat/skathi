@@ -1106,7 +1106,7 @@ enum Bucket {
 }
 
 macro_rules! compound_key {
-    ($iter:expr) => {{
+    ($iter:expr_2021) => {{
         let mut id: Option<Box<str>> = None;
         let mut class: Option<Box<str>> = None;
         let mut tag: Option<Box<str>> = None;
@@ -2563,7 +2563,7 @@ impl Engine {
         let mut rung_outline = [mapper::OutlinePatch::default(); STATE_RUNGS];
         let mut held_decoration: Option<mapper::DecorationPatch> = None;
         macro_rules! over_state_buckets {
-            ($half:expr) => {{
+            ($half:expr_2021) => {{
                 let rungs = [
                     (any_active, &mut active),
                     (any_hover, &mut hover),
@@ -2610,7 +2610,7 @@ impl Engine {
         // A state rule also wins, against the earlier rules there, in the buckets applied after its
         // own when their states hold together.
         macro_rules! over_later_buckets {
-            ($half:expr, $home:expr, $need:expr) => {{
+            ($half:expr_2021, $home:expr_2021, $need:expr_2021) => {{
                 let (half, home, need): (Half<'_>, Slot, Need) = ($half, $home, $need);
                 let rungs = [
                     (any_active, &mut active),
@@ -3563,7 +3563,7 @@ fn matching_group_ancestors<'a, D: MatchDom + 'a>(
     node: &D,
     selector: &'a Selector<'static>,
     offset: usize,
-) -> impl Iterator<Item = u64> + 'a {
+) -> impl Iterator<Item = u64> + 'a + use<'a, D> {
     let ancestors = std::iter::successors(node.parent(), |n| n.parent());
     // A corrupt parent chain must not hang the cascade (same bound the tree's own ancestor walk
     // uses).

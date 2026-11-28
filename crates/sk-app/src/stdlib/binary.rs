@@ -116,18 +116,20 @@ impl Scalar {
     }
 
     unsafe fn to_js(self, g: *mut c_void, bits: u64) -> Js<u64> {
-        Ok(match self {
-            Scalar::U8 => enc_i32(bits as u8 as i32),
-            Scalar::I8 => enc_i32(bits as u8 as i8 as i32),
-            Scalar::U16 => enc_i32(bits as u16 as i32),
-            Scalar::I16 => enc_i32(bits as u16 as i16 as i32),
-            Scalar::U32 => uint(bits as u32),
-            Scalar::I32 => enc_i32(bits as u32 as i32),
-            Scalar::U64 => big_uint(g, bits)?,
-            Scalar::I64 => big_int(g, bits as i64)?,
-            Scalar::F32 => enc_f64(f32::from_bits(bits as u32) as f64),
-            Scalar::F64 => enc_f64(f64::from_bits(bits)),
-        })
+        unsafe {
+            Ok(match self {
+                Scalar::U8 => enc_i32(bits as u8 as i32),
+                Scalar::I8 => enc_i32(bits as u8 as i8 as i32),
+                Scalar::U16 => enc_i32(bits as u16 as i32),
+                Scalar::I16 => enc_i32(bits as u16 as i16 as i32),
+                Scalar::U32 => uint(bits as u32),
+                Scalar::I32 => enc_i32(bits as u32 as i32),
+                Scalar::U64 => big_uint(g, bits)?,
+                Scalar::I64 => big_int(g, bits as i64)?,
+                Scalar::F32 => enc_f64(f32::from_bits(bits as u32) as f64),
+                Scalar::F64 => enc_f64(f64::from_bits(bits)),
+            })
+        }
     }
 
     fn bits_of(self, n: f64) -> u64 {
@@ -141,71 +143,75 @@ impl Scalar {
 
 /// The numbers of an array or of a typed array that holds numbers.
 pub(super) unsafe fn numbers(g: *mut c_void, v: u64, what: &str) -> Js<Vec<f64>> {
-    if let Some(view) = typed_view(g, v) {
-        let bytes = view.bytes();
-        macro_rules! each {
-            ($t:ty) => {
-                bytes
-                    .chunks_exact(std::mem::size_of::<$t>())
-                    .map(|c| <$t>::from_ne_bytes(c.try_into().unwrap()) as f64)
-                    .collect()
+    unsafe {
+        if let Some(view) = typed_view(g, v) {
+            let bytes = view.bytes();
+            macro_rules! each {
+                ($t:ty) => {
+                    bytes
+                        .chunks_exact(std::mem::size_of::<$t>())
+                        .map(|c| <$t>::from_ne_bytes(c.try_into().unwrap()) as f64)
+                        .collect()
+                };
+            }
+            let out: Option<Vec<f64>> = match view.kind {
+                1 => Some(each!(i8)),
+                2 | 3 => Some(each!(u8)),
+                4 => Some(each!(i16)),
+                5 => Some(each!(u16)),
+                6 => Some(each!(i32)),
+                7 => Some(each!(u32)),
+                8 => Some(each!(f32)),
+                9 => Some(each!(f64)),
+                _ => None,
             };
+            if let Some(out) = out {
+                return Ok(out);
+            }
         }
-        let out: Option<Vec<f64>> = match view.kind {
-            1 => Some(each!(i8)),
-            2 | 3 => Some(each!(u8)),
-            4 => Some(each!(i16)),
-            5 => Some(each!(u16)),
-            6 => Some(each!(i32)),
-            7 => Some(each!(u32)),
-            8 => Some(each!(f32)),
-            9 => Some(each!(f64)),
-            _ => None,
-        };
-        if let Some(out) = out {
-            return Ok(out);
+        if !is_cell(v) {
+            return type_error(g, &format!("{what} must be an array of numbers"));
         }
+        let length = count(g, get(g, v, "length"), &format!("the length of {what}"))?;
+        let mut out = Vec::with_capacity(length.min(1 << 20));
+        for i in 0..length {
+            out.push(number(g, get_i(g, v, i as u32))?);
+        }
+        Ok(out)
     }
-    if !is_cell(v) {
-        return type_error(g, &format!("{what} must be an array of numbers"));
-    }
-    let length = count(g, get(g, v, "length"), &format!("the length of {what}"))?;
-    let mut out = Vec::with_capacity(length.min(1 << 20));
-    for i in 0..length {
-        out.push(number(g, get_i(g, v, i as u32))?);
-    }
-    Ok(out)
 }
 
 /// The fields of a struct layout, in the object's own key order.
 unsafe fn layout(g: *mut c_void, v: u64, what: &str) -> Js<Vec<(String, Scalar)>> {
-    if !is_cell(v) {
-        return type_error(
-            g,
-            &format!("{what}: the layout must be an object of field types"),
-        );
-    }
-    let mut keys = UNDEF;
-    if glue::rjs_own_keys(g, v, &mut keys) != 0 {
-        return Err(Thrown);
-    }
-    let mut fields = Vec::new();
-    for i in 0..array_len(g, keys) {
-        let Some(key) = read_string(g, get_i(g, keys, i)) else {
-            continue;
-        };
-        let name = read_string(g, get(g, v, &key)).unwrap_or_default();
-        let Some(scalar) = Scalar::parse(&name) else {
+    unsafe {
+        if !is_cell(v) {
             return type_error(
+                g,
+                &format!("{what}: the layout must be an object of field types"),
+            );
+        }
+        let mut keys = UNDEF;
+        if glue::rjs_own_keys(g, v, &mut keys) != 0 {
+            return Err(Thrown);
+        }
+        let mut fields = Vec::new();
+        for i in 0..array_len(g, keys) {
+            let Some(key) = read_string(g, get_i(g, keys, i)) else {
+                continue;
+            };
+            let name = read_string(g, get(g, v, &key)).unwrap_or_default();
+            let Some(scalar) = Scalar::parse(&name) else {
+                return type_error(
                 g,
                 &format!(
                     "{what}: field \"{key}\" has the type \"{name}\"; use u8, i8, u16, i16, u32, i32, u64, i64, f32 or f64"
                 ),
             );
-        };
-        fields.push((key, scalar));
+            };
+            fields.push((key, scalar));
+        }
+        Ok(fields)
     }
-    Ok(fields)
 }
 
 struct Reader {
@@ -216,34 +222,39 @@ struct Reader {
 static READER: OnceLock<usize> = OnceLock::new();
 
 unsafe fn reader<'a>(g: *mut c_void, this: u64) -> Js<(&'a mut Reader, u64, View)> {
-    let Some(state) = host_data::<Reader>(g, host_class::<Reader>(&READER, "BinaryReader"), this)
-    else {
-        return type_error(g, "this is not a BinaryReader");
-    };
-    let data_view = get(g, this, "view");
-    let native = slot_get(g, this, SOURCE);
-    if native != UNDEF {
-        super::memory::check_current(g, native, get(g, data_view, "buffer"), &"BinaryReader")?;
-    }
-    match typed_view(g, data_view) {
-        Some(view) => Ok((state, data_view, view)),
-        None => Err(Thrown),
+    unsafe {
+        let Some(state) =
+            host_data::<Reader>(g, host_class::<Reader>(&READER, "BinaryReader"), this)
+        else {
+            return type_error(g, "this is not a BinaryReader");
+        };
+        let data_view = get(g, this, "view");
+        let native = slot_get(g, this, SOURCE);
+        if native != UNDEF {
+            super::memory::check_current(g, native, get(g, data_view, "buffer"), &"BinaryReader")?;
+        }
+        match typed_view(g, data_view) {
+            Some(view) => Ok((state, data_view, view)),
+            None => Err(Thrown),
+        }
     }
 }
 
 /// The next `n` bytes, with the cursor moved past them.
 unsafe fn take<'a>(g: *mut c_void, this: u64, n: usize, what: &str) -> Js<(&'a [u8], bool)> {
-    let (state, _, view) = reader(g, this)?;
-    let remaining = view.len.saturating_sub(state.position);
-    if n > remaining {
-        return range_error(
-            g,
-            &format!("BinaryReader.{what}: {n} bytes wanted, {remaining} remain"),
-        );
+    unsafe {
+        let (state, _, view) = reader(g, this)?;
+        let remaining = view.len.saturating_sub(state.position);
+        if n > remaining {
+            return range_error(
+                g,
+                &format!("BinaryReader.{what}: {n} bytes wanted, {remaining} remain"),
+            );
+        }
+        let bytes = &view.bytes()[state.position..state.position + n];
+        state.position += n;
+        Ok((bytes, state.little))
     }
-    let bytes = &view.bytes()[state.position..state.position + n];
-    state.position += n;
-    Ok((bytes, state.little))
 }
 
 std_fn!(fn reader_new(g, args) {
@@ -400,46 +411,52 @@ struct Writer {
 static WRITER: OnceLock<usize> = OnceLock::new();
 
 unsafe fn writer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Writer> {
-    match host_data::<Writer>(g, host_class::<Writer>(&WRITER, "BinaryWriter"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a BinaryWriter"),
+    unsafe {
+        match host_data::<Writer>(g, host_class::<Writer>(&WRITER, "BinaryWriter"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a BinaryWriter"),
+        }
     }
 }
 
 unsafe fn array_buffer(g: *mut c_void, capacity: usize) -> Js<u64> {
-    construct(
-        g,
-        get(g, glue::rjs_global(g), "ArrayBuffer"),
-        &[enc_f64(capacity as f64)],
-    )
+    unsafe {
+        construct(
+            g,
+            get(g, glue::rjs_global(g), "ArrayBuffer"),
+            &[enc_f64(capacity as f64)],
+        )
+    }
 }
 
 unsafe fn append(g: *mut c_void, this: u64, bytes: &[u8]) -> Js<()> {
-    let state = writer(g, this)?;
-    if bytes.is_empty() {
-        return Ok(());
+    unsafe {
+        let state = writer(g, this)?;
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let mut buffer = slot_get(g, this, "skathi.buffer");
+        let capacity = buffer_source(g, buffer).map_or(0, |b| b.len);
+        let needed = state.len + bytes.len();
+        if needed > capacity {
+            let grown = needed.max(capacity * 2).max(64);
+            buffer = call(
+                g,
+                get(g, buffer, "transfer"),
+                buffer,
+                &[enc_f64(grown as f64)],
+            )
+            .map_err(|_| Thrown)?;
+            slot_set(g, this, "skathi.buffer", buffer);
+        }
+        slot_set(g, this, "skathi.view", UNDEF);
+        let Some(target) = buffer_source(g, buffer) else {
+            return Err(Thrown);
+        };
+        target.bytes_mut()[state.len..needed].copy_from_slice(bytes);
+        state.len = needed;
+        Ok(())
     }
-    let mut buffer = slot_get(g, this, "skathi.buffer");
-    let capacity = buffer_source(g, buffer).map_or(0, |b| b.len);
-    let needed = state.len + bytes.len();
-    if needed > capacity {
-        let grown = needed.max(capacity * 2).max(64);
-        buffer = call(
-            g,
-            get(g, buffer, "transfer"),
-            buffer,
-            &[enc_f64(grown as f64)],
-        )
-        .map_err(|_| Thrown)?;
-        slot_set(g, this, "skathi.buffer", buffer);
-    }
-    slot_set(g, this, "skathi.view", UNDEF);
-    let Some(target) = buffer_source(g, buffer) else {
-        return Err(Thrown);
-    };
-    target.bytes_mut()[state.len..needed].copy_from_slice(bytes);
-    state.len = needed;
-    Ok(())
 }
 
 std_fn!(fn writer_new(g, args) {
@@ -544,13 +561,15 @@ struct BitReader {
 static BIT_READER: OnceLock<usize> = OnceLock::new();
 
 unsafe fn bit_reader<'a>(g: *mut c_void, this: u64) -> Js<(&'a mut BitReader, &'a [u8])> {
-    let class = host_class::<BitReader>(&BIT_READER, "BitReader");
-    let Some(state) = host_data::<BitReader>(g, class, this) else {
-        return type_error(g, "this is not a BitReader");
-    };
-    match typed_view(g, slot_get(g, this, "skathi.bytes")) {
-        Some(view) => Ok((state, view.bytes())),
-        None => Err(Thrown),
+    unsafe {
+        let class = host_class::<BitReader>(&BIT_READER, "BitReader");
+        let Some(state) = host_data::<BitReader>(g, class, this) else {
+            return type_error(g, "this is not a BitReader");
+        };
+        match typed_view(g, slot_get(g, this, "skathi.bytes")) {
+            Some(view) => Ok((state, view.bytes())),
+            None => Err(Thrown),
+        }
     }
 }
 
@@ -570,15 +589,17 @@ fn read_bits(state: &mut BitReader, bytes: &[u8], bits: usize) -> u32 {
 }
 
 unsafe fn width(g: *mut c_void, v: u64, what: &str) -> Js<usize> {
-    let bits = count(g, v, what)?;
-    if !(1..=32).contains(&bits) {
-        return range_error(g, &format!("{what} must be from 1 to 32"));
+    unsafe {
+        let bits = count(g, v, what)?;
+        if !(1..=32).contains(&bits) {
+            return range_error(g, &format!("{what} must be from 1 to 32"));
+        }
+        Ok(bits)
     }
-    Ok(bits)
 }
 
 unsafe fn order(g: *mut c_void, v: u64, what: &str) -> Js<bool> {
-    Ok(choice(g, v, &["msb", "lsb"], 0, what)? == 0)
+    unsafe { Ok(choice(g, v, &["msb", "lsb"], 0, what)? == 0) }
 }
 
 std_fn!(fn bit_reader_new(g, args) {
@@ -635,10 +656,12 @@ struct BitWriter {
 static BIT_WRITER: OnceLock<usize> = OnceLock::new();
 
 unsafe fn bit_writer<'a>(g: *mut c_void, this: u64) -> Js<&'a mut BitWriter> {
-    let class = host_class::<BitWriter>(&BIT_WRITER, "BitWriter");
-    match host_data::<BitWriter>(g, class, this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a BitWriter"),
+    unsafe {
+        let class = host_class::<BitWriter>(&BIT_WRITER, "BitWriter");
+        match host_data::<BitWriter>(g, class, this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a BitWriter"),
+        }
     }
 }
 
@@ -693,20 +716,24 @@ std_fn!(fn bit_writer_finish(g, args) {
 });
 
 unsafe fn swap(g: *mut c_void, v: u64, size: usize) -> Js<u64> {
-    match typed_view(g, v).filter(|view| view.kind != TA_DATA_VIEW && view.element_size() == size) {
-        Some(view) => {
-            view.bytes_mut()
-                .chunks_exact_mut(size)
-                .for_each(<[u8]>::reverse);
-            Ok(UNDEF)
-        }
-        None => type_error(
-            g,
-            &format!(
-                "Endian.swap{}: the array must be a typed array of {size}-byte elements",
-                size * 8
+    unsafe {
+        match typed_view(g, v)
+            .filter(|view| view.kind != TA_DATA_VIEW && view.element_size() == size)
+        {
+            Some(view) => {
+                view.bytes_mut()
+                    .chunks_exact_mut(size)
+                    .for_each(<[u8]>::reverse);
+                Ok(UNDEF)
+            }
+            None => type_error(
+                g,
+                &format!(
+                    "Endian.swap{}: the array must be a typed array of {size}-byte elements",
+                    size * 8
+                ),
             ),
-        ),
+        }
     }
 }
 
@@ -738,20 +765,22 @@ fn leb128_size(mut value: u64) -> usize {
 }
 
 unsafe fn var_int(g: *mut c_void, n: f64, zigzag: bool, what: &str) -> Js<u64> {
-    if n.fract() != 0.0 || n.abs() > SAFE || (!zigzag && n < 0.0) {
-        let wanted = if zigzag {
-            "an integer"
+    unsafe {
+        if n.fract() != 0.0 || n.abs() > SAFE || (!zigzag && n < 0.0) {
+            let wanted = if zigzag {
+                "an integer"
+            } else {
+                "a non-negative integer; pass zigzag for signed ones"
+            };
+            return range_error(g, &format!("{what}: {n} is not {wanted} within 2^53"));
+        }
+        let value = n as i64;
+        Ok(if zigzag {
+            ((value << 1) ^ (value >> 63)) as u64
         } else {
-            "a non-negative integer; pass zigzag for signed ones"
-        };
-        return range_error(g, &format!("{what}: {n} is not {wanted} within 2^53"));
+            value as u64
+        })
     }
-    let value = n as i64;
-    Ok(if zigzag {
-        ((value << 1) ^ (value >> 63)) as u64
-    } else {
-        value as u64
-    })
 }
 
 std_fn!(fn var_int_encode_all(g, args) {
@@ -890,9 +919,11 @@ std_fn!(fn crc32_create(g, _args) {
 });
 
 unsafe fn crc32_state<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Crc32> {
-    match host_data::<Crc32>(g, host_class::<Crc32>(&CRC32, "CRC32Stream"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a CRC32 stream"),
+    unsafe {
+        match host_data::<Crc32>(g, host_class::<Crc32>(&CRC32, "CRC32Stream"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a CRC32 stream"),
+        }
     }
 }
 
@@ -921,9 +952,11 @@ std_fn!(fn crc64_create(g, args) {
 });
 
 unsafe fn crc64_state<'a>(g: *mut c_void, this: u64) -> Js<&'a mut Crc64> {
-    match host_data::<Crc64>(g, host_class::<Crc64>(&CRC64, "CRC64Stream"), this) {
-        Some(state) => Ok(state),
-        None => type_error(g, "this is not a CRC64 stream"),
+    unsafe {
+        match host_data::<Crc64>(g, host_class::<Crc64>(&CRC64, "CRC64Stream"), this) {
+            Some(state) => Ok(state),
+            None => type_error(g, "this is not a CRC64 stream"),
+        }
     }
 }
 
@@ -939,145 +972,147 @@ std_fn!(fn crc64_stream_digest(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let reader = support::class(
-        g,
-        &ClassSpec {
-            name: "BinaryReader",
-            arity: 1,
-            construct: Some(reader_new),
-            parent_proto: 0,
-            methods: &[
-                ("readArray", 2, reader_read_array),
-                ("readStruct", 1, reader_read_struct),
-                ("bytes", 1, reader_bytes),
-                ("string", 1, reader_string),
-                ("varUints", 1, reader_var_uints),
-            ],
-            getters: &[("remaining", reader_remaining)],
-            accessors: &[("position", reader_position, reader_set_position)],
-        },
-    );
-    let writer = support::class(
-        g,
-        &ClassSpec {
-            name: "BinaryWriter",
-            arity: 0,
-            construct: Some(writer_new),
-            parent_proto: 0,
-            methods: &[
-                ("writeAll", 2, writer_write_all),
-                ("writeStruct", 2, writer_write_struct),
-                ("bytes", 1, writer_bytes),
-                ("finish", 0, writer_finish),
-            ],
-            getters: &[("view", writer_view), ("length", writer_length)],
-            accessors: &[],
-        },
-    );
-    let bit_reader = support::class(
-        g,
-        &ClassSpec {
-            name: "BitReader",
-            arity: 1,
-            construct: Some(bit_reader_new),
-            parent_proto: 0,
-            methods: &[
-                ("read", 1, bit_reader_read),
-                ("readMany", 2, bit_reader_read_many),
-                ("align", 0, bit_reader_align),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let bit_writer = support::class(
-        g,
-        &ClassSpec {
-            name: "BitWriter",
-            arity: 0,
-            construct: Some(bit_writer_new),
-            parent_proto: 0,
-            methods: &[
-                ("write", 2, bit_writer_write),
-                ("writeMany", 2, bit_writer_write_many),
-                ("finish", 0, bit_writer_finish),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    support::class(
-        g,
-        &ClassSpec {
-            name: "CRC32Stream",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("update", 1, crc32_stream_update),
-                ("digest", 0, crc32_stream_digest),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    support::class(
-        g,
-        &ClassSpec {
-            name: "CRC64Stream",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[
-                ("update", 1, crc64_stream_update),
-                ("digest", 0, crc64_stream_digest),
-            ],
-            getters: &[],
-            accessors: &[],
-        },
-    );
+    unsafe {
+        let reader = support::class(
+            g,
+            &ClassSpec {
+                name: "BinaryReader",
+                arity: 1,
+                construct: Some(reader_new),
+                parent_proto: 0,
+                methods: &[
+                    ("readArray", 2, reader_read_array),
+                    ("readStruct", 1, reader_read_struct),
+                    ("bytes", 1, reader_bytes),
+                    ("string", 1, reader_string),
+                    ("varUints", 1, reader_var_uints),
+                ],
+                getters: &[("remaining", reader_remaining)],
+                accessors: &[("position", reader_position, reader_set_position)],
+            },
+        );
+        let writer = support::class(
+            g,
+            &ClassSpec {
+                name: "BinaryWriter",
+                arity: 0,
+                construct: Some(writer_new),
+                parent_proto: 0,
+                methods: &[
+                    ("writeAll", 2, writer_write_all),
+                    ("writeStruct", 2, writer_write_struct),
+                    ("bytes", 1, writer_bytes),
+                    ("finish", 0, writer_finish),
+                ],
+                getters: &[("view", writer_view), ("length", writer_length)],
+                accessors: &[],
+            },
+        );
+        let bit_reader = support::class(
+            g,
+            &ClassSpec {
+                name: "BitReader",
+                arity: 1,
+                construct: Some(bit_reader_new),
+                parent_proto: 0,
+                methods: &[
+                    ("read", 1, bit_reader_read),
+                    ("readMany", 2, bit_reader_read_many),
+                    ("align", 0, bit_reader_align),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        let bit_writer = support::class(
+            g,
+            &ClassSpec {
+                name: "BitWriter",
+                arity: 0,
+                construct: Some(bit_writer_new),
+                parent_proto: 0,
+                methods: &[
+                    ("write", 2, bit_writer_write),
+                    ("writeMany", 2, bit_writer_write_many),
+                    ("finish", 0, bit_writer_finish),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        support::class(
+            g,
+            &ClassSpec {
+                name: "CRC32Stream",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("update", 1, crc32_stream_update),
+                    ("digest", 0, crc32_stream_digest),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        support::class(
+            g,
+            &ClassSpec {
+                name: "CRC64Stream",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[
+                    ("update", 1, crc64_stream_update),
+                    ("digest", 0, crc64_stream_digest),
+                ],
+                getters: &[],
+                accessors: &[],
+            },
+        );
 
-    let endian = namespace(
-        g,
-        "Endian",
-        &[
-            ("swap16", 1, endian_swap16),
-            ("swap32", 1, endian_swap32),
-            ("swap64", 1, endian_swap64),
-        ],
-    );
-    let native = if NATIVE_LITTLE { "little" } else { "big" };
-    define(g, endian, "native", js_string(g, native), 1 | 4);
-    let var_int = namespace(
-        g,
-        "VarInt",
-        &[
-            ("encodeAll", 1, var_int_encode_all),
-            ("decodeAll", 1, var_int_decode_all),
-            ("size", 1, var_int_size),
-        ],
-    );
-    let crc32 = namespace(
-        g,
-        "CRC32",
-        &[("compute", 1, crc32_compute), ("create", 0, crc32_create)],
-    );
-    let crc64 = namespace(
-        g,
-        "CRC64",
-        &[("compute", 1, crc64_compute), ("create", 0, crc64_create)],
-    );
+        let endian = namespace(
+            g,
+            "Endian",
+            &[
+                ("swap16", 1, endian_swap16),
+                ("swap32", 1, endian_swap32),
+                ("swap64", 1, endian_swap64),
+            ],
+        );
+        let native = if NATIVE_LITTLE { "little" } else { "big" };
+        define(g, endian, "native", js_string(g, native), 1 | 4);
+        let var_int = namespace(
+            g,
+            "VarInt",
+            &[
+                ("encodeAll", 1, var_int_encode_all),
+                ("decodeAll", 1, var_int_decode_all),
+                ("size", 1, var_int_size),
+            ],
+        );
+        let crc32 = namespace(
+            g,
+            "CRC32",
+            &[("compute", 1, crc32_compute), ("create", 0, crc32_create)],
+        );
+        let crc64 = namespace(
+            g,
+            "CRC64",
+            &[("compute", 1, crc64_compute), ("create", 0, crc64_create)],
+        );
 
-    let module = new_object(g, UNDEF);
-    define(g, module, "BinaryReader", reader.ctor, 0);
-    define(g, module, "BinaryWriter", writer.ctor, 0);
-    define(g, module, "BitReader", bit_reader.ctor, 0);
-    define(g, module, "BitWriter", bit_writer.ctor, 0);
-    define(g, module, "Endian", endian, 0);
-    define(g, module, "VarInt", var_int, 0);
-    define(g, module, "CRC32", crc32, 0);
-    define(g, module, "CRC64", crc64, 0);
-    define(g, std, "binary", module, 0);
+        let module = new_object(g, UNDEF);
+        define(g, module, "BinaryReader", reader.ctor, 0);
+        define(g, module, "BinaryWriter", writer.ctor, 0);
+        define(g, module, "BitReader", bit_reader.ctor, 0);
+        define(g, module, "BitWriter", bit_writer.ctor, 0);
+        define(g, module, "Endian", endian, 0);
+        define(g, module, "VarInt", var_int, 0);
+        define(g, module, "CRC32", crc32, 0);
+        define(g, module, "CRC64", crc64, 0);
+        define(g, std, "binary", module, 0);
+    }
 }
 
 #[cfg(test)]

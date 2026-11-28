@@ -50,75 +50,83 @@ fn class() -> JSClassRef {
 }
 
 unsafe fn params<'a>(g: *mut c_void, v: u64) -> Option<&'a mut Params> {
-    host_data::<Params>(g, class(), v)
+    unsafe { host_data::<Params>(g, class(), v) }
 }
 
 unsafe fn strings(g: *mut c_void, v: &Json) -> u64 {
-    let items: Vec<&str> = v
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Json::as_str)
-        .collect();
-    host::frozen_strings(g, &items)
+    unsafe {
+        let items: Vec<&str> = v
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        host::frozen_strings(g, &items)
+    }
 }
 
 unsafe fn make_params(g: *mut c_void, url: Option<String>, handles: &Json) -> u64 {
-    let (proto, slot) = STATE.with(|s| {
-        let s = s.borrow();
-        (s.params_proto, s.s_files)
-    });
-    let files = new_array(g);
-    let mut n = 0;
-    for wire in handles
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|w| w["h"].is_u64())
-    {
-        set_i(g, files, n, super::fsa::from_wire(g, wire));
-        n += 1;
+    unsafe {
+        let (proto, slot) = STATE.with(|s| {
+            let s = s.borrow();
+            (s.params_proto, s.s_files)
+        });
+        let files = new_array(g);
+        let mut n = 0;
+        for wire in handles
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|w| w["h"].is_u64())
+        {
+            set_i(g, files, n, super::fsa::from_wire(g, wire));
+            n += 1;
+        }
+        let object = get(g, host::global(g), "Object");
+        let files = call(g, get(g, object, "freeze"), object, &[files]).unwrap_or(files);
+        let obj = host_create(g, class(), proto, Params { url });
+        glue::rjs_define(g, obj, slot as *mut c_void, files, 0);
+        obj
     }
-    let object = get(g, host::global(g), "Object");
-    let files = call(g, get(g, object, "freeze"), object, &[files]).unwrap_or(files);
-    let obj = host_create(g, class(), proto, Params { url });
-    glue::rjs_define(g, obj, slot as *mut c_void, files, 0);
-    obj
 }
 
 unsafe fn deliver(g: *mut c_void, consumer: u64, url: Option<String>, handles: &Json) {
-    let p = make_params(g, url, handles);
-    if let Err(e) = call(g, consumer, UNDEF, &[p]) {
-        // A consumer that throws must not take the next launch with it.
-        let stack = get(g, e, "stack");
-        let text = host::string_arg(
-            g,
-            if is_cell(e) && stack != UNDEF {
-                stack
-            } else {
-                e
-            },
-        )
-        .unwrap_or_default();
-        let console = get(g, host::global(g), "console");
-        let _ = call(
-            g,
-            get(g, console, "error"),
-            console,
-            &[js_string(
+    unsafe {
+        let p = make_params(g, url, handles);
+        if let Err(e) = call(g, consumer, UNDEF, &[p]) {
+            // A consumer that throws must not take the next launch with it.
+            let stack = get(g, e, "stack");
+            let text = host::string_arg(
                 g,
-                &format!("[skathi] launchQueue consumer threw: {text}"),
-            )],
-        );
+                if is_cell(e) && stack != UNDEF {
+                    stack
+                } else {
+                    e
+                },
+            )
+            .unwrap_or_default();
+            let console = get(g, host::global(g), "console");
+            let _ = call(
+                g,
+                get(g, console, "error"),
+                console,
+                &[js_string(
+                    g,
+                    &format!("[skathi] launchQueue consumer threw: {text}"),
+                )],
+            );
+        }
     }
 }
 
 unsafe fn enqueue(g: *mut c_void, url: Option<String>, handles: Json) {
-    let consumer = STATE.with(|s| s.borrow().consumer);
-    if consumer == 0 {
-        STATE.with(|s| s.borrow_mut().queued.push((url, handles)));
-    } else {
-        deliver(g, consumer, url, &handles);
+    unsafe {
+        let consumer = STATE.with(|s| s.borrow().consumer);
+        if consumer == 0 {
+            STATE.with(|s| s.borrow_mut().queued.push((url, handles)));
+        } else {
+            deliver(g, consumer, url, &handles);
+        }
     }
 }
 
@@ -171,37 +179,39 @@ host_fn!(fn params_files(g, args) {
 
 /// A second launch forwarded here, or the app reopened.
 pub(super) unsafe fn on_launch(g: *mut c_void, p: &Json) {
-    let obj = STATE.with(|s| s.borrow().obj);
-    if obj == 0 {
-        return;
+    unsafe {
+        let obj = STATE.with(|s| s.borrow().obj);
+        if obj == 0 {
+            return;
+        }
+        let url = p["url"].as_str().map(str::to_string);
+        let ev = events::new_trusted_event(g, "launch");
+        define(g, ev, "argv", strings(g, &p["argv"]), 1);
+        define(
+            g,
+            ev,
+            "cwd",
+            js_string(g, p["cwd"].as_str().unwrap_or("")),
+            1,
+        );
+        define(
+            g,
+            ev,
+            "url",
+            url.as_deref().map_or(NULL, |u| js_string(g, u)),
+            1,
+        );
+        define(g, ev, "paths", strings(g, &p["paths"]), 1);
+        define(
+            g,
+            ev,
+            "source",
+            js_string(g, p["source"].as_str().unwrap_or("second-instance")),
+            1,
+        );
+        events::dispatch(g, obj, ev);
+        enqueue(g, url, p["handles"].clone());
     }
-    let url = p["url"].as_str().map(str::to_string);
-    let ev = events::new_trusted_event(g, "launch");
-    define(g, ev, "argv", strings(g, &p["argv"]), 1);
-    define(
-        g,
-        ev,
-        "cwd",
-        js_string(g, p["cwd"].as_str().unwrap_or("")),
-        1,
-    );
-    define(
-        g,
-        ev,
-        "url",
-        url.as_deref().map_or(NULL, |u| js_string(g, u)),
-        1,
-    );
-    define(g, ev, "paths", strings(g, &p["paths"]), 1);
-    define(
-        g,
-        ev,
-        "source",
-        js_string(g, p["source"].as_str().unwrap_or("second-instance")),
-        1,
-    );
-    events::dispatch(g, obj, ev);
-    enqueue(g, url, p["handles"].clone());
 }
 
 host_fn!(fn get_argv(_g, _args) {
@@ -246,71 +256,73 @@ host_fn!(fn is_protocol_registered(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, event_target: u64) {
-    let info: Json = serde_json::from_str(&launch::info_json()).unwrap_or_default();
-    let params_class = make_host_class::<Params>("LaunchParams");
-    let params_cls = define_class(
-        g,
-        &ClassSpec {
-            name: "LaunchParams",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[],
-            getters: &[("targetURL", params_target_url), ("files", params_files)],
-            accessors: &[],
-        },
-    );
-    let queue_cls = define_class(
-        g,
-        &ClassSpec {
-            name: "LaunchQueue",
-            arity: 0,
-            construct: None,
-            parent_proto: 0,
-            methods: &[("setConsumer", 1, set_consumer)],
-            getters: &[],
-            accessors: &[],
-        },
-    );
-    let queue = new_object(g, queue_cls.proto);
-    redjs_protect(g, queue);
-    define(g, host::global(g), "launchQueue", queue, 0);
-
-    let obj = host::install_object(g, "__SK_LAUNCH__", event_target);
-    let (argv, paths) = (strings(g, &info["argv"]), strings(g, &info["paths"]));
-    redjs_protect(g, argv);
-    redjs_protect(g, paths);
-    STATE.with(|s| {
-        *s.borrow_mut() = State {
-            obj,
-            argv,
-            paths,
-            cwd: info["cwd"].as_str().unwrap_or("").to_string(),
-            url: info["url"].as_str().map(str::to_string),
-            single_instance: info["singleInstance"].as_bool().unwrap_or(false),
-            params_class: params_class as usize,
-            params_proto: params_cls.proto,
-            s_files: atom_priv(g, "sk#launchFiles") as usize,
-            consumer: 0,
-            queued: Vec::new(),
-        }
-    });
-    host::getter(g, obj, "argv", get_argv);
-    host::getter(g, obj, "cwd", get_cwd);
-    host::getter(g, obj, "url", get_url);
-    host::getter(g, obj, "paths", get_paths);
-    host::getter(g, obj, "singleInstance", get_single_instance);
-    host::method(g, obj, "registerProtocol", 1, register_protocol);
-    host::method(g, obj, "unregisterProtocol", 1, unregister_protocol);
-    host::method(g, obj, "isProtocolRegistered", 1, is_protocol_registered);
-
-    // Once per process: a reload is not a launch.
-    if take_own_launch(&OWN_LAUNCH, crate::args::process_toast_activation()) {
-        enqueue(
+    unsafe {
+        let info: Json = serde_json::from_str(&launch::info_json()).unwrap_or_default();
+        let params_class = make_host_class::<Params>("LaunchParams");
+        let params_cls = define_class(
             g,
-            info["url"].as_str().map(str::to_string),
-            info["handles"].clone(),
+            &ClassSpec {
+                name: "LaunchParams",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[],
+                getters: &[("targetURL", params_target_url), ("files", params_files)],
+                accessors: &[],
+            },
         );
+        let queue_cls = define_class(
+            g,
+            &ClassSpec {
+                name: "LaunchQueue",
+                arity: 0,
+                construct: None,
+                parent_proto: 0,
+                methods: &[("setConsumer", 1, set_consumer)],
+                getters: &[],
+                accessors: &[],
+            },
+        );
+        let queue = new_object(g, queue_cls.proto);
+        redjs_protect(g, queue);
+        define(g, host::global(g), "launchQueue", queue, 0);
+
+        let obj = host::install_object(g, "__SK_LAUNCH__", event_target);
+        let (argv, paths) = (strings(g, &info["argv"]), strings(g, &info["paths"]));
+        redjs_protect(g, argv);
+        redjs_protect(g, paths);
+        STATE.with(|s| {
+            *s.borrow_mut() = State {
+                obj,
+                argv,
+                paths,
+                cwd: info["cwd"].as_str().unwrap_or("").to_string(),
+                url: info["url"].as_str().map(str::to_string),
+                single_instance: info["singleInstance"].as_bool().unwrap_or(false),
+                params_class: params_class as usize,
+                params_proto: params_cls.proto,
+                s_files: atom_priv(g, "sk#launchFiles") as usize,
+                consumer: 0,
+                queued: Vec::new(),
+            }
+        });
+        host::getter(g, obj, "argv", get_argv);
+        host::getter(g, obj, "cwd", get_cwd);
+        host::getter(g, obj, "url", get_url);
+        host::getter(g, obj, "paths", get_paths);
+        host::getter(g, obj, "singleInstance", get_single_instance);
+        host::method(g, obj, "registerProtocol", 1, register_protocol);
+        host::method(g, obj, "unregisterProtocol", 1, unregister_protocol);
+        host::method(g, obj, "isProtocolRegistered", 1, is_protocol_registered);
+
+        // Once per process: a reload is not a launch.
+        if take_own_launch(&OWN_LAUNCH, crate::args::process_toast_activation()) {
+            enqueue(
+                g,
+                info["url"].as_str().map(str::to_string),
+                info["handles"].clone(),
+            );
+        }
     }
 }
 

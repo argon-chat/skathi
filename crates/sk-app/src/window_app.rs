@@ -154,7 +154,7 @@ pub(super) fn page_hide() {
 // --- verbs -----------------------------------------------------------------------------------
 
 macro_rules! verb {
-    ($name:ident, $op:expr) => {
+    ($name:ident, $op:expr_2021) => {
         host_fn!(fn $name(_g, _args) {
             submit($op);
             UNDEF

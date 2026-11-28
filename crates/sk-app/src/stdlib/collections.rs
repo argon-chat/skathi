@@ -13,34 +13,40 @@ const MAX_BITS: usize = 1 << 32;
 const VALUES: &str = "skathi.values";
 
 unsafe fn index(g: *mut c_void, v: u64, len: usize, what: &str) -> Js<usize> {
-    let i = count(g, v, what)?;
-    if i >= len {
-        return range_error(g, &format!("{what} {i} is outside 0..{len}"));
+    unsafe {
+        let i = count(g, v, what)?;
+        if i >= len {
+            return range_error(g, &format!("{what} {i} is outside 0..{len}"));
+        }
+        Ok(i)
     }
-    Ok(i)
 }
 
 unsafe fn u32_array(g: *mut c_void, values: &[u32]) -> Js<u64> {
-    let (array, out) = typed_array(g, TA_U32, values.len())?;
-    for (slot, value) in out.chunks_exact_mut(4).zip(values) {
-        slot.copy_from_slice(&value.to_ne_bytes());
+    unsafe {
+        let (array, out) = typed_array(g, TA_U32, values.len())?;
+        for (slot, value) in out.chunks_exact_mut(4).zip(values) {
+            slot.copy_from_slice(&value.to_ne_bytes());
+        }
+        Ok(array)
     }
-    Ok(array)
 }
 
 /// `array[Symbol.iterator]()`, so a native list is walked by the engine's own iterator.
 unsafe fn iterate(g: *mut c_void, array: u64) -> Js<u64> {
-    call(g, get(g, array, "values"), array, &[]).map_err(|_| Thrown)
+    unsafe { call(g, get(g, array, "values"), array, &[]).map_err(|_| Thrown) }
 }
 
 unsafe fn iterable(g: *mut c_void, proto: u64, f: HostFn) {
-    let symbol = glue::rjs_atom_iterator(g);
-    glue::rjs_define(g, proto, symbol, make_fn(g, "[Symbol.iterator]", 0, f), 2);
-    glue::rjs_atom_free(g, symbol);
+    unsafe {
+        let symbol = glue::rjs_atom_iterator(g);
+        glue::rjs_define(g, proto, symbol, make_fn(g, "[Symbol.iterator]", 0, f), 2);
+        glue::rjs_atom_free(g, symbol);
+    }
 }
 
 unsafe fn values_slot(g: *mut c_void, this: u64) -> u64 {
-    slot_get(g, this, VALUES)
+    unsafe { slot_get(g, this, VALUES) }
 }
 
 struct BitSet {
@@ -120,33 +126,35 @@ unsafe fn bit_set_combine(
     what: &str,
     op: fn(u64, u64) -> u64,
 ) -> Js<u64> {
-    let left = BitSet {
-        words: bit_set(g, this)?.words.clone(),
-        bits: bit_set(g, this)?.bits,
-    };
-    let right = bit_set(g, other)?;
-    if left.bits != right.bits {
-        return range_error(
+    unsafe {
+        let left = BitSet {
+            words: bit_set(g, this)?.words.clone(),
+            bits: bit_set(g, this)?.bits,
+        };
+        let right = bit_set(g, other)?;
+        if left.bits != right.bits {
+            return range_error(
+                g,
+                &format!(
+                    "BitSet.{what}: the sets hold {} and {} bits; they must be the same size",
+                    left.bits, right.bits
+                ),
+            );
+        }
+        let words = left
+            .words
+            .iter()
+            .zip(&right.words)
+            .map(|(a, b)| op(*a, *b))
+            .collect();
+        Ok(bit_set_new(
             g,
-            &format!(
-                "BitSet.{what}: the sets hold {} and {} bits; they must be the same size",
-                left.bits, right.bits
-            ),
-        );
+            BitSet {
+                words,
+                bits: left.bits,
+            },
+        ))
     }
-    let words = left
-        .words
-        .iter()
-        .zip(&right.words)
-        .map(|(a, b)| op(*a, *b))
-        .collect();
-    Ok(bit_set_new(
-        g,
-        BitSet {
-            words,
-            bits: left.bits,
-        },
-    ))
 }
 
 std_fn!(fn bit_set_and(g, args) { bit_set_combine(g, args.this().0, args.arg(0).0, "and", |a, b| a & b) });
@@ -192,7 +200,7 @@ fn bloom_shape(expected: f64, rate: f64) -> (u64, u32) {
 }
 
 impl BloomFilter {
-    fn positions(&self, key: &[u8]) -> impl Iterator<Item = u64> + '_ {
+    fn positions(&self, key: &[u8]) -> impl Iterator<Item = u64> + '_ + use<'_> {
         let first = fnv1a(key, 0);
         let second = fnv1a(key, 0x9e37_79b9_7f4a_7c15) | 1;
         (0..self.hashes as u64).map(move |i| first.wrapping_add(i.wrapping_mul(second)) % self.bits)
@@ -214,24 +222,26 @@ impl BloomFilter {
 
 /// The bytes a value is hashed by: a string's text, a number's, a bigint's digits, a buffer's bytes.
 unsafe fn hash_key(g: *mut c_void, v: u64, what: &str) -> Js<Vec<u8>> {
-    if let Some(view) = buffer_source(g, v) {
-        return Ok(view.bytes().to_vec());
-    }
-    let tag = match kind(g, v) {
-        KIND_STRING => b's',
-        3 | 4 => b'n',
-        KIND_BIGINT => b'i',
-        _ => {
-            return type_error(
-                g,
-                &format!("{what} must be a string, a number, a bigint or bytes"),
-            )
+    unsafe {
+        if let Some(view) = buffer_source(g, v) {
+            return Ok(view.bytes().to_vec());
         }
-    };
-    let text = to_js_string(g, v).map_err(|()| Thrown)?;
-    let mut key = vec![tag];
-    key.extend(read_string(g, text).unwrap_or_default().into_bytes());
-    Ok(key)
+        let tag = match kind(g, v) {
+            KIND_STRING => b's',
+            3 | 4 => b'n',
+            KIND_BIGINT => b'i',
+            _ => {
+                return type_error(
+                    g,
+                    &format!("{what} must be a string, a number, a bigint or bytes"),
+                )
+            }
+        };
+        let text = to_js_string(g, v).map_err(|()| Thrown)?;
+        let mut key = vec![tag];
+        key.extend(read_string(g, text).unwrap_or_default().into_bytes());
+        Ok(key)
+    }
 }
 
 std_fn!(fn bloom_construct(g, args) {
@@ -388,13 +398,15 @@ std_fn!(fn ring_clear(g, args) {
 });
 
 unsafe fn ring_values(g: *mut c_void, this: u64) -> Js<u64> {
-    let state = ring(g, this)?;
-    let values: Vec<f64> = (0..state.len).map(|i| state.at(i)).collect();
-    let (array, out) = typed_array(g, TA_F64, values.len())?;
-    for (slot, value) in out.chunks_exact_mut(8).zip(values) {
-        slot.copy_from_slice(&value.to_ne_bytes());
+    unsafe {
+        let state = ring(g, this)?;
+        let values: Vec<f64> = (0..state.len).map(|i| state.at(i)).collect();
+        let (array, out) = typed_array(g, TA_F64, values.len())?;
+        for (slot, value) in out.chunks_exact_mut(8).zip(values) {
+            slot.copy_from_slice(&value.to_ne_bytes());
+        }
+        Ok(array)
     }
-    Ok(array)
 }
 
 std_fn!(fn ring_to_array(g, args) { ring_values(g, args.this().0) });
@@ -485,22 +497,28 @@ struct Slots {
 
 impl Slots {
     unsafe fn store(&mut self, g: *mut c_void, this: u64, value: u64) -> u32 {
-        let slot = self.free.pop().unwrap_or_else(|| {
-            self.next += 1;
-            self.next - 1
-        });
-        set_i(g, values_slot(g, this), slot, value);
-        slot
+        unsafe {
+            let slot = self.free.pop().unwrap_or_else(|| {
+                self.next += 1;
+                self.next - 1
+            });
+            set_i(g, values_slot(g, this), slot, value);
+            slot
+        }
     }
 
     unsafe fn release(&mut self, g: *mut c_void, this: u64, slot: u32) {
-        set_i(g, values_slot(g, this), slot, UNDEF);
-        self.free.push(slot);
+        unsafe {
+            set_i(g, values_slot(g, this), slot, UNDEF);
+            self.free.push(slot);
+        }
     }
 
     unsafe fn reset(&mut self, g: *mut c_void, this: u64) {
-        slot_set(g, this, VALUES, new_array(g));
-        *self = Slots::default();
+        unsafe {
+            slot_set(g, this, VALUES, new_array(g));
+            *self = Slots::default();
+        }
     }
 }
 
@@ -585,19 +603,21 @@ std_fn!(fn trie_delete(g, args) {
 });
 
 unsafe fn trie_entries(g: *mut c_void, this: u64, prefix: &str) -> Js<u64> {
-    let found: Vec<(String, u32)> = trie(g, this)?
-        .with_prefix(prefix)
-        .map(|(key, slot)| (key.clone(), *slot))
-        .collect();
-    let values = values_slot(g, this);
-    let list = new_array(g);
-    for (i, (key, slot)) in found.iter().enumerate() {
-        let entry = new_array(g);
-        set_i(g, entry, 0, js_string(g, key));
-        set_i(g, entry, 1, get_i(g, values, *slot));
-        set_i(g, list, i as u32, entry);
+    unsafe {
+        let found: Vec<(String, u32)> = trie(g, this)?
+            .with_prefix(prefix)
+            .map(|(key, slot)| (key.clone(), *slot))
+            .collect();
+        let values = values_slot(g, this);
+        let list = new_array(g);
+        for (i, (key, slot)) in found.iter().enumerate() {
+            let entry = new_array(g);
+            set_i(g, entry, 0, js_string(g, key));
+            set_i(g, entry, 1, get_i(g, values, *slot));
+            set_i(g, list, i as u32, entry);
+        }
+        Ok(list)
     }
-    Ok(list)
 }
 
 std_fn!(fn trie_with_prefix(g, args) {
@@ -710,23 +730,27 @@ impl IntervalTree {
 }
 
 unsafe fn bounds(g: *mut c_void, lo: u64, hi: u64, what: &str) -> Js<(f64, f64)> {
-    let (lo, hi) = (number(g, lo)?, number(g, hi)?);
-    if lo.is_nan() || hi.is_nan() || lo > hi {
-        return range_error(
-            g,
-            &format!("{what}: the interval must run from a number to one not below it"),
-        );
+    unsafe {
+        let (lo, hi) = (number(g, lo)?, number(g, hi)?);
+        if lo.is_nan() || hi.is_nan() || lo > hi {
+            return range_error(
+                g,
+                &format!("{what}: the interval must run from a number to one not below it"),
+            );
+        }
+        Ok((lo, hi))
     }
-    Ok((lo, hi))
 }
 
 unsafe fn slot_values(g: *mut c_void, this: u64, slots: &[u32]) -> u64 {
-    let values = values_slot(g, this);
-    let list = new_array(g);
-    for (i, slot) in slots.iter().enumerate() {
-        set_i(g, list, i as u32, get_i(g, values, *slot));
+    unsafe {
+        let values = values_slot(g, this);
+        let list = new_array(g);
+        for (i, slot) in slots.iter().enumerate() {
+            set_i(g, list, i as u32, get_i(g, values, *slot));
+        }
+        list
     }
-    list
 }
 
 std_fn!(fn interval_construct(g, _args) {
@@ -801,140 +825,142 @@ std_fn!(fn interval_clear(g, args) {
 std_fn!(fn interval_size(g, args) { Ok(enc_f64(interval_tree(g, args.this().0)?.items.len() as f64)) });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let module = new_object(g, UNDEF);
+    unsafe {
+        let module = new_object(g, UNDEF);
 
-    let bit_set = support::class(
-        g,
-        &ClassSpec {
-            name: "BitSet",
-            arity: 1,
-            construct: Some(bit_set_construct),
-            parent_proto: 0,
-            methods: &[
-                ("set", 1, bit_set_set),
-                ("clear", 0, bit_set_clear),
-                ("has", 1, bit_set_has),
-                ("count", 0, bit_set_count),
-                ("and", 1, bit_set_and),
-                ("or", 1, bit_set_or),
-                ("xor", 1, bit_set_xor),
-                ("andNot", 1, bit_set_and_not),
-                ("indices", 0, bit_set_indices),
-            ],
-            getters: &[("size", bit_set_size)],
-            accessors: &[],
-        },
-    );
-    iterable(g, bit_set.proto, bit_set_iterator);
-    define(g, module, "BitSet", bit_set.ctor, 0);
+        let bit_set = support::class(
+            g,
+            &ClassSpec {
+                name: "BitSet",
+                arity: 1,
+                construct: Some(bit_set_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("set", 1, bit_set_set),
+                    ("clear", 0, bit_set_clear),
+                    ("has", 1, bit_set_has),
+                    ("count", 0, bit_set_count),
+                    ("and", 1, bit_set_and),
+                    ("or", 1, bit_set_or),
+                    ("xor", 1, bit_set_xor),
+                    ("andNot", 1, bit_set_and_not),
+                    ("indices", 0, bit_set_indices),
+                ],
+                getters: &[("size", bit_set_size)],
+                accessors: &[],
+            },
+        );
+        iterable(g, bit_set.proto, bit_set_iterator);
+        define(g, module, "BitSet", bit_set.ctor, 0);
 
-    let bloom = support::class(
-        g,
-        &ClassSpec {
-            name: "BloomFilter",
-            arity: 2,
-            construct: Some(bloom_construct),
-            parent_proto: 0,
-            methods: &[
-                ("add", 1, bloom_add),
-                ("addAll", 1, bloom_add_all),
-                ("mightHave", 1, bloom_might_have),
-                ("clear", 0, bloom_clear),
-            ],
-            getters: &[("size", bloom_size), ("bits", bloom_bits)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "BloomFilter", bloom.ctor, 0);
+        let bloom = support::class(
+            g,
+            &ClassSpec {
+                name: "BloomFilter",
+                arity: 2,
+                construct: Some(bloom_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("add", 1, bloom_add),
+                    ("addAll", 1, bloom_add_all),
+                    ("mightHave", 1, bloom_might_have),
+                    ("clear", 0, bloom_clear),
+                ],
+                getters: &[("size", bloom_size), ("bits", bloom_bits)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "BloomFilter", bloom.ctor, 0);
 
-    let ring = support::class(
-        g,
-        &ClassSpec {
-            name: "RingBuffer",
-            arity: 1,
-            construct: Some(ring_construct),
-            parent_proto: 0,
-            methods: &[
-                ("push", 1, ring_push),
-                ("pushAll", 1, ring_push_all),
-                ("shift", 0, ring_shift),
-                ("at", 1, ring_at),
-                ("clear", 0, ring_clear),
-                ("toArray", 0, ring_to_array),
-            ],
-            getters: &[
-                ("size", ring_size),
-                ("capacity", ring_capacity),
-                ("full", ring_full),
-            ],
-            accessors: &[],
-        },
-    );
-    iterable(g, ring.proto, ring_iterator);
-    define(g, module, "RingBuffer", ring.ctor, 0);
+        let ring = support::class(
+            g,
+            &ClassSpec {
+                name: "RingBuffer",
+                arity: 1,
+                construct: Some(ring_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("push", 1, ring_push),
+                    ("pushAll", 1, ring_push_all),
+                    ("shift", 0, ring_shift),
+                    ("at", 1, ring_at),
+                    ("clear", 0, ring_clear),
+                    ("toArray", 0, ring_to_array),
+                ],
+                getters: &[
+                    ("size", ring_size),
+                    ("capacity", ring_capacity),
+                    ("full", ring_full),
+                ],
+                accessors: &[],
+            },
+        );
+        iterable(g, ring.proto, ring_iterator);
+        define(g, module, "RingBuffer", ring.ctor, 0);
 
-    let disjoint = support::class(
-        g,
-        &ClassSpec {
-            name: "DisjointSet",
-            arity: 1,
-            construct: Some(disjoint_construct),
-            parent_proto: 0,
-            methods: &[
-                ("find", 1, disjoint_find),
-                ("union", 2, disjoint_union),
-                ("connected", 2, disjoint_connected),
-            ],
-            getters: &[("size", disjoint_size), ("count", disjoint_count)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "DisjointSet", disjoint.ctor, 0);
+        let disjoint = support::class(
+            g,
+            &ClassSpec {
+                name: "DisjointSet",
+                arity: 1,
+                construct: Some(disjoint_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("find", 1, disjoint_find),
+                    ("union", 2, disjoint_union),
+                    ("connected", 2, disjoint_connected),
+                ],
+                getters: &[("size", disjoint_size), ("count", disjoint_count)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "DisjointSet", disjoint.ctor, 0);
 
-    let trie = support::class(
-        g,
-        &ClassSpec {
-            name: "Trie",
-            arity: 0,
-            construct: Some(trie_construct),
-            parent_proto: 0,
-            methods: &[
-                ("set", 2, trie_set),
-                ("get", 1, trie_get),
-                ("has", 1, trie_has),
-                ("delete", 1, trie_delete),
-                ("withPrefix", 1, trie_with_prefix),
-                ("longestPrefix", 1, trie_longest_prefix),
-                ("clear", 0, trie_clear),
-            ],
-            getters: &[("size", trie_size)],
-            accessors: &[],
-        },
-    );
-    iterable(g, trie.proto, trie_iterator);
-    define(g, module, "Trie", trie.ctor, 0);
+        let trie = support::class(
+            g,
+            &ClassSpec {
+                name: "Trie",
+                arity: 0,
+                construct: Some(trie_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("set", 2, trie_set),
+                    ("get", 1, trie_get),
+                    ("has", 1, trie_has),
+                    ("delete", 1, trie_delete),
+                    ("withPrefix", 1, trie_with_prefix),
+                    ("longestPrefix", 1, trie_longest_prefix),
+                    ("clear", 0, trie_clear),
+                ],
+                getters: &[("size", trie_size)],
+                accessors: &[],
+            },
+        );
+        iterable(g, trie.proto, trie_iterator);
+        define(g, module, "Trie", trie.ctor, 0);
 
-    let intervals = support::class(
-        g,
-        &ClassSpec {
-            name: "IntervalTree",
-            arity: 0,
-            construct: Some(interval_construct),
-            parent_proto: 0,
-            methods: &[
-                ("insert", 3, interval_insert),
-                ("overlapping", 2, interval_overlapping),
-                ("containing", 1, interval_containing),
-                ("delete", 3, interval_delete),
-                ("clear", 0, interval_clear),
-            ],
-            getters: &[("size", interval_size)],
-            accessors: &[],
-        },
-    );
-    define(g, module, "IntervalTree", intervals.ctor, 0);
+        let intervals = support::class(
+            g,
+            &ClassSpec {
+                name: "IntervalTree",
+                arity: 0,
+                construct: Some(interval_construct),
+                parent_proto: 0,
+                methods: &[
+                    ("insert", 3, interval_insert),
+                    ("overlapping", 2, interval_overlapping),
+                    ("containing", 1, interval_containing),
+                    ("delete", 3, interval_delete),
+                    ("clear", 0, interval_clear),
+                ],
+                getters: &[("size", interval_size)],
+                accessors: &[],
+            },
+        );
+        define(g, module, "IntervalTree", intervals.ctor, 0);
 
-    define(g, std, "collections", module, 0);
+        define(g, std, "collections", module, 0);
+    }
 }
 
 #[cfg(test)]

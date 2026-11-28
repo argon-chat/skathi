@@ -3,8 +3,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
-        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
     },
     thread::JoinHandle,
     time::Instant,
@@ -754,15 +754,13 @@ mod tests {
         service.running.store(true, Ordering::Release);
         service.capture_once(|_| {}).unwrap();
         assert!(!service.is_current(&old));
-        assert!(
-            dispatch
-                .queue
-                .lock()
-                .unwrap()
-                .events
-                .iter()
-                .all(|event| event.phase != "down")
-        );
+        assert!(dispatch
+            .queue
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.phase != "down"));
         service.cancel_capture();
         service.input(Button::keyboard(0x70), false);
         service.input(Button::keyboard(0x70), true);
@@ -777,15 +775,13 @@ mod tests {
         assert_eq!(old.phase, "down");
         service.reset();
         assert!(!service.is_current(&old));
-        assert!(
-            dispatch
-                .queue
-                .lock()
-                .unwrap()
-                .events
-                .iter()
-                .all(|event| event.phase != "down")
-        );
+        assert!(dispatch
+            .queue
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.phase != "down"));
         let old_up = Fired {
             phase: "up".into(),
             ..old
@@ -802,11 +798,9 @@ mod tests {
         service.set_bindings(vec![binding.clone()]).unwrap();
         service.input(Button::keyboard(0x70), true);
         let before = service.current_generation();
-        assert!(
-            !service
-                .would_change(std::slice::from_ref(&binding))
-                .unwrap()
-        );
+        assert!(!service
+            .would_change(std::slice::from_ref(&binding))
+            .unwrap());
         assert!(!service.set_bindings(vec![binding]).unwrap());
         assert_eq!(service.current_generation(), before);
         assert_eq!(dispatch.queue.lock().unwrap().events.len(), 1);

@@ -335,13 +335,15 @@ fn encode(text: &str, encoding: &'static Encoding) -> Vec<u8> {
 }
 
 unsafe fn encoding_for(g: *mut c_void, v: u64, what: &str) -> Js<&'static Encoding> {
-    let label = string(g, v, &format!("{what}: the label"))?;
-    match Encoding::for_label(label.as_bytes()) {
-        Some(encoding) => Ok(encoding),
-        None => range_error(
-            g,
-            &format!("{what}: \"{label}\" is not an encoding this host knows"),
-        ),
+    unsafe {
+        let label = string(g, v, &format!("{what}: the label"))?;
+        match Encoding::for_label(label.as_bytes()) {
+            Some(encoding) => Ok(encoding),
+            None => range_error(
+                g,
+                &format!("{what}: \"{label}\" is not an encoding this host knows"),
+            ),
+        }
     }
 }
 
@@ -497,76 +499,78 @@ std_fn!(fn encoding_detect(g, args) {
 });
 
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
-    let module = new_object(g, UNDEF);
-    let hex: &[(&str, u32, HostFn)] = &[
-        ("encode", 1, hex_encode_fn),
-        ("decode", 1, hex_decode_fn),
-        ("dump", 1, hex_dump_fn),
-        ("format", 1, hex_format),
-    ];
-    define(g, module, "Base16", namespace(g, "Base16", &hex[..2]), 0);
-    define(g, module, "Hex", namespace(g, "Hex", hex), 0);
-    define(
-        g,
-        module,
-        "Base32",
-        namespace(
+    unsafe {
+        let module = new_object(g, UNDEF);
+        let hex: &[(&str, u32, HostFn)] = &[
+            ("encode", 1, hex_encode_fn),
+            ("decode", 1, hex_decode_fn),
+            ("dump", 1, hex_dump_fn),
+            ("format", 1, hex_format),
+        ];
+        define(g, module, "Base16", namespace(g, "Base16", &hex[..2]), 0);
+        define(g, module, "Hex", namespace(g, "Hex", hex), 0);
+        define(
             g,
+            module,
             "Base32",
-            &[
-                ("encode", 1, base32_encode_fn),
-                ("decode", 1, base32_decode_fn),
-            ],
-        ),
-        0,
-    );
-    define(
-        g,
-        module,
-        "Base64",
-        namespace(
+            namespace(
+                g,
+                "Base32",
+                &[
+                    ("encode", 1, base32_encode_fn),
+                    ("decode", 1, base32_decode_fn),
+                ],
+            ),
+            0,
+        );
+        define(
             g,
+            module,
             "Base64",
-            &[
-                ("encode", 1, base64_encode_fn),
-                ("decode", 1, base64_decode_fn),
-            ],
-        ),
-        0,
-    );
-    define(
-        g,
-        module,
-        "Mime",
-        namespace(
+            namespace(
+                g,
+                "Base64",
+                &[
+                    ("encode", 1, base64_encode_fn),
+                    ("decode", 1, base64_decode_fn),
+                ],
+            ),
+            0,
+        );
+        define(
             g,
+            module,
             "Mime",
-            &[
-                ("fromName", 1, mime_from_name),
-                ("extensions", 1, mime_extensions),
-                ("sniff", 1, mime_sniff),
-                ("matches", 2, mime_matches),
-            ],
-        ),
-        0,
-    );
-    define(
-        g,
-        module,
-        "Encoding",
-        namespace(
+            namespace(
+                g,
+                "Mime",
+                &[
+                    ("fromName", 1, mime_from_name),
+                    ("extensions", 1, mime_extensions),
+                    ("sniff", 1, mime_sniff),
+                    ("matches", 2, mime_matches),
+                ],
+            ),
+            0,
+        );
+        define(
             g,
+            module,
             "Encoding",
-            &[
-                ("decode", 2, encoding_decode),
-                ("encode", 2, encoding_encode),
-                ("isSupported", 1, encoding_is_supported),
-                ("detect", 1, encoding_detect),
-            ],
-        ),
-        0,
-    );
-    define(g, std, "encoding", module, 0);
+            namespace(
+                g,
+                "Encoding",
+                &[
+                    ("decode", 2, encoding_decode),
+                    ("encode", 2, encoding_encode),
+                    ("isSupported", 1, encoding_is_supported),
+                    ("detect", 1, encoding_detect),
+                ],
+            ),
+            0,
+        );
+        define(g, std, "encoding", module, 0);
+    }
 }
 
 #[cfg(test)]

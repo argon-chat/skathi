@@ -10,5 +10,5 @@
 static GLOBAL: sk_app::heapcount::Counting = sk_app::heapcount::Counting;
 
 fn main() {
-    sk_app::run_exe()
+    sk_app::run_standalone_exe()
 }

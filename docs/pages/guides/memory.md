@@ -70,6 +70,8 @@ for a moment, because it is likely to be asked for again. `"memory": "low"` in
 - The same two settings are put into the process's environment (`MIMALLOC_PAGE_COMMIT_ON_DEMAND=1`,
   `MIMALLOC_PURGE_DELAY=0`) before the GPU driver loads, unless they are already set. NVIDIA's driver
   carries its own copy of the same allocator and reads them. Processes the app starts inherit them.
+  On macOS and Linux, the standalone `sk-app` executable sets these defaults at launch. When calling
+  `skathi::run_exe()` from your own executable, set them in its launch environment to configure the driver.
 
 The same app as above:
 

@@ -291,137 +291,141 @@ unsafe fn render_loop(
     stop: &AtomicBool,
     label: &str,
 ) -> Result<(), String> {
-    let channels = bed.len();
-    let mut mix = vec![0.0f32; max_frames as usize * channels];
-    let mut dynamic: Vec<Option<Dynamic>> = (0..max_objects).map(|_| None).collect();
-    let mut seen = vec![false; max_objects as usize];
-    let mut ran_out = false;
-    let mut mono = vec![0.0f32; max_frames as usize];
-    let mut panned: Vec<Option<(u64, Vec<f32>)>> = (0..max_objects).map(|_| None).collect();
-    let mut target = vec![0.0f32; channels];
-    while !stop.load(Ordering::Acquire) {
-        if WaitForSingleObject(event.0, 200) != WAIT_OBJECT_0 {
-            continue;
-        }
-        let (mut available, mut frames) = (0u32, 0u32);
-        stream
-            .BeginUpdatingAudioObjects(&mut available, &mut frames)
-            .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
-        let frames = (frames as usize).min(max_frames as usize);
-        renderer.render(&mut mix, channels, frames);
-        if in_bed {
+    unsafe {
+        let channels = bed.len();
+        let mut mix = vec![0.0f32; max_frames as usize * channels];
+        let mut dynamic: Vec<Option<Dynamic>> = (0..max_objects).map(|_| None).collect();
+        let mut seen = vec![false; max_objects as usize];
+        let mut ran_out = false;
+        let mut mono = vec![0.0f32; max_frames as usize];
+        let mut panned: Vec<Option<(u64, Vec<f32>)>> = (0..max_objects).map(|_| None).collect();
+        let mut target = vec![0.0f32; channels];
+        while !stop.load(Ordering::Acquire) {
+            if WaitForSingleObject(event.0, 200) != WAIT_OBJECT_0 {
+                continue;
+            }
+            let (mut available, mut frames) = (0u32, 0u32);
+            stream
+                .BeginUpdatingAudioObjects(&mut available, &mut frames)
+                .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
+            let frames = (frames as usize).min(max_frames as usize);
+            renderer.render(&mut mix, channels, frames);
+            if in_bed {
+                seen.fill(false);
+                for block in renderer.objects() {
+                    let i = block.index as usize;
+                    let Some(slot) = panned.get_mut(i) else {
+                        continue;
+                    };
+                    seen[i] = true;
+                    let gain = block.placement.gain;
+                    let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
+                    let out = &mut mono[..frames];
+                    layout::object_samples(block.left, block.right, block.channels, gain, out);
+                    layout::bed_gains(layout::listener_space(&block.placement), bed, &mut target);
+                    let fresh = !matches!(slot, Some((owner, _)) if *owner == block.owner);
+                    let prev = slot.get_or_insert_with(|| (block.owner, vec![0.0; channels]));
+                    if fresh {
+                        prev.0 = block.owner;
+                        prev.1.copy_from_slice(&target);
+                    }
+                    layout::mix_into_bed(
+                        out,
+                        &prev.1,
+                        &target,
+                        &mut mix[..frames * channels],
+                        channels,
+                    );
+                    prev.1.copy_from_slice(&target);
+                }
+                for (slot, seen) in panned.iter_mut().zip(&seen) {
+                    if !seen {
+                        *slot = None;
+                    }
+                }
+            }
+            for (k, object) in statics.iter().enumerate() {
+                if let Some(buf) = buffer(object, frames) {
+                    for (i, s) in buf.iter_mut().enumerate() {
+                        *s = mix[i * channels + k];
+                    }
+                }
+            }
+
             seen.fill(false);
-            for block in renderer.objects() {
+            for block in renderer.objects().filter(|_| !in_bed) {
                 let i = block.index as usize;
-                let Some(slot) = panned.get_mut(i) else {
+                let Some(slot) = dynamic.get_mut(i) else {
                     continue;
                 };
                 seen[i] = true;
-                let gain = block.placement.gain;
-                let gain = if gain.is_finite() { gain.max(0.0) } else { 0.0 };
-                let out = &mut mono[..frames];
-                layout::object_samples(block.left, block.right, block.channels, gain, out);
-                layout::bed_gains(layout::listener_space(&block.placement), bed, &mut target);
-                let fresh = !matches!(slot, Some((owner, _)) if *owner == block.owner);
-                let prev = slot.get_or_insert_with(|| (block.owner, vec![0.0; channels]));
-                if fresh {
-                    prev.0 = block.owner;
-                    prev.1.copy_from_slice(&target);
-                }
-                layout::mix_into_bed(
-                    out,
-                    &prev.1,
-                    &target,
-                    &mut mix[..frames * channels],
-                    channels,
-                );
-                prev.1.copy_from_slice(&target);
-            }
-            for (slot, seen) in panned.iter_mut().zip(&seen) {
-                if !seen {
-                    *slot = None;
-                }
-            }
-        }
-        for (k, object) in statics.iter().enumerate() {
-            if let Some(buf) = buffer(object, frames) {
-                for (i, s) in buf.iter_mut().enumerate() {
-                    *s = mix[i * channels + k];
-                }
-            }
-        }
-
-        seen.fill(false);
-        for block in renderer.objects().filter(|_| !in_bed) {
-            let i = block.index as usize;
-            let Some(slot) = dynamic.get_mut(i) else {
-                continue;
-            };
-            seen[i] = true;
-            if slot.as_ref().is_some_and(|d| d.owner != block.owner) {
-                if let Some(old) = slot.take() {
-                    let _ = old.object.SetEndOfStream(0);
-                }
-            }
-            if slot.is_none() {
-                let activated = if available > 0 {
-                    stream.ActivateSpatialAudioObject(AudioObjectType_Dynamic)
-                } else {
-                    Err(SPTLAUDCLNT_E_NO_MORE_OBJECTS.into())
-                };
-                match activated {
-                    Ok(object) => {
-                        available -= 1;
-                        *slot = Some(Dynamic {
-                            owner: block.owner,
-                            object,
-                        });
+                if slot.as_ref().is_some_and(|d| d.owner != block.owner) {
+                    if let Some(old) = slot.take() {
+                        let _ = old.object.SetEndOfStream(0);
                     }
-                    Err(e) => {
-                        if !ran_out {
-                            ran_out = true;
-                            eprintln!(
+                }
+                if slot.is_none() {
+                    let activated = if available > 0 {
+                        stream.ActivateSpatialAudioObject(AudioObjectType_Dynamic)
+                    } else {
+                        Err(SPTLAUDCLNT_E_NO_MORE_OBJECTS.into())
+                    };
+                    match activated {
+                        Ok(object) => {
+                            available -= 1;
+                            *slot = Some(Dynamic {
+                                owner: block.owner,
+                                object,
+                            });
+                        }
+                        Err(e) => {
+                            if !ran_out {
+                                ran_out = true;
+                                eprintln!(
                                 "[audio] the {label} renderer has no object left for a PannerNode ({e}); it \
                                  renders with HRTF"
                             );
+                            }
+                            renderer.lose_object(block.index);
+                            continue;
                         }
-                        renderer.lose_object(block.index);
-                        continue;
+                    }
+                }
+                let d = slot.as_ref().unwrap();
+                let (volume, gain) = layout::object_gain(block.placement.gain);
+                if let Some(buf) = buffer(&d.object, frames) {
+                    layout::object_samples(block.left, block.right, block.channels, gain, buf);
+                }
+                let [x, y, z] = layout::listener_space(&block.placement);
+                let _ = d.object.SetPosition(x, y, z);
+                let _ = d.object.SetVolume(volume);
+            }
+            for (slot, seen) in dynamic.iter_mut().zip(&seen) {
+                if !seen {
+                    if let Some(old) = slot.take() {
+                        let _ = old.object.SetEndOfStream(0);
                     }
                 }
             }
-            let d = slot.as_ref().unwrap();
-            let (volume, gain) = layout::object_gain(block.placement.gain);
-            if let Some(buf) = buffer(&d.object, frames) {
-                layout::object_samples(block.left, block.right, block.channels, gain, buf);
-            }
-            let [x, y, z] = layout::listener_space(&block.placement);
-            let _ = d.object.SetPosition(x, y, z);
-            let _ = d.object.SetVolume(volume);
+            stream
+                .EndUpdatingAudioObjects()
+                .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
         }
-        for (slot, seen) in dynamic.iter_mut().zip(&seen) {
-            if !seen {
-                if let Some(old) = slot.take() {
-                    let _ = old.object.SetEndOfStream(0);
-                }
-            }
-        }
-        stream
-            .EndUpdatingAudioObjects()
-            .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
+        Ok(())
     }
-    Ok(())
 }
 
 /// The object's buffer for this pass, as `frames` samples.
 unsafe fn buffer<'a>(object: &ISpatialAudioObject, frames: usize) -> Option<&'a mut [f32]> {
-    let (mut ptr, mut len) = (std::ptr::null_mut(), 0u32);
-    object.GetBuffer(&mut ptr, &mut len).ok()?;
-    if ptr.is_null() {
-        return None;
+    unsafe {
+        let (mut ptr, mut len) = (std::ptr::null_mut(), 0u32);
+        object.GetBuffer(&mut ptr, &mut len).ok()?;
+        if ptr.is_null() {
+            return None;
+        }
+        let n = (len as usize / size_of::<f32>()).min(frames);
+        Some(std::slice::from_raw_parts_mut(ptr.cast::<f32>(), n))
     }
-    let n = (len as usize / size_of::<f32>()).min(frames);
-    Some(std::slice::from_raw_parts_mut(ptr.cast::<f32>(), n))
 }
 
 /// The spatial format on the endpoint, for `AudioContext.spatialAudio.format`.

@@ -124,7 +124,8 @@ unsafe extern "system" fn cancel_dialog(_: HWND, _: u32, _: usize, _: u32) {
 unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
     let mut class_name = [0u16; 32];
     let length = unsafe { GetClassNameW(hwnd, &mut class_name) } as usize;
-    if class_name.get(..length) == Some(unsafe { w!("#32770").as_wide() }) {
+    let dialog_class = w!("#32770");
+    if class_name.get(..length) == Some(unsafe { dialog_class.as_wide() }) {
         unsafe {
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         }

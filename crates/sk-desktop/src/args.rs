@@ -380,7 +380,7 @@ pub fn process_toast_activation() -> bool {
 #[cfg(windows)]
 pub fn raw_command_line() -> Option<String> {
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         fn GetCommandLineW() -> *const u16;
     }
     // SAFETY: the returned pointer is owned by the process and valid for its

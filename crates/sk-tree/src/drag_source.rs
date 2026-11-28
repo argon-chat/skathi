@@ -33,12 +33,14 @@ pub(super) unsafe fn target_store(
     token: Option<&str>,
     mode: uievents::DragDataMode,
 ) -> Option<u64> {
-    let store = ACTIVE.with_borrow(|s| {
-        s.as_ref()
-            .filter(|s| s.realm == g as usize && Some(s.token.as_str()) == token)
-            .map(|s| s.store)
-    })?;
-    uievents::transfer_for_target(g, store, mode)
+    unsafe {
+        let store = ACTIVE.with_borrow(|s| {
+            s.as_ref()
+                .filter(|s| s.realm == g as usize && Some(s.token.as_str()) == token)
+                .map(|s| s.store)
+        })?;
+        uievents::transfer_for_target(g, store, mode)
+    }
 }
 
 // Devtools supplies the compositor for synthetic mouse events, which have no

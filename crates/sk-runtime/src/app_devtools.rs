@@ -47,42 +47,46 @@ fn enabled() -> bool {
 }
 
 unsafe fn notify(g: *mut c_void, on: bool) {
-    let watchers = WATCHERS.with(|w| w.borrow().clone());
-    for f in watchers {
-        if let Err(e) = call(g, f, UNDEF, &[enc_bool(on)]) {
-            let e = host::string_arg(g, e).unwrap_or_default();
-            warn_compat(
-                g,
-                "appDevtools.onChange",
-                &format!("a change listener threw and was ignored: {e}"),
-            );
+    unsafe {
+        let watchers = WATCHERS.with(|w| w.borrow().clone());
+        for f in watchers {
+            if let Err(e) = call(g, f, UNDEF, &[enc_bool(on)]) {
+                let e = host::string_arg(g, e).unwrap_or_default();
+                warn_compat(
+                    g,
+                    "appDevtools.onChange",
+                    &format!("a change listener threw and was ignored: {e}"),
+                );
+            }
         }
     }
 }
 
 unsafe fn set(g: *mut c_void, on: bool) -> u64 {
-    let was = enabled();
-    let Some(outcome) = HOST.with(|h| h.borrow().as_ref().map(|h| h.set_enabled(on))) else {
-        if on {
-            warn_compat(
+    unsafe {
+        let was = enabled();
+        let Some(outcome) = HOST.with(|h| h.borrow().as_ref().map(|h| h.set_enabled(on))) else {
+            if on {
+                warn_compat(
                 g,
                 "appDevtools",
                 &format!("{NO_DEVTOOLS}, so there are no devtools to enable — `appDevtools.enable()` did nothing."),
             );
-        }
-        return FALSE;
-    };
-    match outcome {
-        Ok(now) => {
-            if now != was {
-                notify(g, now);
             }
-            enc_bool(now)
-        }
-        Err(e) => {
-            let verb = if on { "enable" } else { "disable" };
-            warn_compat(g, "appDevtools", &format!("{verb}() was refused: {e}"));
-            enc_bool(was)
+            return FALSE;
+        };
+        match outcome {
+            Ok(now) => {
+                if now != was {
+                    notify(g, now);
+                }
+                enc_bool(now)
+            }
+            Err(e) => {
+                let verb = if on { "enable" } else { "disable" };
+                warn_compat(g, "appDevtools", &format!("{verb}() was refused: {e}"));
+                enc_bool(was)
+            }
         }
     }
 }
@@ -161,15 +165,17 @@ crate::host_fn!(fn off(g, args) {
 
 /// Installs `__sk_appDevtools` over `host`, or the inert one for `None`.
 pub unsafe fn install(g: *mut c_void, host: Option<Box<dyn DevtoolsHost>>) {
-    HOST.with(|h| *h.borrow_mut() = host);
-    let obj = host::install_object(g, "__sk_appDevtools", UNDEF);
-    host::getter(g, obj, "available", available);
-    host::method(g, obj, "isEnabled", 0, is_enabled);
-    host::method(g, obj, "enable", 0, enable);
-    host::method(g, obj, "disable", 0, disable);
-    host::method(g, obj, "open", 0, open);
-    host::method(g, obj, "info", 0, info_js);
-    host::method(g, obj, "onChange", 1, on_change);
+    unsafe {
+        HOST.with(|h| *h.borrow_mut() = host);
+        let obj = host::install_object(g, "__sk_appDevtools", UNDEF);
+        host::getter(g, obj, "available", available);
+        host::method(g, obj, "isEnabled", 0, is_enabled);
+        host::method(g, obj, "enable", 0, enable);
+        host::method(g, obj, "disable", 0, disable);
+        host::method(g, obj, "open", 0, open);
+        host::method(g, obj, "info", 0, info_js);
+        host::method(g, obj, "onChange", 1, on_change);
+    }
 }
 
 #[cfg(test)]

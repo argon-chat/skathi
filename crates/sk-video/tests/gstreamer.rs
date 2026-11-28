@@ -639,7 +639,8 @@ mod linux {
     pub fn run() {
         if std::env::var_os("SK_VIDEO_GST_AUDIO_SINK").is_none() {
             // Quiet, and works without a sound server; the clock still runs at real time.
-            std::env::set_var("SK_VIDEO_GST_AUDIO_SINK", "fakesink sync=true");
+            // SAFETY: main calls run directly, before this standalone test loads GStreamer or starts threads.
+            unsafe { std::env::set_var("SK_VIDEO_GST_AUDIO_SINK", "fakesink sync=true") };
         }
         let args: Vec<String> = std::env::args().skip(1).collect();
         if args.iter().any(|a| a == CHILD) {
