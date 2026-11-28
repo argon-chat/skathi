@@ -41,3 +41,5 @@ dist/
 #   .sk-test-artifacts/  the screenshots a failed assertion points at
 /packages/test/.sk-test/
 /.sk-test-artifacts/
+
+.astro/
