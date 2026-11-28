@@ -9,14 +9,15 @@ import {
   type SkKbdKeys,
 } from "@skathi-native/runtime";
 import { ref, useTemplateRef } from "vue";
+import ControlsView from "./ControlsView.vue";
 import GamepadView from "./GamepadView.vue";
 
-type Shot = "keys" | "keyboard" | "layouts" | "mouse" | "gamepad" | "menu" | "pad";
+type Shot = "keys" | "keyboard" | "layouts" | "mouse" | "gamepad" | "menu" | "pad" | "controls";
 const shot = ref<Shot>("keys");
 const menu = useTemplateRef<SkContextMenuHandle<string>>("menu");
 
 const rows: Record<
-  Exclude<Shot, "menu" | "pad">,
+  Exclude<Shot, "menu" | "pad" | "controls">,
   readonly (readonly [string, SkKbdKeys, Record<string, string>?])[]
 > = {
   keys: [
@@ -75,7 +76,8 @@ Object.assign(globalThis, { __shots: { show, openMenu } });
 
 <template>
   <main>
-    <GamepadView v-if="shot === 'pad'" />
+    <ControlsView v-if="shot === 'controls'" />
+    <GamepadView v-else-if="shot === 'pad'" />
     <ul v-else-if="shot === 'menu'" class="list">
       <li
         v-for="file in ['Release notes.md', 'Cover artwork.png', 'App icon.svg']"

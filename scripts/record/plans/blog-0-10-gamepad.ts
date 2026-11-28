@@ -10,6 +10,31 @@ export const plans: AppPlans = {
   group: "blog-0-10",
   window: [640, 440],
   clips: {
+    controls: {
+      poster: 0,
+      async show(app) {
+        await app.eval(`__shots.show("controls")`);
+      },
+      plan: async () => ({ start: 0, end: 0 }),
+    },
+    "controls-dark": {
+      poster: 0,
+      async show(app) {
+        await app.eval(`__shots.show("controls"); document.documentElement.style.colorScheme = "dark"; "ok"`);
+      },
+      plan: async () => ({ start: 0, end: 0 }),
+    },
+    "controls-unset": {
+      poster: 0,
+      async show(app) {
+        await app.eval(`__shots.show("controls"); document.documentElement.style.colorScheme = "";
+          const s = document.createElement("style");
+          s.textContent = "button, input, select, textarea { all: unset }";
+          document.head.append(s);
+          "ok"`);
+      },
+      plan: async () => ({ start: 0, end: 0 }),
+    },
     gamepad: {
       poster: 0.4,
       settle: 800,
