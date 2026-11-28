@@ -53,8 +53,8 @@ fn unknown(kind: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn base_of(kind: &str) -> Result<PathBuf, String> {
-    use windows_sys::Win32::Storage::FileSystem::GetTempPath2W;
-    use windows_sys::Win32::UI::Shell::{
+    use sk_windows::raw::GetTempPath2W;
+    use sk_windows::raw::{
         FOLDERID_Documents, FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_RoamingAppData,
         SHGetKnownFolderPath, KF_FLAG_DEFAULT,
     };
@@ -86,7 +86,7 @@ fn base_of(kind: &str) -> Result<PathBuf, String> {
         let len = (0..).take_while(|&i| unsafe { *wide.add(i) } != 0).count();
         String::from_utf16(unsafe { std::slice::from_raw_parts(wide, len) })
     });
-    unsafe { windows_sys::Win32::System::Com::CoTaskMemFree(wide.cast()) };
+    unsafe { sk_windows::raw::CoTaskMemFree(wide.cast()) };
     match path {
         None => Err(format!(
             "SHGetKnownFolderPath failed for {kind}: 0x{:08x}",

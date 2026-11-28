@@ -10,27 +10,24 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use redjs::webapi::audio::{OutputOpen, OutputRequest, OutputStream, Renderer};
-use windows::core::{HSTRING, PCWSTR};
-use windows::Media::Audio::{SpatialAudioDeviceConfiguration, SpatialAudioFormatSubtype};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows::Win32::Media::Audio::{
-    eConsole, eRender, AudioCategory_SoundEffects, AudioObjectType, AudioObjectType_Dynamic,
-    IMMDeviceEnumerator, ISpatialAudioClient, ISpatialAudioObject, ISpatialAudioObjectRenderStream,
-    MMDeviceEnumerator, SpatialAudioObjectRenderStreamActivationParams,
-    SPTLAUDCLNT_E_NO_MORE_OBJECTS, WAVEFORMATEX,
+use sk_windows::core::{HSTRING, PCWSTR};
+use sk_windows::runtime::{SpatialAudioDeviceConfiguration, SpatialAudioFormatSubtype};
+use sk_windows::win32::VT_BLOB;
+use sk_windows::win32::{
+    eConsole, eRender, AudioCategory_SoundEffects, AudioObjectType_Dynamic, IMMDeviceEnumerator,
+    ISpatialAudioClient, ISpatialAudioObject, ISpatialAudioObjectRenderStream, MMDeviceEnumerator,
+    SpatialAudioObjectRenderStreamActivationParams, SPTLAUDCLNT_E_NO_MORE_OBJECTS, WAVEFORMATEX,
 };
-use windows::Win32::System::Com::StructuredStorage::{
-    PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
-};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, BLOB, CLSCTX_ALL,
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
-};
-use windows::Win32::System::Threading::{
+use sk_windows::win32::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW,
     WaitForSingleObject,
 };
-use windows::Win32::System::Variant::VT_BLOB;
+use sk_windows::win32::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use sk_windows::win32::{
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, BLOB, CLSCTX_ALL,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+};
+use sk_windows::win32::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
 
 use crate::layout::{self, BedChannel};
 
@@ -49,7 +46,7 @@ pub fn open(request: &OutputRequest, renderer: Renderer) -> Result<OutputOpen, S
             .name("sk-spatial-audio".into())
             .spawn(move || {
                 // SAFETY: COM for this thread only; every COM object below is dropped inside `run`.
-                let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+                let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED as u32) }.is_ok();
                 let mut announced = false;
                 if let Err(e) = run(device.as_deref(), renderer, &tx, &mut announced, &stop) {
                     if announced {
@@ -139,7 +136,7 @@ fn run(
     announced: &mut bool,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    let hr = |what: &'static str| move |e: windows::core::Error| format!("{what} failed: {e}");
+    let hr = |what: &'static str| move |e: sk_windows::core::Error| format!("{what} failed: {e}");
     // SAFETY: COM calls on this MTA thread; every pointer passed lives across the call.
     unsafe {
         let devices: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -186,7 +183,7 @@ fn run(
         }
         let native = client
             .GetNativeStaticObjectTypeMask()
-            .map(|m| m.0 as u32)
+            .map(|m| m as u32)
             .unwrap_or(0);
         let bed = layout::bed(native);
         let non_native = bed.iter().filter(|c| native & c.object_type == 0).count() as u32;
@@ -202,18 +199,22 @@ fn run(
             .map_or_else(|| "spatial".into(), format_label);
         let in_bed = layout::objects_in_bed(&label);
 
-        let event = Event(CreateEventW(None, false, false, None).map_err(hr("CreateEventW"))?);
+        let handle = CreateEventW(None, false, false, None);
+        if handle.0.is_null() {
+            return Err(hr("CreateEventW")(sk_windows::core::Error::from_thread()));
+        }
+        let event = Event(handle);
         let mut params = SpatialAudioObjectRenderStreamActivationParams {
             ObjectFormat: format_ptr,
-            StaticObjectTypeMask: AudioObjectType(layout::object_type_mask(&bed) as i32),
+            StaticObjectTypeMask: layout::object_type_mask(&bed) as i32,
             MinDynamicObjectCount: 0,
             MaxDynamicObjectCount: if in_bed { 0 } else { max_objects },
             Category: AudioCategory_SoundEffects,
             EventHandle: event.0,
             NotifyObject: ManuallyDrop::new(None),
         };
-        // Not dropped: PROPVARIANT's Drop is PropVariantClear, which would free `params` (a stack value).
-        let blob = ManuallyDrop::new(PROPVARIANT {
+        // Activation borrows the stack parameters for this call. PropVariantClear would free them.
+        let blob = PROPVARIANT {
             Anonymous: PROPVARIANT_0 {
                 Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
                     vt: VT_BLOB,
@@ -229,13 +230,13 @@ fn run(
                     },
                 }),
             },
-        });
+        };
         let stream: ISpatialAudioObjectRenderStream = client
-            .ActivateSpatialAudioStream(&*blob)
+            .ActivateSpatialAudioStream(&blob)
             .map_err(hr("activating the spatial audio stream"))?;
         let statics = bed
             .iter()
-            .map(|c| stream.ActivateSpatialAudioObject(AudioObjectType(c.object_type as i32)))
+            .map(|c| stream.ActivateSpatialAudioObject(c.object_type as i32))
             .collect::<Result<Vec<_>, _>>()
             .map_err(hr("activating the static bed"))?;
 
@@ -254,9 +255,10 @@ fn run(
         }
 
         let mut task = 0u32;
-        let mmcss = AvSetMmThreadCharacteristicsW(windows::core::w!("Pro Audio"), &mut task).ok();
+        let mmcss = AvSetMmThreadCharacteristicsW(sk_windows::core::w!("Pro Audio"), &mut task);
         stream
             .Start()
+            .ok()
             .map_err(hr("starting the spatial audio stream"))?;
         let result = render_loop(
             &stream,
@@ -271,8 +273,8 @@ fn run(
             &label,
         );
         let _ = stream.Stop();
-        if let Some(h) = mmcss {
-            let _ = AvRevertMmThreadCharacteristics(h);
+        if !mmcss.0.is_null() {
+            let _ = AvRevertMmThreadCharacteristics(mmcss);
         }
         result
     }
@@ -307,6 +309,7 @@ unsafe fn render_loop(
             let (mut available, mut frames) = (0u32, 0u32);
             stream
                 .BeginUpdatingAudioObjects(&mut available, &mut frames)
+                .ok()
                 .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
             let frames = (frames as usize).min(max_frames as usize);
             renderer.render(&mut mix, channels, frames);
@@ -409,6 +412,7 @@ unsafe fn render_loop(
             }
             stream
                 .EndUpdatingAudioObjects()
+                .ok()
                 .map_err(|e| format!("the spatial audio stream stopped: {e}"))?;
         }
         Ok(())
@@ -419,7 +423,7 @@ unsafe fn render_loop(
 unsafe fn buffer<'a>(object: &ISpatialAudioObject, frames: usize) -> Option<&'a mut [f32]> {
     unsafe {
         let (mut ptr, mut len) = (std::ptr::null_mut(), 0u32);
-        object.GetBuffer(&mut ptr, &mut len).ok()?;
+        object.GetBuffer(&mut ptr, &mut len).ok().ok()?;
         if ptr.is_null() {
             return None;
         }
@@ -439,7 +443,7 @@ fn format_label(endpoint: &str) -> String {
     else {
         return "unknown".into();
     };
-    type Subtype = fn() -> windows::core::Result<HSTRING>;
+    type Subtype = fn() -> sk_windows::core::Result<HSTRING>;
     let known: [(Subtype, &str); 7] = [
         (SpatialAudioFormatSubtype::WindowsSonic, "windows-sonic"),
         (

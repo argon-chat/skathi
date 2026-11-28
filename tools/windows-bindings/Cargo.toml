@@ -1,0 +1,12 @@
+[package]
+name = "sk-windows-bindings"
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+hex = "0.4"
+sha2 = "0.11"
+windows-bindgen = "=0.100.0"

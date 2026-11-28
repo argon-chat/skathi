@@ -309,7 +309,7 @@ fn a_variadic_function_gets_integers_floats_and_pointers() {
 #[cfg(windows)]
 #[test]
 fn the_last_error_is_read_after_the_call() {
-    use windows_sys::Win32::Foundation::SetLastError;
+    use sk_windows::raw::SetLastError;
     let signature = Signature {
         args: vec![Type::U32],
         returns: Type::Void,

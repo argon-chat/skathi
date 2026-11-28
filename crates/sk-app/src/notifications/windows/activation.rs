@@ -2,6 +2,12 @@
 //! the toast server can acquire the class and accept activations after exit.
 use super::{activate, reply, Apartment, Error, Notice};
 use serde::{Deserialize, Serialize};
+use sk_windows::core::{implement, IUnknown, Interface, Ref, BOOL, GUID, PCWSTR};
+use sk_windows::win32::{
+    CoRegisterClassObject, IClassFactory, IClassFactory_Impl, INotificationActivationCallback,
+    INotificationActivationCallback_Impl, RoInitialize, CLASS_E_NOAGGREGATION, CLSCTX_LOCAL_SERVER,
+    E_POINTER, NOTIFICATION_USER_INPUT_DATA, REGCLS_MULTIPLEUSE, RO_INIT_MULTITHREADED,
+};
 use std::{
     ffi::c_void,
     fs::{self, File, OpenOptions},
@@ -11,26 +17,10 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
-use windows::{
-    core::{h, implement, IUnknown, Interface, Ref, BOOL, GUID, PCWSTR},
-    ApplicationModel::Package,
-    Data::Xml::Dom::XmlDocument,
-    Storage::ApplicationData,
-    Win32::{
-        Foundation::{CLASS_E_NOAGGREGATION, E_POINTER},
-        System::{
-            Com::{
-                CoRegisterClassObject, IClassFactory, IClassFactory_Impl, CLSCTX_LOCAL_SERVER,
-                REGCLS_MULTIPLEUSE,
-            },
-            WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
-        },
-        UI::Notifications::{
-            INotificationActivationCallback, INotificationActivationCallback_Impl,
-            NOTIFICATION_USER_INPUT_DATA,
-        },
-    },
-};
+use windows::core::h;
+use windows::ApplicationModel::Package;
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::Storage::ApplicationData;
 
 static START: Once = Once::new();
 static ROUTES: OnceLock<Option<Routes>> = OnceLock::new();
@@ -77,7 +67,7 @@ pub(super) fn routes() -> Option<&'static Routes> {
 }
 
 fn register() -> anyhow::Result<(Routes, Apartment)> {
-    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }?;
+    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.ok()?;
     let apartment = Apartment;
     let package_root = PathBuf::from(
         Package::Current()?
@@ -117,7 +107,14 @@ fn register() -> anyhow::Result<(Routes, Apartment)> {
     let routes = Routes { root };
     routes.sweep()?;
     let factory: IClassFactory = Factory.into();
-    unsafe { CoRegisterClassObject(&clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE) }?;
+    unsafe {
+        CoRegisterClassObject(
+            &clsid,
+            &factory,
+            CLSCTX_LOCAL_SERVER,
+            REGCLS_MULTIPLEUSE as u32,
+        )
+    }?;
     Ok((routes, apartment))
 }
 
@@ -131,7 +128,7 @@ impl IClassFactory_Impl for Factory_Impl {
         outer: Ref<'_, IUnknown>,
         iid: *const GUID,
         out: *mut *mut c_void,
-    ) -> windows::core::Result<()> {
+    ) -> sk_windows::core::Result<()> {
         if out.is_null() || iid.is_null() {
             return Err(E_POINTER.into());
         }
@@ -144,7 +141,7 @@ impl IClassFactory_Impl for Factory_Impl {
         let callback: INotificationActivationCallback = Callback.into();
         unsafe { callback.query(iid, out).ok() }
     }
-    fn LockServer(&self, _: BOOL) -> windows::core::Result<()> {
+    fn LockServer(&self, _: BOOL) -> sk_windows::core::Result<()> {
         Ok(())
     }
 }
@@ -160,7 +157,7 @@ impl INotificationActivationCallback_Impl for Callback_Impl {
         args: &PCWSTR,
         data: *const NOTIFICATION_USER_INPUT_DATA,
         count: u32,
-    ) -> windows::core::Result<()> {
+    ) -> sk_windows::core::Result<()> {
         if app.is_null() || args.is_null() {
             return Ok(());
         }
@@ -183,7 +180,7 @@ impl INotificationActivationCallback_Impl for Callback_Impl {
         if let Some(routes) = routes() {
             routes.receive(&args, text).map_err(|err| {
                 log::warn!("Could not consume notification activation: {err}");
-                windows::core::Error::from(windows::Win32::Foundation::E_FAIL)
+                sk_windows::core::Error::from(sk_windows::win32::E_FAIL)
             })?;
         }
         Ok(())
@@ -354,7 +351,7 @@ fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Com::{CoCreateInstance, CoRevokeClassObject};
+    use sk_windows::win32::{CoCreateInstance, CoRevokeClassObject};
 
     #[test]
     fn registered_factory_produces_the_windows_activation_interface() {
@@ -363,7 +360,12 @@ mod tests {
         let clsid: GUID = Uuid::new_v4().as_u128().into();
         let factory: IClassFactory = Factory.into();
         let cookie = unsafe {
-            CoRegisterClassObject(&clsid, &factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE)
+            CoRegisterClassObject(
+                &clsid,
+                &factory,
+                CLSCTX_LOCAL_SERVER,
+                REGCLS_MULTIPLEUSE as u32,
+            )
         }
         .unwrap();
         let actual: INotificationActivationCallback =

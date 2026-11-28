@@ -6,8 +6,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use windows::core::implement;
-use windows::Win32::Media::MediaFoundation::{IMFMediaEngineNotify, IMFMediaEngineNotify_Impl};
+use sk_windows::core::implement;
+use sk_windows::win32::{IMFMediaEngineNotify, IMFMediaEngineNotify_Impl};
 
 use crate::backend::MediaEvent;
 
@@ -23,7 +23,12 @@ impl EngineNotify {
 }
 
 impl IMFMediaEngineNotify_Impl for EngineNotify_Impl {
-    fn EventNotify(&self, event: u32, _param1: usize, _param2: u32) -> windows::core::Result<()> {
+    fn EventNotify(
+        &self,
+        event: u32,
+        _param1: usize,
+        _param2: u32,
+    ) -> sk_windows::core::Result<()> {
         if let Ok(mut queue) = self.queue.lock() {
             // Bounds a stalled UI thread's backlog; the newest events describe the current state, so the oldest go.
             if queue.len() >= 4096 {

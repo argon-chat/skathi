@@ -23,24 +23,20 @@ use std::time::{Duration, Instant};
 use sk_runtime::redjs::webapi::permissions::{
     Capability, PermissionHost, PermissionState, RequestOutcome,
 };
-use windows::core::HSTRING;
-use windows::Security::Authorization::AppCapabilityAccess::{
-    AppCapability, AppCapabilityAccessStatus,
-};
+use sk_windows::core::HSTRING;
+use sk_windows::runtime::{AppCapability, AppCapabilityAccessStatus};
 
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
-use windows_sys::Win32::System::Registry::{
+use sk_windows::raw::ShellExecuteW;
+use sk_windows::raw::SW_SHOWNORMAL;
+use sk_windows::raw::{CloseHandle, ERROR_SUCCESS, HANDLE};
+use sk_windows::raw::{CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE};
+use sk_windows::raw::{
     RegCloseKey, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER,
     HKEY_LOCAL_MACHINE, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET, REG_NOTIFY_CHANGE_NAME,
     REG_NOTIFY_THREAD_AGNOSTIC, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE,
-};
-use windows_sys::Win32::UI::Shell::ShellExecuteW;
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
@@ -351,7 +347,7 @@ fn ask_windows(cap: Capability) -> Option<Wait> {
 }
 
 fn on_ui_thread() -> bool {
-    use windows_sys::Win32::System::Com::{CoGetApartmentType, APTTYPE_MAINSTA, APTTYPE_STA};
+    use sk_windows::raw::{CoGetApartmentType, APTTYPE_MAINSTA, APTTYPE_STA};
     let (mut kind, mut qualifier) = (0, 0);
     // SAFETY: two out-pointers to locals.
     let ok = unsafe { CoGetApartmentType(&mut kind, &mut qualifier) } == 0;
@@ -870,7 +866,7 @@ mod tests {
             k
         }
         fn set(&self, sub: &str, value: &str) {
-            use windows_sys::Win32::System::Registry::{
+            use sk_windows::raw::{
                 RegCreateKeyExW, RegSetValueExW, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
             };
             let path = wide(&format!(r"{}\{sub}", self.0));
@@ -908,10 +904,7 @@ mod tests {
         fn delete(&self) {
             let path = wide(&self.0);
             unsafe {
-                windows_sys::Win32::System::Registry::RegDeleteTreeW(
-                    HKEY_CURRENT_USER,
-                    path.as_ptr(),
-                );
+                sk_windows::raw::RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr());
             }
         }
     }

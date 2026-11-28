@@ -15,7 +15,8 @@ fn only<T>(mut candidates: impl Iterator<Item = T>) -> Option<T> {
 
 #[cfg(windows)]
 pub(super) fn gilrs_id(pad: &Gamepad<'_>) -> Option<String> {
-    use windows::Gaming::Input::{Gamepad as WgiGamepad, RawGameController};
+    use sk_windows::core::Interface;
+    use sk_windows::runtime::{Gamepad as WgiGamepad, IGameController, RawGameController};
     let (vendor, product) = (pad.vendor_id()?, pad.product_id()?);
     let devices = RawGameController::RawGameControllers().ok()?;
     let mut matches = Vec::new();
@@ -27,7 +28,11 @@ pub(super) fn gilrs_id(pad: &Gamepad<'_>) -> Option<String> {
         if device.HardwareVendorId().ok()? == vendor
             && device.HardwareProductId().ok()? == product
             && device.DisplayName().ok()?.to_string_lossy() == pad.os_name()
-            && WgiGamepad::FromGameController(&device).is_ok() == (pad.uuid() == [0; 16])
+            && device
+                .cast::<IGameController>()
+                .and_then(|controller| WgiGamepad::FromGameController(&controller))
+                .is_ok()
+                == (pad.uuid() == [0; 16])
         {
             matches.push(device);
         }

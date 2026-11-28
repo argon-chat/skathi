@@ -21,13 +21,7 @@ indexeddb = ["sk-runtime/indexeddb-disk"]
 # Known-folder API rather than %APPDATA%: environment variables are forgeable and absent in
 # some service contexts. GetTempPath2W for TEMP; CoTaskMemFree releases SHGetKnownFolderPath's
 # result; DPAPI (CryptProtectData) is the at-rest provider.
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_Security_Cryptography",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
+sk-windows = { path = "../sk-windows", version = "0.9.0", features = ["raw"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # ring: AES-256-GCM and SystemRandom. security-framework/core-foundation: the login-keychain

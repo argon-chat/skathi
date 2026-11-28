@@ -5,24 +5,20 @@
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use sk_windows::raw::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use sk_windows::raw::{CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL};
+    use sk_windows::raw::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId};
+    use sk_windows::raw::{
+        MiniDumpWithThreadInfo, MiniDumpWriteDump, SetUnhandledExceptionFilter,
+        EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, LPTOP_LEVEL_EXCEPTION_FILTER,
+        MINIDUMP_EXCEPTION_INFORMATION,
+    };
     use std::fs::File;
     use std::io::Write;
     use std::mem::ManuallyDrop;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
     use std::sync::OnceLock;
-    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-    };
-    use windows_sys::Win32::System::Diagnostics::Debug::{
-        MiniDumpWithThreadInfo, MiniDumpWriteDump, SetUnhandledExceptionFilter,
-        EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, LPTOP_LEVEL_EXCEPTION_FILTER,
-        MINIDUMP_EXCEPTION_INFORMATION,
-    };
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
-    };
 
     struct State {
         stderr: usize,

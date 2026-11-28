@@ -403,9 +403,8 @@ fn print_thumbnail(window: HWND, rect: RECT, width: u32, height: u32) -> Result<
         (rect.right - rect.left) as u32,
         (rect.bottom - rect.top) as u32,
     )?;
-    let printed = unsafe {
-        windows_sys::Win32::Storage::Xps::PrintWindow(window.0, full.dc.0, PW_RENDERFULLCONTENT)
-    };
+    let printed =
+        unsafe { sk_windows::raw::PrintWindow(window.0, full.dc.0, PW_RENDERFULLCONTENT) };
     if printed == 0 {
         return Err(failure("PrintWindow"));
     }

@@ -102,7 +102,7 @@ mod probe {
 fn handle_open(value: usize) -> bool {
     let mut flags = 0u32;
     // SAFETY: only asks whether the value names a handle of this process.
-    unsafe { windows_sys::Win32::Foundation::GetHandleInformation(value as _, &mut flags) != 0 }
+    unsafe { sk_windows::raw::GetHandleInformation(value as _, &mut flags) != 0 }
 }
 
 #[cfg(unix)]
@@ -187,10 +187,8 @@ fn alive(pid: u32) -> bool {
     #[cfg(windows)]
     // SAFETY: opens and closes a handle; asks for nothing but whether it still runs.
     unsafe {
-        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-        };
+        use sk_windows::raw::{CloseHandle, WAIT_TIMEOUT};
+        use sk_windows::raw::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
         let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
         if h.is_null() {
             return false;
@@ -283,11 +281,7 @@ fn a_short_name_matches_the_entry_of_the_long_one() {
     let mut buf = [0u16; 1024];
     // SAFETY: a NUL-terminated path and a buffer as long as said.
     let n = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
-            wide.as_ptr(),
-            buf.as_mut_ptr(),
-            buf.len() as u32,
-        )
+        sk_windows::raw::GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32)
     } as usize;
     let short = PathBuf::from(OsString::from_wide(&buf[..n]));
     if n == 0 || short == long {
@@ -619,9 +613,9 @@ fn a_dropped_handle_ends_the_child() {
 fn only_stdio_reaches_the_child() {
     #[cfg(windows)]
     let leaked = {
+        use sk_windows::raw::GetCurrentProcess;
+        use sk_windows::raw::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
-        use windows_sys::Win32::System::Threading::GetCurrentProcess;
         let file = std::fs::File::open(me()).unwrap();
         let mut dup: HANDLE = std::ptr::null_mut();
         // SAFETY: an inheritable copy of a handle of this process, closed with the process.

@@ -17,8 +17,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 sk-permissions = { path = "../sk-permissions", version = "0.9.0" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = [
-    "ApplicationModel_DataTransfer",
+windows = { version = "0.62.2", features = [
     "Foundation",
     "Foundation_Collections",
     "Media",
@@ -41,30 +40,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# Plain functions (single instance, protocol registry, PrintWindow, file replace) whose `windows`
-# modules are large and needed by nothing else.
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    # `GetAdaptersAddresses`: the connection type of `skathi:network`.
-    "Win32_NetworkManagement_IpHelper",
-    "Win32_NetworkManagement_Ndis",
-    "Win32_Networking_WinSock",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_Storage_FileSystem",
-    "Win32_Storage_Xps",
-    "Win32_System_IO",
-    "Win32_System_Pipes",
-    "Win32_System_Registry",
-    "Win32_System_RemoteDesktop",
-    "Win32_System_Threading",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-] }
+sk-windows = { path = "../sk-windows", version = "0.9.0", features = ["raw", "win32", "runtime"] }
 # `#[implement(...)]` expands to `::windows_core::` paths, so the crate must be nameable.
-windows-core = "0.62"
-windows-collections = "0.3"
+windows-core = "0.100"
+windows-collections = "0.100"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # ScreenCaptureKit and CoreGraphics have no binding here: classes are looked up by name.

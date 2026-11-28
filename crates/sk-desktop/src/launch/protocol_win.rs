@@ -14,15 +14,13 @@
 
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR,
-};
-use windows_sys::Win32::System::Registry::{
+use sk_windows::raw::{
     RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
     RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE,
     REG_OPTION_NON_VOLATILE, REG_SZ,
 };
-use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+use sk_windows::raw::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+use sk_windows::raw::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, WIN32_ERROR};
 
 use super::instance_win::wide;
 use super::protocol::{command_line, command_targets};

@@ -15,16 +15,16 @@ use std::sync::Arc;
 
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
-use windows::core::Interface;
-use windows::Win32::Foundation::RECT;
-use windows::Win32::Graphics::Direct3D11::{
+use sk_windows::core::Interface;
+use sk_windows::win32::RECT;
+use sk_windows::win32::{
     ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
     D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
     D3D11_MAP_FLAG_DO_NOT_WAIT, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::Win32::Media::MediaFoundation::{IMFMediaEngine, MFARGB};
+use sk_windows::win32::{IMFMediaEngine, MFARGB};
+use sk_windows::win32::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 
 use crate::backend::GpuFrame;
 
@@ -127,14 +127,15 @@ impl Presenter {
                         Quality: 0,
                     },
                     Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                    BindFlags: (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) as u32,
                     ..Default::default()
                 },
                 None,
                 Some(&mut target),
             )
         }
-        .ok()?;
+        .is_ok()
+        .then_some(())?;
         let pixels = vec![0u8; size.0 as usize * size.1 as usize * 4];
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
         // `dynamic`: the GPU fills its tile, so its zeroed pixels must never be resampled into a
@@ -173,7 +174,9 @@ impl Presenter {
             rgbGreen: 0,
             rgbBlue: 0,
         };
-        unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }.ok()?;
+        unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }
+            .is_ok()
+            .then_some(())?;
 
         let image = self.placeholder.as_ref()?.clone();
         let gpu = GpuFrame {
@@ -205,14 +208,15 @@ impl Presenter {
             self.device.CreateTexture2D(
                 &D3D11_TEXTURE2D_DESC {
                     Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                    BindFlags: (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) as u32,
                     ..common
                 },
                 None,
                 Some(&mut target),
             )
         }
-        .ok()?;
+        .is_ok()
+        .then_some(())?;
         let mut slots = Vec::with_capacity(2);
         for _ in 0..2 {
             let mut staging = None;
@@ -221,14 +225,15 @@ impl Presenter {
                     &D3D11_TEXTURE2D_DESC {
                         Usage: D3D11_USAGE_STAGING,
                         BindFlags: 0,
-                        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                        CPUAccessFlags: D3D11_CPU_ACCESS_READ as u32,
                         ..common
                     },
                     None,
                     Some(&mut staging),
                 )
             }
-            .ok()?;
+            .is_ok()
+            .then_some(())?;
             slots.push(Slot {
                 texture: staging?,
                 pts: 0,
@@ -273,7 +278,9 @@ impl Presenter {
             rgbGreen: 0,
             rgbBlue: 0,
         };
-        unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }.ok()?;
+        unsafe { engine.TransferVideoFrame(&target, None, &dst, Some(&border)) }
+            .is_ok()
+            .then_some(())?;
 
         let write = self.write;
         unsafe {
@@ -305,7 +312,7 @@ impl Presenter {
                     &staging,
                     0,
                     D3D11_MAP_READ,
-                    D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                    D3D11_MAP_FLAG_DO_NOT_WAIT as u32,
                     Some(&mut mapped),
                 )
             }
@@ -316,7 +323,8 @@ impl Presenter {
                 self.context
                     .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
             }
-            .ok()?;
+            .is_ok()
+            .then_some(())?;
         }
         let row_bytes = size.0 as usize * 4;
         let pitch = mapped.RowPitch as usize;

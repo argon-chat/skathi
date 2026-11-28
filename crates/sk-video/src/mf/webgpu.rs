@@ -38,11 +38,16 @@ unsafe fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Result<
 }
 
 pub(super) fn capture(
-    device: &ID3D11Device,
-    engine: &IMFMediaEngine,
+    device: &sk_windows::win32::ID3D11Device,
+    engine: &sk_windows::win32::IMFMediaEngine,
     (width, height): (u32, u32),
     timestamp: i64,
 ) -> Result<Frame> {
+    // wgpu exposes its own D3D projection. Both borrowed interfaces keep the same IID and owner.
+    let device_raw = sk_windows::core::Interface::as_raw(device);
+    let engine_raw = sk_windows::core::Interface::as_raw(engine);
+    let device = unsafe { ID3D11Device::from_raw_borrowed(&device_raw) }.ok_or(E_FAIL)?;
+    let engine = unsafe { IMFMediaEngine::from_raw_borrowed(&engine_raw) }.ok_or(E_FAIL)?;
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,

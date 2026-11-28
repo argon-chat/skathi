@@ -6,9 +6,7 @@ pub fn family_name() -> Option<&'static str> {
     {
         static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         NAME.get_or_init(|| {
-            win::read(|len, buf| unsafe {
-                windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFamilyName(len, buf)
-            })
+            win::read(|len, buf| unsafe { sk_windows::raw::GetCurrentPackageFamilyName(len, buf) })
         })
         .as_deref()
     }
@@ -27,9 +25,7 @@ pub fn app_user_model_id() -> Option<&'static str> {
         static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         ID.get_or_init(|| {
             win::read(|len, buf| unsafe {
-                windows_sys::Win32::Storage::Packaging::Appx::GetCurrentApplicationUserModelId(
-                    len, buf,
-                )
+                sk_windows::raw::GetCurrentApplicationUserModelId(len, buf)
             })
         })
         .as_deref()
@@ -40,7 +36,7 @@ pub fn app_user_model_id() -> Option<&'static str> {
 
 #[cfg(target_os = "windows")]
 mod win {
-    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use sk_windows::raw::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
 
     /// The two-call string pattern of the `GetCurrentPackage*` family; an unpackaged process gets
     /// `APPMODEL_ERROR_NO_PACKAGE` from the first call.

@@ -1,4 +1,5 @@
 use super::{Callback, Error, Icon, MenuItem, Options};
+use sk_windows::raw::{RegGetValueW, ERROR_SUCCESS, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use std::{
     cell::{Cell, RefCell},
     sync::{
@@ -20,10 +21,6 @@ use windows::{
             WindowsAndMessaging::*,
         },
     },
-};
-use windows_sys::Win32::{
-    Foundation::ERROR_SUCCESS,
-    System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
 };
 
 const CALLBACK: u32 = WM_APP + 0x61;
@@ -615,8 +612,9 @@ fn taskbar_foreground() -> u8 {
     let result = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            windows_sys::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            windows_sys::w!("SystemUsesLightTheme"),
+            windows::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+                .as_ptr(),
+            windows::core::w!("SystemUsesLightTheme").as_ptr(),
             RRF_RT_REG_DWORD,
             std::ptr::null_mut(),
             (&mut light as *mut u32).cast(),

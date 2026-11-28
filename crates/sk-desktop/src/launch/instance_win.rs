@@ -17,37 +17,37 @@ use std::ptr::{null, null_mut};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{
+use sk_windows::raw::ProcessIdToSessionId;
+use sk_windows::raw::{
+    AllowSetForegroundWindow, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindowAsync,
+    SW_RESTORE, SW_SHOW,
+};
+use sk_windows::raw::{
     CloseHandle, GetLastError, LocalFree, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS,
     ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GENERIC_READ,
     GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::Authorization::{
+use sk_windows::raw::{
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
+    GetNamedPipeServerProcessId, SetNamedPipeHandleState, WaitNamedPipeW, PIPE_READMODE_MESSAGE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+};
+use sk_windows::raw::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
-use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-    TOKEN_USER,
-};
-use windows_sys::Win32::Storage::FileSystem::{
+use sk_windows::raw::{
     CreateFileW, FlushFileBuffers, GetFileInformationByHandle, ReadFile, WriteFile,
     BY_HANDLE_FILE_INFORMATION, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
     SECURITY_SQOS_PRESENT,
 };
-use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
-    GetNamedPipeServerProcessId, SetNamedPipeHandleState, WaitNamedPipeW, PIPE_READMODE_MESSAGE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-};
-use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::System::Threading::{
+use sk_windows::raw::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
     QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindowAsync,
-    SW_RESTORE, SW_SHOW,
+use sk_windows::raw::{
+    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER,
 };
 
 use super::{Forward, CLOSING_PATIENCE_MS, FORWARD_TIMEOUT_MS, MAX_MESSAGE};

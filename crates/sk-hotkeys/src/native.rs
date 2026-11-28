@@ -1,15 +1,19 @@
 use super::{Button, Hotkeys, RAW};
+use sk_windows::raw::{
+    CallNextHookEx, DispatchMessageW, GetAsyncKeyState, GetCurrentThreadId, GetForegroundWindow,
+    GetMessageW, GetModuleHandleW, GetSystemMetrics, KillTimer, PeekMessageW, PostThreadMessageW,
+    SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, HINSTANCE,
+    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LPARAM, LRESULT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE,
+    SM_SWAPBUTTON, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN, WM_XBUTTONUP, WPARAM,
+};
 use std::ptr::{null, null_mut};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::{atomic::Ordering, mpsc::SyncSender, Weak},
     time::{Duration, Instant},
-};
-use windows_sys::Win32::{
-    Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM},
-    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
-    UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::*},
 };
 thread_local! { static OWNER: RefCell<Weak<Hotkeys>> = const { RefCell::new(Weak::new()) }; }
 
@@ -533,10 +537,10 @@ mod tests {
     #[ignore = "injects only suppressed F24 into an isolated hook service; run explicitly on an interactive Windows desktop"]
     fn real_f24_input_reaches_handler_with_balanced_suppressed_hold() {
         use super::super::{Binding, Chord};
-        use std::sync::{mpsc, Arc};
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        use sk_windows::raw::{
             SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_F24,
         };
+        use std::sync::{mpsc, Arc};
         fn send_f24(up: bool) -> u32 {
             let input = INPUT {
                 r#type: INPUT_KEYBOARD,

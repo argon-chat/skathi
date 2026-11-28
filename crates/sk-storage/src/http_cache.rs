@@ -146,7 +146,7 @@ mod gcm {
 
     use std::ptr::{null, null_mut};
 
-    use windows_sys::Win32::Security::Cryptography::{
+    use sk_windows::raw::{
         BCryptCloseAlgorithmProvider, BCryptDecrypt, BCryptDestroyKey, BCryptEncrypt,
         BCryptGenerateSymmetricKey, BCryptOpenAlgorithmProvider, BCryptSetProperty,
         BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
@@ -179,7 +179,7 @@ mod gcm {
         }
     }
 
-    fn check(st: windows_sys::Win32::Foundation::NTSTATUS, what: &str) -> Result<(), String> {
+    fn check(st: sk_windows::raw::NTSTATUS, what: &str) -> Result<(), String> {
         if st < 0 {
             Err(format!("{what} failed: 0x{:08x}", st as u32))
         } else {

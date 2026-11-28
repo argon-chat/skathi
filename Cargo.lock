@@ -1727,7 +1727,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5317,7 +5317,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5670,6 +5670,7 @@ dependencies = [
  "sk-storage",
  "sk-tree",
  "sk-webview",
+ "sk-windows",
  "skathi-gpui",
  "skathi-gpui-platform",
  "skathi-gpui-windows",
@@ -5684,9 +5685,8 @@ dependencies = [
  "uuid",
  "wgpu",
  "windows 0.62.2",
- "windows-core 0.62.2",
- "windows-registry 0.100.0",
- "windows-sys 0.61.2",
+ "windows-core 0.100.0",
+ "windows-registry",
  "zbus 5.19.0",
  "zmij",
 ]
@@ -5696,8 +5696,7 @@ name = "sk-audio"
 version = "0.9.0"
 dependencies = [
  "redjs",
- "windows 0.62.2",
- "windows-core 0.62.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5706,8 +5705,9 @@ version = "0.9.0"
 dependencies = [
  "image",
  "sk-runtime",
+ "sk-windows",
  "skathi-gpui",
- "windows-sys 0.61.2",
+ "windows-strings 0.100.0",
 ]
 
 [[package]]
@@ -5745,10 +5745,10 @@ dependencies = [
  "serde_json",
  "sk-permissions",
  "sk-runtime",
+ "sk-windows",
  "windows 0.62.2",
- "windows-collections 0.3.2",
- "windows-core 0.62.2",
- "windows-sys 0.61.2",
+ "windows-collections 0.100.0",
+ "windows-core 0.100.0",
  "zbus 6.5.0",
 ]
 
@@ -5778,7 +5778,7 @@ name = "sk-ffi"
 version = "0.9.0"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5790,8 +5790,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-kit",
  "sha2 0.11.2",
- "windows 0.62.2",
- "windows-sys 0.61.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5799,7 +5798,7 @@ name = "sk-hotkeys"
 version = "0.9.0"
 dependencies = [
  "keycode",
- "windows-sys 0.61.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5844,8 +5843,7 @@ dependencies = [
  "serde_json",
  "sk-locale",
  "sk-runtime",
- "windows 0.62.2",
- "windows-sys 0.61.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5887,7 +5885,7 @@ dependencies = [
  "security-framework",
  "serde_json",
  "sk-runtime",
- "windows-sys 0.61.2",
+ "sk-windows",
 ]
 
 [[package]]
@@ -5955,9 +5953,10 @@ dependencies = [
  "objc2-metal 0.3.2",
  "redjs-webgpu",
  "sk-resample",
+ "sk-windows",
  "skathi-gpui",
  "windows 0.62.2",
- "windows-core 0.62.2",
+ "windows-core 0.100.0",
 ]
 
 [[package]]
@@ -5982,7 +5981,16 @@ dependencies = [
  "skathi-gpui",
  "webview2-com",
  "windows 0.62.2",
- "windows-core 0.62.2",
+]
+
+[[package]]
+name = "sk-windows"
+version = "0.9.0"
+dependencies = [
+ "windows-collections 0.100.0",
+ "windows-core 0.100.0",
+ "windows-future 0.100.0",
+ "windows-link 0.100.0",
 ]
 
 [[package]]
@@ -6386,7 +6394,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-numerics 0.3.1",
- "windows-registry 0.6.1",
+ "windows-registry",
  "windows-sys 0.61.2",
 ]
 
@@ -7008,7 +7016,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8199,7 +8207,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8275,6 +8283,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-collections"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e884f6b14b3c101363efab151e89271b4da599d1e29d945023f92656b23020c2"
+dependencies = [
+ "windows-core 0.100.0",
+]
+
+[[package]]
 name = "windows-core"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8313,6 +8330,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-core"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803590c6856f51d15fa2e9fabe4f4703122c8737f72ef2741b4ac09d4c2192f5"
+dependencies = [
+ "windows-implement 0.100.0",
+ "windows-interface 0.100.0",
+ "windows-link 0.100.0",
+ "windows-result 0.100.0",
+ "windows-strings 0.100.0",
+]
+
+[[package]]
 name = "windows-future"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8332,6 +8362,17 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-link 0.2.1",
  "windows-threading 0.2.1",
+]
+
+[[package]]
+name = "windows-future"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a74555161b6c58612bbe052b9964c9c069326c487d24b8f7e77d5a8e83fb81c8"
+dependencies = [
+ "windows-core 0.100.0",
+ "windows-link 0.100.0",
+ "windows-threading 0.100.0",
 ]
 
 [[package]]
@@ -8357,6 +8398,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-implement"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bc1bc82e5a1b1a4d7255861b07881a0407b552f50a4d8543c0c7276fa96f6e8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "windows-interface"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8372,6 +8424,17 @@ name = "windows-interface"
 version = "0.59.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3f7005c3b757b9b82c2f40c0e71094ff1080adddaf3e8b6ce99b545d3c48796"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8414,17 +8477,6 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core 0.62.2",
  "windows-link 0.2.1",
-]
-
-[[package]]
-name = "windows-registry"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
-dependencies = [
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
 ]
 
 [[package]]
@@ -8575,6 +8627,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-threading"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff005f1c94bffb9b073230837d3448d0e0ba3cf11c34b6f1f7d4c3875eded09"
+dependencies = [
+ "windows-link 0.100.0",
 ]
 
 [[package]]

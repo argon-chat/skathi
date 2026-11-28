@@ -84,7 +84,7 @@ fn main() {
     check_route(VideoState::new(backend), false);
     #[cfg(windows)]
     {
-        use windows::Win32::Media::MediaFoundation::MFCreateAudioRenderer;
+        use sk_windows::win32::MFCreateAudioRenderer;
         // Media Foundation cannot start direct playback on machines without a render endpoint.
         match unsafe { MFCreateAudioRenderer(None) } {
             Ok(sink) => unsafe { sink.Shutdown() }.unwrap(),

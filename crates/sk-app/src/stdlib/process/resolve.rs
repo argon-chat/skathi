@@ -69,12 +69,8 @@ fn system_dir() -> Option<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     let mut buf = [0u16; 260];
     // SAFETY: the buffer is as long as said.
-    let n = unsafe {
-        windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(
-            buf.as_mut_ptr(),
-            buf.len() as u32,
-        )
-    } as usize;
+    let n = unsafe { sk_windows::raw::GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) }
+        as usize;
     (n > 0 && n < buf.len()).then(|| OsString::from_wide(&buf[..n]).into())
 }
 

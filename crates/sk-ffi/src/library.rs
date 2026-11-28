@@ -85,13 +85,13 @@ impl Library {
 
 #[cfg(windows)]
 mod sys {
-    use std::ffi::CStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::path::Path;
-    use windows_sys::Win32::System::LibraryLoader::{
+    use sk_windows::raw::{
         GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
     };
+    use std::ffi::CStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
 
     pub unsafe fn open_system(name: &str) -> Result<usize, String> {
         unsafe {

@@ -18,14 +18,14 @@ pub fn in_call<R>(label: &'static CStr, call: impl FnOnce() -> R) -> R {
 
 #[cfg(windows)]
 fn install() {
-    use std::sync::Once;
-    use windows_sys::Win32::Foundation::{
+    use sk_windows::raw::{
+        AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
+    };
+    use sk_windows::raw::{
         EXCEPTION_ACCESS_VIOLATION, EXCEPTION_ILLEGAL_INSTRUCTION, EXCEPTION_INT_DIVIDE_BY_ZERO,
         EXCEPTION_IN_PAGE_ERROR, EXCEPTION_PRIV_INSTRUCTION, EXCEPTION_STACK_OVERFLOW,
     };
-    use windows_sys::Win32::System::Diagnostics::Debug::{
-        AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
-    };
+    use std::sync::Once;
 
     unsafe extern "system" fn report(info: *mut EXCEPTION_POINTERS) -> i32 {
         unsafe {

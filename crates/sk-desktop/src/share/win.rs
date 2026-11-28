@@ -3,15 +3,13 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use windows::core::{IInspectable, Interface, HSTRING};
-use windows::ApplicationModel::DataTransfer::{
-    DataPackage, DataRequestedEventArgs, DataTransferManager, ShareCompletedEventArgs,
+use sk_windows::core::{Interface, HSTRING};
+use sk_windows::runtime::{
+    DataRequestedEventArgs, DataTransferManager, IStorageItem, StorageFile, Uri,
 };
-use windows::Foundation::{TypedEventHandler, Uri};
-use windows::Storage::{IStorageItem, StorageFile};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
-use windows::Win32::UI::Shell::IDataTransferManagerInterop;
+use sk_windows::win32::{
+    CoInitializeEx, IDataTransferManagerInterop, COINIT_APARTMENTTHREADED, HWND,
+};
 use windows_collections::IIterable;
 
 use super::{write, Request, SharedFile};
@@ -30,9 +28,12 @@ thread_local! {
     static MANAGERS: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
 }
 
-fn store(files: Vec<SharedFile>) -> windows::core::Result<Vec<StorageFile>> {
+fn store(files: Vec<SharedFile>) -> sk_windows::core::Result<Vec<StorageFile>> {
     let paths = write(files).map_err(|e| {
-        windows::core::Error::new(windows::core::HRESULT(0x8000_4005u32 as i32), e.to_string())
+        sk_windows::core::Error::new(
+            sk_windows::core::HRESULT(0x8000_4005u32 as i32),
+            e.to_string(),
+        )
     })?;
     paths
         .iter()
@@ -40,7 +41,7 @@ fn store(files: Vec<SharedFile>) -> windows::core::Result<Vec<StorageFile>> {
         .collect()
 }
 
-fn fill(args: &DataRequestedEventArgs) -> windows::core::Result<()> {
+fn fill(args: &DataRequestedEventArgs) -> sk_windows::core::Result<()> {
     let Some(p) = PENDING.with(|p| p.borrow_mut().take()) else {
         return Ok(());
     };
@@ -54,48 +55,51 @@ fn fill(args: &DataRequestedEventArgs) -> windows::core::Result<()> {
         data.SetWebLink(&Uri::CreateUri(&HSTRING::from(u))?)?;
     }
     if !p.files.is_empty() {
-        let items: Vec<Option<IStorageItem>> = p.files.iter().map(|f| f.cast().ok()).collect();
-        data.SetStorageItems(&IIterable::<IStorageItem>::from(items), true)?;
+        data.SetStorageItems(&storage_items(&p.files)?, true)?;
     }
-    data.ShareCompleted(
-        &TypedEventHandler::<DataPackage, ShareCompletedEventArgs>::new(move |_, _| {
-            crate::settle(token, Ok("{}".into()));
-            Ok(())
-        }),
-    )?;
-    data.ShareCanceled(&TypedEventHandler::<DataPackage, IInspectable>::new(
-        move |_, _| {
+    // The OS owns the data package until the share sheet completes.
+    let _ = data
+        .ShareCompleted(move |_, _| crate::settle(token, Ok("{}".into())))?
+        .into_token();
+    let _ = data
+        .ShareCanceled(move |_, _| {
             crate::settle(token, Err(Fail::new("AbortError", "Share canceled")));
-            Ok(())
-        },
-    ))?;
+        })?
+        .into_token();
     Ok(())
+}
+
+fn storage_items(files: &[StorageFile]) -> sk_windows::core::Result<IIterable<IStorageItem>> {
+    let items = files
+        .iter()
+        .map(|file| file.cast::<IStorageItem>().map(Some));
+    Ok(IIterable::from(
+        items.collect::<sk_windows::core::Result<Vec<_>>>()?,
+    ))
 }
 
 fn manager(
     hwnd: HWND,
-) -> windows::core::Result<(IDataTransferManagerInterop, DataTransferManager)> {
+) -> sk_windows::core::Result<(IDataTransferManagerInterop, DataTransferManager)> {
     // SAFETY: COM on the window's thread; an initialised apartment is fine.
     let interop = unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        windows::core::factory::<DataTransferManager, IDataTransferManagerInterop>()?
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED as u32);
+        sk_windows::core::factory::<DataTransferManager, IDataTransferManagerInterop>()?
     };
     // SAFETY: `hwnd` is a live top-level window of this thread.
     let m: DataTransferManager = unsafe { interop.GetForWindow(hwnd)? };
     if !MANAGERS.with(|ms| ms.borrow().contains(&(hwnd.0 as isize))) {
-        m.DataRequested(&TypedEventHandler::<
-            DataTransferManager,
-            DataRequestedEventArgs,
-        >::new(|_, args| {
-            if let Some(a) = args.as_ref() {
-                if let Err(e) = fill(a) {
-                    crate::advise(&format!(
-                        "navigator.share: the share sheet refused the data ({e})"
-                    ));
+        let _ = m
+            .DataRequested(|_, args| {
+                if let Some(a) = args.as_ref() {
+                    if let Err(e) = fill(a) {
+                        crate::advise(&format!(
+                            "navigator.share: the share sheet refused the data ({e})"
+                        ));
+                    }
                 }
-            }
-            Ok(())
-        }))?;
+            })?
+            .into_token();
         MANAGERS.with(|ms| ms.borrow_mut().push(hwnd.0 as isize));
     }
     Ok((interop, m))
@@ -108,7 +112,7 @@ pub fn start(hwnd: isize, req: Request) -> Result<u32, Fail> {
         crate::settle(prev.token, Err(Fail::new("AbortError", "Share canceled")));
     }
     let hwnd = HWND(hwnd as *mut c_void);
-    let shown = (|| -> windows::core::Result<()> {
+    let shown = (|| -> sk_windows::core::Result<()> {
         let files = store(req.files)?;
         let (interop, _m) = manager(hwnd)?;
         PENDING.with(|p| {
@@ -121,7 +125,7 @@ pub fn start(hwnd: isize, req: Request) -> Result<u32, Fail> {
             })
         });
         // SAFETY: as in `manager`.
-        unsafe { interop.ShowShareUIForWindow(hwnd) }
+        unsafe { interop.ShowShareUIForWindow(hwnd) }.ok()
     })();
     match shown {
         Ok(()) => Ok(token),
@@ -146,6 +150,11 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(files[0].Name().unwrap(), "note.txt");
+        let items = super::storage_items(&files).unwrap();
+        sk_windows::runtime::DataPackage::new()
+            .unwrap()
+            .SetStorageItems(&items, true)
+            .unwrap();
         assert_eq!(
             std::fs::read(folder.join("0").join("note.txt")).unwrap(),
             b"hi"

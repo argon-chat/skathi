@@ -175,8 +175,8 @@ pub fn utc(t: SystemTime) -> String {
 pub fn os_version() -> String {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+        use sk_windows::raw::RtlGetVersion;
+        use sk_windows::raw::OSVERSIONINFOW;
         let mut vi = OSVERSIONINFOW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             ..Default::default()

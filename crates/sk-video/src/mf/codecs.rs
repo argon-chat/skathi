@@ -10,14 +10,14 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use windows::core::GUID;
-use windows::Win32::Media::MediaFoundation::{
+use sk_windows::core::GUID;
+use sk_windows::win32::CoTaskMemFree;
+use sk_windows::win32::{
     IMFActivate, MFMediaType_Video, MFTEnumEx, MFVideoFormat_AV1, MFVideoFormat_H264,
     MFVideoFormat_H265, MFVideoFormat_HEVC, MFVideoFormat_MPEG2, MFVideoFormat_Theora,
     MFVideoFormat_VP80, MFVideoFormat_VP90, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL,
     MFT_REGISTER_TYPE_INFO,
 };
-use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::backend::CanPlay;
 
@@ -115,7 +115,7 @@ fn enumerate(subtype: GUID) -> u32 {
     let ok = unsafe {
         MFTEnumEx(
             MFT_CATEGORY_VIDEO_DECODER,
-            MFT_ENUM_FLAG_ALL,
+            MFT_ENUM_FLAG_ALL as u32,
             Some(&input),
             None,
             &mut activates,

@@ -1,25 +1,25 @@
 //! Shared, read-only input from the four controller collections on Valve's wireless Puck.
+use sk_windows::raw::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+use sk_windows::raw::{
+    CreateFileW, ReadFile, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use sk_windows::raw::{
+    GetLastError, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE,
+};
+use sk_windows::raw::{
+    GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICEINFO,
+    RIDI_DEVICENAME, RID_DEVICE_INFO, RIM_TYPEHID,
+};
+use sk_windows::raw::{
+    HidD_FreePreparsedData, HidD_GetFeature, HidD_GetPreparsedData, HidD_SetFeature, HidP_GetCaps,
+    HIDP_CAPS, HIDP_STATUS_SUCCESS,
+};
 use std::cell::UnsafeCell;
 use std::collections::BTreeMap;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Devices::HumanInterfaceDevice::{
-    HidD_FreePreparsedData, HidD_GetFeature, HidD_GetPreparsedData, HidD_SetFeature, HidP_GetCaps,
-    HIDP_CAPS, HIDP_STATUS_SUCCESS,
-};
-use windows_sys::Win32::Foundation::{
-    GetLastError, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE,
-};
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-};
-use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-use windows_sys::Win32::UI::Input::{
-    GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICEINFO,
-    RIDI_DEVICENAME, RID_DEVICE_INFO, RIM_TYPEHID,
-};
 
 const PUCK: u16 = 0x1304;
 const DISCOVER: Duration = Duration::from_secs(1);
@@ -114,19 +114,21 @@ fn wireless_status(path: &[u16], length: usize) -> Option<Vec<u8>> {
     let mut bytes = vec![0u8; length];
     bytes[..2].copy_from_slice(&[2, 0xb4]);
     unsafe {
-        if !HidD_SetFeature(
+        if HidD_SetFeature(
             file.as_raw_handle(),
             bytes.as_mut_ptr().cast(),
             length as u32,
-        ) {
+        ) == 0
+        {
             return None;
         }
         bytes[1..].fill(0);
-        if !HidD_GetFeature(
+        if HidD_GetFeature(
             file.as_raw_handle(),
             bytes.as_mut_ptr().cast(),
             length as u32,
-        ) {
+        ) == 0
+        {
             return None;
         }
     }
@@ -171,7 +173,7 @@ impl Reader {
         let handle = file.as_raw_handle();
         unsafe {
             let mut data = 0;
-            if !HidD_GetPreparsedData(handle, &mut data) {
+            if HidD_GetPreparsedData(handle, &mut data) == 0 {
                 return None;
             }
             let mut caps = HIDP_CAPS::default();

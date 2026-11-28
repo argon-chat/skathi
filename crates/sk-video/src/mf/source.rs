@@ -1,28 +1,27 @@
 //! Per-engine, in-process packaged media source. The image owns the bytes;
 //! Media Foundation asks a seekable IStream for only the ranges it needs.
 //! No registry scheme, whole-asset allocation, temp file or server is involved.
-use std::{
-    ffi::c_void,
-    sync::{
-        atomic::{AtomicU64, AtomicU8, Ordering},
-        Arc, Mutex,
-    },
+use sk_windows::core::{implement, IUnknown, Interface, OutRef, Ref, Result, BOOL, BSTR, HRESULT};
+use sk_windows::win32::{
+    IAgileObject, IAgileObject_Impl, ISequentialStream_Impl, IStream, IStream_Impl, STATSTG,
+    STGM_READ, STGTY_STREAM, STREAM_SEEK, STREAM_SEEK_CUR, STREAM_SEEK_END, STREAM_SEEK_SET,
 };
-use windows::core::{implement, IUnknown, Interface, OutRef, Ref, Result, BOOL, BSTR, HRESULT};
-use windows::Win32::Foundation::{
-    E_INVALIDARG, E_NOTIMPL, E_POINTER, STG_E_ACCESSDENIED, STG_E_INVALIDFUNCTION, S_FALSE, S_OK,
-};
-use windows::Win32::Media::MediaFoundation::{
+use sk_windows::win32::{
     IMFAsyncCallback, IMFAsyncCallback_Impl, IMFAsyncResult, IMFAttributes, IMFByteStream,
     IMFMediaEngineExtension, IMFMediaEngineExtension_Impl, MFCreateAsyncResult,
     MFCreateMFByteStreamOnStream, MFInvokeCallback, MFPutWorkItem, MFASYNC_CALLBACK_QUEUE_STANDARD,
     MF_BYTESTREAM_CONTENT_TYPE, MF_E_INVALIDREQUEST, MF_E_OPERATION_CANCELLED,
     MF_E_UNSUPPORTED_SCHEME, MF_MEDIA_ENGINE_CANPLAY, MF_OBJECT_BYTESTREAM, MF_OBJECT_TYPE,
 };
-use windows::Win32::System::Com::{
-    IAgileObject, IAgileObject_Impl, ISequentialStream_Impl, IStream, IStream_Impl, LOCKTYPE,
-    STATFLAG, STATSTG, STGC, STGM_READ, STGTY_STREAM, STREAM_SEEK, STREAM_SEEK_CUR,
-    STREAM_SEEK_END, STREAM_SEEK_SET,
+use sk_windows::win32::{
+    E_INVALIDARG, E_NOTIMPL, E_POINTER, STG_E_ACCESSDENIED, STG_E_INVALIDFUNCTION, S_FALSE, S_OK,
+};
+use std::{
+    ffi::c_void,
+    sync::{
+        atomic::{AtomicU64, AtomicU8, Ordering},
+        Arc, Mutex,
+    },
 };
 
 #[derive(Default)]
@@ -81,8 +80,8 @@ impl MappedStream {
         .into()
     }
 }
-impl ISequentialStream_Impl for MappedStream_Impl {
-    fn Read(&self, destination: *mut c_void, requested: u32, read: *mut u32) -> HRESULT {
+impl MappedStream_Impl {
+    fn read_bytes(&self, destination: *mut c_void, requested: u32, read: *mut u32) -> HRESULT {
         unsafe {
             if !read.is_null() {
                 *read = 0;
@@ -126,13 +125,25 @@ impl ISequentialStream_Impl for MappedStream_Impl {
             S_FALSE
         }
     }
-    fn Write(&self, _source: *const c_void, _count: u32, written: *mut u32) -> HRESULT {
+}
+impl ISequentialStream_Impl for MappedStream_Impl {
+    fn Read(&self, destination: *mut c_void, requested: u32, read: *mut u32) -> Result<()> {
+        let status = self.read_bytes(destination, requested, read);
+        // The COM thunk maps Ok(()) to S_OK. Preserve S_FALSE for a short read.
+        if status == S_OK {
+            Ok(())
+        } else {
+            Err(sk_windows::core::Error::from_hresult(status))
+        }
+    }
+
+    fn Write(&self, _source: *const c_void, _count: u32, written: *mut u32) -> Result<()> {
         unsafe {
             if !written.is_null() {
                 *written = 0;
             }
         }
-        STG_E_ACCESSDENIED
+        Err(STG_E_ACCESSDENIED.into())
     }
 }
 impl IStream_Impl for MappedStream_Impl {
@@ -184,7 +195,7 @@ impl IStream_Impl for MappedStream_Impl {
         while remaining != 0 {
             let request = remaining.min(buffer.len() as u64) as u32;
             let mut got = 0;
-            self.Read(buffer.as_mut_ptr().cast(), request, &mut got)
+            self.read_bytes(buffer.as_mut_ptr().cast(), request, &mut got)
                 .ok()?;
             if got == 0 {
                 break;
@@ -220,25 +231,25 @@ impl IStream_Impl for MappedStream_Impl {
         }
         Ok(())
     }
-    fn Commit(&self, _flags: &STGC) -> Result<()> {
+    fn Commit(&self, _flags: u32) -> Result<()> {
         Ok(())
     }
     fn Revert(&self) -> Result<()> {
         Err(E_NOTIMPL.into())
     }
-    fn LockRegion(&self, _offset: u64, _count: u64, _kind: &LOCKTYPE) -> Result<()> {
+    fn LockRegion(&self, _offset: u64, _count: u64, _kind: u32) -> Result<()> {
         Err(E_NOTIMPL.into())
     }
     fn UnlockRegion(&self, _offset: u64, _count: u64, _kind: u32) -> Result<()> {
         Err(E_NOTIMPL.into())
     }
-    fn Stat(&self, out: *mut STATSTG, _flags: &STATFLAG) -> Result<()> {
+    fn Stat(&self, out: *mut STATSTG, _flags: u32) -> Result<()> {
         if out.is_null() {
             return Err(E_POINTER.into());
         }
         unsafe {
             out.write(STATSTG {
-                r#type: STGTY_STREAM.0 as u32,
+                r#type: STGTY_STREAM as u32,
                 cbSize: self.bytes.len() as u64,
                 grfMode: STGM_READ,
                 ..Default::default()
@@ -282,9 +293,9 @@ impl IMFAsyncCallback_Impl for Complete_Impl {
             let object = self.result.GetObject()?;
             let cookie = object.cast_object_ref::<Cookie>()?;
             if cookie.phase.load(Ordering::Acquire) == CANCELLED {
-                self.result.SetStatus(MF_E_OPERATION_CANCELLED)?;
+                self.result.SetStatus(MF_E_OPERATION_CANCELLED).ok()?;
             }
-            MFInvokeCallback(&self.result)
+            MFInvokeCallback(&self.result).ok()
         }
     }
 }
@@ -314,18 +325,20 @@ impl IMFMediaEngineExtension_Impl for Extension_Impl {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
-            .filter(|source| source.url == url.to_string())
+            .filter(|source| source.url == *url)
             .cloned()
-            .ok_or_else(|| windows::core::Error::from_hresult(MF_E_UNSUPPORTED_SCHEME))?;
+            .ok_or_else(|| sk_windows::core::Error::from_hresult(MF_E_UNSUPPORTED_SCHEME))?;
         let stream = MappedStream::open(source.bytes, source.stats, 0);
         let bytes = unsafe { MFCreateMFByteStreamOnStream(&stream)? };
         if !source.mime.is_empty() {
             let attributes: IMFAttributes = bytes.cast()?;
             unsafe {
-                attributes.SetString(
-                    &MF_BYTESTREAM_CONTENT_TYPE,
-                    &windows::core::HSTRING::from(source.mime),
-                )?;
+                attributes
+                    .SetString(
+                        &MF_BYTESTREAM_CONTENT_TYPE,
+                        &sk_windows::core::HSTRING::from(source.mime),
+                    )
+                    .ok()?;
             }
         }
         // The private object owns the stream and linearizes Cancel versus End.
@@ -337,7 +350,7 @@ impl IMFMediaEngineExtension_Impl for Extension_Impl {
         .into();
         let result = unsafe { MFCreateAsyncResult(&cookie, callback.ok()?, state.as_ref())? };
         unsafe {
-            result.SetStatus(S_OK)?;
+            result.SetStatus(S_OK).ok()?;
         }
         let completion: IMFAsyncCallback = Complete { result }.into();
         unsafe {
@@ -345,7 +358,8 @@ impl IMFMediaEngineExtension_Impl for Extension_Impl {
                 MFASYNC_CALLBACK_QUEUE_STANDARD,
                 &completion,
                 None::<&IUnknown>,
-            )?;
+            )
+            .ok()?;
         }
         // This output is optional. Publish only after submission succeeds, so
         // a failed Begin transfers no cookie reference to its caller.
@@ -371,7 +385,7 @@ impl IMFMediaEngineExtension_Impl for Extension_Impl {
         match cookie.phase.swap(ENDED, Ordering::AcqRel) {
             PENDING => {
                 unsafe {
-                    result.GetStatus()?;
+                    result.GetStatus().ok()?;
                 }
                 cookie.stream.cast()
             }
@@ -394,7 +408,7 @@ pub(super) fn extension() -> (IMFMediaEngineExtension, Control) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Com::{STATFLAG_NONAME, STGC_DEFAULT};
+    use sk_windows::win32::{STATFLAG_NONAME, STGC_DEFAULT};
 
     #[test]
     fn mapped_stream_reads_requested_ranges_and_clone_has_an_independent_cursor() {
@@ -423,7 +437,7 @@ mod tests {
             assert_eq!(stats.bytes.load(Ordering::Relaxed), 8);
             assert_eq!(stats.largest.load(Ordering::Relaxed), 4);
             let mut stat = STATSTG::default();
-            stream.Stat(&mut stat, STATFLAG_NONAME).unwrap();
+            stream.Stat(&mut stat, STATFLAG_NONAME as u32).unwrap();
             assert_eq!((stat.cbSize, stat.grfMode), (10, STGM_READ));
         }
     }
@@ -439,7 +453,7 @@ mod tests {
             assert_eq!(got, 0);
             assert_eq!(stream.Read(std::ptr::null_mut(), 0, None), S_OK);
             assert!(stream.Seek(-1, STREAM_SEEK_SET, None).is_err());
-            assert!(stream.Seek(0, STREAM_SEEK(7), None).is_err());
+            assert!(stream.Seek(0, 7, None).is_err());
             stream.Seek(i64::MAX, STREAM_SEEK_SET, None).unwrap();
             stream.Seek(i64::MAX, STREAM_SEEK_CUR, None).unwrap();
             assert!(stream.Seek(2, STREAM_SEEK_CUR, None).is_err());
@@ -454,8 +468,11 @@ mod tests {
                 STG_E_ACCESSDENIED
             );
             assert_eq!(got, 0);
-            assert_eq!(stream.SetSize(0).unwrap_err().code(), STG_E_ACCESSDENIED);
-            stream.Commit(STGC_DEFAULT).unwrap();
+            assert_eq!(
+                stream.SetSize(0).ok().unwrap_err().code(),
+                STG_E_ACCESSDENIED
+            );
+            stream.Commit(STGC_DEFAULT as u32).unwrap();
         }
     }
 
@@ -463,13 +480,13 @@ mod tests {
     #[ignore = "requires SK_PACKED_MEDIA_PROBE_MP4 mapped padded MP4 and the real Windows media stack"]
     fn native_packaged_mp4_plays_and_seeks_with_bounded_mapped_reads() {
         use crate::{FrameRequest, MediaSource, VideoBackend};
+        use sk_windows::win32::HANDLE;
+        use sk_windows::win32::{MapViewOfFile, FILE_MAP_READ};
         use std::{
             fs::OpenOptions,
             os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
             time::{Duration, Instant},
         };
-        use windows::Win32::Foundation::HANDLE;
-        use windows::Win32::System::Memory::{MapViewOfFile, FILE_MAP_READ};
         // Kept for process lifetime, exactly as an exe resource/payload is.
         // A fake 'static slice followed by unmapping would invalidate MF's
         // asynchronous readers after Shutdown, so the proof never does that.
@@ -532,8 +549,8 @@ mod tests {
         };
         assert!(!handle.is_null());
         let view = unsafe { MapViewOfFile(HANDLE(handle), FILE_MAP_READ, 0, 0, 0) };
-        assert!(!view.Value.is_null());
-        let data: &'static [u8] = unsafe { std::slice::from_raw_parts(view.Value.cast(), length) };
+        assert!(!view.0.is_null());
+        let data: &'static [u8] = unsafe { std::slice::from_raw_parts(view.0.cast(), length) };
         let _keep = Box::leak(Box::new((file, handle, view)));
         let mut backend = super::super::MediaEngineBackend::new().unwrap();
         backend.set_muted(true);
@@ -724,6 +741,7 @@ mod tests {
                     &callback,
                     None::<&IUnknown>,
                 )
+                .ok()
                 .unwrap_err();
             assert_eq!(failure.code(), MF_E_UNSUPPORTED_SCHEME);
             assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -758,6 +776,7 @@ mod tests {
             assert_eq!(
                 extension
                     .CancelObjectCreation(cancel.as_ref().unwrap())
+                    .ok()
                     .unwrap_err()
                     .code(),
                 MF_E_INVALIDREQUEST
@@ -782,7 +801,8 @@ mod tests {
                 .unwrap();
             let mut bytes = [0u8; 3];
             let mut got = 0;
-            old.Read(&mut bytes, &mut got).unwrap();
+            old.Read(bytes.as_mut_ptr(), bytes.len() as u32, &mut got)
+                .unwrap();
             assert_eq!(got, 3);
             assert_eq!(&bytes, b"old");
             assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -797,6 +817,7 @@ mod tests {
                         &callback,
                         None::<&IUnknown>
                     )
+                    .ok()
                     .unwrap_err()
                     .code(),
                 MF_E_UNSUPPORTED_SCHEME

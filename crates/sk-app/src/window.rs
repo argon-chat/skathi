@@ -890,8 +890,8 @@ pub(crate) fn has_system_backdrop() -> bool {
     use std::sync::OnceLock;
     static HAS: OnceLock<bool> = OnceLock::new();
     *HAS.get_or_init(|| {
-        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+        use sk_windows::raw::RtlGetVersion;
+        use sk_windows::raw::OSVERSIONINFOW;
         let mut vi = OSVERSIONINFOW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
             ..Default::default()

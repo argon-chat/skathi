@@ -23,15 +23,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
-use windows::core::{Interface, BSTR, HSTRING};
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
-};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Media::MediaFoundation::{
+use sk_windows::core::{Interface, BSTR, HSTRING};
+use sk_windows::win32::DXGI_FORMAT_B8G8R8A8_UNORM;
+use sk_windows::win32::HMODULE;
+use sk_windows::win32::{
     CLSID_MFMediaEngineClassFactory, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEngine,
     IMFMediaEngineClassFactory, IMFMediaEngineEx, IMFMediaEngineNotify, IMFMediaEngineWebSupport,
     MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMFByteStreamOnStream, MFStartup,
@@ -39,9 +34,14 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EXTENSION, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_VERSION,
 };
-use windows::Win32::System::Com::{
+use sk_windows::win32::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
+use sk_windows::win32::{
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
+};
+use sk_windows::win32::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 
 use crate::backend::{
     CanPlay, FrameRequest, MediaError, MediaErrorCode, MediaEvent, MediaSource, NetworkState,
@@ -123,7 +123,7 @@ unsafe impl Sync for SendDevice {}
 /// `texture` is null or a live COM pointer.
 pub(crate) unsafe fn retain_texture(texture: *mut c_void) {
     // SAFETY: the caller's.
-    if let Some(unknown) = unsafe { windows::core::IUnknown::from_raw_borrowed(&texture) } {
+    if let Some(unknown) = unsafe { sk_windows::core::IUnknown::from_raw_borrowed(&texture) } {
         std::mem::forget(unknown.clone());
     }
 }
@@ -134,7 +134,7 @@ pub(crate) unsafe fn retain_texture(texture: *mut c_void) {
 pub(crate) unsafe fn release_texture(texture: *mut c_void) {
     if !texture.is_null() {
         // SAFETY: the caller's: it owns the reference this drops.
-        drop(unsafe { windows::core::IUnknown::from_raw(texture) });
+        drop(unsafe { sk_windows::core::IUnknown::from_raw(texture) });
     }
 }
 
@@ -192,6 +192,7 @@ fn private_device() -> Result<ID3D11Device, MediaError> {
             None,
             Some(&mut context),
         )
+        .ok()
         .map_err(|e| {
             MediaError::new(
                 MediaErrorCode::Decode,
@@ -218,8 +219,8 @@ fn ensure_platform() -> Result<(), MediaError> {
     ONCE.call_once(|| {
         unsafe {
             // The host thread may already be initialised in either apartment; `RPC_E_CHANGED_MODE` is fine.
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_FULL) {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED as u32);
+            if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_FULL).ok() {
                 RESULT = Some(
                     MediaError::new(MediaErrorCode::Decode, format!("MFStartup failed: {e}"))
                         .with_advisory(
@@ -239,7 +240,7 @@ fn ensure_platform() -> Result<(), MediaError> {
 
 struct WebAudio {
     web: IMFMediaEngineWebSupport,
-    provider: windows::Win32::Media::MediaFoundation::IAudioSourceProvider,
+    provider: sk_windows::win32::IAudioSourceProvider,
     output: std::sync::Weak<dyn crate::AudioOutput>,
     rate: u32,
     channels: u32,
@@ -316,7 +317,7 @@ pub struct MediaEngineBackend {
     /// Whether `play()` was called more recently than `pause()` (`GetPaused` cannot answer across a reload).
     wants_playing: bool,
     current_src: String,
-    _source_extension: windows::Win32::Media::MediaFoundation::IMFMediaEngineExtension,
+    _source_extension: sk_windows::win32::IMFMediaEngineExtension,
     source_control: source::Control,
     /// Last field: drops the host video facade only after the engine and texture COM references are gone.
     _renderer_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
@@ -329,41 +330,54 @@ impl MediaEngineBackend {
 
         let mut token = 0u32;
         let mut manager: Option<IMFDXGIDeviceManager> = None;
-        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }.map_err(|e| {
-            MediaError::new(
-                MediaErrorCode::Decode,
-                format!("MFCreateDXGIDeviceManager failed: {e}"),
-            )
-        })?;
+        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }
+            .ok()
+            .map_err(|e| {
+                MediaError::new(
+                    MediaErrorCode::Decode,
+                    format!("MFCreateDXGIDeviceManager failed: {e}"),
+                )
+            })?;
         let manager = manager.expect("MFCreateDXGIDeviceManager succeeded without a manager");
-        unsafe { manager.ResetDevice(&device, token) }.map_err(|e| {
-            MediaError::new(
-                MediaErrorCode::Decode,
-                format!("IMFDXGIDeviceManager::ResetDevice failed: {e}"),
-            )
-            .with_advisory(
-                "the renderer's Direct3D device was refused by Media Foundation — it must be \
+        unsafe { manager.ResetDevice(&device, token) }
+            .ok()
+            .map_err(|e| {
+                MediaError::new(
+                    MediaErrorCode::Decode,
+                    format!("IMFDXGIDeviceManager::ResetDevice failed: {e}"),
+                )
+                .with_advisory(
+                    "the renderer's Direct3D device was refused by Media Foundation — it must be \
                  created with D3D11_CREATE_DEVICE_VIDEO_SUPPORT.",
-            )
-        })?;
+                )
+            })?;
 
         let queue: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
         let notify: IMFMediaEngineNotify = EngineNotify::new(queue.clone()).into();
 
         let mut attributes: Option<IMFAttributes> = None;
-        unsafe { MFCreateAttributes(&mut attributes, 4) }.map_err(|e| {
-            MediaError::new(MediaErrorCode::Decode, format!("MFCreateAttributes: {e}"))
-        })?;
+        unsafe { MFCreateAttributes(&mut attributes, 4) }
+            .ok()
+            .map_err(|e| {
+                MediaError::new(MediaErrorCode::Decode, format!("MFCreateAttributes: {e}"))
+            })?;
         let attributes = attributes.expect("MFCreateAttributes succeeded without attributes");
         unsafe {
             attributes
                 .SetUnknown(&MF_MEDIA_ENGINE_CALLBACK, &notify)
-                .and_then(|()| attributes.SetUnknown(&MF_MEDIA_ENGINE_DXGI_MANAGER, &manager))
+                .ok()
                 .and_then(|()| {
-                    attributes.SetUINT32(
-                        &MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
-                        DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32,
-                    )
+                    attributes
+                        .SetUnknown(&MF_MEDIA_ENGINE_DXGI_MANAGER, &manager)
+                        .ok()
+                })
+                .and_then(|()| {
+                    attributes
+                        .SetUINT32(
+                            &MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
+                            DXGI_FORMAT_B8G8R8A8_UNORM as u32,
+                        )
+                        .ok()
                 })
         }
         .map_err(|e| {
@@ -388,14 +402,14 @@ impl MediaEngineBackend {
         })?;
 
         let (source_extension, source_control) = source::extension();
-        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }.map_err(
-            |error| {
+        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }
+            .ok()
+            .map_err(|error| {
                 MediaError::new(
                     MediaErrorCode::Decode,
                     format!("media source extension: {error}"),
                 )
-            },
-        )?;
+            })?;
         let engine = unsafe { factory.CreateInstance(0, &attributes) }.map_err(|e| {
             MediaError::new(
                 MediaErrorCode::Decode,
@@ -424,12 +438,14 @@ impl MediaEngineBackend {
     }
 
     fn set_source_url(&self, url: &str) -> Result<(), MediaError> {
-        unsafe { self.engine.SetSource(&BSTR::from(url)) }.map_err(|e| {
-            MediaError::new(
-                MediaErrorCode::SrcNotSupported,
-                format!("could not set the media source: {e}"),
-            )
-        })
+        unsafe { self.engine.SetSource(&BSTR::from(url)) }
+            .ok()
+            .map_err(|e| {
+                MediaError::new(
+                    MediaErrorCode::SrcNotSupported,
+                    format!("could not set the media source: {e}"),
+                )
+            })
     }
 
     /// `data:` bytes. `SetSourceFromByteStream` is not the default: MF opens the `url` argument
@@ -497,22 +513,31 @@ impl MediaEngineBackend {
         true
     }
 
-    fn set_source_from_memory(&self, mime: &str, data: &[u8]) -> windows::core::Result<()> {
-        use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
-        use windows::Win32::System::Memory::{
-            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
-        };
+    fn set_source_from_memory(&self, mime: &str, data: &[u8]) -> sk_windows::core::Result<()> {
+        use sk_windows::win32::CreateStreamOnHGlobal;
+        use sk_windows::win32::{GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
         unsafe {
             // `fDeleteOnRelease: TRUE` gives the HGLOBAL to the stream, so it lives as long as the engine's reference.
-            let global = GlobalAlloc(GMEM_MOVEABLE, data.len())?;
+            let global = GlobalAlloc(GMEM_MOVEABLE, data.len());
+            if global.0.is_null() {
+                return Err(sk_windows::core::Error::from_thread());
+            }
             let locked = GlobalLock(global);
             if locked.is_null() {
-                return Err(windows::core::Error::from_thread());
+                let error = sk_windows::core::Error::from_thread();
+                let _ = GlobalFree(Some(global));
+                return Err(error);
             }
             std::ptr::copy_nonoverlapping(data.as_ptr(), locked as *mut u8, data.len());
             let _ = GlobalUnlock(global);
-            let stream = CreateStreamOnHGlobal(global, true)?;
+            let stream = match CreateStreamOnHGlobal(global, true) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let _ = GlobalFree(Some(global));
+                    return Err(error);
+                }
+            };
             let byte_stream = MFCreateMFByteStreamOnStream(&stream)?;
 
             if !mime.is_empty() {
@@ -523,7 +548,9 @@ impl MediaEngineBackend {
             // Never `BSTR::new()`: a NULL BSTR crashes `mfmediaengine.dll` with no panic or message.
             let url = format!("file:///sk-media{}", extension_for(mime));
             let engine_ex: IMFMediaEngineEx = self.engine.cast()?;
-            engine_ex.SetSourceFromByteStream(&byte_stream, &BSTR::from(url.as_str()))
+            engine_ex
+                .SetSourceFromByteStream(&byte_stream, &BSTR::from(url.as_str()))
+                .ok()
         }
     }
 
@@ -534,7 +561,7 @@ impl MediaEngineBackend {
     fn engine_error(&self) -> Option<MediaError> {
         let error = unsafe { self.engine.GetError() }.ok()?;
         let code = unsafe { error.GetErrorCode() };
-        let extended = match unsafe { error.GetExtendedErrorCode() } {
+        let extended = match unsafe { error.GetExtendedErrorCode() }.ok() {
             Ok(()) => String::new(),
             Err(e) => format!(" [{}]", e.code().0),
         };
@@ -645,7 +672,7 @@ impl Drop for MediaEngineBackend {
         if let Some(web) = self.web_audio.take() {
             let _ = unsafe { web.web.DisconnectWebAudio() };
         }
-        if let Err(e) = unsafe { self.engine.Shutdown() } {
+        if let Err(e) = unsafe { self.engine.Shutdown() }.ok() {
             trace(format_args!("Shutdown failed: {e}"));
         }
     }
@@ -667,10 +694,10 @@ impl MediaEngineBackend {
         // decoded picture, including the first legitimate presentation timestamp of zero.
         let status =
             unsafe { (self.engine.vtable().OnVideoStreamTick)(self.engine.as_raw(), &mut pts) };
-        if status == windows::Win32::Foundation::S_OK {
+        if status == sk_windows::win32::S_OK {
             self.current_pts = Some(pts);
         }
-        status.ok().ok()?;
+        status.is_ok().then_some(())?;
         self.current_pts
     }
 }
@@ -756,7 +783,7 @@ impl VideoBackend for MediaEngineBackend {
         // Unlike the DOM, `SetSource` alone leaves `networkState` at EMPTY: the engine must be told
         // to `Load()`. `SetPreload(AUTOMATIC)` fetches the whole file.
         let _ = unsafe { self.engine.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC) };
-        unsafe { self.engine.Load() }.map_err(|e| {
+        unsafe { self.engine.Load() }.ok().map_err(|e| {
             MediaError::new(
                 MediaErrorCode::SrcNotSupported,
                 format!("the media could not be loaded: {e}"),
@@ -843,7 +870,9 @@ impl VideoBackend for MediaEngineBackend {
 
     fn native_size(&self) -> Option<(u32, u32)> {
         let (mut cx, mut cy) = (0u32, 0u32);
-        unsafe { self.engine.GetNativeVideoSize(Some(&mut cx), Some(&mut cy)) }.ok()?;
+        unsafe { self.engine.GetNativeVideoSize(Some(&mut cx), Some(&mut cy)) }
+            .is_ok()
+            .then_some(())?;
         (cx > 0 && cy > 0).then_some((cx, cy))
     }
 

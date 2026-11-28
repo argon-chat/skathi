@@ -28,12 +28,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 // `PrintWindow` is under Storage::Xps in windows-rs' metadata; its flag is a plain `u32` in WindowsAndMessaging.
 #[cfg(windows)]
+use sk_windows::raw::PrintWindow;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     PW_RENDERFULLCONTENT,
 };
-#[cfg(windows)]
-use windows_sys::Win32::Storage::Xps::PrintWindow;
 
 /// Which capture path to use; `Auto` is the default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

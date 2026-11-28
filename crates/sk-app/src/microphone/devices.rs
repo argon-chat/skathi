@@ -35,15 +35,13 @@ fn report(change: Option<Change>) {
 #[cfg(windows)]
 mod win {
     use super::*;
-    use windows::core::{implement, Result, PCWSTR};
-    use windows::Win32::Foundation::PROPERTYKEY;
-    use windows::Win32::Media::Audio::{
+    use sk_windows::core::{implement, Result, PCWSTR};
+    use sk_windows::win32::PROPERTYKEY;
+    use sk_windows::win32::{
         eCapture, eConsole, eRender, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
         IMMNotificationClient_Impl, MMDeviceEnumerator, DEVICE_STATE,
     };
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
-    };
+    use sk_windows::win32::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
     /// role on its own. "Console" is the one CPAL's default is, so it is the
     /// one a page's default follows; the others change nothing it can see.
@@ -94,12 +92,13 @@ mod win {
                 // SAFETY: COM on this thread, multithreaded: the callbacks arrive
                 // on the audio service's own threads, never on this one.
                 let registered = unsafe {
-                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED as u32);
                     let enumerator: Result<IMMDeviceEnumerator> =
                         CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
                     enumerator.and_then(|e| {
                         let client: IMMNotificationClient = Client.into();
                         e.RegisterEndpointNotificationCallback(&client)
+                            .ok()
                             .map(|()| (e, client))
                     })
                 };
@@ -137,9 +136,7 @@ pub fn install() {
 mod tests {
     use super::win::*;
     use super::*;
-    use windows::Win32::Media::Audio::{
-        eAll, eCapture, eCommunications, eConsole, eMultimedia, eRender,
-    };
+    use sk_windows::win32::{eAll, eCapture, eCommunications, eConsole, eMultimedia, eRender};
 
     #[test]
     fn only_the_console_default_moves_what_a_page_sees() {
@@ -163,8 +160,8 @@ mod tests {
 
     #[test]
     fn the_client_hands_each_notification_to_redjs() {
-        use windows::core::PCWSTR;
-        use windows::Win32::Media::Audio::{IMMNotificationClient, DEVICE_STATE_ACTIVE};
+        use sk_windows::core::PCWSTR;
+        use sk_windows::win32::{IMMNotificationClient, DEVICE_STATE_ACTIVE};
         let client: IMMNotificationClient = Client.into();
         let input = mediadevices::default_generation(Flow::Input);
         unsafe {

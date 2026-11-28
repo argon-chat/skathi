@@ -269,9 +269,7 @@ fn move_aside(path: &Path) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn new_key() -> Result<[u8; 32], String> {
-    use windows_sys::Win32::Security::Cryptography::{
-        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-    };
+    use sk_windows::raw::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
     let mut k = [0u8; 32];
     let st = unsafe {
         BCryptGenRandom(
@@ -313,8 +311,8 @@ fn quota_from(free: u64, total: u64, usage: u64) -> u64 {
 
 #[cfg(target_os = "windows")]
 fn disk(dir: &Path) -> Option<(u64, u64)> {
+    use sk_windows::raw::GetDiskFreeSpaceExW;
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
     let (mut free, mut total) = (0u64, 0u64);
     let ok =

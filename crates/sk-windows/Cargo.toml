@@ -1,0 +1,19 @@
+[package]
+name = "sk-windows"
+description = "Windows API bindings used by Skathi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+raw = ["dep:windows-link"]
+win32 = ["dep:windows-core"]
+runtime = ["dep:windows-collections", "dep:windows-core", "dep:windows-future"]
+
+[target.'cfg(windows)'.dependencies]
+windows-collections = { version = "0.100", optional = true }
+windows-core = { version = "0.100", optional = true }
+windows-future = { version = "0.100", optional = true }
+windows-link = { version = "0.100", optional = true }

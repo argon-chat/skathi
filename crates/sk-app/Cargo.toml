@@ -150,7 +150,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 # examples/surface.rs renders D3D11 and D3D12 frames for `<sk-surface>`, and a DirectComposition
 # layer for `<sk-layer>`.
-windows = { version = "0.62", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",
@@ -223,17 +223,16 @@ gpui_platform = { package = "skathi-gpui-platform", path = "../../vendor/gpui/cr
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-core = "0.62"
+windows-core = "0.100"
 windows-registry = "0.100"
 url = "2"
 wgpu = { version = "30.0.2", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
 gpui_windows = { package = "skathi-gpui-windows", path = "../../vendor/gpui/crates/gpui_windows", version = "0.9.0", default-features = false }
-windows = { version = "0.62", features = [
+windows = { version = "0.62.2", features = [
     "ApplicationModel",
     "Storage_Search",
     "Foundation_Collections",
-    "Win32_UI_Notifications",
     "Data_Xml_Dom",
     "UI_Notifications",
     "Win32_System_WinRT",
@@ -244,7 +243,6 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
-    "Win32_Media_Audio",
     "Win32_System_LibraryLoader",
     "Win32_System_Com",
     "Win32_System_Power",
@@ -260,23 +258,5 @@ windows = { version = "0.62", features = [
     "UI",
     "UI_ViewManagement",
 ] }
-# Plain functions whose `windows` modules are large and needed by nothing else.
-windows-sys = { version = "0.61", features = [
-    "Win32_Graphics_Gdi",
-    # `PrintWindow`
-    "Win32_Storage_Xps",
-    # `RtlGetVersion`: the one version query Windows does not lie about for an unmanifested process.
-    "Wdk_System_SystemServices",
-    "Win32_System_SystemInformation",
-    # `skathi:process`: CreateProcessW, a job object per child, pipes.
-    "Win32_Security",
-    "Win32_Storage_FileSystem",
-    "Win32_System_JobObjects",
-    "Win32_System_Pipes",
-    "Win32_System_Threading",
-    # `MiniDumpWriteDump`, `SetUnhandledExceptionFilter` (src/fault.rs).
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_Kernel",
-    "Win32_System_Memory",
-] }
+sk-windows = { path = "../sk-windows", version = "0.9.0", features = ["raw", "win32"] }
 

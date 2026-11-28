@@ -44,7 +44,7 @@ raw-window-handle = "0.6"
 [target.'cfg(windows)'.dependencies]
 # WOFF/WOFF2 are unpacked by DirectWrite (`UnpackFontFile`); `<sk-surface>` copies D3D11/D3D12 textures;
 # popups are owned, non-activating windows.
-windows = { version = "0.62", features = [
+windows = { version = "0.62.2", features = [
     "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",

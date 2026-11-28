@@ -15,8 +15,8 @@ raw-window-handle = "0.6"
 
 # WebView2 in composition mode, under the app surface.
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.39"
-windows = { version = "0.62", features = [
+webview2-com = "0.39.1"
+windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_DirectComposition",
     "Win32_Graphics_Gdi",
@@ -27,7 +27,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-core = "0.62"
 
 # WKWebView in a view under the app's Metal layer.
 [target.'cfg(target_os = "macos")'.dependencies]

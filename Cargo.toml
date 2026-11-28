@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/sk-windows",
     "crates/sk-runtime",    # JS host: context boot, pump, bridge, host_fn!
     "crates/sk-tree",       # retained node tree + renderer host fns
     "crates/sk-css",        # stylesheets, cascade, per-state refinements

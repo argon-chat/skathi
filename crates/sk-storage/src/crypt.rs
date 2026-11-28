@@ -65,9 +65,7 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::Security::Cryptography::{
-            BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        };
+        use sk_windows::raw::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
         let st = unsafe {
             BCryptGenRandom(
                 std::ptr::null_mut(),
@@ -117,11 +115,11 @@ impl SecretProvider for Dpapi {
 #[cfg(target_os = "windows")]
 unsafe fn dpapi(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
     unsafe {
-        use std::ptr::{null, null_mut};
-        use windows_sys::Win32::Foundation::LocalFree;
-        use windows_sys::Win32::Security::Cryptography::{
+        use sk_windows::raw::LocalFree;
+        use sk_windows::raw::{
             CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         };
+        use std::ptr::{null, null_mut};
 
         let inb = CRYPT_INTEGER_BLOB {
             cbData: input.len() as u32,

@@ -284,11 +284,11 @@ impl Write for Counting<'_> {
 
 #[cfg(windows)]
 fn replace(target: &Path, swap: &Path) -> std::io::Result<()> {
-    use std::ptr::null;
-    use windows_sys::Win32::Storage::FileSystem::{
+    use sk_windows::raw::{
         MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         REPLACEFILE_IGNORE_ACL_ERRORS, REPLACEFILE_IGNORE_MERGE_ERRORS,
     };
+    use std::ptr::null;
     let (t, s) = (win_path(target), win_path(swap));
     if target.exists() {
         let ok = unsafe {

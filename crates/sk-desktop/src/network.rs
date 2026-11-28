@@ -289,11 +289,11 @@ mod imp {
 
     /// The type of the connected adapter with a gateway and the lowest metric: the one traffic takes.
     pub(super) fn connection_type() -> &'static str {
-        use windows_sys::Win32::NetworkManagement::IpHelper::{
+        use sk_windows::raw::IfOperStatusUp;
+        use sk_windows::raw::{
             GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
             GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
         };
-        use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 
         const FLAGS: u32 = GAA_FLAG_INCLUDE_GATEWAYS
             | GAA_FLAG_SKIP_ANYCAST

@@ -20,9 +20,11 @@ dist/
 *.log
 .DS_Store
 
-# Only tools/sk-aot is tracked; anything else under tools/ is a local download.
+# Only repository tooling is tracked here.
 /tools/*
 !/tools/sk-aot/
+!/tools/windows-bindings/
+/tools/windows-bindings/target/
 
 # Fetched Lottie measurement corpus (crates/sk-lottie/tools/fetch-corpus.sh).
 # Third-party After Effects exports, pinned by commit, measured but not

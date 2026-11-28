@@ -106,8 +106,8 @@ mod platform {
     }
 
     pub(super) fn release() -> String {
-        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+        use sk_windows::raw::RtlGetVersion;
+        use sk_windows::raw::OSVERSIONINFOW;
         let mut version: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
         version.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
         // `RtlGetVersion`: `GetVersionEx` reports 6.2 to an unmanifested process.
@@ -125,9 +125,7 @@ mod platform {
     }
 
     pub(super) fn hostname() -> String {
-        use windows_sys::Win32::System::SystemInformation::{
-            ComputerNameDnsHostname, GetComputerNameExW,
-        };
+        use sk_windows::raw::{ComputerNameDnsHostname, GetComputerNameExW};
         let mut buffer = [0u16; 256];
         let mut len = buffer.len() as u32;
         if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut len) }

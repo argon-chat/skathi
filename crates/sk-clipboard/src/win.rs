@@ -13,15 +13,13 @@
 use std::io::Error;
 use std::ptr::null_mut;
 
-use windows_sys::core::w;
-use windows_sys::Win32::Foundation::GlobalFree;
-use windows_sys::Win32::System::DataExchange::{
+use sk_windows::raw::GlobalFree;
+use sk_windows::raw::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{
-    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
-};
+use sk_windows::raw::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+use windows_strings::w;
 
 pub(crate) const TYPES: &[&str] = &["text/plain", "text/html", "image/png"];
 
@@ -30,11 +28,11 @@ const CF_UNICODETEXT: u32 = 13;
 const CF_DIBV5: u32 = 17;
 
 fn png_format() -> u32 {
-    unsafe { RegisterClipboardFormatW(w!("PNG")) }
+    unsafe { RegisterClipboardFormatW(w!("PNG").as_ptr()) }
 }
 
 fn html_format() -> u32 {
-    unsafe { RegisterClipboardFormatW(w!("HTML Format")) }
+    unsafe { RegisterClipboardFormatW(w!("HTML Format").as_ptr()) }
 }
 
 struct Open;
