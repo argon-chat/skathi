@@ -1,0 +1,18 @@
+{
+  "$comment": "Stills for the 0.10 blog post, taken by scripts/record/plans/blog-0-10.ts (`__shots.show(id)`).",
+
+  "name": "blog-0-10",
+  "id": "land.skathi.samples.blog-0-10",
+  "productName": "Blog 0.10",
+  "version": "0.1.0",
+
+  "window": {
+    "title": "Blog 0.10",
+    "width": 560,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 0,
+    "titleBarFallback": false,
+    "backdrop": "acrylic"
+  }
+}

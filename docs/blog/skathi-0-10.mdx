@@ -1,0 +1,223 @@
+---
+title: Skathi 0.10
+metaTitle: "Skathi 0.10"
+description: Native context menus, keyboard shortcuts that draw themselves, gamepads, desktop notifications and apps that are ES modules all the way down.
+date: 2026-11-28
+draft: true
+tags: [release, input, menus, notifications, modules]
+release:
+  version: "0.10.0"
+  platforms: Windows, macOS and Linux
+  install:
+    - label: New app
+      command: bun create skathi my-app
+    - label: Existing app
+      command: bun add @skathi-native/runtime@^0.10.0 && bun add -d @skathi-native/cli@^0.10.0
+    - label: Rust program
+      command: cargo add skathi@0.10.0
+---
+
+import Aside from "../src/components/blog/Aside.astro";
+import Change from "../src/components/blog/Change.astro";
+import Feature from "../src/components/blog/Feature.astro";
+import FeatureGrid from "../src/components/blog/FeatureGrid.astro";
+import Figure from "../src/components/blog/Figure.astro";
+import Migration from "../src/components/blog/Migration.astro";
+import Demo from "../src/components/Demo.astro";
+import contextMenuShot from "../src/assets/blog-0-10/context-menu.png";
+import shortcutsShot from "../src/assets/blog-0-10/shortcuts.png";
+
+0.9 was about pixels and sound. 0.10 is about the things a desktop app is expected to just have: a right-click menu that leaves the window, shortcuts with the right symbols on every keyboard, a controller in the hand, a notification in the corner of the screen. And your code is now plain ES modules, top-level `await` included.
+
+<FeatureGrid label="What is new in 0.10">
+  <Feature icon="menu" title="Context menus" href="#context-menus" tone="pink">
+    Native popups that leave the window and forgive a sloppy diagonal.
+  </Feature>
+  <Feature icon="braces" title="Shortcuts" href="#shortcuts" tone="blue">
+    `SkKbd` draws them, `SkKeyMap` handles them, on any layout.
+  </Feature>
+  <Feature icon="play" title="Gamepads" href="#gamepads" tone="lilac">
+    Buttons, sticks, dead zones and rumble.
+  </Feature>
+  <Feature icon="alert" title="Notifications" href="#notifications" tone="yellow">
+    Native cards with buttons and inline replies.
+  </Feature>
+  <Feature icon="code" title="ES modules" href="#es-modules" tone="pink">
+    `import`, `export` and top-level `await` in dev and in production.
+  </Feature>
+  <Feature icon="package" title="SkBank" href="#for-embedders" tone="blue">
+    A new payload format, plus frame timing for native layers.
+  </Feature>
+</FeatureGrid>
+
+## Context menus
+
+A right-click menu used to be a pop-out window you assembled yourself. Now it is a component:
+
+```vue
+<SkContextMenu ref="menu" v-slot="{ context: file }" aria-label="File actions">
+  <SkMenuItem @select="open(file)">Open</SkMenuItem>
+  <SkMenuItem disabled>Rename</SkMenuItem>
+  <SkMenuSeparator />
+  <SkSubmenu label="Copy">
+    <SkMenuItem @select="copyName(file)">File name</SkMenuItem>
+  </SkSubmenu>
+</SkContextMenu>
+```
+
+`menu.open(event, file)` from a `contextmenu` handler opens it at the pointer, `menu.open(button, file)` under a button. One menu serves every row in a list. The Menu key and Shift+F10 work, arrows walk the items, Escape backs out a level.
+
+Each level is a real popup owned by the window: it can hang past the window's edge, it never steals focus, and a submenu flips sideways near the edge of the screen. The default backdrop is acrylic on Windows and a behind-window blur on macOS. If the platform refuses a popup, the menu quietly draws inside the window for the rest of the session.
+
+<Figure
+  src={contextMenuShot}
+  alt="An acrylic window listing three files. A context menu opened on Release notes.md shows Open, a disabled Rename, a separator, Move to and Copy file name; Move to is highlighted and its submenu lists Drafts, Review and Archive"
+  caption="SkContextMenu on Windows: each level is its own acrylic popup, opened and walked with the keyboard."
+/>
+
+**Submenus that forgive you.** Moving diagonally from a row into its open submenu crosses the rows below it. The menu now tracks where you are aiming and keeps the submenu open through that crossing, through a pause, and through a small correction. Curious how it decides? `<SkContextMenu debug-aim>` draws the hit region and the pointer trace.
+
+## Shortcuts
+
+`SkKbd` draws a shortcut, and `defineKeymap` makes one work:
+
+```vue
+<script setup lang="ts">
+import { defineKeymap, SkKbd } from "@skathi-native/runtime";
+import { onScopeDispose } from "vue";
+
+const find = defineKeymap({ keys: ["Mod", { code: "KeyF" }], suppress: true });
+onScopeDispose(find.bind(() => openSearch()));
+</script>
+
+<template>
+  <SkKbd :map="find" />
+</template>
+```
+
+`Mod` is ⌘ on a Mac and Ctrl elsewhere. A physical key follows the user's layout: the same `KeyQ` shows **Q** on QWERTY, **Й** on ЙЦУКЕН and **A** on AZERTY, and the hint updates when the layout changes. Sequences (`Mod+K Mod+C`), alternatives, mouse buttons, wheel directions and controller buttons all draw, with Xbox, PlayStation and Switch legends.
+
+<Figure
+  src={shortcutsShot}
+  alt="Five shortcut hints drawn by SkKbd: Ctrl+K then Ctrl+C for Comment line, Ctrl+Й for Quit on a Russian layout, Ctrl plus mouse wheel up for Zoom, Enter or the Xbox A button for Confirm, and LT+RT for Aim and fire"
+  caption="One component for keys, sequences, the mouse and controllers. Quit is bound to the KeyQ position, so a Russian layout shows Й."
+/>
+
+A keymap knows more than "pressed": `down`, `up`, `press`, `click`, `doubleClick` and `hold`, each with its own listener and an optional `when` condition. An interrupted hold still gets its `up`, which is what push-to-talk needs. `scope: "global"` makes the chord work while another app has focus, on Windows and macOS. The [recipes](/guides/recipes/#display-a-keyboard-shortcut) have the rest.
+
+## Gamepads
+
+`navigator.getGamepads()` now returns real controllers, and `skathi:gamepad` goes further:
+
+```ts
+import { gamepads } from "skathi:gamepad";
+
+gamepads.subscribe((event) => {
+  if (event.type === "button" && event.button === "south" && event.edge === "down") {
+    accept();
+    if (event.gamepad.canRumble) gamepads.rumble(event.gamepad.id, { weak: 0.35, durationMs: 60 });
+  }
+});
+```
+
+Buttons are named by position (`south`, `left-trigger`, `dpad-up`), so Xbox and PlayStation pads read the same. A radial dead zone can be set for every controller, for one model or for one device, and applies even to a stick that is being held. On Windows the Steam Controller (2026) works directly through its wireless Puck, back paddles and pad clicks included, and an app launched from Steam gets the game's Steam Input layout. Rumble works where the backend supports it; macOS is input only for now.
+
+<Demo
+  id="blog-0-10/gamepad"
+  width={736}
+  height={536}
+  caption="A Steam Controller (2026) read through skathi:gamepad: stick axes, triggers and buttons as they move, with SkKbd legends."
+/>
+
+## Notifications
+
+```ts
+import { appNotifications } from "skathi:app";
+
+await appNotifications.show({
+  id: "build",
+  title: "Build finished",
+  body: "3 warnings",
+  actions: [{ id: "open", label: "Open log", kind: "button" }],
+});
+```
+
+Up to two actions, one of which can be an inline reply, an image, a group, a silent mode, and the same `id` to replace or withdraw a card later. `setActivationHandler` receives the click, the button or the reply text, queued in order if it came before the handler was set. `capabilities()` says what the platform can do before you offer it; on Linux that is a subset. `show()` never opens a permission prompt: ask through `appPermissions` when it makes sense for your app.
+
+## ES modules
+
+App code is now ES modules, in `sk dev` and in a packaged app alike. Static imports, `export`, and top-level `await` that holds back importers until it settles:
+
+```js
+// settings.js
+export const settings = await fetch("/settings.json").then((response) => response.json());
+```
+
+npm dependencies written in CommonJS still work when the bundler can fold them into the module. Your own sources must be ESM: the build points out the ones that are not. In the devtools console, `__SK__.importModule("src/stores/counter.ts")` replaces `__SK__.require`. Dev HMR and the usual Vite shims keep working.
+
+## More in the standard library
+
+- **`FuzzyMatcher`** in `skathi:text` ranks labels for a command palette and tells you which characters matched, for highlighting.
+- **`TaskQueue`** in `skathi:time` runs tasks with a concurrency limit, and one `AbortSignal` cancels a whole batch.
+- **`ImageDecoder.info()`** in `skathi:image` reads the size and EXIF orientation without decoding a single pixel, so a photo can get its space before it arrives.
+
+## For embedders
+
+**SkBank.** Standalone payloads (`sk build --payload-only`) are now written as SkBank, a new archive format that also reads from .NET. The CLI checks the host: one that advertises `payloadFormat` 3 gets SkBank, an older one still gets SKPK v1. The file extension stays `.skpk`.
+
+**Frame timing for layers.** `LayerFrame` now carries `picture`, the ID of the frame a backdrop composited from your layer, and `target_present_at`, when the page frame is meant to reach the screen (from `CAMetalDisplayLink` on macOS). A video player can match its own frames and schedule its drawable for the same moment.
+
+**macOS fullscreen.** With a native video layer and a custom fullscreen transition, entering fullscreen could stall the window for half a second. Frames are now presented with their Core Animation transaction: on an M3 Max at 120 Hz, gaps over 450 ms went from 5 of 12 entries to 0 of 21.
+
+**Rust 2024.** The crates moved to the 2024 edition. Local development builds keep only line tables for our code and skip debug info for dependencies, so `target/` grows much more slowly.
+
+## Fixes worth knowing
+
+- Windows: a context menu showed its acrylic backdrop as a flat grey fill, because the menu never takes focus and DWM draws an inactive window's material solid. The blur now shows through, under a lighter default tint.
+- A submenu's first item lines up with the item that opened it; it sat lower by the menu's padding and border.
+- RedJS is locked at the pinned version, so an AOT build no longer picks up a newer one by accident.
+- The API reference is now generated from the SDK sources, so it cannot drift from what the host actually exports.
+
+<Aside kind="warning" title="What 0.10 does not do yet">
+
+- **Rumble on macOS.** The macOS gamepad backend is input only.
+- **Steam Controller** outside a Steam game session and away from its Puck relies on the OS driver or Steam Input. Steamworks action sets and glyphs need your own Steamworks integration.
+- **Global shortcuts** work on Windows and macOS only.
+- **Notifications on Linux** support a subset of the options; check `capabilities()`.
+
+</Aside>
+
+## Upgrading
+
+Run the commands at the top of this post and `bunx sk check`. The prebuilt hosts and the full changelog are in the [GitHub release](https://github.com/argon-chat/skathi/releases/tag/v0.10.0).
+
+<Migration title="Upgrading from 0.9" summary="Two changes that can stop an app from building or starting.">
+<Change title="App code is ES modules only" who="Apps with CommonJS sources">
+
+`sk build`, `sk run` and `sk publish` now stop with "only ES modules" when one of the app's own files uses `require` or `module.exports`, a `.cjs` file included. Rewrite it with `import` and `export`:
+
+```js
+// before
+const { format } = require("./format");
+module.exports = { title: format("Skathi") };
+
+// after
+import { format } from "./format";
+export const title = format("Skathi");
+```
+
+A Vite config that sets an output format must set `es`: `"cjs"` stops the build before a payload is written. npm dependencies written in CommonJS are fine as long as the bundler can fold them into the module.
+
+In the devtools console, `__SK__.require(id)` is now `await __SK__.importModule(id)`.
+
+</Change>
+<Change title="The x64 hosts need an x86-64-v3 CPU" who="Windows and Linux x64 users">
+
+The prebuilt Windows and Linux x64 hosts are compiled for x86-64-v3, which means AVX2, BMI2 and FMA. That is Intel Haswell (2013), AMD Excavator (2015) and anything newer: a Core i5-4570, an FX-8800P, any Ryzen. A virtual machine has to expose the whole v3 set to the guest, so check the CPU model your hypervisor passes through.
+
+Apps on older machines can stay on 0.9. Our policy is to support a CPU generation for ten years after it ships, and the next step, x86-64-v4, is planned for 2030 at the earliest. The [packaging guide](/guides/packaging/#cpu-requirements) has the details. Apple silicon is not affected.
+
+</Change>
+</Migration>
+
+One more for Rust hosts: the 0.10 crates use edition 2024, so rebuild against them.
