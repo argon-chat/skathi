@@ -1,0 +1,47 @@
+name: Documentation
+
+on:
+  push:
+    branches: [master]
+    paths: &reference-inputs
+      - "docs/**"
+      - "crates/sk-*/src/**/*.rs"
+      - "crates/sk-effects/generated/**"
+      - "crates/sk-effects/shaders/**"
+      - "packages/runtime/**"
+      - "packages/cli/**"
+      - "vendor/redjs"
+      - "tsconfig*.json"
+      - "bun.lock"
+      - "package.json"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths: *reference-inputs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: git submodule update --init --depth 1 -- vendor/redjs
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run docs:check
+      - run: bun run docs:build
+      - run: bun run --cwd docs test

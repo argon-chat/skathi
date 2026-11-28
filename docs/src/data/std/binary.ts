@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 const SAME_EVERYWHERE = "The module is the same on every platform.";
 const BATCH =
@@ -14,19 +14,7 @@ export const binary = section("skathi:binary", [
     name: "BinaryReader",
     kind: "class",
     summary: "A cursor that reads typed arrays, structs, byte ranges, text and LEB128 values from a buffer in place.",
-    syntax: `${importLine("skathi:binary", "BinaryReader")}
-
-new BinaryReader(source: BufferSource | NativeBuffer, options?: { endian?: "little" | "big" })
-
-reader.position: number
-readonly reader.remaining: number
-readonly reader.view: DataView
-
-reader.readArray<T extends TypedArray>(type: new (length: number) => T, count: number): T
-reader.readStruct<L extends StructLayout>(layout: L): StructOf<L>
-reader.bytes(n: number): Uint8Array
-reader.string(n: number, encoding?: string): string
-reader.varUints(count: number): Uint32Array`,
+    declaration: true,
     params: [
       {
         name: "source",
@@ -166,17 +154,7 @@ window.byteOffset; // 2`,
     kind: "class",
     summary:
       "A growing buffer that writes arrays of numbers, structs and raw bytes, and hands the result over as a `Uint8Array`.",
-    syntax: `${importLine("skathi:binary", "BinaryWriter")}
-
-new BinaryWriter(options?: { endian?: "little" | "big"; initialCapacity?: number })
-
-readonly writer.length: number
-readonly writer.view: DataView
-
-writer.writeAll(values: ArrayLike<number>, type: "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "f32" | "f64"): this
-writer.writeStruct<L extends StructLayout>(layout: L, value: { [K in keyof L]: number | bigint }): this
-writer.bytes(source: BufferSource): this
-writer.finish(): Uint8Array`,
+    declaration: true,
     params: [
       {
         name: "options.endian",
@@ -292,13 +270,7 @@ writer.length; // 0`,
     kind: "type",
     summary:
       "An object of field names and types that tells `readStruct` and `writeStruct` which scalars follow each other.",
-    syntax: `import type { FieldType, StructLayout, StructOf } from "skathi:binary";
-
-type FieldType = "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "u64" | "i64" | "f32" | "f64"
-type StructLayout = Record<string, FieldType>
-type StructOf<L extends StructLayout> = {
-  [K in keyof L]: L[K] extends "u64" | "i64" ? bigint : number
-}`,
+    declaration: ["StructLayout", "FieldType", "StructOf"],
     values: [
       { value: "u8", status: OK, note: "1 byte, unsigned. A `number`." },
       { value: "i8", status: OK, note: "1 byte, signed. A `number`." },
@@ -347,13 +319,7 @@ head.id; // -2n`,
     name: "BitReader",
     kind: "class",
     summary: "Reads values of 1 to 32 bits from a `Uint8Array`, high bit first or low bit first.",
-    syntax: `${importLine("skathi:binary", "BitReader")}
-
-new BitReader(source: Uint8Array, order?: "msb" | "lsb")
-
-reader.read(bits: number): number
-reader.readMany(bits: number, count: number): Uint32Array
-reader.align(): void`,
+    declaration: true,
     params: [
       { name: "source", type: "Uint8Array", description: "The bytes to read. They are read in place." },
       {
@@ -417,13 +383,7 @@ bits.readMany(2, 3); // Uint32Array [1, 2, 3]`,
     name: "BitWriter",
     kind: "class",
     summary: "Packs values of 1 to 32 bits into bytes, high bit first or low bit first.",
-    syntax: `${importLine("skathi:binary", "BitWriter")}
-
-new BitWriter(order?: "msb" | "lsb")
-
-writer.write(value: number, bits: number): this
-writer.writeMany(values: ArrayLike<number>, bits: number): this
-writer.finish(): Uint8Array`,
+    declaration: true,
     params: [
       {
         name: "order",
@@ -475,12 +435,7 @@ new BitWriter("lsb").write(5, 3).writeMany([1, 2, 3], 2).finish();
     name: "Endian",
     kind: "namespace",
     summary: "Tells this machine's byte order and reverses the bytes of every element of a typed array.",
-    syntax: `${importLine("skathi:binary", "Endian")}
-
-readonly Endian.native: "little" | "big"
-Endian.swap16(array: Uint16Array | Int16Array | Float16Array): void
-Endian.swap32(array: Uint32Array | Int32Array | Float32Array): void
-Endian.swap64(array: BigUint64Array | BigInt64Array | Float64Array): void`,
+    declaration: true,
     notes: [
       '`Endian.native` is `"little"` or `"big"`: this machine\'s byte order, which is the order a typed array stores its elements in.',
       "`swap16`, `swap32` and `swap64` reverse the bytes of every element in place. They return nothing and allocate nothing.",
@@ -526,11 +481,7 @@ word[0]; // 0x3412`,
     kind: "namespace",
     summary:
       "Encodes and decodes arrays of integers as LEB128 variable-length bytes, with optional zigzag for signed values.",
-    syntax: `${importLine("skathi:binary", "VarInt")}
-
-VarInt.encodeAll(values: ArrayLike<number>, zigzag?: boolean): Uint8Array
-VarInt.decodeAll(bytes: BufferSource, zigzag?: boolean): Float64Array
-VarInt.size(value: number, zigzag?: boolean): number`,
+    declaration: true,
     params: [
       {
         name: "values",
@@ -590,10 +541,7 @@ VarInt.decodeAll(new Uint8Array([0xe5, 0x8e, 0x26, 0x7f])); // Float64Array [624
     name: "CRC32",
     kind: "namespace",
     summary: "Computes the CRC-32 checksum that zlib and PNG use, in one call or over data that arrives in pieces.",
-    syntax: `${importLine("skathi:binary", "CRC32")}
-
-CRC32.compute(bytes: BufferSource, seed?: number): number
-CRC32.create(): { update(bytes: BufferSource): void; digest(): number }`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       {
@@ -659,10 +607,7 @@ export async function checksum(chunks: AsyncIterable<Uint8Array>): Promise<numbe
     name: "CRC64",
     kind: "namespace",
     summary: "Computes a CRC-64 checksum as a `bigint`, in the XZ or the NVMe variant.",
-    syntax: `${importLine("skathi:binary", "CRC64")}
-
-CRC64.compute(bytes: BufferSource, variant?: "ecma" | "nvme"): bigint
-CRC64.create(variant?: "ecma" | "nvme"): { update(bytes: BufferSource): void; digest(): bigint }`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       {

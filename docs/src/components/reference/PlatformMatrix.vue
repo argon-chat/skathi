@@ -10,8 +10,10 @@ const columns: { id: Platform; short: string; label: string }[] = [
   { id: "linux", short: "Linux", label: "Linux" },
 ];
 const labels: Record<Status, string> = {
+  declared: "declared in SDK",
   supported: "supported",
   partial: "partial",
+  unsupported: "unsupported",
   planned: "planned",
   "on-hold": "on hold",
   "not-planned": "not planned",

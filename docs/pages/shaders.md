@@ -1,7 +1,7 @@
 ---
 title: Shader library
 label: Shader library
-description: "The Slang modules an effect imports: sk, the effect contract with its attributes, EffectInput and helpers, and sk.color, colours with their encoding in the type, conversions between CSS colour spaces, mixing, contrast and harmonies."
+description: "Public Slang modules for writing Skathi shaders and the signatures of built-in CSS effects."
 section: Reference
 order: 6.5
 ---
@@ -13,32 +13,25 @@ They import Skathi's shader modules by name; `sk build`, `sk dev` and `sk check`
 there is nothing to install or copy into the app.
 
 ```slang
-import sk;        // the effect contract: attributes, IEffect, EffectInput
-import sk.color;  // Color, colour spaces, mixing, contrast
-import sk.math;   // SK_PI, floorMod, safeDiv, remap
-import sk.blend;  // CSS blend modes and Porter-Duff compositing
-import sk.sdf;    // 2D signed distance fields: shapes, operations, strokes
-import sk.ease;   // CSS easing, Penner curves, springs, time envelopes
-import sk.noise;  // hashes, Perlin, simplex, Worley, fbm, curl, dither
-import sk.sample; // blurs, dispersion, displacement, bicubic over the engine's samplers
-import sk.light;  // normals, bevels, Fresnel, refraction, highlights, shadows
-import sk.tone;   // tone curves, exposure, soft clip, nits, PQ and HLG
+import sk;       // EffectInput and IEffect
+import sk.color; // Color and colour-space conversions
 ```
 
-| Module                   | What it gives                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------- |
-| [`sk`](#sk)              | `[SkEffect]` and the other attributes, `IEffect`, `EffectInput`, `SkTexture`, the `sk_` helpers   |
-| [`sk.color`](#skcolor)   | `Color`, sRGB to OKLCH conversions, `mix`, lighten and darken, `contrast`, ΔE, harmonies          |
-| [`sk.math`](#skmath)     | `SK_PI`, `SK_TAU`, `floorMod`, `safeDiv`, `safeAtan2`, `remap`                                    |
-| [`sk.blend`](#skblend)   | `blend<M>` with the sixteen CSS blend modes, `composite<Op>` with the Porter-Duff operators       |
-| [`sk.sdf`](#sksdf)       | `Sdf.circle` to `Sdf.star`, unions and smooth unions, repetition, `coverage`, `stroke`, `glow`    |
-| [`sk.ease`](#skease)     | `CubicBezier`, `Steps`, `LinearStops`, `Spring`, `easeOutCubic` and the Penner set, `progress`    |
-| [`sk.noise`](#sknoise)   | `pcg`, `hash`, `Perlin`, `Simplex`, `ValueNoise`, `worley`, `fbm<N>`, `curl<N>`, `dither`         |
-| [`sk.sample`](#sksample) | `ISampler`, `gaussian<K>`, `box`, `disc<N>`, `dispersion`, `displace`, `catmullRom`, `sharpen`    |
-| [`sk.light`](#sklight)   | `bevelNormal`, `refractionOffset`, `fresnelSchlick`, `blinnPhong`, `ggx`, `dropShadow`, `Light`   |
-| [`sk.tone`](#sktone)     | `Reinhard`, `Hable`, `AcesFitted`, `byLuminance`, `exposure`, `softClip`, `pqEncode`, `hlgEncode` |
-
 The [shader library guide](/guides/shader-library/) walks through writing an effect with them.
+
+| Module                                    | What it gives                                                                                                 |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [`sk`](#sk)                               | Effect attributes, `IEffect`, pixel coordinates and backdrop sampling through `EffectInput`, and `SkTexture`. |
+| [`sk.color`](#skcolor)                    | Colour-space conversions, mixing, contrast, colour differences and harmonies.                                 |
+| [`sk.math`](#skmath)                      | `SK_PI`, `SK_TAU`, `floorMod`, `safeDiv`, `safeAtan2` and `remap`.                                            |
+| [`sk.blend`](#skblend)                    | CSS blend modes with `blend<M>` and Porter-Duff compositing with `composite<Op>`.                             |
+| [`sk.sdf`](#sksdf)                        | Distance fields for shapes, smooth unions, repetition, strokes and glows.                                     |
+| [`sk.ease`](#skease)                      | CSS easing curves, stepped timing, springs and time envelopes.                                                |
+| [`sk.noise`](#sknoise)                    | Hashes, Perlin, simplex and Worley noise, fractals, curl and dithering.                                       |
+| [`sk.sample`](#sksample)                  | Blur kernels, dispersion, displacement, bicubic sampling and sharpening.                                      |
+| [`sk.light`](#sklight)                    | Normals, bevels, refraction, highlights and shadows.                                                          |
+| [`sk.tone`](#sktone)                      | Tone curves, exposure, soft clipping, nits and PQ/HLG encoding.                                               |
+| [Built-in CSS effects](#built-in-effects) | Effect arguments, ranges and defaults for `--shading`.                                                        |
 
 ## Conventions
 

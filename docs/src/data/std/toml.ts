@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 export const toml = section("skathi:toml", [
   {
@@ -6,10 +6,7 @@ export const toml = section("skathi:toml", [
     name: "TOML",
     kind: "namespace",
     summary: "Parses and writes TOML 1.1 documents, in the shape of `JSON`.",
-    syntax: `${importLine("skathi:toml", "TOML")}
-
-TOML.parse(text: string): Record<string, unknown>
-TOML.stringify(value: Record<string, unknown>, options?: { pretty?: boolean }): string`,
+    declaration: true,
     params: [
       { name: "text", type: "string", description: "`parse`: a TOML document." },
       {

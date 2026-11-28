@@ -447,30 +447,30 @@ std_fn!(fn deadline_throw_if_expired(g, args) {
     Ok(UNDEF)
 });
 
+/// `valueOf()` and `toJSON()` return milliseconds, so `+span`, `a < b` and `JSON.stringify(span)` work on a span.
+const TIME_SPAN: ClassSpec<'static> = ClassSpec {
+    name: "TimeSpan",
+    arity: 0,
+    construct: None,
+    parent_proto: 0,
+    methods: &[
+        ("add", 1, span_add),
+        ("subtract", 1, span_subtract),
+        ("toDuration", 0, span_to_duration),
+        ("toString", 0, span_to_string),
+        ("valueOf", 0, span_total_ms),
+        ("toJSON", 0, span_total_ms),
+    ],
+    getters: &[
+        ("totalMilliseconds", span_total_ms),
+        ("totalSeconds", span_total_seconds),
+    ],
+    accessors: &[],
+};
+
 pub(super) unsafe fn install(g: *mut c_void, std: u64) {
     unsafe {
-        let span = support::class(
-            g,
-            &ClassSpec {
-                name: "TimeSpan",
-                arity: 0,
-                construct: None,
-                parent_proto: 0,
-                methods: &[
-                    ("add", 1, span_add),
-                    ("subtract", 1, span_subtract),
-                    ("toDuration", 0, span_to_duration),
-                    ("toString", 0, span_to_string),
-                    ("valueOf", 0, span_total_ms),
-                    ("toJSON", 0, span_total_ms),
-                ],
-                getters: &[
-                    ("totalMilliseconds", span_total_ms),
-                    ("totalSeconds", span_total_seconds),
-                ],
-                accessors: &[],
-            },
-        );
+        let span = support::class(g, &TIME_SPAN);
         static_fn(g, span.ctor, "fromMilliseconds", 1, span_from_ms);
         static_fn(g, span.ctor, "fromSeconds", 1, span_from_seconds);
         static_fn(g, span.ctor, "fromMinutes", 1, span_from_minutes);

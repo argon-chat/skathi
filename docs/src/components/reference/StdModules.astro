@@ -1,0 +1,24 @@
+---
+import { moduleOverview } from "../../lib/std";
+import { categoryId, inline } from "../../lib/reference";
+---
+
+<table>
+  <thead><tr><th scope="col">Module</th><th scope="col">What it gives</th></tr></thead>
+  <tbody>
+    {
+      moduleOverview.map(([name, summary]) => (
+        <tr>
+          <>
+            <td>
+              <a href={`#${categoryId(name)}`}>
+                <code>{name}</code>
+              </a>
+            </td>
+            <td set:html={inline(summary)} />
+          </>
+        </tr>
+      ))
+    }
+  </tbody>
+</table>

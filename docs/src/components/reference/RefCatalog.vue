@@ -39,13 +39,15 @@ const statusFilters: {
   },
   {
     id: "missing",
-    label: "Not planned",
-    match: (s) => s === "not-planned" || s === "deprecated",
+    label: "Unavailable",
+    match: (s) => s === "unsupported" || s === "not-planned" || s === "deprecated",
   },
 ];
 const statusLabels: Record<Status, string> = {
+  declared: "Declared in SDK",
   supported: "Supported",
   partial: "Partial",
+  unsupported: "Unsupported",
   planned: "Planned",
   "on-hold": "On hold",
   "not-planned": "Not planned",

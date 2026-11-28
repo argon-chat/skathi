@@ -26,16 +26,7 @@ const drafts: Draft[] = [
   {
     slug: "i-tone",
     name: "ITone",
-    kind: "interface",
-    summary:
-      "A tone curve as a value: `float at(float x)`, scene light in, display light out. `Reinhard`, `ReinhardExtended`, `Hable`, `AcesFitted` and `SoftClip` implement it.",
     since,
-    syntax: `import sk.tone;
-
-interface ITone
-{
-    float at(float x);
-};`,
     notes: [
       "Apply one to a colour with `perChannel` or `byLuminance`; both specialise at compile time.",
       "Curves take straight light: divide a premultiplied colour by its alpha first.",
@@ -45,11 +36,7 @@ interface ITone
   {
     slug: "reinhard",
     name: "Reinhard",
-    kind: "struct",
-    summary: "`x / (1 + x)`: all of 0..∞ into 0..1, never reaching 1.",
     since,
-    syntax: `Reinhard();
-float at(float x);`,
     params: [LIGHT],
     returns: "0..1, 0.5 at SDR white.",
     related: ["reinhard-extended", "i-tone"],
@@ -57,11 +44,7 @@ float at(float x);`,
   {
     slug: "reinhard-extended",
     name: "ReinhardExtended",
-    kind: "struct",
-    summary: "Reinhard with a white point, `x (1 + x / white²) / (1 + x)`: `white` maps to exactly 1.",
     since,
-    syntax: `ReinhardExtended(float white);
-float at(float x);`,
     params: [{ name: "white", type: "float", description: "The light that maps to 1; > 0." }, LIGHT],
     returns: "0 at 0, 1 at `white`, above 1 beyond it.",
     related: ["reinhard", "i-tone"],
@@ -69,12 +52,7 @@ float at(float x);`,
   {
     slug: "hable",
     name: "Hable",
-    kind: "struct",
-    summary:
-      "A filmic curve with a toe and a shoulder (the Hable form and its usual constants), scaled so `white` maps to 1.",
     since,
-    syntax: `Hable(float white = 11.2);
-float at(float x);`,
     params: [
       { name: "white", type: "float", description: "The light that maps to 1; > 0.", optional: true, default: "11.2" },
       LIGHT,
@@ -86,11 +64,7 @@ float at(float x);`,
   {
     slug: "aces-fitted",
     name: "AcesFitted",
-    kind: "struct",
-    summary: "A rational fit of the ACES film look (RRT and sRGB ODT) from scene light to SDR display light.",
     since,
-    syntax: `AcesFitted();
-float at(float x);`,
     params: [LIGHT],
     returns: "0..1; 1 is reached near x = 10.",
     notes: [
@@ -102,13 +76,9 @@ float at(float x);`,
   {
     slug: "tone-soft-clip",
     name: "softClip",
-    kind: "function",
     summary:
       "Identity up to `knee`, then an exponential roll-off that meets it with slope 1 and approaches `limit` without reaching it.",
     since,
-    syntax: `float softClip(float x, float knee, float limit);
-vector<float, N> softClip(vector<float, N> x, float knee, float limit);
-SoftClip(float knee, float limit);   // the same as an ITone`,
     params: [
       { name: "x", type: "float", description: "Any value; below `knee` every sign passes through." },
       { name: "knee", type: "float", description: "Where the roll-off starts." },
@@ -129,11 +99,8 @@ SoftClip(float knee, float limit);   // the same as an ITone`,
   {
     slug: "tone-per-channel",
     name: "perChannel",
-    kind: "function",
     summary: "A tone curve on each channel, or on BT.709 luminance with the colour scaled to match (`byLuminance`).",
     since,
-    syntax: `float3 perChannel<T : ITone>(T curve, float3 rgb);
-float3 byLuminance<T : ITone>(T curve, float3 rgb);`,
     params: [
       { name: "curve", type: "ITone", description: "The curve." },
       { name: "rgb", type: "float3", description: "Straight linear light." },
@@ -148,11 +115,8 @@ float3 byLuminance<T : ITone>(T curve, float3 rgb);`,
   {
     slug: "luminance709",
     name: "luminance709",
-    kind: "function",
     summary: "BT.709 luminance of linear light, `dot(rgb, SK_LUMA_709)`: 1.0 at SDR white.",
     since,
-    syntax: `static const float3 SK_LUMA_709 = float3(0.2126, 0.7152, 0.0722);
-float luminance709(float3 rgb);`,
     params: [{ name: "rgb", type: "float3", description: "Linear light, any sign." }],
     notes: ["On sRGB-encoded values it is not luminance; decode with `sk_frame_to_linear` first."],
     aliases: ["SK_LUMA_709"],
@@ -161,11 +125,7 @@ float luminance709(float3 rgb);`,
   {
     slug: "exposure",
     name: "exposure",
-    kind: "function",
-    summary: "Light scaled by `2^stops`: +1 doubles it, −1 halves it.",
     since,
-    syntax: `float exposure(float x, float stops);
-vector<float, N> exposure(vector<float, N> x, float stops);`,
     params: [
       { name: "x", type: "float or vector", description: "Linear light, any sign." },
       { name: "stops", type: "float", description: "Any value." },
@@ -175,13 +135,8 @@ vector<float, N> exposure(vector<float, N> x, float stops);`,
   {
     slug: "scene-to-nits",
     name: "sceneToNits",
-    kind: "function",
     summary: "Scene light (1.0 at SDR white) to absolute nits and back, given the nits of SDR white.",
     since,
-    syntax: `static const float SK_SCRGB_WHITE_NITS = 80.0;          // Windows scRGB
-static const float SK_HDR_REFERENCE_WHITE_NITS = 203.0;  // BT.2408
-float sceneToNits(float x, float sdrWhiteNits);
-float nitsToScene(float nits, float sdrWhiteNits);       // and vector<float, N> forms`,
     params: [
       { name: "x", type: "float or vector", description: "Scene light, any sign." },
       { name: "sdrWhiteNits", type: "float", description: "Nits of SDR white; > 0." },
@@ -195,11 +150,8 @@ float nitsToScene(float nits, float sdrWhiteNits);       // and vector<float, N>
   {
     slug: "pq-encode",
     name: "pqEncode",
-    kind: "function",
     summary: "SMPTE ST 2084 (PQ): absolute nits 0..10000 to a signal 0..1, and back with `pqDecode`.",
     since,
-    syntax: `vector<float, N> pqEncode(vector<float, N> nits);
-vector<float, N> pqDecode(vector<float, N> signal);`,
     params: [
       { name: "nits", type: "vector", description: "0..10000; clamped to that range." },
       { name: "signal", type: "vector", description: "0..1; clamped to that range." },
@@ -212,11 +164,8 @@ vector<float, N> pqDecode(vector<float, N> signal);`,
   {
     slug: "hlg-encode",
     name: "hlgEncode",
-    kind: "function",
     summary: "BT.2100 HLG OETF: normalised scene light 0..1 to a signal 0..1, and back with `hlgDecode`.",
     since,
-    syntax: `float hlgEncode(float e);
-float hlgDecode(float signal);              // and vector<float, N> forms`,
     params: [
       { name: "e", type: "float", description: "Scene light normalised to 0..1; clamped to that range." },
       { name: "signal", type: "float", description: "0..1; clamped to that range." },

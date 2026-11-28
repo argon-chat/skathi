@@ -7,7 +7,7 @@ import type { SearchData } from "../src/lib/search";
 
 const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const read = (path: string): string => readFileSync(join(dist, path), "utf8");
-const pages = ["introduction", "quick-start", "concepts", "css", "web-platform", "authoring"];
+const pages = ["introduction", "quick-start", "concepts", "css", "web-platform", "std", "shaders", "authoring"];
 const pagePath = (id: string): string => `${id}/index.html`;
 
 describe("built documentation (run bun run build first)", () => {
@@ -89,6 +89,34 @@ describe("built documentation (run bun run build first)", () => {
         expect(["supported", "partial"], entry.name).toContain(entry.status);
       }
     }
+  });
+
+  test("keeps the module overview and finds SDK types on the pages that use them", () => {
+    const search = JSON.parse(read("search-index.json")) as SearchData;
+    expect(read("std/index.html")).toContain('href="#skathigamepad"');
+    expect(read("std.md")).toContain("[`skathi:gamepad`](#skathigamepad)");
+    expect(read("std.md")).not.toContain("<StdModules");
+    expect(read("std.md").match(/^# Skathi modules$/gm)).toHaveLength(1);
+    for (const id of ["std", "web-platform"]) {
+      expect(read(`${id}/declarations/index.html`)).toContain(`url=/${id}/`);
+      expect(read(`${id}/index.html`)).not.toContain(`/${id}/declarations/`);
+    }
+    expect(search.records.some((r) => r[3].includes("/declarations/"))).toBe(false);
+    for (const [page, symbol] of [
+      ["web-platform/gamepad", "GamepadButton"],
+      ["std/gamepads", "DeadZoneTarget"],
+    ] as const) {
+      const anchor = `type-${symbol}`;
+      expect(read(pagePath(page))).toContain(`id="${anchor}"`);
+      expect(read(`${page}.md`)).toContain(`### ${symbol}`);
+      expect(read(`${page}.md`)).toContain("## Examples");
+      expect(read("llms-full.txt")).toContain(read(`${page}.md`).trim());
+      expect(search.records.some((r) => r[1] === symbol && r[3] === `/${page}/#${anchor}`)).toBe(true);
+    }
+    expect(read("std/time-span.md")).toContain("crates/sk-app/src/stdlib/time.rs");
+    expect(read("shaders/floor-mod.md")).toContain("floorMod<let N : int>");
+    expect(read("shaders/builtin-frost.md")).toContain("12px");
+    expect(read("css/border-top-width.md")).toContain("| `2px` | Supported |");
   });
 
   test("has no broken internal page, asset, or heading links", async () => {

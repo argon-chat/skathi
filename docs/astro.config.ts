@@ -3,6 +3,7 @@ import sitemap from "@astrojs/sitemap";
 import vue from "@astrojs/vue";
 import { satteri } from "@astrojs/markdown-satteri";
 import { defineConfig, fontProviders } from "astro/config";
+import { watchApiSources } from "./scripts/watch-api";
 import { codeTransformers } from "./src/lib/code";
 import docsContent, { sectionSince } from "./src/lib/docs-content";
 import slang from "./src/lib/slang";
@@ -12,6 +13,10 @@ const site = process.env["SITE_URL"] ?? "https://skathi.land";
 export default defineConfig({
   site,
   output: "static",
+  redirects: {
+    "/std/declarations": "/std/",
+    "/web-platform/declarations": "/web-platform/",
+  },
   trailingSlash: "always",
   integrations: [vue(), mdx(), sitemap({ filter: (page) => !page.endsWith("/404/") })],
   fonts: [
@@ -72,5 +77,5 @@ export default defineConfig({
       transformers: codeTransformers,
     },
   },
-  vite: { resolve: { dedupe: ["vue"] } },
+  vite: { resolve: { dedupe: ["vue"] }, plugins: [watchApiSources()] },
 });

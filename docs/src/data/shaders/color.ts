@@ -12,12 +12,9 @@ const space = (
 ): Draft => ({
   slug,
   name,
-  kind: "struct",
   summary,
   since,
-  syntax: `struct ${name} : IColorSpace { ... };
-
-float3 c = color.to<${name}>();       // ${coords}
+  usage: `float3 c = color.to<${name}>();       // ${coords}
 Color back = Color.from<${name}>(c, alpha);`,
   notes,
   ...(example ? { examples: [{ title: `Work in ${name}`, lang: "slang" as const, code: example }] } : {}),
@@ -28,16 +25,7 @@ export const color = section("sk.color", [
   {
     slug: "color",
     name: "Color",
-    kind: "struct",
-    summary: "A colour: linear-light sRGB with straight alpha. Built by a constructor named after what you hold.",
     since,
-    syntax: `import sk.color;
-
-struct Color
-{
-    float3 linear;   // linear sRGB (D65); 1.0 is SDR white, above it HDR
-    float alpha;     // straight, 0..1
-};`,
     notes: [
       "The encoding is in the type: a `Color` is always linear light and straight alpha, whatever it was built from. Build one with `fromSrgb`, `fromPremultiplied`, `fromLinear`, `fromHex` or `from<S>`, and turn it back with the matching `toSrgb`, `toPremultiplied`, `toLinear` or `to<S>`.",
       "`linear` is not clamped. Values above 1.0 (an HDR backdrop) and below 0 (outside the sRGB gamut) survive every conversion that can carry them: linear sRGB, XYZ, Lab, LCH, OKLab and OKLCH. The engine clamps what `shade` returns.",
@@ -75,11 +63,7 @@ struct TintedGlass : IEffect
   {
     slug: "color-from-srgb",
     name: "Color.fromSrgb",
-    kind: "method",
-    summary: "From straight-alpha, sRGB-encoded RGBA: an `[SkColor]` field, a colour written in the shader.",
     since,
-    syntax: `static Color fromSrgb(float4 rgba);
-static Color fromSrgb(float3 rgb);   // opaque`,
     notes: [
       "This is the encoding of an `[SkColor]` parameter, of a `#hex` or `rgb()` written as numbers, and of what a `straightAlpha` effect returns.",
       "Channels outside 0..1 are decoded with the sRGB curve mirrored below 0 and extended above 1, as scRGB does.",
@@ -89,11 +73,7 @@ static Color fromSrgb(float3 rgb);   // opaque`,
   {
     slug: "color-from-premultiplied",
     name: "Color.fromPremultiplied",
-    kind: "method",
-    summary:
-      "From premultiplied, sRGB-encoded RGBA: what the engine samples from the backdrop, the content and colour images.",
     since,
-    syntax: `static Color fromPremultiplied(float4 rgba);`,
     notes: [
       "Use it for `input.backdrop`, `backdropAt`, `rawBackdropAt`, `input.content`, `contentAt` and an `SkTexture` without `[SkLinear]`.",
       "The engine premultiplies in sRGB-encoded space, so this divides by alpha before decoding. A fully transparent sample reads as transparent black.",
@@ -104,21 +84,15 @@ static Color fromSrgb(float3 rgb);   // opaque`,
   {
     slug: "color-from-linear",
     name: "Color.fromLinear",
-    kind: "method",
     summary:
-      "From straight-alpha, linear-light sRGB: values you computed in light, or a `[SkLinear]` texture that holds light.",
+      "Build a colour from straight-alpha, linear-light sRGB, such as values computed in light or sampled from a `[SkLinear]` texture.",
     since,
-    syntax: `static Color fromLinear(float4 rgba);
-static Color fromLinear(float3 rgb);   // opaque`,
     related: ["color-to-linear"],
   },
   {
     slug: "color-from-hex",
     name: "Color.fromHex",
-    kind: "method",
-    summary: "From a CSS hex colour written as a number: `Color.fromHex(0x7fd4ff)`.",
     since,
-    syntax: `static Color fromHex(uint rrggbb, float alpha = 1.0);`,
     params: [
       { name: "rrggbb", type: "uint", description: "Red, green and blue bytes, sRGB-encoded." },
       { name: "alpha", type: "float", description: "Straight alpha.", optional: true, default: "1.0" },
@@ -127,10 +101,7 @@ static Color fromLinear(float3 rgb);   // opaque`,
   {
     slug: "color-from",
     name: "Color.from",
-    kind: "method",
-    summary: "From coordinates in a colour space: `Color.from<Oklch>(float3(0.7, 0.12, 200.0))`.",
     since,
-    syntax: `static Color from<S : IColorSpace>(float3 coords, float alpha = 1.0);`,
     params: [
       {
         name: "S",
@@ -146,48 +117,34 @@ static Color fromLinear(float3 rgb);   // opaque`,
   {
     slug: "color-to-srgb",
     name: "Color.toSrgb",
-    kind: "method",
-    summary: "Straight-alpha, sRGB-encoded RGBA: what a `straightAlpha` effect returns from `shade`.",
     since,
-    syntax: `float4 toSrgb();`,
     related: ["color-from-srgb", "i-effect"],
   },
   {
     slug: "color-to-premultiplied",
     name: "Color.toPremultiplied",
-    kind: "method",
-    summary: "Premultiplied, sRGB-encoded RGBA: what `shade` returns by default.",
     since,
-    syntax: `float4 toPremultiplied();`,
     notes: ["Values above SDR white stay in the result; the engine's clamp after `shade` limits them, not this."],
     related: ["color-from-premultiplied", "i-effect"],
   },
   {
     slug: "color-to-linear",
     name: "Color.toLinear",
-    kind: "method",
-    summary: "Straight-alpha, linear-light RGBA, unclamped.",
+    summary: "Return straight-alpha, linear-light RGBA. Channels above 1 retain their HDR values.",
     since,
-    syntax: `float4 toLinear();`,
   },
   {
     slug: "color-to",
     name: "Color.to",
-    kind: "method",
-    summary: "This colour's coordinates in a colour space: `c.to<Oklch>()`.",
     since,
-    syntax: `float3 to<S : IColorSpace>();`,
     notes: ["Alpha is not part of the coordinates; read `c.alpha`."],
     related: ["color-from", "i-color-space"],
   },
   {
     slug: "color-lighten",
     name: "Color.lighten",
-    kind: "method",
     summary: "HSL lightness raised by `amount` (0..1); `darken` lowers it. As colord, stopping at white and black.",
     since,
-    syntax: `Color lighten(float amount);
-Color darken(float amount);`,
     notes: [
       "Works on the sRGB-encoded HSL lightness, so `lighten(0.1)` is what colord, Sass and CSS preprocessors do.",
       "The result stops at 0 and 1, but a lightness already outside them (an HDR colour) is not pulled back in.",
@@ -198,20 +155,14 @@ Color darken(float amount);`,
   {
     slug: "color-saturate",
     name: "Color.saturate",
-    kind: "method",
     summary: "HSL saturation raised by `amount` (0..1); `desaturate` lowers it. A grey stays grey.",
     since,
-    syntax: `Color saturate(float amount);
-Color desaturate(float amount);`,
     aliases: ["Color.desaturate"],
   },
   {
     slug: "color-grayscale",
     name: "Color.grayscale",
-    kind: "method",
-    summary: "The grey of the same HSL lightness, as colord's `grayscale()`.",
     since,
-    syntax: `Color grayscale();`,
     notes: [
       "This keeps HSL lightness, not luminance: a saturated blue turns a lighter grey than its luminance. For a luminance grey use `Color.fromLinear(float3(c.luminance()))`.",
     ],
@@ -219,39 +170,25 @@ Color desaturate(float amount);`,
   {
     slug: "color-invert",
     name: "Color.invert",
-    kind: "method",
-    summary: "Each sRGB-encoded channel replaced by `1 - c`, as colord's `invert()`.",
     since,
-    syntax: `Color invert();`,
     notes: ["An SDR operation: a channel above 1.0 turns negative."],
   },
   {
     slug: "color-rotate",
     name: "Color.rotate",
-    kind: "method",
     summary: "The HSL hue turned by `degrees`; `withHue` sets it.",
     since,
-    syntax: `Color rotate(float degrees);
-Color withHue(float degrees);`,
     aliases: ["Color.withHue"],
   },
   {
     slug: "color-with-alpha",
     name: "Color.withAlpha",
-    kind: "method",
-    summary: "The same colour with another straight alpha.",
     since,
-    syntax: `Color withAlpha(float alpha);`,
   },
   {
     slug: "color-mix",
     name: "Color.mix",
-    kind: "method",
-    summary:
-      "CSS `color-mix(in <space>, this, other t)`: premultiplied interpolation in any colour space, with a hue method.",
     since,
-    syntax: `Color mix<S : IColorSpace>(Color other, float t, HueInterpolation hue = HueInterpolation.Shorter);
-Color mix(Color other, float t);   // mix<Oklab>`,
     params: [
       { name: "S", type: "IColorSpace", description: "The interpolation space. Without it, `Oklab`, the CSS default." },
       { name: "other", type: "Color", description: "The colour at `t = 1`." },
@@ -283,30 +220,20 @@ return mixed.toPremultiplied();`,
   {
     slug: "hue-interpolation",
     name: "HueInterpolation",
-    kind: "enum",
-    summary:
-      "How `mix` goes round the hue circle in a polar space, as CSS `shorter | longer | increasing | decreasing hue`.",
     since,
-    syntax: `enum HueInterpolation { Shorter, Longer, Increasing, Decreasing }`,
     notes: ["Half turns stay as CSS leaves them: `Shorter` from 0° to 180° goes up, from 180° to 0° goes down."],
     related: ["color-mix"],
   },
   {
     slug: "color-luminance",
     name: "Color.luminance",
-    kind: "method",
-    summary: "WCAG relative luminance: 0 for black, 1 for SDR white, above it for HDR. Ignores alpha.",
     since,
-    syntax: `float luminance();`,
     related: ["color-contrast"],
   },
   {
     slug: "color-contrast",
     name: "Color.contrast",
-    kind: "method",
-    summary: "The WCAG contrast ratio with another colour: 1 to 21 for SDR colours.",
     since,
-    syntax: `float contrast(Color other);`,
     notes: [
       "WCAG 2 asks for 4.5 for body text and 3 for large text.",
       "Alpha is ignored: composite a translucent colour over what is behind it first.",
@@ -327,22 +254,15 @@ Color ink = bg.contrast(Color.fromHex(0x000000)) >= bg.contrast(Color.fromHex(0x
   {
     slug: "color-brightness",
     name: "Color.brightness",
-    kind: "method",
     summary: "Perceived brightness, YIQ luma of the sRGB-encoded channels, 0..1 for SDR; `isDark` is below 0.5.",
     since,
-    syntax: `float brightness();
-bool isDark();    // brightness() < 0.5
-bool isLight();   // brightness() >= 0.5`,
     aliases: ["Color.isDark", "Color.isLight"],
   },
   {
     slug: "color-delta-e",
     name: "Color.deltaEOK",
-    kind: "method",
     summary: "Colour differences: ΔE OK (Euclidean in OKLab) and CIEDE2000 (in D50 Lab), as CSS Color 4 defines them.",
     since,
-    syntax: `float deltaEOK(Color other);     // about 0.02 is just noticeable
-float deltaE2000(Color other);   // about 2 is just noticeable`,
     notes: [
       "`deltaEOK` is cheap and is what CSS gamut mapping uses. `deltaE2000` is the industry metric; it is several times the arithmetic.",
       "colord's `delta()` is CIEDE2000 divided by 100.",
@@ -352,29 +272,14 @@ float deltaE2000(Color other);   // about 2 is just noticeable`,
   {
     slug: "color-harmonies",
     name: "Color.triadic",
-    kind: "method",
     summary: "Colour harmonies as fixed arrays, by HSL hue rotation as colord's harmonies plugin.",
     since,
-    syntax: `Color[2] complementary();        // 0, 180
-Color[3] analogous();            // -30, 0, 30
-Color[3] triadic();              // 0, 120, 240
-Color[4] tetradic();             // 0, 90, 180, 270
-Color[3] splitComplementary();   // 0, 150, 210`,
     aliases: ["Color.complementary", "Color.analogous", "Color.tetradic", "Color.splitComplementary"],
   },
   {
     slug: "i-color-space",
     name: "IColorSpace",
-    kind: "interface",
-    summary: "A colour space `Color.from`, `Color.to`, `Color.mix` and `convert` are specialised for at compile time.",
     since,
-    syntax: `interface IColorSpace
-{
-    static float3 fromLinearSrgb(float3 rgb);
-    static float3 toLinearSrgb(float3 c);
-    static int hueIndex();            // 0, 2, or -1 for no hue
-    static bool achromatic(float3 c); // the hue is powerless
-};`,
     notes: [
       "Every space converts through linear sRGB. Generic code over `S : IColorSpace` is specialised by the compiler: there is no dynamic dispatch, and only the spaces used are compiled in.",
       "A space of your own is a struct that implements the four functions.",
@@ -384,10 +289,7 @@ Color[3] splitComplementary();   // 0, 150, 210`,
   {
     slug: "convert",
     name: "convert",
-    kind: "function",
-    summary: "Coordinates in one space converted to another: `convert<Lab, Oklch>(lab)`.",
     since,
-    syntax: `float3 convert<From : IColorSpace, To : IColorSpace>(float3 c);`,
   },
   space(
     "srgb",

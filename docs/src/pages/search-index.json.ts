@@ -4,7 +4,7 @@ import { getPosts, postUrl } from "../lib/blog";
 import { checkGroups, checkPage, codeUrl } from "../lib/check";
 import { configPage, configSections, optionId, type ConfigOption } from "../lib/config";
 import { getDocs, pageUrl, sections, statusLabels } from "../lib/docs";
-import { entryUrl, kindLabel, pages, plain, statuses } from "../lib/reference";
+import { entryUrl, kindLabel, pages, plain, statuses, typeAnchor } from "../lib/reference";
 import { references } from "../lib/references";
 import type { SearchData, SearchRecord } from "../lib/search";
 
@@ -162,7 +162,7 @@ async function postRecords(): Promise<SearchRecord[]> {
 function referenceRecords(): SearchRecord[] {
   return Object.values(references).flatMap((reference) => {
     const group = groups.indexOf(groupOf[reference.id] ?? apiGroup);
-    return pages(reference).map((entry): SearchRecord => {
+    return pages(reference).flatMap((entry): SearchRecord[] => {
       const body = [
         ...(entry.values ?? []).map((value) => value.value),
         ...(entry.params ?? []).map((param) => param.name),
@@ -171,17 +171,30 @@ function referenceRecords(): SearchRecord[] {
       ]
         .map(plainText)
         .join(" ");
-      return [
+      const url = entryUrl(reference, entry.slug);
+      const page: SearchRecord = [
         group,
         plain(entry.name),
         `${reference.title} › ${entry.category}`,
-        entryUrl(reference, entry.slug),
+        url,
         plainText(entry.summary),
         body,
         (entry.aliases ?? []).join("\n"),
         kindLabel(entry.kind),
         entry.status === "supported" ? "" : statuses[entry.status].label,
       ];
+      const types = (entry.types ?? []).map((type): SearchRecord => [
+        group,
+        type.name,
+        `${entry.category} › ${entry.name}`,
+        `${url}#${typeAnchor(type.name)}`,
+        plainText(type.summary),
+        "",
+        "",
+        "Type",
+        "",
+      ]);
+      return [page, ...types];
     });
   });
 }

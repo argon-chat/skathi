@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 const SAME_EVERYWHERE = "The same on every platform.";
 const NOT_BYTES =
@@ -11,12 +11,7 @@ export const encoding = section("skathi:encoding", [
     name: "Hex",
     kind: "namespace",
     summary: "Converts bytes to hex text and back, prints a hex dump, and formats a number as `0x…`.",
-    syntax: `${importLine("skathi:encoding", "Hex")}
-
-Hex.encode(bytes: BufferSource): string
-Hex.decode(text: string): Uint8Array
-Hex.dump(bytes: BufferSource, options?: { width?: number; offset?: number }): string
-Hex.format(value: number | bigint, width?: number): string`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       { name: "text", type: "string", description: "`decode`: hex digits, two a byte, in either case." },
@@ -100,10 +95,7 @@ console.log(Hex.dump(packet, { width: 3, offset: 0x10 }));
     name: "Base16",
     kind: "namespace",
     summary: "The `encode` and `decode` of `Hex`, under the RFC 4648 name.",
-    syntax: `${importLine("skathi:encoding", "Base16")}
-
-Base16.encode(bytes: BufferSource): string
-Base16.decode(text: string): Uint8Array`,
+    declaration: true,
     notes: [
       "`Base16.encode` and `Base16.decode` are the same functions as `Hex.encode` and `Hex.decode`. `Base16` has no `dump` and no `format`.",
       "`encode` writes lowercase, two digits a byte. `decode` reads either case.",
@@ -132,10 +124,7 @@ Base16.encode(new Uint8Array([0, 255, 16])); // "00ff10"`,
     name: "Base32",
     kind: "namespace",
     summary: "Encodes bytes as Base32 text and back, in the RFC 4648, base32hex or Crockford alphabet.",
-    syntax: `${importLine("skathi:encoding", "Base32")}
-
-Base32.encode(bytes: BufferSource, options?: { alphabet?: "rfc4648" | "hex" | "crockford"; padding?: boolean }): string
-Base32.decode(text: string, options?: { alphabet?: "rfc4648" | "hex" | "crockford" }): Uint8Array`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       {
@@ -200,10 +189,7 @@ Base32.decode("zw-o1o", { alphabet: "crockford" }); // Uint8Array [255, 0, 16]`,
     name: "Base64",
     kind: "namespace",
     summary: "Encodes bytes as Base64 or base64url text and back.",
-    syntax: `${importLine("skathi:encoding", "Base64")}
-
-Base64.encode(bytes: BufferSource, options?: { alphabet?: "base64" | "base64url"; omitPadding?: boolean }): string
-Base64.decode(text: string, options?: { alphabet?: "base64" | "base64url" }): Uint8Array`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       {
@@ -290,12 +276,7 @@ export function jwtPayload(token: string): unknown {
     kind: "namespace",
     summary:
       "Finds a MIME type from a file name or from a file's first bytes, lists a type's extensions, and tests a type against an accept list.",
-    syntax: `${importLine("skathi:encoding", "Mime")}
-
-Mime.fromName(name: string): string
-Mime.extensions(type: string): string[]
-Mime.sniff(bytes: BufferSource): string | null
-Mime.matches(type: string, accept: string): boolean`,
+    declaration: true,
     params: [
       { name: "name", type: "string", description: "`fromName`: a file name or a path. Only the extension is read." },
       {
@@ -390,12 +371,7 @@ export function isAcceptedImage(name: string, content: Uint8Array): boolean {
     kind: "namespace",
     summary:
       "Decodes and encodes text in any encoding `TextDecoder` knows, the legacy ones included, and detects an encoding from a byte order mark.",
-    syntax: `${importLine("skathi:encoding", "Encoding")}
-
-Encoding.decode(bytes: BufferSource, label: string): string
-Encoding.encode(text: string, label: string): Uint8Array
-Encoding.isSupported(label: string): boolean
-Encoding.detect(bytes: BufferSource): string | null`,
+    declaration: true,
     params: [
       { name: "bytes", type: "BufferSource", description: "An `ArrayBuffer`, a typed array or a `DataView`." },
       { name: "text", type: "string", description: "`encode`: the text to write." },

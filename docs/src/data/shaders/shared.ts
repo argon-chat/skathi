@@ -1,22 +1,9 @@
 import type { Platform, Release, Status } from "../css/entries";
 import type { Detail } from "../details";
+import type { Declaration } from "./declarations";
 
-export type Kind = "attribute" | "struct" | "interface" | "method" | "function" | "field" | "enum" | "type";
-
-export const categories = [
-  "sk",
-  "sk.color",
-  "sk.math",
-  "sk.blend",
-  "sk.sdf",
-  "sk.ease",
-  "sk.noise",
-  "sk.sample",
-  "sk.light",
-  "sk.tone",
-] as const;
-
-export type Category = (typeof categories)[number];
+type Kind = Declaration["kind"] | "effect";
+export type Category = "sk" | `sk.${string}` | "Built-in effects";
 
 export interface ShaderEntry extends Detail {
   slug: string;
@@ -31,22 +18,30 @@ export interface ShaderEntry extends Detail {
   notes?: string[];
   related?: string[];
   aliases?: string[];
+  source?: string;
+  syntaxLanguage?: "css";
 }
 
 /** `since` left out means the first release with effects. */
-export type Draft = Omit<ShaderEntry, "category" | "status" | "skathiOnly" | "platforms" | "since"> & {
+export type Guide = Omit<ShaderEntry, "summary" | "syntax" | "kind"> & { summary?: string };
+export type Draft = Omit<Guide, "category" | "status" | "skathiOnly" | "platforms" | "since"> & {
   since?: Release;
+  usage?: string;
 };
 
 const FIRST_RELEASE: Release = "0.2.0";
+export const supported = {
+  status: "supported",
+  platforms: { windows: "supported", macos: "supported", linux: "supported" },
+  skathiOnly: true,
+} as const;
 
-export function section(category: Category, drafts: readonly Draft[]): ShaderEntry[] {
-  return drafts.map((d) => ({
+export function section(category: Category, drafts: readonly Draft[]): Guide[] {
+  return drafts.map(({ usage, ...d }) => ({
     ...d,
     category,
-    status: "supported",
-    platforms: { windows: "supported", macos: "supported", linux: "supported" },
+    ...supported,
     since: d.since ?? FIRST_RELEASE,
-    skathiOnly: true,
+    ...(usage ? { examples: [{ title: "Usage", lang: "slang" as const, code: usage }, ...(d.examples ?? [])] } : {}),
   }));
 }

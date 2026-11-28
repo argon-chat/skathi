@@ -35,15 +35,8 @@ const drafts: Draft[] = [
   {
     slug: "pcg",
     name: "pcg",
-    kind: "function",
     summary: "An integer hash: one round of the PCG output permutation, uint in, uint out, the same bits on every GPU.",
     since,
-    syntax: `import sk.noise;
-
-uint pcg(uint v);
-uint pcg(uint2 v);    // pcg(v.x + pcg(v.y))
-uint pcg(uint3 v);    // pcg(v.x + pcg(v.y + pcg(v.z)))
-uint3 pcg3d(uint3 v); // three independent words at once`,
     params: [
       { name: "v", type: "uint, uint2, uint3", description: "The words to hash: a pixel, a cell, a frame count." },
     ],
@@ -78,13 +71,9 @@ struct TileConfetti : IEffect
   {
     slug: "hash",
     name: "hash",
-    kind: "function",
     summary:
       "Random floats in [0, 1) for the cell `floor(p)`, from `pcg`: one, two or three values per cell, identical on every backend.",
     since,
-    syntax: `float hash(float p);   float hash(float2 p);   float hash(float3 p);
-float2 hash2(float p); float2 hash2(float2 p); float2 hash2(float3 p);
-float3 hash3(float p); float3 hash3(float2 p); float3 hash3(float3 p);`,
     params: [
       {
         name: "p",
@@ -124,21 +113,9 @@ struct Dissolve : IEffect
   {
     slug: "i-noise",
     name: "INoise",
-    kind: "interface",
     summary:
       "A noise over the plane, passed as a type to `fbm`, `turbulence`, `ridged`, `warp` and `curl`: `Perlin`, `Simplex`, `ValueNoise` or your own.",
     since,
-    syntax: `interface INoise
-{
-    static float at(float2 p);           // [-1, 1]
-    static float3 derivatives(float2 p); // (value, d/dx, d/dy)
-}
-
-interface INoise3
-{
-    static float at(float3 p);
-    static float4 derivatives(float3 p); // (value, d/dx, d/dy, d/dz)
-}`,
     notes: [
       "A noise is a type, not a value, so `fbm<Simplex>(p)` compiles to the same code as a loop written by hand around `Simplex.at`: the measured output differs by under 1 %.",
       "A struct of your own with these two static functions works with every fractal; `derivatives` only has to be right if you call `fbmDerivatives` or `curl` with it.",
@@ -178,18 +155,7 @@ struct Marble : IEffect
   {
     slug: "perlin",
     name: "Perlin",
-    kind: "struct",
-    summary: "Perlin's improved gradient noise in 2D and 3D, with analytic derivatives and a tiling form.",
     since,
-    syntax: `struct Perlin : INoise, INoise3
-{
-    static float at(float2 p);
-    static float3 derivatives(float2 p);                     // (value, d/dx, d/dy)
-    static float tiled(float2 p, float2 period);
-    static float3 tiledDerivatives(float2 p, float2 period);
-    static float at(float3 p);
-    static float4 derivatives(float3 p);
-}`,
     params: [
       { name: "p", type: "float2, float3", description: "The point, in lattice cells." },
       {
@@ -227,19 +193,7 @@ struct PerlinTile : IEffect
   {
     slug: "simplex",
     name: "Simplex",
-    kind: "struct",
-    summary:
-      "Simplex noise in 2D and 3D: fewer corners than Perlin, no axis-aligned artefacts, analytic derivatives, and flow noise that swirls in place.",
     since,
-    syntax: `struct Simplex : INoise, INoise3
-{
-    static float at(float2 p);
-    static float3 derivatives(float2 p);
-    static float flow(float2 p, float angle);
-    static float3 flowDerivatives(float2 p, float angle);
-    static float at(float3 p);
-    static float4 derivatives(float3 p);
-}`,
     params: [
       { name: "p", type: "float2, float3", description: "The point, in lattice cells." },
       {
@@ -279,19 +233,7 @@ struct Churn : IEffect
   {
     slug: "value-noise",
     name: "ValueNoise",
-    kind: "struct",
-    summary:
-      "Value noise: random heights at the lattice points blended smoothly. Blockier than gradient noise, and the cheapest base for a fractal.",
     since,
-    syntax: `struct ValueNoise : INoise, INoise3
-{
-    static float at(float2 p);
-    static float3 derivatives(float2 p);
-    static float tiled(float2 p, float2 period);
-    static float3 tiledDerivatives(float2 p, float2 period);
-    static float at(float3 p);
-    static float4 derivatives(float3 p);
-}`,
     params: [
       { name: "p", type: "float2, float3", description: "The point, in lattice cells." },
       { name: "period", type: "float2", description: "Cells after which `tiled` repeats, rounded, at least 1." },
@@ -321,16 +263,9 @@ struct Clouds : IEffect
   {
     slug: "worley",
     name: "worley",
-    kind: "function",
     summary:
       "Cellular (Worley) noise: distances to the nearest and second-nearest feature points, and the nearest one's cell and id, in 2D, tiling 2D and 3D.",
     since,
-    syntax: `struct Cell { float f1; float f2; float2 cell; uint id; float2 toNearest; };
-struct Cell3 { float f1; float f2; float3 cell; uint id; };
-
-Cell worley(float2 p, float jitter = 1.0);
-Cell worley(float2 p, float jitter, float2 period);
-Cell3 worley(float3 p, float jitter = 1.0);`,
     params: [
       { name: "p", type: "float2, float3", description: "The point, in cells: one feature point per cell." },
       {
@@ -376,10 +311,7 @@ struct StainedGlass : IEffect
   {
     slug: "worley-edge",
     name: "worleyEdge",
-    kind: "function",
-    summary: "The exact distance from a point to the nearest edge of its Voronoi cell, in cells: 0 on an edge.",
     since,
-    syntax: `float worleyEdge(float2 p, float jitter = 1.0);`,
     params: [
       { name: "p", type: "float2", description: "The point, in cells." },
       { name: "jitter", type: "float", description: "As for `worley`.", optional: true, default: "1.0" },
@@ -403,14 +335,9 @@ return float4(1.0, 1.0, 1.0, 1.0) * (1.0 - smoothstep(1.0, 2.0, d)) * input.cove
   {
     slug: "fbm",
     name: "fbm",
-    kind: "function",
     summary:
       "Fractal Brownian motion: layers of a noise, each finer and weaker, normalised so the range stays that of the noise. 2D and 3D.",
     since,
-    syntax: `float fbm<N : INoise>(float2 p, float octaves = 5.0, float lacunarity = 2.0, float gain = 0.5);
-float fbm<N : INoise3>(float3 p, float octaves = 5.0, float lacunarity = 2.0, float gain = 0.5);
-float3 fbmDerivatives<N : INoise>(float2 p, float octaves = 5.0, float lacunarity = 2.0, float gain = 0.5);
-static const int MAX_OCTAVES = 8;`,
     params: octaveParams,
     returns: "[-1, 1], the sum divided by its weights; `fbmDerivatives` returns (value, d/dx, d/dy).",
     notes: [
@@ -446,10 +373,7 @@ struct Smoke : IEffect
   {
     slug: "turbulence",
     name: "turbulence",
-    kind: "function",
-    summary: "`fbm` of the noise's absolute value: billowy, with creases where it crosses zero.",
     since,
-    syntax: `float turbulence<N : INoise>(float2 p, float octaves = 5.0, float lacunarity = 2.0, float gain = 0.5);`,
     params: octaveParams,
     returns: "[0, 1].",
     notes: ["Cost: as `fbm`."],
@@ -466,11 +390,7 @@ return float4(1.0, 0.45, 0.1, 1.0) * v * input.coverage;`,
   {
     slug: "ridged",
     name: "ridged",
-    kind: "function",
-    summary:
-      "Ridged noise: `fbm` of (1 − |N|)², sharp crests where the noise crosses zero, for mountain ranges and lightning.",
     since,
-    syntax: `float ridged<N : INoise>(float2 p, float octaves = 5.0, float lacunarity = 2.0, float gain = 0.5);`,
     params: octaveParams,
     returns: "[0, 1], 1 on a crest.",
     notes: ["Cost: as `fbm`."],
@@ -487,11 +407,7 @@ return float4(0.6, 0.9, 1.0, 1.0) * v * input.coverage;`,
   {
     slug: "warp",
     name: "warp",
-    kind: "function",
-    summary:
-      "Domain warping: the point moved by two `fbm`s of a noise, for marbled, smoky patterns. Feed the result to any noise.",
     since,
-    syntax: `float2 warp<N : INoise>(float2 p, float strength, float octaves = 4.0);`,
     params: [
       { name: "p", type: "float2", description: "The point, in noise cells." },
       {
@@ -517,12 +433,7 @@ return float4(v, v * 0.95, v * 0.9, 1.0) * input.coverage;`,
   {
     slug: "curl",
     name: "curl",
-    kind: "function",
-    summary:
-      "Curl noise: the rotated gradient of a noise or of its `fbm`, a divergence-free 2D flow for advection and warps that never bunch up.",
     since,
-    syntax: `float2 curl<N : INoise>(float2 p);
-float2 curl<N : INoise>(float2 p, float octaves, float lacunarity = 2.0, float gain = 0.5);`,
     params: octaveParams.map((p) => (p.name === "octaves" ? { ...p, optional: false } : p)),
     returns: "(dN/dy, −dN/dx), per noise cell. Magnitude 0 to about 8 for one octave; scale it to taste.",
     notes: [
@@ -558,12 +469,7 @@ struct Stir : IEffect
   {
     slug: "ign",
     name: "ign",
-    kind: "function",
-    summary:
-      "Interleaved gradient noise (Jimenez 2014): a cheap per-pixel threshold whose 3 × 3 neighbourhoods are well spread, optionally moving every frame.",
     since,
-    syntax: `float ign(float2 px);
-float ign(float2 px, float frame);`,
     params: [
       { name: "px", type: "float2", description: "The pixel, `input.px`." },
       {
@@ -591,11 +497,7 @@ return float4(1.0, 1.0, 1.0, 1.0) * step(ign(input.px), edge) * input.coverage;`
   {
     slug: "r2",
     name: "r2",
-    kind: "function",
-    summary:
-      "The R2 low-discrepancy sequence (Roberts 2018) over pixels: an even, blue-noise-like threshold mask without a texture.",
     since,
-    syntax: `float r2(float2 px);`,
     params: [{ name: "px", type: "float2", description: "The pixel, `input.px`." }],
     returns: "[0, 1).",
     notes: ["Cost: a dot product and a `frac`. Float arithmetic, like `ign`."],
@@ -612,10 +514,7 @@ return float4(0.0, 0.0, 0.0, 1.0) * step(r2(input.px), shade) * input.coverage;`
   {
     slug: "bayer",
     name: "bayer",
-    kind: "function",
-    summary: "The ordered (Bayer) dither threshold of a pixel in a 2 × 2, 4 × 4 or 8 × 8 matrix, in integer maths.",
     since,
-    syntax: `float bayer(float2 px, int size = 8);`,
     params: [
       { name: "px", type: "float2", description: "The pixel, `input.px`." },
       { name: "size", type: "int", description: "The matrix: 2, 4 or 8.", optional: true, default: "8" },
@@ -647,13 +546,9 @@ struct OneBit : IEffect
   {
     slug: "dither",
     name: "dither",
-    kind: "function",
     summary:
       "Triangular-PDF dither: ±1 quantisation step of noise per channel, so a smooth gradient written to an 8-bit target shows no bands.",
     since,
-    syntax: `float3 dither(float3 rgb, float2 px, float levels = 255.0);
-float3 dither(float3 rgb, float2 px, float frame, float levels);
-float triangular(float u);   // [0, 1) uniform -> (-1, 1) triangular`,
     params: [
       {
         name: "rgb",

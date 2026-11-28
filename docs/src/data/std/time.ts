@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 const TIME_ARG = "Wherever a time is taken, it is a number of milliseconds or a [TimeSpan](/std/time-span/).";
 
@@ -8,27 +8,10 @@ export const time = section("skathi:time", [
     name: "TimeSpan",
     kind: "class",
     summary: "A length of time held as one number of milliseconds, which compares with `<` and adds up.",
-    syntax: `${importLine("skathi:time", "TimeSpan")}
-
-TimeSpan.fromMilliseconds(ms: number): TimeSpan
-TimeSpan.fromSeconds(seconds: number): TimeSpan
-TimeSpan.fromMinutes(minutes: number): TimeSpan
-TimeSpan.fromHours(hours: number): TimeSpan
-TimeSpan.fromDays(days: number): TimeSpan
-TimeSpan.parse(text: string): TimeSpan
-
-readonly span.totalMilliseconds: number
-readonly span.totalSeconds: number
-span.add(other: TimeSpan | number): TimeSpan
-span.subtract(other: TimeSpan | number): TimeSpan
-span.toDuration(): Temporal.Duration
-span.toString(locale?: string | string[]): string
-span.valueOf(): number
-span.toJSON(): number`,
+    declaration: true,
     notes: [
       "A `Temporal.Duration` keeps separate fields and cannot be compared without a reference date. A `TimeSpan` is one number, so it compares with `<` and adds up.",
       "A span is made by the static methods; the type has no public constructor. A span is immutable: `add()` and `subtract()` return a new span. A number passed to them is a number of milliseconds.",
-      "`valueOf()` and `toJSON()` give the milliseconds, so `+span`, `a < b` and `JSON.stringify()` work on a span.",
       '`parse()` reads a list of numbers with units: `"1h30m"`, `"1.5s"`, `"250ms"`, `"2d 4h"`. The units are `d`, `h`, `m`, `s` and `ms`, in either case. Spaces are allowed, a number may have a fraction, and a leading `-` makes the span negative.',
       '`parse()` also reads an ISO 8601 duration of weeks, days and time: `"P1DT2H"`, `"PT1H30M"`, `"P2W"`.',
       '`toString()` without a locale writes the form `parse()` reads: `"1h30m"`, `"1m1.001s"`. A span under one second is written in milliseconds (`"250ms"`), and a span of zero is `"0s"`.',
@@ -100,17 +83,7 @@ export function deadlineFor(setting: string | undefined): Deadline {
     name: "Stopwatch",
     kind: "class",
     summary: "Measures elapsed time on the operating system's monotonic clock.",
-    syntax: `${importLine("skathi:time", "Stopwatch")}
-
-new Stopwatch()
-Stopwatch.startNew(): Stopwatch
-
-readonly stopwatch.elapsed: TimeSpan
-readonly stopwatch.running: boolean
-stopwatch.start(): void
-stopwatch.stop(): void
-stopwatch.reset(): void
-stopwatch.restart(): void`,
+    declaration: true,
     notes: [
       "`new Stopwatch()` is stopped. `Stopwatch.startNew()` is already running.",
       "`stop()` keeps what has elapsed, and `start()` goes on from there. `reset()` stops and clears. `restart()` clears and starts.",
@@ -174,14 +147,7 @@ export function activeSeconds(): number {
     name: "Deadline",
     kind: "class",
     summary: "A point in time a chain of calls must finish by, with an `AbortSignal` and the time left.",
-    syntax: `${importLine("skathi:time", "Deadline")}
-
-Deadline.after(time: number | TimeSpan): Deadline
-
-readonly deadline.signal: AbortSignal
-deadline.remaining(): number
-deadline.expired(): boolean
-deadline.throwIfExpired(): void`,
+    declaration: true,
     notes: [
       TIME_ARG,
       "`signal` is an `AbortSignal` that aborts with a `TimeoutError` when the deadline passes. Pass it to `fetch()` and other calls that take a signal. Every read gives the same signal.",
@@ -248,13 +214,7 @@ deadline.signal.reason.name; // "TimeoutError"`,
     name: "Backoff",
     kind: "class",
     summary: "Gives growing delays for repeated attempts, with a cap and random jitter.",
-    syntax: `${importLine("skathi:time", "Backoff")}
-
-new Backoff(options?: BackoffOptions)
-
-readonly backoff.attempt: number
-backoff.next(): number
-backoff.reset(): void`,
+    declaration: true,
     params: [
       {
         name: "options",
@@ -325,14 +285,7 @@ export function connect(url: string, onMessage: (data: unknown) => void): void {
     name: "BackoffOptions",
     kind: "type",
     summary: "The options of a `Backoff`, also taken by `RetryPolicy` as its `backoff` option.",
-    syntax: `import type { BackoffOptions } from "skathi:time";
-
-interface BackoffOptions {
-  initial?: number | TimeSpan;
-  max?: number | TimeSpan;
-  factor?: number;
-  jitter?: "full" | "equal" | "none";
-}`,
+    declaration: true,
     params: [
       {
         name: "initial",
@@ -402,11 +355,7 @@ export const requests = new RetryPolicy({ attempts: 4, backoff: delays });`,
     name: "RetryPolicy",
     kind: "class",
     summary: "Runs an async function again after it fails, waiting a `Backoff` delay between the attempts.",
-    syntax: `${importLine("skathi:time", "RetryPolicy")}
-
-new RetryPolicy(options: { attempts: number; backoff?: BackoffOptions; retryIf?: (error: unknown) => boolean })
-
-policy.run<T>(run: (attempt: number, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T>`,
+    declaration: true,
     params: [
       {
         name: "options.attempts",
@@ -508,13 +457,7 @@ calls; // [1, 2, 3]`,
     name: "RateLimiter",
     kind: "class",
     summary: "A token bucket that limits how often something runs: `tokens` are added every `per`, up to `burst`.",
-    syntax: `${importLine("skathi:time", "RateLimiter")}
-
-new RateLimiter(options: { tokens: number; per: number | TimeSpan; burst?: number })
-
-readonly limiter.available: number
-limiter.tryAcquire(count?: number): boolean
-limiter.acquire(count?: number, signal?: AbortSignal): Promise<void>`,
+    declaration: true,
     params: [
       { name: "options.tokens", type: "number", description: "The tokens added every `per`. Above 0." },
       {
@@ -590,10 +533,7 @@ export function report(message: string): void {
     since: "Unreleased",
     kind: "class",
     summary: "Run a batch of tasks with a fixed limit on how many can be in progress.",
-    syntax: `${importLine("skathi:time", "TaskQueue")}
-
-new TaskQueue(options: { concurrency: number })
-queue.run<T>(task: (signal: AbortSignal) => T | PromiseLike<T>, signal?: AbortSignal): Promise<T>`,
+    declaration: true,
     notes: [
       "Tasks start in submission order on the event loop. Each call resolves with its task's value or rejects with its error. A synchronous throw also releases the slot for the next task.",
       "Pass the same signal to several calls to cancel a batch. Each call rejects with the signal's reason when aborted. The queue skips cancelled tasks that are waiting. A running callback receives the signal and keeps its slot until its work settles.",
@@ -621,20 +561,7 @@ export function loadPreviews(urls: string[], signal: AbortSignal): Promise<Blob[
     name: "Timer",
     kind: "class",
     summary: "A timer that can be paused and fires a `tick` event when its time is up, once or repeatedly.",
-    syntax: `${importLine("skathi:time", "Timer")}
-
-class Timer extends EventTarget
-
-new Timer(time: number | TimeSpan, options?: { repeat?: boolean })
-
-readonly timer.running: boolean
-readonly timer.remaining: number
-timer.start(): void
-timer.pause(): void
-timer.resume(): void
-timer.reset(): void
-
-timer.addEventListener("tick", listener)`,
+    declaration: true,
     params: [
       {
         name: "time",

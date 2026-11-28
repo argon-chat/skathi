@@ -18,24 +18,9 @@ const drafts: Draft[] = [
   {
     slug: "i-sampler",
     name: "ISampler",
-    kind: "interface",
     summary:
       "What a kernel reads: premultiplied RGBA at a point in its own pixel space, bilinear. One struct per engine source and one for textures.",
     since,
-    syntax: `import sk.sample;
-
-interface ISampler
-{
-    float4 at(float2 px);
-    float2 texelOffset();
-}
-
-struct Backdrop : ISampler     { __init(EffectInput input); }  // blurred to [SkBackdropRadius]
-struct RawBackdrop : ISampler  { __init(EffectInput input); }  // unblurred, one texel per pixel
-struct PageBackdrop : ISampler { __init(EffectInput input); }  // the page without native layers
-struct Content : ISampler      { __init(EffectInput input); }  // [SkContent]
-struct History : ISampler      { __init(EffectInput input); }  // [SkHistory], raw values
-struct Image : ISampler        { __init(SkTexture texture, bool repeat = false); }`,
     notes: [
       "Element samplers take device pixels of the element, `input.px` space, whose texel centres sit at half pixels; `Image` takes texels of the image, 0 to its size.",
       "Every kernel is linear in premultiplied colour: transparent pixels contribute nothing, and a fully transparent neighbourhood gives exactly 0, never a NaN.",
@@ -70,11 +55,7 @@ struct SoftCopy : IEffect
   {
     slug: "uv-to-px",
     name: "uvToPx",
-    kind: "function",
-    summary:
-      "A window UV, the space of `input.uv` and `backdropAt`, as a point in the element's pixels, the space kernels take.",
     since,
-    syntax: `float2 uvToPx(EffectInput input, float2 uv);`,
     params: [
       { name: "input", type: "EffectInput", description: "The effect's input." },
       { name: "uv", type: "float2", description: "A window UV." },
@@ -93,17 +74,9 @@ return gaussian<Gaussian5>(RawBackdrop(input), at);`,
   {
     slug: "gaussian",
     name: "gaussian",
-    kind: "function",
     summary:
       "A small Gaussian blur of any sampler, 5, 9 or 13 taps wide, with neighbouring taps merged into one bilinear read.",
     since,
-    syntax: `float4 gaussian<K : IGaussian, S : ISampler>(S src, float2 px, float scale = 1.0);
-float4 gaussianLine<K : IGaussian, S : ISampler>(S src, float2 px, float2 direction, float scale = 1.0);
-float gaussianReach<K : IGaussian>(float scale = 1.0);
-
-struct Gaussian5 : IGaussian;   // 1 4 6 4 1, sigma 1 px, 3 reads per axis
-struct Gaussian9 : IGaussian;   // binomial 8, sigma 1.41 px, 5 reads per axis
-struct Gaussian13 : IGaussian;  // binomial 12, sigma 1.73 px, 7 reads per axis`,
     params: [
       src,
       px,
@@ -150,11 +123,8 @@ struct TiltBlur : IEffect
   {
     slug: "box",
     name: "box",
-    kind: "function",
     summary: "A box (mean) blur over a square of half-width `radius` pixels, from 4 × 4 bilinear reads.",
     since,
-    syntax: `float4 box<S : ISampler>(S src, float2 px, float radius);
-float boxReach(float radius);`,
     params: [src, px, { name: "radius", type: "float", description: "Half the square's side, in pixels." }],
     returns: "Premultiplied RGBA; `boxReach` is `0.75 × radius + 1` px.",
     notes: [
@@ -174,11 +144,8 @@ float boxReach(float radius);`,
   {
     slug: "disc",
     name: "disc",
-    kind: "function",
     summary: "A disc (bokeh) blur: `N` reads on a golden-angle spiral, evenly covering a disc of `radius` pixels.",
     since,
-    syntax: `float4 disc<let N : int, S : ISampler>(S src, float2 px, float radius);
-float discReach(float radius);`,
     params: [
       { name: "N", type: "int", description: "Reads: 16 to 32 hide the spiral on a smooth source." },
       src,
@@ -216,11 +183,8 @@ struct Bokeh : IEffect
   {
     slug: "directional",
     name: "directional",
-    kind: "function",
     summary: "A motion blur: `N` even reads along a segment of `delta` pixels centred on the point.",
     since,
-    syntax: `float4 directional<let N : int, S : ISampler>(S src, float2 px, float2 delta);
-float directionalReach(float2 delta);`,
     params: [
       { name: "N", type: "int", description: "Reads along the segment." },
       src,
@@ -242,11 +206,8 @@ float directionalReach(float2 delta);`,
   {
     slug: "radial",
     name: "radial",
-    kind: "function",
     summary: "A zoom blur: `N` reads from the point towards `center`, `amount` of the way there.",
     since,
-    syntax: `float4 radial<let N : int, S : ISampler>(S src, float2 px, float2 center, float amount);
-float radialReach(float2 center, float amount, float2 size);`,
     params: [
       { name: "N", type: "int", description: "Reads along the ray." },
       src,
@@ -270,13 +231,9 @@ float radialReach(float2 center, float amount, float2 size);`,
   {
     slug: "chromatic",
     name: "chromatic",
-    kind: "function",
     summary:
       "Chromatic aberration: red read shifted one way, blue the other, green in place; a fixed shift or one growing from a centre.",
     since,
-    syntax: `float4 chromatic<S : ISampler>(S src, float2 px, float2 shift);
-float4 chromaticRadial<S : ISampler>(S src, float2 px, float2 center, float amount);
-float chromaticReach(float2 shift);`,
     params: [
       src,
       px,
@@ -303,12 +260,9 @@ float chromaticReach(float2 shift);`,
   {
     slug: "dispersion",
     name: "dispersion",
-    kind: "function",
     summary:
       "Dispersion: a read displaced by `offset`, with red bent `1 + spread` times as far and blue `1 − spread`, as glass bends short wavelengths more.",
     since,
-    syntax: `float4 dispersion<S : ISampler>(S src, float2 px, float2 offset, float spread);
-float dispersionReach(float2 offset, float spread);`,
     params: [
       src,
       px,
@@ -336,12 +290,7 @@ return dispersion(RawBackdrop(input), input.px, inward * 8.0 * rim, 0.15);`,
   {
     slug: "displace",
     name: "displace",
-    kind: "function",
-    summary:
-      "The source read at a displaced point: by an offset in pixels, or by a normal's tilt times a depth, as a normal-mapped pane of glass bends it.",
     since,
-    syntax: `float4 displace<S : ISampler>(S src, float2 px, float2 offset);
-float4 displace<S : ISampler>(S src, float2 px, float3 normal, float depth);`,
     params: [
       src,
       px,
@@ -385,12 +334,9 @@ struct HeatHaze : IEffect
   {
     slug: "catmull-rom",
     name: "catmullRom",
-    kind: "function",
     summary:
       "Bicubic resampling: `catmullRom` is sharp (9 bilinear reads), `bspline` smooth and never overshoots (4 reads).",
     since,
-    syntax: `float4 catmullRom<S : ISampler>(S src, float2 px);
-float4 bspline<S : ISampler>(S src, float2 px);`,
     params: [
       src,
       {
@@ -431,10 +377,7 @@ struct Upscale : IEffect
   {
     slug: "sharpen",
     name: "sharpen",
-    kind: "function",
-    summary: "Unsharp masking: each pixel pushed away from its 3 × 3 tent blur by `amount`.",
     since,
-    syntax: `float4 sharpen<S : ISampler>(S src, float2 px, float amount);`,
     params: [src, px, { name: "amount", type: "float", description: "0.5 is subtle, 2 strong." }],
     returns: "Premultiplied RGBA; negative results are clamped to 0.",
     notes: [
@@ -453,12 +396,9 @@ struct Upscale : IEffect
   {
     slug: "pixelate",
     name: "pixelate",
-    kind: "function",
     summary:
       "A mosaic: each `cell`-pixel square shows the colour at its centre. `cellCenter` gives that centre for reads of your own.",
     since,
-    syntax: `float4 pixelate<S : ISampler>(S src, float2 px, float2 cell);
-float2 cellCenter(float2 px, float2 cell);`,
     params: [src, px, { name: "cell", type: "float2", description: "The square's size, in pixels." }],
     returns: "Premultiplied RGBA.",
     notes: ["Cost: 1 read. Reach: half a cell plus 1 px."],
@@ -475,12 +415,9 @@ float2 cellCenter(float2 px, float2 cell);`,
   {
     slug: "mirror-repeat",
     name: "mirrorRepeat",
-    kind: "function",
     summary:
       "Point folding for mirrored effects: `mirrorRepeat` folds into a rectangle like a mirrored-repeat sampler, `kaleidoscope` into one wedge of `segments`.",
     since,
-    syntax: `float2 mirrorRepeat(float2 p, float2 size);
-float2 kaleidoscope(float2 p, float2 center, int segments, float rotation = 0.0);`,
     params: [
       { name: "p", type: "float2", description: "The point, in pixels." },
       { name: "size", type: "float2", description: "The rectangle to fold into, from the origin." },

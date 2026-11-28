@@ -1,6 +1,4 @@
-import { importLine, section } from "./shared";
-
-const IMPORT = importLine("skathi:runtime", "Runtime", "runtime");
+import { section } from "./shared";
 
 export const runtime = section("skathi:runtime", [
   {
@@ -8,13 +6,7 @@ export const runtime = section("skathi:runtime", [
     name: "runtime",
     kind: "object",
     summary: "The Skathi version of the host and the optional parts it was built with.",
-    syntax: `${IMPORT}
-
-readonly runtime.version: string
-readonly runtime.features: ReadonlySet<string>
-
-Runtime.isAot(): boolean
-Runtime.isSingleFile(): boolean`,
+    declaration: ["runtime", "Runtime.isAot", "Runtime.isSingleFile"],
     notes: [
       '`runtime.version` is the version of Skathi the host was built from, for example `"0.7.0"`. It is not the app\'s own version, which is [`app.getVersion()`](/std/app-get-version/).',
       "`runtime.features` names the optional parts this host has: `audio`, `spatial-audio`, `storages`, `clipboard`, `indexeddb`, `webgpu`, `lottie`, `video`, `hotkeys`, `webview`, `battery`, `process`, `devtools`, `native-aot`, `no-jit`, `no-wasm`. A name is in the set only when the host was built with that part.",
@@ -66,7 +58,7 @@ export function describeMissingVideo(): string {
     name: "Runtime.isAot()",
     kind: "function",
     summary: "Tells whether the app's code is running from its native image.",
-    syntax: "Runtime.isAot(): boolean",
+    declaration: true,
     returns: "`true` while the app's code runs from its [native image](/guides/aot/), else `false`.",
     notes: [
       "It is `false` under `sk dev`, in a build without `--aot`, and with the environment variable `SK_APP_ENGINE=jit`.",
@@ -90,7 +82,7 @@ console.info(Runtime.isAot() ? "Running from the native image" : "Running the bu
     name: "Runtime.isSingleFile()",
     kind: "function",
     summary: "Tells whether the app needs no file beside its executable.",
-    syntax: "Runtime.isSingleFile(): boolean",
+    declaration: true,
     returns:
       "`true` when the payload is inside the executable and there are no asset packs, no `icu.skpk` and no native image file to load.",
     notes: [

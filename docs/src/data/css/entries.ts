@@ -1,6 +1,8 @@
-import { bcd } from "./bcd";
+import { compat } from "./bcd";
+import { catalogPath, nativeProperties, webkitNames, type NativeProperty } from "./native";
 
-export type Status = "supported" | "partial" | "planned" | "on-hold" | "not-planned" | "deprecated";
+export type Status =
+  "supported" | "partial" | "unsupported" | "planned" | "on-hold" | "not-planned" | "deprecated" | "declared";
 export type Platform = "windows" | "macos" | "linux";
 export type Kind =
   | "property"
@@ -38,6 +40,7 @@ export const categories = [
   "Media features",
   "Values and units",
   "Vendor prefixes",
+  "Additional properties",
 ] as const;
 export type Category = (typeof categories)[number];
 
@@ -61,6 +64,7 @@ export interface ValueSupport {
 }
 
 export interface CssEntry {
+  source?: string;
   slug: string;
   name: string;
   kind: Kind;
@@ -125,6 +129,18 @@ const draft =
   (name: string, status: Status, summary: string, x: Extra = {}): Draft => ({ name, kind, status, summary, ...x });
 const prop = draft("property");
 const sh = draft("shorthand");
+function declarationStatus(property: NativeProperty): Status {
+  return property.status === "supported" || property.status === "partial" ? property.status : "unsupported";
+}
+const declaration =
+  (kind: "property" | "shorthand") =>
+  (name: string, summary: string, extra?: Extra): Draft => {
+    const property = nativeProperties.get(name);
+    if (!property) throw new Error(`The CSS reference describes ${name}, but it is missing from ${catalogPath}`);
+    return draft(kind)(name, declarationStatus(property), summary, extra);
+  };
+const nativeProp = declaration("property");
+const nativeSh = declaration("shorthand");
 const pc = draft("pseudo-class");
 const pe = draft("pseudo-element");
 const at = draft("at-rule");
@@ -175,10 +191,17 @@ function slugFor(d: Draft): string {
   }
 }
 
-function section(category: Category, drafts: readonly Draft[]): CssEntry[] {
+function section(category: Category, drafts: readonly Draft[], fromCatalog = false): CssEntry[] {
   return drafts.map((d) => {
     const slug = slugFor(d);
-    const status = d.status === OK && d.values?.some((value) => value.status !== OK) ? PART : d.status;
+    const native = (d.kind === "property" || d.kind === "shorthand") && nativeProperties.get(d.name);
+    const nativeStatus = native && declarationStatus(native);
+    const available =
+      (nativeStatus === OK || nativeStatus === PART) && (d.status === PLAN || d.status === NO || d.status === "on-hold")
+        ? nativeStatus
+        : d.status;
+    const limited = (native && native.status === PART) || d.values?.some((value) => value.status !== OK);
+    const status = available === OK && limited ? PART : available;
     const e: CssEntry = {
       ...d,
       slug,
@@ -187,8 +210,32 @@ function section(category: Category, drafts: readonly Draft[]): CssEntry[] {
       status,
       platforms: d.platforms ?? { windows: status, macos: status, linux: status },
     };
-    if (d.status === OK || d.status === PART) e.since = d.since ?? FIRST_RELEASE;
-    const info = bcd[slug];
+    if ((d.status === OK || d.status === PART) && !fromCatalog) e.since = d.since ?? FIRST_RELEASE;
+    if (fromCatalog) e.source = catalogPath;
+    if (native) {
+      const values = new Map((d.values ?? []).map((v) => [v.value, v]));
+      for (const value of native.applied) {
+        if (values.has(value)) continue;
+        const functionName = /^([-a-z]+)\(/.exec(value)?.[1];
+        const since = functionName ? values.get(`${functionName}()`)?.since : undefined;
+        values.set(
+          value,
+          native.status === "ignored"
+            ? v(value, "unsupported", "Accepted by the parser without a visible effect.")
+            : v(value, OK, undefined, since),
+        );
+      }
+      for (const value of native.refused) {
+        if (!values.has(value)) values.set(value, v(value, "unsupported", "Not applied by the app stylesheet mapper."));
+      }
+      e.values = [...values.values()];
+      if (native.note) {
+        const note = /[.!?]$/.test(native.note) ? native.note : `${native.note}.`;
+        e.notes = [...new Set([...(e.notes ?? []), note])];
+      }
+      if (native.webkit) e.aliases = [...new Set([...(e.aliases ?? []), `-webkit-${native.name}`])];
+    }
+    const info = compat(e);
     if (info?.mdn !== undefined) e.mdn = info.mdn;
     if (info?.experimental) e.experimental = true;
     if (info?.deprecated) e.webDeprecated = true;
@@ -196,15 +243,9 @@ function section(category: Category, drafts: readonly Draft[]): CssEntry[] {
   });
 }
 
-const SIZE_NOTE = "Lengths, percentages, `auto`, `none` and `calc()` are supported.";
-const SIZING_KEYWORDS = [
-  v("min-content", NO, "Ignored without an advisory; use flex or grid sizing."),
-  v("max-content", NO, "Ignored without an advisory; use flex or grid sizing."),
-  v("fit-content", NO, "Ignored without an advisory; use flex or grid sizing."),
-  v("stretch", NO, "Ignored without an advisory; use flex or grid sizing."),
-];
+const SIZE_NOTE =
+  "Lengths, percentages, `auto`, `none` and `calc()` are supported. Bare intrinsic sizing keywords are skipped without an advisory.";
 const SIZING_VALUES = [
-  ...SIZING_KEYWORDS,
   v(
     "calc-size()",
     OK,
@@ -421,48 +462,47 @@ const stylesheets = section("Stylesheets", [
 ]);
 
 const boxModel = section("Box model and sizing", [
-  prop("width", OK, "Sets the width of an element's box.", {
+  nativeProp("width", "Sets the width of an element's box.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: SIZING.filter((s) => s !== "width"),
   }),
-  prop("height", OK, "Sets the height of an element's box.", {
+  nativeProp("height", "Sets the height of an element's box.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: SIZING.filter((s) => s !== "height"),
   }),
-  prop("min-width", OK, "Sets the smallest width an element's box can shrink to.", {
+  nativeProp("min-width", "Sets the smallest width an element's box can shrink to.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: ["width", "max-width"],
   }),
-  prop("min-height", OK, "Sets the smallest height an element's box can shrink to.", {
+  nativeProp("min-height", "Sets the smallest height an element's box can shrink to.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: ["height", "max-height"],
   }),
-  prop("max-width", OK, "Sets the largest width an element's box can grow to.", {
+  nativeProp("max-width", "Sets the largest width an element's box can grow to.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: ["width", "min-width"],
   }),
-  prop("max-height", OK, "Sets the largest height an element's box can grow to.", {
+  nativeProp("max-height", "Sets the largest height an element's box can grow to.", {
     notes: [SIZE_NOTE],
     values: SIZING_VALUES,
     animates: "interpolated",
     related: ["height", "min-height"],
   }),
-  prop("box-sizing", PART, "Sets whether an element's declared width and height include its padding and border.", {
+  nativeProp("box-sizing", "Sets whether an element's declared width and height include its padding and border.", {
     notes: ["Every box is `border-box`."],
     values: [v("border-box", OK), v("content-box", NO, "Padding and border stay inside the declared size.")],
-    aliases: ["-webkit-box-sizing"],
   }),
-  prop("aspect-ratio", OK, "Sets a preferred width-to-height ratio for an element's box.", {
+  nativeProp("aspect-ratio", "Sets a preferred width-to-height ratio for an element's box.", {
     values: [
       v("<ratio>", OK, "A number or a pair such as `16 / 9` sets the preferred ratio when a dimension is automatic."),
       v("auto", OK, "Undoes an earlier ratio; a replaced element keeps its natural ratio.", "0.4.0"),
@@ -493,9 +533,8 @@ const boxModel = section("Box model and sizing", [
       },
     ),
   ),
-  sh(
+  nativeSh(
     "overflow",
-    OK,
     "Sets what happens to content that does not fit in an element's box: shown, clipped, or scrolled.",
     {
       notes: [
@@ -507,11 +546,11 @@ const boxModel = section("Box model and sizing", [
       related: ["overflow-x", "overflow-y", "scrollbar-width", "scrollbar-color"],
     },
   ),
-  prop("overflow-x", OK, "Sets what happens to content that overflows an element's left and right edges.", {
+  nativeProp("overflow-x", "Sets what happens to content that overflows an element's left and right edges.", {
     notes: ["Values: `visible`, `hidden`, `clip`, `auto`, `scroll`."],
     related: ["overflow", "overflow-y"],
   }),
-  prop("overflow-y", OK, "Sets what happens to content that overflows an element's top and bottom edges.", {
+  nativeProp("overflow-y", "Sets what happens to content that overflows an element's top and bottom edges.", {
     notes: ["Values: `visible`, `hidden`, `clip`, `auto`, `scroll`."],
     related: ["overflow", "overflow-x"],
   }),
@@ -521,7 +560,7 @@ const boxModel = section("Box model and sizing", [
     "Sets how far outside its box an element with `overflow: clip` may paint before it is clipped.",
     { related: ["overflow"] },
   ),
-  prop("visibility", OK, "Shows or hides an element without changing the layout.", {
+  nativeProp("visibility", "Shows or hides an element without changing the layout.", {
     limitations: [
       "`collapse` behaves as `hidden`.",
       "A child with `visibility: visible` inside a `visibility: hidden` box stays hidden and takes no pointer events.",
@@ -530,7 +569,7 @@ const boxModel = section("Box model and sizing", [
 ]);
 
 const layout = section("Layout", [
-  prop("display", OK, "Sets the kind of box an element generates and how its children are laid out.", {
+  nativeProp("display", "Sets the kind of box an element generates and how its children are laid out.", {
     values: [
       v("block", OK),
       v("flex", OK),
@@ -558,64 +597,52 @@ const layout = section("Layout", [
       "flow-root",
     ],
   }),
-  sh("flex", OK, "Sets how a flex item grows, shrinks and what size it starts from, in one declaration.", {
+  nativeSh("flex", "Sets how a flex item grows, shrinks and what size it starts from, in one declaration.", {
     limitations: ["`flex-basis: content` and `flex-basis: min-content` are not supported."],
     related: ["flex-grow", "flex-shrink", "flex-basis"],
-    aliases: ["-webkit-flex"],
   }),
-  prop("flex-grow", OK, "Sets how much of the free space in a flex container an item takes.", {
+  nativeProp("flex-grow", "Sets how much of the free space in a flex container an item takes.", {
     related: ["flex", "flex-shrink", "flex-basis"],
-    aliases: ["-webkit-flex-grow"],
   }),
-  prop("flex-shrink", OK, "Sets how much a flex item shrinks when the container is too small.", {
+  nativeProp("flex-shrink", "Sets how much a flex item shrinks when the container is too small.", {
     related: ["flex", "flex-grow", "flex-basis"],
-    aliases: ["-webkit-flex-shrink"],
   }),
-  prop("flex-basis", OK, "Sets the starting size of a flex item before free space is distributed.", {
+  nativeProp("flex-basis", "Sets the starting size of a flex item before free space is distributed.", {
     values: [
       v("content", NO),
       v("min-content", NO),
       v("calc-size()", OK, "Starts from the item's measured size, such as `calc-size(content, size * 2)`.", "0.4.0"),
     ],
     related: ["flex", "flex-grow", "flex-shrink"],
-    aliases: ["-webkit-flex-basis"],
   }),
-  prop("flex-direction", OK, "Sets the direction flex items are placed in: row or column, normal or reversed.", {
+  nativeProp("flex-direction", "Sets the direction flex items are placed in: row or column, normal or reversed.", {
     related: ["flex-wrap", "flex-flow"],
-    aliases: ["-webkit-flex-direction"],
   }),
-  prop("flex-wrap", OK, "Sets whether flex items wrap onto several lines.", {
+  nativeProp("flex-wrap", "Sets whether flex items wrap onto several lines.", {
     related: ["flex-direction", "flex-flow"],
-    aliases: ["-webkit-flex-wrap"],
   }),
-  sh("flex-flow", OK, "Sets `flex-direction` and `flex-wrap` in one declaration.", {
+  nativeSh("flex-flow", "Sets `flex-direction` and `flex-wrap` in one declaration.", {
     since: "0.4.0",
     notes: ["A half left out resets to its initial value: `flex-flow: wrap` is `row wrap`."],
     related: ["flex-direction", "flex-wrap"],
-    aliases: ["-webkit-flex-flow"],
   }),
-  prop("order", OK, "Sets the order an item is laid out in within a flex or grid container.", {
+  nativeProp("order", "Sets the order an item is laid out in within a flex or grid container.", {
     notes: ["Works in flex and grid containers."],
-    aliases: ["-webkit-order"],
   }),
-  prop(
+  nativeProp(
     "align-items",
-    OK,
     "Sets the default alignment of the items of a flex or grid container on the cross or block axis.",
     {
       values: [v("normal", NO, "Prints an advisory; `stretch` is already the default.")],
       related: ["align-self", "align-content", "place-items"],
-      aliases: ["-webkit-align-items"],
     },
   ),
-  prop("align-self", OK, "Overrides `align-items` for one flex or grid item.", {
+  nativeProp("align-self", "Overrides `align-items` for one flex or grid item.", {
     limitations: ["`align-self: auto` and `align-self: normal` cannot undo an earlier value."],
     related: ["align-items", "place-self"],
-    aliases: ["-webkit-align-self"],
   }),
-  prop(
+  nativeProp(
     "align-content",
-    OK,
     "Distributes the lines of a flex container or the tracks of a grid along the cross or block axis.",
     {
       values: [
@@ -623,22 +650,20 @@ const layout = section("Layout", [
         v("baseline values", NO, "Print an advisory and are not applied."),
       ],
       related: ["align-items", "place-content"],
-      aliases: ["-webkit-align-content"],
     },
   ),
-  prop("justify-content", OK, "Distributes flex items or grid tracks along the main or inline axis.", {
+  nativeProp("justify-content", "Distributes flex items or grid tracks along the main or inline axis.", {
     values: [v("left", NO), v("right", NO), v("normal", NO)],
     related: ["justify-items", "justify-self", "place-content"],
-    aliases: ["-webkit-justify-content"],
   }),
-  prop("justify-items", OK, "Sets the default inline-axis alignment of the items of a grid container.", {
+  nativeProp("justify-items", "Sets the default inline-axis alignment of the items of a grid container.", {
     related: ["justify-self", "place-items"],
   }),
-  prop("justify-self", OK, "Overrides `justify-items` for one grid item.", {
+  nativeProp("justify-self", "Overrides `justify-items` for one grid item.", {
     limitations: ["`auto` and `normal` compute to `stretch` instead of taking the container's `justify-items`."],
     related: ["justify-items", "place-self"],
   }),
-  sh("place-items", OK, "Sets `align-items` and `justify-items` in one declaration.", {
+  nativeSh("place-items", "Sets `align-items` and `justify-items` in one declaration.", {
     related: ["align-items", "justify-items"],
   }),
   sh("place-content", PLAN, "Sets `align-content` and `justify-content` in one declaration.", {
@@ -649,18 +674,18 @@ const layout = section("Layout", [
     workaround: "Use the `align-*` / `justify-*` longhands.",
     related: ["align-self", "justify-self"],
   }),
-  sh("gap", OK, "Sets the gaps between rows and columns in flex and grid layouts.", {
+  nativeSh("gap", "Sets the gaps between rows and columns in flex and grid layouts.", {
     limitations: [GAP_NORMAL_LIMIT],
     related: ["row-gap", "column-gap"],
     aliases: ["grid-gap"],
   }),
-  prop("row-gap", OK, "Sets the gap between rows in flex and grid layouts.", {
+  nativeProp("row-gap", "Sets the gap between rows in flex and grid layouts.", {
     limitations: [GAP_NORMAL_LIMIT],
     animates: "interpolated",
     related: ["gap", "column-gap"],
     aliases: ["grid-row-gap"],
   }),
-  prop("column-gap", OK, "Sets the gap between columns in flex and grid layouts.", {
+  nativeProp("column-gap", "Sets the gap between columns in flex and grid layouts.", {
     limitations: [GAP_NORMAL_LIMIT],
     animates: "interpolated",
     related: ["gap", "row-gap"],
@@ -686,19 +711,19 @@ const layout = section("Layout", [
       aliases: ["fit-content()", "minmax()", "repeat()", "fr", "subgrid", "masonry"],
     }),
   ),
-  sh("grid-column", OK, "Places a grid item between column lines.", {
+  nativeSh("grid-column", "Places a grid item between column lines.", {
     notes: ["Line numbers and `span` are supported."],
     values: [v("named lines and areas", NO, "Place items by line number.")],
     related: ["grid-row", "grid-area"],
     aliases: ["grid-column-start", "grid-column-end"],
   }),
-  sh("grid-row", OK, "Places a grid item between row lines.", {
+  nativeSh("grid-row", "Places a grid item between row lines.", {
     notes: ["Line numbers and `span` are supported."],
     values: [v("named lines and areas", NO, "Place items by line number.")],
     related: ["grid-column", "grid-area"],
     aliases: ["grid-row-start", "grid-row-end"],
   }),
-  sh("grid-area", OK, "Places a grid item by its row and column lines, or by a named area.", {
+  nativeSh("grid-area", "Places a grid item by its row and column lines, or by a named area.", {
     notes: ["Line numbers and `span` are supported."],
     values: [v("named areas", NO, "Place items by line number.")],
     related: ["grid-column", "grid-row", "grid-template-areas"],
@@ -720,19 +745,18 @@ const layout = section("Layout", [
       related: ["grid", "grid-template-columns", "grid-template-rows", "grid-template-areas"],
     },
   ),
-  prop(
+  nativeProp(
     "grid-auto-flow",
-    OK,
     "Sets how grid items without an explicit position are placed, including the `dense` packing.",
     { notes: ["`dense` is supported."], related: ["grid-auto-rows", "grid-auto-columns"] },
   ),
-  prop("grid-auto-rows", OK, "Sets the size of grid rows that are created implicitly.", {
+  nativeProp("grid-auto-rows", "Sets the size of grid rows that are created implicitly.", {
     related: ["grid-auto-columns", "grid-auto-flow"],
   }),
-  prop("grid-auto-columns", OK, "Sets the size of grid columns that are created implicitly.", {
+  nativeProp("grid-auto-columns", "Sets the size of grid columns that are created implicitly.", {
     related: ["grid-auto-rows", "grid-auto-flow"],
   }),
-  prop("position", OK, "Sets how an element is positioned: in the flow, offset, or taken out of the flow.", {
+  nativeProp("position", "Sets how an element is positioned: in the flow, offset, or taken out of the flow.", {
     values: [
       v("static", OK, "`top`, `right`, `bottom` and `left` do not move the box."),
       v("relative", OK, "With `z-index: auto` or `0`, the box paints above in-flow siblings."),
@@ -756,27 +780,27 @@ const layout = section("Layout", [
     related: ["top", "right", "bottom", "left", "inset", "z-index"],
     aliases: ["position: fixed", "position: sticky", "position: absolute"],
   }),
-  prop("top", OK, "Sets the offset of a positioned element from the top.", {
+  nativeProp("top", "Sets the offset of a positioned element from the top.", {
     notes: ["Including `calc()` with a percentage."],
     related: ["inset", "bottom", "position"],
   }),
-  prop("right", OK, "Sets the offset of a positioned element from the right.", {
+  nativeProp("right", "Sets the offset of a positioned element from the right.", {
     notes: ["Including `calc()` with a percentage."],
     related: ["inset", "left", "position"],
   }),
-  prop("bottom", OK, "Sets the offset of a positioned element from the bottom.", {
+  nativeProp("bottom", "Sets the offset of a positioned element from the bottom.", {
     notes: ["Including `calc()` with a percentage."],
     related: ["inset", "top", "position"],
   }),
-  prop("left", OK, "Sets the offset of a positioned element from the left.", {
+  nativeProp("left", "Sets the offset of a positioned element from the left.", {
     notes: ["Including `calc()` with a percentage."],
     related: ["inset", "right", "position"],
   }),
-  sh("inset", OK, "Sets `top`, `right`, `bottom` and `left` in one declaration.", {
+  nativeSh("inset", "Sets `top`, `right`, `bottom` and `left` in one declaration.", {
     notes: ["Including `calc()` with a percentage."],
     related: ["top", "right", "bottom", "left", "inset-inline", "inset-block"],
   }),
-  prop("z-index", OK, "Sets the stacking order of positioned elements and flex or grid items.", {
+  nativeProp("z-index", "Sets the stacking order of positioned elements and flex or grid items.", {
     related: ["position"],
   }),
   prop("float", NO, "Takes an element out of the flow and lets text and inline content wrap around it.", {
@@ -790,22 +814,20 @@ const layout = section("Layout", [
   sh("columns", NO, "Sets the number and width of the columns of a multi-column layout.", {
     workaround: "Use grid.",
     related: ["column-count", "column-width", "column-rule"],
-    aliases: ["-webkit-columns", "multi-column"],
+    aliases: ["multi-column"],
   }),
   prop("column-count", NO, "Sets the number of columns of a multi-column layout.", {
     workaround: "Use grid.",
     related: ["columns"],
-    aliases: ["-webkit-column-count"],
   }),
   prop("column-width", NO, "Sets the ideal column width of a multi-column layout.", {
     workaround: "Use grid.",
     related: ["columns"],
-    aliases: ["-webkit-column-width"],
   }),
   sh("column-rule", NO, "Draws a line between the columns of a multi-column layout.", {
     workaround: "Use grid.",
     related: ["columns"],
-    aliases: ["column-rule-width", "column-rule-style", "column-rule-color", "-webkit-column-rule"],
+    aliases: ["column-rule-width", "column-rule-style", "column-rule-color"],
   }),
   prop("break-before", NO, "Sets whether a page, column or region break happens before an element.", {
     related: ["break-after", "break-inside"],
@@ -851,43 +873,43 @@ const layout = section("Layout", [
 ]);
 
 const spacing = section("Spacing and logical properties", [
-  sh("margin", OK, "Sets the space outside an element's border, on all four sides or each side.", {
+  nativeSh("margin", "Sets the space outside an element's border, on all four sides or each side.", {
     notes: ["Negative margins and `auto` margins are supported."],
     animates: "interpolated",
     related: ["margin-inline", "margin-block", "padding"],
     aliases: ["margin-top", "margin-right", "margin-bottom", "margin-left"],
   }),
-  sh("padding", OK, "Sets the space between an element's content and its border, on all four sides or each side.", {
+  nativeSh("padding", "Sets the space between an element's content and its border, on all four sides or each side.", {
     animates: "interpolated",
     related: ["padding-inline", "padding-block", "margin"],
     aliases: ["padding-top", "padding-right", "padding-bottom", "padding-left"],
   }),
-  sh("margin-inline", OK, "Sets the margins at the start and end of the inline axis.", {
+  nativeSh("margin-inline", "Sets the margins at the start and end of the inline axis.", {
     notes: [FLOW_RELATIVE],
     related: ["margin", "margin-block"],
     aliases: ["margin-inline-start", "margin-inline-end"],
   }),
-  sh("margin-block", OK, "Sets the margins at the start and end of the block axis.", {
+  nativeSh("margin-block", "Sets the margins at the start and end of the block axis.", {
     notes: [FLOW_RELATIVE],
     related: ["margin", "margin-inline"],
     aliases: ["margin-block-start", "margin-block-end"],
   }),
-  sh("padding-inline", OK, "Sets the padding at the start and end of the inline axis.", {
+  nativeSh("padding-inline", "Sets the padding at the start and end of the inline axis.", {
     notes: [FLOW_RELATIVE],
     related: ["padding", "padding-block"],
     aliases: ["padding-inline-start", "padding-inline-end"],
   }),
-  sh("padding-block", OK, "Sets the padding at the start and end of the block axis.", {
+  nativeSh("padding-block", "Sets the padding at the start and end of the block axis.", {
     notes: [FLOW_RELATIVE],
     related: ["padding", "padding-inline"],
     aliases: ["padding-block-start", "padding-block-end"],
   }),
-  sh("inset-inline", OK, "Sets the offsets of a positioned element at the start and end of the inline axis.", {
+  nativeSh("inset-inline", "Sets the offsets of a positioned element at the start and end of the inline axis.", {
     notes: [FLOW_RELATIVE],
     related: ["inset", "inset-block"],
     aliases: ["inset-inline-start", "inset-inline-end"],
   }),
-  sh("inset-block", OK, "Sets the offsets of a positioned element at the start and end of the block axis.", {
+  nativeSh("inset-block", "Sets the offsets of a positioned element at the start and end of the block axis.", {
     notes: [FLOW_RELATIVE],
     related: ["inset", "inset-inline"],
     aliases: ["inset-block-start", "inset-block-end"],
@@ -921,7 +943,7 @@ const spacing = section("Spacing and logical properties", [
 ]);
 
 const typography = section("Typography and text", [
-  prop("font-family", OK, "Sets a prioritized list of font families for an element's text.", {
+  nativeProp("font-family", "Sets a prioritized list of font families for an element's text.", {
     notes: [
       "Installed families, `@font-face` families, `serif`, `sans-serif`, `monospace` and `system-ui` are supported.",
       "Each character is drawn with the first family of the list that has a glyph for it, as in browsers, on every platform; an `@font-face` face only for the characters its `unicode-range` covers. One no family has goes to the platform's fallback, which differs by platform; one no font has is the first family's missing glyph. See [text rendering](/guides/text-rendering/#characters-the-font-lacks).",
@@ -934,16 +956,16 @@ const typography = section("Typography and text", [
     ],
     related: ["at-font-face", "font"],
   }),
-  prop("font-size", OK, "Sets the size of an element's text.", {
+  nativeProp("font-size", "Sets the size of an element's text.", {
     notes: ["Lengths, `%`, keywords, `smaller` / `larger` and `calc()` are supported."],
     animates: "interpolated",
     related: ["font"],
   }),
-  prop("font-weight", OK, "Sets how bold an element's text is.", {
+  nativeProp("font-weight", "Sets how bold an element's text is.", {
     limitations: ["`lighter` gives 100."],
     related: ["font", "font-variation-settings"],
   }),
-  prop("font-style", OK, "Selects a normal, italic or oblique face of the font.", {
+  nativeProp("font-style", "Selects a normal, italic or oblique face of the font.", {
     notes: [
       "On a variable font, `italic` sets the `ital` axis to 1, or the `slnt` axis to -14deg when the font has no `ital` axis, and `oblique <angle>` sets `slnt` to minus the angle; both stay within the axis and the face's `@font-face` `font-style` range.",
       "A face with neither axis and no italic face of its own is drawn upright on macOS and Linux; on Windows, DirectWrite slants it.",
@@ -955,13 +977,13 @@ const typography = section("Typography and text", [
     workaround: "In app stylesheets, set the font longhands.",
     related: ["font-family", "font-size", "font-weight", "font-style", "line-height"],
   }),
-  prop("font-stretch", OK, "Selects a condensed or expanded face of the font.", {
+  nativeProp("font-stretch", "Selects a condensed or expanded face of the font.", {
     notes: [
       "Keywords and percentages. A variable font draws at that `wdth`, within the axis and the face's `@font-face` `font-stretch` range; among static faces the nearest width is picked before style and weight.",
     ],
     related: ["font-width", "font-variation-settings"],
   }),
-  prop("font-width", OK, "Selects a condensed or expanded face of the font; the newer name of `font-stretch`.", {
+  nativeProp("font-width", "Selects a condensed or expanded face of the font; the newer name of `font-stretch`.", {
     related: ["font-stretch"],
   }),
   sh(
@@ -978,20 +1000,19 @@ const typography = section("Typography and text", [
     workaround: 'Use `font-feature-settings: "smcp"` where the font has it.',
     related: ["font-variant", "font-feature-settings"],
   }),
-  prop("font-variant-numeric", OK, "Selects numeral glyphs such as tabular, old-style or slashed-zero figures.", {
+  nativeProp("font-variant-numeric", "Selects numeral glyphs such as tabular, old-style or slashed-zero figures.", {
     related: ["font-variant", "font-feature-settings"],
   }),
-  prop("font-variant-ligatures", OK, "Turns ligatures and contextual forms on or off.", {
+  nativeProp("font-variant-ligatures", "Turns ligatures and contextual forms on or off.", {
     related: ["font-variant", "font-feature-settings"],
   }),
-  prop("font-kerning", OK, "Turns the font's kerning on or off.", { related: ["font-feature-settings"] }),
-  prop("font-feature-settings", OK, "Turns OpenType features of the font on or off by tag.", {
-    aliases: ["-webkit-font-feature-settings", "opentype features"],
+  nativeProp("font-kerning", "Turns the font's kerning on or off.", { related: ["font-feature-settings"] }),
+  nativeProp("font-feature-settings", "Turns OpenType features of the font on or off by tag.", {
+    aliases: ["opentype features"],
     related: ["font-variant-numeric", "font-variant-ligatures"],
   }),
-  prop(
+  nativeProp(
     "font-variation-settings",
-    OK,
     "Sets the axes of a variable font by tag, such as `wdth`, `GRAD` or one of the font's own.",
     {
       values: [
@@ -1007,7 +1028,7 @@ const typography = section("Typography and text", [
       related: ["font-weight", "font-style", "font-optical-sizing"],
     },
   ),
-  prop("font-optical-sizing", PART, "Sets whether a variable font's optical-size axis follows the font size.", {
+  nativeProp("font-optical-sizing", "Sets whether a variable font's optical-size axis follows the font size.", {
     limitations: ["Always `auto`."],
     related: ["font-variation-settings"],
   }),
@@ -1016,7 +1037,7 @@ const typography = section("Typography and text", [
     NO,
     "Sets whether the browser may synthesize bold, italic or small-capital faces the font lacks.",
   ),
-  prop("font-size-adjust", PART, "Scales fallback fonts so their x-height matches the first choice.", {
+  nativeProp("font-size-adjust", "Scales fallback fonts so their x-height matches the first choice.", {
     values: [
       v("none", OK),
       v(
@@ -1050,7 +1071,7 @@ const typography = section("Typography and text", [
     NO,
     "Selects East Asian glyph variants such as simplified, traditional or ruby forms.",
   ),
-  prop("line-height", OK, "Sets the height of a line of text.", {
+  nativeProp("line-height", "Sets the height of a line of text.", {
     notes: [
       "`normal`, the initial value, comes from the first available font of the element's `font-family`: its ascent, descent and line gap, each rounded to a pixel as Chromium does. It inherits as the keyword, so each element resolves it for its own font and size.",
       "A line with glyphs from another font (a later family of the list, or the system's fallback) grows where that font's box reaches further: its rounded ascent and descent with half its rounded line gap on each side, set on the shared baseline, as Chromium unites them. Under `line-metrics: snapped` that font's snapped box. A line without such glyphs keeps the first font's height, and a declared `line-height` never grows.",
@@ -1061,7 +1082,7 @@ const typography = section("Typography and text", [
     ],
     related: ["font", "line-metrics", "line-leading", "font-size-adjust"],
   }),
-  prop("line-metrics", OK, "Sets what a font contributes to the height of a line: CSS's metrics or whole pixels.", {
+  nativeProp("line-metrics", "Sets what a font contributes to the height of a line: CSS's metrics or whole pixels.", {
     skathiOnly: true,
     values: [
       v(
@@ -1089,7 +1110,7 @@ const typography = section("Typography and text", [
     aliases: ["integral line height", "whole-pixel line height", "native line metrics", "macOS line height"],
     related: ["line-leading", "line-height", "text-box-trim"],
   }),
-  prop("line-leading", OK, "Sets where the difference between the line height and the font's box goes.", {
+  nativeProp("line-leading", "Sets where the difference between the line height and the font's box goes.", {
     skathiOnly: true,
     values: [
       v("split", OK, "As in CSS: half above the font's box and half below it."),
@@ -1108,13 +1129,13 @@ const typography = section("Typography and text", [
     aliases: ["leading distribution", "half-leading", "baseline position"],
     related: ["line-metrics", "line-height", "vertical-align"],
   }),
-  sh("text-box", PART, "Sets the trimmed sides and the font metrics used for trimming.", {
+  nativeSh("text-box", "Sets the trimmed sides and the font metrics used for trimming.", {
     since: "0.7.0",
     notes: ["`normal` resets both longhands. Supplying only an edge sets `text-box-trim: trim-both`."],
     limitations: ["Uses the block text layout and font metrics supported by the longhands."],
     related: ["text-box-trim", "text-box-edge", "line-height"],
   }),
-  prop("text-box-trim", PART, "Trims above the first line and below the last line using font metrics.", {
+  nativeProp("text-box-trim", "Trims above the first line and below the last line using font metrics.", {
     since: "0.7.0",
     values: [v("none", OK), v("trim-start", OK), v("trim-end", OK), v("trim-both", OK)],
     limitations: [
@@ -1122,7 +1143,7 @@ const typography = section("Typography and text", [
     ],
     related: ["text-box", "text-box-edge", "line-height"],
   }),
-  prop("text-box-edge", PART, "Chooses the font metrics used to trim a text box.", {
+  nativeProp("text-box-edge", "Chooses the font metrics used to trim a text box.", {
     since: "0.7.0",
     values: [
       v("auto", OK),
@@ -1139,32 +1160,31 @@ const typography = section("Typography and text", [
     limitations: ["Ideographic metrics and `line-fit-edge` are unavailable."],
     related: ["text-box", "text-box-trim"],
   }),
-  prop("letter-spacing", OK, "Sets extra space between characters.", {
+  nativeProp("letter-spacing", "Sets extra space between characters.", {
     limitations: ["A percentage is not supported."],
     related: ["word-spacing"],
   }),
-  prop("word-spacing", OK, "Sets extra space between words.", {
+  nativeProp("word-spacing", "Sets extra space between words.", {
     limitations: ["A percentage is not supported."],
     related: ["letter-spacing"],
   }),
-  prop("color", OK, "Sets the color of an element's text and the value of `currentColor`.", {
+  nativeProp("color", "Sets the color of an element's text and the value of `currentColor`.", {
     animates: "interpolated",
     related: ["keyword-currentcolor"],
   }),
-  prop("text-align", OK, "Sets the horizontal alignment of the lines of text in a block.", {
+  nativeProp("text-align", "Sets the horizontal alignment of the lines of text in a block.", {
     values: [v("left", OK), v("right", OK), v("center", OK), v("start", OK), v("end", OK), v("justify", NO)],
     related: ["text-align-last", "text-justify"],
   }),
   prop("text-align-last", NO, "Sets the alignment of the last line of a block.", { related: ["text-align"] }),
   prop("text-justify", NO, "Sets how justified text distributes its spacing.", { related: ["text-align"] }),
-  prop("text-indent", PART, "Accepts a zero indent. The first line starts at the block's edge.", {
+  nativeProp("text-indent", "Accepts a zero indent. The first line starts at the block's edge.", {
     values: [v("0", OK, "Text starts at the edge of the block."), v("nonzero indent", NO)],
     workaround: "`padding-left` indents the whole block.",
   }),
-  prop("text-transform", OK, "Changes the case of text: uppercase, lowercase or capitalized."),
-  sh(
+  nativeProp("text-transform", "Changes the case of text: uppercase, lowercase or capitalized."),
+  nativeSh(
     "text-decoration",
-    PART,
     "Draws lines on text, setting their kind, style, color and thickness in one declaration.",
     {
       limitations: [
@@ -1200,17 +1220,17 @@ const typography = section("Typography and text", [
       related: ["text-decoration"],
     },
   ),
-  prop("text-decoration-color", OK, "Sets the color of text decoration lines.", {
+  nativeProp("text-decoration-color", "Sets the color of text decoration lines.", {
     animates: "interpolated",
     related: ["text-decoration"],
   }),
-  prop("text-decoration-thickness", OK, "Sets the thickness of text decoration lines.", {
+  nativeProp("text-decoration-thickness", "Sets the thickness of text decoration lines.", {
     related: ["text-decoration", "text-underline-offset"],
   }),
-  prop("text-underline-offset", OK, "Sets how far an underline sits from its text.", {
+  nativeProp("text-underline-offset", "Sets how far an underline sits from its text.", {
     related: ["text-decoration", "text-underline-position"],
   }),
-  prop("text-decoration-skip-ink", PART, "Accepts `none`. Underlines run continuously across glyph ink.", {
+  nativeProp("text-decoration-skip-ink", "Accepts `none`. Underlines run continuously across glyph ink.", {
     values: [v("none", OK), v("auto", NO)],
     limitations: ["The underline is one unbroken line."],
     related: ["text-decoration"],
@@ -1219,13 +1239,13 @@ const typography = section("Typography and text", [
     limitations: ["The underline is one unbroken line."],
     related: ["text-underline-offset"],
   }),
-  prop("text-shadow", OK, "Adds shadows to text.", {
+  nativeProp("text-shadow", "Adds shadows to text.", {
     notes: ["Several shadows, with blur, are supported."],
     limitations: ["A list of more than four shadows snaps instead of animating."],
     animates: "interpolated",
   }),
   sh("text-emphasis", NO, "Draws emphasis marks above or below characters."),
-  prop("white-space", OK, "Sets how white space and line breaks in text are collapsed and wrapped.", {
+  nativeProp("white-space", "Sets how white space and line breaks in text are collapsed and wrapped.", {
     notes: [
       "All values are supported.",
       "On an `<sk-editor>`, `pre` and `nowrap` turn off soft wrapping and lines scroll sideways; the other values wrap. Spaces are always kept there, and an ancestor's value does not reach it.",
@@ -1250,8 +1270,8 @@ const typography = section("Typography and text", [
     related: ["text-wrap"],
     aliases: ["text-wrap: balance", "text-wrap: pretty"],
   }),
-  prop("word-break", OK, "Sets where lines may break inside words.", { related: ["overflow-wrap"] }),
-  prop("overflow-wrap", OK, "Sets whether an unbreakable word may break to keep it from overflowing its box.", {
+  nativeProp("word-break", "Sets where lines may break inside words.", { related: ["overflow-wrap"] }),
+  nativeProp("overflow-wrap", "Sets whether an unbreakable word may break to keep it from overflowing its box.", {
     aliases: ["word-wrap"],
     related: ["word-break"],
   }),
@@ -1259,23 +1279,21 @@ const typography = section("Typography and text", [
   prop("hyphenate-character", NO, "Sets the character shown at the end of a hyphenated line.", {
     related: ["hyphens"],
   }),
-  prop("hyphens", PART, "Sets whether words are hyphenated when text wraps.", {
+  nativeProp("hyphens", "Sets whether words are hyphenated when text wraps.", {
     limitations: ["Breaks only at soft hyphens (`&shy;`): there is no dictionary."],
-    aliases: ["-webkit-hyphens"],
   }),
-  prop("text-overflow", OK, "Sets how text that overflows its box is signalled, for example with an ellipsis.", {
+  nativeProp("text-overflow", "Sets how text that overflows its box is signalled, for example with an ellipsis.", {
     values: [v("ellipsis", OK), v("clip", PART, "Cannot undo an earlier ellipsis."), v("a custom string", NO)],
     related: ["line-clamp", "white-space", "overflow"],
   }),
-  sh("line-clamp", PART, "Limits a block's content to a number of lines.", {
+  nativeSh("line-clamp", "Limits a block's content to a number of lines.", {
     limitations: [
       "No ellipsis is drawn unless `text-overflow: ellipsis` is set too.",
       "`none` and `0` print an advisory and cannot undo an earlier clamp; put the clamp on a class and remove the class instead.",
     ],
-    aliases: ["-webkit-line-clamp"],
     related: ["text-overflow"],
   }),
-  prop("vertical-align", PART, "Moves an inline box up or down in its line of text.", {
+  nativeProp("vertical-align", "Moves an inline box up or down in its line of text.", {
     values: [
       v("baseline", OK, "The box's baseline on the line's; a box with no text aligns its bottom edge."),
       v("middle", OK, "The box's middle at the baseline plus half the x-height of the line's text."),
@@ -1299,7 +1317,7 @@ const typography = section("Typography and text", [
       "Table cells: there is no table layout.",
     ],
   }),
-  prop("tab-size", OK, "Sets the width of a tab character.", {
+  nativeProp("tab-size", "Sets the width of a tab character.", {
     notes: [
       "A number is that many space widths of the tab's font, letter and word spacing included; a length is a fixed distance. Applies to text, `<textarea>` and `<sk-editor>`.",
     ],
@@ -1307,7 +1325,7 @@ const typography = section("Typography and text", [
     since: "0.8.0",
     related: ["white-space"],
   }),
-  prop("-webkit-text-fill-color", OK, "Sets the fill color of text, separately from `color`.", {
+  nativeProp("-webkit-text-fill-color", "Sets the fill color of text, separately from `color`.", {
     notes: ["Use it with `background-clip: text` for gradient text."],
     related: ["background-clip", "webkit-text-stroke"],
   }),
@@ -1326,7 +1344,7 @@ const typography = section("Typography and text", [
   prop("writing-mode", PART, "Sets whether lines of text are laid out horizontally or vertically.", {
     notes: ["SVG text supports vertical writing with `vertical-rl` and `vertical-lr`.", SVG_STYLE_ONLY],
     limitations: ["App layout uses horizontal writing."],
-    aliases: ["-webkit-writing-mode", "vertical text"],
+    aliases: ["vertical text"],
     related: ["text-orientation", "direction"],
   }),
   prop("text-orientation", NO, "Sets the orientation of characters in vertical text.", {
@@ -1360,17 +1378,11 @@ const typography = section("Typography and text", [
       limitations: [
         "Text in a box drawn through its own layer, such as one with `clip-path`, a colour `filter` or a view transition snapshot, draws grayscale.",
       ],
-      aliases: [
-        "-webkit-font-smoothing",
-        "-moz-osx-font-smoothing",
-        "font-smooth",
-        "ClearType",
-        "subpixel antialiasing",
-      ],
+      aliases: ["-moz-osx-font-smoothing", "font-smooth", "ClearType", "subpixel antialiasing"],
       related: ["text-rendering", "font-dilation"],
     },
   ),
-  prop("font-dilation", OK, "Sets how much weight glyph edges get for the colour of the text.", {
+  nativeProp("font-dilation", "Sets how much weight glyph edges get for the colour of the text.", {
     skathiOnly: true,
     platforms: { windows: OK, macos: NO, linux: PART },
     values: [
@@ -1475,7 +1487,7 @@ const color = section("Color", [
     "Keywords such as `Canvas` or `AccentColor` that resolve to colors of the user's system.",
     { aliases: ["Canvas", "CanvasText", "AccentColor", "ButtonFace"] },
   ),
-  prop("color-scheme", OK, "Declares which color schemes, light or dark, an element can be rendered in.", {
+  nativeProp("color-scheme", "Declares which color schemes, light or dark, an element can be rendered in.", {
     since: "0.4.0",
     values: [
       v("normal", OK, "Light."),
@@ -1502,7 +1514,7 @@ const color = section("Color", [
   prop("print-color-adjust", NO, "Sets whether the browser may adjust colors to save ink when printing.", {
     aliases: ["-webkit-print-color-adjust"],
   }),
-  prop("dynamic-range-limit", PART, "Limits how bright high dynamic range (HDR) content in an element may be.", {
+  nativeProp("dynamic-range-limit", "Limits how bright high dynamic range (HDR) content in an element may be.", {
     since: "0.4.0",
     values: [
       v("standard", OK, "No brighter than SDR white."),
@@ -1534,12 +1546,12 @@ const color = section("Color", [
 ]);
 
 const backgrounds = section("Backgrounds and borders", [
-  prop("background-color", OK, "Sets the background color of an element.", {
+  nativeProp("background-color", "Sets the background color of an element.", {
     notes: ["Several layers are supported."],
     animates: "interpolated",
     related: ["background"],
   }),
-  sh("background", OK, "Sets every background property, for one or several layers, in one declaration.", {
+  nativeSh("background", "Sets every background property, for one or several layers, in one declaration.", {
     notes: ["Several layers are supported."],
     related: [
       "background-color",
@@ -1550,7 +1562,7 @@ const backgrounds = section("Backgrounds and borders", [
       "background-clip",
     ],
   }),
-  prop("background-image", OK, "Sets one or more images or gradients as the background of an element.", {
+  nativeProp("background-image", "Sets one or more images or gradients as the background of an element.", {
     values: [
       v("url()", OK, "Raster images and SVG."),
       v("gradients", OK),
@@ -1596,11 +1608,10 @@ const backgrounds = section("Backgrounds and borders", [
     workaround: "Write a standard gradient.",
     related: ["function-linear-gradient", "function-radial-gradient"],
   }),
-  prop("background-size", OK, "Sets the size of background images.", {
-    aliases: ["-webkit-background-size"],
+  nativeProp("background-size", "Sets the size of background images.", {
     related: ["background"],
   }),
-  prop("background-repeat", OK, "Sets how background images repeat.", {
+  nativeProp("background-repeat", "Sets how background images repeat.", {
     values: [v("space", PART, "Repeats as `repeat`."), v("round", PART, "Repeats as `repeat`.")],
     related: ["background"],
   }),
@@ -1620,9 +1631,8 @@ const backgrounds = section("Backgrounds and borders", [
       },
     ),
   ),
-  prop(
+  nativeProp(
     "background-clip",
-    PART,
     "Sets which box a background extends under: border, padding, content, or the text itself.",
     {
       values: [
@@ -1632,13 +1642,12 @@ const backgrounds = section("Backgrounds and borders", [
         v("content-box", NO, "The background fills the padding box."),
       ],
       limitations: ["Only `text` is supported; with other values the background fills the padding box."],
-      aliases: ["-webkit-background-clip", "background-clip: text", "gradient text"],
+      aliases: ["background-clip: text", "gradient text"],
       related: ["webkit-text-fill-color", "background-origin"],
     },
   ),
   prop("background-origin", NO, "Sets which box background images are positioned from.", {
     limitations: ["The background fills the padding box."],
-    aliases: ["-webkit-background-origin"],
     related: ["background-clip"],
   }),
   prop(
@@ -1650,16 +1659,16 @@ const backgrounds = section("Backgrounds and borders", [
   prop("background-blend-mode", NO, "Sets how an element's background layers blend with each other.", {
     related: ["mix-blend-mode"],
   }),
-  sh("border", OK, "Sets the width, style and color of an element's border, on all sides or one side.", {
+  nativeSh("border", "Sets the width, style and color of an element's border, on all sides or one side.", {
     related: ["border-width", "border-style", "border-color", "border-radius"],
     aliases: ["border-top", "border-right", "border-bottom", "border-left"],
   }),
-  sh("border-width", OK, "Sets the width of an element's border.", {
+  nativeSh("border-width", "Sets the width of an element's border.", {
     animates: "interpolated",
     related: ["border"],
     aliases: ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"],
   }),
-  sh("border-color", OK, "Sets the color of an element's border.", {
+  nativeSh("border-color", "Sets the color of an element's border.", {
     animates: "interpolated",
     related: ["border"],
     aliases: ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"],
@@ -1696,7 +1705,6 @@ const backgrounds = section("Backgrounds and borders", [
       "border-top-right-radius",
       "border-bottom-right-radius",
       "border-bottom-left-radius",
-      "-webkit-border-radius",
     ],
   }),
   sh("corner-shape", PART, "Sets the shape of rounded corners, such as bevel, scoop or squircle.", {
@@ -1768,12 +1776,11 @@ const backgrounds = section("Backgrounds and borders", [
     "box-decoration-break",
     NO,
     "Sets how an element's decorations are drawn where it is split across lines, columns or pages.",
-    { aliases: ["-webkit-box-decoration-break"] },
   ),
 ]);
 
 const effects = section("Effects", [
-  prop("box-shadow", PART, "Adds shadows around or inside an element's box.", {
+  nativeProp("box-shadow", "Adds shadows around or inside an element's box.", {
     notes: [
       "Several shadows, `inset`, spread and `none` are supported.",
       "Shadow lists interpolate shadow by shadow, the shorter list padded with transparent shadows; a pair where only one is `inset` snaps.",
@@ -1783,14 +1790,13 @@ const effects = section("Effects", [
       "A list of more than six shadows snaps instead of animating.",
     ],
     animates: "interpolated",
-    aliases: ["-webkit-box-shadow"],
     related: ["text-shadow", "keyword-currentcolor"],
   }),
-  prop("opacity", OK, "Sets how transparent an element is, together with its content.", {
+  nativeProp("opacity", "Sets how transparent an element is, together with its content.", {
     notes: ["A number or a percentage."],
     animates: "interpolated",
   }),
-  prop("filter", PART, "Applies graphical effects such as blur, drop shadows or color changes to an element.", {
+  nativeProp("filter", "Applies graphical effects such as blur, drop shadows or color changes to an element.", {
     values: [
       v("blur()", PART, "On a box with no children and a solid background."),
       v("drop-shadow()", PART, "On a box with an opaque solid background, and on inline `<svg>`."),
@@ -1810,7 +1816,6 @@ const effects = section("Effects", [
       "App stylesheets support `blur()`, `drop-shadow()` and a local `url(#id)` referencing an SVG `feColorMatrix`. Color filters on SVG shapes must be set inside the SVG.",
     ],
     aliases: [
-      "-webkit-filter",
       "blur()",
       "drop-shadow()",
       "grayscale()",
@@ -1823,13 +1828,13 @@ const effects = section("Effects", [
     ],
     related: ["backdrop-filter", "shading"],
   }),
-  prop("backdrop-filter", PART, "Applies graphical effects such as blur to the area behind an element.", {
+  nativeProp("backdrop-filter", "Applies graphical effects such as blur to the area behind an element.", {
     values: [v("blur()", OK)],
     limitations: ["Only `blur()` applies; other functions are dropped."],
-    aliases: ["-webkit-backdrop-filter", "frosted glass"],
+    aliases: ["frosted glass"],
     related: ["filter"],
   }),
-  prop("mix-blend-mode", PART, "Sets how an element's content blends with what is behind it.", {
+  nativeProp("mix-blend-mode", "Sets how an element's content blends with what is behind it.", {
     values: [
       v("normal", OK),
       v(
@@ -1846,10 +1851,10 @@ const effects = section("Effects", [
     ],
     related: ["background-blend-mode", "isolation", "pseudo-view-transition"],
   }),
-  prop("isolation", OK, "Creates a new stacking context, so blending inside it does not reach what is behind it.", {
+  nativeProp("isolation", "Creates a new stacking context, so blending inside it does not reach what is behind it.", {
     related: ["mix-blend-mode"],
   }),
-  prop("clip-path", PART, "Clips an element to a shape, hiding what is outside it.", {
+  nativeProp("clip-path", "Clips an element to a shape, hiding what is outside it.", {
     limitations: ["App stylesheets cannot use a `url()` clip reference, `xywh()` or `rect()`."],
     values: [
       v("inset()", OK),
@@ -1866,10 +1871,9 @@ const effects = section("Effects", [
       v("xywh()", NO),
       v("rect()", NO),
     ],
-    aliases: ["-webkit-clip-path"],
     related: ["clip", "mask"],
   }),
-  prop("clip", PART, "Clips an absolutely positioned element to a rectangle; superseded by `clip-path`.", {
+  nativeProp("clip", "Clips an absolutely positioned element to a rectangle; superseded by `clip-path`.", {
     values: [v("rect()", PART, "Only the empty rect of the visually-hidden idiom.")],
     limitations: ["Only the empty `rect()` of the visually-hidden idiom works."],
     related: ["clip-path"],
@@ -1888,16 +1892,16 @@ const effects = section("Effects", [
       related: [...MASKS.filter((s) => s !== name), "webkit-mask"],
     }),
   ),
-  prop("mask-mode", PART, "Sets whether a mask image uses its alpha channel or its luminance.", {
+  nativeProp("mask-mode", "Sets whether a mask image uses its alpha channel or its luminance.", {
     values: [v("alpha", OK), v("luminance", OK), v("match-source", PART, "Treated as `alpha`.")],
     limitations: ["One mode applies to all the layers."],
     related: ["mask", "mask-type"],
   }),
-  prop("mask-clip", PART, "Sets the area a mask applies to.", {
+  nativeProp("mask-clip", "Sets the area a mask applies to.", {
     values: [v("border-box", OK), v("content-box", PART, "Only in the gradient-border ring.")],
     related: ["mask", "mask-origin"],
   }),
-  prop("mask-origin", PART, "Sets the box mask images are positioned from.", {
+  nativeProp("mask-origin", "Sets the box mask images are positioned from.", {
     values: [v("border-box", OK)],
     limitations: ["Only `border-box` is supported."],
     related: ["mask", "mask-clip"],
@@ -1933,7 +1937,7 @@ const effects = section("Effects", [
     related: ["mask", "mask-image"],
   }),
   prop("-webkit-box-reflect", NO, "Draws a reflection of an element next to it."),
-  prop("effect-quality", OK, "Selects the quality tier of a shader on this element.", {
+  nativeProp("effect-quality", "Selects the quality tier of a shader on this element.", {
     skathiOnly: true,
     since: "0.7.0",
     values: [v("auto", OK), v("full", OK), v("reduced", OK), v("minimal", OK)],
@@ -1953,7 +1957,7 @@ const effects = section("Effects", [
 ]);
 
 const transforms = section("Transforms", [
-  prop("transform", PART, "Moves, rotates, scales or skews an element without changing the layout.", {
+  nativeProp("transform", "Moves, rotates, scales or skews an element without changing the layout.", {
     notes: ["2D transforms are supported."],
     values: [
       v("translate()", OK),
@@ -1972,13 +1976,12 @@ const transforms = section("Transforms", [
       v("matrix3d()", PLAN),
     ],
     animates: "interpolated",
-    aliases: ["-webkit-transform", "translate()", "rotate()", "scale()", "skew()", "matrix()", "3d transforms"],
+    aliases: ["translate()", "rotate()", "scale()", "skew()", "matrix()", "3d transforms"],
     related: ["transform-origin", "translate", "rotate", "scale", "perspective"],
   }),
   prop("transform-origin", PART, "Sets the point a transform is applied around.", {
     notes: ["Lengths, percentages and keywords are supported."],
     limitations: ["A keyword with an offset and `calc()` are not supported."],
-    aliases: ["-webkit-transform-origin"],
     related: ["transform"],
   }),
   prop(
@@ -1986,7 +1989,6 @@ const transforms = section("Transforms", [
     PLAN,
     "Sets the distance between the viewer and the z=0 plane, giving 3D-transformed children depth.",
     {
-      aliases: ["-webkit-perspective"],
       related: ["perspective-origin", "transform-style", "transform"],
     },
   ),
@@ -1998,19 +2000,18 @@ const transforms = section("Transforms", [
     "backface-visibility",
     PLAN,
     "Sets whether the back face of an element is visible when it is turned away from the viewer.",
-    { aliases: ["-webkit-backface-visibility"], related: ["transform-style"] },
+    { related: ["transform-style"] },
   ),
   prop("perspective-origin", PLAN, "Sets the viewer's position for the `perspective` property.", {
-    aliases: ["-webkit-perspective-origin"],
     related: ["perspective"],
   }),
-  prop("translate", PART, "Moves an element, independently of `transform`.", {
+  nativeProp("translate", "Moves an element, independently of `transform`.", {
     since: "0.7.0",
     animates: "interpolated",
     limitations: ["Supports X and Y offsets. A nonzero Z offset is unsupported."],
     related: ["transform", "rotate", "scale", "at-starting-style"],
   }),
-  prop("rotate", PART, "Rotates an element, independently of `transform`.", {
+  nativeProp("rotate", "Rotates an element, independently of `transform`.", {
     since: "0.7.0",
     animates: "interpolated",
     limitations: ["Supports rotation around the Z axis."],
@@ -2029,37 +2030,31 @@ const transforms = section("Transforms", [
 ]);
 
 const transitions = section("Transitions and animations", [
-  sh(
+  nativeSh(
     "transition",
-    OK,
     "Animates changes of property values over time, setting every transition property in one declaration.",
     {
       notes: ["Interrupted transitions retarget from the value on screen."],
       values: [
         v("composed with var()", OK, "The shorthand and longhands resolve custom properties on each element.", "0.6.0"),
       ],
-      aliases: ["-webkit-transition"],
       related: TRANSITIONS.filter((s) => s !== "transition"),
     },
   ),
-  prop("transition-property", OK, "Sets which properties transition when their values change.", {
-    aliases: ["-webkit-transition-property"],
+  nativeProp("transition-property", "Sets which properties transition when their values change.", {
     related: ["transition"],
   }),
-  prop("transition-duration", OK, "Sets how long a transition takes.", {
-    aliases: ["-webkit-transition-duration"],
+  nativeProp("transition-duration", "Sets how long a transition takes.", {
     related: ["transition"],
   }),
-  prop("transition-timing-function", OK, "Sets the easing curve of a transition.", {
-    aliases: ["-webkit-transition-timing-function"],
+  nativeProp("transition-timing-function", "Sets the easing curve of a transition.", {
     related: ["transition", "easing-functions"],
   }),
-  prop("transition-delay", OK, "Sets how long to wait before a transition starts.", {
+  nativeProp("transition-delay", "Sets how long to wait before a transition starts.", {
     values: [v("negative values", OK, "The transition starts part-way through.", "0.3.0")],
-    aliases: ["-webkit-transition-delay"],
     related: ["transition", "animation-delay"],
   }),
-  prop("transition-behavior", PART, "Sets whether properties with discrete values, such as `display`, transition.", {
+  nativeProp("transition-behavior", "Sets whether properties with discrete values, such as `display`, transition.", {
     since: "0.7.0",
     values: [v("normal", OK), v("allow-discrete", OK)],
     notes: [
@@ -2070,9 +2065,8 @@ const transitions = section("Transitions and animations", [
     ],
     related: ["transition", "display", "content-visibility", "cursor", "flex-flow", "overflow", "at-starting-style"],
   }),
-  prop(
+  nativeProp(
     "interpolate-size",
-    OK,
     "Lets sizes animate to and from intrinsic keywords such as `auto`, `min-content` and `fit-content`.",
     {
       since: "0.4.0",
@@ -2086,13 +2080,11 @@ const transitions = section("Transitions and animations", [
       related: ["function-calc-size", "transition", "height"],
     },
   ),
-  sh(
+  nativeSh(
     "animation",
-    OK,
     "Runs `@keyframes` animations on an element, setting every animation property in one declaration.",
     {
       notes: ["Per-property keyframe timelines, every fill mode, direction and play state are supported."],
-      aliases: ["-webkit-animation"],
       related: [...ANIMATIONS.filter((s) => s !== "animation"), "at-keyframes"],
     },
   ),
@@ -2112,9 +2104,8 @@ const transitions = section("Transitions and animations", [
       related: name === "animation-timing-function" ? ["animation", "easing-functions"] : ["animation"],
     }),
   ),
-  prop("animation-delay", OK, "Sets how long to wait before an animation starts.", {
+  nativeProp("animation-delay", "Sets how long to wait before an animation starts.", {
     values: [v("negative values", OK, "The animation starts part-way through.", "0.3.0")],
-    aliases: ["-webkit-animation-delay"],
     related: ["animation", "transition-delay"],
   }),
   prop("animation-timeline", NO, "Drives an animation from a scroll or view timeline instead of time.", {
@@ -2220,11 +2211,11 @@ const transitions = section("Transitions and animations", [
 ]);
 
 const scrolling = section("Scrolling", [
-  prop("scrollbar-width", OK, "Sets the thickness of an element's scrollbars, or hides them.", {
+  nativeProp("scrollbar-width", "Sets the thickness of an element's scrollbars, or hides them.", {
     values: [v("auto", OK), v("thin", OK), v("none", OK)],
     related: ["scrollbar-color", "overflow"],
   }),
-  prop("scrollbar-color", OK, "Sets the colors of an element's scrollbar thumb and track.", {
+  nativeProp("scrollbar-color", "Sets the colors of an element's scrollbar thumb and track.", {
     related: ["scrollbar-width"],
   }),
   prop("scrollbar-gutter", NO, "Reserves space for a scrollbar so the layout does not shift when it appears.", {
@@ -2241,9 +2232,8 @@ const scrolling = section("Scrolling", [
     ],
     related: ["scrollbar-width", "scrollbar-color"],
   }),
-  sh(
+  nativeSh(
     "overscroll-behavior",
-    OK,
     "Sets what happens when scrolling reaches the edge of a scroll container: chain to the parent, bounce, or stop.",
     {
       values: [v("auto", OK), v("contain", OK), v("none", OK)],
@@ -2255,10 +2245,10 @@ const scrolling = section("Scrolling", [
       ],
     },
   ),
-  prop("scroll-behavior", OK, "Sets whether programmatic and navigation scrolling is instant or smooth.", {
+  nativeProp("scroll-behavior", "Sets whether programmatic and navigation scrolling is instant or smooth.", {
     values: [v("smooth", OK)],
   }),
-  prop("scroll-snap-type", OK, "Makes a scroll container snap to positions on its children.", {
+  nativeProp("scroll-snap-type", "Makes a scroll container snap to positions on its children.", {
     since: "0.4.0",
     values: [
       v("x, y, block, inline, both", OK),
@@ -2278,27 +2268,31 @@ const scrolling = section("Scrolling", [
     ],
     related: ["scroll-snap-align", "scroll-snap-stop", "scroll-padding", "scroll-margin"],
   }),
-  prop("scroll-snap-align", OK, "Sets the snap position of an element inside a snapping scroll container.", {
+  nativeProp("scroll-snap-align", "Sets the snap position of an element inside a snapping scroll container.", {
     since: "0.4.0",
     values: [v("none, start, end, center", OK)],
     notes: ["The two-value form is block (y) then inline (x)."],
     related: ["scroll-snap-type", "scroll-snap-stop"],
   }),
-  prop("scroll-snap-stop", OK, "Sets whether a snapping scroll container may scroll past an element's snap position.", {
-    since: "0.4.0",
-    values: [v("normal", OK), v("always", OK)],
-    notes: [
-      "`always` stops wheel, touchpad, arrow-key and paging scrolls; Home, End, scrollbar drags and scripts pass it.",
-    ],
-    related: ["scroll-snap-type", "scroll-snap-align"],
-  }),
-  sh("scroll-padding", OK, "Sets the inset of a scroll container's snap and scroll-into-view area.", {
+  nativeProp(
+    "scroll-snap-stop",
+    "Sets whether a snapping scroll container may scroll past an element's snap position.",
+    {
+      since: "0.4.0",
+      values: [v("normal", OK), v("always", OK)],
+      notes: [
+        "`always` stops wheel, touchpad, arrow-key and paging scrolls; Home, End, scrollbar drags and scripts pass it.",
+      ],
+      related: ["scroll-snap-type", "scroll-snap-align"],
+    },
+  ),
+  nativeSh("scroll-padding", "Sets the inset of a scroll container's snap and scroll-into-view area.", {
     since: "0.4.0",
     notes: ["Shrinks the area snap positions and `scrollIntoView()` align to. `auto` is 0."],
     aliases: ["scroll-padding-*", "scroll-padding-top", "scroll-padding-inline", "scroll-padding-block"],
     related: ["scroll-margin", "scroll-snap-type"],
   }),
-  sh("scroll-margin", OK, "Sets the outset of an element's snap and scroll-into-view area.", {
+  nativeSh("scroll-margin", "Sets the outset of an element's snap and scroll-into-view area.", {
     since: "0.4.0",
     notes: ["Grows the box snap positions and `scrollIntoView()` align."],
     aliases: ["scroll-margin-*", "scroll-margin-top", "scroll-margin-inline", "scroll-margin-block"],
@@ -2309,7 +2303,7 @@ const scrolling = section("Scrolling", [
 const hapticCss = { since: "0.6.0", skathiOnly: true, platforms: { windows: OK, macos: OK, linux: NO } } as const;
 const penCss = { ...hapticCss, platforms: { windows: OK, macos: NO, linux: NO } } as const;
 const interaction = section("Interaction", [
-  sh("haptic", OK, "Binds a gesture to tactile feedback on a pointing device.", {
+  nativeSh("haptic", "Binds a gesture to tactile feedback on a pointing device.", {
     ...hapticCss,
     notes: [
       "`haptic: press tick .4` sets the trigger, effect and intensity. Separate multiple bindings with commas. Theme variables can supply an effect and strength together.",
@@ -2324,7 +2318,7 @@ const interaction = section("Interaction", [
       "at-haptic-pattern",
     ],
   }),
-  prop("haptic-trigger", OK, "Chooses the interaction that requests feedback.", {
+  nativeProp("haptic-trigger", "Chooses the interaction that requests feedback.", {
     ...hapticCss,
     notes: [
       "press fires on primary pointer down. activate fires after an uncancelled activation, including Enter or Space on a native button. hover fires on entry.",
@@ -2332,7 +2326,7 @@ const interaction = section("Interaction", [
       "snap follows a new native scroll-snap destination reached by user input. A custom guide or drag control signals its own transition with appHaptics.trigger(element, 'snap', pointerId).",
     ],
   }),
-  prop("haptic-effect", OK, "Selects tick, hint, align, edge, success, error, none or a named pattern.", {
+  nativeProp("haptic-effect", "Selects tick, hint, align, edge, success, error, none or a named pattern.", {
     ...hapticCss,
     notes: [
       "Lists pair by trigger position. A shorter list repeats. If an event appears twice, its last binding wins.",
@@ -2346,26 +2340,26 @@ const interaction = section("Interaction", [
       "Zero silences feedback on every device. Windows applies positive values on controllers that support intensity. Other controllers use their normal strength.",
     ],
   }),
-  prop("haptic-target", OK, "Routes feedback to auto, mouse or pen.", {
+  nativeProp("haptic-target", "Routes feedback to auto, mouse or pen.", {
     ...hapticCss,
     notes: [
       "auto follows the interaction. For keyboard activation the platform selects the current device. mouse includes touchpads.",
     ],
   }),
-  prop("haptic-min-interval", OK, "Spaces repeated requests from the same gesture, element and target.", {
+  nativeProp("haptic-min-interval", "Spaces repeated requests from the same gesture, element and target.", {
     ...hapticCss,
     notes: [
       "Defaults to 0ms. The interval applies to the entire sequence and leaves the timing between its pulses intact.",
     ],
   }),
-  prop("haptic-sharpness", PART, "Stores a waveform sharpness hint between zero and one.", {
+  nativeProp("haptic-sharpness", "Stores a waveform sharpness hint between zero and one.", {
     ...hapticCss,
     platforms: { windows: PART, macos: PART, linux: NO },
     limitations: [
       "AppKit and Windows SimpleHapticsController use preset waveforms. Their public pointing-device APIs expose no sharpness adjustment.",
     ],
   }),
-  prop("haptic-texture", OK, "Plays an advertised pen texture during contact.", {
+  nativeProp("haptic-texture", "Plays an advertised pen texture during contact.", {
     ...penCss,
     notes: [
       "Use ink, pencil, brush or eraser. The texture stops on lift, exit, cancellation or focus loss. none disables it.",
@@ -2376,7 +2370,7 @@ const interaction = section("Interaction", [
     platforms: { windows: PART, macos: NO, linux: NO },
     notes: ["Defaults to one. Zero is silent. Positive values scale on pens with adjustable intensity."],
   }),
-  prop("cursor", PART, "Sets the mouse cursor shown over an element.", {
+  nativeProp("cursor", "Sets the mouse cursor shown over an element.", {
     notes: ["Native cursors are used."],
     values: [
       v(
@@ -2397,12 +2391,11 @@ const interaction = section("Interaction", [
       v("url()", PART, "The image is not loaded: the first fallback keyword shows."),
     ],
   }),
-  prop("pointer-events", OK, "Sets whether an element can be the target of pointer events.", {
+  nativeProp("pointer-events", "Sets whether an element can be the target of pointer events.", {
     values: [v("auto", OK), v("none", OK)],
   }),
-  prop("user-select", OK, "Sets whether the user can select an element's text.", {
+  nativeProp("user-select", "Sets whether the user can select an element's text.", {
     values: [v("contain", PART, "Behaves as `text`.")],
-    aliases: ["-webkit-user-select"],
   }),
   prop(
     "touch-action",
@@ -2410,9 +2403,8 @@ const interaction = section("Interaction", [
     "Sets which touch gestures, such as panning or pinch-zoom, the browser handles on an element.",
     { limitations: ["Accepted, but the host does not deliver touch input yet."] },
   ),
-  prop("appearance", OK, "Sets whether a form control is drawn with its native look.", {
+  nativeProp("appearance", "Sets whether a form control is drawn with its native look.", {
     notes: ["`none` strips a form control's native look."],
-    aliases: ["-webkit-appearance"],
   }),
   prop("accent-color", PART, "Sets the accent color of form controls, such as the filled part of a range input.", {
     limitations: ["Range inputs, checkboxes and radio buttons read it; other controls keep their default color."],
@@ -2421,11 +2413,11 @@ const interaction = section("Interaction", [
   prop("caret-shape", NO, "Sets the shape of the text insertion caret: bar, block or underscore.", {
     related: ["caret-color"],
   }),
-  prop("resize", PART, "Accepts `none`. Native boxes have no resize handle.", {
+  nativeProp("resize", "Accepts `none`. Native boxes have no resize handle.", {
     values: [v("none", OK, "Boxes have no resize handle."), v("horizontal, vertical or both", NO)],
     workaround: "Build a drag handle with pointer events.",
   }),
-  prop("field-sizing", PART, "Lets text inputs, textareas, and closed selects size to their content.", {
+  nativeProp("field-sizing", "Lets text inputs, textareas, and closed selects size to their content.", {
     since: "0.7.0",
     values: [v("fixed", OK), v("content", OK)],
     notes: [
@@ -2437,7 +2429,7 @@ const interaction = section("Interaction", [
     related: ["width", "height", "min-width", "max-width", "min-height", "max-height"],
   }),
   prop("interactivity", NO, "Makes an element and its subtree inert."),
-  prop("app-region", OK, "Marks an element as a region that drags the window, as in an installed web app.", {
+  nativeProp("app-region", "Marks an element as a region that drags the window, as in an installed web app.", {
     values: [v("drag", OK), v("no-drag", OK), v("move", OK, "Same as `drag`."), v("none", OK, "Same as `no-drag`.")],
     notes: [
       "`app-region: drag` drags the window, as in an installed web app.",
@@ -2445,7 +2437,7 @@ const interaction = section("Interaction", [
       'On Windows, the OS moves the window. On macOS and Linux, the host does, in the main window and in a popout with `chrome="hidden"`.',
     ],
     platformSince: { macos: "0.3.0" },
-    aliases: ["-webkit-app-region", "window-drag", "drag region", "titlebar"],
+    aliases: ["window-drag", "drag region", "titlebar"],
     related: ["window-control"],
   }),
   prop("--window-control", OK, "Turns an element into a window button: `minimize`, `maximize` or `close`.", {
@@ -2462,7 +2454,7 @@ const interaction = section("Interaction", [
 ]);
 
 const svgSection = section("SVG properties in CSS", [
-  prop("fill", OK, "Sets the paint used to fill an SVG shape or text.", {
+  nativeProp("fill", "Sets the paint used to fill an SVG shape or text.", {
     notes: ["Colors and `none` are supported."],
     limitations: [
       "A `url(#…)` paint server from a CSS rule draws in `currentColor`.",
@@ -2471,7 +2463,7 @@ const svgSection = section("SVG properties in CSS", [
     animates: "interpolated",
     related: ["stroke", "fill-opacity", "fill-rule"],
   }),
-  prop("stroke", OK, "Sets the paint used to outline an SVG shape or text.", {
+  nativeProp("stroke", "Sets the paint used to outline an SVG shape or text.", {
     notes: ["Colors and `none` are supported."],
     limitations: [
       "A `url(#…)` paint server from a CSS rule draws in `currentColor`.",
@@ -2557,13 +2549,13 @@ const containment = section("Containment and hints", [
     limitations: ["`getComputedStyle()` reads `contain` as `none`."],
     related: ["content-visibility", "container-type"],
   }),
-  prop("will-change", OK, "Hints which properties of an element are expected to change.", {
+  nativeProp("will-change", "Hints which properties of an element are expected to change.", {
     notes: [
       "`transform` (or `translate`, `scale`, `rotate`) makes the text of the element and its descendants move as one layer: under a moving translation it is resampled between pixels and keeps its place against the box, instead of stepping by whole device pixels down and by subpixel steps across. Once the transform has been still for 200 ms the text is drawn sharp at its new place.",
       "Every other value is a hint and changes nothing.",
     ],
   }),
-  prop("container-type", OK, "Makes an element a query container that `@container` rules can test.", {
+  nativeProp("container-type", "Makes an element a query container that `@container` rules can test.", {
     since: "0.4.0",
     values: [
       v("normal", OK, "Not a size container; still a style container."),
@@ -2578,16 +2570,16 @@ const containment = section("Containment and hints", [
     limitations: ["Layout containment is not applied: a container still has a baseline and floats can cross it."],
     related: ["container-name", "container", "at-container", "unit-container"],
   }),
-  prop("container-name", OK, "Names a query container for `@container` rules.", {
+  nativeProp("container-name", "Names a query container for `@container` rules.", {
     since: "0.4.0",
     notes: ["A list of names; `@container <name>` picks the nearest ancestor that has the name."],
     related: ["container-type", "container", "at-container"],
   }),
-  sh("container", OK, "Sets `container-name` and `container-type` in one declaration.", {
+  nativeSh("container", "Sets `container-name` and `container-type` in one declaration.", {
     since: "0.4.0",
     related: ["container-type", "container-name", "at-container"],
   }),
-  prop("content-visibility", PART, "Lets an element skip drawing and measuring its content.", {
+  nativeProp("content-visibility", "Lets an element skip drawing and measuring its content.", {
     since: "0.7.0",
     values: [v("visible", OK), v("hidden", OK), v("auto", NO)],
     notes: ["Hidden ordinary boxes keep their own background and borders while omitting their content."],
@@ -2615,7 +2607,7 @@ const generated = section("Generated content and lists", [
     values: [v(":hover / :focus-visible before ::after", OK, "Matches the originating element or an ancestor.")],
     related: ["pseudo-before", "content"],
   }),
-  prop("content", PART, "Sets the content of `::before` and `::after` pseudo-elements.", {
+  nativeProp("content", "Sets the content of `::before` and `::after` pseudo-elements.", {
     values: [
       v("a string", OK),
       v("attr()", NO, "Render the value as a real element."),
@@ -2629,7 +2621,7 @@ const generated = section("Generated content and lists", [
   prop("counter-reset", NO, "Creates or resets CSS counters.", { related: ["counter-increment", "counter-set"] }),
   prop("counter-increment", NO, "Increments CSS counters.", { related: ["counter-reset", "counter-set"] }),
   prop("counter-set", NO, "Sets CSS counters to a value.", { related: ["counter-reset", "counter-increment"] }),
-  prop("list-style-type", PART, "Sets the marker of a list item, such as a disc or a number.", {
+  nativeProp("list-style-type", "Sets the marker of a list item, such as a disc or a number.", {
     values: [
       v("disc", OK),
       v("circle", OK),
@@ -2644,13 +2636,13 @@ const generated = section("Generated content and lists", [
     limitations: ["Markers are drawn on `<li>` only."],
     related: ["list-style", "list-style-position", "list-style-image", "pseudo-marker"],
   }),
-  prop("list-style-position", OK, "Sets whether a list item's marker sits inside or outside its box.", {
+  nativeProp("list-style-position", "Sets whether a list item's marker sits inside or outside its box.", {
     related: ["list-style", "list-style-type"],
   }),
-  sh("list-style", OK, "Sets a list item's marker type, position and image in one declaration.", {
+  nativeSh("list-style", "Sets a list item's marker type, position and image in one declaration.", {
     related: ["list-style-type", "list-style-position", "list-style-image"],
   }),
-  prop("list-style-image", PART, "Accepts `none`. List markers use the shape or numbering from `list-style-type`.", {
+  nativeProp("list-style-image", "Accepts `none`. List markers use the shape or numbering from `list-style-type`.", {
     values: [
       v("none", OK, "The marker comes from `list-style-type`."),
       v("<image>", NO, "Marker images are not drawn."),
@@ -2662,9 +2654,9 @@ const generated = section("Generated content and lists", [
     workaround: 'Use `::before { content: "…" }`.',
     related: ["list-style-type", "pseudo-before"],
   }),
-  prop("object-fit", OK, "Sets how an image or video is resized to fit its box.", { related: ["object-position"] }),
-  prop("object-position", OK, "Sets where an image or video sits inside its box.", { related: ["object-fit"] }),
-  prop("image-rendering", PART, "Sets the scaling algorithm used for images, such as smooth or pixelated.", {
+  nativeProp("object-fit", "Sets how an image or video is resized to fit its box.", { related: ["object-position"] }),
+  nativeProp("object-position", "Sets where an image or video sits inside its box.", { related: ["object-fit"] }),
+  nativeProp("image-rendering", "Sets the scaling algorithm used for images, such as smooth or pixelated.", {
     values: [
       v("auto", OK, "Bounded Catmull–Rom for enlargement on native surfaces."),
       v("pixelated", OK, "Nearest-neighbour on native surfaces and on a `<canvas>`."),
@@ -3416,7 +3408,7 @@ const vendorPrefixes = section("Vendor prefixes", [
     "Browser-specific spellings of properties, such as `-webkit-transform`, kept for older engines.",
     {
       notes: [
-        "Skathi reads these `-webkit-` spellings as the unprefixed property, which then has that property's status: `-webkit-align-*`, `-webkit-animation*`, `-webkit-app-region`, `-webkit-appearance`, `-webkit-backdrop-filter`, `-webkit-backface-visibility`, `-webkit-background-clip`, `-webkit-background-origin`, `-webkit-background-size`, `-webkit-border-*-radius`, `-webkit-box-reflect`, `-webkit-box-shadow`, `-webkit-box-sizing`, `-webkit-clip-path`, `-webkit-column*`, `-webkit-filter`, `-webkit-flex*`, `-webkit-font-feature-settings`, `-webkit-font-smoothing`, `-webkit-hyphens`, `-webkit-justify-content`, `-webkit-line-clamp`, `-webkit-order`, `-webkit-perspective*`, `-webkit-text-fill-color`, `-webkit-text-size-adjust`, `-webkit-text-stroke*`, `-webkit-transform*`, `-webkit-transition*`, `-webkit-user-select`, `-webkit-writing-mode`.",
+        `Skathi recognizes the following vendor-prefixed declarations. Each has the support of the underlying property: ${webkitNames.map((name) => "\`-webkit-" + name + "\`").join(", ")}.`,
       ],
       limitations: [
         "Every other vendor-prefixed property (`-moz-`, `-ms-`, `-o-`, and the remaining `-webkit-` ones such as `-webkit-touch-callout` or `-webkit-tap-highlight-color`) is dropped without an advisory, as Chromium drops what it does not know.",
@@ -3439,7 +3431,7 @@ const vendorPrefixes = section("Vendor prefixes", [
   ),
 ]);
 
-export const entries: readonly CssEntry[] = [
+const described: readonly CssEntry[] = [
   ...stylesheets,
   ...boxModel,
   ...layout,
@@ -3460,6 +3452,29 @@ export const entries: readonly CssEntry[] = [
   ...mediaFeatures,
   ...valuesAndUnits,
   ...vendorPrefixes,
+];
+
+const describedNames = new Set(
+  described.filter((e) => e.kind === "property" || e.kind === "shorthand").map((e) => e.name),
+);
+export const additionalProperties = new Set([...nativeProperties.keys()].filter((name) => !describedNames.has(name)));
+const summaries: Record<NativeProperty["status"], string> = {
+  supported: "The app stylesheet applies this property.",
+  partial: "The app stylesheet applies this property with limitations.",
+  ignored: "The app stylesheet accepts this property without a visible effect.",
+  unsupported: "The app stylesheet does not apply this property.",
+  dropped: "The app stylesheet silently drops this vendor-prefixed spelling.",
+};
+export const entries: readonly CssEntry[] = [
+  ...described,
+  ...section(
+    "Additional properties",
+    [...additionalProperties].map((name) => {
+      const property = nativeProperties.get(name)!;
+      return nativeProp(name, summaries[property.status]);
+    }),
+    true,
+  ),
 ];
 
 export const entriesBySlug: ReadonlyMap<string, CssEntry> = new Map(entries.map((e) => [e.slug, e]));

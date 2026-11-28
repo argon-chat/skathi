@@ -1,5 +1,5 @@
 import type { Platform, Release, Status, ValueSupport } from "../css/entries";
-import { bcd } from "./bcd";
+import { compat } from "./bcd";
 
 export type Kind = "interface" | "method" | "property" | "event" | "function" | "element" | "api" | "feature";
 
@@ -106,7 +106,7 @@ function section(category: Category, drafts: readonly Draft[]): WebEntry[] {
       platforms: platforms ?? { windows: d.status, macos: d.status, linux: d.status },
     };
     if (d.status === OK || d.status === PART) e.since = d.since ?? FIRST_RELEASE;
-    const info = bcd[slug];
+    const info = compat(e);
     if (info?.mdn !== undefined) e.mdn = info.mdn;
     if (info?.experimental) e.experimental = true;
     if (info?.deprecated) e.webDeprecated = true;

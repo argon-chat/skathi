@@ -8,6 +8,7 @@ import StatusMark from "./StatusMark.vue";
 import { repository } from "../../lib/docs";
 import slang from "../../lib/slang";
 import {
+  behaviorNotes,
   categoryId,
   entryHref,
   entryMarkdownUrl,
@@ -15,6 +16,7 @@ import {
   find,
   freshNote,
   inline,
+  instanceMembers,
   isNew,
   isProseName,
   kindLabel,
@@ -22,9 +24,11 @@ import {
   plain,
   platforms,
   releaseQualifier,
+  rustSourceUrl,
   sinceOn,
   skathiOnlyNote,
   statuses,
+  typeAnchor,
   type RefEntry,
   type Reference,
 } from "../../lib/reference";
@@ -38,21 +42,29 @@ interface Props {
 
 const { reference, entry, previous, next } = Astro.props;
 const status = statuses[entry.status];
+const declared = entry.status === "declared";
+const description = declared
+  ? entry.summary || `${entry.name} ${kindLabel(entry.kind).toLowerCase()} declaration.`
+  : `${entry.summary} ${status.label} in Skathi${releaseQualifier(entry.since)}.`.trim();
 const related = (entry.related ?? []).map((slug) => find(reference, slug)).filter((r) => r !== undefined);
 const valueSince = entry.values?.some((value) => value.since && value.since !== entry.since) ?? false;
 const fresh = freshNote(entry);
-const behavior = entry.notes ?? [];
+const behavior = behaviorNotes(entry);
+const memberGroups = instanceMembers(reference, entry);
+const memberHeading = entry.syntax ? "Additional instance members" : "Instance members";
 const examples = entry.examples ?? [];
 const edgeCases = entry.edgeCases ?? [];
 const headings: MarkdownHeading[] = [
   entry.syntax ? { depth: 2, slug: "syntax", text: "Syntax" } : undefined,
+  memberGroups.length ? { depth: 2, slug: "instance-members", text: memberHeading } : undefined,
   behavior.length ? { depth: 2, slug: "behavior", text: "Behavior" } : undefined,
   entry.values?.length ? { depth: 2, slug: "values", text: "Values" } : undefined,
   examples.length ? { depth: 2, slug: "examples", text: "Examples" } : undefined,
   edgeCases.length ? { depth: 2, slug: "edge-cases", text: "Edge cases" } : undefined,
   entry.limitations?.length ? { depth: 2, slug: "limitations", text: "Limitations" } : undefined,
   entry.workaround ? { depth: 2, slug: "instead", text: "Instead" } : undefined,
-  entry.mdn ? undefined : { depth: 2, slug: "reference", text: "Reference" },
+  entry.types?.length ? { depth: 2, slug: "types", text: "Types" } : undefined,
+  entry.mdn || declared ? undefined : { depth: 2, slug: "reference", text: "Reference" },
   related.length ? { depth: 2, slug: "related", text: "Related" } : undefined,
 ].filter((h): h is MarkdownHeading => h !== undefined);
 const link = (e: RefEntry | undefined) => e && { label: plain(e.name), href: entryUrl(reference, e.slug) };
@@ -67,7 +79,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
 
 <DocsLayout
   title={plain(entry.name)}
-  description={`${entry.summary} ${status.label} in Skathi${releaseQualifier(entry.since)}.`}
+  description={description}
   headings={headings}
   sub={{
     parent: reference.id,
@@ -78,51 +90,68 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
       { label: plain(entry.name), href: entryUrl(reference, entry.slug) },
     ],
     markdown: entryMarkdownUrl(reference, entry.slug),
-    edit: `${repository}/edit/master/${reference.source}`,
+    edit: `${repository}/edit/master/${entry.source ?? reference.source}`,
     previous: link(previous),
     next: link(next),
   }}
 >
   <header class="sheet-head" slot="heading">
     <h1 class:list={["sheet-title", { "sheet-title-prose": prose }]} set:html={inline(entry.name)} />
-    <p class="sheet-lead" set:html={inline(entry.summary)} />
+    {entry.summary && <p class="sheet-lead" set:html={inline(entry.summary)} />}
   </header>
 
-  <dl class="spec-strip" aria-label="Support in Skathi">
-    <div class="spec-cell spec-status" data-tone={status.tone}>
-      <dt>In Skathi</dt>
-      <dd><StatusMark status={entry.status} size={18} />{status.label}</dd>
-    </div>
-    {
-      platforms.map((platform, index) => {
-        const value = entry.platforms[platform.id];
-        const since = entry.platformSince ? sinceOn(entry, platform.id) : undefined;
-        return (
-          <div class="spec-cell" data-tone={statuses[value].tone} style={`--delay: ${(index + 1) * 70}ms`}>
-            <dt>{platform.label}</dt>
-            <dd>
-              <StatusMark status={value} size={16} />
-              {statuses[value].label}
-            </dd>
-            {since && (
-              <dd class:list={["spec-os-since", { "is-new": isNew(since) }]}>{releaseQualifier(since).trim()}</dd>
-            )}
-          </div>
-        );
-      })
-    }
-    <div class="spec-cell spec-since">
-      <dt>Since</dt>
-      <dd class:list={{ "is-new": isNew(entry.since) }}>{entry.since ?? "Not yet"}</dd>
-    </div>
-  </dl>
+  {
+    !declared && (
+      <dl class="spec-strip" aria-label="Support in Skathi">
+        <div class="spec-cell spec-status" data-tone={status.tone}>
+          <dt>In Skathi</dt>
+          <dd>
+            <StatusMark status={entry.status} size={18} />
+            {status.label}
+          </dd>
+        </div>
+        {platforms.map((platform, index) => {
+          const value = entry.platforms[platform.id];
+          const since = entry.platformSince ? sinceOn(entry, platform.id) : undefined;
+          return (
+            <div class="spec-cell" data-tone={statuses[value].tone} style={`--delay: ${(index + 1) * 70}ms`}>
+              <dt>{platform.label}</dt>
+              <dd>
+                <StatusMark status={value} size={16} />
+                {statuses[value].label}
+              </dd>
+              {since && (
+                <dd class:list={["spec-os-since", { "is-new": isNew(since) }]}>{releaseQualifier(since).trim()}</dd>
+              )}
+            </div>
+          );
+        })}
+        <div class="spec-cell spec-since">
+          <dt>Since</dt>
+          <dd class:list={{ "is-new": isNew(entry.since) }}>
+            {entry.since ?? (entry.status === "supported" || entry.status === "partial" ? "Unspecified" : "Not yet")}
+          </dd>
+        </div>
+      </dl>
+    )
+  }
   <div class="sheet-actions">
     <span class="sheet-badge sheet-badge-kind">{kindLabel(entry.kind)}</span>
+    {declared && <span class="sheet-badge">{status.label}</span>}
     {
       entry.mdn && (
         <a class="sheet-action" href={entry.mdn} target="_blank" rel="noreferrer">
           <Icon name="book" size={15} />
           MDN reference
+          <Icon name="arrow" size={13} />
+        </a>
+      )
+    }
+    {
+      entry.nativeBinding && (
+        <a class="sheet-action" href={rustSourceUrl(entry.nativeBinding.source)} target="_blank" rel="noreferrer">
+          <Icon name="code" size={15} />
+          Rust source
           <Icon name="arrow" size={13} />
         </a>
       )
@@ -161,7 +190,7 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         <div class="syntax">
           <Code
             code={entry.syntax.trim()}
-            lang={reference.syntax === "slang" ? slang : "ts"}
+            lang={entry.syntaxLanguage ?? (reference.syntax === "slang" ? slang : "ts")}
             themes={{ light: "github-light", dark: "github-dark" }}
             defaultColor={false}
           />
@@ -208,6 +237,41 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
         )}
       </>
     ) : null
+  }
+
+  {
+    memberGroups.length > 0 && (
+      <>
+        <h2 id="instance-members">{memberHeading}</h2>
+        <div class="table-scroll">
+          <table class="pinout" data-plain>
+            <thead>
+              <tr>
+                <>
+                  <th scope="col">Kind</th>
+                  <th scope="col">Members</th>
+                </>
+              </tr>
+            </thead>
+            <tbody>
+              {memberGroups.map((group) => (
+                <tr>
+                  <th scope="row">{group.kind}</th>
+                  <td>
+                    {group.names.map((name, index) => (
+                      <>
+                        {index > 0 && ", "}
+                        <code>{name}</code>
+                      </>
+                    ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    )
   }
 
   {
@@ -334,7 +398,31 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
   }
 
   {
-    entry.mdn ? null : (
+    entry.types?.length ? (
+      <>
+        <h2 id="types">Types</h2>
+        {entry.types.map((type) => (
+          <details class="api-type">
+            <summary>
+              <Icon name="chevron" size={14} />
+              <code>{type.name}</code>
+            </summary>
+            <div id={typeAnchor(type.name)}>
+              {type.summary && <p set:html={inline(type.summary)} />}
+              <Code
+                code={type.syntax.trim()}
+                lang="ts"
+                themes={{ light: "github-light", dark: "github-dark" }}
+                defaultColor={false}
+              />
+            </div>
+          </details>
+        ))}
+      </>
+    ) : null
+  }
+  {
+    entry.mdn || declared ? null : (
       <>
         <h2 id="reference">Reference</h2>
         <div class="reference-card">
@@ -368,3 +456,18 @@ const groupHref = `/${reference.id}/#${categoryId(entry.category)}`;
     ) : null
   }
 </DocsLayout>
+
+<style>
+  .api-type {
+    border-bottom: 1px solid var(--border);
+  }
+  .api-type summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0.6em 0;
+  }
+  .api-type[open] summary :global(svg) {
+    transform: rotate(90deg);
+  }
+</style>

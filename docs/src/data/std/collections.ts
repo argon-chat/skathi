@@ -1,4 +1,4 @@
-import { importLine, section } from "./shared";
+import { section } from "./shared";
 
 const HOST = "The host keeps the contents.";
 const VALUES = "The values stay JS values and can be of any kind.";
@@ -11,21 +11,7 @@ export const collections = section("skathi:collections", [
     name: "BitSet",
     kind: "class",
     summary: "A fixed number of flags, stored 64 to a word, with set operations.",
-    syntax: `${importLine("skathi:collections", "BitSet")}
-
-new BitSet(size: number)
-
-readonly bits.size: number
-bits.set(index: number): this
-bits.clear(index?: number): void
-bits.has(index: number): boolean
-bits.count(): number
-bits.and(other: BitSet): BitSet
-bits.or(other: BitSet): BitSet
-bits.xor(other: BitSet): BitSet
-bits.andNot(other: BitSet): BitSet
-bits.indices(): Uint32Array
-bits[Symbol.iterator](): Iterator<number>`,
+    declaration: true,
     params: [
       {
         name: "size",
@@ -116,18 +102,7 @@ export class Selection {
     name: "BloomFilter",
     kind: "class",
     summary: 'A set that answers "certainly not" or "probably": it never misses a value it was given.',
-    syntax: `${importLine("skathi:collections", "BloomFilter")}
-
-type BloomKey = string | number | bigint | BufferSource
-
-new BloomFilter<T extends BloomKey = BloomKey>(expected: number, falsePositiveRate?: number)
-
-readonly filter.size: number
-readonly filter.bits: number
-filter.add(value: T): this
-filter.addAll(values: readonly T[]): this
-filter.mightHave(value: T): boolean
-filter.clear(): void`,
+    declaration: ["BloomFilter", "BloomKey"],
     params: [
       {
         name: "expected",
@@ -208,20 +183,7 @@ export async function load(key: string, read: (key: string) => Promise<Uint8Arra
     name: "RingBuffer",
     kind: "class",
     summary: "Keeps the last `capacity` numbers pushed and drops the oldest when full.",
-    syntax: `${importLine("skathi:collections", "RingBuffer")}
-
-new RingBuffer(capacity: number)
-
-readonly ring.size: number
-readonly ring.capacity: number
-readonly ring.full: boolean
-ring.push(value: number): number | undefined
-ring.pushAll(values: readonly number[] | Float64Array): this
-ring.shift(): number | undefined
-ring.at(index: number): number | undefined
-ring.clear(): void
-ring.toArray(): Float64Array
-ring[Symbol.iterator](): Iterator<number>`,
+    declaration: true,
     params: [
       {
         name: "capacity",
@@ -311,15 +273,7 @@ export function averageFrameMs(): number {
     name: "DisjointSet",
     kind: "class",
     summary: "Union-find over the elements `0..size`: tracks which of them are connected.",
-    syntax: `${importLine("skathi:collections", "DisjointSet")}
-
-new DisjointSet(size: number)
-
-readonly sets.size: number
-readonly sets.count: number
-sets.find(element: number): number
-sets.union(a: number, b: number): boolean
-sets.connected(a: number, b: number): boolean`,
+    declaration: true,
     params: [
       {
         name: "size",
@@ -396,19 +350,7 @@ export function countIslands(land: readonly boolean[], width: number): number {
     name: "Trie",
     kind: "class",
     summary: "Maps string keys to values, keeps the keys in order and searches them by prefix.",
-    syntax: `${importLine("skathi:collections", "Trie")}
-
-new Trie<V>()
-
-readonly trie.size: number
-trie.set(key: string, value: V): this
-trie.get(key: string): V | undefined
-trie.has(key: string): boolean
-trie.delete(key: string): boolean
-trie.withPrefix(prefix: string): IterableIterator<[string, V]>
-trie.longestPrefix(text: string): string | undefined
-trie.clear(): void
-trie[Symbol.iterator](): Iterator<[string, V]>`,
+    declaration: true,
     notes: [
       "Use it for search by prefix, autocomplete and routes.",
       "`set()`, `get()`, `has()` and `delete()` work as on a `Map`. `set()` on a key that is there replaces its value. `delete()` says whether the key was there.",
@@ -484,16 +426,7 @@ routes.longestPrefix("nope"); // undefined`,
     name: "IntervalTree",
     kind: "class",
     summary: "Keeps values on closed intervals of numbers and finds the ones that cover a point or meet a range.",
-    syntax: `${importLine("skathi:collections", "IntervalTree")}
-
-new IntervalTree<V>()
-
-readonly tree.size: number
-tree.insert(lo: number, hi: number, value: V): this
-tree.overlapping(lo: number, hi: number): V[]
-tree.containing(point: number): V[]
-tree.delete(lo: number, hi: number, value: V): boolean
-tree.clear(): void`,
+    declaration: true,
     notes: [
       "Use it for timelines, ranges of text and schedules.",
       "The intervals are closed: `lo` and `hi` both belong to the interval. Two intervals that only touch at an end overlap.",

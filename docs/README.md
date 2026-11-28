@@ -30,6 +30,42 @@ Requires Bun >=1.4.4 and a Node version supported by Astro (>=22.23.4; Node 24 r
 
 ## Content
 
+### API references
+
+The API reference reads the SDK checkout during the site build. On a fresh clone, run
+`git submodule update --init vendor/redjs` from the SDK root. HTML reference pages, Markdown downloads
+and search results use the same source data.
+
+| Section                    | Where to change the API                                                                                                                                                                 | What the site extracts                                                                                                                                                                                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web                        | The host's Rust bindings and the app-facing declarations in `packages/runtime/env.d.ts`, `src/engine.d.ts` and `src/indexeddb.d.ts` under `packages/runtime`                            | Global values, interfaces, overloads and JSDoc. Matching Rust `ClassSpec` registrations supply the prototype's methods, getters, setters and implementation path.                                                                                                               |
+| Standard library           | The public `skathi:*` module exports in `packages/runtime/env.d.ts` and the definitions they re-export                                                                                  | Exported types and values grouped by module, signatures and JSDoc. A native class can also expose its Rust prototype in its reference page.                                                                                                                                     |
+| Shader library and effects | Public declarations and `///` comments in `packages/cli/effects/sk.slang` and `packages/cli/effects/sk/*.slang`. Built-in effect structs and attributes in `crates/sk-effects/shaders/` | Library overloads, types and members come from Slang source. Effect names, parameter order, ranges and defaults come from the checked-in compiler reflection in `crates/sk-effects/generated/effects.json`. Run the existing `bun run shaders` after editing a built-in effect. |
+| CSS                        | `CATALOG` in `crates/sk-css/src/catalog.rs` and the prefix allowlist in `crates/sk-css/src/prefix.rs`                                                                                   | A page per catalogued property with mapper status, example values it applies or refuses, implementation notes and accepted aliases. Linux CI compares the extracted records with the compiled Rust catalog.                                                                     |
+
+For example, `DeadZoneTarget` and its JSDoc appear under Types on `/std/gamepads/` because the gamepad API
+uses it. A search for the type opens its definition there. Exports without a guide or an associated
+type section appear in their module's catalog. The overview at `/std/` takes each module's description
+from the corresponding property of `stdModules` in `packages/runtime/src/std/index.ts`. Adding a public library function in
+`sk/math.slang` creates a shader page with its overloads and first `///` paragraph. Existing guides
+can keep their URLs and add usage examples to those signatures.
+
+Web coverage pages include the SDK signatures and associated types. A registered Web interface without
+a guide can appear under Native interfaces. Runtime availability, feature flags, release history, platform differences
+and examples belong on the relevant coverage page. Rust prototype details cover statically identifiable
+registrations. Dynamic names, macros and members installed separately can still be described in the public
+declaration. To document a Rust class at its implementation, add a `///` comment to a named `ClassSpec`
+constant and pass it to the registration function in the same file. See `TimeSpan` in
+`crates/sk-app/src/stdlib/time.rs`.
+
+CSS selectors, media queries and at-rules have their own reference entries outside the property catalog.
+Both the CSS and Web pages look up MDN links, experimental flags and deprecations in the pinned
+`@mdn/browser-compat-data` package at build time. Run `bun run bcd:check` in `docs/` to check key overrides.
+
+Run `bun run docs:api:check` from the SDK root to validate extraction, or `bun run docs:build` to render the site.
+
+### Guides and Markdown pages
+
 Add `.md` or `.mdx` under `pages/`, including nested directories. The existing `css.md` and `web-platform.md` remain at their original paths and are also loaded. `README.md` is excluded. Frontmatter is validated:
 
 ```yaml

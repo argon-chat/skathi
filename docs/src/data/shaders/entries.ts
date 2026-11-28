@@ -7,13 +7,12 @@ import { noise } from "./noise";
 import { sample } from "./sample";
 import { sdf } from "./sdf";
 import { tone } from "./tone";
-import { categories, type Category, type ShaderEntry } from "./shared";
+import { type Category, type Guide } from "./shared";
 import { sk } from "./sk";
 
-export { categories };
-export type { Category, ShaderEntry };
-
 export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
+  "Built-in effects":
+    "CSS functions provided by the runtime for `--shading`. Parameter order, defaults and ranges come from the compiler's reflection of each effect.",
   sk: "The contract every effect is written against: the attributes the compiler reads into the CSS schema, `IEffect`, `EffectInput` and its samplers, `SkTexture`, and the helpers that have always shipped with it. `import sk;`",
   "sk.color":
     "Colours with their encoding in the type: `Color` holds linear-light sRGB with straight alpha, constructors are named after what you hold, and conversions to sRGB, HSL, HSV, HWB, XYZ, Lab, LCH, OKLab and OKLCH follow CSS Color 4. Manipulation, `color-mix()`-style mixing, contrast, ΔE and harmonies. `import sk.color;`",
@@ -35,7 +34,7 @@ export const categoryNotes: Readonly<Partial<Record<Category, string>>> = {
     "Light above SDR white: Reinhard, extended Reinhard, filmic and ACES-fitted tone curves per channel or by luminance, exposure in stops, a soft clip that rolls highlights into the headroom left, nits conversions, and PQ and HLG. Pairs with `[SkBackdropLinear]`. `import sk.tone;`",
 };
 
-export const entries: readonly ShaderEntry[] = [
+export const guides: readonly Guide[] = [
   ...sk,
   ...color,
   ...math,

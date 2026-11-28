@@ -24,13 +24,7 @@ const drafts: Draft[] = [
   {
     slug: "screen-gradient",
     name: "screenGradient",
-    kind: "function",
-    summary:
-      "The gradient of a value per device pixel from the GPU's pixel-quad derivatives: of `input.sd` it points out of the element with length about 1.",
     since,
-    syntax: `import sk.light;
-
-float2 screenGradient(float f);   // float2(ddx(f), ddy(f))`,
     params: [{ name: "f", type: "float", description: "Any value computed per pixel: `input.sd`, a height, a noise." }],
     returns: "Units of `f` per pixel. Pass it as the `gradient` of `bevelNormal`; it need not be normalised.",
     notes: [
@@ -51,12 +45,9 @@ return float4(1.0, 1.0, 1.0, 1.0) * lit * input.coverage;`,
   {
     slug: "screen-normal",
     name: "normalFromSlope",
-    kind: "function",
     summary:
       "A unit normal from a height field's slope, or from a height known only per pixel through its screen-space derivatives.",
     since,
-    syntax: `float3 normalFromSlope(float2 slope, float strength = 1.0);
-float3 screenNormal(float height, float strength = 1.0);`,
     params: [
       {
         name: "slope",
@@ -90,13 +81,9 @@ return float4(lit, lit, lit, 1.0) * input.coverage;`,
   {
     slug: "height-normal",
     name: "heightNormal",
-    kind: "function",
     summary:
       "The unit normal of a height field you can evaluate anywhere, by central differences: for a relief computed in the shader.",
     since,
-    syntax: `interface IHeightField { float height(float2 p); }
-
-float3 heightNormal<H : IHeightField>(H field, float2 p, float step = 1.0, float strength = 1.0);`,
     params: [
       {
         name: "field",
@@ -142,12 +129,9 @@ struct DomeEffect : IEffect
   {
     slug: "unpack-normal",
     name: "unpackNormal",
-    kind: "function",
     summary:
       "A unit normal from a normal-map texel (rgb 0..1 holding −1..1), y down as pixel space by default; `packNormal` is the inverse.",
     since,
-    syntax: `float3 unpackNormal(float4 texel, bool yUp = false);
-float4 packNormal(float3 n);`,
     params: [
       {
         name: "texel",
@@ -191,14 +175,9 @@ struct RibbedGlass : IEffect
   {
     slug: "bevel-normal",
     name: "bevelNormal",
-    kind: "function",
     summary:
       "The normal of a bevelled rim along any signed distance: round, squircle or flat chamfer, rising over `width` pixels from the edge.",
     since,
-    syntax: `enum BevelProfile { Circle, Squircle, Linear }
-
-float3 bevelNormal(float sd, float2 gradient, float width, BevelProfile profile = BevelProfile.Circle, float height = 1.0);
-float bevelHeight(float sd, float width, BevelProfile profile = BevelProfile.Circle);`,
     params: [
       {
         name: "sd",
@@ -247,13 +226,9 @@ return float4(0.2, 0.45, 0.9, 1.0) * lit * input.coverage;`,
   {
     slug: "fresnel-schlick",
     name: "fresnelSchlick",
-    kind: "function",
     summary:
       "How much light a surface reflects at an angle: Schlick's approximation, the exact dielectric formula, and the normal-incidence reflectance from an index of refraction.",
     since,
-    syntax: `float fresnelSchlick(float cosTheta, float f0);
-float fresnelDielectric(float cosI, float eta);
-float f0FromIor(float ior, float outside = 1.0);`,
     params: [
       {
         name: "cosTheta, cosI",
@@ -291,10 +266,7 @@ return float4(1.0, 1.0, 1.0, 1.0) * f * input.coverage;`,
   {
     slug: "refract-direction",
     name: "refractDirection",
-    kind: "function",
-    summary: "Snell's law: the direction a ray continues in after crossing a surface into another medium.",
     since,
-    syntax: `float3 refractDirection(float3 incident, float3 normal, float eta);`,
     params: [
       { name: "incident", type: "float3", description: "Unit direction the ray travels in, towards the surface." },
       { name: "normal", type: "float3", description: "Unit normal facing the incident side." },
@@ -317,11 +289,9 @@ return RawBackdrop(input).at(input.px + shift);   // sk.sample`,
   {
     slug: "refraction-offset",
     name: "refractionOffset",
-    kind: "function",
     summary:
       "Where to read what lies behind glass of this normal and thickness: the view ray refracted by Snell's law and carried to the back face, as a pixel offset.",
     since,
-    syntax: `float2 refractionOffset(float3 normal, float thickness, float ior = 1.5);`,
     params: [
       normal,
       { name: "thickness", type: "float", description: "How deep the glass is, in pixels." },
@@ -367,23 +337,7 @@ struct Lens : IEffect
   {
     slug: "light",
     name: "Light",
-    kind: "struct",
-    summary: "A light: from a direction or at a point above the surface, with a linear-light colour and an intensity.",
     since,
-    syntax: `struct Light
-{
-    float3 vector;   // directional: towards the light; point: its position (px, px, height px)
-    bool isPoint;
-    Color color;     // linear light (sk.color)
-    float intensity;
-
-    static Light directional(float3 towards, float intensity = 1.0);
-    static Light directional(float3 towards, Color color, float intensity);
-    static Light point(float3 position, float intensity = 1.0);
-    static Light point(float3 position, Color color, float intensity);
-    float3 towards(float3 at);   // unit direction from a surface point to the light
-    float3 radiance();           // color.linear * intensity
-}`,
     notes: [
       "Directions are normalised for you. A point light's direction changes over the element; a directional light's does not.",
     ],
@@ -402,13 +356,9 @@ return Color.fromLinear(lamp.radiance() * lambert(n, l)).toPremultiplied() * inp
   {
     slug: "lambert",
     name: "lambert",
-    kind: "function",
     summary:
       "Diffuse terms: `lambert` (max(n·l, 0)), `wrapLambert` that wraps past the terminator, and `lobe`, a cheap glint.",
     since,
-    syntax: `float lambert(float3 normal, float3 toLight);
-float wrapLambert(float3 normal, float3 toLight, float wrap);
-float lobe(float3 normal, float3 toLight, float exponent);   // max(n . l, 0)^exponent`,
     params: [
       normal,
       toLight,
@@ -435,10 +385,7 @@ return float4(lit, lit, lit, 1.0) * input.coverage;`,
   {
     slug: "blinn-phong",
     name: "blinnPhong",
-    kind: "function",
-    summary: "Blinn-Phong specular: max(n·h, 0)^shininess, h halfway between the light and the viewer.",
     since,
-    syntax: `float blinnPhong(float3 normal, float3 toLight, float shininess, float3 toViewer = SK_VIEW);`,
     params: [
       normal,
       toLight,
@@ -463,11 +410,9 @@ return addLight(float4(0.0, 0.0, 0.0, 0.0), h) * input.coverage;`,
   {
     slug: "ggx",
     name: "ggx",
-    kind: "function",
     summary:
       "Physically based specular: Cook-Torrance with the GGX distribution, height-correlated Smith visibility and Schlick Fresnel, times n·l.",
     since,
-    syntax: `float ggx(float3 normal, float3 toLight, float roughness, float f0, float3 toViewer = SK_VIEW);`,
     params: [
       normal,
       toLight,
@@ -499,10 +444,7 @@ return addLight(float4(0.05, 0.08, 0.14, 1.0), s * 0.5) * input.coverage;`,
   {
     slug: "rim",
     name: "rim",
-    kind: "function",
-    summary: "Rim light: (1 − n·v)^power, bright where the surface turns away from the viewer.",
     since,
-    syntax: `float rim(float3 normal, float power, float3 toViewer = SK_VIEW);`,
     params: [
       normal,
       { name: "power", type: "float", description: "Higher keeps the light to the outermost edge." },
@@ -522,10 +464,7 @@ return float4(0.5, 0.8, 1.0, 1.0) * rim(n, 3.0) * input.coverage;`,
   {
     slug: "anisotropic",
     name: "anisotropic",
-    kind: "function",
-    summary: "A Kajiya-Kay anisotropic highlight: a streak across the grooves of brushed metal or hair.",
     since,
-    syntax: `float anisotropic(float3 normal, float3 toLight, float3 tangent, float exponent, float3 toViewer = SK_VIEW);`,
     params: [
       normal,
       toLight,
@@ -549,12 +488,9 @@ return float4(float3(0.55, 0.57, 0.6) + s * 0.4, 1.0) * input.coverage;`,
   {
     slug: "drop-shadow",
     name: "dropShadow",
-    kind: "function",
     summary:
       "The opacity of a blurred shadow at a signed distance, matching CSS `box-shadow` (sigma = blur / 2), outside or inset.",
     since,
-    syntax: `float dropShadow(float sd, float blur);
-float innerShadow(float sd, float blur);`,
     params: [
       {
         name: "sd",
@@ -600,10 +536,7 @@ struct CardShadow : IEffect
   {
     slug: "edge-occlusion",
     name: "edgeOcclusion",
-    kind: "function",
-    summary: "Ambient-occlusion-like darkening near an edge: 1 on it, fading to 0 about three radii in.",
     since,
-    syntax: `float edgeOcclusion(float sd, float radius);`,
     params: [
       { name: "sd", type: "float", description: "Signed distance in pixels, negative inside." },
       { name: "radius", type: "float", description: "The falloff, in pixels." },
@@ -622,22 +555,9 @@ return float4(float3(0.9, 0.9, 0.92) * (1.0 - 0.4 * ao), 1.0) * input.coverage;`
   {
     slug: "surface",
     name: "Surface",
-    kind: "struct",
     summary:
       "A surface's normal, thickness, index of refraction and roughness, with the refraction, Fresnel and GGX specular that follow from them.",
     since,
-    syntax: `struct Surface
-{
-    float3 normal;
-    float thickness;   // px
-    float ior;
-    float roughness;   // 0..1
-
-    static Surface create(float3 normal, float thickness = 0.0, float ior = 1.5, float roughness = 0.2);
-    float2 refraction();                                    // refractionOffset(normal, thickness, ior)
-    float fresnel();                                        // Schlick, f0 from ior
-    float3 specular(Light light, float3 at = float3(0.0)); // ggx(...) * light.radiance()
-}`,
     notes: [
       "Saves passing the same four values to each call; there is no `shade` that does everything, because a single combinator made the showcase's glass longer, not shorter.",
     ],
@@ -656,12 +576,9 @@ return addLight(seen, sun.radiance() * glass.fresnel() + glass.specular(sun)).to
   {
     slug: "add-light",
     name: "addLight",
-    kind: "function",
     summary:
       "Light added to a colour: in sRGB-encoded values on a premultiplied pixel (cheap, for highlights), or in linear light on a `Color`.",
     since,
-    syntax: `float4 addLight(float4 premultiplied, float amount);
-Color addLight(Color c, float3 light);`,
     params: [
       {
         name: "premultiplied",

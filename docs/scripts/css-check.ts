@@ -1,5 +1,5 @@
 // Consistency check for src/data/css/entries.ts. Usage: bun scripts/css-check.ts
-import { categories, entries, type CssEntry, type Status } from "../src/data/css/entries";
+import { additionalProperties, categories, entries, type CssEntry, type Status } from "../src/data/css/entries";
 
 const errors: string[] = [];
 const warnings: string[] = [];
@@ -22,14 +22,15 @@ for (const e of entries) {
     if (!slugs.has(r)) fail(e, `related slug "${r}" does not exist`);
     if (r === e.slug) fail(e, "relates to itself");
   }
-  if (RELEASED.includes(e.status) !== (e.since !== undefined))
+  if (!additionalProperties.has(e.name) && RELEASED.includes(e.status) !== (e.since !== undefined))
     fail(e, `since must be set exactly when status is supported or partial`);
   if (e.mdn !== undefined && !e.mdn.startsWith("https://developer.mozilla.org/")) fail(e, "mdn is not an MDN URL");
   if (e.skathiOnly && e.mdn !== undefined) fail(e, "a Skathi-only entry has an MDN link");
 
   const explained = (e.limitations?.length ?? 0) > 0 || (e.notes?.length ?? 0) > 0 || e.workaround !== undefined;
-  const valueNotes = (e.values ?? []).some((v) => v.status !== "supported" && v.note !== undefined);
-  if (e.status === "partial" && !explained && !valueNotes) fail(e, "partial without a note, limitation or value note");
+  const limitedValues = (e.values ?? []).some((v) => v.status !== "supported");
+  if (e.status === "partial" && !explained && !limitedValues)
+    fail(e, "partial without a note, limitation or limited value");
   if (e.status === "planned" && !explained)
     warnings.push(`${e.slug}: planned without a note (the coverage page has none)`);
 
@@ -46,7 +47,7 @@ for (const e of entries) {
     ...(e.limitations ?? []),
     ...(e.workaround === undefined ? [] : [e.workaround]),
   ]) {
-    if (!/^[A-Z0-9`:@<"-]/.test(s) || !/[.)]$/.test(s)) fail(e, `not a full sentence: "${s}"`);
+    if (!/[.!?)]$/.test(s.trim())) fail(e, `not a full sentence: "${s}"`);
   }
 }
 

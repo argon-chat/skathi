@@ -13,6 +13,7 @@
   .status-mark[data-status="on-hold"] {
     color: var(--hold);
   }
+  .status-mark[data-status="unsupported"],
   .status-mark[data-status="not-planned"] {
     color: var(--no);
   }
@@ -326,6 +327,7 @@
   .row-status[data-status="supported"] {
     color: var(--text);
   }
+  .row-status[data-status="unsupported"],
   .row-status[data-status="not-planned"],
   .row-status[data-status="deprecated"] {
     color: var(--muted);
@@ -528,6 +530,7 @@
   .platform-cell[data-status="planned"] .status-mark {
     color: var(--planned);
   }
+  .platform-cell[data-status="unsupported"] .status-mark,
   .platform-cell[data-status="not-planned"] .status-mark {
     color: var(--no);
   }

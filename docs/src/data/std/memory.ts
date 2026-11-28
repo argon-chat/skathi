@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 const SAME_EVERYWHERE = "The module is the same on every platform.";
 
@@ -8,14 +8,7 @@ export const memory = section("skathi:memory", [
     name: "NativeBuffer",
     kind: "class",
     summary: "Memory the host allocates, seen from JS as an `ArrayBuffer` without a copy, and freed when you say so.",
-    syntax: `${importLine("skathi:memory", "NativeBuffer")}
-
-static NativeBuffer.alloc(byteLength: number, options?: { zeroed?: boolean; alignment?: number }): NativeBuffer
-
-readonly buffer.byteLength: number
-readonly buffer.buffer: ArrayBuffer
-readonly buffer.freed: boolean
-buffer.free(): void`,
+    declaration: true,
     params: [
       { name: "byteLength", type: "number", description: "The size in bytes. 0 is allowed." },
       {
@@ -99,13 +92,7 @@ scratch.freed; // true`,
     name: "Arena",
     kind: "class",
     summary: "Hands out `NativeBuffer`s from larger chunks, and frees all of them in one `reset()`.",
-    syntax: `${importLine("skathi:memory", "Arena")}
-
-new Arena(options?: { chunkSize?: number })
-
-arena.alloc(byteLength: number, alignment?: number): NativeBuffer
-readonly arena.used: number
-arena.reset(): void`,
+    declaration: true,
     params: [
       {
         name: "options.chunkSize",
@@ -161,14 +148,7 @@ export function draw(device: GPUDevice, vertices: GPUBuffer, points: Float32Arra
     name: "MemoryView",
     kind: "class",
     summary: "Elements of one number type at a fixed stride, such as one attribute of interleaved vertices.",
-    syntax: `${importLine("skathi:memory", "MemoryView")}
-
-new MemoryView(source: NativeBuffer | ArrayBuffer, layout: MemoryLayout)
-
-readonly view.length: number
-view.get(index: number): number
-view.set(index: number, value: number): void
-view.copyFrom(values: ArrayLike<number>, start?: number): void`,
+    declaration: true,
     params: [
       { name: "source", type: "NativeBuffer | ArrayBuffer", description: "The memory the view reads and writes." },
       {

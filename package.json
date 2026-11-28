@@ -26,6 +26,7 @@
     "docs:dev": "bun run --cwd docs dev",
     "docs:build": "bun run --cwd docs build",
     "docs:check": "bun run --cwd docs check",
+    "docs:api:check": "bun run --cwd docs api:check",
     "docs:deploy": "bun run --cwd docs deploy"
   },
   "devDependencies": {

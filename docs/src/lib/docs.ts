@@ -2,7 +2,8 @@ import { getCollection, type CollectionEntry } from "astro:content";
 import type { MarkdownHeading } from "astro";
 import { checkMarkdown, checkPage } from "./check";
 import { configMarkdown, configPage } from "./config";
-import { catalogMarkdown } from "./reference";
+import { catalogMarkdown, categoryId } from "./reference";
+import { moduleOverview } from "./std";
 import { references } from "./references";
 import { isNew, newLabel } from "./release";
 import { expandSamples } from "./samples";
@@ -48,7 +49,18 @@ export async function getDocs(): Promise<CollectionEntry<"docs">[]> {
 }
 
 export function pageMarkdown(page: CollectionEntry<"docs">, site: URL): string {
-  const body = expandSamples((page.body ?? "").replace(/^#\s+[^\n]*(?:\r?\n|$)/, "").trim());
+  let body = expandSamples((page.body ?? "").replace(/^#\s+[^\n]*(?:\r?\n|$)/, "").trim());
+  if (page.id === "std") {
+    body = body.replace("<StdModules />", () =>
+      [
+        "| Module | What it gives |",
+        "| --- | --- |",
+        ...moduleOverview.map(
+          ([name, summary]) => `| [\`${name}\`](#${categoryId(name)}) | ${summary.replaceAll("|", "\\|")} |`,
+        ),
+      ].join("\n"),
+    );
+  }
   const reference = references[page.id];
   const catalog = reference
     ? `\n\n${catalogMarkdown(reference, site)}`

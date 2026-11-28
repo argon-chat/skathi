@@ -1,6 +1,5 @@
-import { OK, PART, importLine, os, section } from "./shared";
+import { OK, PART, os, section } from "./shared";
 
-const IMPORT = importLine("skathi:network", "network");
 const WINDOWS_2004 =
   'Windows needs Windows 10 2004 or later. Before it `online` reads `true`, `internet` reads `"unknown"`, the three flags read `null` and no event fires.';
 const MAC =
@@ -16,16 +15,7 @@ export const network = section("skathi:network", [
     summary:
       "Reads what the OS knows about the connection: online, internet reachability, connection type, metered and roaming, with change events.",
     platforms: os(OK, PART, PART),
-    syntax: `${IMPORT}
-
-readonly network.online: boolean
-readonly network.internet: "full" | "limited" | "portal" | "none" | "unknown"
-readonly network.type: "ethernet" | "wifi" | "cellular" | "other" | "none" | "unknown"
-readonly network.metered: boolean | null
-readonly network.roaming: boolean | null
-readonly network.overDataLimit: boolean | null
-
-network.addEventListener(type: "change" | "online" | "offline", listener: (event: Event) => void): void`,
+    declaration: true,
     notes: [
       "`network` is an `EventTarget`. Every property is read synchronously.",
       "`online` is `navigator.onLine`: the OS believes there is a network. A LAN without internet and a captive portal are both online.",
@@ -110,9 +100,7 @@ onBeforeUnmount(() => network.removeEventListener("change", update));
     kind: "type",
     summary: "The values of `network.internet`: the result of the operating system's own connectivity check.",
     platforms: os(OK, PART, PART),
-    syntax: `import type { Internet } from "skathi:network";
-
-type Internet = "full" | "limited" | "portal" | "none" | "unknown";`,
+    declaration: true,
     values: [
       { value: "full", status: OK, note: "The OS reached the internet." },
       { value: "limited", status: OK, note: "A network without internet." },
@@ -158,9 +146,7 @@ export function connectionHint(): string | null {
     kind: "type",
     summary: "The values of `network.type`: the physical connection traffic takes.",
     platforms: os(OK, OK, OK),
-    syntax: `import type { ConnectionType } from "skathi:network";
-
-type ConnectionType = "ethernet" | "wifi" | "cellular" | "other" | "none" | "unknown";`,
+    declaration: true,
     values: [
       { value: "ethernet", status: OK },
       { value: "wifi", status: OK },

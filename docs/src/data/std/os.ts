@@ -1,6 +1,4 @@
-import { importLine, section } from "./shared";
-
-const IMPORT = importLine("skathi:os", "os");
+import { section } from "./shared";
 
 export const os = section("skathi:os", [
   {
@@ -9,16 +7,7 @@ export const os = section("skathi:os", [
     kind: "object",
     summary:
       "Reads the operating system synchronously: platform, architecture, release, host name, home and temp folders.",
-    syntax: `${IMPORT}
-
-readonly os.platform: "win32" | "darwin" | "linux"
-readonly os.arch: "x64" | "arm64"
-readonly os.machineArch: "x64" | "arm64"
-readonly os.release: string
-readonly os.distro: { readonly name: string; readonly version: string; readonly id: string } | null
-readonly os.hostname: string
-readonly os.homedir: string
-readonly os.tmpdir: string`,
+    declaration: true,
     notes: [
       "The values are synchronous and use Node's names, so code and packages written against `process.platform` and `os.arch()` read the same strings.",
       "`navigator.userAgentData` stays for code written for a browser. Its `getHighEntropyValues()` is asynchronous and reports Chromium's `platformVersion`, not the OS release.",

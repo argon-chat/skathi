@@ -1,4 +1,4 @@
-import { OK, importLine, section } from "./shared";
+import { OK, section } from "./shared";
 
 export const units = section("skathi:units", [
   {
@@ -6,18 +6,7 @@ export const units = section("skathi:units", [
     name: "DataSize",
     kind: "class",
     summary: "A number of bytes that parses, converts between decimal and binary units, and formats for a locale.",
-    syntax: `${importLine("skathi:units", "DataSize")}
-
-type DataUnit = "B" | "kB" | "MB" | "GB" | "TB" | "PB" | "KiB" | "MiB" | "GiB" | "TiB" | "PiB"
-
-DataSize.bytes(count: number): DataSize
-DataSize.parse(text: string): DataSize
-
-readonly size.bytes: number
-size.to(unit: DataUnit): number
-size.format(options?: { binary?: boolean; locale?: string | string[] }): string
-size.toString(): string
-size.valueOf(): number`,
+    declaration: ["DataSize", "DataUnit"],
     values: [
       { value: "B", status: OK, note: "One byte." },
       { value: "kB", status: OK, note: "Decimal: 1000 bytes." },
@@ -104,15 +93,7 @@ export function check(file: File): string | null {
     name: "Frequency",
     kind: "class",
     summary: "A frequency in hertz, with the time one cycle takes.",
-    syntax: `${importLine("skathi:units", "Frequency")}
-
-Frequency.hz(value: number): Frequency
-Frequency.fromPeriod(period: TimeSpan | number): Frequency
-
-readonly frequency.hz: number
-readonly frequency.period: TimeSpan
-frequency.toString(): string
-frequency.valueOf(): number`,
+    declaration: true,
     notes: [
       "A frequency is made by `Frequency.hz()` or `Frequency.fromPeriod()`; the type has no public constructor. A frequency is immutable.",
       "`period` is the time one cycle takes, as a [TimeSpan](/std/time-span/). `fromPeriod()` takes a `TimeSpan` or a number of milliseconds.",
@@ -171,15 +152,7 @@ export function simulate(step: (seconds: number) => void): Timer {
     name: "Angle",
     kind: "class",
     summary: "An angle that reads in degrees and radians and normalizes to one turn.",
-    syntax: `${importLine("skathi:units", "Angle")}
-
-Angle.deg(value: number): Angle
-Angle.rad(value: number): Angle
-
-readonly angle.degrees: number
-readonly angle.radians: number
-angle.normalize(): Angle
-angle.toString(): string`,
+    declaration: true,
     notes: [
       "An angle is made by `Angle.deg()` or `Angle.rad()`; the type has no public constructor. An angle is immutable.",
       "`normalize()` returns a new angle with the same direction, from 0° up to, not including, 360°.",

@@ -1,30 +1,11 @@
 import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../css/entries";
 import type { Detail } from "../details";
+import { bindings } from "../../../scripts/bindings-reference";
 
 export type Kind = "class" | "namespace" | "object" | "function" | "type";
 
-export const categories = [
-  "skathi:app",
-  "skathi:gamepad",
-  "skathi:runtime",
-  "skathi:os",
-  "skathi:network",
-  "skathi:numeric",
-  "skathi:toml",
-  "skathi:binary",
-  "skathi:encoding",
-  "skathi:ffi",
-  "skathi:process",
-  "skathi:memory",
-  "skathi:image",
-  "skathi:gpu",
-  "skathi:text",
-  "skathi:time",
-  "skathi:units",
-  "skathi:collections",
-] as const;
-
-export type Category = (typeof categories)[number];
+export type Category = `skathi:${string}`;
+export const categories = [...bindings().std.keys()].sort() as Category[];
 
 export interface StdEntry extends Detail {
   slug: string;
@@ -32,6 +13,8 @@ export interface StdEntry extends Detail {
   kind: Kind;
   category: Category;
   summary: string;
+  /** Use the public declaration(s) for the syntax block. True resolves the entry's own name. */
+  declaration?: true | string[];
   status: Status;
   platforms: Record<Platform, Status>;
   since?: Release;

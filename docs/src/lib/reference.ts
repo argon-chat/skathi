@@ -1,11 +1,16 @@
 import type { Platform, PlatformSince, Release, Status, ValueSupport } from "../data/css/entries";
 import type { Detail, Example, Param } from "../data/details";
+import type { NativeBinding } from "../../scripts/rust-bindings";
 import { isNew, newLabel } from "./release";
 
 export type { Example, Param, Platform, PlatformSince, Release, Status, ValueSupport };
 export { isNew, newLabel };
 
 export interface RefEntry extends Detail {
+  source?: string;
+  syntaxLanguage?: "css";
+  nativeBinding?: NativeBinding;
+  types?: { name: string; summary: string; syntax: string }[];
   slug: string;
   name: string;
   kind: string;
@@ -47,7 +52,7 @@ export interface Reference {
 export function skathiOnlyNote(ref: Reference): string {
   if (ref.id === "css") return "Browsers ignore it; Skathi reads it.";
   if (ref.id === "std") return "A browser has no such module, and an import of it fails there.";
-  if (ref.id === "shaders") return "It is Slang for Skathi's --shading effects, which browsers do not run.";
+  if (ref.id === "shaders") return "This API belongs to Skathi's --shading effects.";
   return "A browser does not have it, and code that uses it fails there.";
 }
 
@@ -80,6 +85,11 @@ export const platforms: readonly {
 ];
 
 export const statuses: Record<Status, { label: string; tone: string; summary: string }> = {
+  declared: {
+    label: "Declared in SDK",
+    tone: "neutral",
+    summary: "Listed in the public SDK declarations",
+  },
   supported: {
     label: "Supported",
     tone: "ok",
@@ -89,6 +99,11 @@ export const statuses: Record<Status, { label: string; tone: string; summary: st
     label: "Partial",
     tone: "partial",
     summary: "Works with a limitation",
+  },
+  unsupported: {
+    label: "Unsupported",
+    tone: "no",
+    summary: "Not applied by the app stylesheet mapper",
   },
   planned: {
     label: "Planned",
@@ -148,6 +163,10 @@ export function categoryId(category: string): string {
 
 export function entryUrl(ref: Reference, slug: string): string {
   return `/${ref.id}/${slug}/`;
+}
+
+export function typeAnchor(name: string): string {
+  return `type-${name}`;
 }
 
 export function entryMarkdownUrl(ref: Reference, slug: string): string {
@@ -284,18 +303,45 @@ export function releaseQualifier(since?: Release): string {
   return since ? ` since ${since}` : "";
 }
 
+export function behaviorNotes(entry: RefEntry): string[] {
+  const notes = entry.notes ?? [];
+  const doc = entry.nativeBinding?.documentation;
+  return doc && doc !== entry.summary && !notes.includes(doc) ? [...notes, doc] : notes;
+}
+
+export function rustSourceUrl(source: string): string {
+  const prefix = "vendor/redjs/";
+  return source.startsWith(prefix)
+    ? `https://github.com/argon-chat/redjs/blob/master/${source.slice(prefix.length)}`
+    : `https://github.com/argon-chat/skathi/blob/master/${source}`;
+}
+
+export function instanceMembers(ref: Reference, entry: RefEntry): { kind: string; names: string[] }[] {
+  if (!entry.nativeBinding || !["interface", "class", "object", "api"].includes(entry.kind)) return [];
+  // A std class can wrap a private host object with a different set of methods.
+  if (ref.id !== "web-platform") return [];
+  const members = entry.nativeBinding.members;
+  const groups = [
+    ["method", "Methods"],
+    ["getter", "Read-only properties"],
+    ["accessor", "Writable properties"],
+  ] as const;
+  return groups
+    .map(([kind, label]) => ({ kind: label, names: members.filter((m) => m.kind === kind).map((m) => m.name) }))
+    .filter((group) => group.names.length > 0);
+}
+
 export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): string {
   const lines = [
     `# ${entry.name}`,
     "",
-    `> ${entry.summary}`,
-    "",
+    ...(entry.summary ? [`> ${entry.summary}`, ""] : []),
     `Source: ${new URL(entryUrl(ref, entry.slug), site).href}`,
     "",
     `- Kind: ${kindLabel(entry.kind)} (${entry.category})`,
     `- Status in Skathi: ${statuses[entry.status].label}${releaseQualifier(entry.since)}`,
-    `- Platforms: ${platformLine(entry)}`,
   ];
+  if (entry.status !== "declared") lines.push(`- Platforms: ${platformLine(entry)}`);
   const fresh = freshNote(entry);
   if (fresh) lines.push(`- ${newLabel}: ${fresh}.`);
   if (entry.skathiOnly) lines.push(`- Skathi only: not part of the web platform. ${skathiOnlyNote(ref)}`);
@@ -303,8 +349,9 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
   if (entry.webDeprecated) lines.push("- Deprecated on the web.");
   if (entry.animates) lines.push(`- Animates: ${entry.animates}.`);
   if (entry.mdn) lines.push(`- MDN: ${entry.mdn}`);
+  if (entry.nativeBinding) lines.push(`- [Rust source](${rustSourceUrl(entry.nativeBinding.source)})`);
   if (entry.syntax) {
-    lines.push("", "## Syntax", "", `\`\`\`${ref.syntax ?? "ts"}`, entry.syntax.trim(), "```");
+    lines.push("", "## Syntax", "", `\`\`\`${entry.syntaxLanguage ?? ref.syntax ?? "ts"}`, entry.syntax.trim(), "```");
     if (entry.params?.length)
       lines.push(
         "",
@@ -317,7 +364,19 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
       );
     if (entry.returns) lines.push("", `Returns: ${entry.returns}`);
   }
-  if (entry.notes?.length) lines.push("", "## Behavior", "", ...entry.notes.map((note) => `- ${note}`));
+  const members = instanceMembers(ref, entry);
+  if (members.length) {
+    lines.push(
+      "",
+      entry.syntax ? "## Additional instance members" : "## Instance members",
+      "",
+      "| Kind | Members |",
+      "| --- | --- |",
+      ...members.map((group) => `| ${group.kind} | ${group.names.map((name) => `\`${name}\``).join(", ")} |`),
+    );
+  }
+  const notes = behaviorNotes(entry);
+  if (notes.length) lines.push("", "## Behavior", "", ...notes.map((note) => `- ${note}`));
   if (entry.values?.length) {
     lines.push("", "## Values", "", "| Value | Status | Since | Notes |", "| --- | --- | --- | --- |");
     for (const value of entry.values)
@@ -336,6 +395,14 @@ export function entryMarkdown(ref: Reference, entry: RefEntry, site: URL): strin
   if (entry.edgeCases?.length) lines.push("", "## Edge cases", "", ...entry.edgeCases.map((e) => `- ${e}`));
   if (entry.limitations?.length) lines.push("", "## Limitations", "", ...entry.limitations.map((l) => `- ${l}`));
   if (entry.workaround) lines.push("", "## Instead", "", entry.workaround);
+  if (entry.types?.length) {
+    lines.push("", "## Types");
+    for (const type of entry.types) {
+      lines.push("", `### ${type.name}`, "");
+      if (type.summary) lines.push(type.summary, "");
+      lines.push("```ts", type.syntax.trim(), "```");
+    }
+  }
   const related = (entry.related ?? []).map((slug) => find(ref, slug)).filter((r) => r !== undefined);
   if (related.length)
     lines.push(
@@ -361,7 +428,7 @@ export function catalogMarkdown(ref: Reference, site: URL): string {
                 .join(", ")
             : "all";
           const notes = [...(entry.limitations ?? []), ...(entry.workaround ? [entry.workaround] : [])].join(" ");
-          return `| [\`${entry.name}\`](${new URL(markdownPage(ref, entry), site).href}) | ${statuses[entry.status].label} | ${where} | ${sinceText(entry)} | ${notes} |`;
+          return `| [\`${entry.name}\`](${new URL(markdownPage(ref, entry), site).href}) | ${statuses[entry.status].label} | ${entry.status === "declared" ? "" : where} | ${sinceText(entry)} | ${notes} |`;
         });
       return [
         `## ${category}`,

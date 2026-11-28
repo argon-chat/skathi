@@ -6,13 +6,8 @@ const drafts: Draft[] = [
   {
     slug: "sk-pi",
     name: "SK_PI",
-    kind: "type",
     summary: "π and 2π (`SK_TAU`, one turn in radians) as `float` constants.",
     since,
-    syntax: `import sk.math;
-
-static const float SK_PI;    // 3.14159265358979
-static const float SK_TAU;   // 6.28318530717959`,
     notes: [
       "Prefixed so they never clash with a `PI` an effect declares for itself: Slang reports a name that two imports both declare as ambiguous.",
     ],
@@ -21,11 +16,7 @@ static const float SK_TAU;   // 6.28318530717959`,
   {
     slug: "floor-mod",
     name: "floorMod",
-    kind: "function",
-    summary: "`x` wrapped into [0, y) for a positive `y`, as GLSL `mod`: a negative `x` wraps upwards.",
     since,
-    syntax: `float floorMod(float x, float y);
-vector<float, N> floorMod<let N : int>(vector<float, N> x, vector<float, N> y);`,
     params: [
       { name: "x", type: "float", description: "The value to wrap." },
       { name: "y", type: "float", description: "The period, greater than 0." },
@@ -40,11 +31,7 @@ vector<float, N> floorMod<let N : int>(vector<float, N> x, vector<float, N> y);`
   {
     slug: "safe-div",
     name: "safeDiv",
-    kind: "function",
-    summary: "`a / b`, or `fallback` where `b` is 0: no infinity or NaN from a zero divisor.",
     since,
-    syntax: `float safeDiv(float a, float b, float fallback = 0.0);
-vector<float, N> safeDiv<let N : int>(vector<float, N> a, vector<float, N> b, float fallback = 0.0);`,
     params: [
       { name: "a", type: "float", description: "The dividend." },
       { name: "b", type: "float", description: "The divisor; checked against exactly 0." },
@@ -55,11 +42,7 @@ vector<float, N> safeDiv<let N : int>(vector<float, N> a, vector<float, N> b, fl
   {
     slug: "safe-atan2",
     name: "safeAtan2",
-    kind: "function",
-    summary:
-      "The angle of the point (x, y) in radians, as `atan2(y, x)`, but 0 at the origin and the same on every GPU.",
     since,
-    syntax: `float safeAtan2(float y, float x);`,
     params: [
       { name: "y", type: "float", description: "The vertical component." },
       { name: "x", type: "float", description: "The horizontal component." },
@@ -93,13 +76,9 @@ struct Conic : IEffect
   {
     slug: "remap",
     name: "remap",
-    kind: "function",
     summary:
       "`x` mapped linearly from one range to another, unclamped; `remapClamped` holds the result in the target range.",
     since,
-    syntax: `float remap(float x, float from0, float from1, float to0, float to1);
-float remapClamped(float x, float from0, float from1, float to0, float to1);
-// and per component on float2, float3 and float4`,
     params: [
       { name: "x", type: "float", description: "The value." },
       { name: "from0, from1", type: "float", description: "The source range; either order." },

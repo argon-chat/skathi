@@ -1,33 +1,30 @@
-import runtimeModule from "../../../../packages/runtime/src/std/app.ts?raw";
+import { bindings } from "../../../scripts/bindings-reference";
 import { appReference } from "../../lib/app";
 import { entryUrl } from "../../lib/reference";
 import { windowReference } from "../../lib/window";
-import { importLine, section, type Draft } from "./shared";
+import { section, type Draft } from "./shared";
 
-const IMPORT = importLine("skathi:app", "app");
+/** The public desktop objects each link to their App API or Window API page. */
+const exported = [...bindings().std.get("skathi:app")!.keys()].filter((name) => /^app[A-Z]\w*$/.test(name));
 
-/** The `app*` objects the runtime's `skathi:app` re-exports, in its order; each row points at its own page. */
-const exported = [...runtimeModule.matchAll(/^export \{([^}]*)\}/gm)]
-  .flatMap((match) => (match[1] ?? "").split(","))
-  .map((name) => name.trim())
-  .filter((name) => /^app[A-Z]\w*$/.test(name));
-
-function exportRow(name: string): Draft {
+function exportRow(name: string): Draft[] {
   for (const reference of [appReference, windowReference]) {
     const entry = reference.entries.find((e) => e.name === name);
     if (!entry) continue;
-    return {
-      slug: entry.slug,
-      name,
-      kind: "object",
-      summary: entry.summary,
-      platforms: entry.platforms,
-      ...(entry.since ? { since: entry.since } : {}),
-      ...(entry.platformSince ? { platformSince: entry.platformSince } : {}),
-      link: { url: entryUrl(reference, entry.slug), title: reference.title },
-    };
+    return [
+      {
+        slug: entry.slug,
+        name,
+        kind: "object",
+        summary: entry.summary,
+        platforms: entry.platforms,
+        ...(entry.since ? { since: entry.since } : {}),
+        ...(entry.platformSince ? { platformSince: entry.platformSince } : {}),
+        link: { url: entryUrl(reference, entry.slug), title: reference.title },
+      },
+    ];
   }
-  throw new Error(`skathi:app exports ${name}, which has no entry in the App API or Window API reference`);
+  return [];
 }
 const EMBEDDED_RESTART =
   "In an app that runs inside another program, `restart()` throws an `Error` named `NotSupportedError`: the process is the embedder's. Ask the embedder to restart through a [native module](/embedding/native-modules/).";
@@ -38,12 +35,7 @@ export const app = section("skathi:app", [
     name: "app",
     kind: "object",
     summary: "Ends the app, starts it again, reads its version, and sets how far the wheel scrolls.",
-    syntax: `${IMPORT}
-
-app.quit(options?: { exitCode?: number }): void
-app.restart(options?: { args?: string[] }): void
-app.getVersion(): string
-app.wheelScrollScale: number`,
+    declaration: true,
     notes: [
       "The module also exports the `app*` objects listed with it here; each has its page in the [App API](/app-api/) or [Window API](/window-api/) reference. Importing them from `@skathi-native/runtime` still works but is deprecated.",
       "`quit()` and `restart()` end the app the way [`appWindow.close()`](/window-api/) does. See [Closing, hiding and quitting](/guides/closing-and-background/).",
@@ -77,7 +69,7 @@ const version = app.getVersion();
     name: "app.quit()",
     kind: "function",
     summary: "Ends the app with an exit code, the way `appWindow.close()` does.",
-    syntax: "app.quit(options?: { exitCode?: number }): void",
+    declaration: true,
     params: [
       {
         name: "options.exitCode",
@@ -129,7 +121,7 @@ export function quitFromMenu(): void {
     name: "app.restart()",
     kind: "function",
     summary: "Ends the app as `quit()` does and starts it again, with the same arguments or with new ones.",
-    syntax: "app.restart(options?: { args?: string[] }): void",
+    declaration: true,
     params: [
       {
         name: "options.args",
@@ -181,7 +173,7 @@ export function restartInSafeMode(): void {
     name: "app.getVersion()",
     kind: "function",
     summary: "Returns the app's own version string.",
-    syntax: "app.getVersion(): string",
+    declaration: true,
     returns: '`"version"` from `sk.config.json`, else the one in `package.json`, else `"0.0.0"`.',
     notes: [
       "It is the string `sk build` stamps into the executable's version resource and the macOS bundle.",
@@ -211,7 +203,7 @@ export async function sendReport(text: string): Promise<void> {
     name: "app.wheelScrollScale",
     kind: "object",
     summary: "How far a mouse-wheel notch scrolls the app, as a multiple of a browser's distance.",
-    syntax: "app.wheelScrollScale: number",
+    declaration: true,
     returns:
       'The scale now in use: `"input": { "wheelScrollScale" }` from `sk.config.json` at start, else `1`, until the app sets another.',
     notes: [
@@ -250,5 +242,5 @@ function onInput() {
     related: ["app"],
     aliases: ["wheelScrollScale", "scroll speed", "wheel speed", "mouse wheel"],
   },
-  ...exported.map(exportRow),
+  ...exported.flatMap(exportRow),
 ]);

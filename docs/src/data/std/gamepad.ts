@@ -7,14 +7,7 @@ export const gamepad = section("skathi:gamepad", [
     kind: "object",
     since: "Unreleased",
     summary: "Read connected controllers, bind physical buttons and sticks, and drive rumble motors.",
-    syntax: `import { gamepads } from "skathi:gamepad";
-
-gamepads.available
-gamepads.list(): readonly Controller[]
-gamepads.setDeadZone(target: DeadZoneTarget, radius: number | null): void
-gamepads.getDeadZone(target: DeadZoneTarget): number | null
-gamepads.subscribe(listener: (event: ControllerEvent) => void): () => void
-gamepads.rumble(id: number, options?: { strong?: number; weak?: number; durationMs?: number }): boolean`,
+    declaration: true,
     notes: [
       "The default host includes the Cargo feature `gamepad`. Input delivery starts on demand and follows window focus. Each controller has an `id` for its current connection and an `index` that a later connection can reuse.",
       "Windows Gaming Input reports changes from its first reading. A control held before the first poll can read as neutral until it moves. The Windows backend keeps polling while a device remains connected, including after the last subscription ends. Linux and macOS retain the device monitor across app reloads.",

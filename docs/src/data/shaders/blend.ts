@@ -5,10 +5,9 @@ const since = "0.9.0" as const;
 const mode = (css: string, name: string, formula: string, notes?: string[]): Draft => ({
   slug: `blend-${css}`,
   name: `Blend.${name}`,
-  kind: "struct",
   summary: `CSS \`mix-blend-mode: ${css}\`: ${formula}`,
   since,
-  syntax: `float4 r = blend<Blend.${name}>(below, above);
+  usage: `float4 r = blend<Blend.${name}>(below, above);
 float3 b = Blend.${name}.apply(cb, cs);   // B(Cb, Cs) on straight colours`,
   ...(notes ? { notes } : {}),
   related: ["blend", "i-blend-mode"],
@@ -17,10 +16,9 @@ float3 b = Blend.${name}.apply(cb, cs);   // B(Cb, Cs) on straight colours`,
 const op = (css: string, name: string, summary: string, factors: string, notes?: string[]): Draft => ({
   slug: `composite-${css}`,
   name: `Composite.${name}`,
-  kind: "struct",
   summary: `\`${css}\`: ${summary}`,
   since,
-  syntax: `float4 r = composite<Composite.${name}>(below, above);   // ${factors}`,
+  usage: `float4 r = composite<Composite.${name}>(below, above);   // ${factors}`,
   ...(notes ? { notes } : {}),
   related: ["composite", "i-composite-op"],
 });
@@ -32,15 +30,7 @@ const drafts: Draft[] = [
   {
     slug: "blend",
     name: "blend",
-    kind: "function",
-    summary:
-      "CSS `mix-blend-mode`: `above` blended with `below` by a mode, then composited source-over. Premultiplied in and out.",
     since,
-    syntax: `import sk.blend;
-
-float4 blend<M : IBlendMode>(float4 below, float4 above);
-float4 blend<M : IBlendMode>(float4 below, float4 above, float opacity);
-Color blend<M : IBlendMode>(Color below, Color above);`,
     params: [
       { name: "M", type: "IBlendMode", description: "The mode: `Blend.Multiply`, `Blend.Overlay`, … (see the list)." },
       { name: "below", type: "float4", description: "The backdrop, premultiplied." },
@@ -86,10 +76,7 @@ struct OverlayTint : IEffect
   {
     slug: "blend-linear",
     name: "blendLinear",
-    kind: "function",
-    summary: "`blend<M>` on `Color`s in linear light: physically even for screen and multiply, but not what CSS shows.",
     since,
-    syntax: `Color blendLinear<M : IBlendMode>(Color below, Color above);`,
     notes: [
       "Light adds in linear space, so a `Blend.Screen` of two lamps or a `Blend.Multiply` filter looks physically right here. Use `blend` to match a browser.",
     ],
@@ -98,13 +85,7 @@ struct OverlayTint : IEffect
   {
     slug: "i-blend-mode",
     name: "IBlendMode",
-    kind: "interface",
-    summary: "A blend function B(Cb, Cs) on straight colours: what `blend<M>` is specialised for.",
     since,
-    syntax: `interface IBlendMode
-{
-    static float3 apply(float3 below, float3 above);
-};`,
     notes: [
       "Write your own mode as a struct with a static `apply` and pass it to `blend`: the compositing around it stays the spec's.",
       "Values above 1 pass through the separable formulas unchanged except where the formula is bounded: `color-dodge` and `color-burn` stop at 0 and 1, `soft-light` reads a backdrop below 0 as 0 under its square root, and the four non-separable modes clip into 0..1.",
@@ -168,11 +149,7 @@ struct AverageTint : IEffect
   {
     slug: "composite",
     name: "composite",
-    kind: "function",
-    summary: "A Porter-Duff operator applied to premultiplied `above` (the source) and `below` (the backdrop).",
     since,
-    syntax: `float4 composite<Op : ICompositeOp>(float4 below, float4 above);
-Color composite<Op : ICompositeOp>(Color below, Color above);`,
     params: [
       {
         name: "Op",
@@ -213,13 +190,7 @@ struct Punch : IEffect
   {
     slug: "i-composite-op",
     name: "ICompositeOp",
-    kind: "interface",
-    summary: "A compositing operator: premultiplied source and backdrop in, premultiplied result out.",
     since,
-    syntax: `interface ICompositeOp
-{
-    static float4 apply(float4 below, float4 above);
-};`,
     related: ["composite"],
   },
   op("clear", "Clear", "nothing.", "Fa 0, Fb 0"),
