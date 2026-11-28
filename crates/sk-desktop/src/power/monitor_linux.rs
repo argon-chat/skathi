@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
@@ -36,7 +37,7 @@ async fn scheme(connection: &Connection) -> Scheme {
 }
 
 async fn monitor() -> ashpd::zbus::Result<()> {
-    let connection = ashpd::zbus::connection::Builder::system()?
+    let connection = ashpd::zbus::connection::Builder::system()
         .method_timeout(Duration::from_secs(3))
         .build()
         .await?;
@@ -44,22 +45,22 @@ async fn monitor() -> ashpd::zbus::Result<()> {
     for (name, path) in PROFILES {
         let properties = MatchRule::builder()
             .msg_type(Type::Signal)
-            .sender(name)?
-            .path(path)?
-            .interface("org.freedesktop.DBus.Properties")?
-            .member("PropertiesChanged")?
-            .arg(0, name)?
-            .build();
+            .sender(name)
+            .path(path)
+            .interface("org.freedesktop.DBus.Properties")
+            .member("PropertiesChanged")
+            .arg(0, name)
+            .build()?;
         let owners = MatchRule::builder()
             .msg_type(Type::Signal)
-            .sender("org.freedesktop.DBus")?
-            .interface("org.freedesktop.DBus")?
-            .member("NameOwnerChanged")?
-            .arg(0, name)?
-            .build();
+            .sender("org.freedesktop.DBus")
+            .interface("org.freedesktop.DBus")
+            .member("NameOwnerChanged")
+            .arg(0, name)
+            .build()?;
         changes.push(stream::or(
-            MessageStream::for_match_rule(properties, &connection, Some(8)).await?,
-            MessageStream::for_match_rule(owners, &connection, Some(4)).await?,
+            MessageStream::for_match_rule(properties, &connection, NonZeroUsize::new(8)).await?,
+            MessageStream::for_match_rule(owners, &connection, NonZeroUsize::new(4)).await?,
         ));
     }
     let mut changes = stream::or(changes.pop().unwrap(), changes.pop().unwrap());

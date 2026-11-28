@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 
 fn key(source: &str, value: &[u8]) -> String {
     // OS identifiers can contain a serial number, Bluetooth address or USB topology.
-    format!("{source}:{:x}", Sha256::digest(value))
+    format!("{source}:{}", hex::encode(Sha256::digest(value)))
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
@@ -146,6 +146,14 @@ pub(super) fn gilrs_id(_: &Gamepad<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_key_keeps_its_persisted_format() {
+        assert_eq!(
+            key("device", b"abc"),
+            "device:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn ambiguous_model_matches_do_not_get_a_device_key() {

@@ -193,15 +193,15 @@ pub(super) fn details_of(connectivity: Option<u32>, metered: Option<u32>) -> Det
 async fn follow_network_manager() -> zbus::Result<()> {
     let bus = zbus::Connection::system().await?;
     let manager = zbus::proxy::Builder::<zbus::Proxy<'_>>::new(&bus)
-        .destination(NM)?
-        .path(NM_PATH)?
-        .interface(NM)?
+        .destination(NM)
+        .path(NM_PATH)
+        .interface(NM)
         .cache_properties(zbus::proxy::CacheProperties::No)
         .build()
         .await?;
     let properties = zbus::fdo::PropertiesProxy::builder(&bus)
-        .destination(NM)?
-        .path(NM_PATH)?
+        .destination(NM)
+        .path(NM_PATH)
         .build()
         .await?;
     let mut changes = properties.receive_properties_changed().await?;

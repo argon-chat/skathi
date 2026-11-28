@@ -6,16 +6,15 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ashpd::zbus::{
-    self,
-    message::Type,
-    zvariant::{OwnedValue, Value},
-    Connection, MatchRule, Message, MessageStream,
-};
 use futures::{
     executor::block_on,
     future::{select, AbortHandle, Abortable, Either},
     StreamExt,
+};
+use zbus::{
+    message::Type,
+    zvariant::{OwnedValue, Value},
+    Connection, MatchRule, Message, MessageStream,
 };
 
 use super::{activate, open_with_token, Capabilities, Error, Notice, Submission};

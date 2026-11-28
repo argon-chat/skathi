@@ -22,7 +22,7 @@ fn digest(reader: impl Read) -> String {
         }
         hash.update(&buffer[..count]);
     }
-    format!("{:x}", hash.finalize())
+    hex::encode(hash.finalize())
 }
 fn text<'a>(value: &'a serde_json::Value, name: &str) -> &'a str {
     value
@@ -160,7 +160,7 @@ pub fn prepare(repo: &Path, out: &Path) {
             .expect("cannot compress native image");
         count += length as u64;
     }
-    require(&manifest, "imageSha256", &format!("{:x}", hash.finalize()));
+    require(&manifest, "imageSha256", &hex::encode(hash.finalize()));
     assert_eq!(
         count, size,
         "native inspector input changed while packaging"

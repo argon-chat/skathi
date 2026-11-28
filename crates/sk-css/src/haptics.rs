@@ -1,9 +1,9 @@
 //! Declarative input feedback. Longhands cascade independently and repeat to the trigger list's length.
-use cssparser::{ParseError, Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, Token};
 use std::rc::Rc;
 use std::time::Duration;
 
-type ResultAt<'i, T> = Result<T, ParseError<'i, &'static str>>;
+type ParseResult<T> = Result<T, ParseError<&'static str>>;
 
 macro_rules! keywords {
     ($name:ident { $($variant:ident => $css:literal),+ $(,)? }) => {
@@ -17,9 +17,9 @@ macro_rules! keywords {
             pub fn name(self) -> &'static str {
                 match self { $(Self::$variant => $css),+ }
             }
-            fn parse<'i>(p: &mut Parser<'i, '_>) -> ResultAt<'i, Self> {
+            fn parse(p: &mut Parser<'_>) -> ParseResult<Self> {
                 let word = p.expect_ident_cloned()?;
-                Self::from_name(&word).ok_or_else(|| p.new_custom_error("unknown keyword"))
+                Self::from_name(&word).ok_or_else(|| ParseError::custom("unknown keyword"))
             }
         }
     }
@@ -38,7 +38,7 @@ pub enum Effect {
     Pattern(String),
 }
 impl Effect {
-    fn parse<'i>(p: &mut Parser<'i, '_>) -> ResultAt<'i, Self> {
+    fn parse(p: &mut Parser<'_>) -> ParseResult<Self> {
         if p.try_parse(|p| p.expect_function_matching("pattern"))
             .is_ok()
         {
@@ -53,32 +53,32 @@ impl Effect {
         }
     }
 }
-fn dashed<'i>(p: &mut Parser<'i, '_>) -> ResultAt<'i, String> {
+fn dashed(p: &mut Parser<'_>) -> ParseResult<String> {
     let name = p.expect_ident_cloned()?;
     if name.starts_with("--") && name.len() > 2 {
         Ok(name.to_string())
     } else {
-        Err(p.new_custom_error("expected a --pattern name"))
+        Err(ParseError::custom("expected a --pattern name"))
     }
 }
-fn unit<'i>(p: &mut Parser<'i, '_>) -> ResultAt<'i, f32> {
+fn unit(p: &mut Parser<'_>) -> ParseResult<f32> {
     let n = p.expect_number()?;
     if (0.0..=1.0).contains(&n) {
         Ok(n)
     } else {
-        Err(p.new_custom_error("expected a number from 0 to 1"))
+        Err(ParseError::custom("expected a number from 0 to 1"))
     }
 }
-fn time<'i>(p: &mut Parser<'i, '_>) -> ResultAt<'i, Duration> {
+fn time(p: &mut Parser<'_>) -> ParseResult<Duration> {
     let seconds = match p.next()? {
         Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("ms") => {
             *value as f64 / 1000.
         }
         Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("s") => *value as f64,
         Token::Number { value, .. } if *value == 0. => 0.,
-        _ => return Err(p.new_custom_error("expected a nonnegative time in ms or s")),
+        _ => return Err(ParseError::custom("expected a nonnegative time in ms or s")),
     };
-    Duration::try_from_secs_f64(seconds).map_err(|_| p.new_custom_error("time is out of range"))
+    Duration::try_from_secs_f64(seconds).map_err(|_| ParseError::custom("time is out of range"))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -205,8 +205,7 @@ pub(crate) fn declaration(name: &str, value: &str) -> Result<Haptics, String> {
     } else {
         value
     };
-    let mut input = ParserInput::new(value);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(value);
     let parsed = p.parse_entirely(|p| {
         let mut result = Haptics::default();
         match name {
@@ -255,11 +254,11 @@ pub(crate) fn declaration(name: &str, value: &str) -> Result<Haptics, String> {
             }
             "haptic-texture" => result.texture = Some(Texture::parse(p)?),
             "haptic-texture-intensity" => result.texture_intensity = Some(unit(p)?),
-            _ => return Err(p.new_custom_error("unknown property")),
+            _ => return Err(ParseError::custom("unknown property")),
         }
         Ok(result)
     });
-    parsed.map_err(|e: ParseError<'_, &str>| format!("Invalid `{name}: {value}` ({})", e.kind))
+    parsed.map_err(|e: ParseError<&str>| format!("Invalid `{name}: {value}` ({})", e.kind))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -284,12 +283,11 @@ impl Pattern {
 }
 
 pub(crate) fn pattern_rule(css: &str) -> Result<(String, Rc<Pattern>), String> {
-    let mut input = ParserInput::new(css);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(css);
     p.parse_entirely(|p| {
         match p.next()? {
             Token::AtKeyword(id) if id.eq_ignore_ascii_case("haptic-pattern") => {}
-            _ => return Err(p.new_custom_error("expected @haptic-pattern")),
+            _ => return Err(ParseError::custom("expected @haptic-pattern")),
         }
         let name = dashed(p)?;
         p.expect_curly_bracket_block()?;
@@ -323,7 +321,7 @@ pub(crate) fn pattern_rule(css: &str) -> Result<(String, Rc<Pattern>), String> {
                         } else if field.eq_ignore_ascii_case("sharpness") {
                             pulse.sharpness = Some(unit(p)?);
                         } else {
-                            return Err(p.new_custom_error("expected intensity or sharpness"));
+                            return Err(ParseError::custom("expected intensity or sharpness"));
                         }
                         if !p.is_exhausted() {
                             p.expect_semicolon()?;
@@ -334,15 +332,15 @@ pub(crate) fn pattern_rule(css: &str) -> Result<(String, Rc<Pattern>), String> {
                 pat.pulses.push(pulse);
             }
             if pat.pulses.is_empty() {
-                return Err(p.new_custom_error("expected at least one timed pulse"));
+                return Err(ParseError::custom("expected at least one timed pulse"));
             }
             pat.pulses.sort_by_key(|p| p.at);
             if pat.pulses.windows(2).any(|p| p[0].at == p[1].at) {
-                return Err(p.new_custom_error("duplicate pulse time"));
+                return Err(ParseError::custom("duplicate pulse time"));
             }
             Ok(pat)
         })?;
         Ok((name, Rc::new(pattern)))
     })
-    .map_err(|e: ParseError<'_, &str>| format!("Invalid @haptic-pattern ({})", e.kind))
+    .map_err(|e: ParseError<&str>| format!("Invalid @haptic-pattern ({})", e.kind))
 }

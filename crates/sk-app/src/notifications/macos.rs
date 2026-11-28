@@ -254,7 +254,7 @@ fn register_category(
     live: Option<HashSet<String>>,
 ) -> Result<Retained<NSString>, Error> {
     let encoded = serde_json::to_vec(&labels).map_err(|e| Error::operation(e.to_string()))?;
-    let key = format!("skathi.buttons.v1.{:x}", Sha256::digest(encoded));
+    let key = format!("skathi.buttons.v1.{}", hex::encode(Sha256::digest(encoded)));
     let category_id = NSString::from_str(&key);
     let (send, receive) = mpsc::channel();
     let read = RcBlock::new(move |categories: NonNull<NSSet<UNNotificationCategory>>| {

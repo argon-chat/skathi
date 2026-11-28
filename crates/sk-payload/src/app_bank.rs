@@ -43,7 +43,7 @@ impl<'a> PayloadKey<'a> {
     }
 
     fn digest(&self) -> String {
-        format!("{:x}", Sha256::digest(self.name.as_bytes()))
+        hex::encode(Sha256::digest(self.name.as_bytes()))
     }
 }
 

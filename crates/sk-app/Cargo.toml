@@ -132,7 +132,8 @@ sk-storage = { path = "../sk-storage", version = "0.9.0", optional = true }
 sk-clipboard = { path = "../sk-clipboard", version = "0.9.0", optional = true }
 futures = "0.3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11.2"
 uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -192,8 +193,9 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
 
 [build-dependencies]
 serde_json = "1"
-sha2 = "0.10"
-embed-resource = "=3.0.11"
+hex = "0.4"
+sha2 = "0.11.2"
+embed-resource = "=3.0.12"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -208,10 +210,12 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
     "UNNotificationTrigger", "UNUserNotificationCenter",
 ] }
 libc = "0.2"
-mach2 = "0.6"
+mach2 = "0.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["async-io"] }
+ashpd = { version = "0.14.3", default-features = false, features = ["async-io"] }
+# CloseNotification needs the sender and body of standard FDO errors, which zbus 6 discards.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 async-io = "2"
 # gpui's Linux display backends: Wayland where there is one, X11 elsewhere. Off, gpui_linux is a
 # headless platform.
@@ -220,7 +224,7 @@ libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-core = "0.62"
-windows-registry = "0.6"
+windows-registry = "0.100"
 url = "2"
 wgpu = { version = "30.0.2", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }

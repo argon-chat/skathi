@@ -25,7 +25,7 @@ thorvg-default = ["thorvg"]
 #
 # Pinned exactly: `backend::raster` declares the prepared animation `Send` on an argument about
 # rasterlottie's internals; an upgrade re-checks it.
-rasterlottie = { version = "=0.2.2", default-features = false, features = [
+rasterlottie = { version = "=0.3.0", default-features = false, features = [
     "images",
     "text",
 ] }

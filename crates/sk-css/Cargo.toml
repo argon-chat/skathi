@@ -13,7 +13,9 @@ gpui = { package = "skathi-gpui", path = "../../vendor/gpui/crates/gpui", versio
 # MPL-2.0: link unmodified. parcel_selectors is pinned to the version lightningcss resolves so
 # both share one `Selector` type; `into_owned` lets a compiled rule own its selector.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["into_owned"] }
-cssparser = "0.37"
+cssparser = "0.38"
+# The transition shorthand feeds a shared parser to lightningcss::traits::Parse.
+lightningcss-parser = { package = "cssparser", version = "0.37" }
 parcel_selectors = "0.28.3"
 serde = { version = "1", features = ["derive"] }
 sk-effects = { path = "../sk-effects", version = "0.9.0" }

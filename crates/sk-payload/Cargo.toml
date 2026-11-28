@@ -9,7 +9,8 @@ description = "SkBank data banks, Skathi application payloads, and asset URL res
 
 [dependencies]
 brotli-decompressor = "6.3"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11.2"
 zstd = { version = "0.13.3", default-features = false }
 
 [[bench]]

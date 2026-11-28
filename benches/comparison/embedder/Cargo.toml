@@ -18,7 +18,7 @@ direct = []
 skathi = { path = "../../../crates/skathi", default-features = false }
 
 [build-dependencies]
-embed-resource = "=3.0.11"
+embed-resource = "=3.0.12"
 
 [patch.crates-io]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }

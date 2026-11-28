@@ -40,10 +40,14 @@ const MAX_ACTIONS: usize = 2;
 type Banners = Arc<Mutex<HashMap<String, (Arc<AtomicBool>, ToastNotification)>>>;
 
 fn os_error(err: WinError) -> Error {
-    match err.code() {
-        E_ACCESSDENIED => Error::denied(err.to_string()),
-        REGDB_E_CLASSNOTREG | E_NOINTERFACE => Error::unsupported(err.to_string()),
-        _ => Error::operation(err.to_string()),
+    classify_error(err.code(), err.to_string())
+}
+
+fn classify_error(code: windows::core::HRESULT, message: String) -> Error {
+    match code {
+        E_ACCESSDENIED => Error::denied(message),
+        REGDB_E_CLASSNOTREG | E_NOINTERFACE => Error::unsupported(message),
+        _ => Error::operation(message),
     }
 }
 
@@ -80,7 +84,7 @@ fn posting_id() -> Option<&'static str> {
                         } else {
                             format!(
                                 "Skathi.{}",
-                                &format!("{:x}", Sha256::digest(app.id.as_bytes()))[..32]
+                                hex::encode(&Sha256::digest(app.id.as_bytes())[..16])
                             )
                         }
                     })
@@ -111,32 +115,35 @@ fn prepare_unpackaged_id(id: &str) -> Result<(), Error> {
     if registered.is_ok() {
         return Ok(());
     }
+    ensure_registry_id(id)
+        .map_err(|err| classify_error(windows::core::HRESULT(err.code().0), err.to_string()))
+}
+
+fn ensure_registry_id(id: &str) -> windows_registry::Result<()> {
     // Honor an existing machine-wide or per-user registration, including its
     // localized DisplayName and icon. A loose SDK executable has no shortcut.
     let key_path = format!(r"AppUserModelId\{id}");
-    let missing = |err: &WinError| {
+    let missing = |code: i32| {
         [
             ERROR_FILE_NOT_FOUND.to_hresult(),
             ERROR_PATH_NOT_FOUND.to_hresult(),
         ]
-        .contains(&err.code())
+        .contains(&windows::core::HRESULT(code))
     };
     match windows_registry::CLASSES_ROOT.open(&key_path) {
         Ok(_) => return Ok(()),
-        Err(err) if missing(&err) => {}
-        Err(err) => return Err(os_error(err)),
+        Err(err) if missing(err.code().0) => {}
+        Err(err) => return Err(err),
     }
-    let key = windows_registry::CURRENT_USER
-        .create(format!(r"Software\Classes\{key_path}"))
-        .map_err(os_error)?;
+    let key = windows_registry::CURRENT_USER.create(format!(r"Software\Classes\{key_path}"))?;
     if let Err(err) = key.get_type("DisplayName") {
-        if !missing(&err) {
-            return Err(os_error(err));
+        if !missing(err.code().0) {
+            return Err(err);
         }
         let name = sk_desktop::launch::identity()
             .map(|identity| identity.name.as_str())
             .unwrap_or(id);
-        key.set_string("DisplayName", name).map_err(os_error)?;
+        key.set_string("DisplayName", name)?;
     }
     Ok(())
 }

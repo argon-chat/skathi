@@ -133,7 +133,7 @@ fn native_id(id: &str) -> String {
     }
     hash.update([0]);
     hash.update(id.as_bytes());
-    format!("{:x}", hash.finalize())[..32].to_owned()
+    hex::encode(&hash.finalize()[..16])
 }
 
 #[derive(Default)]

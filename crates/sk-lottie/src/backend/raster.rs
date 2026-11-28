@@ -13,7 +13,7 @@ pub(crate) struct Rasterlottie {
 }
 
 // SAFETY: `PreparedAnimation` is `!Send` only because its static path cache holds
-// `Rc<tiny_skia::Path>`s (rasterlottie 0.2.2). Every clone lives inside this one graph
+// `Rc<tiny_skia::Path>`s (rasterlottie 0.3.0). Every clone lives inside this one graph
 // (`render_frame`'s clones drop before it returns) and rasterlottie keeps no thread-local or global
 // state that could hold one, so the graph moves between threads intact and is never shared
 // (`!Sync`). Re-check on any rasterlottie upgrade.

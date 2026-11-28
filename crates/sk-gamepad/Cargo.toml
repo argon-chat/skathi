@@ -9,7 +9,8 @@ homepage.workspace = true
 
 [dependencies]
 gilrs = { version = "0.11.2", default-features = false, features = ["wgi"] }
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFSet", "CFString"] }

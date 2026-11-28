@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use cssparser::{ParseError, Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, Token};
 use lightningcss::traits::Parse as _;
 use lightningcss::values::number::CSSNumber;
 
@@ -78,8 +78,7 @@ fn rewrite(
     if !integer_math && !plain_function_name(text) && !text.contains('\\') {
         return Ok((None, 0));
     }
-    let mut input = ParserInput::new(text);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = Parser::new(text);
     let mut edits = Vec::new();
     let used =
         collect_edits(&mut parser, index, count, integer_math, &mut edits).map_err(|_| ())?;
@@ -97,13 +96,13 @@ fn rewrite(
     Ok((Some(result), used))
 }
 
-fn collect_edits<'i>(
-    parser: &mut Parser<'i, '_>,
+fn collect_edits(
+    parser: &mut Parser<'_>,
     index: u32,
     count: u32,
     integer_math: bool,
     edits: &mut Vec<(usize, usize, String)>,
-) -> Result<u8, ParseError<'i, ()>> {
+) -> Result<u8, ParseError<()>> {
     let mut reads = 0;
     loop {
         let start = parser.position();
@@ -140,9 +139,7 @@ fn collect_edits<'i>(
                     Ok(())
                 })?;
                 let raw = parser.slice_from(start);
-                let mut input = ParserInput::new(raw);
-                let mut expression = Parser::new(&mut input);
-                if let Ok(value) = expression.parse_entirely(CSSNumber::parse) {
+                if let Ok(value) = CSSNumber::parse_string(raw) {
                     let integer = (f64::from(value) + 0.5).floor() as i32;
                     edits.push((
                         start.byte_index(),

@@ -529,8 +529,8 @@ impl Collector {
             let Some(value) = crate::mapper::value_text(p) else {
                 return false;
             };
-            let mut input = cssparser::ParserInput::new(&value);
-            let mut parser = cssparser::Parser::new(&mut input);
+            let mut input = lightningcss_parser::ParserInput::new(&value);
+            let mut parser = lightningcss_parser::Parser::new(&mut input);
             let Ok(entries) = parser.parse_comma_separated(parse_shorthand_entry) else {
                 return false;
             };
@@ -563,8 +563,8 @@ impl Collector {
             let Some(value) = crate::mapper::value_text(p) else {
                 return false;
             };
-            let mut input = cssparser::ParserInput::new(&value);
-            let mut parser = cssparser::Parser::new(&mut input);
+            let mut input = lightningcss_parser::ParserInput::new(&value);
+            let mut parser = lightningcss_parser::Parser::new(&mut input);
             let Ok(behaviors) = parser.parse_comma_separated(parse_behavior) else {
                 return false;
             };
@@ -674,9 +674,11 @@ enum Expansion {
     Props(Vec<TransitionProperty>),
 }
 
-type ParseError<'i> = cssparser::ParseError<'i, lightningcss::error::ParserError<'i>>;
+type ParseError<'i> = lightningcss_parser::ParseError<'i, lightningcss::error::ParserError<'i>>;
 
-fn parse_behavior<'i>(input: &mut cssparser::Parser<'i, '_>) -> Result<bool, ParseError<'i>> {
+fn parse_behavior<'i>(
+    input: &mut lightningcss_parser::Parser<'i, '_>,
+) -> Result<bool, ParseError<'i>> {
     let location = input.current_source_location();
     let ident = input.expect_ident_cloned()?;
     if ident.eq_ignore_ascii_case("normal") {
@@ -684,12 +686,12 @@ fn parse_behavior<'i>(input: &mut cssparser::Parser<'i, '_>) -> Result<bool, Par
     } else if ident.eq_ignore_ascii_case("allow-discrete") {
         Ok(true)
     } else {
-        Err(location.new_unexpected_token_error(cssparser::Token::Ident(ident)))
+        Err(location.new_unexpected_token_error(lightningcss_parser::Token::Ident(ident)))
     }
 }
 
 fn parse_shorthand_entry<'i>(
-    input: &mut cssparser::Parser<'i, '_>,
+    input: &mut lightningcss_parser::Parser<'i, '_>,
 ) -> Result<(PropertyId<'i>, Time, Time, EasingFunction, bool), ParseError<'i>> {
     let (mut property, mut duration, mut delay, mut easing, mut behavior) =
         (None, None, None, None, None);
